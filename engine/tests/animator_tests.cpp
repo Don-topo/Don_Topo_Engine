@@ -24,6 +24,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cmath>
+#include <tuple>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -1498,6 +1499,99 @@ static glm::mat4 evalLocalXform(const PackedClips& p, size_t clipBase, size_t i,
     return out;
 }
 
+// ── Réplica en CPU del bone_eval por muestras ───────────────────────────────
+//
+// TRS de un hueso. bind = "este hueso no lo anima nada: vale su bindLocal"
+// (el shader lo marca con scale.w = 0 en poseTrs).
+struct Trs { glm::vec3 p{0.0f}; glm::vec4 q{0.0f, 0.0f, 0.0f, 1.0f}; glm::vec3 s{1.0f}; bool bind = false; };
+
+// Muestrea el hueso i del bloque clipBase en T. false si el clip no tiene
+// canal para ese hueso (entonces `out` queda en identidad, como en el shader).
+static bool sampleTrs(const PackedClips& p, size_t clipBase, size_t i, float T, Trs& out)
+{
+    out = Trs{};
+    const GpuBoneInfo& info = p.boneInfos[clipBase + i];
+    if (info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0) return false;
+    auto tramo = [&](int off, int count, auto clave) {
+        int lo = off, hi = off + count - 1;
+        for (int k = off; k < off + count - 1; k++)
+            if (clave(k + 1) > T) { lo = k; hi = k + 1; break; }
+        const float t0 = clave(lo), t1 = clave(hi);
+        const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+        return std::make_tuple(lo, hi, f);
+    };
+    if (info.posCount > 0)
+    {
+        auto [lo, hi, f] = tramo(info.posOffset, info.posCount, [&](int k) { return p.pos[(size_t)k].timePad.x; });
+        out.p = glm::mix(glm::vec3(p.pos[(size_t)lo].value), glm::vec3(p.pos[(size_t)hi].value), f);
+    }
+    if (info.rotCount > 0)
+    {
+        auto [lo, hi, f] = tramo(info.rotOffset, info.rotCount, [&](int k) { return p.rot[(size_t)k].timePad.x; });
+        out.q = slerpQ(p.rot[(size_t)lo].value, p.rot[(size_t)hi].value, f);
+    }
+    if (info.scaleCount > 0)
+    {
+        auto [lo, hi, f] = tramo(info.scaleOffset, info.scaleCount, [&](int k) { return p.scale[(size_t)k].timePad.x; });
+        out.s = glm::mix(glm::vec3(p.scale[(size_t)lo].value), glm::vec3(p.scale[(size_t)hi].value), f);
+    }
+    return true;
+}
+
+// Lo que calcula bone_eval para el hueso i con una AnimationPose: suma
+// ponderada de las muestras (y de la congelada), rotación con el signo
+// alineado a la primera y normalizada, y el bloqueo de raíz al final. Con
+// boneCount = 1 y clip = clipBase sirve también para bloques sueltos.
+static Trs evalPoseTrs(const PackedClips& p, size_t boneCount, size_t i, const AnimationPose& pose,
+                       const std::vector<Trs>* frozen)
+{
+    Trs acc; acc.p = glm::vec3(0.0f); acc.s = glm::vec3(0.0f);
+    glm::vec4 q(0.0f), ref(0.0f, 0.0f, 0.0f, 1.0f);
+    bool hayRef = false, alguna = false;
+    float total = 0.0f;
+    auto sumar = [&](const Trs& t, float w) {
+        glm::vec4 qk = t.q;
+        if (!hayRef) { ref = qk; hayRef = true; }
+        if (glm::dot(qk, ref) < 0.0f) qk = -qk;
+        acc.p += w * t.p; acc.s += w * t.s; q += w * qk; total += w;
+    };
+    for (int k = 0; k < pose.count; k++)
+    {
+        Trs t;
+        if (sampleTrs(p, (size_t)pose.samples[k].clip * boneCount, i, pose.samples[k].time, t)) alguna = true;
+        sumar(t, pose.samples[k].weight);
+    }
+    if (pose.frozenWeight > 0.0f && frozen && i < frozen->size() && !(*frozen)[i].bind)
+    {
+        sumar((*frozen)[i], pose.frozenWeight);
+        alguna = true;
+    }
+    if (!alguna) { Trs b; b.bind = true; return b; }
+    // Si la congelada no entra (su hueso era bind), el resto se renormaliza.
+    if (total > 0.0f && std::fabs(total - 1.0f) > 1e-4f) { acc.p /= total; acc.s /= total; q /= total; }
+    const float len = glm::length(q);
+    acc.q = len > 1e-6f ? q / len : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    const size_t base = (size_t)(pose.count > 0 ? pose.samples[0].clip : 0) * boneCount;
+    const GpuBoneInfo& info = p.boneInfos[base + i];
+    if (info.parentIndex < 0)
+    {
+        if (pose.rootMotionMode == 1u) acc.p = glm::vec3(info.bindLocal[3]);
+        if (pose.rootMotionMode == 2u) acc.p = glm::vec3(info.bindLocal[3].x, acc.p.y, info.bindLocal[3].z);
+    }
+    return acc;
+}
+
+static glm::mat4 trsToMat(const Trs& t, const GpuBoneInfo& info)
+{
+    if (t.bind) return info.bindLocal;
+    glm::mat4 out = glm::mat4_cast(glm::quat(t.q.w, t.q.x, t.q.y, t.q.z));
+    out[0] *= t.s.x;
+    out[1] *= t.s.y;
+    out[2] *= t.s.z;
+    out[3] = glm::vec4(t.p, 1.0f);
+    return out;
+}
+
 // Réplica en CPU de bone_hierarchy.comp: las dos pasadas, tal cual. Sirve pa
 // comprobar la matriz que acaba viendo skinning.comp sin necesitar un VkDevice.
 static std::vector<glm::mat4> runBoneHierarchy(const PackedClips& p, size_t clipBase,
@@ -2292,76 +2386,14 @@ static glm::mat4 evalLocalXformBlended(const PackedClips& p, size_t clipBaseA, s
     if (w >= 1.0f) return evalLocalXform(p, clipBaseB, i, TB, lockRootMotion);
     if (w <= 0.0f) return evalLocalXform(p, clipBaseA, i, TA, lockRootMotion);
 
-    const GpuBoneInfo& ia = p.boneInfos[clipBaseA + i];
-    const GpuBoneInfo& ib = p.boneInfos[clipBaseB + i];
-
-    // Un hueso sin canal se resuelve POR CLIP antes de mezclar: su aportación es
-    // su bind local, no la identidad.
-    const bool emptyA = (ia.posCount == 0 && ia.rotCount == 0 && ia.scaleCount == 0);
-    const bool emptyB = (ib.posCount == 0 && ib.rotCount == 0 && ib.scaleCount == 0);
-    if (emptyA && emptyB) return ia.bindLocal;
-
-    auto sample = [&](const GpuBoneInfo& info, float T, glm::vec3& pos, glm::vec4& rot, glm::vec3& scl)
-    {
-        pos = glm::vec3(0.0f);
-        rot = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-        scl = glm::vec3(1.0f);
-        if (info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0)
-        {
-            // Descomponer bindLocal entero sería otra historia; en las fixtures
-            // de estos tests el hueso sin canal lo está en los dos clips y ya se
-            // ha resuelto arriba.
-            return;
-        }
-        if (info.posCount > 0)
-        {
-            int lo = info.posOffset, hi = info.posOffset + info.posCount - 1;
-            for (int k = info.posOffset; k < info.posOffset + info.posCount - 1; k++)
-                if (p.pos[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
-            const float t0 = p.pos[(size_t)lo].timePad.x, t1 = p.pos[(size_t)hi].timePad.x;
-            const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
-            pos = glm::mix(glm::vec3(p.pos[(size_t)lo].value), glm::vec3(p.pos[(size_t)hi].value), f);
-        }
-        if (info.rotCount > 0)
-        {
-            int lo = info.rotOffset, hi = info.rotOffset + info.rotCount - 1;
-            for (int k = info.rotOffset; k < info.rotOffset + info.rotCount - 1; k++)
-                if (p.rot[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
-            const float t0 = p.rot[(size_t)lo].timePad.x, t1 = p.rot[(size_t)hi].timePad.x;
-            const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
-            rot = slerpQ(p.rot[(size_t)lo].value, p.rot[(size_t)hi].value, f);
-        }
-        if (info.scaleCount > 0)
-        {
-            int lo = info.scaleOffset, hi = info.scaleOffset + info.scaleCount - 1;
-            for (int k = info.scaleOffset; k < info.scaleOffset + info.scaleCount - 1; k++)
-                if (p.scale[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
-            const float t0 = p.scale[(size_t)lo].timePad.x, t1 = p.scale[(size_t)hi].timePad.x;
-            const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
-            scl = glm::mix(glm::vec3(p.scale[(size_t)lo].value), glm::vec3(p.scale[(size_t)hi].value), f);
-        }
-    };
-
-    glm::vec3 pa, sa, pb, sb;
-    glm::vec4 ra, rb;
-    sample(ia, TA, pa, ra, sa);
-    sample(ib, TB, pb, rb, sb);
-
-    glm::vec3       pos = glm::mix(pa, pb, w);
-    const glm::vec4 rot = slerpQ(ra, rb, w);
-    const glm::vec3 scl = glm::mix(sa, sb, w);
-
-    // El override va DESPUÉS de mezclar: mezclar dos traslaciones y luego
-    // pisarla es lo mismo que hace el shader en su único punto de override.
-    if (lockRootMotion && ib.parentIndex < 0)
-        pos = glm::vec3(ib.bindLocal[3]);
-
-    glm::mat4 out = glm::mat4_cast(glm::quat(rot.w, rot.x, rot.y, rot.z));
-    out[0] *= scl.x;
-    out[1] *= scl.y;
-    out[2] *= scl.z;
-    out[3] = glm::vec4(pos, 1.0f);
-    return out;
+    // Desde la fila 13 la GPU suma muestras ponderadas (nlerp en la rotación,
+    // no slerp): la referencia es la misma que la del bone_eval por muestras.
+    AnimationPose pose;
+    pose.count = 2;
+    pose.samples[0] = { (int)clipBaseA, TA, 1.0f - w };
+    pose.samples[1] = { (int)clipBaseB, TB, w };
+    pose.rootMotionMode = lockRootMotion ? 1u : 0u;
+    return trsToMat(evalPoseTrs(p, 1, i, pose, nullptr), p.boneInfos[clipBaseA + i]);
 }
 
 // Malla de dos clips que colocan el mismo hueso en sitios MUY separados (x=0 y
@@ -5008,26 +5040,24 @@ static void test_tracker_label_is_per_gesture()
 // helper es plantilla y no toma `EditorRenderer&`: esa interfaz son 75 métodos
 // puros, y un doble de 75 stubs para probar cinco llamadas no lo escribe nadie.
 // Apunta el ORDEN, que es la mitad de lo que hay que proteger aquí.
+static AnimatorComponent makeTwoBlendStates();   // más abajo, con los tests de pose
+
 struct SkinnedRendererDoble
 {
     std::vector<std::string> orden;
     bool      visible       = false;
-    uint32_t  clipB         = 0xFFFFFFFFu;
-    uint32_t  clipA         = 0xFFFFFFFFu;
-    float     timeB         = -1.0f;
-    float     timeA         = -1.0f;
-    float     weight        = -1.0f;
-    uint32_t  rootMode      = 0xFFFFFFFFu;
+    AnimationPose pose;
+    bool      poseRecibida  = false;
     float     dtSinAnimator = -1.0f;
     glm::mat4 transform     = glm::mat4(0.0f);
     float     ssr           = -1.0f;
 
     void setSkinnedMeshVisible(int, bool v) { orden.push_back("visible"); visible = v; }
     void updateAnimation(int, float dt)     { orden.push_back("updateAnimation"); dtSinAnimator = dt; }
-    void setAnimationBlend(int, uint32_t cb, float tb, uint32_t ca, float ta, float w, uint32_t mode)
+    void setAnimationPose(int, const AnimationPose& p)
     {
         orden.push_back("blend");
-        clipB = cb; timeB = tb; clipA = ca; timeA = ta; weight = w; rootMode = mode;
+        pose = p; poseRecibida = true;
     }
     void setSkinnedTransform(int, const glm::mat4& m) { orden.push_back("transform"); transform = m; }
     void setSkinnedSsr(int, float s)                  { orden.push_back("ssr"); ssr = s; }
@@ -5112,15 +5142,45 @@ static void test_apply_skinned_frame_passes_pose_b_then_a()
     SkinnedRendererDoble r;
     applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
 
-    CHECK(a->poseClipA() != a->poseClipB());
-    CHECK(!nearlyEqual(a->poseTimeA(), a->poseTimeB()));
-    CHECK(r.clipB == (uint32_t)a->poseClipB());
-    CHECK(r.clipA == (uint32_t)a->poseClipA());
-    CHECK(nearlyEqual(r.timeB, a->poseTimeB()));
-    CHECK(nearlyEqual(r.timeA, a->poseTimeA()));
-    CHECK(nearlyEqual(r.weight, a->poseWeight()));
-    CHECK(r.rootMode == 1u);
-    CHECK(r.rootMode == a->poseRootMotionMode());
+    // Desde la fila 13 viaja la AnimationPose entera: la misma que da pose().
+    const AnimationPose esperada = a->pose();
+    CHECK(r.poseRecibida);
+    CHECK(esperada.count == 2);
+    CHECK(r.pose.count == esperada.count);
+    for (int k = 0; k < esperada.count; k++)
+    {
+        CHECK(r.pose.samples[k].clip == esperada.samples[k].clip);
+        CHECK(nearlyEqual(r.pose.samples[k].time, esperada.samples[k].time));
+        CHECK(nearlyEqual(r.pose.samples[k].weight, esperada.samples[k].weight));
+    }
+    CHECK(r.pose.samples[0].clip != r.pose.samples[1].clip);
+    CHECK(!nearlyEqual(r.pose.samples[0].time, r.pose.samples[1].time));
+    CHECK(r.pose.rootMotionMode == 1u);
+    CHECK(nearlyEqual(r.pose.frozenWeight, esperada.frozenWeight));
+}
+
+// Un fade interrumpido pide congelar la pose de pantalla UNA vez: el host la
+// entrega con freezeNow y la consume en el acto. Si no la consumiera, el
+// backend congelaría cada frame y la pose de salida se quedaría clavada.
+static void test_apply_skinned_frame_delivers_freeze_once()
+{
+    Scene scene("Test");
+    auto a = std::make_shared<AnimatorComponent>(makeTwoBlendStates());
+    a->setTrigger("go");
+    a->update(0.016f, true);
+    a->update(0.5f, true);                          // fade Loco -> Otro en vuelo
+    a->setTrigger("back");
+    GameObject* go = makeSkinnedGameObject(scene, a);
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);   // interrumpe
+    CHECK(r.pose.freezeNow);
+    CHECK(r.pose.frozenWeight > 0.0f);
+    CHECK(!a->pose().freezeNow);
+
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
+    CHECK(!r.pose.freezeNow);
+    CHECK(r.pose.frozenWeight > 0.0f);
 }
 
 // Sin Animator el reloj lo lleva el backend, como antes de que el componente
@@ -6523,6 +6583,193 @@ static void test_legacy_scene_without_sources_shares_preloaded(PhysicsManager& p
     CHECK(r2->getMesh().get() != conExtra.get());
 }
 
+// ── Pose por muestras ────────────────────────────────────────────────────────
+//
+// Dos estados con blend 1D: Loco (Walk clip 0 umbral 0, Run clip 2 umbral 1) y
+// Otro (Idle clip 1 umbral 0, Jump clip 3 umbral 1), con speed = 0,5 (pareja a
+// medias en los dos). go: Loco -> Otro, fade de 2 s. back: Otro -> Loco, 1 s.
+static AnimatorComponent makeTwoBlendStates()
+{
+    AnimatorComponent a;
+    auto estado = [](const char* n, const char* principal, int ci, const char* extra, int ce) {
+        AnimatorComponent::State s;
+        s.name = n; s.clipName = principal; s.clipIndex = ci; s.duration = 40.0f;
+        s.ticksPerSecond = 20.0f; s.loop = true;
+        s.blendParam = "speed"; s.clipThreshold = 0.0f;
+        s.blendEntries = { entrada(extra, ce, 40.0f, 1.0f) };
+        return s;
+    };
+    a.addState(estado("Loco", "Walk", 0, "Run", 2));
+    a.addState(estado("Otro", "Idle", 1, "Jump", 3));
+    a.setEntryState(0);
+    a.addParameter("speed", AnimatorComponent::ParamType::Float);
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    a.addParameter("back", AnimatorComponent::ParamType::Trigger);
+    auto trans = [&](int from, int to, float dur, const char* trig) {
+        AnimatorComponent::Transition t;
+        t.fromState = from; t.toState = to; t.duration = dur;
+        AnimatorComponent::Condition c;
+        c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = trig;
+        t.conditions.push_back(c);
+        a.addTransition(t);
+    };
+    trans(0, 1, 2.0f, "go");
+    trans(1, 0, 1.0f, "back");
+    a.reset();
+    a.setFloat("speed", 0.5f);
+    return a;
+}
+
+static float pesoMuestra(const AnimationPose& p, int clip)
+{
+    float w = 0.0f;
+    for (int i = 0; i < p.count; i++) if (p.samples[i].clip == clip) w += p.samples[i].weight;
+    return w;
+}
+
+static float sumaPesos(const AnimationPose& p)
+{
+    float w = p.frozenWeight;
+    for (int i = 0; i < p.count; i++) w += p.samples[i].weight;
+    return w;
+}
+
+// Sin fade: la pareja del estado, con sus pesos.
+static void test_pose_samples_without_fade()
+{
+    AnimatorComponent a = makeTwoBlendStates();
+    a.update(0.5f, true);
+    const AnimationPose p = a.pose();
+    CHECK(p.count == 2);
+    CHECK(nearlyEqual(pesoMuestra(p, 0), 0.5f));
+    CHECK(nearlyEqual(pesoMuestra(p, 2), 0.5f));
+    CHECK(nearlyEqual(p.frozenWeight, 0.0f));
+    CHECK(!p.freezeNow);
+    // Sin blend: una sola muestra de peso 1.
+    a.setFloat("speed", 0.0f);
+    a.update(0.0f, true);
+    CHECK(a.pose().count == 1);
+    CHECK(nearlyEqual(a.pose().samples[0].weight, 1.0f));
+}
+
+// Fade entre dos estados con blend: las 4 muestras, el que sale con SU reloj.
+static void test_pose_samples_fade_between_blends()
+{
+    AnimatorComponent a = makeTwoBlendStates();
+    a.update(0.5f, true);                          // Loco en 10 ticks
+    a.setTrigger("go");
+    a.update(0.016f, true);                        // sale a Otro
+    a.update(0.5f, true);                          // w = 0,258 aprox.
+    const float w = a.blendWeight();
+    CHECK(w > 0.2f && w < 0.3f);
+    const AnimationPose p = a.pose();
+    CHECK(p.count == 4);
+    CHECK(nearlyEqual(pesoMuestra(p, 0), (1.0f - w) * 0.5f));
+    CHECK(nearlyEqual(pesoMuestra(p, 2), (1.0f - w) * 0.5f));
+    CHECK(nearlyEqual(pesoMuestra(p, 1), w * 0.5f));
+    CHECK(nearlyEqual(pesoMuestra(p, 3), w * 0.5f));
+    for (int i = 0; i < p.count; i++)
+        if (p.samples[i].clip == 0 || p.samples[i].clip == 2)
+            CHECK(nearlyEqual(p.samples[i].time, a.previousAnimTime()));   // Run: fase del previo x 40
+}
+
+// Interrumpir un fade congela la pose una vez y el estado previo deja de
+// aportar muestras.
+static void test_pose_freeze_on_interrupted_fade()
+{
+    AnimatorComponent a = makeTwoBlendStates();
+    a.setTrigger("go");
+    a.update(0.016f, true);
+    a.update(0.5f, true);                          // fade Loco -> Otro en vuelo
+    a.setTrigger("back");
+    a.update(0.016f, true);                        // interrumpe: Otro -> Loco
+    AnimationPose p = a.pose();
+    CHECK(p.freezeNow);
+    CHECK(a.fading());
+    CHECK(!a.blending());
+    CHECK(nearlyEqual(p.frozenWeight, 1.0f - a.blendWeight()));
+    CHECK(nearlyEqual(pesoMuestra(p, 1) + pesoMuestra(p, 3), 0.0f));   // Otro ya no aporta
+    a.clearFreezeRequest();
+    CHECK(!a.pose().freezeNow);
+    a.update(0.25f, true);
+    p = a.pose();
+    CHECK(!p.freezeNow);
+    CHECK(nearlyEqual(p.frozenWeight, 1.0f - a.blendWeight()));
+    CHECK(p.frozenWeight > 0.0f && p.frozenWeight < 1.0f);
+    a.update(2.0f, true);                          // el fade acaba
+    CHECK(!a.fading());
+    CHECK(nearlyEqual(a.pose().frozenWeight, 0.0f));
+}
+
+// Los pesos suman 1 en todos los casos.
+static void test_pose_weights_sum_to_one()
+{
+    AnimatorComponent a = makeTwoBlendStates();
+    CHECK(nearlyEqual(sumaPesos(a.pose()), 1.0f));
+    a.setTrigger("go");
+    a.update(0.016f, true);
+    for (int i = 0; i < 5; i++) { a.update(0.3f, true); CHECK(nearlyEqual(sumaPesos(a.pose()), 1.0f)); }
+    a.setTrigger("back");
+    a.update(0.016f, true);
+    for (int i = 0; i < 5; i++) { a.update(0.3f, true); CHECK(nearlyEqual(sumaPesos(a.pose()), 1.0f)); }
+}
+
+static SkinnedMesh makeFourConstantClips()
+{
+    SkinnedMesh m;
+    m.skeleton.names = { "Hips" };
+    m.skeleton.parentIndex = { -1 };
+    m.skeleton.inverseBindPose = { glm::mat4(1.0f) };
+    m.skeleton.boneMap["Hips"] = 0;
+    const glm::vec3 pos[4] = { {0,0,0}, {0,20,0}, {10,0,0}, {0,0,30} };
+    const char* nombres[4] = { "Walk", "Idle", "Run", "Jump" };
+    for (int c = 0; c < 4; c++)
+    {
+        AnimationClip clip; clip.name = nombres[c]; clip.duration = 40.0f; clip.ticksPerSecond = 20.0f;
+        BoneChannel ch; ch.boneIndex = 0;
+        ch.posKeys = { { 0.0f, pos[c] }, { 40.0f, pos[c] } };
+        ch.rotKeys = { { 0.0f, glm::quat(1,0,0,0) }, { 40.0f, glm::quat(1,0,0,0) } };
+        ch.scaleKeys = { { 0.0f, glm::vec3(1.0f) }, { 40.0f, glm::vec3(1.0f) } };
+        clip.channels.push_back(ch);
+        m.animationClips.push_back(clip);
+    }
+    return m;
+}
+
+// A3: un fade desde un estado con blend no salta en su primer frame.
+static void test_pose_continuity_fade_from_blend()
+{
+    const SkinnedMesh mesh = makeFourConstantClips();
+    const PackedClips p = packSkinnedClips(mesh);
+    AnimatorComponent a = makeTwoBlendStates();
+    a.update(0.5f, true);
+    const glm::vec3 antes = evalPoseTrs(p, 1, 0, a.pose(), nullptr).p;   // (5,0,0)
+    a.setTrigger("go");
+    a.update(0.016f, true);                                              // primer frame del fade
+    const glm::vec3 despues = evalPoseTrs(p, 1, 0, a.pose(), nullptr).p;
+    CHECK(nearlyEqual(antes.x, 5.0f));
+    CHECK(glm::length(despues - antes) < 0.5f);
+}
+
+// A4: interrumpir un fade no salta; la congelada es la salida del frame anterior.
+static void test_pose_continuity_interrupted_fade()
+{
+    const SkinnedMesh mesh = makeFourConstantClips();
+    const PackedClips p = packSkinnedClips(mesh);
+    AnimatorComponent a = makeTwoBlendStates();
+    a.setTrigger("go");
+    a.update(0.016f, true);
+    a.update(0.5f, true);
+    std::vector<Trs> salida = { evalPoseTrs(p, 1, 0, a.pose(), nullptr) };
+    const glm::vec3 antes = salida[0].p;
+    a.setTrigger("back");
+    a.update(0.016f, true);
+    const AnimationPose tras = a.pose();
+    CHECK(tras.freezeNow);
+    const glm::vec3 despues = evalPoseTrs(p, 1, 0, tras, &salida).p;     // la GPU congela 'salida'
+    CHECK(glm::length(despues - antes) < 0.5f);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6654,6 +6901,12 @@ int main()
     test_apply_skinned_frame_applies_root_motion();
     test_packing_fills_bone_depth();
     test_packing_depth_invariant_real_rig();
+    test_pose_samples_without_fade();
+    test_pose_samples_fade_between_blends();
+    test_pose_freeze_on_interrupted_fade();
+    test_pose_weights_sum_to_one();
+    test_pose_continuity_fade_from_blend();
+    test_pose_continuity_interrupted_fade();
     test_state_without_blend_fields_loads(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
@@ -6712,6 +6965,7 @@ int main()
 
     test_apply_skinned_frame_sets_visible_before_animation();
     test_apply_skinned_frame_passes_pose_b_then_a();
+    test_apply_skinned_frame_delivers_freeze_once();
     test_apply_skinned_frame_without_animator_advances_backend_clock();
     test_apply_skinned_frame_edit_mode_does_not_move_the_graph();
     test_apply_skinned_frame_ignores_unregistered_object();

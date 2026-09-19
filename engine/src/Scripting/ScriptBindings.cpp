@@ -1534,7 +1534,7 @@ namespace DonTopo::ScriptBindings
                 // Cross-fade en curso. Son de LECTURA: la duración de la mezcla
                 // es autoría del grafo (se edita en el panel Animator), igual
                 // que las condiciones de una transición.
-                "IsBlending",     [animOf](const LuaAnimator& c) { return animOf(c)->blending(); },
+                "IsBlending",     [animOf](const LuaAnimator& c) { return animOf(c)->fading(); },
                 "GetBlendWeight", [animOf](const LuaAnimator& c) { return animOf(c)->blendWeight(); },
                 "GetPreviousState", [animOf](const LuaAnimator& c) { return animOf(c)->previousStateName(); },
                 // El peso que acaba yendo a la GPU: el del cross-fade si hay

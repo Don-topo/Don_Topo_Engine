@@ -35,7 +35,7 @@ namespace DonTopo
         // sin Animator en Vulkan: `Renderer::updateAnimation` congela el reloj
         // de un mesh oculto, así que el flag tiene que estar ya puesto o iría un
         // frame por detrás. Con Animator el orden no cambia nada (el reloj lo
-        // lleva la CPU y `setAnimationBlend` no mira la visibilidad), y D3D12 no
+        // lleva la CPU y `setAnimationPose` no mira la visibilidad), y D3D12 no
         // congela en ningún camino; se mantiene un único orden para los dos
         // para que esa diferencia no dependa de quién llama.
         renderer.setSkinnedMeshVisible(go.skinnedRenderIndex, go.meshVisible);
@@ -51,17 +51,13 @@ namespace DonTopo
             if (!anim->rootMotionSamples().empty())
                 if (const SkinnedMesh* sk = go.getSkinnedMesh())
                     applyRootMotion(go, rootMotionDelta(*sk, *anim), dt);
-            // setAnimationBlend siempre: los pose* resuelven ya el cross-fade y
-            // el blend por parámetro, y sin ninguno de los dos el peso vale 1 y
-            // el backend ni mira el segundo clip. Primero el clip actual (B),
-            // después el que se apaga (A).
-            renderer.setAnimationBlend(go.skinnedRenderIndex,
-                                       (uint32_t)anim->poseClipB(),
-                                       anim->poseTimeB(),
-                                       (uint32_t)anim->poseClipA(),
-                                       anim->poseTimeA(),
-                                       anim->poseWeight(),
-                                       anim->poseRootMotionMode());
+            // La pose entera siempre: muestras del estado actual, del que se
+            // apaga (con su propio blend) y la congelada si un fade se
+            // interrumpió. La petición de congelar se consume AQUÍ, al
+            // entregarla, y no en el siguiente update: un CrossFade de Lua
+            // entre dos updates la perdería.
+            renderer.setAnimationPose(go.skinnedRenderIndex, anim->pose());
+            anim->clearFreezeRequest();
         }
         else
         {

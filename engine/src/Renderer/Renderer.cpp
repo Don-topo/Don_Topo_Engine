@@ -3649,6 +3649,8 @@ namespace DonTopo {
         destroy(obj.inputVertexBuffer,    obj.inputVertexMemory);
         destroy(obj.localTransformBuffer, obj.localTransformMemory);
         destroy(obj.finalBoneBuffer,      obj.finalBoneMemory);
+        destroy(obj.poseTrsBuffer,        obj.poseTrsMemory);
+        destroy(obj.frozenTrsBuffer,      obj.frozenTrsMemory);
         destroy(obj.outputVertexBuffer,   obj.outputVertexMemory);
         destroy(obj.indexBuffer,          obj.indexMemory);
 
@@ -3800,6 +3802,17 @@ namespace DonTopo {
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             obj.finalBoneBuffer, obj.finalBoneMemory);
 
+        // Pose en TRS (bone_eval) y la congelada: 3 vec4 por hueso; se copian
+        // entre sí al interrumpir un fade, de ahí los usos de transferencia.
+        for (auto* par : { &obj.poseTrsBuffer, &obj.frozenTrsBuffer })
+        {
+            VkDeviceMemory& mem = (par == &obj.poseTrsBuffer) ? obj.poseTrsMemory : obj.frozenTrsMemory;
+            m_res.createBuffer((uint32_t)boneCount * 3 * sizeof(glm::vec4),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, *par, mem);
+        }
+
         // --- Output vertex buffer: SSBO + VB, stride 80 bytes (5×vec4) ---
         constexpr VkDeviceSize OUT_VERT = 5 * sizeof(glm::vec4);
         m_res.createBuffer((uint32_t)vertexCount * OUT_VERT,
@@ -3815,7 +3828,7 @@ namespace DonTopo {
         if (obj.computeDescPool == VK_NULL_HANDLE)
             throw std::runtime_error("failed to allocate compute descriptor set!");
 
-        VkDescriptorBufferInfo bufInfos[8]{};
+        VkDescriptorBufferInfo bufInfos[10]{};
         bufInfos[0] = { obj.keyframePosBuffer,    0, VK_WHOLE_SIZE };
         bufInfos[1] = { obj.keyframeRotBuffer,    0, VK_WHOLE_SIZE };
         bufInfos[2] = { obj.keyframeScaleBuffer,  0, VK_WHOLE_SIZE };
@@ -3824,9 +3837,11 @@ namespace DonTopo {
         bufInfos[5] = { obj.finalBoneBuffer,      0, VK_WHOLE_SIZE };
         bufInfos[6] = { obj.inputVertexBuffer,    0, VK_WHOLE_SIZE };
         bufInfos[7] = { obj.outputVertexBuffer,   0, VK_WHOLE_SIZE };
+        bufInfos[8] = { obj.poseTrsBuffer,        0, VK_WHOLE_SIZE };
+        bufInfos[9] = { obj.frozenTrsBuffer,      0, VK_WHOLE_SIZE };
 
-        VkWriteDescriptorSet writes[8]{};
-        for (int i = 0; i < 8; i++)
+        VkWriteDescriptorSet writes[10]{};
+        for (int i = 0; i < 10; i++)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = obj.computeDescSet;
@@ -3835,7 +3850,7 @@ namespace DonTopo {
             writes[i].descriptorCount = 1;
             writes[i].pBufferInfo     = &bufInfos[i];
         }
-        vkUpdateDescriptorSets(m_gpu.device(), 8, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_gpu.device(), 10, writes, 0, nullptr);
 
         // --- Texturas y descriptor sets por material ---
         constexpr uint8_t white[4] = {255, 255, 255, 255};
@@ -4024,27 +4039,32 @@ namespace DonTopo {
         // fuera del SSBO de BoneInfos, y el compute leería basura en silencio.
         obj.activeClip = clampClipIndex(clipIndex, obj.clipCount);
         obj.animTime   = animTime;
-        // Un objeto que deja de mezclar tiene que volver a peso 1 o el compute
-        // seguiría leyendo el clip previo del frame anterior para siempre. Por
-        // lo mismo se suelta el bloqueo de raíz: quien lo quiera pasa por
-        // setAnimationBlend, que lo fija cada frame.
-        obj.blendWeight = 1.0f;
-        obj.rootMotionMode = 0;
+        // Una sola muestra a partir de aquí: la pose de un Animator la vuelve a
+        // mandar setAnimationPose cada frame si hace falta.
+        obj.hasPose = false;
     }
 
-    void Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animTime,
-                                     uint32_t prevClipIndex, float prevAnimTime, float weight,
-                                     uint32_t rootMotionMode)
+    void Renderer::setAnimationPose(int index, const AnimationPose& pose)
     {
-        setAnimationState(index, clipIndex, animTime);
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
         auto& obj = m_skinnedObjects[index];
-        // Mismo clamp que el clip activo: el clip previo también indexa el SSBO
-        // de BoneInfos y un índice fuera de rango leería basura en silencio.
-        obj.prevClip     = clampClipIndex(prevClipIndex, obj.clipCount);
-        obj.prevAnimTime = prevAnimTime;
-        obj.blendWeight  = (weight < 0.0f) ? 0.0f : (weight > 1.0f ? 1.0f : weight);
-        obj.rootMotionMode = rootMotionMode;
+        obj.pose    = pose;
+        obj.hasPose = true;
+        // Mismo clamp que el clip activo: cada clip indexa el SSBO de BoneInfos
+        // y uno fuera de rango leería basura en silencio.
+        int masPesada = -1;
+        for (int k = 0; k < obj.pose.count; k++)
+        {
+            obj.pose.samples[k].clip = (int)clampClipIndex((uint32_t)std::max(0, obj.pose.samples[k].clip), obj.clipCount);
+            if (masPesada < 0 || obj.pose.samples[k].weight > obj.pose.samples[masPesada].weight) masPesada = k;
+        }
+        // El resto del renderer (límites, contorno) sigue mirando un solo clip:
+        // el que más pesa.
+        if (masPesada >= 0)
+        {
+            obj.activeClip = (uint32_t)obj.pose.samples[masPesada].clip;
+            obj.animTime   = obj.pose.samples[masPesada].time;
+        }
     }
 
     void Renderer::setSkinnedTransform(int index, const glm::mat4& t)

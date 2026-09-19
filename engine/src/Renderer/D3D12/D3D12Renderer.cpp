@@ -153,20 +153,20 @@ static_assert(sizeof(PushData) == 80, "PushData debe ocupar 80 bytes (20 root co
 // Espejo de SkinningPass::Push (Vulkan): los dos backends compilan LOS MISMOS
 // .comp, así que este bloque y aquél tienen que coincidir campo a campo.
 struct ComputePush {
-    float    animTime;
     uint32_t boneCount;
     uint32_t vertexCount;
-    uint32_t clipBase;  // activeClip * boneCount
-    // Cross-fade: segundo clip, su reloj y el peso. Solo los lee bone_eval.
-    float    prevAnimTime;
-    uint32_t prevClipBase;
-    float    blendWeight;
-    // 1 = traslación del hueso raíz clavada a su bind pose. Ocupa el slot que
-    // antes era padding: el bloque sigue en 32 bytes y la root signature no
-    // cambia. Solo lo lee bone_eval.
-    uint32_t lockRootMotion;
+    // --- Solo los lee bone_eval.comp ---
+    // Hasta 4 muestras (clip * boneCount, tiempo en ticks, peso) y el peso
+    // de la pose congelada. Escalares y no arrays: en HLSL un array de un
+    // cbuffer ocupa 16 bytes por elemento y spirv-cross no lo iguala.
+    uint32_t sampleCount;
+    uint32_t rootMotionMode;   // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
+    float    frozenWeight;
+    uint32_t clipBase0, clipBase1, clipBase2, clipBase3;
+    float    time0, time1, time2, time3;
+    float    weight0, weight1, weight2, weight3;
 };
-static_assert(sizeof(ComputePush) == 32, "ComputePush debe ocupar 32 bytes");
+static_assert(sizeof(ComputePush) == 68, "ComputePush: espejo de SkinningPass::Push y de los 3 .comp");
 
 // Medio flotante a mano: los neutros del IBL son cuatro texels y no compensa
 // arrastrar DirectXMath por ellos. Vale para valores normales y pequeños, que
@@ -946,6 +946,9 @@ struct D3D12Renderer::Impl {
         D3D12MA::Allocation* inputVerts  = nullptr;
         D3D12MA::Allocation* localXforms = nullptr;
         D3D12MA::Allocation* finalBones  = nullptr;
+        // TRS de la pose (lo escribe bone_eval) y la congelada, 3 vec4 por hueso.
+        D3D12MA::Allocation* poseTrs     = nullptr;
+        D3D12MA::Allocation* frozenTrs   = nullptr;
         D3D12MA::Allocation* outputVerts = nullptr;
         D3D12MA::Allocation* indices     = nullptr;
 
@@ -966,14 +969,10 @@ struct D3D12Renderer::Impl {
         uint32_t clipBase     = 0;
         float    animTime     = 0.0f;
         float    animDuration = 0.0f;
-        // Cross-fade: el clip que se apaga y su propio reloj. Con blendWeight
-        // a 1 el compute no llega a mirarlos.
-        uint32_t prevClipBase = 0;
-        float    prevAnimTime = 0.0f;
-        float    blendWeight  = 1.0f;
-        // Modo de la raíz: 0 libre, 1 clavada a bind, 2 solo X y Z clavadas
-        // (root motion). 0 = comportamiento de siempre.
-        uint32_t rootMotionMode = 0;
+        // La pose que manda un Animator (setAnimationPose). Sin ella, una sola
+        // muestra: clipBase en animTime.
+        AnimationPose pose;
+        bool          hasPose = false;
         // Quién manda en animTime. En cuanto alguien de fuera lo mueve
         // —updateAnimation o setAnimationState— el backend deja de avanzarlo por
         // su cuenta: los dos relojes sumando dejarían el clip al doble.
@@ -3215,7 +3214,11 @@ void D3D12Renderer::Impl::createSkinningPipelines()
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 1},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 2},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 3},
-                        {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 4}},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 4},
+                        // poseTrs (u8, escribible) y frozenTrs (t9, solo lectura):
+                        // spirv-cross da el registro del binding.
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 8},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 9}},
                        boneEvalRootSignature, "bone_eval");
     // bone_hierarchy: lee huesos y locales (t3, t4), escribe matrices finales (u5)
     buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 3},
@@ -3374,6 +3377,10 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
     object.localXforms = createStorageBuffer(static_cast<UINT64>(object.boneCount) * sizeof(glm::mat4),
                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     object.finalBones  = createStorageBuffer(static_cast<UINT64>(object.boneCount) * sizeof(glm::mat4),
+                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    object.poseTrs     = createStorageBuffer(static_cast<UINT64>(object.boneCount) * 3 * sizeof(glm::vec4),
+                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    object.frozenTrs   = createStorageBuffer(static_cast<UINT64>(object.boneCount) * 3 * sizeof(glm::vec4),
                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     object.outputVerts = createStorageBuffer(
         static_cast<UINT64>(object.vertexCount) * kSkinnedOutputStride,
@@ -3559,7 +3566,7 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
     for (SkinnedObject& character : skinnedObjects) {
         for (D3D12MA::Allocation** allocation :
              {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
-              &character.inputVerts, &character.localXforms, &character.finalBones,
+              &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs,
               &character.outputVerts, &character.indices}) {
             if (*allocation) {
                 (*allocation)->Release();
@@ -3584,26 +3591,63 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
 
 void D3D12Renderer::Impl::recordSkinning()
 {
-    std::vector<const SkinnedObject*> activos;
+    std::vector<SkinnedObject*> activos;
     activos.reserve(skinnedObjects.size());
-    for (const SkinnedObject& object : skinnedObjects)
+    for (SkinnedObject& object : skinnedObjects)
         if (object.vertexCount != 0)
             activos.push_back(&object);
     if (activos.empty())
         return;
 
+    // Push de un personaje: la pose por muestras si la mandó un Animator, o una
+    // sola muestra (clipBase en animTime) si su reloj va por el backend.
     auto pushDe = [](const SkinnedObject& object) {
         ComputePush push{};
-        push.prevAnimTime   = object.prevAnimTime;
-        push.prevClipBase   = object.prevClipBase;
-        push.blendWeight    = object.blendWeight;
-        push.lockRootMotion = object.rootMotionMode;
-        push.animTime       = object.animTime;
-        push.boneCount      = object.boneCount;
-        push.vertexCount    = object.vertexCount;
-        push.clipBase       = object.clipBase;
+        push.boneCount   = object.boneCount;
+        push.vertexCount = object.vertexCount;
+        const uint32_t B = object.boneCount;
+        AnimationPose unica;
+        unica.count = 1;
+        unica.samples[0] = { B > 0 ? (int)(object.clipBase / B) : 0, object.animTime, 1.0f };
+        const AnimationPose& pose = object.hasPose ? object.pose : unica;
+        push.sampleCount    = static_cast<uint32_t>(pose.count);
+        push.rootMotionMode = pose.rootMotionMode;
+        push.frozenWeight   = pose.frozenWeight;
+        uint32_t* cb[4] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3 };
+        float*    tt[4] = { &push.time0, &push.time1, &push.time2, &push.time3 };
+        float*    ww[4] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3 };
+        for (int k = 0; k < 4; k++) {
+            const bool usada = k < pose.count;
+            *cb[k] = usada ? static_cast<uint32_t>(pose.samples[k].clip) * B : 0u;
+            *tt[k] = usada ? pose.samples[k].time : 0.0f;
+            *ww[k] = usada ? pose.samples[k].weight : 0.0f;
+        }
         return push;
     };
+
+    // Congelar la pose de pantalla (fade interrumpido) antes de evaluar:
+    // poseTrs tiene la del frame anterior. Una vez por petición.
+    for (SkinnedObject* object : activos) {
+        if (!object->hasPose || !object->pose.freezeNow)
+            continue;
+        D3D12_RESOURCE_BARRIER aCopia[2]{};
+        for (int b = 0; b < 2; b++) {
+            aCopia[b].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            aCopia[b].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            aCopia[b].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        }
+        aCopia[0].Transition.pResource  = object->poseTrs->GetResource();
+        aCopia[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        aCopia[1].Transition.pResource  = object->frozenTrs->GetResource();
+        aCopia[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        commandList->ResourceBarrier(2, aCopia);
+        commandList->CopyBufferRegion(object->frozenTrs->GetResource(), 0, object->poseTrs->GetResource(), 0,
+                                      static_cast<UINT64>(object->boneCount) * 3 * sizeof(glm::vec4));
+        for (int b = 0; b < 2; b++)
+            std::swap(aCopia[b].Transition.StateBefore, aCopia[b].Transition.StateAfter);
+        commandList->ResourceBarrier(2, aCopia);
+        object->pose.freezeNow = false;
+    }
     auto gpu = [](const auto& buffer) { return buffer->GetResource()->GetGPUVirtualAddress(); };
 
     // Tres FASES para todos los personajes, no tres pases por personaje: los
@@ -3631,6 +3675,8 @@ void D3D12Renderer::Impl::recordSkinning()
         commandList->SetComputeRootShaderResourceView(3, gpu(object->scaleKeys));
         commandList->SetComputeRootShaderResourceView(4, gpu(object->boneInfos));
         commandList->SetComputeRootUnorderedAccessView(5, gpu(object->localXforms));
+        commandList->SetComputeRootUnorderedAccessView(6, gpu(object->poseTrs));
+        commandList->SetComputeRootShaderResourceView(7, gpu(object->frozenTrs));
         commandList->Dispatch((object->boneCount + 63) / 64, 1, 1);
     }
     barreraEntreFases();
@@ -8257,7 +8303,7 @@ bool D3D12Renderer::Impl::releaseSkinnedSlot(size_t index)
 
     for (D3D12MA::Allocation** allocation :
          {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
-          &character.inputVerts, &character.localXforms, &character.finalBones,
+          &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs,
           &character.outputVerts, &character.indices}) {
         if (*allocation) {
             (*allocation)->Release();
@@ -10024,30 +10070,37 @@ void D3D12Renderer::setAnimationState(int index, uint32_t clipIndex, float animT
     // Acotado como en Vulkan: fuera de rango, clip 0 (ver clampClipIndex).
     character.clipBase             = clampClipIndex(clipIndex, character.clipCount) * character.boneCount;
     character.animTime             = animTime;
-    // Un objeto que deja de mezclar vuelve a peso 1 o el compute seguiría
-    // leyendo el clip previo del frame anterior para siempre.
-    character.blendWeight          = 1.0f;
-    // Y suelta el bloqueo de raíz por lo mismo: lo fija setAnimationBlend cada
-    // frame para quien lo quiera.
-    character.rootMotionMode       = 0;
+    // Una sola muestra a partir de aquí: la pose de un Animator la vuelve a
+    // mandar setAnimationPose cada frame si hace falta.
+    character.hasPose              = false;
     // El Animator del GameObject es el dueño del reloj: el backend no vuelve a
     // sumarle tiempo por su cuenta.
     character.externalClock = true;
 }
 
-void D3D12Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animTime,
-                                      uint32_t prevClipIndex, float prevAnimTime, float weight,
-                                      uint32_t rootMotionMode)
+void D3D12Renderer::setAnimationPose(int index, const AnimationPose& pose)
 {
-    setAnimationState(index, clipIndex, animTime);
     Impl& d = *m_impl;
     if (index < 0 || static_cast<size_t>(index) >= d.skinnedObjects.size())
         return;
     Impl::SkinnedObject& character = d.skinnedObjects[index];
-    character.prevClipBase         = clampClipIndex(prevClipIndex, character.clipCount) * character.boneCount;
-    character.prevAnimTime         = prevAnimTime;
-    character.blendWeight          = (weight < 0.0f) ? 0.0f : (weight > 1.0f ? 1.0f : weight);
-    character.rootMotionMode       = rootMotionMode;
+    character.pose    = pose;
+    character.hasPose = true;
+    // El Animator es el dueño del reloj: el backend no suma tiempo por su cuenta.
+    character.externalClock = true;
+    // Acotado como en Vulkan: un clip fuera de rango leería otro bloque.
+    int masPesada = -1;
+    for (int k = 0; k < character.pose.count; k++) {
+        character.pose.samples[k].clip = static_cast<int>(
+            clampClipIndex(static_cast<uint32_t>((std::max)(0, character.pose.samples[k].clip)), character.clipCount));
+        if (masPesada < 0 || character.pose.samples[k].weight > character.pose.samples[masPesada].weight)
+            masPesada = k;
+    }
+    // Lo demás del backend sigue mirando un solo clip: el que más pesa.
+    if (masPesada >= 0) {
+        character.clipBase = static_cast<uint32_t>(character.pose.samples[masPesada].clip) * character.boneCount;
+        character.animTime = character.pose.samples[masPesada].time;
+    }
 }
 
 size_t D3D12Renderer::skinnedCount() const

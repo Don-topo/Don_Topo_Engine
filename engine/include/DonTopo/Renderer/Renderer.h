@@ -471,13 +471,9 @@ namespace DonTopo {
             // AnimatorComponent. Los dos no se pisan: quien tiene Animator nunca
             // pasa por updateAnimation.
             void setAnimationState(int index, uint32_t clipIndex, float animTime);
-            // Igual que setAnimationState pero con el segundo clip de un
-            // cross-fade. weight 0 = solo prevClip, 1 = solo clipIndex.
-            // rootMotionMode: 0 pose libre, 1 raíz clavada a su bind, 2 solo X
-            // y Z clavadas (root motion). Default 0 = comportamiento de siempre.
-            void setAnimationBlend(int index, uint32_t clipIndex, float animTime,
-                                   uint32_t prevClipIndex, float prevAnimTime, float weight,
-                                   uint32_t rootMotionMode = 0);
+            // La pose de un Animator: hasta 4 muestras y la congelada (ver
+            // AnimationPose). Cada clip se acota como en setAnimationState.
+            void setAnimationPose(int index, const AnimationPose& pose);
             void setSkinnedTransform(int index, const glm::mat4& transform);
 
             // ── Frustum culling ──────────────────────────────────────────────

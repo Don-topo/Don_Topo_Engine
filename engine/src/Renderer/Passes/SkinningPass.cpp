@@ -15,9 +15,10 @@ namespace DonTopo {
 
 void SkinningPass::createPipelines(const Context& ctx)
 {
-    // --- Descriptor set layout: 8 storage buffers ---
-    VkDescriptorSetLayoutBinding bindings[8]{};
-    for (uint32_t i = 0; i < 8; i++)
+    // --- Descriptor set layout: 10 storage buffers (8 y 9: poseTrs y
+    // frozenTrs, solo de bone_eval) ---
+    VkDescriptorSetLayoutBinding bindings[10]{};
+    for (uint32_t i = 0; i < 10; i++)
     {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -27,7 +28,7 @@ void SkinningPass::createPipelines(const Context& ctx)
 
     VkDescriptorSetLayoutCreateInfo dslInfo{};
     dslInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslInfo.bindingCount = 8;
+    dslInfo.bindingCount = 10;
     dslInfo.pBindings    = bindings;
     if (vkCreateDescriptorSetLayout(ctx.gpu.device(), &dslInfo, nullptr, &m_descLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create compute descriptor set layout!");
@@ -81,10 +82,10 @@ void SkinningPass::createPipelines(const Context& ctx)
 
 bool SkinningPass::addPool(const Context& ctx)
 {
-    // 8 SSBOs por set, que son los ocho buffers que ata initSkinnedRenderObject.
+    // 10 SSBOs por set, que son los diez buffers que ata initSkinnedRenderObject.
     VkDescriptorPoolSize ps{};
     ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps.descriptorCount = 8 * kSetsPerPool;
+    ps.descriptorCount = 10 * kSetsPerPool;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -176,6 +177,63 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
     }
     if (activos.empty()) return;
 
+    // Push de un personaje: la pose por muestras si la mandó un Animator, o una
+    // sola muestra (clip activo, peso 1) si su reloj va por updateAnimation.
+    auto pushDe = [](const SkinnedRenderObject& obj) {
+        Push push{};
+        push.boneCount   = obj.boneCount;
+        push.vertexCount = obj.vertexCount;
+        AnimationPose unica;
+        unica.count = 1;
+        unica.samples[0] = { (int)obj.activeClip, obj.animTime, 1.0f };
+        const AnimationPose& pose = obj.hasPose ? obj.pose : unica;
+        push.sampleCount    = (uint32_t)pose.count;
+        push.rootMotionMode = pose.rootMotionMode;
+        push.frozenWeight   = pose.frozenWeight;
+        const uint32_t B = obj.boneCount;
+        uint32_t* cb[4] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3 };
+        float*    tt[4] = { &push.time0, &push.time1, &push.time2, &push.time3 };
+        float*    ww[4] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3 };
+        for (int k = 0; k < 4; k++)
+        {
+            const bool usada = k < pose.count;
+            *cb[k] = usada ? (uint32_t)pose.samples[k].clip * B : 0u;
+            *tt[k] = usada ? pose.samples[k].time : 0.0f;
+            *ww[k] = usada ? pose.samples[k].weight : 0.0f;
+        }
+        return push;
+    };
+
+    // Congelar la pose de pantalla (un fade interrumpido) ANTES de evaluar:
+    // poseTrs tiene la del frame anterior. Se hace una vez por petición.
+    bool hayCongelacion = false;
+    for (size_t i : activos)
+        if (ctx.skinnedObjects[i].hasPose && ctx.skinnedObjects[i].pose.freezeNow) hayCongelacion = true;
+    if (hayCongelacion)
+    {
+        VkMemoryBarrier antes{};
+        antes.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        antes.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+        antes.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 1, &antes, 0, nullptr, 0, nullptr);
+        for (size_t i : activos)
+        {
+            SkinnedRenderObject& obj = ctx.skinnedObjects[i];
+            if (!obj.hasPose || !obj.pose.freezeNow) continue;
+            VkBufferCopy region{};
+            region.size = (VkDeviceSize)obj.boneCount * 3 * sizeof(float) * 4;
+            vkCmdCopyBuffer(cmd, obj.poseTrsBuffer, obj.frozenTrsBuffer, 1, &region);
+            obj.pose.freezeNow = false;
+        }
+        VkMemoryBarrier despues{};
+        despues.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        despues.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        despues.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 1, &despues, 0, nullptr, 0, nullptr);
+    }
+
     // Tres FASES para todos los personajes, no tres pases por personaje: los
     // buffers de cada uno son suyos, así que dentro de una fase no dependen
     // entre sí y basta UNA barrera entre fases. Antes eran dos barreras por
@@ -187,15 +245,7 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
         for (size_t i : activos)
         {
             SkinnedRenderObject& obj = ctx.skinnedObjects[i];
-            Push push{};
-            push.animTime       = obj.animTime;
-            push.boneCount      = obj.boneCount;
-            push.vertexCount    = obj.vertexCount;
-            push.clipBase       = obj.activeClip * obj.boneCount;
-            push.prevAnimTime   = obj.prevAnimTime;
-            push.prevClipBase   = obj.prevClip * obj.boneCount;
-            push.blendWeight    = obj.blendWeight;
-            push.lockRootMotion = obj.rootMotionMode;
+            const Push push = pushDe(obj);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                 m_pipelineLayout, 0, 1, &obj.computeDescSet, 0, nullptr);
             vkCmdPushConstants(cmd, m_pipelineLayout,
