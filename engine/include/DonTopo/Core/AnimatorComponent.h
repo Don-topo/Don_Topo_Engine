@@ -426,6 +426,20 @@ namespace DonTopo
             // misma distinción que hay entre bindClips y rebindClips).
             void reset();
 
+            // --- Capas ---
+            // La 0 existe siempre y es la base: peso 1, override, sin máscara
+            // (los setters la ignoran). Las demás se aplican encima en orden.
+            int          layerCount() const { return (int)m_layers.size(); }
+            const Layer& layer(int i) const { return lay(i); }
+            Layer&       layerMutable(int i) { return lay(i); }
+            // Devuelve el índice de la nueva, -1 si ya hay kMaxLayers.
+            int   addLayer(const std::string& name);
+            void  removeLayer(int i);                 // no la 0
+            void  moveLayer(int from, int to);        // ni desde ni hacia la 0
+            void  setLayerWeight(int i, float w);     // acotado a [0, 1]
+            float layerWeight(int i) const;           // la 0 siempre 1
+            void  setLayerMode(int i, LayerMode m);
+
             // Blend 2D: hay blend (stateBlends) y blendParamY es Float declarado.
             bool stateBlends2D(int stateIdx, int layer = 0) const;
             // Las muestras de un estado con SU reloj: 1 o 2 en 1D (la pareja de
@@ -472,6 +486,11 @@ namespace DonTopo
             // estado actual (y el que se apaga, en un fade). ticks0 y
             // prevTicks0: los relojes acumulados ANTES de avanzar.
             void collectRootMotion(double ticks0, double prevTicks0);
+            // El update de UNA capa. No consume triggers: apunta la transición
+            // elegida en `consumir`, y update los consume tras todas las capas,
+            // así un mismo trigger puede mover varias capas en el mismo frame.
+            void updateLayer(int li, float dt, bool evaluateTransitions,
+                             std::vector<const Transition*>& consumir);
             static constexpr int kMaxEventCyclesPerUpdate = 16;
             // Ticks por segundo efectivos del estado: ticksPerSecond x speed x
             // parámetro multiplicador, nunca negativo.

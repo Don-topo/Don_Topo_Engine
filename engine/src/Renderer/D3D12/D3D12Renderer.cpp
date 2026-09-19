@@ -3610,17 +3610,22 @@ void D3D12Renderer::Impl::recordSkinning()
         unica.count = 1;
         unica.samples[0] = { B > 0 ? (int)(object.clipBase / B) : 0, object.animTime, 1.0f };
         const AnimationPose& pose = object.hasPose ? object.pose : unica;
-        push.sampleCount    = static_cast<uint32_t>(pose.count);
+        // Hasta el bloque de pose por capas, la GPU solo ve la capa 0.
+        PoseSample base[kMaxPoseSamplesPerLayer];
+        int nBase = 0;
+        for (int k = 0; k < pose.count && nBase < kMaxPoseSamplesPerLayer; k++)
+            if (pose.samples[k].layer == 0) base[nBase++] = pose.samples[k];
+        push.sampleCount    = static_cast<uint32_t>(nBase);
         push.rootMotionMode = pose.rootMotionMode;
-        push.frozenWeight   = pose.frozenWeight;
-        uint32_t* cb[kMaxPoseSamples] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3, &push.clipBase4, &push.clipBase5 };
-        float*    tt[kMaxPoseSamples] = { &push.time0, &push.time1, &push.time2, &push.time3, &push.time4, &push.time5 };
-        float*    ww[kMaxPoseSamples] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3, &push.weight4, &push.weight5 };
-        for (int k = 0; k < kMaxPoseSamples; k++) {
-            const bool usada = k < pose.count;
-            *cb[k] = usada ? static_cast<uint32_t>(pose.samples[k].clip) * B : 0u;
-            *tt[k] = usada ? pose.samples[k].time : 0.0f;
-            *ww[k] = usada ? pose.samples[k].weight : 0.0f;
+        push.frozenWeight   = pose.layers[0].frozenWeight;
+        uint32_t* cb[kMaxPoseSamplesPerLayer] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3, &push.clipBase4, &push.clipBase5 };
+        float*    tt[kMaxPoseSamplesPerLayer] = { &push.time0, &push.time1, &push.time2, &push.time3, &push.time4, &push.time5 };
+        float*    ww[kMaxPoseSamplesPerLayer] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3, &push.weight4, &push.weight5 };
+        for (int k = 0; k < kMaxPoseSamplesPerLayer; k++) {
+            const bool usada = k < nBase;
+            *cb[k] = usada ? static_cast<uint32_t>(base[k].clip) * B : 0u;
+            *tt[k] = usada ? base[k].time : 0.0f;
+            *ww[k] = usada ? base[k].weight : 0.0f;
         }
         return push;
     };
@@ -3628,7 +3633,7 @@ void D3D12Renderer::Impl::recordSkinning()
     // Congelar la pose de pantalla (fade interrumpido) antes de evaluar:
     // poseTrs tiene la del frame anterior. Una vez por petición.
     for (SkinnedObject* object : activos) {
-        if (!object->hasPose || !object->pose.freezeNow)
+        if (!object->hasPose || !object->pose.layers[0].freezeNow)
             continue;
         D3D12_RESOURCE_BARRIER aCopia[2]{};
         for (int b = 0; b < 2; b++) {
@@ -3646,7 +3651,7 @@ void D3D12Renderer::Impl::recordSkinning()
         for (int b = 0; b < 2; b++)
             std::swap(aCopia[b].Transition.StateBefore, aCopia[b].Transition.StateAfter);
         commandList->ResourceBarrier(2, aCopia);
-        object->pose.freezeNow = false;
+        object->pose.layers[0].freezeNow = false;
     }
     auto gpu = [](const auto& buffer) { return buffer->GetResource()->GetGPUVirtualAddress(); };
 

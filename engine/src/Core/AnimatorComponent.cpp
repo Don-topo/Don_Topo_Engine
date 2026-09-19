@@ -3,9 +3,11 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace DonTopo
 {
+    static_assert(AnimatorComponent::kMaxLayers == kMaxLayersPose, "AnimationPose y el Animator comparten el tope de capas");
     int AnimatorComponent::addState(State s, int layer)
     {
         Layer& L = lay(layer);
@@ -124,7 +126,6 @@ namespace DonTopo
 
     void AnimatorComponent::removeParameter(const std::string& name)
     {
-        Layer& L = m_layers[0];
         // Nombre vacío == el que usan las condiciones AnimationFinished (ver
         // Condition::paramName); si siguiéramos de largo, el bucle de abajo las
         // borraría todas del grafo sin que el usuario lo pidiera.
@@ -139,22 +140,25 @@ namespace DonTopo
         m_ints.erase(name);
         m_floats.erase(name);
 
-        // Las condiciones que lo usaban quedarían colgadas y no dispararían
-        // nunca: se van con él.
-        for (auto& t : L.transitions)
-            t.conditions.erase(
-                std::remove_if(t.conditions.begin(), t.conditions.end(),
-                    [&name](const Condition& c) { return c.paramName == name; }),
-                t.conditions.end());
+        for (auto& L : m_layers)
+        {
+            // Las condiciones que lo usaban quedarían colgadas y no dispararían
+            // nunca: se van con él.
+            for (auto& t : L.transitions)
+                t.conditions.erase(
+                    std::remove_if(t.conditions.begin(), t.conditions.end(),
+                        [&name](const Condition& c) { return c.paramName == name; }),
+                    t.conditions.end());
 
-        // Una transición que se quedó sin condiciones (ésta era la única) no
-        // puede disparar nunca (conditionsMet exige al menos una), así que
-        // dejarla sería un link invisible y muerto en el canvas. Si conservó
-        // otras condiciones, sobrevive tal cual.
-        L.transitions.erase(
-            std::remove_if(L.transitions.begin(), L.transitions.end(),
-                [](const Transition& t) { return t.conditions.empty(); }),
-            L.transitions.end());
+            // Una transición que se quedó sin condiciones (ésta era la única) no
+            // puede disparar nunca (conditionsMet exige al menos una), así que
+            // dejarla sería un link invisible y muerto en el canvas. Si conservó
+            // otras condiciones, sobrevive tal cual.
+            L.transitions.erase(
+                std::remove_if(L.transitions.begin(), L.transitions.end(),
+                    [](const Transition& t) { return t.conditions.empty(); }),
+                L.transitions.end());
+        }
     }
 
     AnimatorComponent::Graph AnimatorComponent::graph() const
@@ -481,41 +485,99 @@ namespace DonTopo
 
     AnimationPose AnimatorComponent::pose() const
     {
-        const Layer& L = m_layers[0];
         AnimationPose out;
         out.rootMotionMode = poseRootMotionMode();
-        out.freezeNow      = L.freezePending;
-        auto add = [&](int clip, float time, float w) {
-            if (w <= 0.0f || out.count >= kMaxPoseSamples) return;
-            out.samples[out.count++] = { clip < 0 ? 0 : clip, time, w };
-        };
-        // Las muestras de blend de un estado (1D o 2D), con SU reloj, escaladas
-        // por el peso que ese estado tiene en el fade.
-        auto addMuestras = [&](int stateIdx, float time, float scale) {
-            BlendSample bs[3];
-            const int n = stateBlendSamples(stateIdx, time, bs);
-            for (int i = 0; i < n; i++) add(bs[i].clip, bs[i].time, scale * bs[i].weight);
-        };
-        if (L.currentState < 0 || L.currentState >= (int)L.states.size())
+        out.layerCount     = (int)m_layers.size();
+        for (int li = 0; li < (int)m_layers.size(); li++)
         {
-            add(0, L.animTime, 1.0f);
-            return out;
+            const Layer& L = m_layers[li];
+            PoseLayer&   pl = out.layers[li];
+            pl.weight    = layerWeight(li);
+            pl.mode      = li == 0 ? 0u : (uint32_t)L.mode;
+            pl.freezeNow = L.freezePending;
+            pl.mask      = (li == 0 || L.maskResolved.empty()) ? nullptr : &L.maskResolved;
+            // Una capa apagada no aporta muestras, pero sigue contando: el
+            // índice de capa de las demás no cambia.
+            if (li > 0 && pl.weight <= 0.0f) continue;
+
+            int enCapa = 0;
+            auto add = [&](int clip, float time, float w) {
+                if (w <= 0.0f || enCapa >= kMaxPoseSamplesPerLayer) return;
+                out.samples[out.count++] = { clip < 0 ? 0 : clip, time, w, li };
+                enCapa++;
+            };
+            // Las muestras de blend de un estado (1D o 2D), con SU reloj,
+            // escaladas por el peso que ese estado tiene en el fade.
+            auto addMuestras = [&](int stateIdx, float time, float scale) {
+                BlendSample bs[3];
+                const int n = stateBlendSamples(stateIdx, time, bs, li);
+                for (int i = 0; i < n; i++) add(bs[i].clip, bs[i].time, scale * bs[i].weight);
+            };
+            if (L.currentState < 0 || L.currentState >= (int)L.states.size())
+            {
+                // Sin estado: la base cae al clip 0 como siempre; una capa
+                // superior sin grafo no dice nada.
+                if (li == 0) add(0, L.animTime, 1.0f);
+                continue;
+            }
+            const float w = blendWeight(li);
+            if (L.frozenFade)
+            {
+                pl.frozenWeight = 1.0f - w;
+                addMuestras(L.currentState, L.animTime, w);
+            }
+            else if (blending(li) && L.prevState < (int)L.states.size())
+            {
+                // El que sale aporta su pareja completa, no solo su principal (A3).
+                addMuestras(L.prevState, L.prevAnimTime, 1.0f - w);
+                addMuestras(L.currentState, L.animTime, w);
+            }
+            else
+                addMuestras(L.currentState, L.animTime, 1.0f);
         }
-        const float w = blendWeight();
-        if (L.frozenFade)
-        {
-            out.frozenWeight = 1.0f - w;
-            addMuestras(L.currentState, L.animTime, w);
-        }
-        else if (blending() && L.prevState < (int)L.states.size())
-        {
-            // El que sale aporta su pareja completa, no solo su principal (A3).
-            addMuestras(L.prevState, L.prevAnimTime, 1.0f - w);
-            addMuestras(L.currentState, L.animTime, w);
-        }
-        else
-            addMuestras(L.currentState, L.animTime, 1.0f);
         return out;
+    }
+
+    int AnimatorComponent::addLayer(const std::string& name)
+    {
+        if ((int)m_layers.size() >= kMaxLayers) return -1;
+        Layer L;
+        L.name = name;
+        m_layers.push_back(std::move(L));
+        return (int)m_layers.size() - 1;
+    }
+
+    void AnimatorComponent::removeLayer(int i)
+    {
+        if (i <= 0 || i >= (int)m_layers.size()) return;
+        m_layers.erase(m_layers.begin() + i);
+    }
+
+    void AnimatorComponent::moveLayer(int from, int to)
+    {
+        const int n = (int)m_layers.size();
+        if (from <= 0 || to <= 0 || from >= n || to >= n || from == to) return;
+        Layer L = std::move(m_layers[from]);
+        m_layers.erase(m_layers.begin() + from);
+        m_layers.insert(m_layers.begin() + to, std::move(L));
+    }
+
+    void AnimatorComponent::setLayerWeight(int i, float w)
+    {
+        if (i <= 0 || i >= (int)m_layers.size()) return;
+        m_layers[i].weight = std::isfinite(w) ? std::clamp(w, 0.0f, 1.0f) : 0.0f;
+    }
+
+    float AnimatorComponent::layerWeight(int i) const
+    {
+        if (i <= 0 || i >= (int)m_layers.size()) return 1.0f;
+        return m_layers[i].weight;
+    }
+
+    void AnimatorComponent::setLayerMode(int i, LayerMode m)
+    {
+        if (i <= 0 || i >= (int)m_layers.size()) return;
+        m_layers[i].mode = m;
     }
 
     int AnimatorComponent::poseClipA() const
@@ -567,17 +629,20 @@ namespace DonTopo
 
     void AnimatorComponent::resetPlayback()
     {
-        Layer& L = m_layers[0];
-        enterState(L.entryState);
-        // Corta cualquier cross-fade en vuelo: tras esto el estado previo puede
-        // ni existir (el editor acaba de reeditar el grafo), y mezclar contra él
-        // dejaría una pose imposible o un índice fuera de rango.
-        L.prevState     = -1;
-        L.prevAnimTime  = 0.0f;
-        L.blendElapsed  = 0.0f;
-        L.blendDuration = 0.0f;
-        L.frozenFade    = false;
-        L.freezePending = false;
+        for (int li = 0; li < (int)m_layers.size(); li++)
+        {
+            Layer& L = m_layers[li];
+            enterState(L.entryState, li);
+            // Corta cualquier cross-fade en vuelo: tras esto el estado previo
+            // puede ni existir (el editor acaba de reeditar el grafo), y mezclar
+            // contra él dejaría una pose imposible o un índice fuera de rango.
+            L.prevState     = -1;
+            L.prevAnimTime  = 0.0f;
+            L.blendElapsed  = 0.0f;
+            L.blendDuration = 0.0f;
+            L.frozenFade    = false;
+            L.freezePending = false;
+        }
     }
 
     void AnimatorComponent::reset()
@@ -591,42 +656,64 @@ namespace DonTopo
 
     void AnimatorComponent::rebindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings)
     {
-        Layer& L = m_layers[0];
         auto findClip = [&mesh](const std::string& name) {
             for (size_t i = 0; i < mesh.animationClips.size(); i++)
                 if (mesh.animationClips[i].name == name) return (int)i;
             return -1;
         };
 
-        for (auto& st : L.states)
+        for (auto& L : m_layers)
         {
-            // Las entradas del blend se resuelven SIEMPRE, aunque el primario
-            // falle: los avisos son independientes y ver solo uno mandaría a
-            // buscar al sitio equivocado. Una entrada recién añadida en el
-            // editor todavía no tiene clip: no es un error, no avisa.
-            for (auto& e : st.blendEntries)
+            for (auto& st : L.states)
             {
-                const int b = e.clipName.empty() ? -1 : findClip(e.clipName);
-                e.clipIndex = b;
-                e.duration  = (b >= 0) ? mesh.animationClips[b].duration : 0.0f;
-                if (b < 0 && !e.clipName.empty() && warnings)
-                    warnings->push_back("Animator: el estado '" + st.name + "' mezcla con el clip '" +
-                                        e.clipName + "', que no existe en el modelo");
-            }
+                // Las entradas del blend se resuelven SIEMPRE, aunque el primario
+                // falle: los avisos son independientes y ver solo uno mandaría a
+                // buscar al sitio equivocado. Una entrada recién añadida en el
+                // editor todavía no tiene clip: no es un error, no avisa.
+                for (auto& e : st.blendEntries)
+                {
+                    const int b = e.clipName.empty() ? -1 : findClip(e.clipName);
+                    e.clipIndex = b;
+                    e.duration  = (b >= 0) ? mesh.animationClips[b].duration : 0.0f;
+                    if (b < 0 && !e.clipName.empty() && warnings)
+                        warnings->push_back("Animator: el estado '" + st.name + "' mezcla con el clip '" +
+                                            e.clipName + "', que no existe en el modelo");
+                }
 
-            const int found = findClip(st.clipName);
-            if (found < 0)
-            {
-                st.clipIndex = -1;
-                if (warnings)
-                    warnings->push_back("Animator: el estado '" + st.name + "' referencia el clip '" +
-                                        st.clipName + "', que no existe en el modelo");
-                continue;
+                const int found = findClip(st.clipName);
+                if (found < 0)
+                {
+                    st.clipIndex = -1;
+                    if (warnings)
+                        warnings->push_back("Animator: el estado '" + st.name + "' referencia el clip '" +
+                                            st.clipName + "', que no existe en el modelo");
+                    continue;
+                }
+                st.clipIndex      = found;
+                st.duration       = mesh.animationClips[found].duration;
+                st.ticksPerSecond = mesh.animationClips[found].ticksPerSecond;
+                // st.loop NO se toca: es autoría del usuario, no un dato del FBX.
             }
-            st.clipIndex      = found;
-            st.duration       = mesh.animationClips[found].duration;
-            st.ticksPerSecond = mesh.animationClips[found].ticksPerSecond;
-            // st.loop NO se toca: es autoría del usuario, no un dato del FBX.
+        }
+        // Máscaras por nombre de hueso: un nombre que el esqueleto no tiene
+        // avisa, como un clip que no existe, y no marca nada.
+        for (auto& L : m_layers)
+        {
+            L.maskResolved.clear();
+            if (L.maskBones.empty()) continue;
+            L.maskResolved.assign(mesh.skeleton.names.size(), 0);
+            for (const auto& nombre : L.maskBones)
+            {
+                auto it = std::find(mesh.skeleton.names.begin(), mesh.skeleton.names.end(), nombre);
+                if (it == mesh.skeleton.names.end())
+                {
+                    if (warnings)
+                        warnings->push_back("Animator: la máscara de la capa '" + L.name +
+                                            "' nombra el hueso '" + nombre + "', que el modelo no tiene");
+                    continue;
+                }
+                L.maskResolved[(size_t)(it - mesh.skeleton.names.begin())] = 1;
+            }
         }
     }
 
@@ -639,8 +726,8 @@ namespace DonTopo
     int AnimatorComponent::renameClipReferences(const std::string& oldName,
                                                  const std::string& newName)
     {
-        Layer& L = m_layers[0];
         int changed = 0;
+        for (auto& L : m_layers)
         for (auto& st : L.states)
         {
             // Un estado cuenta UNA vez aunque el rename le toque los dos clips:
@@ -829,19 +916,27 @@ namespace DonTopo
 
     void AnimatorComponent::update(float dt, bool evaluateTransitions)
     {
-        Layer& L = m_layers[0];
         // Solo lo de ESTE update: se vacía antes de cualquier return.
         m_firedEvents.clear();
         m_rootMotionSamples.clear();
+        // Velocidad global: escala el dt entero, cross-fade incluido, en
+        // todas las capas.
+        dt *= m_speed;
+        std::vector<const Transition*> consumir;
+        for (int li = 0; li < (int)m_layers.size(); li++)
+            updateLayer(li, dt, evaluateTransitions, consumir);
+        for (const Transition* t : consumir) consumeTriggers(*t);
+    }
 
+    void AnimatorComponent::updateLayer(int li, float dt, bool evaluateTransitions,
+                                        std::vector<const Transition*>& consumir)
+    {
+        Layer& L = m_layers[li];
         if (L.currentState < 0 || L.currentState >= (int)L.states.size())
         {
             L.currentState = L.entryState;
             if (L.currentState < 0 || L.currentState >= (int)L.states.size()) return;
         }
-
-        // Velocidad global: escala el dt entero, cross-fade incluido.
-        dt *= m_speed;
 
         const State& actual      = L.states[L.currentState];
         const bool   conDuracion = actual.duration > 0.0f && actual.ticksPerSecond > 0.0f;
@@ -884,11 +979,13 @@ namespace DonTopo
         // Eventos ANTES de las transiciones: si este update sale del estado,
         // su tramo final ya ha disparado. Solo el estado actual; el que se
         // apaga en un fade no, o las pisadas saldrían dobles.
-        if (conDuracion)
+        // Una capa apagada no dispara: no se ve.
+        if (conDuracion && (li == 0 || L.weight > 0.0f))
             collectEvents(actual, ticks0, L.stateTicks);
 
         // Root motion con el mismo tramo: también antes de las transiciones.
-        if (conDuracion && actual.rootMotion == RootMotion::Apply)
+        // Solo la base mueve el GameObject.
+        if (li == 0 && conDuracion && actual.rootMotion == RootMotion::Apply)
             collectRootMotion(ticks0, prevTicks0);
 
         const double n0 = conDuracion ? ticks0 / actual.duration : 0.0;
@@ -905,7 +1002,7 @@ namespace DonTopo
             // Hacia el estado actual solo con el flag: con un bool, reentrar
             // reiniciaría el estado cada frame.
             if (t.toState == L.currentState && !t.canTransitionToSelf) continue;
-            if (transitionReady(t, n0, n1, conDuracion)) { elegida = &t; break; }
+            if (transitionReady(t, n0, n1, conDuracion, li)) { elegida = &t; break; }
         }
         if (!elegida)
         {
@@ -913,14 +1010,14 @@ namespace DonTopo
             {
                 if (t.fromState != L.currentState) continue;
                 if (t.toState < 0 || t.toState >= (int)L.states.size()) continue;
-                if (transitionReady(t, n0, n1, conDuracion)) { elegida = &t; break; }
+                if (transitionReady(t, n0, n1, conDuracion, li)) { elegida = &t; break; }
             }
         }
         if (!elegida) return;
 
         {
-            consumeTriggers(*elegida);
-            startTransitionTo(elegida->toState, elegida->duration);   // una por update
+            consumir.push_back(elegida);
+            startTransitionTo(elegida->toState, elegida->duration, li);   // una por update
         }
     }
 

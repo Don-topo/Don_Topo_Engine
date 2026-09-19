@@ -187,19 +187,24 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
         unica.count = 1;
         unica.samples[0] = { (int)obj.activeClip, obj.animTime, 1.0f };
         const AnimationPose& pose = obj.hasPose ? obj.pose : unica;
-        push.sampleCount    = (uint32_t)pose.count;
+        // Hasta el bloque de pose por capas, la GPU solo ve la capa 0.
+        PoseSample base[kMaxPoseSamplesPerLayer];
+        int nBase = 0;
+        for (int k = 0; k < pose.count && nBase < kMaxPoseSamplesPerLayer; k++)
+            if (pose.samples[k].layer == 0) base[nBase++] = pose.samples[k];
+        push.sampleCount    = (uint32_t)nBase;
         push.rootMotionMode = pose.rootMotionMode;
-        push.frozenWeight   = pose.frozenWeight;
+        push.frozenWeight   = pose.layers[0].frozenWeight;
         const uint32_t B = obj.boneCount;
-        uint32_t* cb[kMaxPoseSamples] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3, &push.clipBase4, &push.clipBase5 };
-        float*    tt[kMaxPoseSamples] = { &push.time0, &push.time1, &push.time2, &push.time3, &push.time4, &push.time5 };
-        float*    ww[kMaxPoseSamples] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3, &push.weight4, &push.weight5 };
-        for (int k = 0; k < kMaxPoseSamples; k++)
+        uint32_t* cb[kMaxPoseSamplesPerLayer] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3, &push.clipBase4, &push.clipBase5 };
+        float*    tt[kMaxPoseSamplesPerLayer] = { &push.time0, &push.time1, &push.time2, &push.time3, &push.time4, &push.time5 };
+        float*    ww[kMaxPoseSamplesPerLayer] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3, &push.weight4, &push.weight5 };
+        for (int k = 0; k < kMaxPoseSamplesPerLayer; k++)
         {
-            const bool usada = k < pose.count;
-            *cb[k] = usada ? (uint32_t)pose.samples[k].clip * B : 0u;
-            *tt[k] = usada ? pose.samples[k].time : 0.0f;
-            *ww[k] = usada ? pose.samples[k].weight : 0.0f;
+            const bool usada = k < nBase;
+            *cb[k] = usada ? (uint32_t)base[k].clip * B : 0u;
+            *tt[k] = usada ? base[k].time : 0.0f;
+            *ww[k] = usada ? base[k].weight : 0.0f;
         }
         return push;
     };
@@ -208,7 +213,7 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
     // poseTrs tiene la del frame anterior. Se hace una vez por petición.
     bool hayCongelacion = false;
     for (size_t i : activos)
-        if (ctx.skinnedObjects[i].hasPose && ctx.skinnedObjects[i].pose.freezeNow) hayCongelacion = true;
+        if (ctx.skinnedObjects[i].hasPose && ctx.skinnedObjects[i].pose.layers[0].freezeNow) hayCongelacion = true;
     if (hayCongelacion)
     {
         VkMemoryBarrier antes{};
@@ -220,11 +225,11 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
         for (size_t i : activos)
         {
             SkinnedRenderObject& obj = ctx.skinnedObjects[i];
-            if (!obj.hasPose || !obj.pose.freezeNow) continue;
+            if (!obj.hasPose || !obj.pose.layers[0].freezeNow) continue;
             VkBufferCopy region{};
             region.size = (VkDeviceSize)obj.boneCount * 3 * sizeof(float) * 4;
             vkCmdCopyBuffer(cmd, obj.poseTrsBuffer, obj.frozenTrsBuffer, 1, &region);
-            obj.pose.freezeNow = false;
+            obj.pose.layers[0].freezeNow = false;
         }
         VkMemoryBarrier despues{};
         despues.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
