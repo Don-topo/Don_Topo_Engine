@@ -118,6 +118,18 @@ namespace {
         return anim.stateIndexByEditorId(editorIdFromRawId(rawId), capa);
     }
 
+    // Tooltip de un widget de DENTRO de un nodo. Entre ed::Begin y ed::End el
+    // ratón y las ventanas van en coordenadas del lienzo, así que un tooltip
+    // creado ahí sale desplazado por el pan y el zoom (muy por encima del
+    // cursor). Suspend lo saca a coordenadas de pantalla, como pide la
+    // librería para toda ventana que se abra desde el lienzo.
+    void tooltipEnNodo(const char* texto)
+    {
+        ed::Suspend();
+        ImGui::SetTooltip("%s", texto);
+        ed::Resume();
+    }
+
     const char* condLabel(AnimatorComponent::ConditionType t)
     {
         switch (t)
@@ -418,7 +430,7 @@ void AnimatorPanel::drawLayerMaskPopup(GameObject* go)
                 cambio = true;
             }
             ImGui::SameLine();
-            ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
+            ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_DefaultOpen;
             if (hoja) fl |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
             const bool abierto = ImGui::TreeNodeEx(nombres[(size_t)b].c_str(), fl);
             if (abierto && !hoja)
@@ -428,7 +440,11 @@ void AnimatorPanel::drawLayerMaskPopup(GameObject* go)
             }
             ImGui::PopID();
         };
-        ImGui::BeginChild("arbolMascara", ImVec2(320.0f, 420.0f), true);
+        // Alto según la pantalla (un esqueleto de 60 huesos no cabe en 420 px)
+        // y scroll horizontal: cada nivel sangra, y en una rama profunda el
+        // nombre se salía por la derecha sin forma de verlo.
+        const float alto = std::clamp(ImGui::GetMainViewport()->WorkSize.y * 0.6f, 240.0f, 900.0f);
+        ImGui::BeginChild("arbolMascara", ImVec2(420.0f, alto), true, ImGuiWindowFlags_HorizontalScrollbar);
         for (int r : raices) nodo(r);
         ImGui::EndChild();
         if (cambio)
@@ -498,15 +514,15 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             ImGui::SameLine();
             if (ImGui::RadioButton("normal##rm", modo == 0)) modo = 0;
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("La pose mueve la raiz: el clip se desplaza con su animacion.");
+                tooltipEnNodo("La pose mueve la raiz: el clip se desplaza con su animacion.");
             ImGui::SameLine();
             if (ImGui::RadioButton("bloq.##rm", modo == 1)) modo = 1;
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Clava la traslacion de la raiz a su bind pose: el clip se reproduce en el sitio. La rotacion de la raiz y el resto de huesos animan igual.");
+                tooltipEnNodo("Clava la traslacion de la raiz a su bind pose: el clip se reproduce en el sitio. La rotacion de la raiz y el resto de huesos animan igual.");
             ImGui::SameLine();
             if (ImGui::RadioButton("root motion##rm", modo == 2)) modo = 2;
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("El avance horizontal de la raiz mueve al GameObject (con Rigidbody dinamico, como velocidad). La Y se queda en la pose y la rotacion no se aplica.");
+                tooltipEnNodo("El avance horizontal de la raiz mueve al GameObject (con Rigidbody dinamico, como velocidad). La Y se queda en la pose y la rotacion no se aplica.");
             if (modo != (int)states[i].rootMotion)
                 anim->statesMutable(m_layer)[i].rootMotion = (RM)modo;
         }
@@ -517,7 +533,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         ImGui::DragFloat("speed", &anim->statesMutable(m_layer)[i].speed, 0.01f, 0.0f, 100.0f, "%.2f");
         if (anim->statesMutable(m_layer)[i].speed < 0.0f) anim->statesMutable(m_layer)[i].speed = 0.0f;
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Multiplica el ritmo del clip (1 = normal, 0 = congelado).");
+            tooltipEnNodo("Multiplica el ritmo del clip (1 = normal, 0 = congelado).");
         ImGui::SameLine();
         {
             const std::string& sp = states[i].speedParam;
@@ -529,7 +545,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 m_blendPickKind      = 2;
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Parametro float que multiplica la velocidad (como el Multiplier de Unity).");
+                tooltipEnNodo("Parametro float que multiplica la velocidad (como el Multiplier de Unity).");
         }
 
         // --- Blend 1D: clips extra con su umbral ---
@@ -555,7 +571,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 ImGui::SetNextItemWidth(60.0f);
                 ImGui::DragFloat("umbral##clipThr", &stMut.clipThreshold, 0.01f);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Umbral del clip principal del estado.");
+                    tooltipEnNodo("Umbral del clip principal del estado.");
 
                 // --- Blend 2D ---
                 // Con un segundo parámetro cada clip es un punto (umbral, Y) y
@@ -581,7 +597,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                         stMut.blendParamY.clear();
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Blend 2D: cada clip es un punto (umbral X, umbral Y).");
+                    tooltipEnNodo("Blend 2D: cada clip es un punto (umbral X, umbral Y).");
                 if (!stMut.blendParamY.empty())
                 {
                     if (ImGui::Button(("Y: " + stMut.blendParamY + "##byY").c_str(), ImVec2(140.0f, 0.0f)))
@@ -593,7 +609,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                     ImGui::SetNextItemWidth(60.0f);
                     ImGui::DragFloat("Y##clipThrY", &stMut.clipThresholdY, 0.01f);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Umbral Y del clip principal del estado.");
+                        tooltipEnNodo("Umbral Y del clip principal del estado.");
                 }
             }
 
@@ -661,7 +677,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             ImGui::SetNextItemWidth(50.0f);
             ImGui::DragFloat("##evTime", &ev.time, 0.005f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Instante del ciclo, normalizado (0 = inicio, 1 = final).");
+                tooltipEnNodo("Instante del ciclo, normalizado (0 = inicio, 1 = final).");
             ImGui::SameLine();
             if (ImGui::SmallButton("x")) quitarEvento = k;
             ImGui::PopID();
