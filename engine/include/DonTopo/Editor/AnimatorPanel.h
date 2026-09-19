@@ -40,6 +40,10 @@ private:
     // serializa.
     void syncPositionsToComponent(GameObject* go);
     void drawParameterList(EditorContext& ctx, GameObject* go);
+    // Capas: la lista (seleccionar, añadir, quitar, reordenar, renombrar) y,
+    // para las que no son la base, peso, modo y máscara.
+    void drawLayerBar(EditorContext& ctx, GameObject* go);
+    void drawLayerMaskPopup(GameObject* go);
     void drawGraph(EditorContext& ctx, GameObject* go);
     void drawConditionsPopup(EditorContext& ctx, GameObject* go);
     // Lista de clips ("blend") o de parámetros float ("by") de un estado. Se
@@ -65,6 +69,17 @@ private:
     // Último GameObject cuyas posiciones se volcaron al canvas. Al cambiar la
     // selección hay que re-volcarlas.
     GameObject* m_boundTo = nullptr;
+    // Tooltip del widget de un nodo que está bajo el cursor: se anota mientras
+    // se dibuja el nodo y se pinta tras cerrar el lienzo (ver drawGraph).
+    std::string m_tooltipNodo;
+    // Capa cuyo grafo se muestra y edita, y la que tenía el canvas en el último
+    // volcado de posiciones: al cambiar de capa se vuelcan otra vez, como al
+    // cambiar de objeto.
+    int  m_layer          = 0;
+    int  m_boundLayer     = -1;
+    int  m_renamingLayer  = -1;
+    bool m_focusRename    = false;
+    char m_layerNameBuf[64] = {};
 
     // Índice de la transición cuyo popup de condiciones está abierto, -1 si
     // ninguno. Diferido al final del frame: abrir un popup en mitad del canvas

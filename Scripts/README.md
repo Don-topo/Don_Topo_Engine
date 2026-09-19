@@ -903,14 +903,17 @@ GameObject haya perdido su Animator entre el `GetComponent` y la llamada.
 | `a:SetBool(n, v)` / `a:GetBool(n)` | Parámetro `bool` |
 | `a:SetTrigger(n)` | Arma un `trigger`; lo consume la transición que dispara |
 | `a:ResetTrigger(n)` | Desarma un `trigger` que todavía no se ha consumido |
-| `a:Play(estado)` | Entra ya en ese estado, sin mezcla y con el tiempo a 0 (también si ya estaba en él). `false` si no existe, con aviso en el log |
-| `a:CrossFade(estado, segundos)` | Mezcla hacia ese estado durante `segundos`; con 0, igual que `Play`. `false` si no existe, con aviso |
+| `a:Play(estado, [capa])` | Entra ya en ese estado (de la capa `capa`, 0 = base por defecto), sin mezcla y con el tiempo a 0 (también si ya estaba en él). `false` si no existe, con aviso en el log |
+| `a:CrossFade(estado, segundos, [capa])` | Mezcla hacia ese estado (de la capa `capa`, 0 = base) durante `segundos`; con 0, igual que `Play`. `false` si no existe, con aviso |
 | `a:SetSpeed(v)` / `a:GetSpeed()` | Velocidad global del Animator (1 = normal, 0 = congelado; negativo se acota a 0, NaN/Inf se ignora con aviso). No se guarda en la escena. La velocidad por estado se edita en el grafo y se conduce con `SetFloat` sobre su parámetro multiplicador |
-| `a:GetNormalizedTime()` | Tiempo del estado actual normalizado: 1 = una vuelta, y en loop sigue creciendo (2.5 = dos vueltas y media). 0 si el clip no tiene duración |
+| `a:GetNormalizedTime([capa])` | Tiempo del estado actual (de la capa, 0 = base) normalizado: 1 = una vuelta, y en loop sigue creciendo (2.5 = dos vueltas y media). 0 si el clip no tiene duración |
 | `a:SetInt(n, v)` / `a:GetInt(n)` | Parámetro `int` |
 | `a:SetFloat(n, v)` / `a:GetFloat(n)` | Parámetro `float` (NaN/Inf se ignora con aviso) |
-| `a:GetState()` | Nombre del estado activo, `""` si el grafo está vacío |
-| `a:IsBlending()` | `true` mientras dura un cross-fade |
+| `a:GetState([capa])` | Nombre del estado activo de la capa (0 = base), `""` si el grafo está vacío o la capa no existe |
+| `a:IsBlending([capa])` | `true` mientras dura un cross-fade en la capa (0 = base) |
+| `a:SetLayerWeight(capa, peso)` | Peso 0..1 de una capa superior; la base (0) vale siempre 1 y no cambia. Una capa que no existe se ignora; NaN/Inf se ignora con aviso |
+| `a:GetLayerWeight(capa)` | Peso de la capa; 1 en la base, 0 si no existe |
+| `a:GetLayerCount()` | Número de capas, base incluida |
 | `a:GetBlendWeight()` | 0 = solo el estado que se apaga, 1 = solo el nuevo. Vale 1 si no hay mezcla |
 | `a:GetPreviousState()` | Nombre del estado que se apaga, `""` si no hay mezcla |
 | `a:GetPoseWeight()` | El peso que va de verdad a la GPU: el del cross-fade si lo hay, si no el del blend por parámetro, y 1 si no hay mezcla |

@@ -3,6 +3,7 @@
 // camera_tests.cpp y physics_tests.cpp.
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/Blend2D.h"
+#include "DonTopo/Renderer/PoseBlock.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Physics/PhysicsManager.h"
@@ -1562,9 +1563,9 @@ static Trs evalPoseTrs(const PackedClips& p, size_t boneCount, size_t i, const A
         if (sampleTrs(p, (size_t)pose.samples[k].clip * boneCount, i, pose.samples[k].time, t)) alguna = true;
         sumar(t, pose.samples[k].weight);
     }
-    if (pose.frozenWeight > 0.0f && frozen && i < frozen->size() && !(*frozen)[i].bind)
+    if (pose.layers[0].frozenWeight > 0.0f && frozen && i < frozen->size() && !(*frozen)[i].bind)
     {
-        sumar((*frozen)[i], pose.frozenWeight);
+        sumar((*frozen)[i], pose.layers[0].frozenWeight);
         alguna = true;
     }
     if (!alguna) { Trs b; b.bind = true; return b; }
@@ -5157,7 +5158,7 @@ static void test_apply_skinned_frame_passes_pose_b_then_a()
     CHECK(r.pose.samples[0].clip != r.pose.samples[1].clip);
     CHECK(!nearlyEqual(r.pose.samples[0].time, r.pose.samples[1].time));
     CHECK(r.pose.rootMotionMode == 1u);
-    CHECK(nearlyEqual(r.pose.frozenWeight, esperada.frozenWeight));
+    CHECK(nearlyEqual(r.pose.layers[0].frozenWeight, esperada.layers[0].frozenWeight));
 }
 
 // Un fade interrumpido pide congelar la pose de pantalla UNA vez: el host la
@@ -5175,13 +5176,13 @@ static void test_apply_skinned_frame_delivers_freeze_once()
 
     SkinnedRendererDoble r;
     applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);   // interrumpe
-    CHECK(r.pose.freezeNow);
-    CHECK(r.pose.frozenWeight > 0.0f);
-    CHECK(!a->pose().freezeNow);
+    CHECK(r.pose.layers[0].freezeNow);
+    CHECK(r.pose.layers[0].frozenWeight > 0.0f);
+    CHECK(!a->pose().layers[0].freezeNow);
 
     applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
-    CHECK(!r.pose.freezeNow);
-    CHECK(r.pose.frozenWeight > 0.0f);
+    CHECK(!r.pose.layers[0].freezeNow);
+    CHECK(r.pose.layers[0].frozenWeight > 0.0f);
 }
 
 // Sin Animator el reloj lo lleva el backend, como antes de que el componente
@@ -6630,7 +6631,7 @@ static float pesoMuestra(const AnimationPose& p, int clip)
 
 static float sumaPesos(const AnimationPose& p)
 {
-    float w = p.frozenWeight;
+    float w = p.layers[0].frozenWeight;
     for (int i = 0; i < p.count; i++) w += p.samples[i].weight;
     return w;
 }
@@ -6644,8 +6645,8 @@ static void test_pose_samples_without_fade()
     CHECK(p.count == 2);
     CHECK(nearlyEqual(pesoMuestra(p, 0), 0.5f));
     CHECK(nearlyEqual(pesoMuestra(p, 2), 0.5f));
-    CHECK(nearlyEqual(p.frozenWeight, 0.0f));
-    CHECK(!p.freezeNow);
+    CHECK(nearlyEqual(p.layers[0].frozenWeight, 0.0f));
+    CHECK(!p.layers[0].freezeNow);
     // Sin blend: una sola muestra de peso 1.
     a.setFloat("speed", 0.0f);
     a.update(0.0f, true);
@@ -6685,21 +6686,21 @@ static void test_pose_freeze_on_interrupted_fade()
     a.setTrigger("back");
     a.update(0.016f, true);                        // interrumpe: Otro -> Loco
     AnimationPose p = a.pose();
-    CHECK(p.freezeNow);
+    CHECK(p.layers[0].freezeNow);
     CHECK(a.fading());
     CHECK(!a.blending());
-    CHECK(nearlyEqual(p.frozenWeight, 1.0f - a.blendWeight()));
+    CHECK(nearlyEqual(p.layers[0].frozenWeight, 1.0f - a.blendWeight()));
     CHECK(nearlyEqual(pesoMuestra(p, 1) + pesoMuestra(p, 3), 0.0f));   // Otro ya no aporta
     a.clearFreezeRequest();
-    CHECK(!a.pose().freezeNow);
+    CHECK(!a.pose().layers[0].freezeNow);
     a.update(0.25f, true);
     p = a.pose();
-    CHECK(!p.freezeNow);
-    CHECK(nearlyEqual(p.frozenWeight, 1.0f - a.blendWeight()));
-    CHECK(p.frozenWeight > 0.0f && p.frozenWeight < 1.0f);
+    CHECK(!p.layers[0].freezeNow);
+    CHECK(nearlyEqual(p.layers[0].frozenWeight, 1.0f - a.blendWeight()));
+    CHECK(p.layers[0].frozenWeight > 0.0f && p.layers[0].frozenWeight < 1.0f);
     a.update(2.0f, true);                          // el fade acaba
     CHECK(!a.fading());
-    CHECK(nearlyEqual(a.pose().frozenWeight, 0.0f));
+    CHECK(nearlyEqual(a.pose().layers[0].frozenWeight, 0.0f));
 }
 
 // Los pesos suman 1 en todos los casos.
@@ -6766,7 +6767,7 @@ static void test_pose_continuity_interrupted_fade()
     a.setTrigger("back");
     a.update(0.016f, true);
     const AnimationPose tras = a.pose();
-    CHECK(tras.freezeNow);
+    CHECK(tras.layers[0].freezeNow);
     const glm::vec3 despues = evalPoseTrs(p, 1, 0, tras, &salida).p;     // la GPU congela 'salida'
     CHECK(glm::length(despues - antes) < 0.5f);
 }
@@ -7019,6 +7020,498 @@ static void test_blend2d_serialization(PhysicsManager& pm, AudioManager& am)
     CHECK(apariciones == 4u);   // solo el estado 2D: clipThresholdY + 3 entradas
 }
 
+// Dos capas: base con "Idle"(clip 0) -> "Run"(clip 1) por trigger "go"; capa
+// 1 "Brazos" con "Low"(clip 2) -> "Aim"(clip 3) por el MISMO trigger.
+static AnimatorComponent makeTwoLayers()
+{
+    AnimatorComponent a;
+    auto st = [](const char* n, int clip) {
+        AnimatorComponent::State s;
+        s.name = n; s.clipName = n; s.clipIndex = clip; s.duration = 40.0f;
+        s.ticksPerSecond = 20.0f; s.loop = true;
+        return s;
+    };
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    auto trans = [&](int layer) {
+        AnimatorComponent::Transition t;
+        t.fromState = 0; t.toState = 1; t.duration = 0.5f;
+        AnimatorComponent::Condition c;
+        c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "go";
+        t.conditions.push_back(c);
+        a.addTransition(t, layer);
+    };
+    a.addState(st("Idle", 0)); a.addState(st("Run", 1)); a.setEntryState(0); trans(0);
+    const int l1 = a.addLayer("Brazos");
+    a.addState(st("Low", 2), l1); a.addState(st("Aim", 3), l1); a.setEntryState(0, l1); trans(l1);
+    a.reset();
+    return a;
+}
+
+static void test_layers_management()
+{
+    AnimatorComponent a = makeTwoLayers();
+    CHECK(a.layerCount() == 2);
+    CHECK(a.layer(1).name == "Brazos");
+    a.setLayerWeight(0, 0.3f);  CHECK(nearlyEqual(a.layerWeight(0), 1.0f));   // la base no cambia
+    CHECK(nearlyEqual(a.layer(0).weight, 1.0f));                                // ni el campo guardado
+    // Y aunque alguien escriba el campo a mano, la pose ve la base a peso 1.
+    a.layerMutable(0).weight = 0.2f;
+    CHECK(nearlyEqual(a.layerWeight(0), 1.0f));
+    CHECK(nearlyEqual(a.pose().layers[0].weight, 1.0f));
+    a.layerMutable(0).weight = 1.0f;
+    a.setLayerWeight(1, 1.7f);  CHECK(nearlyEqual(a.layerWeight(1), 1.0f));
+    a.setLayerWeight(1, 0.25f); CHECK(nearlyEqual(a.layerWeight(1), 0.25f));
+    for (int i = 2; i < AnimatorComponent::kMaxLayers; i++) CHECK(a.addLayer("x") == i);
+    CHECK(a.addLayer("sobra") == -1);
+    a.removeLayer(0);            CHECK(a.layerCount() == AnimatorComponent::kMaxLayers);
+    a.moveLayer(1, 0);           CHECK(a.layer(1).name == "Brazos");
+    a.moveLayer(1, 2);           CHECK(a.layer(2).name == "Brazos");
+    a.removeLayer(2);            CHECK(a.layerCount() == AnimatorComponent::kMaxLayers - 1);
+}
+
+static void test_layers_trigger_fires_in_both_layers()
+{
+    AnimatorComponent a = makeTwoLayers();
+    a.update(0.1f, true);
+    a.setTrigger("go");
+    a.update(0.1f, true);
+    CHECK(a.currentState(0) == 1);
+    CHECK(a.currentState(1) == 1);
+    CHECK(a.fading(0) && a.fading(1));
+}
+
+static void test_layers_clocks_independent()
+{
+    AnimatorComponent a = makeTwoLayers();
+    a.update(0.5f, true);
+    a.play("Aim", 1);                     // solo la capa 1 reinicia su reloj
+    a.update(0.25f, true);
+    CHECK(nearlyEqual(a.animTime(0), 15.0f));
+    CHECK(nearlyEqual(a.animTime(1), 5.0f));
+}
+
+static void test_layers_pose_tags_and_weights()
+{
+    AnimatorComponent a = makeTwoLayers();
+    a.setLayerWeight(1, 0.4f);
+    a.setLayerMode(1, AnimatorComponent::LayerMode::Additive);
+    a.update(0.1f, true);
+    AnimationPose p = a.pose();
+    CHECK(p.layerCount == 2);
+    CHECK(p.count == 2);
+    CHECK(p.samples[0].layer == 0 && p.samples[0].clip == 0);
+    CHECK(p.samples[1].layer == 1 && p.samples[1].clip == 2);
+    CHECK(nearlyEqual(p.layers[1].weight, 0.4f));
+    CHECK(p.layers[1].mode == 1u);
+    a.setLayerWeight(1, 0.0f);
+    p = a.pose();
+    CHECK(p.layerCount == 2 && p.count == 1);            // la capa sigue, sin muestras
+    CHECK(nearlyEqual(p.layers[1].weight, 0.0f));
+}
+
+static void test_layers_events_and_root_motion()
+{
+    AnimatorComponent a = makeTwoLayers();
+    a.statesMutable(1)[0].events = { { "golpe", 0.1f } };
+    a.statesMutable(1)[0].rootMotion = AnimatorComponent::RootMotion::Apply;
+    a.update(0.3f, true);                                // 6 ticks: fase 0.15
+    CHECK(std::find(a.firedEvents().begin(), a.firedEvents().end(), "golpe") != a.firedEvents().end());
+    CHECK(a.rootMotionSamples().empty());                // root motion solo de la base
+    a.reset();
+    a.setLayerWeight(1, 0.0f);
+    a.update(0.3f, true);
+    CHECK(a.firedEvents().empty());                      // capa a peso 0 no dispara
+}
+
+static void test_layers_mask_resolution()
+{
+    SkinnedMesh m;
+    m.skeleton.names       = { "hips", "spine", "arm", "hand", "leg" };
+    m.skeleton.parentIndex = { -1, 0, 1, 2, 0 };
+    m.skeleton.inverseBindPose.assign(5, glm::mat4(1.0f));
+    AnimatorComponent a = makeTwoLayers();
+    a.layerMutable(1).maskBones = { "arm", "hand", "noExiste" };
+    std::vector<std::string> avisos;
+    a.bindClips(m, &avisos);
+    const auto& r = a.layer(1).maskResolved;
+    CHECK(r.size() == 5u);
+    if (r.size() == 5u) CHECK(r[0] == 0 && r[1] == 0 && r[2] == 1 && r[3] == 1 && r[4] == 0);
+    bool avisado = false;
+    for (const auto& w : avisos) if (w.find("noExiste") != std::string::npos) avisado = true;
+    CHECK(avisado);
+    a.layerMutable(1).maskBones.clear();
+    a.rebindClips(m, nullptr);
+    CHECK(a.layer(1).maskResolved.empty());
+    const AnimationPose p = a.pose();
+    CHECK(p.layers[1].mask == nullptr);
+}
+
+static void test_layers_serialization(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>(makeTwoLayers());
+    const int l2 = a->addLayer("Respirar");
+    a->setLayerWeight(1, 0.6f);
+    a->setLayerMode(l2, AnimatorComponent::LayerMode::Additive);
+    a->layerMutable(1).maskBones = { "arm", "hand" };
+    go->setAnimator(a);
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& b = *found->getAnimator();
+    CHECK(b.layerCount() == 3);
+    if (b.layerCount() != 3) return;
+    CHECK(b.layer(1).name == "Brazos" && nearlyEqual(b.layer(1).weight, 0.6f));
+    CHECK(b.layer(1).maskBones.size() == 2u);
+    CHECK(b.layer(1).states.size() == 2u && b.layer(1).transitions.size() == 1u);
+    CHECK(b.layer(2).mode == AnimatorComponent::LayerMode::Additive);
+    CHECK(b.layer(2).maskBones.empty());
+}
+
+// Una capa: ninguna clave nueva en el JSON.
+static void test_layers_single_layer_json_unchanged()
+{
+    AnimatorComponent a = makeTwoBlendStates();
+    const nlohmann::json j = animatorToJson(a);
+    CHECK(!j.contains("layers"));
+    AnimatorComponent b = makeTwoLayers();
+    CHECK(animatorToJson(b).contains("layers"));
+}
+
+static void test_layers_too_many_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>(makeTwoLayers());
+    go->setAnimator(a);
+    nlohmann::json j = scene.toJson();
+    for (auto& node : j["root"]["children"])
+        if (node.contains("animator"))
+            while (node["animator"]["layers"].size() < 9) node["animator"]["layers"].push_back(node["animator"]["layers"][0]);
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool avisado = false;
+    for (const auto& w : loaded.lastWarnings()) if (w.find("capas") != std::string::npos) avisado = true;
+    CHECK(avisado);
+}
+
+// El undo de la capa: la clave del grafo cambia al tocar peso, modo o máscara.
+static void test_layers_graph_key_sees_layer_edits()
+{
+    AnimatorComponent a = makeTwoLayers();
+    const auto k0 = animatorGraphKey(a);
+    a.setLayerWeight(1, 0.5f);
+    const auto k1 = animatorGraphKey(a);
+    CHECK(k0 != k1);
+    a.layerMutable(1).maskBones = { "arm" };
+    CHECK(animatorGraphKey(a) != k1);
+}
+
+// El undo de las capas pasa por graph()/applyGraph: el snapshot devuelve las
+// capas (nombre, peso, modo, máscara, grafo) y quita las que se añadieron.
+static void test_layers_apply_graph_restores()
+{
+    AnimatorComponent a = makeTwoLayers();
+    a.update(0.1f, true);
+    const AnimatorComponent::Graph antes = a.graph();
+    a.setLayerWeight(1, 0.3f);
+    a.layerMutable(1).maskBones = { "arm" };
+    a.addState(a.states(1)[0], 1);
+    a.addLayer("Nueva");
+    a.applyGraph(antes);
+    CHECK(a.layerCount() == 2);
+    CHECK(nearlyEqual(a.layer(1).weight, 1.0f));
+    CHECK(a.layer(1).maskBones.empty());
+    CHECK(a.states(1).size() == 2u);
+    CHECK(a.currentState(1) == 0);          // conserva su playhead
+    // Y rehacer: vuelve la capa añadida.
+    AnimatorComponent b = makeTwoLayers();
+    b.addLayer("Nueva");
+    const AnimatorComponent::Graph despues = b.graph();
+    a.applyGraph(despues);
+    CHECK(a.layerCount() == 3);
+    CHECK(a.layer(2).name == "Nueva");
+}
+
+
+// ── Capas en la GPU: layout del bloque y réplica en CPU de bone_eval ────────
+
+static void test_pose_block_layout()
+{
+    AnimationPose p;
+    p.layerCount = 2;
+    p.count = 2;
+    p.samples[0] = { 3, 12.5f, 1.0f, 0 };
+    p.samples[1] = { 1, 4.0f, 1.0f, 1 };
+    std::vector<uint8_t> mask = { 0, 1, 1 };
+    p.layers[1] = { 0.75f, 1u, 0.25f, false, &mask };
+    std::vector<uint32_t> b(poseBlockUints(3), 0xDEADBEEFu);
+    writePoseBlock(p, 3, b.data());
+    auto f = [&](uint32_t i) { float v; std::memcpy(&v, &b[i], 4); return v; };
+    CHECK(b[0] == 2u && b[1] == 2u);
+    CHECK(nearlyEqual(f(4), 1.0f) && b[5] == 0u && b[7] == 0u);          // capa 0: peso 1, sin máscara
+    CHECK(nearlyEqual(f(8), 0.75f) && b[9] == 1u && nearlyEqual(f(10), 0.25f) && b[11] == 1u);
+    CHECK(b[12] == 0u && b[15] == 0u);                                   // capa 2: vacía
+    CHECK(b[36] == 9u && nearlyEqual(f(37), 12.5f) && nearlyEqual(f(38), 1.0f) && b[39] == 0u);
+    CHECK(b[40] == 3u && b[43] == 1u);
+    CHECK(b[44] == 0u && b[47] == 0u);                                   // muestra 2: vacía
+    CHECK(b[228 + 3] == 0u && b[228 + 4] == 1u && b[228 + 5] == 1u);
+    CHECK(b[228] == 0xDEADBEEFu);                                        // la capa 0 no escribe máscara
+}
+
+// Réplica de decomposeTrs (bone_eval.comp).
+static Trs decomposeTrsRef(const glm::mat4& m)
+{
+    Trs r;
+    r.p = glm::vec3(m[3]);
+    r.s = glm::vec3(glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2])));
+    glm::mat3 R(glm::vec3(m[0]) / std::max(r.s.x, 1e-8f), glm::vec3(m[1]) / std::max(r.s.y, 1e-8f),
+                glm::vec3(m[2]) / std::max(r.s.z, 1e-8f));
+    const float tr = R[0][0] + R[1][1] + R[2][2];
+    glm::vec4 q;
+    if (tr > 0.0f)
+    {
+        const float s = std::sqrt(tr + 1.0f) * 2.0f;
+        q = { (R[1][2] - R[2][1]) / s, (R[2][0] - R[0][2]) / s, (R[0][1] - R[1][0]) / s, 0.25f * s };
+    }
+    else if (R[0][0] > R[1][1] && R[0][0] > R[2][2])
+    {
+        const float s = std::sqrt(1.0f + R[0][0] - R[1][1] - R[2][2]) * 2.0f;
+        q = { 0.25f * s, (R[1][0] + R[0][1]) / s, (R[2][0] + R[0][2]) / s, (R[1][2] - R[2][1]) / s };
+    }
+    else if (R[1][1] > R[2][2])
+    {
+        const float s = std::sqrt(1.0f + R[1][1] - R[0][0] - R[2][2]) * 2.0f;
+        q = { (R[1][0] + R[0][1]) / s, 0.25f * s, (R[2][1] + R[1][2]) / s, (R[2][0] - R[0][2]) / s };
+    }
+    else
+    {
+        const float s = std::sqrt(1.0f + R[2][2] - R[0][0] - R[1][1]) * 2.0f;
+        q = { (R[2][0] + R[0][2]) / s, (R[2][1] + R[1][2]) / s, 0.25f * s, (R[0][1] - R[1][0]) / s };
+    }
+    r.q = glm::normalize(q);
+    return r;
+}
+
+static glm::vec4 qmulRef(const glm::vec4& a, const glm::vec4& b)
+{
+    const glm::vec3 av(a), bv(b);
+    return glm::vec4(a.w * bv + b.w * av + glm::cross(av, bv), a.w * b.w - glm::dot(av, bv));
+}
+
+// Réplica de evalCapa (bone_eval.comp) sin congelada. bind = override y
+// ninguna muestra anima el hueso.
+static Trs capaTrs(const PackedClips& p, size_t boneCount, size_t i, const AnimationPose& pose, int L, bool additive)
+{
+    Trs acc; acc.p = glm::vec3(0.0f); acc.s = glm::vec3(0.0f);
+    glm::vec4 q(0.0f), ref(0.0f, 0.0f, 0.0f, 1.0f);
+    bool hayRef = additive, alguna = false;
+    float total = 0.0f;
+    for (int k = 0; k < pose.count; k++)
+    {
+        if (pose.samples[k].layer != L) continue;
+        const size_t base = (size_t)pose.samples[k].clip * boneCount;
+        Trs t;
+        if (sampleTrs(p, base, i, pose.samples[k].time, t))
+        {
+            alguna = true;
+            if (additive)
+            {
+                Trs t0;
+                sampleTrs(p, base, i, 0.0f, t0);
+                t.p = t.p - t0.p;
+                t.q = qmulRef(t.q, glm::vec4(-t0.q.x, -t0.q.y, -t0.q.z, t0.q.w));
+                t.s = glm::vec3(t0.s.x != 0.0f ? t.s.x / t0.s.x : 1.0f,
+                                t0.s.y != 0.0f ? t.s.y / t0.s.y : 1.0f,
+                                t0.s.z != 0.0f ? t.s.z / t0.s.z : 1.0f);
+            }
+        }
+        glm::vec4 qk = t.q;
+        if (!hayRef) { ref = qk; hayRef = true; }
+        if (glm::dot(qk, ref) < 0.0f) qk = -qk;
+        const float w = pose.samples[k].weight;
+        acc.p += w * t.p; acc.s += w * t.s; q += w * qk; total += w;
+    }
+    if (!additive && !alguna) { Trs b; b.bind = true; return b; }
+    if (total <= 0.0f) return Trs{};
+    if (std::fabs(total - 1.0f) > 1e-4f) { acc.p /= total; acc.s /= total; q /= total; }
+    const float len = glm::length(q);
+    acc.q = len > 1e-6f ? q / len : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    return acc;
+}
+
+// Réplica del main de bone_eval (sin el bloqueo de raíz): la base y cada capa
+// encima con m = peso x máscara.
+static Trs evalLayeredTrs(const PackedClips& p, size_t boneCount, size_t i, const AnimationPose& pose)
+{
+    const size_t cb0 = pose.count > 0 ? (size_t)pose.samples[0].clip * boneCount : 0;
+    const glm::mat4& bindLocal = p.boneInfos[cb0 + i].bindLocal;
+    Trs r = capaTrs(p, boneCount, i, pose, 0, false);
+    for (int L = 1; L < pose.layerCount; L++)
+    {
+        const PoseLayer& pl = pose.layers[L];
+        const bool add = pl.mode == 1u;
+        Trs c = capaTrs(p, boneCount, i, pose, L, add);
+        const float mk = pl.mask ? ((i < pl.mask->size() && (*pl.mask)[i]) ? 1.0f : 0.0f) : 1.0f;
+        const float m = pl.weight * mk;
+        if (m <= 0.0f || c.bind) continue;
+        if (r.bind) r = decomposeTrsRef(bindLocal);
+        if (!add)
+        {
+            glm::vec4 lq = c.q;
+            if (glm::dot(lq, r.q) < 0.0f) lq = -lq;
+            r.p = glm::mix(r.p, c.p, m);
+            r.s = glm::mix(r.s, c.s, m);
+            r.q = glm::normalize(glm::mix(r.q, lq, m));
+        }
+        else
+        {
+            glm::vec4 lq = c.q;
+            if (lq.w < 0.0f) lq = -lq;
+            const glm::vec4 d = glm::normalize(glm::mix(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), lq, m));
+            r.q = glm::normalize(qmulRef(d, r.q));
+            r.p += m * c.p;
+            r.s *= glm::mix(glm::vec3(1.0f), c.s, m);
+        }
+    }
+    return r;
+}
+
+// Cadera -> columna -> brazo. Clip 0 "Base": cada hueso en (i, 0, 0), sin
+// rotar. Clip 1 "Brazo": (0, 5 + i, 0) y 90 grados en Z. Clip 2 "Suma": de
+// (0,2,0) y 30 grados en Y en t = 0 a (0,3,0) y además 90 grados en X en
+// t = 10: su delta respecto al primer fotograma es +Y y giro en X, y SIN
+// restar el primer fotograma sale otra cosa.
+static SkinnedMesh makeLayerFixture()
+{
+    SkinnedMesh m;
+    m.skeleton.names       = { "hips", "spine", "arm" };
+    m.skeleton.parentIndex = { -1, 0, 1 };
+    m.skeleton.inverseBindPose.assign(3, glm::mat4(1.0f));
+    for (int i = 0; i < 3; i++) m.skeleton.boneMap[m.skeleton.names[i]] = i;
+    const glm::quat id(1, 0, 0, 0);
+    const glm::quat rz = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0, 0, 1));
+    const glm::quat rx = glm::angleAxis(glm::half_pi<float>(), glm::vec3(1, 0, 0));
+    const glm::quat ry = glm::angleAxis(glm::radians(30.0f), glm::vec3(0, 1, 0));
+    const char* nombres[3] = { "Base", "Brazo", "Suma" };
+    for (int c = 0; c < 3; c++)
+    {
+        AnimationClip clip; clip.name = nombres[c]; clip.duration = 10.0f; clip.ticksPerSecond = 10.0f;
+        for (int b = 0; b < 3; b++)
+        {
+            BoneChannel ch; ch.boneIndex = b;
+            if (c == 0) { ch.posKeys = { { 0.0f, glm::vec3((float)b, 0, 0) }, { 10.0f, glm::vec3((float)b, 0, 0) } };
+                          ch.rotKeys = { { 0.0f, id }, { 10.0f, id } }; }
+            if (c == 1) { ch.posKeys = { { 0.0f, glm::vec3(0, 5.0f + b, 0) }, { 10.0f, glm::vec3(0, 5.0f + b, 0) } };
+                          ch.rotKeys = { { 0.0f, rz }, { 10.0f, rz } }; }
+            if (c == 2) { ch.posKeys = { { 0.0f, glm::vec3(0, 2, 0) }, { 10.0f, glm::vec3(0, 3, 0) } };
+                          ch.rotKeys = { { 0.0f, ry }, { 10.0f, rx * ry } }; }
+            ch.scaleKeys = { { 0.0f, glm::vec3(1.0f) }, { 10.0f, glm::vec3(1.0f) } };
+            clip.channels.push_back(ch);
+        }
+        m.animationClips.push_back(clip);
+    }
+    return m;
+}
+
+static bool mismoTrs(const Trs& a, const Trs& b, float eps = 1e-5f)
+{
+    return glm::length(a.p - b.p) < eps && glm::length(a.s - b.s) < eps &&
+           std::fabs(std::fabs(glm::dot(a.q, b.q)) - 1.0f) < eps;
+}
+
+// Criterio de la fila 14: capa 1 override con máscara de brazo y peso 1 -> los
+// huesos de fuera son la capa 0 exacta y los de dentro la capa 1; peso 0 ->
+// la capa 0 exacta; peso 0.5 -> a medio camino solo dentro.
+static void test_layers_override_mask_criterion()
+{
+    const SkinnedMesh m = makeLayerFixture();
+    const PackedClips p = packSkinnedClips(m);
+    const size_t B = 3;
+    std::vector<uint8_t> brazo = { 0, 0, 1 };
+    AnimationPose base;  base.count = 1;  base.samples[0]  = { 0, 2.0f, 1.0f, 0 };
+    AnimationPose solo1; solo1.count = 1; solo1.samples[0] = { 1, 2.0f, 1.0f, 0 };
+    AnimationPose pose = base;
+    pose.layerCount = 2; pose.count = 2;
+    pose.samples[1] = { 1, 2.0f, 1.0f, 1 };
+    pose.layers[1] = { 1.0f, 0u, 0.0f, false, &brazo };
+    for (size_t i = 0; i < B; i++)
+        CHECK(mismoTrs(evalLayeredTrs(p, B, i, pose), evalLayeredTrs(p, B, i, brazo[i] ? solo1 : base)));
+    CHECK(!mismoTrs(evalLayeredTrs(p, B, 2, base), evalLayeredTrs(p, B, 2, solo1)));   // el test ve algo
+    pose.layers[1].weight = 0.0f;
+    for (size_t i = 0; i < B; i++)
+        CHECK(mismoTrs(evalLayeredTrs(p, B, i, pose), evalLayeredTrs(p, B, i, base)));
+    pose.layers[1].weight = 0.5f;
+    const Trs medio = evalLayeredTrs(p, B, 2, pose);
+    CHECK(glm::length(medio.p - glm::vec3(1.0f, 3.5f, 0.0f)) < 1e-5f);                 // (2,0,0)..(0,7,0)
+    CHECK(mismoTrs(evalLayeredTrs(p, B, 0, pose), evalLayeredTrs(p, B, 0, base)));
+    // Sin máscara: todo el cuerpo.
+    pose.layers[1] = { 1.0f, 0u, 0.0f, false, nullptr };
+    for (size_t i = 0; i < B; i++)
+        CHECK(mismoTrs(evalLayeredTrs(p, B, i, pose), evalLayeredTrs(p, B, i, solo1)));
+}
+
+// Additive: en t = 0 no cambia nada; a mitad suma medio delta.
+static void test_layers_additive_delta()
+{
+    const SkinnedMesh m = makeLayerFixture();
+    const PackedClips p = packSkinnedClips(m);
+    const size_t B = 3;
+    AnimationPose base; base.count = 1; base.samples[0] = { 0, 2.0f, 1.0f, 0 };
+    AnimationPose pose = base;
+    pose.layerCount = 2; pose.count = 2;
+    pose.samples[1] = { 2, 0.0f, 1.0f, 1 };
+    pose.layers[1] = { 1.0f, 1u, 0.0f, false, nullptr };
+    for (size_t i = 0; i < B; i++)
+        CHECK(mismoTrs(evalLayeredTrs(p, B, i, pose), evalLayeredTrs(p, B, i, base)));
+    pose.samples[1].time = 5.0f;
+    const Trs r = evalLayeredTrs(p, B, 1, pose);
+    CHECK(glm::length(r.p - glm::vec3(1.0f, 0.5f, 0.0f)) < 1e-5f);
+    const float s = std::sin(glm::quarter_pi<float>() * 0.5f), c = std::cos(glm::quarter_pi<float>() * 0.5f);
+    CHECK(std::fabs(std::fabs(glm::dot(r.q, glm::vec4(s, 0.0f, 0.0f, c))) - 1.0f) < 1e-5f);    // 45 grados en X
+    CHECK(glm::length(r.s - glm::vec3(1.0f)) < 1e-5f);
+    // Peso 0.5: la mitad de la mitad.
+    pose.layers[1].weight = 0.5f;
+    CHECK(glm::length(evalLayeredTrs(p, B, 1, pose).p - glm::vec3(1.0f, 0.25f, 0.0f)) < 1e-5f);
+    // Capa additive sin muestras: nada (y no escala 0).
+    pose.count = 1;
+    pose.layers[1].weight = 1.0f;
+    CHECK(mismoTrs(evalLayeredTrs(p, B, 1, pose), evalLayeredTrs(p, B, 1, base)));
+}
+
+// Una capa: la réplica por capas da lo mismo que la de la fila 13.
+static void test_layers_single_layer_matches_pose_samples()
+{
+    const SkinnedMesh m = makeLayerFixture();
+    const PackedClips p = packSkinnedClips(m);
+    AnimationPose pose; pose.count = 2;
+    pose.samples[0] = { 0, 2.0f, 0.3f, 0 };
+    pose.samples[1] = { 1, 7.0f, 0.7f, 0 };
+    for (size_t i = 0; i < 3; i++)
+        CHECK(mismoTrs(evalLayeredTrs(p, 3, i, pose), evalPoseTrs(p, 3, i, pose, nullptr)));
+}
+
+// El panel identifica nodos por editorId: la búsqueda tiene que ser en la
+// capa que se edita. Mirando siempre la base, un nodo de otra capa no existía
+// y crear o borrar en ella se descartaba en silencio.
+static void test_layers_state_index_by_editor_id()
+{
+    AnimatorComponent a = makeTwoLayers();
+    const int eidBase = a.states(0)[1].editorId;
+    const int eidCapa = a.states(1)[1].editorId;
+    CHECK(eidBase != eidCapa);
+    CHECK(a.stateIndexByEditorId(eidBase, 0) == 1);
+    CHECK(a.stateIndexByEditorId(eidCapa, 1) == 1);
+    CHECK(a.stateIndexByEditorId(eidCapa, 0) == -1);
+    CHECK(a.stateIndexByEditorId(eidBase, 1) == -1);
+    CHECK(a.stateIndexByEditorId(eidCapa, 7) == -1);   // capa que no existe
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -7166,8 +7659,24 @@ int main()
     test_blend2d_pose_and_fade();
     test_blend2d_legacy_pair_is_two_heaviest();
     test_blend2d_root_motion_samples();
+    test_layers_management();
+    test_layers_trigger_fires_in_both_layers();
+    test_layers_clocks_independent();
+    test_layers_pose_tags_and_weights();
+    test_layers_events_and_root_motion();
+    test_layers_mask_resolution();
+    test_layers_single_layer_json_unchanged();
+    test_layers_graph_key_sees_layer_edits();
+    test_layers_apply_graph_restores();
+    test_layers_state_index_by_editor_id();
+    test_pose_block_layout();
+    test_layers_override_mask_criterion();
+    test_layers_additive_delta();
+    test_layers_single_layer_matches_pose_samples();
     test_state_without_blend_fields_loads(pm, am);
     test_blend2d_serialization(pm, am);
+    test_layers_serialization(pm, am);
+    test_layers_too_many_warns(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
     test_animation_sources_survive_scene_round_trip(pm, am);

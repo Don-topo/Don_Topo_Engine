@@ -7806,6 +7806,7 @@ void PropertiesPanel::drawAnimatorSection(EditorContext& ctx)
 
     ImGui::Text("Estados: %d", (int)anim->states().size());
     ImGui::Text("Transiciones: %d", (int)anim->transitions().size());
+    if (anim->layerCount() > 1) ImGui::Text("Capas: %d (estados y transiciones: la base)", anim->layerCount());
     const int entry = anim->entryState();
     if (entry >= 0 && entry < (int)anim->states().size())
         ImGui::Text("Entrada: %s", anim->states()[entry].name.c_str());

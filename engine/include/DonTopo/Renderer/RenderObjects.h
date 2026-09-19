@@ -155,6 +155,14 @@ namespace DonTopo {
         VkDeviceMemory poseTrsMemory        = VK_NULL_HANDLE;
         VkBuffer       frozenTrsBuffer      = VK_NULL_HANDLE;
         VkDeviceMemory frozenTrsMemory      = VK_NULL_HANDLE;
+        // Bloque de pose (PoseBlock.h), una copia por frame en vuelo, mapeado
+        // de forma persistente: lo escribe SkinningPass::record cada frame.
+        VkBuffer       poseBlockBuffer      = VK_NULL_HANDLE;
+        VkDeviceMemory poseBlockMemory      = VK_NULL_HANDLE;
+        void*          poseBlockMapped      = nullptr;
+        // Copia de las máscaras de la pose: la del Animator solo vale durante
+        // setAnimationPose.
+        std::vector<uint8_t> poseMasks[kMaxLayersPose];
         float     duration       = 0.0f;
         float     ticksPerSecond = 24.0f;
         glm::mat4 transform      {1.0f};

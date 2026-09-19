@@ -1,4 +1,5 @@
-﻿#include "DonTopo/Renderer/Renderer.h"
+﻿#include "DonTopo/Renderer/PoseBlock.h"
+#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/Gizmos.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
@@ -3651,6 +3652,12 @@ namespace DonTopo {
         destroy(obj.finalBoneBuffer,      obj.finalBoneMemory);
         destroy(obj.poseTrsBuffer,        obj.poseTrsMemory);
         destroy(obj.frozenTrsBuffer,      obj.frozenTrsMemory);
+        if (obj.poseBlockMapped)
+        {
+            vkUnmapMemory(m_gpu.device(), obj.poseBlockMemory);
+            obj.poseBlockMapped = nullptr;
+        }
+        destroy(obj.poseBlockBuffer,      obj.poseBlockMemory);
         destroy(obj.outputVertexBuffer,   obj.outputVertexMemory);
         destroy(obj.indexBuffer,          obj.indexMemory);
 
@@ -3807,11 +3814,20 @@ namespace DonTopo {
         for (auto* par : { &obj.poseTrsBuffer, &obj.frozenTrsBuffer })
         {
             VkDeviceMemory& mem = (par == &obj.poseTrsBuffer) ? obj.poseTrsMemory : obj.frozenTrsMemory;
-            m_res.createBuffer((uint32_t)boneCount * 3 * sizeof(glm::vec4),
+            m_res.createBuffer((uint32_t)boneCount * 3 * sizeof(glm::vec4) * kMaxLayersPose,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, *par, mem);
         }
+
+        // Bloque de pose: una copia por frame en vuelo, visible desde el host y
+        // mapeada para siempre (se reescribe cada frame en SkinningPass).
+        m_res.createBuffer((uint32_t)(MAX_FRAMES * poseBlockUints((uint32_t)boneCount) * sizeof(uint32_t)),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            obj.poseBlockBuffer, obj.poseBlockMemory);
+        if (vkMapMemory(m_gpu.device(), obj.poseBlockMemory, 0, VK_WHOLE_SIZE, 0, &obj.poseBlockMapped) != VK_SUCCESS)
+            throw std::runtime_error("failed to map the pose block!");
 
         // --- Output vertex buffer: SSBO + VB, stride 80 bytes (5×vec4) ---
         constexpr VkDeviceSize OUT_VERT = 5 * sizeof(glm::vec4);
@@ -3828,7 +3844,7 @@ namespace DonTopo {
         if (obj.computeDescPool == VK_NULL_HANDLE)
             throw std::runtime_error("failed to allocate compute descriptor set!");
 
-        VkDescriptorBufferInfo bufInfos[10]{};
+        VkDescriptorBufferInfo bufInfos[11]{};
         bufInfos[0] = { obj.keyframePosBuffer,    0, VK_WHOLE_SIZE };
         bufInfos[1] = { obj.keyframeRotBuffer,    0, VK_WHOLE_SIZE };
         bufInfos[2] = { obj.keyframeScaleBuffer,  0, VK_WHOLE_SIZE };
@@ -3839,9 +3855,10 @@ namespace DonTopo {
         bufInfos[7] = { obj.outputVertexBuffer,   0, VK_WHOLE_SIZE };
         bufInfos[8] = { obj.poseTrsBuffer,        0, VK_WHOLE_SIZE };
         bufInfos[9] = { obj.frozenTrsBuffer,      0, VK_WHOLE_SIZE };
+        bufInfos[10] = { obj.poseBlockBuffer,     0, VK_WHOLE_SIZE };
 
-        VkWriteDescriptorSet writes[10]{};
-        for (int i = 0; i < 10; i++)
+        VkWriteDescriptorSet writes[11]{};
+        for (int i = 0; i < 11; i++)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = obj.computeDescSet;
@@ -3850,7 +3867,7 @@ namespace DonTopo {
             writes[i].descriptorCount = 1;
             writes[i].pBufferInfo     = &bufInfos[i];
         }
-        vkUpdateDescriptorSets(m_gpu.device(), 10, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_gpu.device(), 11, writes, 0, nullptr);
 
         // --- Texturas y descriptor sets por material ---
         constexpr uint8_t white[4] = {255, 255, 255, 255};
@@ -4050,6 +4067,14 @@ namespace DonTopo {
         auto& obj = m_skinnedObjects[index];
         obj.pose    = pose;
         obj.hasPose = true;
+        // La máscara de cada capa se copia: la del Animator solo vale durante
+        // esta llamada. SkinningPass reapunta la pose a estas copias.
+        for (int L = 0; L < kMaxLayersPose; L++)
+        {
+            const std::vector<uint8_t>* m = (L < pose.layerCount) ? pose.layers[L].mask : nullptr;
+            if (m) obj.poseMasks[L] = *m; else obj.poseMasks[L].clear();
+            obj.pose.layers[L].mask = nullptr;
+        }
         // Mismo clamp que el clip activo: cada clip indexa el SSBO de BoneInfos
         // y uno fuera de rango leería basura en silencio.
         int masPesada = -1;
@@ -5075,7 +5100,7 @@ namespace DonTopo {
         // m_skinnedVisible es la MISMA lista que consume el bucle de dibujo: si
         // el pase saltara un objeto que luego se dibuja, le quedaria la pose del
         // ultimo frame en que fue visible.
-        return SkinningPass::Context{ m_gpu, m_skinnedObjects, m_skinnedVisible };
+        return SkinningPass::Context{ m_gpu, m_skinnedObjects, m_skinnedVisible, (uint32_t)m_currentFrame };
     }
 
     // ── Shadow map ──────────────────────────────────────────────────────────

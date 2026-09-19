@@ -27,26 +27,18 @@ class GpuDevice;
 //    ultimo frame en que fue visible).
 class SkinningPass {
 public:
-    // ABI compartida por los 3 compute shaders. 32 bytes: los 4 primeros campos
-    // no se han movido de sitio, los 4 del cross-fade se anadieron detras.
     // Espejo del bloque push_constant de los tres .comp de skinning (y de
-    // ComputePush en D3D12): mismo orden, mismos tipos.
+    // ComputePush en D3D12): mismo orden, mismos tipos. La pose va en el
+    // bloque de pose (PoseBlock.h); aquí solo el offset de la copia del frame.
     struct Push
     {
         uint32_t boneCount;
         uint32_t vertexCount;
         // --- Solo los lee bone_eval.comp ---
-        // Hasta 6 muestras (clip * boneCount, tiempo en ticks, peso) y el peso
-        // de la pose congelada. Escalares y no arrays: en HLSL un array de un
-        // cbuffer ocupa 16 bytes por elemento y spirv-cross no lo iguala.
-        uint32_t sampleCount;
-        uint32_t rootMotionMode;   // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
-        float    frozenWeight;
-        uint32_t clipBase0, clipBase1, clipBase2, clipBase3, clipBase4, clipBase5;
-        float    time0, time1, time2, time3, time4, time5;
-        float    weight0, weight1, weight2, weight3, weight4, weight5;
+        uint32_t rootMotionMode;    // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
+        uint32_t poseBlockOffset;   // en uints
     };
-    static_assert(sizeof(Push) == 92, "Push: los 3 .comp y ComputePush de D3D12 declaran este layout");
+    static_assert(sizeof(Push) == 16, "Push: los 3 .comp y ComputePush de D3D12 declaran este layout");
 
     struct Context {
         GpuDevice& gpu;
@@ -54,6 +46,8 @@ public:
         // Renderer.
         std::vector<SkinnedRenderObject>& skinnedObjects;
         const std::vector<uint8_t>&       skinnedVisible;
+        // Frame en vuelo que se graba: elige la copia del bloque de pose.
+        uint32_t                          frameIndex = 0;
     };
 
     SkinningPass()                               = default;

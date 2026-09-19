@@ -194,6 +194,7 @@ const std::vector<std::string>& baseSymbols()
         "Animator:GetPreviousState", "Animator:GetPoseWeight",
         "Animator:Play", "Animator:CrossFade", "Animator:ResetTrigger", "Animator:GetNormalizedTime",
         "Animator:SetSpeed", "Animator:GetSpeed",
+        "Animator:SetLayerWeight", "Animator:GetLayerWeight", "Animator:GetLayerCount",
 
         // AudioClip (GetComponent("AudioClip"))
         "AudioClip:Play", "AudioClip:PlayOneShot", "AudioClip:Stop",
@@ -684,17 +685,20 @@ const std::unordered_map<std::string, DocEntry>& docTable()
             {"Animator:GetInt", {"(nombre) -> number", "Lee un parámetro entero."}},
             {"Animator:SetFloat", {"(nombre, valor)", "Fija un parámetro float."}},
             {"Animator:GetFloat", {"(nombre) -> number", "Lee un parámetro float."}},
-            {"Animator:GetState", {"() -> string", "Nombre del estado actual."}},
+            {"Animator:GetState", {"([capa]) -> string", "Nombre del estado actual de la capa (0 = base, por defecto)."}},
             {"Animator:GetPreviousState", {"() -> string", "Estado del que se viene durante un cross-fade."}},
-            {"Animator:IsBlending", {"() -> boolean", "Si hay un cross-fade en curso."}},
+            {"Animator:IsBlending", {"([capa]) -> boolean", "Si hay un cross-fade en curso en la capa (0 = base, por defecto)."}},
             {"Animator:GetBlendWeight", {"() -> number", "Peso 0..1 del cross-fade en curso."}},
             {"Animator:GetPoseWeight", {"() -> number", "Peso que va a la GPU: el del cross-fade si lo hay, si no el del blend por parámetro."}},
-            {"Animator:Play", {"(estado) -> boolean", "Entra ya en ese estado, sin mezcla. false si no existe."}},
-            {"Animator:CrossFade", {"(estado, segundos) -> boolean", "Mezcla hacia ese estado durante los segundos dados. false si no existe."}},
+            {"Animator:Play", {"(estado, [capa]) -> boolean", "Entra ya en ese estado de la capa (0 = base), sin mezcla. false si no existe."}},
+            {"Animator:CrossFade", {"(estado, segundos, [capa]) -> boolean", "Mezcla hacia ese estado de la capa (0 = base) durante los segundos dados. false si no existe."}},
             {"Animator:ResetTrigger", {"(nombre)", "Desarma un trigger que todavía no se ha consumido."}},
             {"Animator:SetSpeed", {"(velocidad)", "Velocidad global del Animator (1 = normal, 0 = congelado). Negativo se acota a 0."}},
             {"Animator:GetSpeed", {"() -> number", "Velocidad global actual del Animator."}},
-            {"Animator:GetNormalizedTime", {"() -> number", "Tiempo normalizado del estado actual: 1 = una vuelta; en loop sigue creciendo."}},
+            {"Animator:GetNormalizedTime", {"([capa]) -> number", "Tiempo normalizado del estado actual de la capa: 1 = una vuelta; en loop sigue creciendo."}},
+            {"Animator:SetLayerWeight", {"(capa, peso)", "Peso 0..1 de una capa superior (la base vale siempre 1)."}},
+            {"Animator:GetLayerWeight", {"(capa) -> number", "Peso de la capa; 0 si no existe."}},
+            {"Animator:GetLayerCount", {"() -> integer", "Número de capas, base incluida."}},
 
             // --- Audio ---
             {"Audio.SetBusVolume", {"(bus, volumen)", "Volumen 0..1 de \"master\", \"music\" o \"sfx\"."}},

@@ -696,6 +696,18 @@ while the vertical bob stays in the pose; rotation isn't applied. The component 
 **Properties → Add → Animator**, greyed out on non-skinned objects (an Animator has no clips
 to name without a skeleton).
 
+The Animator has **layers**, like Unity's. Layer 0 is the base graph; every extra layer is a
+full state machine of its own (states, transitions, entry, Any State) that reads the same
+parameters, so one trigger can move several layers in the same frame. Each extra layer has a
+**weight** (0..1), a **mode** and a **mask**: **Override** replaces the pose of the masked
+bones, blended by the weight; **Additive** adds each clip's difference from its own first
+frame on top of what is below (a breathing or recoil clip over any locomotion). The mask is a
+set of bones, picked on the skeleton tree — a click takes the bone and its whole branch,
+Ctrl+click only that bone; an empty mask means the whole body. Only the base layer moves the
+GameObject with root motion; animation events fire from every layer whose weight is above 0.
+In the panel the layer list sits above the graph: **+** / **−**, the arrows reorder, and a
+double click renames; the graph shown is the selected layer's.
+
 Open the graph with **View → Animator**. In the node panel:
 
 - **Add State from Clip** adds a node from one of the model's clips.
@@ -721,7 +733,7 @@ evaluated before the current state's own transitions. By default an Any State tr
 never re-enters the state that is already playing; turn on **Can Transition To Self** on that
 transition to allow it (for example, a hit reaction that restarts on every trigger).
 
-Every edit to the graph (states, transitions, conditions, parameters, blend, entry state) is
+Every edit to the graph (states, transitions, conditions, parameters, blend, entry state, layers) is
 undoable with Ctrl+Z, one step per gesture — dragging a value is a single step. Moving nodes
 on the canvas is not recorded.
 
@@ -742,7 +754,8 @@ It is driven from Lua via `GetComponent("Animator")`: the graph's `bool`, `trigg
 and `float` parameters are read and written **by name**, and the active state, the blend
 weight and the state being faded out can be queried. Scripts can also drive the graph
 directly: `Play(state)` and `CrossFade(state, seconds)` jump to a state by name (returning
-`false` for an unknown one), `ResetTrigger(name)` disarms a pending trigger, `SetSpeed(v)`/`GetSpeed()` scale the whole
+`false` for an unknown one; both take an optional layer index, and `SetLayerWeight(layer, w)`
+fades a layer in and out), `ResetTrigger(name)` disarms a pending trigger, `SetSpeed(v)`/`GetSpeed()` scale the whole
 Animator (runtime only, not saved), and
 `GetNormalizedTime()` reports how far into the current state it is (it keeps growing on a
 loop, so `2.5` is two and a half loops). Parameter names are never fatal — an
