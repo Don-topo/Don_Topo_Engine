@@ -574,7 +574,32 @@ static void test_ik_twobone_reaches_target()
         CHECK(std::isfinite(m[3].x) && std::isfinite(m[3].y) && std::isfinite(m[3].z));
 }
 
-static void test_ik_twobone_pole_decides_the_plane()
+// Pesos intermedios: la cadena se acerca al objetivo a medida que sube el
+// peso, sin llegar hasta que vale 1. Sin este caso, el peso solo se medía en
+// el 0, que sale por la guarda de arriba y no pasa por la flexión.
+static void test_ik_twobone_partial_weight()
+{
+    std::vector<int> padres; std::vector<glm::mat4> locales;
+    cadenaDePrueba(locales, padres);
+    const auto mundo = componer(locales, padres);
+    const glm::vec3 objetivo(2, 2, 0);
+    const float sinIk = glm::length(glm::vec3(mundo[3][3]) - objetivo);
+    float anterior = sinIk;
+    for (float w : { 0.25f, 0.5f, 0.75f, 1.0f })
+    {
+        AnimationIk ik;
+        ik.count = 1;
+        ik.solves[0] = { 1u, 3, 2, 1, w, objetivo, glm::vec3(0), 0u, glm::vec3(0, 0, 1), 80.0f };
+        auto conIk = locales;
+        resolverIk(ik, mundo, padres, conIk);
+        const float d = glm::length(glm::vec3(componer(conIk, padres)[3][3]) - objetivo);
+        CHECK(d < anterior - 1e-3f);          // cada escalón acerca
+        anterior = d;
+    }
+    CHECK(anterior < 1e-3f);                  // con peso 1 llega
+}
+
+
 {
     std::vector<int> padres; std::vector<glm::mat4> locales;
     cadenaDePrueba(locales, padres);
