@@ -6523,6 +6523,136 @@ static void test_legacy_scene_without_sources_shares_preloaded(PhysicsManager& p
     CHECK(r2->getMesh().get() != conExtra.get());
 }
 
+// ── Pose por muestras ────────────────────────────────────────────────────────
+//
+// Dos estados con blend 1D: Loco (Walk clip 0 umbral 0, Run clip 2 umbral 1) y
+// Otro (Idle clip 1 umbral 0, Jump clip 3 umbral 1), con speed = 0,5 (pareja a
+// medias en los dos). go: Loco -> Otro, fade de 2 s. back: Otro -> Loco, 1 s.
+static AnimatorComponent makeTwoBlendStates()
+{
+    AnimatorComponent a;
+    auto estado = [](const char* n, const char* principal, int ci, const char* extra, int ce) {
+        AnimatorComponent::State s;
+        s.name = n; s.clipName = principal; s.clipIndex = ci; s.duration = 40.0f;
+        s.ticksPerSecond = 20.0f; s.loop = true;
+        s.blendParam = "speed"; s.clipThreshold = 0.0f;
+        s.blendEntries = { entrada(extra, ce, 40.0f, 1.0f) };
+        return s;
+    };
+    a.addState(estado("Loco", "Walk", 0, "Run", 2));
+    a.addState(estado("Otro", "Idle", 1, "Jump", 3));
+    a.setEntryState(0);
+    a.addParameter("speed", AnimatorComponent::ParamType::Float);
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    a.addParameter("back", AnimatorComponent::ParamType::Trigger);
+    auto trans = [&](int from, int to, float dur, const char* trig) {
+        AnimatorComponent::Transition t;
+        t.fromState = from; t.toState = to; t.duration = dur;
+        AnimatorComponent::Condition c;
+        c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = trig;
+        t.conditions.push_back(c);
+        a.addTransition(t);
+    };
+    trans(0, 1, 2.0f, "go");
+    trans(1, 0, 1.0f, "back");
+    a.reset();
+    a.setFloat("speed", 0.5f);
+    return a;
+}
+
+static float pesoMuestra(const AnimationPose& p, int clip)
+{
+    float w = 0.0f;
+    for (int i = 0; i < p.count; i++) if (p.samples[i].clip == clip) w += p.samples[i].weight;
+    return w;
+}
+
+static float sumaPesos(const AnimationPose& p)
+{
+    float w = p.frozenWeight;
+    for (int i = 0; i < p.count; i++) w += p.samples[i].weight;
+    return w;
+}
+
+// Sin fade: la pareja del estado, con sus pesos.
+static void test_pose_samples_without_fade()
+{
+    AnimatorComponent a = makeTwoBlendStates();
+    a.update(0.5f, true);
+    const AnimationPose p = a.pose();
+    CHECK(p.count == 2);
+    CHECK(nearlyEqual(pesoMuestra(p, 0), 0.5f));
+    CHECK(nearlyEqual(pesoMuestra(p, 2), 0.5f));
+    CHECK(nearlyEqual(p.frozenWeight, 0.0f));
+    CHECK(!p.freezeNow);
+    // Sin blend: una sola muestra de peso 1.
+    a.setFloat("speed", 0.0f);
+    a.update(0.0f, true);
+    CHECK(a.pose().count == 1);
+    CHECK(nearlyEqual(a.pose().samples[0].weight, 1.0f));
+}
+
+// Fade entre dos estados con blend: las 4 muestras, el que sale con SU reloj.
+static void test_pose_samples_fade_between_blends()
+{
+    AnimatorComponent a = makeTwoBlendStates();
+    a.update(0.5f, true);                          // Loco en 10 ticks
+    a.setTrigger("go");
+    a.update(0.016f, true);                        // sale a Otro
+    a.update(0.5f, true);                          // w = 0,258 aprox.
+    const float w = a.blendWeight();
+    CHECK(w > 0.2f && w < 0.3f);
+    const AnimationPose p = a.pose();
+    CHECK(p.count == 4);
+    CHECK(nearlyEqual(pesoMuestra(p, 0), (1.0f - w) * 0.5f));
+    CHECK(nearlyEqual(pesoMuestra(p, 2), (1.0f - w) * 0.5f));
+    CHECK(nearlyEqual(pesoMuestra(p, 1), w * 0.5f));
+    CHECK(nearlyEqual(pesoMuestra(p, 3), w * 0.5f));
+    for (int i = 0; i < p.count; i++)
+        if (p.samples[i].clip == 0) CHECK(nearlyEqual(p.samples[i].time, a.previousAnimTime()));
+}
+
+// Interrumpir un fade congela la pose una vez y el estado previo deja de
+// aportar muestras.
+static void test_pose_freeze_on_interrupted_fade()
+{
+    AnimatorComponent a = makeTwoBlendStates();
+    a.setTrigger("go");
+    a.update(0.016f, true);
+    a.update(0.5f, true);                          // fade Loco -> Otro en vuelo
+    a.setTrigger("back");
+    a.update(0.016f, true);                        // interrumpe: Otro -> Loco
+    AnimationPose p = a.pose();
+    CHECK(p.freezeNow);
+    CHECK(a.fading());
+    CHECK(!a.blending());
+    CHECK(nearlyEqual(p.frozenWeight, 1.0f - a.blendWeight()));
+    CHECK(nearlyEqual(pesoMuestra(p, 1) + pesoMuestra(p, 3), 0.0f));   // Otro ya no aporta
+    a.clearFreezeRequest();
+    CHECK(!a.pose().freezeNow);
+    a.update(0.25f, true);
+    p = a.pose();
+    CHECK(!p.freezeNow);
+    CHECK(nearlyEqual(p.frozenWeight, 1.0f - a.blendWeight()));
+    CHECK(p.frozenWeight > 0.0f && p.frozenWeight < 1.0f);
+    a.update(2.0f, true);                          // el fade acaba
+    CHECK(!a.fading());
+    CHECK(nearlyEqual(a.pose().frozenWeight, 0.0f));
+}
+
+// Los pesos suman 1 en todos los casos.
+static void test_pose_weights_sum_to_one()
+{
+    AnimatorComponent a = makeTwoBlendStates();
+    CHECK(nearlyEqual(sumaPesos(a.pose()), 1.0f));
+    a.setTrigger("go");
+    a.update(0.016f, true);
+    for (int i = 0; i < 5; i++) { a.update(0.3f, true); CHECK(nearlyEqual(sumaPesos(a.pose()), 1.0f)); }
+    a.setTrigger("back");
+    a.update(0.016f, true);
+    for (int i = 0; i < 5; i++) { a.update(0.3f, true); CHECK(nearlyEqual(sumaPesos(a.pose()), 1.0f)); }
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6654,6 +6784,10 @@ int main()
     test_apply_skinned_frame_applies_root_motion();
     test_packing_fills_bone_depth();
     test_packing_depth_invariant_real_rig();
+    test_pose_samples_without_fade();
+    test_pose_samples_fade_between_blends();
+    test_pose_freeze_on_interrupted_fade();
+    test_pose_weights_sum_to_one();
     test_state_without_blend_fields_loads(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);

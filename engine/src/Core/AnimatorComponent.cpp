@@ -81,6 +81,8 @@ namespace DonTopo
         m_prevAnimTime  = 0.0f;
         m_blendElapsed  = 0.0f;
         m_blendDuration = 0.0f;
+        m_frozenFade    = false;
+        m_freezePending = false;
     }
 
     void AnimatorComponent::removeTransition(int idx)
@@ -232,7 +234,11 @@ namespace DonTopo
             enterState(m_entryState);
         }
 
-        if (m_prevState >= 0 && cur >= 0 && prev >= 0)
+        if (m_frozenFade && cur >= 0)
+        {
+            // La congelada no depende de índices del grafo: el fade sigue.
+        }
+        else if (m_prevState >= 0 && cur >= 0 && prev >= 0)
         {
             m_prevState = prev;
         }
@@ -242,6 +248,8 @@ namespace DonTopo
             m_prevAnimTime  = 0.0f;
             m_blendElapsed  = 0.0f;
             m_blendDuration = 0.0f;
+            m_frozenFade    = false;
+            m_freezePending = false;
         }
     }
 
@@ -324,7 +332,7 @@ namespace DonTopo
     {
         // Sin mezcla el destino pesa el 100%: así el consumidor no necesita
         // preguntar antes si hay cross-fade o no.
-        if (m_prevState < 0 || m_blendDuration <= 0.0f) return 1.0f;
+        if ((m_prevState < 0 && !m_frozenFade) || m_blendDuration <= 0.0f) return 1.0f;
         const float w = m_blendElapsed / m_blendDuration;
         return w < 0.0f ? 0.0f : (w > 1.0f ? 1.0f : w);
     }
@@ -350,16 +358,17 @@ namespace DonTopo
         return hasParam(st.blendParam, ParamType::Float);
     }
 
-    AnimatorComponent::BlendPair AnimatorComponent::stateBlendPair(int stateIdx) const
+    AnimatorComponent::BlendPair AnimatorComponent::stateBlendPair(int stateIdx, float animTime) const
     {
-        const int clip = currentClipIndex();
+        const int clip = (stateIdx >= 0 && stateIdx < (int)m_states.size() && m_states[stateIdx].clipIndex >= 0)
+                             ? m_states[stateIdx].clipIndex : 0;
         const float durActual = (stateIdx >= 0 && stateIdx < (int)m_states.size()) ? m_states[stateIdx].duration : 0.0f;
-        BlendPair out{ clip, m_animTime, clip, m_animTime, 1.0f, durActual, durActual };
+        BlendPair out{ clip, animTime, clip, animTime, 1.0f, durActual, durActual };
         if (!stateBlends(stateIdx)) return out;
 
         const State& st    = m_states[stateIdx];
         const float  p     = getFloat(st.blendParam);
-        const float  phase = st.duration > 0.0f ? m_animTime / st.duration : 0.0f;
+        const float  phase = st.duration > 0.0f ? animTime / st.duration : 0.0f;
 
         // Vecino de abajo (mayor umbral <= p) y de arriba (menor umbral > p),
         // sin ordenar ni asignar memoria. -1 es el principal, que se mira
@@ -386,7 +395,7 @@ namespace DonTopo
         // y las piernas patinan; por fase, el pie de apoyo de uno cae sobre el
         // del otro.
         auto clipDe   = [&](int k) { return k < 0 ? st.clipIndex : st.blendEntries[k].clipIndex; };
-        auto tiempoDe = [&](int k) { return k < 0 ? m_animTime : phase * st.blendEntries[k].duration; };
+        auto tiempoDe = [&](int k) { return k < 0 ? animTime : phase * st.blendEntries[k].duration; };
         out.clipA  = clipDe(lo);
         out.timeA  = tiempoDe(lo);
         out.clipB  = clipDe(hi);
@@ -398,30 +407,69 @@ namespace DonTopo
         return out;
     }
 
+    AnimationPose AnimatorComponent::pose() const
+    {
+        AnimationPose out;
+        out.rootMotionMode = poseRootMotionMode();
+        out.freezeNow      = m_freezePending;
+        auto add = [&](int clip, float time, float w) {
+            if (w <= 0.0f || out.count >= 4) return;
+            out.samples[out.count++] = { clip < 0 ? 0 : clip, time, w };
+        };
+        // La pareja de blend de un estado, con SU reloj, escalada por el peso
+        // que ese estado tiene en el fade.
+        auto addPair = [&](int stateIdx, float time, float scale) {
+            const BlendPair bp = stateBlendPair(stateIdx, time);
+            if (bp.clipA == bp.clipB) { add(bp.clipB, bp.timeB, scale); return; }
+            add(bp.clipA, bp.timeA, scale * (1.0f - bp.weight));
+            add(bp.clipB, bp.timeB, scale * bp.weight);
+        };
+        if (m_currentState < 0 || m_currentState >= (int)m_states.size())
+        {
+            add(0, m_animTime, 1.0f);
+            return out;
+        }
+        const float w = blendWeight();
+        if (m_frozenFade)
+        {
+            out.frozenWeight = 1.0f - w;
+            addPair(m_currentState, m_animTime, w);
+        }
+        else if (blending() && m_prevState < (int)m_states.size())
+        {
+            // El que sale aporta su pareja completa, no solo su principal (A3).
+            addPair(m_prevState, m_prevAnimTime, 1.0f - w);
+            addPair(m_currentState, m_animTime, w);
+        }
+        else
+            addPair(m_currentState, m_animTime, 1.0f);
+        return out;
+    }
+
     int AnimatorComponent::poseClipA() const
     {
-        return blending() ? previousClipIndex() : stateBlendPair(m_currentState).clipA;
+        return blending() ? previousClipIndex() : stateBlendPair(m_currentState, m_animTime).clipA;
     }
 
     float AnimatorComponent::poseTimeA() const
     {
-        return blending() ? m_prevAnimTime : stateBlendPair(m_currentState).timeA;
+        return blending() ? m_prevAnimTime : stateBlendPair(m_currentState, m_animTime).timeA;
     }
 
     int AnimatorComponent::poseClipB() const
     {
         // Cross-fade: el destino aporta su clip PRIMARIO (solo caben dos clips).
-        return blending() ? currentClipIndex() : stateBlendPair(m_currentState).clipB;
+        return blending() ? currentClipIndex() : stateBlendPair(m_currentState, m_animTime).clipB;
     }
 
     float AnimatorComponent::poseTimeB() const
     {
-        return blending() ? m_animTime : stateBlendPair(m_currentState).timeB;
+        return blending() ? m_animTime : stateBlendPair(m_currentState, m_animTime).timeB;
     }
 
     float AnimatorComponent::poseWeight() const
     {
-        return blending() ? blendWeight() : stateBlendPair(m_currentState).weight;
+        return blending() ? blendWeight() : stateBlendPair(m_currentState, m_animTime).weight;
     }
 
     uint32_t AnimatorComponent::poseRootMotionMode() const
@@ -448,6 +496,8 @@ namespace DonTopo
         m_prevAnimTime  = 0.0f;
         m_blendElapsed  = 0.0f;
         m_blendDuration = 0.0f;
+        m_frozenFade    = false;
+        m_freezePending = false;
     }
 
     void AnimatorComponent::reset()
@@ -681,7 +731,7 @@ namespace DonTopo
             }
             return;
         }
-        const BlendPair bp = stateBlendPair(m_currentState);
+        const BlendPair bp = stateBlendPair(m_currentState, m_animTime);
         // Cada clip del blend va en la fase del principal: sus ticks acumulados
         // son los del principal escalados a su duración.
         const double escA = st.duration > 0.0f ? (double)bp.durA / st.duration : 0.0;
@@ -723,9 +773,9 @@ namespace DonTopo
         // ritmo y SU loop mientras dura la mezcla. Congelarlo daría un salto
         // visible justo al empezar la transición, que es lo contrario de lo que
         // el cross-fade viene a resolver.
-        if (m_prevState >= 0)
+        if (m_prevState >= 0 || m_frozenFade)
         {
-            if (m_prevState < (int)m_states.size())
+            if (m_prevState >= 0 && m_prevState < (int)m_states.size())
             {
                 advanceClock(m_states[m_prevState], stateRate(m_states[m_prevState]),
                              m_prevAnimTime, nullptr, dt);
@@ -741,6 +791,8 @@ namespace DonTopo
                 m_prevAnimTime  = 0.0f;
                 m_blendElapsed  = 0.0f;
                 m_blendDuration = 0.0f;
+                m_frozenFade    = false;
+                m_freezePending = false;
             }
         }
 
@@ -793,14 +845,25 @@ namespace DonTopo
     {
         if (duration > 0.0f)
         {
-            // El estado que dejamos pasa a ser el que se apaga, con el tiempo
-            // que llevara. Si YA había una mezcla en vuelo se descarta:
-            // mezclar tres clips necesitaría un tercer bloque en el SSBO y en
-            // el push constant, así que la mezcla anterior se corta aquí
-            // (mismo criterio que Unity con su capa base).
-            m_prevState     = m_currentState;
-            m_prevStateTicks = m_stateTicks;
-            m_prevAnimTime  = m_animTime;
+            if (fading())
+            {
+                // Interrupción: la mezcla en vuelo se CONGELA en vez de
+                // descartarse (A4). El backend copia la pose de pantalla a la
+                // congelada antes de evaluar (freezeNow) y el fade sale de ella.
+                m_frozenFade     = true;
+                m_freezePending  = true;
+                m_prevState      = -1;
+                m_prevStateTicks = 0.0;
+                m_prevAnimTime   = 0.0f;
+            }
+            else
+            {
+                // El estado que dejamos pasa a ser el que se apaga, con el
+                // tiempo que llevara.
+                m_prevState      = m_currentState;
+                m_prevStateTicks = m_stateTicks;
+                m_prevAnimTime   = m_animTime;
+            }
             m_blendElapsed  = 0.0f;
             m_blendDuration = duration;
         }
@@ -812,6 +875,8 @@ namespace DonTopo
             m_prevAnimTime  = 0.0f;
             m_blendElapsed  = 0.0f;
             m_blendDuration = 0.0f;
+            m_frozenFade    = false;
+            m_freezePending = false;
         }
         enterState(idx);
     }
