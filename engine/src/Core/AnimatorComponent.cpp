@@ -578,6 +578,15 @@ namespace DonTopo
         return out;
     }
 
+    int AnimatorComponent::stateIndexByEditorId(int editorId, int layer) const
+    {
+        if (editorId < 0 || layer < 0 || layer >= (int)m_layers.size()) return -1;
+        const auto& states = m_layers[(size_t)layer].states;
+        for (size_t i = 0; i < states.size(); i++)
+            if (states[i].editorId == editorId) return (int)i;
+        return -1;
+    }
+
     int AnimatorComponent::addLayer(const std::string& name)
     {
         if ((int)m_layers.size() >= kMaxLayers) return -1;

@@ -436,6 +436,11 @@ namespace DonTopo
             Layer&       layerMutable(int i) { return lay(i); }
             // Devuelve el índice de la nueva, -1 si ya hay kMaxLayers.
             int   addLayer(const std::string& name);
+            // Índice del estado con ese editorId en la capa dada, -1 si no está
+            // (o la capa no existe). La capa es obligatoria a propósito: el
+            // editor identifica nodos por editorId, y buscar en la base por
+            // defecto hacía invisibles los nodos de las demás capas.
+            int   stateIndexByEditorId(int editorId, int layer) const;
             void  removeLayer(int i);                 // no la 0
             void  moveLayer(int from, int to);        // ni desde ni hacia la 0
             void  setLayerWeight(int i, float w);     // acotado a [0, 1]

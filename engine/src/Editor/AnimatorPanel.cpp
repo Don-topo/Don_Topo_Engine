@@ -109,17 +109,13 @@ namespace {
     // Un pin (o un nodo) solo trae el editorId estable, y las transiciones
     // guardan índices del vector m_states (no editorIds) porque ese es el
     // contrato de AnimatorComponent::Transition. Este helper hace el puente:
-    // decodifica el editorId y escanea states() buscando quién lo tiene hoy.
-    // Devuelve -1 si ningún estado vivo tiene ese id (no debería pasar: los
-    // ids que llegan aquí vienen de nodos/pines dibujados este mismo frame a
-    // partir de states() actual).
-    int stateIndexFromPin(const AnimatorComponent& anim, int rawId)
+    // decodifica el editorId y lo busca en los estados de la capa que se está
+    // editando. Devuelve -1 si ningún estado vivo tiene ese id (no debería
+    // pasar: los ids que llegan aquí vienen de nodos/pines dibujados este
+    // mismo frame a partir de states(capa) actual).
+    int stateIndexFromPin(const AnimatorComponent& anim, int rawId, int capa)
     {
-        const int eid = editorIdFromRawId(rawId);
-        const auto& states = anim.states();
-        for (size_t i = 0; i < states.size(); i++)
-            if (states[i].editorId == eid) return (int)i;
-        return -1;
+        return anim.stateIndexByEditorId(editorIdFromRawId(rawId), capa);
     }
 
     const char* condLabel(AnimatorComponent::ConditionType t)
@@ -755,8 +751,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 // de Any State no se decodifica: es el centinela.
                 const int fromIdx = (outPin == kAnyStateOutPinId)
                                     ? AnimatorComponent::kAnyState
-                                    : stateIndexFromPin(*anim, outPin);
-                const int toIdx   = stateIndexFromPin(*anim, inPin);
+                                    : stateIndexFromPin(*anim, outPin, m_layer);
+                const int toIdx   = stateIndexFromPin(*anim, inPin, m_layer);
                 if ((fromIdx >= 0 || fromIdx == AnimatorComponent::kAnyState) && toIdx >= 0)
                 {
                     AnimatorComponent::Transition tr;
@@ -804,7 +800,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             if ((int)dn.Get() == kAnyStateNodeId) { ed::RejectDeletedItem(); continue; }
             if (ed::AcceptDeletedItem())
             {
-                const int idx = stateIndexFromPin(*anim, (int)dn.Get());
+                const int idx = stateIndexFromPin(*anim, (int)dn.Get(), m_layer);
                 if (idx >= 0) statesToRemove.push_back(idx);
             }
         }
@@ -851,7 +847,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // ctxNode.Get() decodifica a un editorId, no al índice del vector que
         // "Set as Entry" necesita (setEntryState(idx)) — de ahí el paso por
         // stateIndexFromPin.
-        m_nodeCtxTarget = stateIndexFromPin(*anim, (int)ctxNode.Get());
+        m_nodeCtxTarget = stateIndexFromPin(*anim, (int)ctxNode.Get(), m_layer);
     }
     else if (ed::ShowLinkContextMenu(&ctxLink))
     {

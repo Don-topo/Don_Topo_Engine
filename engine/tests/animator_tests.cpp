@@ -7496,6 +7496,22 @@ static void test_layers_single_layer_matches_pose_samples()
         CHECK(mismoTrs(evalLayeredTrs(p, 3, i, pose), evalPoseTrs(p, 3, i, pose, nullptr)));
 }
 
+// El panel identifica nodos por editorId: la búsqueda tiene que ser en la
+// capa que se edita. Mirando siempre la base, un nodo de otra capa no existía
+// y crear o borrar en ella se descartaba en silencio.
+static void test_layers_state_index_by_editor_id()
+{
+    AnimatorComponent a = makeTwoLayers();
+    const int eidBase = a.states(0)[1].editorId;
+    const int eidCapa = a.states(1)[1].editorId;
+    CHECK(eidBase != eidCapa);
+    CHECK(a.stateIndexByEditorId(eidBase, 0) == 1);
+    CHECK(a.stateIndexByEditorId(eidCapa, 1) == 1);
+    CHECK(a.stateIndexByEditorId(eidCapa, 0) == -1);
+    CHECK(a.stateIndexByEditorId(eidBase, 1) == -1);
+    CHECK(a.stateIndexByEditorId(eidCapa, 7) == -1);   // capa que no existe
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -7652,6 +7668,7 @@ int main()
     test_layers_single_layer_json_unchanged();
     test_layers_graph_key_sees_layer_edits();
     test_layers_apply_graph_restores();
+    test_layers_state_index_by_editor_id();
     test_pose_block_layout();
     test_layers_override_mask_criterion();
     test_layers_additive_delta();
