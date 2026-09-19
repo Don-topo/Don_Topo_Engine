@@ -1488,6 +1488,13 @@ namespace DonTopo::ScriptBindings
                 if (!go->hasAnimator()) throw std::runtime_error("El GameObject ya no tiene Animator");
                 return go->getAnimator().get();
             };
+            // Capa opcional de las llamadas por capa: sin argumento, la base.
+            // Fuera de rango devuelve -1 y la llamada no hace nada (en vez de
+            // caer en otra capa, que es lo que haría el acotado del componente).
+            auto capaDe = [](AnimatorComponent* a, sol::optional<int> capa) {
+                const int li = capa.value_or(0);
+                return (li >= 0 && li < a->layerCount()) ? li : -1;
+            };
             lua.new_usertype<LuaAnimator>("Animator",
                 sol::no_constructor,
                 "SetBool",    [animOf](const LuaAnimator& c, const std::string& n, bool v) { animOf(c)->setBool(n, v); },
@@ -1497,19 +1504,41 @@ namespace DonTopo::ScriptBindings
                 // Control directo del grafo. Un estado que no existe devuelve
                 // false y deja aviso en el log, sin lanzar: igual que los
                 // parámetros, un nombre mal escrito no tumba el script.
-                "Play", [animOf, &mgr](const LuaAnimator& c, const std::string& estado) {
-                    const bool ok = animOf(c)->play(estado);
+                "Play", [animOf, capaDe, &mgr](const LuaAnimator& c, const std::string& estado, sol::optional<int> capa) {
+                    AnimatorComponent* anim = animOf(c);
+                    const int li = capaDe(anim, capa);
+                    if (li < 0) { mgr.log("[Lua][WARN] Animator.Play: no hay capa " + std::to_string(capa.value_or(0))); return false; }
+                    const bool ok = anim->play(estado, li);
                     if (!ok) mgr.log("[Lua][WARN] Animator.Play: no hay ningún estado '" + estado + "'");
                     return ok;
                 },
-                "CrossFade", [animOf, &mgr](const LuaAnimator& c, const std::string& estado, float segundos) {
+                "CrossFade", [animOf, capaDe, &mgr](const LuaAnimator& c, const std::string& estado, float segundos,
+                                                    sol::optional<int> capa) {
                     AnimatorComponent* anim = animOf(c);
                     if (!ensureFinite(mgr, "Animator.CrossFade", segundos)) return false;
-                    const bool ok = anim->crossFade(estado, segundos);
+                    const int li = capaDe(anim, capa);
+                    if (li < 0) { mgr.log("[Lua][WARN] Animator.CrossFade: no hay capa " + std::to_string(capa.value_or(0))); return false; }
+                    const bool ok = anim->crossFade(estado, segundos, li);
                     if (!ok) mgr.log("[Lua][WARN] Animator.CrossFade: no hay ningún estado '" + estado + "'");
                     return ok;
                 },
-                "GetNormalizedTime", [animOf](const LuaAnimator& c) { return animOf(c)->normalizedTime(); },
+                "GetNormalizedTime", [animOf, capaDe](const LuaAnimator& c, sol::optional<int> capa) {
+                    AnimatorComponent* anim = animOf(c);
+                    const int li = capaDe(anim, capa);
+                    return li < 0 ? 0.0f : anim->normalizedTime(li);
+                },
+                // Capas: el peso de las superiores se conduce desde aquí (la base
+                // vale siempre 1); modo y máscara son autoría del grafo.
+                "SetLayerWeight", [animOf, &mgr](const LuaAnimator& c, int capa, float peso) {
+                    AnimatorComponent* anim = animOf(c);
+                    if (!ensureFinite(mgr, "Animator.SetLayerWeight", peso)) return;
+                    anim->setLayerWeight(capa, peso);
+                },
+                "GetLayerWeight", [animOf](const LuaAnimator& c, int capa) {
+                    AnimatorComponent* anim = animOf(c);
+                    return (capa >= 0 && capa < anim->layerCount()) ? anim->layerWeight(capa) : 0.0f;
+                },
+                "GetLayerCount", [animOf](const LuaAnimator& c) { return animOf(c)->layerCount(); },
                 // Velocidad global del Animator (runtime, no se guarda). La
                 // velocidad por estado es autoría del grafo: se conduce con
                 // SetFloat sobre su parámetro multiplicador.
@@ -1530,11 +1559,19 @@ namespace DonTopo::ScriptBindings
                     anim->setFloat(n, v);
                 },
                 "GetFloat",   [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getFloat(n); },
-                "GetState",   [animOf](const LuaAnimator& c) { return animOf(c)->currentStateName(); },
+                "GetState",   [animOf, capaDe](const LuaAnimator& c, sol::optional<int> capa) {
+                    AnimatorComponent* anim = animOf(c);
+                    const int li = capaDe(anim, capa);
+                    return li < 0 ? std::string() : anim->currentStateName(li);
+                },
                 // Cross-fade en curso. Son de LECTURA: la duración de la mezcla
                 // es autoría del grafo (se edita en el panel Animator), igual
                 // que las condiciones de una transición.
-                "IsBlending",     [animOf](const LuaAnimator& c) { return animOf(c)->fading(); },
+                "IsBlending",     [animOf, capaDe](const LuaAnimator& c, sol::optional<int> capa) {
+                    AnimatorComponent* anim = animOf(c);
+                    const int li = capaDe(anim, capa);
+                    return li >= 0 && anim->fading(li);
+                },
                 "GetBlendWeight", [animOf](const LuaAnimator& c) { return animOf(c)->blendWeight(); },
                 "GetPreviousState", [animOf](const LuaAnimator& c) { return animOf(c)->previousStateName(); },
                 // El peso que acaba yendo a la GPU: el del cross-fade si hay

@@ -3675,13 +3675,70 @@ static void test_animator_lua_play_crossfade_reset_and_time(ScriptManager& sm)
     CHECK(nearlyEqual(a->speed(), 0.0f));
 }
 
+// Capas desde Lua: peso, número de capas y el argumento de capa opcional.
+static void test_animator_lua_layers(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s;
+    s.duration = 100.0f; s.ticksPerSecond = 10.0f;
+    s.name = "Idle"; s.clipName = "Idle"; a->addState(s);
+    s.name = "Run";  s.clipName = "Run";  a->addState(s);
+    const int l1 = a->addLayer("Brazos");
+    s.name = "Low"; s.clipName = "Low"; a->addState(s, l1);
+    s.name = "Aim"; s.clipName = "Aim"; a->addState(s, l1);
+    a->setEntryState(0, l1);
+    go->setAnimator(a);
+    a->update(0.0f, false);
+    sm.rebuildAliveSet();
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        local an = e:GetComponent("Animator")
+        an:SetLayerWeight(1, 0.5)
+        peso    = an:GetLayerWeight(1)
+        pesoB   = an:GetLayerWeight(0)
+        pesoNo  = an:GetLayerWeight(9)
+        capas   = an:GetLayerCount()
+        okAim   = an:Play("Aim", 1)
+        base    = an:GetState()
+        brazos  = an:GetState(1)
+        nadie   = an:GetState(9)
+        okNo    = an:Play("Aim", 9)
+        okFade  = an:CrossFade("Low", 0.5, 1)
+        mezcla  = an:IsBlending(1)
+        mezcla0 = an:IsBlending()
+        an:SetLayerWeight(9, 1)
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+    CHECK(nearlyEqual(sm.lua()["peso"].get<float>(), 0.5f));
+    CHECK(nearlyEqual(sm.lua()["pesoB"].get<float>(), 1.0f));
+    CHECK(nearlyEqual(sm.lua()["pesoNo"].get<float>(), 0.0f));
+    CHECK(sm.lua()["capas"].get<int>() == 2);
+    CHECK(sm.lua()["okAim"].get<bool>());
+    CHECK(sm.lua()["base"].get<std::string>() == "Idle");
+    CHECK(sm.lua()["brazos"].get<std::string>() == "Aim");
+    CHECK(sm.lua()["nadie"].get<std::string>().empty());
+    CHECK(!sm.lua()["okNo"].get<bool>());
+    CHECK(sm.lua()["okFade"].get<bool>());
+    CHECK(sm.lua()["mezcla"].get<bool>());
+    CHECK(!sm.lua()["mezcla0"].get<bool>());
+    CHECK(a->currentStateName(1) == "Low");
+    CHECK(a->layerCount() == 2);
+}
+
 // Regla del repo: todo binding nuevo va también al autocompletado.
 static void test_animator_lua_new_methods_are_in_the_reference()
 {
     const auto& simbolos = luaApiSymbols();
     for (const char* nombre : { "Animator:Play", "Animator:CrossFade",
                                 "Animator:ResetTrigger", "Animator:GetNormalizedTime",
-                                "Animator:SetSpeed", "Animator:GetSpeed" })
+                                "Animator:SetSpeed", "Animator:GetSpeed",
+                                "Animator:SetLayerWeight", "Animator:GetLayerWeight",
+                                "Animator:GetLayerCount" })
     {
         std::string firma, doc;
         luaApiDoc(nombre, firma, doc);
@@ -3750,6 +3807,7 @@ int main()
     sm.setAudioManager(&am);
 
     test_animator_lua_play_crossfade_reset_and_time(sm);
+    test_animator_lua_layers(sm);
     test_animation_event_reaches_lua(sm);
     test_animator_lua_new_methods_are_in_the_reference();
     test_set_position_rejects_nan(sm);
