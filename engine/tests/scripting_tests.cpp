@@ -3730,6 +3730,51 @@ static void test_animator_lua_layers(ScriptManager& sm)
     CHECK(a->layerCount() == 2);
 }
 
+// IK desde Lua: peso, objetivo, pole y recuento.
+static void test_animator_lua_ik(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Personaje");
+    GameObject* objetivo = scene.addGameObject("Objetivo");
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::IkConstraint mirar;
+    mirar.name = "mirar"; mirar.boneName = "head";
+    AnimatorComponent::IkConstraint mano;
+    mano.name = "mano"; mano.type = AnimatorComponent::IkType::TwoBone; mano.boneName = "hand";
+    a->addIkConstraint(mirar);
+    a->addIkConstraint(mano);
+    go->setAnimator(a);
+    sm.rebuildAliveSet();
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+    sm.lua()["obj"] = LuaEntity{ objetivo, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        local an = e:GetComponent("Animator")
+        an:SetIkWeight("mano", 0.5)
+        peso   = an:GetIkWeight("mano")
+        pesoNo = an:GetIkWeight("noExiste")
+        cuenta = an:GetIkCount()
+        an:SetIkTarget("mirar", obj)
+        an:SetIkPole("mano", obj)
+        an:SetIkWeight("noExiste", 1)
+        an:SetIkTarget("noExiste", obj)
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+    CHECK(nearlyEqual(sm.lua()["peso"].get<float>(), 0.5f));
+    CHECK(nearlyEqual(sm.lua()["pesoNo"].get<float>(), 0.0f));
+    CHECK(sm.lua()["cuenta"].get<int>() == 2);
+    CHECK(a->ikConstraints()[0].targetId == objetivo->id);
+    CHECK(a->ikConstraints()[1].poleId == objetivo->id);
+
+    // Quitar el objetivo con nil.
+    auto r2 = sm.lua().safe_script("e:GetComponent('Animator'):SetIkTarget('mirar', nil)",
+                                    sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(a->ikConstraints()[0].targetId == 0u);
+}
+
 // Regla del repo: todo binding nuevo va también al autocompletado.
 static void test_animator_lua_new_methods_are_in_the_reference()
 {
@@ -3738,7 +3783,10 @@ static void test_animator_lua_new_methods_are_in_the_reference()
                                 "Animator:ResetTrigger", "Animator:GetNormalizedTime",
                                 "Animator:SetSpeed", "Animator:GetSpeed",
                                 "Animator:SetLayerWeight", "Animator:GetLayerWeight",
-                                "Animator:GetLayerCount" })
+                                "Animator:GetLayerCount",
+                                "Animator:SetIkWeight", "Animator:GetIkWeight",
+                                "Animator:SetIkTarget", "Animator:SetIkPole",
+                                "Animator:GetIkCount" })
     {
         std::string firma, doc;
         luaApiDoc(nombre, firma, doc);
@@ -3808,6 +3856,7 @@ int main()
 
     test_animator_lua_play_crossfade_reset_and_time(sm);
     test_animator_lua_layers(sm);
+    test_animator_lua_ik(sm);
     test_animation_event_reaches_lua(sm);
     test_animator_lua_new_methods_are_in_the_reference();
     test_set_position_rejects_nan(sm);

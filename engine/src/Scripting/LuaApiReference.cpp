@@ -195,6 +195,8 @@ const std::vector<std::string>& baseSymbols()
         "Animator:Play", "Animator:CrossFade", "Animator:ResetTrigger", "Animator:GetNormalizedTime",
         "Animator:SetSpeed", "Animator:GetSpeed",
         "Animator:SetLayerWeight", "Animator:GetLayerWeight", "Animator:GetLayerCount",
+        "Animator:SetIkWeight", "Animator:GetIkWeight", "Animator:SetIkTarget",
+        "Animator:SetIkPole", "Animator:GetIkCount",
 
         // AudioClip (GetComponent("AudioClip"))
         "AudioClip:Play", "AudioClip:PlayOneShot", "AudioClip:Stop",
@@ -699,6 +701,11 @@ const std::unordered_map<std::string, DocEntry>& docTable()
             {"Animator:SetLayerWeight", {"(capa, peso)", "Peso 0..1 de una capa superior (la base vale siempre 1)."}},
             {"Animator:GetLayerWeight", {"(capa) -> number", "Peso de la capa; 0 si no existe."}},
             {"Animator:GetLayerCount", {"() -> integer", "Número de capas, base incluida."}},
+            {"Animator:SetIkWeight", {"(nombre, peso)", "Peso 0..1 de una restricción de IK; un nombre que no existe se ignora."}},
+            {"Animator:GetIkWeight", {"(nombre) -> number", "Peso de la restricción; 0 si no existe."}},
+            {"Animator:SetIkTarget", {"(nombre, entidad)", "Objetivo de la restricción; nil lo quita y la IK deja de aplicarse."}},
+            {"Animator:SetIkPole", {"(nombre, entidad)", "Pole de una IK de dos huesos: hacia dónde apunta el codo o la rodilla."}},
+            {"Animator:GetIkCount", {"() -> integer", "Número de restricciones de IK del Animator."}},
 
             // --- Audio ---
             {"Audio.SetBusVolume", {"(bus, volumen)", "Volumen 0..1 de \"master\", \"music\" o \"sfx\"."}},
