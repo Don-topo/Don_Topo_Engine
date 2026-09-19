@@ -29,32 +29,24 @@ class SkinningPass {
 public:
     // ABI compartida por los 3 compute shaders. 32 bytes: los 4 primeros campos
     // no se han movido de sitio, los 4 del cross-fade se anadieron detras.
+    // Espejo del bloque push_constant de los tres .comp de skinning (y de
+    // ComputePush en D3D12): mismo orden, mismos tipos.
     struct Push
     {
-        float    animTime;
         uint32_t boneCount;
         uint32_t vertexCount;
-        // activeClip * boneCount: indice base del bloque del clip activo dentro
-        // del SSBO de BoneInfos, que va en layout [clip][hueso]. Solo lo lee
-        // bone_eval.comp; bone_hierarchy y skinning declaran este slot como
-        // "pad" y no lo tocan.
-        uint32_t clipBase;
-        // --- Cross-fade ---
-        // Segundo clip de la mezcla y su reloj. Con blendWeight >= 1 bone_eval
-        // ni los mira, asi que el caso sin mezcla no paga la segunda
-        // evaluacion. Solo los lee bone_eval.comp.
-        float    prevAnimTime;
-        uint32_t prevClipBase;
-        // 0 = solo prevClip, 1 = solo el clip activo. El Animator manda 1
-        // cuando no hay cross-fade en vuelo.
-        float    blendWeight;
-        // 1 = la traslacion del hueso raiz vuelve a la de su bind pose (clip
-        // que desplaza el modelo reproducido en el sitio). Ocupa el slot que
-        // antes era padding, asi que el bloque sigue en 32 bytes. Solo lo lee
-        // bone_eval.comp.
-        uint32_t lockRootMotion;
+        // --- Solo los lee bone_eval.comp ---
+        // Hasta 4 muestras (clip * boneCount, tiempo en ticks, peso) y el peso
+        // de la pose congelada. Escalares y no arrays: en HLSL un array de un
+        // cbuffer ocupa 16 bytes por elemento y spirv-cross no lo iguala.
+        uint32_t sampleCount;
+        uint32_t rootMotionMode;   // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
+        float    frozenWeight;
+        uint32_t clipBase0, clipBase1, clipBase2, clipBase3;
+        float    time0, time1, time2, time3;
+        float    weight0, weight1, weight2, weight3;
     };
-    static_assert(sizeof(Push) == 32, "Push debe seguir en 32 bytes: los 3 .comp declaran este layout");
+    static_assert(sizeof(Push) == 68, "Push: los 3 .comp y ComputePush de D3D12 declaran este layout");
 
     struct Context {
         GpuDevice& gpu;

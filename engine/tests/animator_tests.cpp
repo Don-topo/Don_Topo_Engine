@@ -5040,26 +5040,24 @@ static void test_tracker_label_is_per_gesture()
 // helper es plantilla y no toma `EditorRenderer&`: esa interfaz son 75 métodos
 // puros, y un doble de 75 stubs para probar cinco llamadas no lo escribe nadie.
 // Apunta el ORDEN, que es la mitad de lo que hay que proteger aquí.
+static AnimatorComponent makeTwoBlendStates();   // más abajo, con los tests de pose
+
 struct SkinnedRendererDoble
 {
     std::vector<std::string> orden;
     bool      visible       = false;
-    uint32_t  clipB         = 0xFFFFFFFFu;
-    uint32_t  clipA         = 0xFFFFFFFFu;
-    float     timeB         = -1.0f;
-    float     timeA         = -1.0f;
-    float     weight        = -1.0f;
-    uint32_t  rootMode      = 0xFFFFFFFFu;
+    AnimationPose pose;
+    bool      poseRecibida  = false;
     float     dtSinAnimator = -1.0f;
     glm::mat4 transform     = glm::mat4(0.0f);
     float     ssr           = -1.0f;
 
     void setSkinnedMeshVisible(int, bool v) { orden.push_back("visible"); visible = v; }
     void updateAnimation(int, float dt)     { orden.push_back("updateAnimation"); dtSinAnimator = dt; }
-    void setAnimationBlend(int, uint32_t cb, float tb, uint32_t ca, float ta, float w, uint32_t mode)
+    void setAnimationPose(int, const AnimationPose& p)
     {
         orden.push_back("blend");
-        clipB = cb; timeB = tb; clipA = ca; timeA = ta; weight = w; rootMode = mode;
+        pose = p; poseRecibida = true;
     }
     void setSkinnedTransform(int, const glm::mat4& m) { orden.push_back("transform"); transform = m; }
     void setSkinnedSsr(int, float s)                  { orden.push_back("ssr"); ssr = s; }
@@ -5144,15 +5142,45 @@ static void test_apply_skinned_frame_passes_pose_b_then_a()
     SkinnedRendererDoble r;
     applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
 
-    CHECK(a->poseClipA() != a->poseClipB());
-    CHECK(!nearlyEqual(a->poseTimeA(), a->poseTimeB()));
-    CHECK(r.clipB == (uint32_t)a->poseClipB());
-    CHECK(r.clipA == (uint32_t)a->poseClipA());
-    CHECK(nearlyEqual(r.timeB, a->poseTimeB()));
-    CHECK(nearlyEqual(r.timeA, a->poseTimeA()));
-    CHECK(nearlyEqual(r.weight, a->poseWeight()));
-    CHECK(r.rootMode == 1u);
-    CHECK(r.rootMode == a->poseRootMotionMode());
+    // Desde la fila 13 viaja la AnimationPose entera: la misma que da pose().
+    const AnimationPose esperada = a->pose();
+    CHECK(r.poseRecibida);
+    CHECK(esperada.count == 2);
+    CHECK(r.pose.count == esperada.count);
+    for (int k = 0; k < esperada.count; k++)
+    {
+        CHECK(r.pose.samples[k].clip == esperada.samples[k].clip);
+        CHECK(nearlyEqual(r.pose.samples[k].time, esperada.samples[k].time));
+        CHECK(nearlyEqual(r.pose.samples[k].weight, esperada.samples[k].weight));
+    }
+    CHECK(r.pose.samples[0].clip != r.pose.samples[1].clip);
+    CHECK(!nearlyEqual(r.pose.samples[0].time, r.pose.samples[1].time));
+    CHECK(r.pose.rootMotionMode == 1u);
+    CHECK(nearlyEqual(r.pose.frozenWeight, esperada.frozenWeight));
+}
+
+// Un fade interrumpido pide congelar la pose de pantalla UNA vez: el host la
+// entrega con freezeNow y la consume en el acto. Si no la consumiera, el
+// backend congelaría cada frame y la pose de salida se quedaría clavada.
+static void test_apply_skinned_frame_delivers_freeze_once()
+{
+    Scene scene("Test");
+    auto a = std::make_shared<AnimatorComponent>(makeTwoBlendStates());
+    a->setTrigger("go");
+    a->update(0.016f, true);
+    a->update(0.5f, true);                          // fade Loco -> Otro en vuelo
+    a->setTrigger("back");
+    GameObject* go = makeSkinnedGameObject(scene, a);
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);   // interrumpe
+    CHECK(r.pose.freezeNow);
+    CHECK(r.pose.frozenWeight > 0.0f);
+    CHECK(!a->pose().freezeNow);
+
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
+    CHECK(!r.pose.freezeNow);
+    CHECK(r.pose.frozenWeight > 0.0f);
 }
 
 // Sin Animator el reloj lo lleva el backend, como antes de que el componente
@@ -6937,6 +6965,7 @@ int main()
 
     test_apply_skinned_frame_sets_visible_before_animation();
     test_apply_skinned_frame_passes_pose_b_then_a();
+    test_apply_skinned_frame_delivers_freeze_once();
     test_apply_skinned_frame_without_animator_advances_backend_clock();
     test_apply_skinned_frame_edit_mode_does_not_move_the_graph();
     test_apply_skinned_frame_ignores_unregistered_object();

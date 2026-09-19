@@ -1,4 +1,5 @@
 #pragma once
+#include "DonTopo/Core/AnimationPose.h"
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <string>
@@ -143,15 +144,17 @@ namespace DonTopo {
         // Índice del clip que se evalúa este frame. Los demás residen en el
         // SSBO y no se leen.
         uint32_t  activeClip     = 0;
-        // Cross-fade: el clip que se está apagando y su propio reloj. Con
-        // blendWeight a 1 el compute no llega a mirarlos, que es el estado en
-        // que queda todo objeto que no esté mezclando.
-        uint32_t  prevClip       = 0;
-        float     prevAnimTime   = 0.0f;
-        float     blendWeight    = 1.0f;
-        // Modo de la raíz (ver EditorRenderer::setAnimationBlend): 0 libre,
-        // 1 clavada a bind, 2 solo X y Z clavadas. 0 = comportamiento de siempre.
-        uint32_t  rootMotionMode = 0;
+        // La pose que manda un Animator (setAnimationPose): hasta 4 muestras y
+        // la congelada. Sin ella (hasPose false), bone_eval evalúa una sola
+        // muestra: activeClip en animTime, que es el camino de updateAnimation.
+        AnimationPose pose;
+        bool          hasPose        = false;
+        // TRS de la pose resultante (lo escribe bone_eval) y la copia congelada
+        // al interrumpir un fade. 3 vec4 por hueso.
+        VkBuffer       poseTrsBuffer        = VK_NULL_HANDLE;
+        VkDeviceMemory poseTrsMemory        = VK_NULL_HANDLE;
+        VkBuffer       frozenTrsBuffer      = VK_NULL_HANDLE;
+        VkDeviceMemory frozenTrsMemory      = VK_NULL_HANDLE;
         float     duration       = 0.0f;
         float     ticksPerSecond = 24.0f;
         glm::mat4 transform      {1.0f};

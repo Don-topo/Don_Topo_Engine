@@ -22,17 +22,19 @@ layout(set=0, binding=4, std430) readonly buffer LocalXforms { mat4 data[]; }   
 layout(set=0, binding=5, std430) buffer FinalBones           { mat4 data[]; }     finalBones;
 
 layout(push_constant) uniform PC {
-    float animTime;
     uint  boneCount;
     uint  vertexCount;
-    // clipBase, los tres del cross-fade y el bloqueo de raíz: solo los lee
-    // bone_eval.comp. Aquí se declaran para que el bloque tenga el mismo tamaño
-    // que SkinningPass::Push.
-    uint  pad;
-    float pad1;
-    uint  pad2;
-    float pad3;
-    uint  padLockRootMotion;
+    // --- Solo los lee bone_eval.comp ---
+    // Hasta 4 muestras (clip * boneCount, tiempo en ticks, peso) y el peso de
+    // la pose congelada. Escalares y no arrays: en HLSL un array de un cbuffer
+    // ocupa 16 bytes por elemento, y spirv-cross no lo iguala. El mismo bloque
+    // en los tres .comp, en SkinningPass::Push y en ComputePush de D3D12.
+    uint  sampleCount;
+    uint  rootMotionMode;   // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
+    float frozenWeight;
+    uint  clipBase0; uint clipBase1; uint clipBase2; uint clipBase3;
+    float time0;     float time1;    float time2;    float time3;
+    float weight0;   float weight1;  float weight2;  float weight3;
 } push;
 
 shared uint sMaxDepth;
