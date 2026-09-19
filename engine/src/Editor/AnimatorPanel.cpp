@@ -118,18 +118,6 @@ namespace {
         return anim.stateIndexByEditorId(editorIdFromRawId(rawId), capa);
     }
 
-    // Tooltip de un widget de DENTRO de un nodo. Entre ed::Begin y ed::End el
-    // ratón y las ventanas van en coordenadas del lienzo, así que un tooltip
-    // creado ahí sale desplazado por el pan y el zoom (muy por encima del
-    // cursor). Suspend lo saca a coordenadas de pantalla, como pide la
-    // librería para toda ventana que se abra desde el lienzo.
-    void tooltipEnNodo(const char* texto)
-    {
-        ed::Suspend();
-        ImGui::SetTooltip("%s", texto);
-        ed::Resume();
-    }
-
     const char* condLabel(AnimatorComponent::ConditionType t)
     {
         switch (t)
@@ -464,6 +452,13 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     auto anim = go->getAnimator();
 
     ed::SetCurrentEditor(m_ctx);
+    // El tooltip de un widget de dentro de un nodo NO se puede dibujar aquí:
+    // entre ed::Begin y ed::End el ratón y las ventanas van en coordenadas del
+    // lienzo, así que saldría desplazado por el pan y el zoom, y sacarlo con
+    // ed::Suspend dentro de un nodo rompe el splitter de canales del lienzo
+    // (IM_ASSERT en imgui_canvas.cpp: la aplicación se queda clavada al
+    // arrastrar un nodo). Se anota el texto y se pinta al final, ya fuera.
+    m_tooltipNodo.clear();
     ed::Begin("AnimatorCanvas");
     // Escribiendo en un campo de un nodo (nombre de evento), Supr borraría el
     // nodo seleccionado: imgui-node-editor mira la tecla, no el foco de texto.
@@ -514,15 +509,15 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             ImGui::SameLine();
             if (ImGui::RadioButton("normal##rm", modo == 0)) modo = 0;
             if (ImGui::IsItemHovered())
-                tooltipEnNodo("La pose mueve la raiz: el clip se desplaza con su animacion.");
+                m_tooltipNodo = "La pose mueve la raiz: el clip se desplaza con su animacion.";
             ImGui::SameLine();
             if (ImGui::RadioButton("bloq.##rm", modo == 1)) modo = 1;
             if (ImGui::IsItemHovered())
-                tooltipEnNodo("Clava la traslacion de la raiz a su bind pose: el clip se reproduce en el sitio. La rotacion de la raiz y el resto de huesos animan igual.");
+                m_tooltipNodo = "Clava la traslacion de la raiz a su bind pose: el clip se reproduce en el sitio. La rotacion de la raiz y el resto de huesos animan igual.";
             ImGui::SameLine();
             if (ImGui::RadioButton("root motion##rm", modo == 2)) modo = 2;
             if (ImGui::IsItemHovered())
-                tooltipEnNodo("El avance horizontal de la raiz mueve al GameObject (con Rigidbody dinamico, como velocidad). La Y se queda en la pose y la rotacion no se aplica.");
+                m_tooltipNodo = "El avance horizontal de la raiz mueve al GameObject (con Rigidbody dinamico, como velocidad). La Y se queda en la pose y la rotacion no se aplica.";
             if (modo != (int)states[i].rootMotion)
                 anim->statesMutable(m_layer)[i].rootMotion = (RM)modo;
         }
@@ -533,7 +528,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         ImGui::DragFloat("speed", &anim->statesMutable(m_layer)[i].speed, 0.01f, 0.0f, 100.0f, "%.2f");
         if (anim->statesMutable(m_layer)[i].speed < 0.0f) anim->statesMutable(m_layer)[i].speed = 0.0f;
         if (ImGui::IsItemHovered())
-            tooltipEnNodo("Multiplica el ritmo del clip (1 = normal, 0 = congelado).");
+            m_tooltipNodo = "Multiplica el ritmo del clip (1 = normal, 0 = congelado).";
         ImGui::SameLine();
         {
             const std::string& sp = states[i].speedParam;
@@ -545,7 +540,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 m_blendPickKind      = 2;
             }
             if (ImGui::IsItemHovered())
-                tooltipEnNodo("Parametro float que multiplica la velocidad (como el Multiplier de Unity).");
+                m_tooltipNodo = "Parametro float que multiplica la velocidad (como el Multiplier de Unity).";
         }
 
         // --- Blend 1D: clips extra con su umbral ---
@@ -571,7 +566,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 ImGui::SetNextItemWidth(60.0f);
                 ImGui::DragFloat("umbral##clipThr", &stMut.clipThreshold, 0.01f);
                 if (ImGui::IsItemHovered())
-                    tooltipEnNodo("Umbral del clip principal del estado.");
+                    m_tooltipNodo = "Umbral del clip principal del estado.";
 
                 // --- Blend 2D ---
                 // Con un segundo parámetro cada clip es un punto (umbral, Y) y
@@ -597,7 +592,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                         stMut.blendParamY.clear();
                 }
                 if (ImGui::IsItemHovered())
-                    tooltipEnNodo("Blend 2D: cada clip es un punto (umbral X, umbral Y).");
+                    m_tooltipNodo = "Blend 2D: cada clip es un punto (umbral X, umbral Y).";
                 if (!stMut.blendParamY.empty())
                 {
                     if (ImGui::Button(("Y: " + stMut.blendParamY + "##byY").c_str(), ImVec2(140.0f, 0.0f)))
@@ -609,7 +604,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                     ImGui::SetNextItemWidth(60.0f);
                     ImGui::DragFloat("Y##clipThrY", &stMut.clipThresholdY, 0.01f);
                     if (ImGui::IsItemHovered())
-                        tooltipEnNodo("Umbral Y del clip principal del estado.");
+                        m_tooltipNodo = "Umbral Y del clip principal del estado.";
                 }
             }
 
@@ -677,7 +672,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             ImGui::SetNextItemWidth(50.0f);
             ImGui::DragFloat("##evTime", &ev.time, 0.005f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
             if (ImGui::IsItemHovered())
-                tooltipEnNodo("Instante del ciclo, normalizado (0 = inicio, 1 = final).");
+                m_tooltipNodo = "Instante del ciclo, normalizado (0 = inicio, 1 = final).";
             ImGui::SameLine();
             if (ImGui::SmallButton("x")) quitarEvento = k;
             ImGui::PopID();
@@ -893,6 +888,9 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     ed::Resume();
 
     ed::End();
+    // Ya fuera del lienzo: aquí el ratón vuelve a estar en coordenadas de
+    // pantalla y el tooltip sale junto al cursor.
+    if (!m_tooltipNodo.empty()) ImGui::SetTooltip("%s", m_tooltipNodo.c_str());
     ed::SetCurrentEditor(nullptr);
 }
 

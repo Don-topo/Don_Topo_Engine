@@ -69,6 +69,9 @@ private:
     // Último GameObject cuyas posiciones se volcaron al canvas. Al cambiar la
     // selección hay que re-volcarlas.
     GameObject* m_boundTo = nullptr;
+    // Tooltip del widget de un nodo que está bajo el cursor: se anota mientras
+    // se dibuja el nodo y se pinta tras cerrar el lienzo (ver drawGraph).
+    std::string m_tooltipNodo;
     // Capa cuyo grafo se muestra y edita, y la que tenía el canvas en el último
     // volcado de posiciones: al cambiar de capa se vuelcan otra vez, como al
     // cambiar de objeto.
