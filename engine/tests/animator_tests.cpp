@@ -7917,6 +7917,28 @@ static void test_ik_twobone_partial_weight()
         anterior = d;
     }
     CHECK(anterior < 1e-3f);                  // con peso 1 llega
+
+    // Y el ÁNGULO DEL CODO interpola entre el de partida y el de llegada: es
+    // lo único que mide el peso de la flexión (la distancia al objetivo la
+    // manda el giro del hombro, que lleva su propio peso).
+    auto anguloCodo = [&](const std::vector<glm::mat4>& mundo2) {
+        const glm::vec3 a(mundo2[1][3]), b(mundo2[2][3]), c(mundo2[3][3]);
+        return std::acos(glm::clamp(glm::dot(glm::normalize(a - b), glm::normalize(c - b)), -1.0f, 1.0f));
+    };
+    const float ang0 = anguloCodo(mundo);
+    const float lAB  = glm::length(glm::vec3(mundo[2][3]) - glm::vec3(mundo[1][3]));
+    const float lBC  = glm::length(glm::vec3(mundo[3][3]) - glm::vec3(mundo[2][3]));
+    const float lAT  = glm::length(objetivo - glm::vec3(mundo[1][3]));
+    const float ang1 = std::acos(glm::clamp((lAB * lAB + lBC * lBC - lAT * lAT) / (2.0f * lAB * lBC), -1.0f, 1.0f));
+    for (float w : { 0.25f, 0.5f, 0.75f })
+    {
+        AnimationIk ik;
+        ik.count = 1;
+        ik.solves[0] = { 1u, 3, 2, 1, w, objetivo, glm::vec3(0), 0u, glm::vec3(0, 0, 1), 80.0f };
+        auto conIk = locales;
+        resolverIk(ik, mundo, padres, conIk);
+        CHECK(std::fabs(anguloCodo(componer(conIk, padres)) - (ang0 + w * (ang1 - ang0))) < 0.02f);
+    }
 }
 
 static void test_ik_twobone_pole_decides_the_plane()
