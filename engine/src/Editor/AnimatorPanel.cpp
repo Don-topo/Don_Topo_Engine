@@ -363,6 +363,125 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
     ImGui::PopID();
 }
 
+void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
+{
+    auto anim = go->getAnimator();
+    const SkinnedMesh* mesh = go->getSkinnedMesh();
+    ImGui::PushID("ik");
+    if (ImGui::CollapsingHeader("IK"))
+    {
+        // Objetivo y pole son GameObjects de la escena: se listan en preorden,
+        // como el panel de jerarquía, y el propio personaje no entra.
+        std::vector<const GameObject*> objetos;
+        std::function<void(const GameObject&)> recorrer = [&](const GameObject& n) {
+            for (const auto& h : n.children)
+            {
+                objetos.push_back(h.get());
+                recorrer(*h);
+            }
+        };
+        if (ctx.scene) recorrer(ctx.scene->getRoot());
+        auto selectorObjeto = [&](const char* etiqueta, uint64_t& id) {
+            const GameObject* actual = nullptr;
+            for (const auto* o : objetos)
+                if (o->id == id) actual = o;
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::BeginCombo(etiqueta, actual ? actual->name.c_str() : "(ninguno)"))
+            {
+                if (ImGui::Selectable("(ninguno)", id == 0)) id = 0;
+                for (const auto* o : objetos)
+                {
+                    if (o == go) continue;
+                    ImGui::PushID((int)o->id);
+                    if (ImGui::Selectable(o->name.c_str(), o->id == id)) id = o->id;
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+        };
+
+        int quitar = -1;
+        auto& lista = anim->ikConstraintsMutable();
+        for (int i = 0; i < (int)lista.size(); i++)
+        {
+            auto& c = lista[i];
+            ImGui::PushID(i);
+            char nombre[64];
+            std::snprintf(nombre, sizeof(nombre), "%s", c.name.c_str());
+            ImGui::SetNextItemWidth(140.0f);
+            if (ImGui::InputText("##nombre", nombre, sizeof(nombre))) c.name = nombre;
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x")) quitar = i;
+
+            int tipo = (int)c.type;
+            const char* tipos[] = { "Look at", "Two bone" };
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::Combo("Tipo##tipo", &tipo, tipos, 2))
+            {
+                c.type = (AnimatorComponent::IkType)tipo;
+                // La cadena (padre y abuelo) depende del tipo: hay que
+                // re-resolverla. rebindClips y no bindClips: puede estar
+                // corriendo Play Mode.
+                if (mesh) anim->rebindClips(*mesh, nullptr);
+            }
+
+            // Hueso: el que mira (look-at) o el EXTREMO de la cadena (two bone).
+            const bool roto = c.boneIndex < 0;
+            if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::BeginCombo("Hueso##hueso", c.boneName.empty() ? "(elige hueso)" : c.boneName.c_str()))
+            {
+                if (mesh)
+                    for (const auto& n : mesh->skeleton.names)
+                        if (ImGui::Selectable(n.c_str(), n == c.boneName))
+                        {
+                            c.boneName = n;
+                            anim->rebindClips(*mesh, nullptr);
+                        }
+                ImGui::EndCombo();
+            }
+            if (roto) ImGui::PopStyleColor();
+            if (roto && ImGui::IsItemHovered())
+                ImGui::SetTooltip("El hueso no existe en el modelo, o la cadena no llega a tres huesos:\n"
+                                  "la restricción no se aplica.");
+
+            selectorObjeto("Objetivo##objetivo", c.targetId);
+            if (c.type == AnimatorComponent::IkType::TwoBone)
+            {
+                selectorObjeto("Pole##pole", c.poleId);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Hacia dónde apunta el codo o la rodilla.");
+            }
+            ImGui::SetNextItemWidth(160.0f);
+            ImGui::SliderFloat("Peso##peso", &c.weight, 0.0f, 1.0f, "%.2f");
+            if (c.type == AnimatorComponent::IkType::LookAt)
+            {
+                ImGui::SetNextItemWidth(160.0f);
+                ImGui::DragFloat3("Eje##eje", &c.aimAxis.x, 0.01f);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Eje LOCAL del hueso que apunta al objetivo.");
+                ImGui::SetNextItemWidth(160.0f);
+                ImGui::SliderFloat("Angulo max##ang", &c.maxAngle, 0.0f, 180.0f, "%.0f");
+            }
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+        if (quitar >= 0) anim->removeIkConstraint(quitar);
+
+        ImGui::BeginDisabled((int)lista.size() >= AnimatorComponent::kMaxIkConstraints);
+        if (ImGui::Button("+ IK##addIk"))
+        {
+            AnimatorComponent::IkConstraint nueva;
+            nueva.name = "IK " + std::to_string(anim->ikConstraints().size() + 1);
+            anim->addIkConstraint(nueva);
+            ctx.pushLog("Animator: restriccion de IK anadida");
+        }
+        ImGui::EndDisabled();
+        if (!mesh) ImGui::TextDisabled("Sin mesh skinned no hay huesos que elegir.");
+    }
+    ImGui::PopID();
+}
+
 void AnimatorPanel::drawLayerMaskPopup(GameObject* go)
 {
     if (!ImGui::BeginPopup("layerMask")) return;
@@ -1453,6 +1572,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
 
                 drawAnimationSources(ctx, go);
                 drawLayerBar(ctx, go);
+                drawIkList(ctx, go);
 
                 // --- Añadir estado desde los clips del modelo ---
                 const SkinnedMesh* mesh = go->getSkinnedMesh();

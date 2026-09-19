@@ -5051,6 +5051,8 @@ struct SkinnedRendererDoble
     bool      visible       = false;
     AnimationPose pose;
     bool      poseRecibida  = false;
+    AnimationIk ik;
+    bool      ikRecibida    = false;
     float     dtSinAnimator = -1.0f;
     glm::mat4 transform     = glm::mat4(0.0f);
     float     ssr           = -1.0f;
@@ -5062,6 +5064,7 @@ struct SkinnedRendererDoble
         orden.push_back("blend");
         pose = p; poseRecibida = true;
     }
+    void setAnimationIk(int, const AnimationIk& v) { orden.push_back("ik"); ik = v; ikRecibida = true; }
     void setSkinnedTransform(int, const glm::mat4& m) { orden.push_back("transform"); transform = m; }
     void setSkinnedSsr(int, float s)                  { orden.push_back("ssr"); ssr = s; }
 
@@ -7987,6 +7990,34 @@ static void test_ik_block_layout()
     CHECK(b[36] == 0u && b[52] == 0u);
 }
 
+static void test_apply_skinned_frame_passes_ik_in_model_space()
+{
+    Scene scene("Test");
+    auto a = std::make_shared<AnimatorComponent>(makeIkAnimator());
+    GameObject* go = makeSkinnedGameObject(scene, a);
+    go->setMesh(std::make_shared<SkinnedMesh>(makeIkSkeleton()));
+    a->bindClips(*go->getSkinnedMesh(), nullptr);
+    GameObject* objetivo = scene.addGameObject("Objetivo");
+    objetivo->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(10, 0, 0));
+    a->setIkTarget("mirar", objetivo->id);
+    a->ikConstraintsMutable()[1].weight = 0.0f;      // la otra no viaja
+    // El personaje desplazado: el objetivo llega en ESPACIO DEL MODELO.
+    go->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(4, 0, 0));
+    scene.getRoot().updateWorldTransforms();
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
+    CHECK(r.ik.count == 1);
+    if (r.ik.count != 1) return;
+    CHECK(r.ik.solves[0].type == 0u && r.ik.solves[0].bone == 5);
+    CHECK(glm::length(r.ik.solves[0].target - glm::vec3(6, 0, 0)) < 1e-4f);
+
+    // Sin objetivo resoluble no viaja nada, pero la llamada se hace igual.
+    a->setIkTarget("mirar", 999999);
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
+    CHECK(r.ikRecibida && r.ik.count == 0);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -8220,6 +8251,7 @@ int main()
     test_apply_skinned_frame_sets_visible_before_animation();
     test_apply_skinned_frame_passes_pose_b_then_a();
     test_apply_skinned_frame_delivers_freeze_once();
+    test_apply_skinned_frame_passes_ik_in_model_space();
     test_apply_skinned_frame_without_animator_advances_backend_clock();
     test_apply_skinned_frame_edit_mode_does_not_move_the_graph();
     test_apply_skinned_frame_ignores_unregistered_object();

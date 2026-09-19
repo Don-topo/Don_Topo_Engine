@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include "DonTopo/Core/AnimationIk.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/RootMotionApply.h"
@@ -65,6 +66,54 @@ namespace DonTopo
             // componente existiera. Los dos caminos no se pisan.
             renderer.updateAnimation(go.skinnedRenderIndex, dt);
         }
+
+        // IK: el objetivo y el pole son GameObjects de la escena, y el shader
+        // los quiere en espacio del MODELO. Se resuelven aquí, que es donde hay
+        // GameObject; el Animator no conoce la escena. Se llama SIEMPRE, también
+        // con count 0: si no, quitar la última restricción dejaría encendida la
+        // del frame anterior.
+        AnimationIk ik;
+        if (const auto& anim = go.getAnimator())
+        {
+            const GameObject* raiz = &go;
+            while (raiz->parent) raiz = raiz->parent;
+            auto porId = [](const GameObject* nodo, uint64_t id) -> const GameObject* {
+                if (id == 0) return nullptr;
+                std::vector<const GameObject*> pila = { nodo };
+                while (!pila.empty())
+                {
+                    const GameObject* x = pila.back();
+                    pila.pop_back();
+                    if (x->id == id) return x;
+                    for (const auto& h : x->children) pila.push_back(h.get());
+                }
+                return nullptr;
+            };
+            const glm::mat4 aModelo = glm::inverse(go.worldTransform);
+            for (const auto& c : anim->ikConstraints())
+            {
+                if (ik.count >= kMaxIkPose) break;
+                if (c.boneIndex < 0 || c.weight <= 0.0f) continue;
+                const GameObject* objetivo = porId(raiz, c.targetId);
+                if (!objetivo) continue;
+                IkSolve s;
+                s.type        = c.type == AnimatorComponent::IkType::TwoBone ? 1u : 0u;
+                s.bone        = c.boneIndex;
+                s.parent      = c.parentIndex;
+                s.grandParent = c.grandParentIndex;
+                s.weight      = c.weight;
+                s.target      = glm::vec3(aModelo * glm::vec4(glm::vec3(objetivo->worldTransform[3]), 1.0f));
+                s.aimAxis     = c.aimAxis;
+                s.maxAngle    = c.maxAngle;
+                if (const GameObject* pole = porId(raiz, c.poleId))
+                {
+                    s.pole    = glm::vec3(aModelo * glm::vec4(glm::vec3(pole->worldTransform[3]), 1.0f));
+                    s.hasPole = 1u;
+                }
+                ik.solves[ik.count++] = s;
+            }
+        }
+        renderer.setAnimationIk(go.skinnedRenderIndex, ik);
 
         renderer.setSkinnedTransform(go.skinnedRenderIndex, go.worldTransform);
         // El backend no conoce el flag: con el SSR apagado se le manda un 0.

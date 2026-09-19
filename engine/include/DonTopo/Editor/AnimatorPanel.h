@@ -44,6 +44,9 @@ private:
     // para las que no son la base, peso, modo y máscara.
     void drawLayerBar(EditorContext& ctx, GameObject* go);
     void drawLayerMaskPopup(GameObject* go);
+    // Restricciones de IK del componente (no de una capa): tipo, hueso,
+    // objetivo, pole, peso y, en look-at, eje y ángulo máximo.
+    void drawIkList(EditorContext& ctx, GameObject* go);
     void drawGraph(EditorContext& ctx, GameObject* go);
     void drawConditionsPopup(EditorContext& ctx, GameObject* go);
     // Lista de clips ("blend") o de parámetros float ("by") de un estado. Se
