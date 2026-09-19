@@ -4,6 +4,7 @@
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/Blend2D.h"
 #include "DonTopo/Renderer/PoseBlock.h"
+#include "DonTopo/Renderer/IkBlock.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Physics/PhysicsManager.h"
@@ -7670,6 +7671,275 @@ static void test_ik_graph_key_and_apply_graph()
     CHECK(nearlyEqual(a.ikWeight("mano"), 0.25f));
 }
 
+// ── IK: réplica en CPU de bone_ik.comp ─────────────────────────────────────
+// Rotación de un transform de mundo (se asume escala uniforme, como la spec).
+static glm::quat rotDe(const glm::mat4& m)
+{
+    glm::mat3 r(glm::normalize(glm::vec3(m[0])), glm::normalize(glm::vec3(m[1])), glm::normalize(glm::vec3(m[2])));
+    return glm::normalize(glm::quat_cast(r));
+}
+
+// Giro mínimo de a a b (unitarios). Con vectores opuestos, cualquier eje
+// perpendicular vale: se elige uno estable.
+static glm::quat giroEntre(const glm::vec3& a, const glm::vec3& b)
+{
+    const float d = glm::clamp(glm::dot(a, b), -1.0f, 1.0f);
+    if (d > 0.9999f) return glm::quat(1, 0, 0, 0);
+    if (d < -0.9999f)
+    {
+        glm::vec3 eje = glm::cross(a, glm::vec3(1, 0, 0));
+        if (glm::length(eje) < 1e-4f) eje = glm::cross(a, glm::vec3(0, 1, 0));
+        return glm::angleAxis(glm::pi<float>(), glm::normalize(eje));
+    }
+    return glm::angleAxis(std::acos(d), glm::normalize(glm::cross(a, b)));
+}
+
+// Acota el giro a maxAngle grados y lo escala por weight.
+static glm::quat acotaYPesa(const glm::quat& q, float maxAngleDeg, float weight)
+{
+    const glm::quat u = glm::normalize(q);
+    float ang = 2.0f * std::acos(glm::clamp(u.w, -1.0f, 1.0f));
+    if (ang < 1e-6f) return glm::quat(1, 0, 0, 0);
+    const glm::vec3 eje = glm::vec3(u.x, u.y, u.z) / std::sin(ang * 0.5f);
+    ang = std::min(ang, glm::radians(glm::clamp(maxAngleDeg, 0.0f, 180.0f)));
+    return glm::angleAxis(ang * glm::clamp(weight, 0.0f, 1.0f), glm::normalize(eje));
+}
+
+// Locales corregidos por la IK. `mundo` son los transforms de mundo de todos
+// los huesos (lo que deja la jerarquía "solo mundo"), `padres` el esqueleto y
+// `locales` la entrada/salida. Réplica de bone_ik.comp.
+static void resolverIk(const AnimationIk& ik, const std::vector<glm::mat4>& mundo,
+                       const std::vector<int>& padres, std::vector<glm::mat4>& locales)
+{
+    auto mundoRot = [&](int i) { return i >= 0 ? rotDe(mundo[(size_t)i]) : glm::quat(1, 0, 0, 0); };
+    auto pos      = [&](int i) { return glm::vec3(mundo[(size_t)i][3]); };
+    auto escribeRot = [&](int i, const glm::quat& nuevaMundo) {
+        const glm::quat padre = mundoRot(padres[(size_t)i]);
+        const glm::quat local = glm::normalize(glm::inverse(padre) * nuevaMundo);
+        // Solo cambia la rotación: posición y escala del local se conservan.
+        const glm::vec3 t(locales[(size_t)i][3]);
+        const glm::vec3 s(glm::length(glm::vec3(locales[(size_t)i][0])),
+                          glm::length(glm::vec3(locales[(size_t)i][1])),
+                          glm::length(glm::vec3(locales[(size_t)i][2])));
+        glm::mat4 m = glm::mat4_cast(local);
+        m[0] *= s.x; m[1] *= s.y; m[2] *= s.z;
+        m[3] = glm::vec4(t, 1.0f);
+        locales[(size_t)i] = m;
+    };
+
+    for (int k = 0; k < ik.count; k++)
+    {
+        const IkSolve& s = ik.solves[k];
+        if (s.bone < 0 || s.weight <= 0.0f) continue;
+        if (s.type == 0u)
+        {
+            const glm::vec3 p = pos(s.bone);
+            const glm::vec3 d = s.target - p;
+            if (glm::length(d) < 1e-5f || glm::length(s.aimAxis) < 1e-5f) continue;
+            const glm::quat R    = mundoRot(s.bone);
+            const glm::vec3 actual = glm::normalize(R * glm::normalize(s.aimAxis));
+            const glm::quat giro = acotaYPesa(giroEntre(actual, glm::normalize(d)), s.maxAngle, s.weight);
+            escribeRot(s.bone, glm::normalize(giro * R));
+            continue;
+        }
+        // TwoBone: A abuelo, B padre, C extremo.
+        const int A = s.grandParent, B = s.parent, C = s.bone;
+        if (A < 0 || B < 0) continue;
+        const glm::vec3 pA = pos(A), pB = pos(B), pC = pos(C);
+        const float lAB = glm::length(pB - pA), lBC = glm::length(pC - pB);
+        if (lAB < 1e-5f || lBC < 1e-5f) continue;
+        const glm::vec3 haciaT = s.target - pA;
+        if (glm::length(haciaT) < 1e-5f) continue;
+        const float lAT = glm::clamp(glm::length(haciaT), 1e-4f, lAB + lBC - 1e-4f);
+
+        // 1) Codo: ángulo actual y deseado por la ley de cosenos.
+        const glm::vec3 BA = glm::normalize(pA - pB), BC = glm::normalize(pC - pB);
+        const float ang0 = std::acos(glm::clamp(glm::dot(BA, BC), -1.0f, 1.0f));
+        const float ang1 = std::acos(glm::clamp((lAB * lAB + lBC * lBC - lAT * lAT) / (2.0f * lAB * lBC),
+                                                -1.0f, 1.0f));
+        glm::vec3 eje = glm::cross(pC - pA, pB - pA);
+        if (glm::length(eje) < 1e-5f) eje = glm::cross(pC - pA, glm::vec3(0, 0, 1));
+        if (glm::length(eje) < 1e-5f) eje = glm::vec3(0, 1, 0);
+        eje = glm::normalize(eje);
+        const glm::quat flex = glm::angleAxis((ang1 - ang0) * glm::clamp(s.weight, 0.0f, 1.0f), eje);
+
+        // 2) Hombro: lleva el extremo (ya flexionado) al objetivo.
+        const glm::vec3 pCflex = pB + flex * (pC - pB);
+        glm::quat giro = giroEntre(glm::normalize(pCflex - pA), glm::normalize(haciaT));
+        giro = glm::slerp(glm::quat(1, 0, 0, 0), giro, glm::clamp(s.weight, 0.0f, 1.0f));
+
+        // 3) Pole: gira alrededor del eje A->objetivo hasta meter el codo en su plano.
+        if (s.hasPole != 0u)
+        {
+            const glm::vec3 ejeT = glm::normalize(haciaT);
+            // El codo solo lo mueve el giro del hombro: la flexión es la rotación
+            // del PROPIO codo y no cambia su posición. Metiéndola aquí, el pole
+            // elegía el lado contrario.
+            const glm::vec3 pBnuevo = pA + giro * (pB - pA);
+            const glm::vec3 actual = pBnuevo - pA - ejeT * glm::dot(pBnuevo - pA, ejeT);
+            const glm::vec3 deseado = s.pole - pA - ejeT * glm::dot(s.pole - pA, ejeT);
+            if (glm::length(actual) > 1e-5f && glm::length(deseado) > 1e-5f)
+            {
+                const glm::quat q = giroEntre(glm::normalize(actual), glm::normalize(deseado));
+                giro = glm::normalize(glm::slerp(glm::quat(1, 0, 0, 0), q,
+                                                 glm::clamp(s.weight, 0.0f, 1.0f)) * giro);
+            }
+        }
+
+        const glm::quat RA = mundoRot(A), RB = mundoRot(B);
+        const glm::quat RAnuevo = glm::normalize(giro * RA);
+        const glm::quat RBnuevo = glm::normalize(giro * flex * RB);
+        escribeRot(A, RAnuevo);
+        // B se escribe DESPUÉS de A: su local se mide contra el mundo nuevo de A.
+        const glm::quat local = glm::normalize(glm::inverse(RAnuevo) * RBnuevo);
+        const glm::vec3 t(locales[(size_t)B][3]);
+        glm::mat4 mB = glm::mat4_cast(local);
+        mB[3] = glm::vec4(t, 1.0f);
+        locales[(size_t)B] = mB;
+    }
+}
+
+// Compone la jerarquía en CPU (lo que hace bone_hierarchy en su pasada 1).
+static std::vector<glm::mat4> componer(const std::vector<glm::mat4>& locales, const std::vector<int>& padres)
+{
+    std::vector<glm::mat4> mundo(locales.size(), glm::mat4(1.0f));
+    for (size_t i = 0; i < locales.size(); i++)
+        mundo[i] = padres[i] < 0 ? locales[i] : mundo[(size_t)padres[i]] * locales[i];
+    return mundo;
+}
+
+// Cadena en +Y: A en el origen, B a 2, C a 4. El padre de A es la raíz.
+// B se separa un poco en Z para que el plano del codo esté DEFINIDO: con la
+// cadena perfectamente recta, cross(C-A, B-A) es nulo y entra el eje de
+// reserva, que no es lo que quiere medir el test del pole.
+static void cadenaDePrueba(std::vector<glm::mat4>& locales, std::vector<int>& padres)
+{
+    padres  = { -1, 0, 1, 2 };                       // raíz, A, B, C
+    locales = { glm::mat4(1.0f),
+                glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 0)),
+                glm::translate(glm::mat4(1.0f), glm::vec3(0, 2, 0.05f)),
+                glm::translate(glm::mat4(1.0f), glm::vec3(0, 2, -0.05f)) };
+}
+
+static void test_ik_lookat()
+{
+    std::vector<int> padres = { -1, 0 };
+    std::vector<glm::mat4> locales = { glm::mat4(1.0f), glm::translate(glm::mat4(1.0f), glm::vec3(0, 1, 0)) };
+    auto mundo = componer(locales, padres);
+    AnimationIk ik;
+    ik.count = 1;
+    ik.solves[0] = { 0u, 1, 0, -1, 1.0f, glm::vec3(5, 1, 0), glm::vec3(0), 0u, glm::vec3(0, 0, 1), 180.0f };
+    auto conIk = locales;
+    resolverIk(ik, mundo, padres, conIk);
+    // El eje +Z del hueso acaba apuntando al objetivo.
+    glm::vec3 eje = glm::vec3(componer(conIk, padres)[1] * glm::vec4(0, 0, 1, 0));
+    CHECK(glm::length(glm::normalize(eje) - glm::vec3(1, 0, 0)) < 1e-4f);
+
+    // Con el límite a 30 grados, gira exactamente 30.
+    ik.solves[0].maxAngle = 30.0f;
+    conIk = locales;
+    resolverIk(ik, mundo, padres, conIk);
+    eje = glm::normalize(glm::vec3(componer(conIk, padres)[1] * glm::vec4(0, 0, 1, 0)));
+    CHECK(std::fabs(glm::degrees(std::acos(glm::clamp(glm::dot(eje, glm::vec3(0, 0, 1)), -1.0f, 1.0f))) - 30.0f) < 1e-3f);
+
+    // Peso 0 y objetivo encima del hueso: no cambia nada.
+    ik.solves[0].maxAngle = 180.0f;
+    ik.solves[0].weight   = 0.0f;
+    conIk = locales;
+    resolverIk(ik, mundo, padres, conIk);
+    CHECK(conIk[1] == locales[1]);
+    ik.solves[0].weight = 1.0f;
+    ik.solves[0].target = glm::vec3(0, 1, 0);
+    conIk = locales;
+    resolverIk(ik, mundo, padres, conIk);
+    CHECK(conIk[1] == locales[1]);
+}
+
+static void test_ik_twobone_reaches_target()
+{
+    std::vector<int> padres; std::vector<glm::mat4> locales;
+    cadenaDePrueba(locales, padres);
+    const auto mundo = componer(locales, padres);
+    AnimationIk ik;
+    ik.count = 1;
+    ik.solves[0] = { 1u, 3, 2, 1, 1.0f, glm::vec3(2, 2, 0), glm::vec3(0), 0u, glm::vec3(0, 0, 1), 80.0f };
+    auto conIk = locales;
+    resolverIk(ik, mundo, padres, conIk);
+    const glm::vec3 extremo = glm::vec3(componer(conIk, padres)[3][3]);
+    CHECK(glm::length(extremo - glm::vec3(2, 2, 0)) < 1e-3f);
+
+    // Fuera de alcance: la cadena se estira hacia el objetivo, no se rompe.
+    ik.solves[0].target = glm::vec3(0, 40, 0);
+    conIk = locales;
+    resolverIk(ik, mundo, padres, conIk);
+    const auto mundo2 = componer(conIk, padres);
+    const glm::vec3 c = glm::vec3(mundo2[3][3]), a = glm::vec3(mundo2[1][3]);
+    CHECK(std::fabs(glm::length(c - a) - 4.0f) < 1e-2f);   // la cadena mide 4 salvo el codillo en Z
+    CHECK(glm::length(glm::normalize(c - a) - glm::vec3(0, 1, 0)) < 1e-3f);
+    CHECK(std::isfinite(c.x) && std::isfinite(c.y) && std::isfinite(c.z));
+
+    // Peso 0: la cadena se queda como estaba.
+    ik.solves[0].target = glm::vec3(2, 2, 0);
+    ik.solves[0].weight = 0.0f;
+    conIk = locales;
+    resolverIk(ik, mundo, padres, conIk);
+    CHECK(conIk[1] == locales[1] && conIk[2] == locales[2]);
+
+    // Objetivo sobre el propio A: no toca nada y no da NaN.
+    ik.solves[0].weight = 1.0f;
+    ik.solves[0].target = glm::vec3(0, 0, 0);
+    conIk = locales;
+    resolverIk(ik, mundo, padres, conIk);
+    for (const auto& m : componer(conIk, padres))
+        CHECK(std::isfinite(m[3].x) && std::isfinite(m[3].y) && std::isfinite(m[3].z));
+}
+
+static void test_ik_twobone_pole_decides_the_plane()
+{
+    std::vector<int> padres; std::vector<glm::mat4> locales;
+    cadenaDePrueba(locales, padres);
+    const auto mundo = componer(locales, padres);
+    AnimationIk ik;
+    ik.count = 1;
+    ik.solves[0] = { 1u, 3, 2, 1, 1.0f, glm::vec3(2, 2, 0), glm::vec3(5, 2, 0), 1u, glm::vec3(0, 0, 1), 80.0f };
+    auto conZ = locales;
+    resolverIk(ik, mundo, padres, conZ);
+    const glm::vec3 codoZ = glm::vec3(componer(conZ, padres)[2][3]);
+    ik.solves[0].pole = glm::vec3(-5, 2, 0);
+    auto conMenosZ = locales;
+    resolverIk(ik, mundo, padres, conMenosZ);
+    const glm::vec3 codoMenosZ = glm::vec3(componer(conMenosZ, padres)[2][3]);
+    // Los dos codos caen a lados opuestos, y el extremo llega igual.
+    // Cada codo cae del lado de SU pole: el criterio es la distancia al pole,
+    // no un eje concreto. Con este objetivo las dos soluciones válidas son
+    // (2,0,0) y (0,2,0), y ninguna tiene x negativa.
+    const glm::vec3 poleZ(5, 2, 0), poleMenosZ(-5, 2, 0);
+    CHECK(glm::length(codoZ - poleZ) < glm::length(codoMenosZ - poleZ));
+    CHECK(glm::length(codoMenosZ - poleMenosZ) < glm::length(codoZ - poleMenosZ));
+    CHECK(glm::length(codoZ - codoMenosZ) > 1.0f);
+    CHECK(glm::length(glm::vec3(componer(conZ, padres)[3][3]) - glm::vec3(2, 2, 0)) < 1e-3f);
+    CHECK(glm::length(glm::vec3(componer(conMenosZ, padres)[3][3]) - glm::vec3(2, 2, 0)) < 1e-3f);
+}
+
+static void test_ik_block_layout()
+{
+    AnimationIk ik;
+    ik.count = 2;
+    ik.solves[0] = { 0u, 5, 1, -1, 0.5f, glm::vec3(1, 2, 3), glm::vec3(0), 0u, glm::vec3(0, 1, 0), 55.0f };
+    ik.solves[1] = { 1u, 4, 3, 2, 1.0f, glm::vec3(7, 8, 9), glm::vec3(4, 5, 6), 1u, glm::vec3(0, 0, 1), 80.0f };
+    std::vector<uint32_t> b(ikBlockUints(), 0xDEADBEEFu);
+    writeIkBlock(ik, b.data());
+    auto f = [&](uint32_t i) { float v; std::memcpy(&v, &b[i], 4); return v; };
+    CHECK(b[0] == 2u);
+    CHECK(b[4] == 0u && (int)b[5] == 5 && (int)b[6] == 1 && (int)b[7] == -1);
+    CHECK(nearlyEqual(f(8), 0.5f) && nearlyEqual(f(9), 1.0f) && nearlyEqual(f(11), 3.0f));
+    CHECK(b[15] == 0u && nearlyEqual(f(17), 1.0f) && nearlyEqual(f(19), 55.0f));
+    CHECK(b[20] == 1u && (int)b[23] == 2 && b[31] == 1u);
+    CHECK(nearlyEqual(f(28), 4.0f) && nearlyEqual(f(35), 80.0f));
+    // La restricción 3 queda a cero, no con basura.
+    CHECK(b[36] == 0u && b[52] == 0u);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -7830,6 +8100,10 @@ int main()
     test_ik_constraint_management();
     test_ik_chain_resolution();
     test_ik_graph_key_and_apply_graph();
+    test_ik_lookat();
+    test_ik_twobone_reaches_target();
+    test_ik_twobone_pole_decides_the_plane();
+    test_ik_block_layout();
     test_pose_block_layout();
     test_layers_override_mask_criterion();
     test_layers_additive_delta();

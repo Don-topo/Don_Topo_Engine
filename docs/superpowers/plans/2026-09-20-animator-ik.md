@@ -453,7 +453,9 @@ static void resolverIk(const AnimationIk& ik, const std::vector<glm::mat4>& mund
         if (s.hasPole != 0u)
         {
             const glm::vec3 ejeT = glm::normalize(haciaT);
-            const glm::vec3 pBnuevo = pA + giro * (flex * (pB - pA));
+            // El codo solo lo mueve el giro del hombro: la flexión es la rotación
+            // del PROPIO codo y no cambia su posición.
+            const glm::vec3 pBnuevo = pA + giro * (pB - pA);
             const glm::vec3 actual = pBnuevo - pA - ejeT * glm::dot(pBnuevo - pA, ejeT);
             const glm::vec3 deseado = s.pole - pA - ejeT * glm::dot(s.pole - pA, ejeT);
             if (glm::length(actual) > 1e-5f && glm::length(deseado) > 1e-5f)
@@ -588,7 +590,13 @@ static void test_ik_twobone_pole_decides_the_plane()
     resolverIk(ik, mundo, padres, conMenosZ);
     const glm::vec3 codoMenosZ = glm::vec3(componer(conMenosZ, padres)[2][3]);
     // Los dos codos caen a lados opuestos, y el extremo llega igual.
-    CHECK(codoZ.x > 0.1f && codoMenosZ.x < -0.1f);
+    // Cada codo cae del lado de SU pole: el criterio es la distancia al pole,
+    // no un eje concreto. Con este objetivo las dos soluciones válidas son
+    // (2,0,0) y (0,2,0), y ninguna tiene x negativa.
+    const glm::vec3 poleZ(5, 2, 0), poleMenosZ(-5, 2, 0);
+    CHECK(glm::length(codoZ - poleZ) < glm::length(codoMenosZ - poleZ));
+    CHECK(glm::length(codoMenosZ - poleMenosZ) < glm::length(codoZ - poleMenosZ));
+    CHECK(glm::length(codoZ - codoMenosZ) > 1.0f);
     CHECK(glm::length(glm::vec3(componer(conZ, padres)[3][3]) - glm::vec3(2, 2, 0)) < 1e-3f);
     CHECK(glm::length(glm::vec3(componer(conMenosZ, padres)[3][3]) - glm::vec3(2, 2, 0)) < 1e-3f);
 }
