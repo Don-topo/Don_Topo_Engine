@@ -1906,9 +1906,22 @@ namespace
                         if (it != preloaded->end())
                             if (const auto* sk = dynamic_cast<const DonTopo::SkinnedMesh*>(it->second.get()))
                             {
-                                const nlohmann::json fuentesPedidas = j["mesh"].contains("animationSources")
+                                // Sin la clave (escena guardada antes de que
+                                // existiera) la escena pide solo las
+                                // animaciones del propio FBX, que es justo lo
+                                // que trae una precargada con una única fuente
+                                // builtin de ese fichero. Sin esta equivalencia
+                                // cada nodo se llevaba su copia (~80 MB con
+                                // modelAnimation.fbx). Si trae más fuentes, se
+                                // copia y se configura como antes.
+                                const bool conClave = j["mesh"].contains("animationSources");
+                                const bool soloBuiltin = sk->animationSources.size() == 1 &&
+                                                         sk->animationSources[0].builtin &&
+                                                         sk->animationSources[0].path == sourcePath;
+                                const nlohmann::json fuentesPedidas = conClave
                                     ? j["mesh"]["animationSources"] : nlohmann::json::array();
-                                if (DonTopo::meshMatchesAnimationConfig(*sk, fuentesPedidas))
+                                if (conClave ? DonTopo::meshMatchesAnimationConfig(*sk, fuentesPedidas)
+                                             : soloBuiltin)
                                     compartida = it->second;
                                 else
                                     mesh = std::make_shared<DonTopo::SkinnedMesh>(*sk);
