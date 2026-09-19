@@ -8,9 +8,12 @@ namespace DonTopo
     // suman 1. Vive fuera de AnimatorComponent.h para que la interfaz del
     // backend no tenga que incluir el Animator.
     struct PoseSample { int clip = 0; float time = 0.0f; float weight = 0.0f; };
+    // 3 por estado en un fade entre dos estados con blend 2D.
+    static constexpr int kMaxPoseSamples = 6;
+
     struct AnimationPose
     {
-        PoseSample samples[4] = {};
+        PoseSample samples[kMaxPoseSamples] = {};
         int        count = 0;
         float      frozenWeight = 0.0f;   // 0 = no se usa la congelada
         // Este frame: copiar la pose actual a la congelada ANTES de evaluar.

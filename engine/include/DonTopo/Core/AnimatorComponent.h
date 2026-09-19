@@ -96,6 +96,7 @@ namespace DonTopo
                 int         clipIndex = -1;
                 float       duration  = 0.0f;   // ticks
                 float       threshold = 0.0f;
+                float       thresholdY = 0.0f;   // solo en blend 2D
             };
 
             // Evento con nombre en un instante del ciclo del estado. time es
@@ -136,6 +137,12 @@ namespace DonTopo
                 std::string             blendParam;
                 float                   clipThreshold = 0.0f;
                 std::vector<BlendEntry> blendEntries;
+                // --- Blend 2D ---
+                // Con blendParamY Float declarado, cada clip es un punto
+                // (umbral, umbralY) y suenan los 3 del triángulo que contiene
+                // (blendParam, blendParamY). Ver stateBlendSamples.
+                std::string             blendParamY;
+                float                   clipThresholdY = 0.0f;
                 // Eventos del estado: disparan en Play (ver collectEvents) y
                 // llegan a Lua como OnAnimationEvent(name).
                 std::vector<AnimationEvent> events;
@@ -370,6 +377,13 @@ namespace DonTopo
             // misma distinción que hay entre bindClips y rebindClips).
             void reset();
 
+            // Blend 2D: hay blend (stateBlends) y blendParamY es Float declarado.
+            bool stateBlends2D(int stateIdx) const;
+            // Las muestras de un estado con SU reloj: 1 o 2 en 1D (la pareja de
+            // siempre, peso 0 incluido) y hasta 3 en 2D. Pesos que suman 1.
+            struct BlendSample { int clip; float time; float weight; float duration; };
+            int stateBlendSamples(int stateIdx, float animTime, BlendSample out[3]) const;
+
         private:
             // Deja el playhead en el estado de entrada y corta cualquier
             // cross-fade, SIN tocar bools/triggers/ints/floats. Es la mitad de
@@ -420,6 +434,8 @@ namespace DonTopo
             struct BlendPair { int clipA; float timeA; int clipB; float timeB; float weight;
                                float durA = 0.0f; float durB = 0.0f; };   // duración de cada clip, ticks
             BlendPair stateBlendPair(int stateIdx, float animTime) const;
+            // La pareja del blend 1D (los dos vecinos del parámetro).
+            BlendPair stateBlendPair1D(int stateIdx, float animTime) const;
             // Estático porque no toca estado: aísla los cuatro comparadores en
             // un sitio y sirve tanto a Int como a Float.
             template <typename T>
