@@ -101,6 +101,11 @@ namespace {
     // editorIdFromRawId: pasados por esa fórmula casarían con un editorId
     // (300000) que ningún grafo alcanza, pero isOutputPin los clasificaría
     // mal — por eso esPinDeSalida.
+    // Ancho de la columna izquierda del panel (fuentes, capas, IK, parámetros).
+    // Cabe el más ancho de sus widgets (los 260 de la lista de parámetros) más
+    // el relleno y la barra de scroll.
+    const float kAnchoColumnaIzq = 300.0f;
+
     const int kAnyStateNodeId   = 900001;
     const int kAnyStateOutPinId = 900002;
 
@@ -186,9 +191,16 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
 {
     auto anim = go->getAnimator();
 
-    // 260 y no 200: con el widget de valor de int/float al lado del nombre, a
-    // 200 el DragFloat se comía el botón de borrado.
-    ImGui::BeginChild("params", ImVec2(260, 0), true);
+    // Ancho 0 = lo que quede de la columna izquierda (antes 260 fijos: con el
+    // widget de valor de int/float al lado del nombre, a 200 el DragFloat se
+    // comía el botón de borrado, y la columna ya da ese ancho).
+    //
+    // El alto va con el contenido, acotado: con 0 ("lo que queda") este hijo se
+    // llevaría todo el alto visible de la columna y su propio scroll, y el de
+    // la columna no llegaría nunca a él.
+    const float alto = std::clamp(anim->parameters().size() * ImGui::GetFrameHeightWithSpacing() + 90.0f,
+                                  120.0f, 360.0f);
+    ImGui::BeginChild("params", ImVec2(0, alto), true);
     ImGui::TextUnformatted("Parameters");
     ImGui::Separator();
 
@@ -1570,6 +1582,14 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 grafoDibujado = true;
                 const bool historialMovido = ctx.undo->revision() != m_lastUndoRevision;
 
+                // Columna izquierda en un hijo CON SCROLL: fuentes, capas, IK,
+                // "Add State" y parámetros. Antes iban sueltos en la ventana y,
+                // al crecer (varias capas, varias restricciones de IK), lo de
+                // abajo quedaba fuera sin forma de llegar, y de paso aplastaban
+                // el lienzo. El lienzo sigue aparte, a la derecha: su rueda y su
+                // pan son suyos y este scroll no los toca.
+                ImGui::BeginChild("columnaIzq", ImVec2(kAnchoColumnaIzq, 0), false,
+                                  ImGuiWindowFlags_HorizontalScrollbar);
                 drawAnimationSources(ctx, go);
                 drawLayerBar(ctx, go);
                 drawIkList(ctx, go);
@@ -1606,6 +1626,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 }
 
                 drawParameterList(ctx, go);
+                ImGui::EndChild();
                 ImGui::SameLine();
 
                 ImGui::BeginChild("canvas", ImVec2(0, 0), false);
