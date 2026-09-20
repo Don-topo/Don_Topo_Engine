@@ -192,190 +192,191 @@ void AnimatorPanel::syncPositionsToComponent(GameObject* go)
 
 void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
 {
-    auto anim = go->getAnimator();
-
-    // Ancho 0 = lo que quede de la columna izquierda (antes 260 fijos: con el
-    // widget de valor de int/float al lado del nombre, a 200 el DragFloat se
-    // comía el botón de borrado, y la columna ya da ese ancho).
-    //
-    // El alto va con el contenido, acotado: con 0 ("lo que queda") este hijo se
-    // llevaría todo el alto visible de la columna y su propio scroll, y el de
-    // la columna no llegaría nunca a él.
-    const float alto = std::clamp(anim->parameters().size() * ImGui::GetFrameHeightWithSpacing() + 90.0f,
-                                  120.0f, 360.0f);
-    ImGui::BeginChild("params", ImVec2(0, alto), true);
-    ImGui::TextUnformatted("Parameters");
-    ImGui::Separator();
-
-    std::string toRemove;
-    for (const auto& p : anim->parameters())
+    // Desplegable, como las fuentes de animación, las capas y la IK: las
+    // cuatro secciones de la columna se abren y se cierran igual, y el
+    // scroll es el de la columna. Antes esto era un hijo con alto propio y
+    // su propia barra, que ni cuadraba con el resto ni hacía falta.
+    ImGui::PushID("params");
+    if (ImGui::CollapsingHeader("Parameters", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::PushID(p.name.c_str());
-        ImGui::TextUnformatted(p.name.c_str());
-        ImGui::SameLine();
-        ImGui::TextDisabled("(%s)", paramTypeLabel(p.type));
-        ImGui::SameLine();
+        auto anim = go->getAnimator();
 
-        // Valor editable in situ: en Play permite provocar una transición a mano
-        // sin escribir Lua, que es como se depura un grafo.
-        ImGui::SetNextItemWidth(70);
-        switch (p.type)
+        std::string toRemove;
+        for (const auto& p : anim->parameters())
         {
-            case AnimatorComponent::ParamType::Bool:
+            ImGui::PushID(p.name.c_str());
+            ImGui::TextUnformatted(p.name.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%s)", paramTypeLabel(p.type));
+            ImGui::SameLine();
+
+            // Valor editable in situ: en Play permite provocar una transición a mano
+            // sin escribir Lua, que es como se depura un grafo.
+            ImGui::SetNextItemWidth(70);
+            switch (p.type)
             {
-                bool v = anim->getBool(p.name);
-                if (ImGui::Checkbox("##val", &v)) anim->setBool(p.name, v);
-                break;
+                case AnimatorComponent::ParamType::Bool:
+                {
+                    bool v = anim->getBool(p.name);
+                    if (ImGui::Checkbox("##val", &v)) anim->setBool(p.name, v);
+                    break;
+                }
+                case AnimatorComponent::ParamType::Trigger:
+                    // Un trigger no tiene valor que mostrar: se arma y lo consume la
+                    // primera transición que lo mire (ver consumeTriggers).
+                    if (ImGui::SmallButton("Set")) anim->setTrigger(p.name);
+                    break;
+                case AnimatorComponent::ParamType::Int:
+                {
+                    int v = anim->getInt(p.name);
+                    if (ImGui::DragInt("##val", &v)) anim->setInt(p.name, v);
+                    break;
+                }
+                case AnimatorComponent::ParamType::Float:
+                {
+                    float v = anim->getFloat(p.name);
+                    if (ImGui::DragFloat("##val", &v, 0.01f)) anim->setFloat(p.name, v);
+                    break;
+                }
             }
-            case AnimatorComponent::ParamType::Trigger:
-                // Un trigger no tiene valor que mostrar: se arma y lo consume la
-                // primera transición que lo mire (ver consumeTriggers).
-                if (ImGui::SmallButton("Set")) anim->setTrigger(p.name);
-                break;
-            case AnimatorComponent::ParamType::Int:
-            {
-                int v = anim->getInt(p.name);
-                if (ImGui::DragInt("##val", &v)) anim->setInt(p.name, v);
-                break;
-            }
-            case AnimatorComponent::ParamType::Float:
-            {
-                float v = anim->getFloat(p.name);
-                if (ImGui::DragFloat("##val", &v, 0.01f)) anim->setFloat(p.name, v);
-                break;
-            }
+
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X")) toRemove = p.name;
+            ImGui::PopID();
+        }
+        // Diferido: borrar dentro del for-range invalidaría el iterador.
+        if (!toRemove.empty())
+        {
+            m_graphUndo.setLabel("Quitar parámetro");
+            anim->removeParameter(toRemove);
+            ctx.pushLog("Animator: parámetro '" + toRemove + "' eliminado");
         }
 
-        ImGui::SameLine();
-        if (ImGui::SmallButton("X")) toRemove = p.name;
-        ImGui::PopID();
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(110);
+        ImGui::InputText("##newparam", m_newParamName, sizeof(m_newParamName));
+        // El orden coincide con el del enum ParamType, así que el índice del combo
+        // castea directo: si el enum crece, esta lista crece con él.
+        const char* types[] = { "bool", "trigger", "int", "float" };
+        ImGui::SetNextItemWidth(110);
+        ImGui::Combo("##newparamtype", &m_newParamType, types, IM_ARRAYSIZE(types));
+        if (ImGui::Button("Add Parameter") && m_newParamName[0] != '\0')
+        {
+            m_graphUndo.setLabel("Añadir parámetro");
+            anim->addParameter(m_newParamName, (AnimatorComponent::ParamType)m_newParamType);
+            ctx.pushLog(std::string("Animator: parámetro '") + m_newParamName + "' añadido");
+            m_newParamName[0] = '\0';
+        }
     }
-    // Diferido: borrar dentro del for-range invalidaría el iterador.
-    if (!toRemove.empty())
-    {
-        m_graphUndo.setLabel("Quitar parámetro");
-        anim->removeParameter(toRemove);
-        ctx.pushLog("Animator: parámetro '" + toRemove + "' eliminado");
-    }
+    ImGui::PopID();
 
-    ImGui::Separator();
-    ImGui::SetNextItemWidth(110);
-    ImGui::InputText("##newparam", m_newParamName, sizeof(m_newParamName));
-    // El orden coincide con el del enum ParamType, así que el índice del combo
-    // castea directo: si el enum crece, esta lista crece con él.
-    const char* types[] = { "bool", "trigger", "int", "float" };
-    ImGui::SetNextItemWidth(110);
-    ImGui::Combo("##newparamtype", &m_newParamType, types, IM_ARRAYSIZE(types));
-    if (ImGui::Button("Add Parameter") && m_newParamName[0] != '\0')
-    {
-        m_graphUndo.setLabel("Añadir parámetro");
-        anim->addParameter(m_newParamName, (AnimatorComponent::ParamType)m_newParamType);
-        ctx.pushLog(std::string("Animator: parámetro '") + m_newParamName + "' añadido");
-        m_newParamName[0] = '\0';
-    }
-
-    ImGui::EndChild();
 }
 
 void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
 {
     auto anim = go->getAnimator();
     ImGui::PushID("capas");
+    // El acotado va FUERA del desplegable: la capa seleccionada tiene que
+    // seguir siendo válida aunque la sección esté cerrada (el grafo que se
+    // dibuja es el suyo).
     m_layer = std::clamp(m_layer, 0, anim->layerCount() - 1);
-    ImGui::TextUnformatted("Layers");
-    for (int li = 0; li < anim->layerCount(); li++)
+    if (ImGui::CollapsingHeader("Layers", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::PushID(li);
-        if (m_renamingLayer == li)
+        for (int li = 0; li < anim->layerCount(); li++)
         {
-            if (m_focusRename) { ImGui::SetKeyboardFocusHere(); m_focusRename = false; }
+            ImGui::PushID(li);
+            if (m_renamingLayer == li)
+            {
+                if (m_focusRename) { ImGui::SetKeyboardFocusHere(); m_focusRename = false; }
+                ImGui::SetNextItemWidth(200.0f);
+                ImGui::InputText("##nombre", m_layerNameBuf, sizeof(m_layerNameBuf),
+                                 ImGuiInputTextFlags_AutoSelectAll);
+                // Al soltar el foco (Enter, clic fuera): se guarda si no está vacío.
+                if (ImGui::IsItemDeactivated())
+                {
+                    if (m_layerNameBuf[0] != '\0') anim->layerMutable(li).name = m_layerNameBuf;
+                    m_renamingLayer = -1;
+                }
+            }
+            else if (ImGui::Selectable(anim->layer(li).name.c_str(), m_layer == li,
+                                       ImGuiSelectableFlags_AllowDoubleClick, ImVec2(200.0f, 0.0f)))
+            {
+                m_layer = li;
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                {
+                    m_renamingLayer = li;
+                    m_focusRename   = true;
+                    std::snprintf(m_layerNameBuf, sizeof(m_layerNameBuf), "%s", anim->layer(li).name.c_str());
+                }
+            }
+            if (li == 0 && ImGui::IsItemHovered())
+                ImGui::SetTooltip("Capa base: siempre override, peso 1 y todo el cuerpo.");
+            ImGui::PopID();
+        }
+
+        ImGui::BeginDisabled(anim->layerCount() >= AnimatorComponent::kMaxLayers);
+        if (ImGui::Button("+##addLayer"))
+        {
+            const int n = anim->addLayer("Layer " + std::to_string(anim->layerCount()));
+            if (n >= 0)
+            {
+                m_layer = n;
+                ctx.pushLog("Animator: capa '" + anim->layer(n).name + "' añadida");
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_layer == 0);
+        if (ImGui::Button("-##removeLayer"))
+        {
+            ctx.pushLog("Animator: capa '" + anim->layer(m_layer).name + "' quitada");
+            anim->removeLayer(m_layer);
+            m_layer = std::min(m_layer, anim->layerCount() - 1);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_layer <= 1);
+        if (ImGui::ArrowButton("##layerUp", ImGuiDir_Up))
+        {
+            anim->moveLayer(m_layer, m_layer - 1);
+            m_layer--;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_layer == 0 || m_layer >= anim->layerCount() - 1);
+        if (ImGui::ArrowButton("##layerDown", ImGuiDir_Down))
+        {
+            anim->moveLayer(m_layer, m_layer + 1);
+            m_layer++;
+        }
+        ImGui::EndDisabled();
+
+        // La base no tiene peso, modo ni máscara propios.
+        if (m_layer > 0)
+        {
+            const auto& L = anim->layer(m_layer);
+            float peso = L.weight;
             ImGui::SetNextItemWidth(200.0f);
-            ImGui::InputText("##nombre", m_layerNameBuf, sizeof(m_layerNameBuf),
-                             ImGuiInputTextFlags_AutoSelectAll);
-            // Al soltar el foco (Enter, clic fuera): se guarda si no está vacío.
-            if (ImGui::IsItemDeactivated())
-            {
-                if (m_layerNameBuf[0] != '\0') anim->layerMutable(li).name = m_layerNameBuf;
-                m_renamingLayer = -1;
-            }
+            if (ImGui::SliderFloat("Weight##lw", &peso, 0.0f, 1.0f, "%.2f"))
+                anim->setLayerWeight(m_layer, peso);
+            int modo = (int)L.mode;
+            const char* modos[] = { "Override", "Additive" };
+            ImGui::SetNextItemWidth(200.0f);
+            if (ImGui::Combo("Mode##lm", &modo, modos, 2))
+                anim->setLayerMode(m_layer, (AnimatorComponent::LayerMode)modo);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Override sustituye la pose de los huesos de la máscara;\n"
+                                  "Additive le suma la diferencia de cada clip con su primer fotograma.");
+            const std::string etiqueta = L.maskBones.empty()
+                ? std::string("Mask: todo el cuerpo")
+                : "Mask: " + std::to_string(L.maskBones.size()) + " hueso(s)";
+            if (ImGui::Button((etiqueta + "##lmask").c_str(), ImVec2(200.0f, 0.0f)))
+                ImGui::OpenPopup("layerMask");
+            drawLayerMaskPopup(go);
         }
-        else if (ImGui::Selectable(anim->layer(li).name.c_str(), m_layer == li,
-                                   ImGuiSelectableFlags_AllowDoubleClick, ImVec2(200.0f, 0.0f)))
-        {
-            m_layer = li;
-            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-            {
-                m_renamingLayer = li;
-                m_focusRename   = true;
-                std::snprintf(m_layerNameBuf, sizeof(m_layerNameBuf), "%s", anim->layer(li).name.c_str());
-            }
-        }
-        if (li == 0 && ImGui::IsItemHovered())
-            ImGui::SetTooltip("Capa base: siempre override, peso 1 y todo el cuerpo.");
-        ImGui::PopID();
-    }
-
-    ImGui::BeginDisabled(anim->layerCount() >= AnimatorComponent::kMaxLayers);
-    if (ImGui::Button("+##addLayer"))
-    {
-        const int n = anim->addLayer("Layer " + std::to_string(anim->layerCount()));
-        if (n >= 0)
-        {
-            m_layer = n;
-            ctx.pushLog("Animator: capa '" + anim->layer(n).name + "' añadida");
-        }
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(m_layer == 0);
-    if (ImGui::Button("-##removeLayer"))
-    {
-        ctx.pushLog("Animator: capa '" + anim->layer(m_layer).name + "' quitada");
-        anim->removeLayer(m_layer);
-        m_layer = std::min(m_layer, anim->layerCount() - 1);
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(m_layer <= 1);
-    if (ImGui::ArrowButton("##layerUp", ImGuiDir_Up))
-    {
-        anim->moveLayer(m_layer, m_layer - 1);
-        m_layer--;
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(m_layer == 0 || m_layer >= anim->layerCount() - 1);
-    if (ImGui::ArrowButton("##layerDown", ImGuiDir_Down))
-    {
-        anim->moveLayer(m_layer, m_layer + 1);
-        m_layer++;
-    }
-    ImGui::EndDisabled();
-
-    // La base no tiene peso, modo ni máscara propios.
-    if (m_layer > 0)
-    {
-        const auto& L = anim->layer(m_layer);
-        float peso = L.weight;
-        ImGui::SetNextItemWidth(200.0f);
-        if (ImGui::SliderFloat("Weight##lw", &peso, 0.0f, 1.0f, "%.2f"))
-            anim->setLayerWeight(m_layer, peso);
-        int modo = (int)L.mode;
-        const char* modos[] = { "Override", "Additive" };
-        ImGui::SetNextItemWidth(200.0f);
-        if (ImGui::Combo("Mode##lm", &modo, modos, 2))
-            anim->setLayerMode(m_layer, (AnimatorComponent::LayerMode)modo);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Override sustituye la pose de los huesos de la máscara;\n"
-                              "Additive le suma la diferencia de cada clip con su primer fotograma.");
-        const std::string etiqueta = L.maskBones.empty()
-            ? std::string("Mask: todo el cuerpo")
-            : "Mask: " + std::to_string(L.maskBones.size()) + " hueso(s)";
-        if (ImGui::Button((etiqueta + "##lmask").c_str(), ImVec2(200.0f, 0.0f)))
-            ImGui::OpenPopup("layerMask");
-        drawLayerMaskPopup(go);
     }
     ImGui::PopID();
+
 }
 
 void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
