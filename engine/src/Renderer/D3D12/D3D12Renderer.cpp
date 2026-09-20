@@ -24,6 +24,7 @@
 #include "DonTopo/Renderer/SelectionOutline.h"
 #include "DonTopo/Renderer/Plane.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/MeshClock.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/SharedTextureCache.h"
 #include "DonTopo/Renderer/TaaJitter.h"
@@ -978,8 +979,13 @@ struct D3D12Renderer::Impl {
         // boneInfos va en layout [clip][hueso]: el offset del clip activo es
         // clip * boneCount.
         uint32_t clipBase     = 0;
-        float    animTime     = 0.0f;
-        float    animDuration = 0.0f;
+        // animTime y animDuration van en TICKS de Assimp, que es lo que lee el
+        // compute. Sin ticksPerSecond no se puede pasar de los segundos del
+        // frame a ticks: faltaba, y por eso este backend reproducía el camino
+        // sin Animator entre 24 y 30 veces más lento (A13).
+        float    animTime       = 0.0f;
+        float    animDuration   = 0.0f;
+        float    ticksPerSecond = 0.0f;
         // La pose que manda un Animator (setAnimationPose). Sin ella, una sola
         // muestra: clipBase en animTime.
         AnimationPose pose;
@@ -3368,6 +3374,12 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
     object.vertexCount  = static_cast<uint32_t>(mesh.skinnedVertices.size());
     object.clipBase     = 0;
     object.animDuration = mesh.animationClips.empty() ? 0.0f : mesh.animationClips[0].duration;
+    // Mismo default que Vulkan: un FBX sin mTicksPerSecond se reproduce a 24.
+    object.ticksPerSecond = mesh.animationClips.empty()
+                                ? 0.0f
+                                : (mesh.animationClips[0].ticksPerSecond > 0.0f
+                                       ? mesh.animationClips[0].ticksPerSecond
+                                       : 24.0f);
 
     object.posKeys   = uploadBuffer(packed.pos.data(), packed.pos.size() * sizeof(GpuPosKey),
                                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -9402,9 +9414,9 @@ void D3D12Renderer::drawFrame()
             // los pondría al doble de velocidad.
             if (character.externalClock)
                 continue;
-            character.animTime += static_cast<float>(elapsed);
-            if (character.animDuration > 0.0f && character.animTime > character.animDuration)
-                character.animTime = std::fmod(character.animTime, character.animDuration);
+            character.animTime = advanceMeshClock(character.animTime, static_cast<float>(elapsed),
+                                                  character.ticksPerSecond, character.animDuration,
+                                                  character.visible);
         }
 
         d.recordSkinning();
@@ -10094,9 +10106,11 @@ void D3D12Renderer::updateAnimation(int index, float deltaTime)
     // este personaje se apaga: mandan desde fuera.
     Impl::SkinnedObject& character = d.skinnedObjects[index];
     character.externalClock        = true;
-    character.animTime += deltaTime;
-    if (character.animDuration > 0.0f && character.animTime > character.animDuration)
-        character.animTime = std::fmod(character.animTime, character.animDuration);
+    // La regla entera (ritmo, wrap y congelar el oculto) vive en
+    // advanceMeshClock, compartida con Vulkan: escrita dos veces, las dos
+    // copias divergieron (A13).
+    character.animTime = advanceMeshClock(character.animTime, deltaTime, character.ticksPerSecond,
+                                          character.animDuration, character.visible);
 }
 
 void D3D12Renderer::setObjectMeshVisible(size_t objectIndex, bool visible)
