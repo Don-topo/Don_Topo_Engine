@@ -295,8 +295,9 @@ namespace DonTopo
                 // Capas 1..N enteras (el diseño; su ejecución se ignora).
                 std::vector<Layer>      extraLayers;
                 // Las restricciones de IK son diseño entero: no tienen
-                // ejecución que conservar.
+                // ejecución que conservar. Los clips de propiedades, igual.
                 std::vector<IkConstraint> ik;
+                std::vector<PropertyClip> propertyClips;
             };
 
             // --- Diseño (editor / carga de escena) ---

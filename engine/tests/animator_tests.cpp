@@ -8298,6 +8298,76 @@ static void test_property_clips_material_goes_to_the_backend()
     CHECK(nearlyEqual(r.factorMetallic, propertyGet(*go, PropertyId::MaterialMetallic)));
 }
 
+static void test_property_clips_serialization(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Puerta");
+    const uint64_t id = go->id;
+    go->setAnimator(std::make_shared<AnimatorComponent>(makePuerta()));
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& anim = *found->getAnimator();
+    CHECK(anim.propertyClips().size() == 2u);
+    if (anim.propertyClips().size() != 2u) return;
+    CHECK(anim.propertyClips()[1].name == "abrir");
+    CHECK(nearlyEqual(anim.propertyClips()[1].duration, 2.0f));
+    CHECK(anim.propertyClips()[1].tracks.size() == 1u);
+    CHECK(anim.propertyClips()[1].tracks[0].property == PropertyId::PositionY);
+    CHECK(anim.propertyClips()[1].tracks[0].keys.size() == 2u);
+    CHECK(nearlyEqual(anim.propertyClips()[1].tracks[0].keys[1].value, 4.0f));
+    CHECK(anim.states()[1].propertyClipName == "abrir");
+    // Un Animator sin clips de propiedades no escribe ninguna clave nueva.
+    AnimatorComponent vacio;
+    const std::string texto = animatorToJson(vacio).dump();
+    CHECK(texto.find("propertyClip") == std::string::npos);
+}
+
+static void test_property_clips_bad_file_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Puerta");
+    go->setAnimator(std::make_shared<AnimatorComponent>(makePuerta()));
+    nlohmann::json j = scene.toJson();
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        node["animator"]["propertyClips"][0]["tracks"][0]["property"] = "noExiste";
+        node["animator"]["propertyClips"][1]["duration"] = 0.0f;
+        while (node["animator"]["propertyClips"].size() < 20)
+            node["animator"]["propertyClips"].push_back(node["animator"]["propertyClips"][0]);
+    }
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool prop = false, dur = false, tope = false;
+    for (const auto& w : loaded.lastWarnings())
+    {
+        if (w.find("noExiste") != std::string::npos) prop = true;
+        if (w.find("duración") != std::string::npos) dur = true;
+        if (w.find("clips de propiedades") != std::string::npos) tope = true;
+    }
+    CHECK(prop && dur && tope);
+    GameObject* found = loaded.getRoot().children[0].get();
+    const auto& anim = *found->getAnimator();
+    CHECK(anim.propertyClips().size() == (size_t)AnimatorComponent::kMaxPropertyClips);
+    CHECK(anim.propertyClips()[0].tracks.empty());              // la pista mala se descarta
+    CHECK(anim.propertyClips()[1].duration > 0.0f);             // la duración se acota
+}
+
+static void test_property_clips_apply_graph_restores()
+{
+    AnimatorComponent a = makePuerta();
+    const AnimatorComponent::Graph snap = a.graph();
+    a.propertyClipsMutable()[1].duration = 9.0f;
+    a.removePropertyClip(0);
+    a.applyGraph(snap);
+    CHECK(a.propertyClips().size() == 2u);
+    if (a.propertyClips().size() == 2u) CHECK(nearlyEqual(a.propertyClips()[1].duration, 2.0f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -8467,6 +8537,7 @@ int main()
     test_property_samples_follow_the_graph();
     test_property_clips_drive_a_non_skinned_object();
     test_property_clips_material_goes_to_the_backend();
+    test_property_clips_apply_graph_restores();
     test_ik_graph_key_and_apply_graph();
     test_ik_lookat();
     test_ik_twobone_reaches_target();
@@ -8483,6 +8554,8 @@ int main()
     test_layers_too_many_warns(pm, am);
     test_ik_serialization(pm, am);
     test_ik_bad_file_warns(pm, am);
+    test_property_clips_serialization(pm, am);
+    test_property_clips_bad_file_warns(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
     test_animation_sources_survive_scene_round_trip(pm, am);
