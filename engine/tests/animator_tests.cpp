@@ -8839,6 +8839,98 @@ static void test_property_clips_serialization(PhysicsManager& pm, AudioManager& 
     CHECK(texto.find("propertyClip") == std::string::npos);
 }
 
+static void test_submachine_serialization(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Bicho");
+    const uint64_t id = go->id;
+    go->setAnimator(std::make_shared<AnimatorComponent>(makeCajas()));
+
+    const nlohmann::json ja = animatorToJson(*go->getAnimator());
+    CHECK(ja["states"][1].contains("subMachine"));
+    CHECK(ja["states"][2].contains("parent"));
+    // Un estado normal no escribe ninguna clave nueva.
+    CHECK(!ja["states"][0].contains("parent"));
+    CHECK(!ja["states"][0].contains("subMachine"));
+    CHECK(!ja["states"][0].contains("subEntry"));
+
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& anim = *found->getAnimator();
+    CHECK(anim.states().size() == 5u);
+    if (anim.states().size() != 5u) return;
+    CHECK(anim.states()[1].isSubMachine);
+    CHECK(anim.states()[2].parent == 1);
+    CHECK(anim.states()[1].subEntry == 3);
+    CHECK(anim.resolveEntryLeaf(1, 0) == 4);
+
+    // Un Animator sin cajas no escribe ninguna clave nueva.
+    AnimatorComponent plano;
+    AnimatorComponent::State s;
+    s.name = "Solo";
+    plano.addState(s);
+    const std::string texto = animatorToJson(plano).dump();
+    CHECK(texto.find("subMachine") == std::string::npos);
+    CHECK(texto.find("parent") == std::string::npos);
+    CHECK(texto.find("subEntry") == std::string::npos);
+}
+
+static void test_submachine_bad_file_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Bicho");
+    const uint64_t id = go->id;
+    go->setAnimator(std::make_shared<AnimatorComponent>(makeCajas()));
+    nlohmann::json j = scene.toJson();
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        node["animator"]["states"][2]["parent"] = 99;   // fuera de rango
+        node["animator"]["states"][4]["parent"] = 0;    // Base no es una caja
+    }
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    CHECK(found->getAnimator()->states()[2].parent == -1);
+    CHECK(found->getAnimator()->states()[4].parent == -1);
+    bool rango = false, noCaja = false;
+    for (const auto& w : loaded.lastWarnings())
+    {
+        if (w.find("fuera de rango") != std::string::npos)        rango = true;
+        if (w.find("no es una sub-maquina") != std::string::npos) noCaja = true;
+    }
+    CHECK(rango);
+    CHECK(noCaja);
+
+    // Ciclo de contención: Ataques dentro de Combo, que ya está dentro de
+    // Ataques. Sin la pasada de ciclos, subir por parent no terminaría.
+    nlohmann::json c = scene.toJson();
+    for (auto& node : c["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        node["animator"]["states"][1]["parent"] = 3;
+    }
+    Scene conCiclo("Ciclo");
+    CHECK(conCiclo.fromJson(c, pm, am));
+    GameObject* f2 = conCiclo.findById(id);
+    CHECK(f2 && f2->hasAnimator());
+    if (!f2 || !f2->hasAnimator()) return;
+    const auto& anim = *f2->getAnimator();
+    CHECK(anim.states().size() == 5u);
+    if (anim.states().size() != 5u) return;
+    CHECK(anim.states()[1].parent == -1 || anim.states()[3].parent == -1);
+    bool ciclo = false;
+    for (const auto& w : conCiclo.lastWarnings())
+        if (w.find("ciclo") != std::string::npos) ciclo = true;
+    CHECK(ciclo);
+}
+
 static void test_curve_serialization(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -9205,6 +9297,8 @@ int main()
     test_ik_bad_file_warns(pm, am);
     test_property_clips_serialization(pm, am);
     test_curve_serialization(pm, am);
+    test_submachine_serialization(pm, am);
+    test_submachine_bad_file_warns(pm, am);
     test_property_clips_bad_file_warns(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);

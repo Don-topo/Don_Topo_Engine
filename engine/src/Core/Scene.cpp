@@ -589,6 +589,11 @@ namespace DonTopo
                     sj["speed"] = s.speed;
                 if (!s.speedParam.empty())
                     sj["speedParam"] = s.speedParam;
+                // Sub-máquinas: solo lo que no es el default, para que un grafo
+                // sin cajas se guarde byte a byte como antes.
+                if (s.parent >= 0)   sj["parent"]     = s.parent;
+                if (s.isSubMachine)  sj["subMachine"] = true;
+                if (s.subEntry >= 0) sj["subEntry"]   = s.subEntry;
                 states.push_back(sj);
             }
 
@@ -758,6 +763,11 @@ namespace
                     st.name     = s.value("name", std::string());
                     st.clipName = s.value("clip", std::string());
                     st.loop     = s.value("loop", true);
+                    // Sub-máquinas. La coherencia (a quién apunta cada índice) se
+                    // valida abajo, cuando ya están todos los estados leídos.
+                    st.parent       = s.value("parent", -1);
+                    st.isSubMachine = s.value("subMachine", false);
+                    st.subEntry     = s.value("subEntry", -1);
                     // Ausentes en escenas anteriores al blend por parámetro: sin
                     // entradas el estado es de un solo clip, como siempre.
                     const std::string ctxBlend = "animator.state." + st.name;
@@ -838,6 +848,62 @@ namespace
                     // duration/ticksPerSecond/clipIndex los rellena bindClips contra
                     // el SkinnedMesh: son del FBX, no del fichero de escena.
                     a->addState(st, capa);
+                }
+
+                // La jerarquía se valida con TODOS los estados ya cargados: es
+                // cuando se puede mirar a quién apunta cada índice. Un fichero
+                // manipulado no puede dejar una jerarquía que cuelgue los
+                // recorridos ni un padre que no sea una caja.
+                auto& estados = a->statesMutable(capa);
+                for (auto& st : estados)
+                {
+                    if (st.parent >= (int)estados.size() || st.parent < -1)
+                    {
+                        if (warnings)
+                            warnings->push_back("animator.state." + st.name +
+                                                 ": padre fuera de rango, se deja en la raiz");
+                        st.parent = -1;
+                    }
+                    // Su propia comprobación de rango, no un `else` de la de
+                    // arriba: una guarda que se apoya en otra deja de proteger
+                    // en cuanto alguien toca la primera, y aquí eso es indexar
+                    // fuera del vector.
+                    if (st.parent >= 0 && st.parent < (int)estados.size() &&
+                        !estados[(size_t)st.parent].isSubMachine)
+                    {
+                        if (warnings)
+                            warnings->push_back("animator.state." + st.name +
+                                                 ": el padre no es una sub-maquina, se deja en la raiz");
+                        st.parent = -1;
+                    }
+                    if (st.subEntry >= (int)estados.size() || st.subEntry < -1)
+                    {
+                        if (warnings)
+                            warnings->push_back("animator.state." + st.name +
+                                                 ": entrada fuera de rango, la sub-maquina queda vacia");
+                        st.subEntry = -1;
+                    }
+                }
+                // Ciclos de contención: subir desde cada estado con un tope. Si
+                // se pasa, ese estado a la raíz; sin esto, isDescendantOf y
+                // resolveEntryLeaf tendrían que fiarse de su propio tope en cada
+                // frame.
+                for (int i = 0; i < (int)estados.size(); i++)
+                {
+                    int p = estados[(size_t)i].parent;
+                    int pasos = 0;
+                    while (p >= 0 && p < (int)estados.size() && pasos <= (int)estados.size())
+                    {
+                        p = estados[(size_t)p].parent;
+                        pasos++;
+                    }
+                    if (pasos > (int)estados.size())
+                    {
+                        if (warnings)
+                            warnings->push_back("animator.state." + estados[(size_t)i].name +
+                                                 ": ciclo de sub-maquinas, se deja en la raiz");
+                        estados[(size_t)i].parent = -1;
+                    }
                 }
             }
 
