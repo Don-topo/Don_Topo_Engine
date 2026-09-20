@@ -1766,7 +1766,8 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 const SkinnedMesh* mesh = go->getSkinnedMesh();
                 if (!mesh || mesh->animationClips.empty())
                 {
-                    ImGui::TextDisabled("El GameObject no tiene un mesh skinned con animaciones.");
+                    ImGui::TextDisabled("Sin mesh skinned con animaciones: los estados salen de\n"
+                                        "los clips de propiedades (abajo).");
                 }
                 else if (ImGui::BeginCombo("##addstate", "Add State from Clip"))
                 {
@@ -1785,6 +1786,36 @@ void AnimatorPanel::draw(EditorContext& ctx)
                         const int eid = go->getAnimator()->states(m_layer)[idx].editorId;
                         // El nodo es nuevo: hay que colocarlo en el canvas a mano, el
                         // sync general solo corre al cambiar de objeto.
+                        ed::SetCurrentEditor(m_ctx);
+                        ed::SetNodePosition(nodeId(eid), ImVec2(st.editorPos.x, st.editorPos.y));
+                        ed::SetCurrentEditor(nullptr);
+                        ctx.pushLog("Animator: estado '" + st.name + "' añadido");
+                    }
+                    ImGui::EndCombo();
+                }
+
+                auto anim = go->getAnimator();
+
+                // --- Añadir estado desde un clip de propiedades ---
+                // Sin esto, un objeto SIN esqueleto no podía tener ni un estado
+                // (la única forma de crearlos eran los clips del modelo), así
+                // que su clip de propiedades no lo reproducía nadie.
+                if (!anim->propertyClips().empty() && ImGui::BeginCombo("##addpropstate", "Add State from Property Clip"))
+                {
+                    for (const auto& pc : anim->propertyClips())
+                    {
+                        if (!ImGui::Selectable(pc.name.c_str())) continue;
+                        AnimatorComponent::State st;
+                        st.name             = pc.name;
+                        st.propertyClipName = pc.name;
+                        st.editorPos        = glm::vec2(40.0f + 40.0f * (float)anim->states(m_layer).size(),
+                                                        40.0f + 30.0f * (float)anim->states(m_layer).size());
+                        const int idx = anim->addState(st, m_layer);
+                        // El índice del clip y la duración del estado (que sin
+                        // clip de malla sale del de propiedades) los resuelve
+                        // bindProperties.
+                        anim->bindProperties(go, nullptr);
+                        const int eid = anim->states(m_layer)[idx].editorId;
                         ed::SetCurrentEditor(m_ctx);
                         ed::SetNodePosition(nodeId(eid), ImVec2(st.editorPos.x, st.editorPos.y));
                         ed::SetCurrentEditor(nullptr);

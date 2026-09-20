@@ -5055,6 +5055,9 @@ struct SkinnedRendererDoble
     bool      poseRecibida  = false;
     AnimationIk ik;
     bool      ikRecibida    = false;
+    bool      transformEstaticoRecibido = false;
+    int       transformEstaticoIndice    = -1;
+    glm::mat4 transformEstatico          = glm::mat4(0.0f);
     bool      factoresRecibidos = false;
     size_t    factoresIndice    = 0;
     float     factorMetallic    = -1.0f;
@@ -5071,6 +5074,11 @@ struct SkinnedRendererDoble
         pose = p; poseRecibida = true;
     }
     void setAnimationIk(int, const AnimationIk& v) { orden.push_back("ik"); ik = v; ikRecibida = true; }
+    void setTransform(int i, const glm::mat4& m)
+    {
+        orden.push_back("transformEstatico");
+        transformEstaticoIndice = i; transformEstatico = m; transformEstaticoRecibido = true;
+    }
     void setObjectMaterialFactors(size_t i, float m, float r)
     {
         orden.push_back("factores");
@@ -8371,6 +8379,37 @@ static void test_property_clips_apply_graph_restores()
     if (a.propertyClips().size() == 2u) CHECK(nearlyEqual(a.propertyClips()[1].duration, 2.0f));
 }
 
+// El host propaga los worldTransform y empuja el transform ANTES de llamar al
+// helper: lo que se anima en este frame tiene que reenviarse, o el objeto iría
+// un frame por detrás (y sus hijos, dos).
+static void test_property_clips_push_transform_and_world()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Puerta");
+    go->staticRenderIndex = 7;
+    GameObject* hijo = scene.addGameObject("Pomo", go);
+    hijo->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 1));
+    auto a = std::make_shared<AnimatorComponent>(makePuerta());
+    go->setAnimator(a);
+    a->bindProperties(go, nullptr);
+    a->reset();
+    scene.getRoot().updateWorldTransforms();
+
+    SkinnedRendererDoble r;
+    a->setTrigger("abre");
+    applySkinnedFrame(*go, r, 0.016f, true);
+    applySkinnedFrame(*go, r, 1.0f, true);
+    CHECK(r.transformEstaticoRecibido);
+    CHECK(r.transformEstaticoIndice == 7);
+    const float y = propertyGet(*go, PropertyId::PositionY);
+    CHECK(y > 0.5f);
+    // El transform que recibe el backend es el de ESTE frame, no el anterior.
+    CHECK(nearlyEqual(r.transformEstatico[3].y, go->worldTransform[3].y));
+    CHECK(nearlyEqual(go->worldTransform[3].y, y));
+    // Y el hijo ya cuelga de la posición nueva, sin esperar al frame siguiente.
+    CHECK(nearlyEqual(hijo->worldTransform[3].y, y));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -8540,6 +8579,7 @@ int main()
     test_property_samples_follow_the_graph();
     test_property_clips_drive_a_non_skinned_object();
     test_property_clips_material_goes_to_the_backend();
+    test_property_clips_push_transform_and_world();
     test_property_clips_apply_graph_restores();
     test_ik_graph_key_and_apply_graph();
     test_ik_lookat();

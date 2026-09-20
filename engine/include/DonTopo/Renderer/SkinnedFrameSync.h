@@ -31,13 +31,20 @@ namespace DonTopo
     // de applySkinnedFrame, que salía en cuanto el objeto no tenía índice
     // skinned: un objeto sin esqueleto no animaba nada.
     //
-    // Devuelve true si escribió alguna propiedad de MATERIAL: esos factores
-    // viven en el GameObject y hay que empujarlos al backend (hoy solo los
-    // empujaban el panel y los comandos del editor).
-    inline bool applyAnimatorFrame(GameObject& go, float dt, bool evaluateTransitions)
+    // Devuelve QUÉ escribió, porque los dos hosts propagan los worldTransform y
+    // empujan el transform al backend ANTES de llegar aquí: lo que se anima en
+    // este frame tiene que reenviarse, o iría un frame por detrás.
+    struct AnimatorFrameResult
     {
+        bool transform = false;   // alguna de posición, rotación o escala
+        bool material  = false;   // metálico o rugosidad
+    };
+
+    inline AnimatorFrameResult applyAnimatorFrame(GameObject& go, float dt, bool evaluateTransitions)
+    {
+        AnimatorFrameResult res;
         const auto& anim = go.getAnimator();
-        if (!anim) return false;
+        if (!anim) return res;
         // El Animator es el único dueño de animTime: calcula en CPU y el
         // backend solo recibe el resultado.
         anim->update(dt, evaluateTransitions);
@@ -50,7 +57,7 @@ namespace DonTopo
 
         AnimatorComponent::PropertySampleRef muestras[kMaxLayersPose * kMaxPoseSamplesPerLayer];
         const int n = anim->propertySamples(muestras, (int)(sizeof(muestras) / sizeof(muestras[0])));
-        if (n == 0) return false;
+        if (n == 0) return res;
 
         bool  escritas[(int)PropertyId::Count] = {};
         float valores [(int)PropertyId::Count] = {};
@@ -77,7 +84,15 @@ namespace DonTopo
             valores[p]  = blendPropertyValues(id, aporta, m);
         }
         propertyApply(go, escritas, valores);
-        return escritas[(int)PropertyId::MaterialMetallic] || escritas[(int)PropertyId::MaterialRoughness];
+
+        for (int p = 0; p <= (int)PropertyId::ScaleZ; p++) res.transform = res.transform || escritas[p];
+        res.material = escritas[(int)PropertyId::MaterialMetallic] || escritas[(int)PropertyId::MaterialRoughness];
+        // El mundo de ESTE objeto y el de sus hijos, aquí mismo: los hosts ya
+        // propagaron antes del recorrido, así que sin esto lo animado llegaría
+        // al backend un frame tarde y los hijos, dos.
+        if (res.transform)
+            go.updateWorldTransforms(go.parent ? go.parent->worldTransform : glm::mat4(1.0f));
+        return res;
     }
 
     template <typename R>
@@ -85,11 +100,18 @@ namespace DonTopo
     {
         // El grafo corre SIEMPRE, tenga o no malla con esqueleto: es lo que
         // permite animar una puerta o una luz con un clip de propiedades.
-        const bool tocoMaterial = applyAnimatorFrame(go, dt, evaluateTransitions);
-        if (tocoMaterial && go.staticRenderIndex >= 0)
-            renderer.setObjectMaterialFactors((size_t)go.staticRenderIndex,
-                                              propertyGet(go, PropertyId::MaterialMetallic),
-                                              propertyGet(go, PropertyId::MaterialRoughness));
+        const AnimatorFrameResult animado = applyAnimatorFrame(go, dt, evaluateTransitions);
+        if (go.staticRenderIndex >= 0)
+        {
+            // Reenviar lo que se acaba de animar: el host empujó el transform de
+            // este objeto ANTES de llamar aquí, y los factores de material solo
+            // los empujaban el panel y los comandos del editor.
+            if (animado.transform) renderer.setTransform(go.staticRenderIndex, go.worldTransform);
+            if (animado.material)
+                renderer.setObjectMaterialFactors((size_t)go.staticRenderIndex,
+                                                  propertyGet(go, PropertyId::MaterialMetallic),
+                                                  propertyGet(go, PropertyId::MaterialRoughness));
+        }
 
         // Sin índice no está dado de alta en el backend: ni se dibuja ni hay
         // pose que mandar.
