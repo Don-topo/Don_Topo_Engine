@@ -1,5 +1,6 @@
 ﻿#include "DonTopo/Renderer/IkBlock.h"
 #include "DonTopo/Renderer/PoseBlock.h"
+#include "DonTopo/Renderer/MeshClock.h"
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/Gizmos.h"
 #include "DonTopo/Core/GameObject.h"
@@ -4054,13 +4055,11 @@ namespace DonTopo {
     {
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
         auto& obj = m_skinnedObjects[index];
-        if (obj.ticksPerSecond <= 0.0f || obj.duration <= 0.0f) return;
-        // Oculto: no se ve, así que su reloj tampoco corre. Al volver a marcarlo
-        // Visible reanuda donde se quedó en vez de saltar hacia delante.
-        if (!obj.meshVisible) return;
-        obj.animTime += deltaTime * obj.ticksPerSecond;
-        if (obj.animTime > obj.duration)
-            obj.animTime = std::fmod(obj.animTime, obj.duration);
+        // La regla entera (ritmo, wrap y congelar el oculto) vive en
+        // advanceMeshClock, compartida con D3D12: escrita dos veces, las dos
+        // copias divergieron (A13).
+        obj.animTime = advanceMeshClock(obj.animTime, deltaTime, obj.ticksPerSecond,
+                                        obj.duration, obj.meshVisible);
     }
 
     void Renderer::setAnimationState(int index, uint32_t clipIndex, float animTime)

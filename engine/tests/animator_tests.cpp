@@ -16,6 +16,7 @@
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Renderer/SkinnedFrameSync.h"
+#include "DonTopo/Renderer/MeshClock.h"
 #include "DonTopo/Renderer/RootMotion.h"
 #include "DonTopo/Core/RootMotionApply.h"
 #include "DonTopo/Physics/Rigidbody.h"
@@ -8388,6 +8389,22 @@ static void test_curve_last_layer_wins()
 // curvas, que se escriben tal cual).
 // Lo que el panel necesita para pintar una curva: contra qué umbrales se lee y
 // con qué rango vertical.
+// El reloj del camino SIN Animator, que los dos backends comparten desde que
+// se descubrió que habían divergido (A13).
+static void test_mesh_clock_advances_in_ticks()
+{
+    // dt en SEGUNDOS, reloj en TICKS: sin el ritmo, medio segundo de un clip a
+    // 24 fps avanzaría 0,5 en vez de 12, y el personaje iría 24 veces lento.
+    CHECK(nearlyEqual(advanceMeshClock(0.0f, 0.5f, 24.0f, 100.0f, true), 12.0f));
+    // Wrap: 95 + 12 = 107 sobre un clip de 100.
+    CHECK(nearlyEqual(advanceMeshClock(95.0f, 0.5f, 24.0f, 100.0f, true), 7.0f));
+    // Oculto: el reloj se queda quieto y reanuda donde estaba.
+    CHECK(nearlyEqual(advanceMeshClock(30.0f, 0.5f, 24.0f, 100.0f, false), 30.0f));
+    // Sin ritmo o sin duración no hay clip que muestrear.
+    CHECK(nearlyEqual(advanceMeshClock(30.0f, 0.5f, 0.0f, 100.0f, true), 30.0f));
+    CHECK(nearlyEqual(advanceMeshClock(30.0f, 0.5f, 24.0f, 0.0f, true), 30.0f));
+}
+
 static void test_curve_condition_thresholds()
 {
     AnimatorComponent a = makeCurvaVelocidad();
@@ -8936,6 +8953,7 @@ int main()
     test_curve_fires_its_transition_in_the_same_frame();
     test_curve_of_a_zero_weight_layer_still_writes();
     test_curve_last_layer_wins();
+    test_mesh_clock_advances_in_ticks();
     test_curve_condition_thresholds();
     test_curve_draw_range();
     test_property_samples_scale_with_the_layer_weight();
