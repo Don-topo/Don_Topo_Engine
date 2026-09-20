@@ -87,9 +87,6 @@ private:
     int  m_layer          = 0;
     int  m_boundLayer     = -1;
     int  m_renamingLayer  = -1;
-    // Clip de propiedades desplegado en el panel (solo uno a la vez: sus
-    // pistas y sus keys ocupan mucho).
-    int  m_propClipAbierto = -1;
     bool m_focusRename    = false;
     char m_layerNameBuf[64] = {};
 

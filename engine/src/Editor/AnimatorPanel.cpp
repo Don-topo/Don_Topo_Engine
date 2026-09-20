@@ -512,30 +512,36 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
         {
             auto& clip = clips[(size_t)i];
             ImGui::PushID(i);
-            char nombre[64];
-            std::snprintf(nombre, sizeof(nombre), "%s", clip.name.c_str());
-            ImGui::SetNextItemWidth(130.0f);
-            if (ImGui::InputText("##nombre", nombre, sizeof(nombre)))
-            {
-                clip.name = nombre;
-                // El estado referencia por NOMBRE: renombrar obliga a re-resolver.
-                anim->bindProperties(go, nullptr);
-            }
+            // Cabecera por clip, como las secciones de la columna. El "###" es
+            // lo que la hace utilizable: sin él el ID sale del texto ENTERO, así
+            // que al renombrar el clip —o al cambiar el glifo de un botón que
+            // dependa de su propio estado— la cabecera pasa a ser otro widget y
+            // se pierde si estaba abierta. ImGui abre y cierra por ID, así que
+            // cada clip recuerda su estado él solo.
+            const std::string etiqueta = (clip.name.empty() ? std::string("(sin nombre)") : clip.name) +
+                                         "###clip";
+            const bool abierto = ImGui::CollapsingHeader(etiqueta.c_str());
             ImGui::SameLine();
-            if (ImGui::SmallButton(m_propClipAbierto == i ? "-##abrir" : "+##abrir"))
-                m_propClipAbierto = (m_propClipAbierto == i) ? -1 : i;
-            ImGui::SameLine();
-            if (ImGui::SmallButton("x")) quitarClip = i;
-            ImGui::SetNextItemWidth(130.0f);
-            if (ImGui::DragFloat("Duracion (s)##dur", &clip.duration, 0.01f, 0.001f, 600.0f, "%.3f"))
+            if (ImGui::SmallButton("x###quitarClip")) quitarClip = i;
+            if (abierto)
             {
-                if (clip.duration < 0.001f) clip.duration = 0.001f;
-                // La duración del estado sale de aquí cuando no hay clip de malla.
-                anim->bindProperties(go, nullptr);
-            }
+                char nombre[64];
+                std::snprintf(nombre, sizeof(nombre), "%s", clip.name.c_str());
+                ImGui::SetNextItemWidth(130.0f);
+                if (ImGui::InputText("Nombre###nombre", nombre, sizeof(nombre)))
+                {
+                    clip.name = nombre;
+                    // El estado referencia por NOMBRE: renombrar obliga a re-resolver.
+                    anim->bindProperties(go, nullptr);
+                }
+                ImGui::SetNextItemWidth(130.0f);
+                if (ImGui::DragFloat("Duracion (s)###dur", &clip.duration, 0.01f, 0.001f, 600.0f, "%.3f"))
+                {
+                    if (clip.duration < 0.001f) clip.duration = 0.001f;
+                    // La duración del estado sale de aquí cuando no hay clip de malla.
+                    anim->bindProperties(go, nullptr);
+                }
 
-            if (m_propClipAbierto == i)
-            {
                 int quitarPista = -1;
                 for (int p = 0; p < (int)clip.tracks.size(); p++)
                 {
@@ -544,7 +550,7 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     const bool roto = !pista.resolved;
                     if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
                     ImGui::SetNextItemWidth(150.0f);
-                    if (ImGui::BeginCombo("##prop", propertyName(pista.property)))
+                    if (ImGui::BeginCombo("###prop", propertyName(pista.property)))
                     {
                         for (int q = 0; q < (int)PropertyId::Count; q++)
                         {
@@ -562,19 +568,19 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                         ImGui::SetTooltip("El objeto no tiene el componente que necesita esta pista:\n"
                                           "no se aplica.");
                     ImGui::SameLine();
-                    if (ImGui::SmallButton("x##pista")) quitarPista = p;
+                    if (ImGui::SmallButton("x###pista")) quitarPista = p;
 
                     int quitarKey = -1;
                     for (int k = 0; k < (int)pista.keys.size(); k++)
                     {
                         ImGui::PushID(k);
                         ImGui::SetNextItemWidth(60.0f);
-                        ImGui::DragFloat("##t", &pista.keys[(size_t)k].time, 0.01f, 0.0f, 600.0f, "t %.2f");
+                        ImGui::DragFloat("###t", &pista.keys[(size_t)k].time, 0.01f, 0.0f, 600.0f, "t %.2f");
                         ImGui::SameLine();
                         ImGui::SetNextItemWidth(70.0f);
-                        ImGui::DragFloat("##v", &pista.keys[(size_t)k].value, 0.01f, 0.0f, 0.0f, "v %.3f");
+                        ImGui::DragFloat("###v", &pista.keys[(size_t)k].value, 0.01f, 0.0f, 0.0f, "v %.3f");
                         ImGui::SameLine();
-                        if (ImGui::SmallButton("x##key")) quitarKey = k;
+                        if (ImGui::SmallButton("x###key")) quitarKey = k;
                         ImGui::PopID();
                     }
                     if (quitarKey >= 0) pista.keys.erase(pista.keys.begin() + quitarKey);
@@ -603,7 +609,6 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
         if (quitarClip >= 0)
         {
             anim->removePropertyClip(quitarClip);
-            if (m_propClipAbierto >= (int)clips.size()) m_propClipAbierto = -1;
             anim->bindProperties(go, nullptr);
         }
 
@@ -612,12 +617,8 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
         {
             PropertyClip nuevo;
             nuevo.name = "Clip " + std::to_string(anim->propertyClips().size() + 1);
-            const int i = anim->addPropertyClip(nuevo);
-            if (i >= 0)
-            {
-                m_propClipAbierto = i;
+            if (anim->addPropertyClip(nuevo) >= 0)
                 ctx.pushLog("Animator: clip de propiedades '" + nuevo.name + "' anadido");
-            }
         }
         ImGui::EndDisabled();
     }
