@@ -64,9 +64,10 @@ caja.
 actual es descendiente suyo a cualquier profundidad. No hay nodos Exit que
 mantener: la salida es "desde cualquier hoja de dentro".
 
-**Orden.** Se evalúan primero las transiciones cuyo `fromState` es el estado
-actual, luego las de su padre, luego las del abuelo, y así hasta la raíz; al
-final, las de Any State, como hoy. Dentro de cada nivel manda el orden del
+**Orden.** Any State sigue yendo **primero**, como hoy (`AnimatorComponent.cpp`,
+el bucle de `kAnyState`: es la prioridad de Unity y no se toca). Después, las
+transiciones cuyo `fromState` es el estado actual, luego las de su padre, luego
+las del abuelo, y así hasta la raíz. Dentro de cada nivel manda el orden del
 vector. Hoy ese orden es el del vector a secas, que es arbitrario; con cajas
 haría que una salida general pudiera ganarle a una salida concreta según dónde se
 creó, que es justo lo que nadie espera.
