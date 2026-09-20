@@ -373,6 +373,11 @@ namespace DonTopo
         return it != m_floats.end() ? it->second : 0.0f;
     }
 
+    bool AnimatorComponent::hasFloatParameter(const std::string& n) const
+    {
+        return hasParam(n, ParamType::Float);
+    }
+
     int AnimatorComponent::currentClipIndex(int layer) const
     {
         const Layer& L = lay(layer);
@@ -637,6 +642,17 @@ namespace DonTopo
         for (auto& clip : m_propertyClips)
             for (auto& tr : clip.tracks)
             {
+                if (tr.target == TrackTarget::Parameter)
+                {
+                    // Una curva no depende del objeto: depende de que el
+                    // parámetro exista y sea Float.
+                    tr.resolved = !tr.parameterName.empty() && hasFloatParameter(tr.parameterName);
+                    if (!tr.resolved && warnings)
+                        warnings->push_back("Animator: la curva del clip '" + clip.name +
+                                            "' escribe '" + tr.parameterName +
+                                            "', que no es un parametro Float declarado");
+                    continue;
+                }
                 tr.resolved = !go || propertyAvailable(*go, tr.property);
                 if (!tr.resolved && warnings)
                     warnings->push_back("Animator: la pista '" + std::string(propertyName(tr.property)) +

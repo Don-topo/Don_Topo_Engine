@@ -26,12 +26,21 @@ namespace DonTopo
 
     struct PropertyKey { float time = 0.0f; float value = 0.0f; };   // time en SEGUNDOS
 
+    // A dónde va el valor de la pista. Property: una propiedad del GameObject
+    // (una puerta, una luz, un material). Parameter: un parámetro Float del
+    // Animator —una "curva de clip"—, que sirve para que el propio tiempo de la
+    // animación condicione la máquina de estados o alimente speedParam.
+    enum class TrackTarget { Property, Parameter };
+
     struct PropertyTrack
     {
-        PropertyId               property = PropertyId::PositionX;
+        TrackTarget              target = TrackTarget::Property;
+        PropertyId               property = PropertyId::PositionX;   // si target == Property
+        std::string              parameterName;                      // si target == Parameter
         std::vector<PropertyKey> keys;
-        // El objeto tiene el componente que hace falta (lo fija
-        // AnimatorComponent::bindProperties). Sin él, la pista no se aplica.
+        // Property: el objeto tiene el componente que hace falta. Parameter:
+        // hay un parámetro Float con ese nombre. Lo fija
+        // AnimatorComponent::bindProperties; sin él, la pista no se aplica.
         bool                     resolved = false;
     };
 

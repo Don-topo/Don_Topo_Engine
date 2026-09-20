@@ -8214,6 +8214,42 @@ static void test_property_clip_tracks_resolved_against_object()
     CHECK(avisos.empty());
 }
 
+// Una curva es una pista con destino parámetro: se resuelve contra los
+// parámetros DECLARADOS, no contra los componentes del objeto.
+static void test_curve_track_resolves_against_float_parameter()
+{
+    AnimatorComponent a;
+    a.addParameter("velocidad", AnimatorComponent::ParamType::Float);
+    a.addParameter("vivo",      AnimatorComponent::ParamType::Bool);
+    PropertyClip c;
+    c.name = "curvas"; c.duration = 1.0f;
+    PropertyTrack ok;   ok.target   = TrackTarget::Parameter; ok.parameterName   = "velocidad";
+    ok.keys = { { 0.0f, 0.0f }, { 1.0f, 1.0f } };
+    PropertyTrack tipo; tipo.target = TrackTarget::Parameter; tipo.parameterName = "vivo";
+    tipo.keys = { { 0.0f, 0.0f } };
+    PropertyTrack no;   no.target   = TrackTarget::Parameter; no.parameterName   = "noExiste";
+    no.keys = { { 0.0f, 0.0f } };
+    PropertyTrack vacia; vacia.target = TrackTarget::Parameter;
+    vacia.keys = { { 0.0f, 0.0f } };
+    c.tracks = { ok, tipo, no, vacia };
+    a.addPropertyClip(c);
+
+    CHECK(a.hasFloatParameter("velocidad"));
+    CHECK(!a.hasFloatParameter("vivo"));
+    CHECK(!a.hasFloatParameter("noExiste"));
+
+    std::vector<std::string> avisos;
+    a.bindProperties(nullptr, &avisos);
+    CHECK(a.propertyClips()[0].tracks[0].resolved);
+    CHECK(!a.propertyClips()[0].tracks[1].resolved);   // existe, pero es Bool
+    CHECK(!a.propertyClips()[0].tracks[2].resolved);
+    CHECK(!a.propertyClips()[0].tracks[3].resolved);   // sin nombre
+    CHECK(avisos.size() == 3u);
+    // El destino por defecto sigue siendo la propiedad: una pista de siempre no
+    // cambia de significado.
+    CHECK(PropertyTrack{}.target == TrackTarget::Property);
+}
+
 static void test_property_samples_follow_the_graph()
 {
     AnimatorComponent a = makePuerta();
@@ -8576,6 +8612,7 @@ int main()
     test_property_light_and_material();
     test_property_clip_binding_and_duration();
     test_property_clip_tracks_resolved_against_object();
+    test_curve_track_resolves_against_float_parameter();
     test_property_samples_follow_the_graph();
     test_property_clips_drive_a_non_skinned_object();
     test_property_clips_material_goes_to_the_backend();

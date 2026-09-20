@@ -379,6 +379,10 @@ namespace DonTopo
             int   getInt(const std::string& n) const;
             void  setFloat(const std::string& n, float v);
             float getFloat(const std::string& n) const;
+            // ¿Hay un parámetro DECLARADO con ese nombre y de tipo Float? Es lo
+            // que hace resoluble una curva de clip (una pista cuyo destino es
+            // un parámetro).
+            bool  hasFloatParameter(const std::string& n) const;
 
             // Desarma un trigger que nadie ha consumido todavía. Nombre no
             // declarado o de otro tipo: no hace nada, como setTrigger.
