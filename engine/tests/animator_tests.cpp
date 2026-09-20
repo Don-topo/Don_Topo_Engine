@@ -3,6 +3,7 @@
 // camera_tests.cpp y physics_tests.cpp.
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/Blend2D.h"
+#include "DonTopo/Core/PropertyTracks.h"
 #include "DonTopo/Renderer/PoseBlock.h"
 #include "DonTopo/Renderer/IkBlock.h"
 #include "DonTopo/Core/GameObject.h"
@@ -8018,6 +8019,50 @@ static void test_apply_skinned_frame_passes_ik_in_model_space()
     CHECK(r.ikRecibida && r.ik.count == 0);
 }
 
+static void test_property_track_sampling()
+{
+    PropertyTrack t;
+    t.property = PropertyId::PositionY;
+    CHECK(nearlyEqual(samplePropertyTrack(t, 0.5f, 7.0f), 7.0f));       // sin keys: el actual
+    t.keys = { { 1.0f, 10.0f } };
+    CHECK(nearlyEqual(samplePropertyTrack(t, 0.0f, 0.0f), 10.0f));      // una sola key
+    CHECK(nearlyEqual(samplePropertyTrack(t, 5.0f, 0.0f), 10.0f));
+    t.keys = { { 1.0f, 10.0f }, { 3.0f, 30.0f } };
+    CHECK(nearlyEqual(samplePropertyTrack(t, 0.0f, 0.0f), 10.0f));      // antes de la primera
+    CHECK(nearlyEqual(samplePropertyTrack(t, 1.0f, 0.0f), 10.0f));      // justo en una key
+    CHECK(nearlyEqual(samplePropertyTrack(t, 2.0f, 0.0f), 20.0f));      // lineal
+    CHECK(nearlyEqual(samplePropertyTrack(t, 3.0f, 0.0f), 30.0f));
+    CHECK(nearlyEqual(samplePropertyTrack(t, 9.0f, 0.0f), 30.0f));      // después de la última
+    // Keys desordenadas: el muestreo NO puede depender del orden del fichero.
+    t.keys = { { 3.0f, 30.0f }, { 1.0f, 10.0f } };
+    CHECK(nearlyEqual(samplePropertyTrack(t, 2.0f, 0.0f), 20.0f));
+}
+
+static void test_property_blend_short_path()
+{
+    const PropertyContribution mitad[2] = { { 0.0f, 0.5f }, { 10.0f, 0.5f } };
+    CHECK(nearlyEqual(blendPropertyValues(PropertyId::PositionX, mitad, 2), 5.0f));
+    // Rotación: 350 y 10 son 20 grados de diferencia, no 340.
+    const PropertyContribution giro[2] = { { 350.0f, 0.5f }, { 10.0f, 0.5f } };
+    const float r = blendPropertyValues(PropertyId::RotationY, giro, 2);
+    CHECK(std::fabs(std::remainder(r - 0.0f, 360.0f)) < 1e-3f);
+    // Pesos que no suman 1 (una capa a media potencia): se renormalizan.
+    const PropertyContribution parcial[2] = { { 0.0f, 0.25f }, { 8.0f, 0.25f } };
+    CHECK(nearlyEqual(blendPropertyValues(PropertyId::PositionX, parcial, 2), 4.0f));
+    CHECK(nearlyEqual(blendPropertyValues(PropertyId::PositionX, mitad, 0), 0.0f));   // sin nada
+}
+
+static void test_property_names_round_trip()
+{
+    for (int i = 0; i < (int)PropertyId::Count; i++)
+    {
+        const PropertyId id = (PropertyId)i;
+        CHECK(propertyFromName(propertyName(id)) == id);
+    }
+    CHECK(propertyFromName("noExiste") == PropertyId::Count);
+    CHECK(propertyIsRotation(PropertyId::RotationZ) && !propertyIsRotation(PropertyId::ScaleX));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -8177,6 +8222,9 @@ int main()
     test_layers_state_index_by_editor_id();
     test_ik_constraint_management();
     test_ik_chain_resolution();
+    test_property_track_sampling();
+    test_property_blend_short_path();
+    test_property_names_round_trip();
     test_ik_graph_key_and_apply_graph();
     test_ik_lookat();
     test_ik_twobone_reaches_target();
