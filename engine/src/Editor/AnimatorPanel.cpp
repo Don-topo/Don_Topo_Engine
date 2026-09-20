@@ -553,8 +553,48 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     ImGui::PushID(p);
                     const bool roto = !pista.resolved;
                     if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+                    // Destino: una propiedad del objeto o un parámetro Float del
+                    // Animator (una curva de clip).
+                    ImGui::SetNextItemWidth(90.0f);
+                    if (ImGui::BeginCombo("###destino",
+                                          pista.target == TrackTarget::Parameter ? "Parametro" : "Propiedad"))
+                    {
+                        if (ImGui::Selectable("Propiedad", pista.target == TrackTarget::Property))
+                        {
+                            pista.target = TrackTarget::Property;
+                            anim->bindProperties(go, nullptr);
+                        }
+                        if (ImGui::Selectable("Parametro", pista.target == TrackTarget::Parameter))
+                        {
+                            pista.target = TrackTarget::Parameter;
+                            anim->bindProperties(go, nullptr);
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SameLine();
                     ImGui::SetNextItemWidth(150.0f);
-                    if (ImGui::BeginCombo("###prop", propertyName(pista.property)))
+                    if (pista.target == TrackTarget::Parameter)
+                    {
+                        // Solo los Float: una curva no puede escribir otra cosa.
+                        // El nombre actual se ve aunque el parámetro ya no exista
+                        // (la pista sale en rojo), para no perderlo en silencio.
+                        const char* actual = pista.parameterName.empty() ? "(sin parametro)"
+                                                                         : pista.parameterName.c_str();
+                        if (ImGui::BeginCombo("###param", actual))
+                        {
+                            for (const auto& prm : anim->parameters())
+                            {
+                                if (prm.type != AnimatorComponent::ParamType::Float) continue;
+                                if (ImGui::Selectable(prm.name.c_str(), prm.name == pista.parameterName))
+                                {
+                                    pista.parameterName = prm.name;
+                                    anim->bindProperties(go, nullptr);
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+                    }
+                    else if (ImGui::BeginCombo("###prop", propertyName(pista.property)))
                     {
                         for (int q = 0; q < (int)PropertyId::Count; q++)
                         {
@@ -569,8 +609,11 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     }
                     if (roto) ImGui::PopStyleColor();
                     if (roto && ImGui::IsItemHovered())
-                        ImGui::SetTooltip("El objeto no tiene el componente que necesita esta pista:\n"
-                                          "no se aplica.");
+                        ImGui::SetTooltip(pista.target == TrackTarget::Parameter
+                                              ? "No hay un parametro Float con ese nombre:\n"
+                                                "la curva no se aplica."
+                                              : "El objeto no tiene el componente que necesita esta pista:\n"
+                                                "no se aplica.");
                     ImGui::SameLine();
                     if (ImGui::SmallButton("x###pista")) quitarPista = p;
 
@@ -594,7 +637,9 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                         // objeto tiene ahora: así se autora "desde aquí".
                         PropertyKey nueva;
                         nueva.time  = pista.keys.empty() ? 0.0f : clip.duration;
-                        nueva.value = propertyGet(*go, pista.property);
+                        nueva.value = pista.target == TrackTarget::Parameter
+                                          ? anim->getFloat(pista.parameterName)
+                                          : propertyGet(*go, pista.property);
                         pista.keys.push_back(nueva);
                     }
                     ImGui::Separator();
@@ -604,6 +649,19 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                 if (ImGui::SmallButton("+ pista"))
                 {
                     clip.tracks.push_back(PropertyTrack{});
+                    anim->bindProperties(go, nullptr);
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("+ curva"))
+                {
+                    // Una curva escribe un parámetro; se crea sobre el primer
+                    // Float que haya, y si no hay ninguno sale en rojo hasta que
+                    // se declare uno.
+                    PropertyTrack curva;
+                    curva.target = TrackTarget::Parameter;
+                    for (const auto& prm : anim->parameters())
+                        if (prm.type == AnimatorComponent::ParamType::Float) { curva.parameterName = prm.name; break; }
+                    clip.tracks.push_back(curva);
                     anim->bindProperties(go, nullptr);
                 }
             }

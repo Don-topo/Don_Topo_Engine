@@ -695,7 +695,15 @@ namespace DonTopo
                     auto keys = nlohmann::json::array();
                     for (const auto& k : tr.keys)
                         keys.push_back({ {"t", k.time}, {"v", k.value} });
-                    pistas.push_back({ {"property", propertyName(tr.property)}, {"keys", std::move(keys)} });
+                    // Una curva se distingue por "target"; una pista de
+                    // propiedad se guarda como siempre, para que un .scene de
+                    // antes y uno de ahora sean idénticos si no hay curvas.
+                    if (tr.target == TrackTarget::Parameter)
+                        pistas.push_back({ {"target", "parameter"},
+                                           {"parameter", tr.parameterName},
+                                           {"keys", std::move(keys)} });
+                    else
+                        pistas.push_back({ {"property", propertyName(tr.property)}, {"keys", std::move(keys)} });
                 }
                 clips.push_back({ {"name", c.name}, {"duration", c.duration}, {"tracks", std::move(pistas)} });
             }
@@ -961,14 +969,31 @@ namespace
                     {
                         if (!tj.is_object()) continue;
                         DonTopo::PropertyTrack tr;
-                        const std::string prop = tj.value("property", std::string());
-                        tr.property = DonTopo::propertyFromName(prop);
-                        if (tr.property == DonTopo::PropertyId::Count)
+                        if (tj.value("target", std::string("property")) == "parameter")
                         {
-                            if (warnings)
-                                warnings->push_back(ctxClip + ": propiedad '" + prop +
-                                                     "' desconocida, la pista se descarta");
-                            continue;
+                            // Curva: el destino es un parámetro del Animator. Su
+                            // `resolved` lo rehace bindProperties, como el de las
+                            // pistas de propiedad.
+                            tr.target        = DonTopo::TrackTarget::Parameter;
+                            tr.parameterName = tj.value("parameter", std::string());
+                            if (tr.parameterName.empty())
+                            {
+                                if (warnings)
+                                    warnings->push_back(ctxClip + ": una curva sin parametro, se descarta");
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            const std::string prop = tj.value("property", std::string());
+                            tr.property = DonTopo::propertyFromName(prop);
+                            if (tr.property == DonTopo::PropertyId::Count)
+                            {
+                                if (warnings)
+                                    warnings->push_back(ctxClip + ": propiedad '" + prop +
+                                                         "' desconocida, la pista se descarta");
+                                continue;
+                            }
                         }
                         if (tj.contains("keys") && tj["keys"].is_array())
                             for (const auto& kj : tj["keys"])

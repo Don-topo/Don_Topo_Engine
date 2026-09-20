@@ -8214,6 +8214,206 @@ static void test_property_clip_tracks_resolved_against_object()
     CHECK(avisos.empty());
 }
 
+// Una curva es una pista con destino parámetro: se resuelve contra los
+// parámetros DECLARADOS, no contra los componentes del objeto.
+static void test_curve_track_resolves_against_float_parameter()
+{
+    AnimatorComponent a;
+    a.addParameter("velocidad", AnimatorComponent::ParamType::Float);
+    a.addParameter("vivo",      AnimatorComponent::ParamType::Bool);
+    PropertyClip c;
+    c.name = "curvas"; c.duration = 1.0f;
+    PropertyTrack ok;   ok.target   = TrackTarget::Parameter; ok.parameterName   = "velocidad";
+    ok.keys = { { 0.0f, 0.0f }, { 1.0f, 1.0f } };
+    PropertyTrack tipo; tipo.target = TrackTarget::Parameter; tipo.parameterName = "vivo";
+    tipo.keys = { { 0.0f, 0.0f } };
+    PropertyTrack no;   no.target   = TrackTarget::Parameter; no.parameterName   = "noExiste";
+    no.keys = { { 0.0f, 0.0f } };
+    PropertyTrack vacia; vacia.target = TrackTarget::Parameter;
+    vacia.keys = { { 0.0f, 0.0f } };
+    c.tracks = { ok, tipo, no, vacia };
+    a.addPropertyClip(c);
+
+    CHECK(a.hasFloatParameter("velocidad"));
+    CHECK(!a.hasFloatParameter("vivo"));
+    CHECK(!a.hasFloatParameter("noExiste"));
+
+    std::vector<std::string> avisos;
+    a.bindProperties(nullptr, &avisos);
+    CHECK(a.propertyClips()[0].tracks[0].resolved);
+    CHECK(!a.propertyClips()[0].tracks[1].resolved);   // existe, pero es Bool
+    CHECK(!a.propertyClips()[0].tracks[2].resolved);
+    CHECK(!a.propertyClips()[0].tracks[3].resolved);   // sin nombre
+    CHECK(avisos.size() == 3u);
+    // El destino por defecto sigue siendo la propiedad: una pista de siempre no
+    // cambia de significado.
+    CHECK(PropertyTrack{}.target == TrackTarget::Property);
+}
+
+// Estado único con una curva 0 -> 10 en 1 s sobre el parámetro "velocidad".
+static AnimatorComponent makeCurvaVelocidad()
+{
+    AnimatorComponent a;
+    a.addParameter("velocidad", AnimatorComponent::ParamType::Float);
+    PropertyClip c;
+    c.name = "acelera"; c.duration = 1.0f;
+    PropertyTrack cur; cur.target = TrackTarget::Parameter; cur.parameterName = "velocidad";
+    cur.keys = { { 0.0f, 0.0f }, { 1.0f, 10.0f } };
+    c.tracks.push_back(cur);
+    a.addPropertyClip(c);
+    AnimatorComponent::State s;
+    s.name = "Arranca"; s.propertyClipName = "acelera";
+    a.addState(s);
+    a.setEntryState(0);
+    a.bindProperties(nullptr, nullptr);
+    return a;
+}
+
+static void test_curve_writes_the_parameter()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    a.update(0.25f, true);
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 2.5f));
+    a.update(0.25f, true);
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 5.0f));
+    // Una curva sin resolver no escribe: el parámetro se queda como estaba.
+    AnimatorComponent b = makeCurvaVelocidad();
+    b.propertyClipsMutable()[0].tracks[0].parameterName = "otro";
+    b.bindProperties(nullptr, nullptr);
+    b.setFloat("velocidad", -1.0f);
+    b.update(0.5f, true);
+    CHECK(nearlyEqual(b.getFloat("velocidad"), -1.0f));
+}
+
+static void test_curve_blends_during_cross_fade()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    // Segundo estado con una curva constante a 0 y transición por trigger.
+    PropertyClip frena;
+    frena.name = "frena"; frena.duration = 1.0f;
+    PropertyTrack cur; cur.target = TrackTarget::Parameter; cur.parameterName = "velocidad";
+    cur.keys = { { 0.0f, 0.0f }, { 1.0f, 0.0f } };
+    frena.tracks.push_back(cur);
+    a.addPropertyClip(frena);
+    AnimatorComponent::State s;
+    s.name = "Frena"; s.propertyClipName = "frena";
+    a.addState(s);
+    a.addParameter("para", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 1.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "para";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+    a.bindProperties(nullptr, nullptr);
+
+    // Arranca con curva CONSTANTE a 10: así lo que se mide es la mezcla y no
+    // dónde cae cada reloj (el estado hace loop y su rampa daría el wrap).
+    a.propertyClipsMutable()[0].tracks[0].keys = { { 0.0f, 10.0f }, { 1.0f, 10.0f } };
+    a.update(0.5f, true);
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 10.0f));
+    a.setTrigger("para");
+    a.update(0.0f, true);                 // arranca el fade, el destino pesa 0
+    a.update(0.5f, true);                 // mitad del fade: 0,5*10 + 0,5*0
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 5.0f));
+    a.update(0.5f, true);                 // fade terminado: manda Frena
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 0.0f));
+}
+
+static void test_curve_fires_its_transition_in_the_same_frame()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    AnimatorComponent::State s;
+    s.name = "Corre";
+    a.addState(s);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 0.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Float;
+    c.paramName = "velocidad"; c.compare = AnimatorComponent::Compare::Greater; c.threshold = 4.0f;
+    t.conditions.push_back(c);
+    a.addTransition(t);
+    a.bindProperties(nullptr, nullptr);
+    // En t=0,5 la curva vale 5: la transición salta en ESTE update, no en el
+    // siguiente.
+    a.update(0.5f, true);
+    CHECK(a.currentState() == 1);
+}
+
+static void test_curve_of_a_zero_weight_layer_still_writes()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    // Una capa con peso 0 no se ve, pero su máquina corre: su curva es
+    // información, no pose.
+    CHECK(a.addLayer("Info") == 1);
+    a.setLayerWeight(1, 0.0f);
+    a.addParameter("info", AnimatorComponent::ParamType::Float);
+    PropertyClip c;
+    c.name = "infoClip"; c.duration = 1.0f;
+    PropertyTrack cur; cur.target = TrackTarget::Parameter; cur.parameterName = "info";
+    cur.keys = { { 0.0f, 0.0f }, { 1.0f, 8.0f } };
+    c.tracks.push_back(cur);
+    a.addPropertyClip(c);
+    AnimatorComponent::State s;
+    s.name = "Info"; s.propertyClipName = "infoClip";
+    a.addState(s, 1);
+    a.setEntryState(0, 1);
+    a.bindProperties(nullptr, nullptr);
+    a.update(0.5f, true);
+    CHECK(nearlyEqual(a.getFloat("info"), 4.0f));
+}
+
+static void test_curve_last_layer_wins()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    CHECK(a.addLayer("Encima") == 1);
+    a.setLayerWeight(1, 1.0f);
+    PropertyClip c;
+    c.name = "encima"; c.duration = 1.0f;
+    PropertyTrack cur; cur.target = TrackTarget::Parameter; cur.parameterName = "velocidad";
+    cur.keys = { { 0.0f, 100.0f }, { 1.0f, 100.0f } };
+    c.tracks.push_back(cur);
+    a.addPropertyClip(c);
+    AnimatorComponent::State s;
+    s.name = "Encima"; s.propertyClipName = "encima";
+    a.addState(s, 1);
+    a.setEntryState(0, 1);
+    a.bindProperties(nullptr, nullptr);
+    a.update(0.5f, true);
+    // Las capas se recorren en orden: escribe la última.
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 100.0f));
+}
+
+// El peso de la capa SÍ escala lo que se aplica al objeto (al revés que las
+// curvas, que se escriben tal cual).
+static void test_property_samples_scale_with_the_layer_weight()
+{
+    AnimatorComponent a = makePuerta();
+    CHECK(a.addLayer("Encima") == 1);
+    a.setLayerWeight(1, 0.25f);
+    PropertyClip c;
+    c.name = "sube"; c.duration = 1.0f;
+    PropertyTrack pos; pos.property = PropertyId::PositionY;
+    pos.keys = { { 0.0f, 0.0f }, { 1.0f, 4.0f } };
+    c.tracks.push_back(pos);
+    a.addPropertyClip(c);
+    AnimatorComponent::State s;
+    s.name = "Sube"; s.propertyClipName = "sube";
+    a.addState(s, 1);
+    a.setEntryState(0, 1);
+    a.bindProperties(nullptr, nullptr);
+    a.update(0.1f, true);
+
+    AnimatorComponent::PropertySampleRef m[8];
+    const int n = a.propertySamples(m, 8);
+    CHECK(n == 2);
+    if (n == 2)
+    {
+        CHECK(nearlyEqual(m[0].weight, 1.0f));     // capa base
+        CHECK(nearlyEqual(m[1].weight, 0.25f));    // capa con peso
+    }
+}
+
 static void test_property_samples_follow_the_graph()
 {
     AnimatorComponent a = makePuerta();
@@ -8337,6 +8537,67 @@ static void test_property_clips_serialization(PhysicsManager& pm, AudioManager& 
     CHECK(texto.find("propertyClip") == std::string::npos);
 }
 
+static void test_curve_serialization(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    a->addParameter("velocidad", AnimatorComponent::ParamType::Float);
+    PropertyClip c;
+    c.name = "acelera"; c.duration = 2.0f;
+    PropertyTrack cur; cur.target = TrackTarget::Parameter; cur.parameterName = "velocidad";
+    cur.keys = { { 0.0f, 1.0f }, { 2.0f, 7.0f } };
+    PropertyTrack pos; pos.property = PropertyId::PositionY;
+    pos.keys = { { 0.0f, 0.0f }, { 2.0f, 3.0f } };
+    c.tracks = { cur, pos };
+    a->addPropertyClip(c);
+    go->setAnimator(a);
+
+    const nlohmann::json ja = animatorToJson(*a);
+    // contains ANTES de indexar: si la clave no se escribe, nlohmann aborta
+    // (exit 3 mudo) en vez de dar FAIL.
+    const auto& pj = ja["propertyClips"][0]["tracks"];
+    CHECK(pj[0].contains("target"));
+    if (pj[0].contains("target"))
+    {
+        CHECK(pj[0]["target"] == "parameter");
+        CHECK(pj[0].contains("parameter") && pj[0]["parameter"] == "velocidad");
+    }
+    // La pista de propiedad se guarda como siempre: sin "target".
+    CHECK(!pj[1].contains("target"));
+
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& leido = *found->getAnimator();
+    CHECK(leido.propertyClips().size() == 1u);
+    if (leido.propertyClips().empty()) return;
+    const auto& pistas = leido.propertyClips()[0].tracks;
+    CHECK(pistas.size() == 2u);
+    if (pistas.size() != 2u) return;
+    CHECK(pistas[0].target == TrackTarget::Parameter);
+    CHECK(pistas[0].parameterName == "velocidad");
+    CHECK(pistas[0].keys.size() == 2u);
+    CHECK(pistas[1].target == TrackTarget::Property);
+    CHECK(pistas[1].property == PropertyId::PositionY);
+
+    // Una curva sin nombre de parámetro se descarta al cargar.
+    nlohmann::json roto = j;
+    for (auto& nodo : roto["root"]["children"])
+        if (nodo.contains("animator"))
+            nodo["animator"]["propertyClips"][0]["tracks"][0]["parameter"] = "";
+    Scene loaded2("Loaded2");
+    CHECK(loaded2.fromJson(roto, pm, am));
+    GameObject* f2 = loaded2.findById(id);
+    CHECK(f2 && f2->hasAnimator());
+    if (!f2 || !f2->hasAnimator()) return;
+    CHECK(f2->getAnimator()->propertyClips()[0].tracks.size() == 1u);
+}
+
 static void test_property_clips_bad_file_warns(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -8382,6 +8643,29 @@ static void test_property_clips_apply_graph_restores()
 // El host propaga los worldTransform y empuja el transform ANTES de llamar al
 // helper: lo que se anima en este frame tiene que reenviarse, o el objeto iría
 // un frame por detrás (y sus hijos, dos).
+// Una curva no es una propiedad: no mueve el objeto ni marca el resultado del
+// frame. El parámetro sí se escribe (lo hace el componente en update).
+static void test_curve_does_not_touch_the_transform()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    go->staticRenderIndex = 3;
+    auto a = std::make_shared<AnimatorComponent>(makeCurvaVelocidad());
+    go->setAnimator(a);
+    a->bindProperties(go, nullptr);
+    a->reset();
+    scene.getRoot().updateWorldTransforms();
+    const float yAntes = propertyGet(*go, PropertyId::PositionY);
+    const float xAntes = propertyGet(*go, PropertyId::PositionX);
+
+    const AnimatorFrameResult r = applyAnimatorFrame(*go, 0.5f, true);
+    CHECK(!r.transform);
+    CHECK(!r.material);
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionX), xAntes));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionY), yAntes));
+    CHECK(nearlyEqual(a->getFloat("velocidad"), 5.0f));
+}
+
 static void test_property_clips_push_transform_and_world()
 {
     Scene scene("Test");
@@ -8576,10 +8860,18 @@ int main()
     test_property_light_and_material();
     test_property_clip_binding_and_duration();
     test_property_clip_tracks_resolved_against_object();
+    test_curve_track_resolves_against_float_parameter();
+    test_curve_writes_the_parameter();
+    test_curve_blends_during_cross_fade();
+    test_curve_fires_its_transition_in_the_same_frame();
+    test_curve_of_a_zero_weight_layer_still_writes();
+    test_curve_last_layer_wins();
+    test_property_samples_scale_with_the_layer_weight();
     test_property_samples_follow_the_graph();
     test_property_clips_drive_a_non_skinned_object();
     test_property_clips_material_goes_to_the_backend();
     test_property_clips_push_transform_and_world();
+    test_curve_does_not_touch_the_transform();
     test_property_clips_apply_graph_restores();
     test_ik_graph_key_and_apply_graph();
     test_ik_lookat();
@@ -8598,6 +8890,7 @@ int main()
     test_ik_serialization(pm, am);
     test_ik_bad_file_warns(pm, am);
     test_property_clips_serialization(pm, am);
+    test_curve_serialization(pm, am);
     test_property_clips_bad_file_warns(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);

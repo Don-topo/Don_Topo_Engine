@@ -26,12 +26,21 @@ namespace DonTopo
 
     struct PropertyKey { float time = 0.0f; float value = 0.0f; };   // time en SEGUNDOS
 
+    // A dónde va el valor de la pista. Property: una propiedad del GameObject
+    // (una puerta, una luz, un material). Parameter: un parámetro Float del
+    // Animator —una "curva de clip"—, que sirve para que el propio tiempo de la
+    // animación condicione la máquina de estados o alimente speedParam.
+    enum class TrackTarget { Property, Parameter };
+
     struct PropertyTrack
     {
-        PropertyId               property = PropertyId::PositionX;
+        TrackTarget              target = TrackTarget::Property;
+        PropertyId               property = PropertyId::PositionX;   // si target == Property
+        std::string              parameterName;                      // si target == Parameter
         std::vector<PropertyKey> keys;
-        // El objeto tiene el componente que hace falta (lo fija
-        // AnimatorComponent::bindProperties). Sin él, la pista no se aplica.
+        // Property: el objeto tiene el componente que hace falta. Parameter:
+        // hay un parámetro Float con ese nombre. Lo fija
+        // AnimatorComponent::bindProperties; sin él, la pista no se aplica.
         bool                     resolved = false;
     };
 
@@ -58,6 +67,9 @@ namespace DonTopo
     // Mezcla de varias aportaciones a la MISMA propiedad. Las rotaciones van
     // por el camino corto: 350 y 10 dan 0, no 180.
     float blendPropertyValues(PropertyId id, const PropertyContribution* c, int n);
+    // Media ponderada a secas. Es lo que usa una curva: un parámetro no es un
+    // ángulo, así que no hay camino corto que respetar.
+    float blendScalarValues(const PropertyContribution* c, int n);
 
     // --- Acceso a las propiedades de un GameObject ---
     // El objeto tiene lo que hace falta para esta propiedad (la luz, sobre

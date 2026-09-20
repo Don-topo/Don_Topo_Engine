@@ -373,6 +373,11 @@ namespace DonTopo
         return it != m_floats.end() ? it->second : 0.0f;
     }
 
+    bool AnimatorComponent::hasFloatParameter(const std::string& n) const
+    {
+        return hasParam(n, ParamType::Float);
+    }
+
     int AnimatorComponent::currentClipIndex(int layer) const
     {
         const Layer& L = lay(layer);
@@ -637,6 +642,17 @@ namespace DonTopo
         for (auto& clip : m_propertyClips)
             for (auto& tr : clip.tracks)
             {
+                if (tr.target == TrackTarget::Parameter)
+                {
+                    // Una curva no depende del objeto: depende de que el
+                    // parámetro exista y sea Float.
+                    tr.resolved = !tr.parameterName.empty() && hasFloatParameter(tr.parameterName);
+                    if (!tr.resolved && warnings)
+                        warnings->push_back("Animator: la curva del clip '" + clip.name +
+                                            "' escribe '" + tr.parameterName +
+                                            "', que no es un parametro Float declarado");
+                    continue;
+                }
                 tr.resolved = !go || propertyAvailable(*go, tr.property);
                 if (!tr.resolved && warnings)
                     warnings->push_back("Animator: la pista '" + std::string(propertyName(tr.property)) +
@@ -644,13 +660,10 @@ namespace DonTopo
             }
     }
 
-    int AnimatorComponent::propertySamples(PropertySampleRef* out, int max) const
+    int AnimatorComponent::layerPropertySamples(int li, PropertySampleRef* out, int max) const
     {
         int n = 0;
-        // Mismo reparto que pose(): cada capa aporta su estado actual y, en un
-        // fade, también el que se apaga, con el peso de los dos multiplicado
-        // por el de la capa.
-        auto add = [&](int li, int stateIdx, float animTime, float peso) {
+        auto add = [&](int stateIdx, float animTime, float peso) {
             if (n >= max || peso <= 0.0f) return;
             const Layer& L = m_layers[(size_t)li];
             if (stateIdx < 0 || stateIdx >= (int)L.states.size()) return;
@@ -660,21 +673,82 @@ namespace DonTopo
                          st.ticksPerSecond > 0.0f ? animTime / st.ticksPerSecond : 0.0f,
                          peso };
         };
+        const Layer& L = m_layers[(size_t)li];
+        const float  w = blendWeight(li);
+        if (blending(li))
+        {
+            add(L.prevState, L.prevAnimTime, 1.0f - w);
+            add(L.currentState, L.animTime, w);
+        }
+        else
+            add(L.currentState, L.animTime, 1.0f);
+        return n;
+    }
+
+    int AnimatorComponent::propertySamples(PropertySampleRef* out, int max) const
+    {
+        int n = 0;
+        // Mismo reparto que pose(): cada capa aporta su estado actual y, en un
+        // fade, también el que se apaga, con el peso de los dos multiplicado
+        // por el de la capa.
         for (int li = 0; li < (int)m_layers.size(); li++)
         {
-            const Layer& L    = m_layers[(size_t)li];
-            const float  capa = layerWeight(li);
+            const float capa = layerWeight(li);
             if (capa <= 0.0f) continue;
-            const float w = blendWeight(li);
-            if (blending(li))
+            PropertySampleRef propias[kMaxPoseSamplesPerLayer];
+            const int m = layerPropertySamples(li, propias, kMaxPoseSamplesPerLayer);
+            for (int k = 0; k < m && n < max; k++)
             {
-                add(li, L.prevState, L.prevAnimTime, capa * (1.0f - w));
-                add(li, L.currentState, L.animTime, capa * w);
+                // Aquí sí entra el peso de la capa: esto es lo que se APLICA al
+                // objeto. Las curvas (applyCurves) no lo usan.
+                propias[k].weight *= capa;
+                out[n++] = propias[k];
             }
-            else
-                add(li, L.currentState, L.animTime, capa);
         }
         return n;
+    }
+
+    void AnimatorComponent::applyCurves(int li)
+    {
+        PropertySampleRef muestras[kMaxPoseSamplesPerLayer];
+        const int n = layerPropertySamples(li, muestras, kMaxPoseSamplesPerLayer);
+        if (n == 0) return;
+
+        // Los parámetros que escriben estas muestras, sin repetir: en un fade
+        // los dos clips pueden tocar el mismo, y hay que mezclarlos, no
+        // escribirlos dos veces.
+        const std::string* nombres[kMaxPoseSamplesPerLayer * 8];
+        int numNombres = 0;
+        for (int k = 0; k < n; k++)
+            for (const auto& tr : m_propertyClips[(size_t)muestras[k].clip].tracks)
+            {
+                if (tr.target != TrackTarget::Parameter || !tr.resolved || tr.keys.empty()) continue;
+                bool visto = false;
+                for (int i = 0; i < numNombres; i++)
+                    if (*nombres[i] == tr.parameterName) { visto = true; break; }
+                if (!visto && numNombres < (int)(sizeof(nombres) / sizeof(nombres[0])))
+                    nombres[numNombres++] = &tr.parameterName;
+            }
+
+        for (int i = 0; i < numNombres; i++)
+        {
+            const std::string& nombre = *nombres[i];
+            PropertyContribution aporta[kMaxPoseSamplesPerLayer];
+            int m = 0;
+            for (int k = 0; k < n && m < kMaxPoseSamplesPerLayer; k++)
+                for (const auto& tr : m_propertyClips[(size_t)muestras[k].clip].tracks)
+                {
+                    if (tr.target != TrackTarget::Parameter || !tr.resolved) continue;
+                    if (tr.parameterName != nombre) continue;
+                    aporta[m++] = { samplePropertyTrack(tr, muestras[k].time, getFloat(nombre)),
+                                    muestras[k].weight };
+                    break;   // una pista por parámetro y clip: la primera manda
+                }
+            // El peso de la CAPA no entra: una pose se mezcla, un parámetro se
+            // escribe. Si dos capas tienen curva para el mismo parámetro gana la
+            // última, porque update() las recorre en orden.
+            if (m > 0) setFloat(nombre, blendScalarValues(aporta, m));
+        }
     }
 
     int AnimatorComponent::addIkConstraint(IkConstraint c)
@@ -1189,6 +1263,11 @@ namespace DonTopo
                 L.freezePending = false;
             }
         }
+
+        // Curvas ANTES de las transiciones y antes del return de Edit: el valor
+        // de este frame condiciona las transiciones de este frame, y en el
+        // preview del editor el parámetro se ve moverse en el panel.
+        applyCurves(li);
 
         if (!evaluateTransitions) return;
 

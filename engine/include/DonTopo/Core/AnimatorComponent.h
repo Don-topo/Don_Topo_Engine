@@ -379,6 +379,10 @@ namespace DonTopo
             int   getInt(const std::string& n) const;
             void  setFloat(const std::string& n, float v);
             float getFloat(const std::string& n) const;
+            // ¿Hay un parámetro DECLARADO con ese nombre y de tipo Float? Es lo
+            // que hace resoluble una curva de clip (una pista cuyo destino es
+            // un parámetro).
+            bool  hasFloatParameter(const std::string& n) const;
 
             // Desarma un trigger que nadie ha consumido todavía. Nombre no
             // declarado o de otro tipo: no hace nada, como setTrigger.
@@ -566,6 +570,15 @@ namespace DonTopo
                                  const std::vector<Transition>& transitions, int entryState);
             void updateLayer(int li, float dt, bool evaluateTransitions,
                              std::vector<const Transition*>& consumir);
+            // Muestras de UNA capa (su estado actual y, en un fade, el que se
+            // apaga), SIN el peso de la capa. propertySamples es la suma de
+            // todas las capas y applyCurves necesita la de una sola: el reparto
+            // vive en un único sitio para que no haya dos que mantener.
+            int  layerPropertySamples(int li, PropertySampleRef* out, int max) const;
+            // Escribe los parámetros de las pistas con destino Parameter de esa
+            // capa. Se llama desde updateLayer ANTES de evaluar las
+            // transiciones: el valor de este frame condiciona este frame.
+            void applyCurves(int li);
             static constexpr int kMaxEventCyclesPerUpdate = 16;
             // Ticks por segundo efectivos del estado: ticksPerSecond x speed x
             // parámetro multiplicador, nunca negativo.

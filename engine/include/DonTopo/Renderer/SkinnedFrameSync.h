@@ -71,6 +71,10 @@ namespace DonTopo
                 const PropertyClip& clip = anim->propertyClips()[(size_t)muestras[k].clip];
                 for (const auto& tr : clip.tracks)
                 {
+                    // Las pistas con destino parámetro (las curvas) ya las
+                    // escribió el componente dentro de update(): aquí solo van
+                    // las propiedades del objeto.
+                    if (tr.target != TrackTarget::Property) continue;
                     if (tr.property != id || !tr.resolved || tr.keys.empty()) continue;
                     aporta[m++] = { samplePropertyTrack(tr, muestras[k].time, propertyGet(go, id)),
                                     muestras[k].weight };
