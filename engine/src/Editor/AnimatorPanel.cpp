@@ -101,10 +101,13 @@ namespace {
     // editorIdFromRawId: pasados por esa fórmula casarían con un editorId
     // (300000) que ningún grafo alcanza, pero isOutputPin los clasificaría
     // mal — por eso esPinDeSalida.
-    // Ancho de la columna izquierda del panel (fuentes, capas, IK, parámetros).
-    // Cabe el más ancho de sus widgets (los 260 de la lista de parámetros) más
-    // el relleno y la barra de scroll.
-    const float kAnchoColumnaIzq = 300.0f;
+    // Límites del ancho de la columna izquierda (fuentes, capas, IK,
+    // parámetros), que el usuario arrastra por el borde. El mínimo deja ver la
+    // lista de parámetros, que es el widget más ancho; el máximo evita dejar el
+    // lienzo en nada de un tirón.
+    const float kAnchoColumnaMin = 200.0f;
+    const float kAnchoColumnaMax = 700.0f;
+    const float kAnchoAgarre     = 6.0f;
 
     const int kAnyStateNodeId   = 900001;
     const int kAnyStateOutPinId = 900002;
@@ -1588,7 +1591,14 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 // abajo quedaba fuera sin forma de llegar, y de paso aplastaban
                 // el lienzo. El lienzo sigue aparte, a la derecha: su rueda y su
                 // pan son suyos y este scroll no los toca.
-                ImGui::BeginChild("columnaIzq", ImVec2(kAnchoColumnaIzq, 0), false,
+                // El máximo se acota también a la ventana: si se encoge, la
+                // columna no puede quedarse más ancha que ella y dejar el
+                // lienzo sin sitio.
+                const float anchoMax = std::max(kAnchoColumnaMin,
+                                                std::min(kAnchoColumnaMax,
+                                                         ImGui::GetContentRegionAvail().x - 120.0f));
+                m_anchoColumna = std::clamp(m_anchoColumna, kAnchoColumnaMin, anchoMax);
+                ImGui::BeginChild("columnaIzq", ImVec2(m_anchoColumna, 0), false,
                                   ImGuiWindowFlags_HorizontalScrollbar);
                 drawAnimationSources(ctx, go);
                 drawLayerBar(ctx, go);
@@ -1627,6 +1637,24 @@ void AnimatorPanel::draw(EditorContext& ctx)
 
                 drawParameterList(ctx, go);
                 ImGui::EndChild();
+                ImGui::SameLine();
+
+                // Agarre para arrastrar el borde. Un InvisibleButton y no un
+                // Separator: hace falta que capture el arrastre (IsItemActive)
+                // para seguir moviéndolo aunque el cursor se salga del rect.
+                ImGui::InvisibleButton("##agarreColumna",
+                                       ImVec2(kAnchoAgarre, ImGui::GetContentRegionAvail().y));
+                const bool agarreActivo  = ImGui::IsItemActive();
+                const bool agarreEncima  = ImGui::IsItemHovered();
+                if (agarreActivo || agarreEncima) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                if (agarreActivo) m_anchoColumna = std::clamp(m_anchoColumna + ImGui::GetIO().MouseDelta.x,
+                                                              kAnchoColumnaMin, anchoMax);
+                // Sin pintarlo no se ve dónde agarrar: es invisible por diseño.
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                    ImGui::GetColorU32(agarreActivo ? ImGuiCol_SeparatorActive
+                                                    : (agarreEncima ? ImGuiCol_SeparatorHovered
+                                                                    : ImGuiCol_Separator)));
                 ImGui::SameLine();
 
                 ImGui::BeginChild("canvas", ImVec2(0, 0), false);

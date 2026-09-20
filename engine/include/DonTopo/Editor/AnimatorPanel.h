@@ -78,6 +78,9 @@ private:
     // Capa cuyo grafo se muestra y edita, y la que tenía el canvas en el último
     // volcado de posiciones: al cambiar de capa se vuelcan otra vez, como al
     // cambiar de objeto.
+    // Ancho de la columna izquierda: lo arrastra el usuario por el borde. Vive
+    // en la sesión, no en el project.json (ahí va la visibilidad de paneles).
+    float m_anchoColumna  = 300.0f;
     int  m_layer          = 0;
     int  m_boundLayer     = -1;
     int  m_renamingLayer  = -1;
