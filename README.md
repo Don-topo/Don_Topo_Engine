@@ -716,6 +716,12 @@ panel while the preview runs); and if two layers have a curve for the same param
 **last one wins** — the layer's weight does not scale the value (a pose is blended, a
 parameter is written), and a layer at weight 0 still writes its curve.
 
+Every track draws itself above its keyframe list: the sampled shape, a dot per key, the
+range's ends, and — while the preview runs — a playhead at the clip's current time. A curve
+also draws a line for each **threshold** of the Float conditions that read its parameter, so
+whether it crosses `speed > 4`, and when, is one glance rather than arithmetic. The canvas is
+read-only; keys are still edited in the list below it.
+
 The Animator has **layers**, like Unity's. Layer 0 is the base graph; every extra layer is a
 full state machine of its own (states, transitions, entry, Any State) that reads the same
 parameters, so one trigger can move several layers in the same frame. Each extra layer has a

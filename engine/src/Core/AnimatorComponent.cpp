@@ -378,6 +378,27 @@ namespace DonTopo
         return hasParam(n, ParamType::Float);
     }
 
+    int AnimatorComponent::conditionThresholds(const std::string& n, float* out, int max) const
+    {
+        if (n.empty() || !out || max <= 0) return 0;
+        int cuantos = 0;
+        for (const auto& L : m_layers)
+            for (const auto& t : L.transitions)
+                for (const auto& c : t.conditions)
+                {
+                    if (c.type != ConditionType::Float || c.paramName != n) continue;
+                    // Sin repetir: dos transiciones con el mismo umbral pintan
+                    // una sola línea.
+                    bool visto = false;
+                    for (int i = 0; i < cuantos; i++)
+                        if (out[i] == c.threshold) { visto = true; break; }
+                    if (visto) continue;
+                    if (cuantos >= max) return cuantos;
+                    out[cuantos++] = c.threshold;
+                }
+        return cuantos;
+    }
+
     int AnimatorComponent::currentClipIndex(int layer) const
     {
         const Layer& L = lay(layer);

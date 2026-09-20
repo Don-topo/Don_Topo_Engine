@@ -70,6 +70,25 @@ namespace DonTopo
         return glm::mix(lo->value, hi->value, (tiempo - lo->time) / span);
     }
 
+    void curveRange(const PropertyTrack& t, const float* extra, int nExtra, float& lo, float& hi)
+    {
+        bool hay = false;
+        auto mete = [&](float v) {
+            if (!hay) { lo = hi = v; hay = true; return; }
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        };
+        for (const auto& k : t.keys) mete(k.value);
+        for (int i = 0; i < nExtra && extra; i++) mete(extra[i]);
+        if (!hay) { lo = -1.0f; hi = 1.0f; return; }
+        // Altura cero (pista plana, o una sola key): la línea saldría pegada a
+        // un borde y no se vería que es plana.
+        if (hi - lo < 1e-6f) { lo -= 0.5f; hi += 0.5f; return; }
+        const float margen = (hi - lo) * 0.1f;
+        lo -= margen;
+        hi += margen;
+    }
+
     float blendScalarValues(const PropertyContribution* c, int n)
     {
         if (n <= 0) return 0.0f;
