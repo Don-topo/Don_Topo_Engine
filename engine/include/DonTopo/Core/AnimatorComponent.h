@@ -5,6 +5,7 @@
 #include <vector>
 #include <glm/glm.hpp>
 #include "DonTopo/Core/AnimationPose.h"
+#include "DonTopo/Core/PropertyTracks.h"
 
 namespace DonTopo
 {
@@ -144,6 +145,10 @@ namespace DonTopo
                 // (blendParam, blendParamY). Ver stateBlendSamples.
                 std::string             blendParamY;
                 float                   clipThresholdY = 0.0f;
+                // Clip de propiedades del estado, por NOMBRE (como el de
+                // malla); el índice lo resuelve bindProperties.
+                std::string             propertyClipName;
+                int                     propertyClipIndex = -1;
                 // Eventos del estado: disparan en Play (ver collectEvents) y
                 // llegan a Lua como OnAnimationEvent(name).
                 std::vector<AnimationEvent> events;
@@ -176,6 +181,24 @@ namespace DonTopo
                 std::string name;
                 ParamType   type = ParamType::Bool;
             };
+
+            // --- Clips de propiedades ---
+            // Un estado puede reproducir, además de su clip de malla, un clip
+            // autorado que escribe propiedades del GameObject (transform, luz,
+            // material). Es lo que permite animar un objeto SIN esqueleto.
+            static constexpr int kMaxPropertyClips = 16;
+            const std::vector<PropertyClip>& propertyClips() const { return m_propertyClips; }
+            std::vector<PropertyClip>&       propertyClipsMutable() { return m_propertyClips; }
+            int  addPropertyClip(PropertyClip c);   // índice, -1 si ya hay kMaxPropertyClips
+            void removePropertyClip(int i);
+            // Resuelve el propertyClipName de cada estado y el `resolved` de
+            // cada pista contra el objeto (qué componentes tiene). Con go nulo
+            // solo hace lo primero: el componente NO guarda el GameObject.
+            void bindProperties(const GameObject* go, std::vector<std::string>* warnings);
+            // Lo que suena este frame: clip, tiempo EN SEGUNDOS y peso (el del
+            // cross-fade por el de su capa). Devuelve cuántas.
+            struct PropertySampleRef { int clip = -1; float time = 0.0f; float weight = 0.0f; };
+            int  propertySamples(PropertySampleRef* out, int max) const;
 
             // --- IK ---
             // Restricciones que corrigen la pose YA evaluada, en la GPU, entre
@@ -272,8 +295,9 @@ namespace DonTopo
                 // Capas 1..N enteras (el diseño; su ejecución se ignora).
                 std::vector<Layer>      extraLayers;
                 // Las restricciones de IK son diseño entero: no tienen
-                // ejecución que conservar.
+                // ejecución que conservar. Los clips de propiedades, igual.
                 std::vector<IkConstraint> ik;
+                std::vector<PropertyClip> propertyClips;
             };
 
             // --- Diseño (editor / carga de escena) ---
@@ -579,6 +603,7 @@ namespace DonTopo
             std::vector<Layer>      m_layers = std::vector<Layer>(1);
             std::vector<Parameter>  m_parameters;
             std::vector<IkConstraint> m_ik;
+            std::vector<PropertyClip> m_propertyClips;
             std::vector<std::string> m_firedEvents;
             std::vector<RootMotionSample> m_rootMotionSamples;
             float                   m_speed        = 1.0f;

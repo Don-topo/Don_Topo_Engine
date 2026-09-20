@@ -5,6 +5,7 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/Blend2D.h"
+#include "DonTopo/Core/PropertyTracks.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
@@ -498,6 +499,136 @@ void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
     ImGui::PopID();
 }
 
+void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
+{
+    auto anim = go->getAnimator();
+    ImGui::PushID("propclips");
+    if (ImGui::CollapsingHeader("Property Clips"))
+    {
+        ImGui::TextDisabled("Animan el objeto: transform, luz y material.");
+        auto& clips = anim->propertyClipsMutable();
+        int quitarClip = -1;
+        for (int i = 0; i < (int)clips.size(); i++)
+        {
+            auto& clip = clips[(size_t)i];
+            ImGui::PushID(i);
+            // Cabecera por clip, como las secciones de la columna. El "###" es
+            // lo que la hace utilizable: sin él el ID sale del texto ENTERO, así
+            // que al renombrar el clip —o al cambiar el glifo de un botón que
+            // dependa de su propio estado— la cabecera pasa a ser otro widget y
+            // se pierde si estaba abierta. ImGui abre y cierra por ID, así que
+            // cada clip recuerda su estado él solo.
+            const std::string etiqueta = (clip.name.empty() ? std::string("(sin nombre)") : clip.name) +
+                                         "###clip";
+            // AllowOverlap: la cabecera ocupa la fila entera, así que sin el
+            // flag ImGui le da el clic a ella (el primer item enviado) y la "x"
+            // no se podía pulsar nunca. Mismo patrón que la lista de fuentes.
+            const bool abierto = ImGui::CollapsingHeader(etiqueta.c_str(),
+                                                         ImGuiTreeNodeFlags_AllowOverlap);
+            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f);
+            if (ImGui::SmallButton("x###quitarClip")) quitarClip = i;
+            if (abierto)
+            {
+                char nombre[64];
+                std::snprintf(nombre, sizeof(nombre), "%s", clip.name.c_str());
+                ImGui::SetNextItemWidth(130.0f);
+                if (ImGui::InputText("Nombre###nombre", nombre, sizeof(nombre)))
+                {
+                    clip.name = nombre;
+                    // El estado referencia por NOMBRE: renombrar obliga a re-resolver.
+                    anim->bindProperties(go, nullptr);
+                }
+                ImGui::SetNextItemWidth(130.0f);
+                if (ImGui::DragFloat("Duracion (s)###dur", &clip.duration, 0.01f, 0.001f, 600.0f, "%.3f"))
+                {
+                    if (clip.duration < 0.001f) clip.duration = 0.001f;
+                    // La duración del estado sale de aquí cuando no hay clip de malla.
+                    anim->bindProperties(go, nullptr);
+                }
+
+                int quitarPista = -1;
+                for (int p = 0; p < (int)clip.tracks.size(); p++)
+                {
+                    auto& pista = clip.tracks[(size_t)p];
+                    ImGui::PushID(p);
+                    const bool roto = !pista.resolved;
+                    if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+                    ImGui::SetNextItemWidth(150.0f);
+                    if (ImGui::BeginCombo("###prop", propertyName(pista.property)))
+                    {
+                        for (int q = 0; q < (int)PropertyId::Count; q++)
+                        {
+                            const PropertyId id = (PropertyId)q;
+                            if (ImGui::Selectable(propertyName(id), id == pista.property))
+                            {
+                                pista.property = id;
+                                anim->bindProperties(go, nullptr);
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    if (roto) ImGui::PopStyleColor();
+                    if (roto && ImGui::IsItemHovered())
+                        ImGui::SetTooltip("El objeto no tiene el componente que necesita esta pista:\n"
+                                          "no se aplica.");
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("x###pista")) quitarPista = p;
+
+                    int quitarKey = -1;
+                    for (int k = 0; k < (int)pista.keys.size(); k++)
+                    {
+                        ImGui::PushID(k);
+                        ImGui::SetNextItemWidth(60.0f);
+                        ImGui::DragFloat("###t", &pista.keys[(size_t)k].time, 0.01f, 0.0f, 600.0f, "t %.2f");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(70.0f);
+                        ImGui::DragFloat("###v", &pista.keys[(size_t)k].value, 0.01f, 0.0f, 0.0f, "v %.3f");
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("x###key")) quitarKey = k;
+                        ImGui::PopID();
+                    }
+                    if (quitarKey >= 0) pista.keys.erase(pista.keys.begin() + quitarKey);
+                    if (ImGui::SmallButton("+ key"))
+                    {
+                        // La nueva va al final del clip con el valor que el
+                        // objeto tiene ahora: así se autora "desde aquí".
+                        PropertyKey nueva;
+                        nueva.time  = pista.keys.empty() ? 0.0f : clip.duration;
+                        nueva.value = propertyGet(*go, pista.property);
+                        pista.keys.push_back(nueva);
+                    }
+                    ImGui::Separator();
+                    ImGui::PopID();
+                }
+                if (quitarPista >= 0) clip.tracks.erase(clip.tracks.begin() + quitarPista);
+                if (ImGui::SmallButton("+ pista"))
+                {
+                    clip.tracks.push_back(PropertyTrack{});
+                    anim->bindProperties(go, nullptr);
+                }
+            }
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+        if (quitarClip >= 0)
+        {
+            anim->removePropertyClip(quitarClip);
+            anim->bindProperties(go, nullptr);
+        }
+
+        ImGui::BeginDisabled((int)clips.size() >= AnimatorComponent::kMaxPropertyClips);
+        if (ImGui::Button("+ clip##addPropClip"))
+        {
+            PropertyClip nuevo;
+            nuevo.name = "Clip " + std::to_string(anim->propertyClips().size() + 1);
+            if (anim->addPropertyClip(nuevo) >= 0)
+                ctx.pushLog("Animator: clip de propiedades '" + nuevo.name + "' anadido");
+        }
+        ImGui::EndDisabled();
+    }
+    ImGui::PopID();
+}
+
 void AnimatorPanel::drawLayerMaskPopup(GameObject* go)
 {
     if (!ImGui::BeginPopup("layerMask")) return;
@@ -788,6 +919,36 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
 
             if (!stMut.blendEntries.empty() && !stMut.blendParamY.empty())
                 drawBlend2DCanvas(*anim, stMut);
+        }
+
+        // --- Clip de propiedades del estado ---
+        // Lo que permite que un objeto SIN esqueleto tenga estados: aquí se
+        // elige qué clip autorado reproduce cada uno.
+        if (!anim->propertyClips().empty())
+        {
+            ImGui::PushID("propclip");
+            ImGui::SetNextItemWidth(150.0f);
+            const bool roto = !stMut.propertyClipName.empty() && stMut.propertyClipIndex < 0;
+            if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+            if (ImGui::BeginCombo("##propclip",
+                                  stMut.propertyClipName.empty() ? "(sin clip de propiedades)"
+                                                                 : stMut.propertyClipName.c_str()))
+            {
+                if (ImGui::Selectable("(ninguno)", stMut.propertyClipName.empty()))
+                {
+                    stMut.propertyClipName.clear();
+                    anim->bindProperties(go, nullptr);
+                }
+                for (const auto& pc : anim->propertyClips())
+                    if (ImGui::Selectable(pc.name.c_str(), pc.name == stMut.propertyClipName))
+                    {
+                        stMut.propertyClipName = pc.name;
+                        anim->bindProperties(go, nullptr);
+                    }
+                ImGui::EndCombo();
+            }
+            if (roto) ImGui::PopStyleColor();
+            ImGui::PopID();
         }
 
         // --- Eventos del estado ---
@@ -1604,12 +1765,14 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 drawAnimationSources(ctx, go);
                 drawLayerBar(ctx, go);
                 drawIkList(ctx, go);
+                drawPropertyClips(ctx, go);
 
                 // --- Añadir estado desde los clips del modelo ---
                 const SkinnedMesh* mesh = go->getSkinnedMesh();
                 if (!mesh || mesh->animationClips.empty())
                 {
-                    ImGui::TextDisabled("El GameObject no tiene un mesh skinned con animaciones.");
+                    ImGui::TextDisabled("Sin mesh skinned con animaciones: los estados salen de\n"
+                                        "los clips de propiedades (abajo).");
                 }
                 else if (ImGui::BeginCombo("##addstate", "Add State from Clip"))
                 {
@@ -1628,6 +1791,36 @@ void AnimatorPanel::draw(EditorContext& ctx)
                         const int eid = go->getAnimator()->states(m_layer)[idx].editorId;
                         // El nodo es nuevo: hay que colocarlo en el canvas a mano, el
                         // sync general solo corre al cambiar de objeto.
+                        ed::SetCurrentEditor(m_ctx);
+                        ed::SetNodePosition(nodeId(eid), ImVec2(st.editorPos.x, st.editorPos.y));
+                        ed::SetCurrentEditor(nullptr);
+                        ctx.pushLog("Animator: estado '" + st.name + "' añadido");
+                    }
+                    ImGui::EndCombo();
+                }
+
+                auto anim = go->getAnimator();
+
+                // --- Añadir estado desde un clip de propiedades ---
+                // Sin esto, un objeto SIN esqueleto no podía tener ni un estado
+                // (la única forma de crearlos eran los clips del modelo), así
+                // que su clip de propiedades no lo reproducía nadie.
+                if (!anim->propertyClips().empty() && ImGui::BeginCombo("##addpropstate", "Add State from Property Clip"))
+                {
+                    for (const auto& pc : anim->propertyClips())
+                    {
+                        if (!ImGui::Selectable(pc.name.c_str())) continue;
+                        AnimatorComponent::State st;
+                        st.name             = pc.name;
+                        st.propertyClipName = pc.name;
+                        st.editorPos        = glm::vec2(40.0f + 40.0f * (float)anim->states(m_layer).size(),
+                                                        40.0f + 30.0f * (float)anim->states(m_layer).size());
+                        const int idx = anim->addState(st, m_layer);
+                        // El índice del clip y la duración del estado (que sin
+                        // clip de malla sale del de propiedades) los resuelve
+                        // bindProperties.
+                        anim->bindProperties(go, nullptr);
+                        const int eid = anim->states(m_layer)[idx].editorId;
                         ed::SetCurrentEditor(m_ctx);
                         ed::SetNodePosition(nodeId(eid), ImVec2(st.editorPos.x, st.editorPos.y));
                         ed::SetCurrentEditor(nullptr);

@@ -9203,9 +9203,10 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         }
         ImGui::EndDisabled();
 
-        // Animator: solo tiene sentido sobre un mesh skinned (es quien trae los
-        // clips). El gate pregunta al GameObject, no a un flag propio.
-        const bool canAnimate     = ctx.selected->isSkinned();
+        // Animator: desde los clips de propiedades (C14) vale para CUALQUIER
+        // objeto — una puerta, una luz, una cámara. Con malla skinned añade los
+        // clips del modelo; sin ella, solo los clips de propiedades.
+        const bool canAnimate     = true;
         const bool alreadyHasAnim = ctx.selected->hasAnimator();
         ImGui::BeginDisabled(!canAnimate || alreadyHasAnim);
         if (ImGui::Selectable("Animator") && canAnimate && !alreadyHasAnim)

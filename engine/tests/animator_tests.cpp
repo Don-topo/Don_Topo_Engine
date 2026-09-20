@@ -3,6 +3,8 @@
 // camera_tests.cpp y physics_tests.cpp.
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/Blend2D.h"
+#include "DonTopo/Core/PropertyTracks.h"
+#include "DonTopo/Core/LightComponent.h"
 #include "DonTopo/Renderer/PoseBlock.h"
 #include "DonTopo/Renderer/IkBlock.h"
 #include "DonTopo/Core/GameObject.h"
@@ -5053,6 +5055,13 @@ struct SkinnedRendererDoble
     bool      poseRecibida  = false;
     AnimationIk ik;
     bool      ikRecibida    = false;
+    bool      transformEstaticoRecibido = false;
+    int       transformEstaticoIndice    = -1;
+    glm::mat4 transformEstatico          = glm::mat4(0.0f);
+    bool      factoresRecibidos = false;
+    size_t    factoresIndice    = 0;
+    float     factorMetallic    = -1.0f;
+    float     factorRoughness   = -1.0f;
     float     dtSinAnimator = -1.0f;
     glm::mat4 transform     = glm::mat4(0.0f);
     float     ssr           = -1.0f;
@@ -5065,6 +5074,16 @@ struct SkinnedRendererDoble
         pose = p; poseRecibida = true;
     }
     void setAnimationIk(int, const AnimationIk& v) { orden.push_back("ik"); ik = v; ikRecibida = true; }
+    void setTransform(int i, const glm::mat4& m)
+    {
+        orden.push_back("transformEstatico");
+        transformEstaticoIndice = i; transformEstatico = m; transformEstaticoRecibido = true;
+    }
+    void setObjectMaterialFactors(size_t i, float m, float r)
+    {
+        orden.push_back("factores");
+        factoresRecibidos = true; factoresIndice = i; factorMetallic = m; factorRoughness = r;
+    }
     void setSkinnedTransform(int, const glm::mat4& m) { orden.push_back("transform"); transform = m; }
     void setSkinnedSsr(int, float s)                  { orden.push_back("ssr"); ssr = s; }
 
@@ -5225,8 +5244,10 @@ static void test_apply_skinned_frame_edit_mode_does_not_move_the_graph()
     CHECK(a->currentStateName() == "B");
 }
 
-// Un objeto que no está dado de alta en el backend no tiene índice: ni se
-// dibuja ni se le avanza el reloj, igual que hacía el `if` de los hosts.
+// Un objeto que no está dado de alta en el backend no tiene índice: no se le
+// manda NADA al backend. Su grafo sí corre: desde los clips de propiedades
+// (C14) el Animator anima objetos sin malla con esqueleto, y antes salía por
+// esta misma puerta sin hacer nada.
 static void test_apply_skinned_frame_ignores_unregistered_object()
 {
     Scene scene("Test");
@@ -5237,11 +5258,10 @@ static void test_apply_skinned_frame_ignores_unregistered_object()
     SkinnedRendererDoble r;
     applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
 
+    // Al backend, nada: ni pose, ni IK, ni transform, ni SSR.
     CHECK(r.orden.empty());
-    // El estado y no animTime: el trigger está armado, así que si el helper
-    // llegara a correr la transición dispararía y dejaría animTime a 0 de todas
-    // formas — esa aserción pasaría con la guarda quitada y no probaría nada.
-    CHECK(a->currentStateName() == "A");
+    // Pero el grafo sí avanza: el trigger armado dispara su transición.
+    CHECK(a->currentStateName() == "B");
 }
 
 // Transform y SSR van al backend con el resto del bloque, y el SSR apagado
@@ -8018,6 +8038,378 @@ static void test_apply_skinned_frame_passes_ik_in_model_space()
     CHECK(r.ikRecibida && r.ik.count == 0);
 }
 
+static void test_property_track_sampling()
+{
+    PropertyTrack t;
+    t.property = PropertyId::PositionY;
+    CHECK(nearlyEqual(samplePropertyTrack(t, 0.5f, 7.0f), 7.0f));       // sin keys: el actual
+    t.keys = { { 1.0f, 10.0f } };
+    CHECK(nearlyEqual(samplePropertyTrack(t, 0.0f, 0.0f), 10.0f));      // una sola key
+    CHECK(nearlyEqual(samplePropertyTrack(t, 5.0f, 0.0f), 10.0f));
+    t.keys = { { 1.0f, 10.0f }, { 3.0f, 30.0f } };
+    CHECK(nearlyEqual(samplePropertyTrack(t, 0.0f, 0.0f), 10.0f));      // antes de la primera
+    CHECK(nearlyEqual(samplePropertyTrack(t, 1.0f, 0.0f), 10.0f));      // justo en una key
+    CHECK(nearlyEqual(samplePropertyTrack(t, 2.0f, 0.0f), 20.0f));      // lineal
+    CHECK(nearlyEqual(samplePropertyTrack(t, 3.0f, 0.0f), 30.0f));
+    CHECK(nearlyEqual(samplePropertyTrack(t, 9.0f, 0.0f), 30.0f));      // después de la última
+    // Keys desordenadas: el muestreo NO puede depender del orden del fichero.
+    t.keys = { { 3.0f, 30.0f }, { 1.0f, 10.0f } };
+    CHECK(nearlyEqual(samplePropertyTrack(t, 2.0f, 0.0f), 20.0f));
+}
+
+static void test_property_blend_short_path()
+{
+    const PropertyContribution mitad[2] = { { 0.0f, 0.5f }, { 10.0f, 0.5f } };
+    CHECK(nearlyEqual(blendPropertyValues(PropertyId::PositionX, mitad, 2), 5.0f));
+    // Rotación: 350 y 10 son 20 grados de diferencia, no 340.
+    const PropertyContribution giro[2] = { { 350.0f, 0.5f }, { 10.0f, 0.5f } };
+    const float r = blendPropertyValues(PropertyId::RotationY, giro, 2);
+    CHECK(std::fabs(std::remainder(r - 0.0f, 360.0f)) < 1e-3f);
+    // Pesos que no suman 1 (una capa a media potencia): se renormalizan.
+    const PropertyContribution parcial[2] = { { 0.0f, 0.25f }, { 8.0f, 0.25f } };
+    CHECK(nearlyEqual(blendPropertyValues(PropertyId::PositionX, parcial, 2), 4.0f));
+    CHECK(nearlyEqual(blendPropertyValues(PropertyId::PositionX, mitad, 0), 0.0f));   // sin nada
+}
+
+static void test_property_names_round_trip()
+{
+    for (int i = 0; i < (int)PropertyId::Count; i++)
+    {
+        const PropertyId id = (PropertyId)i;
+        CHECK(propertyFromName(propertyName(id)) == id);
+    }
+    CHECK(propertyFromName("noExiste") == PropertyId::Count);
+    CHECK(propertyIsRotation(PropertyId::RotationZ) && !propertyIsRotation(PropertyId::ScaleX));
+}
+
+static void test_property_get_set_transform()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Puerta");
+    go->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(1, 2, 3));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionY), 2.0f));
+    CHECK(propertyAvailable(*go, PropertyId::PositionY));
+
+    bool  escritas[(int)PropertyId::Count] = {};
+    float valores [(int)PropertyId::Count] = {};
+    escritas[(int)PropertyId::PositionY] = true; valores[(int)PropertyId::PositionY] = 9.0f;
+    escritas[(int)PropertyId::RotationZ] = true; valores[(int)PropertyId::RotationZ] = 90.0f;
+    escritas[(int)PropertyId::ScaleX]    = true; valores[(int)PropertyId::ScaleX]    = 2.0f;
+    propertyApply(*go, escritas, valores);
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionY), 9.0f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionX), 1.0f));   // lo no escrito NO cambia
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionZ), 3.0f));
+    CHECK(std::fabs(std::remainder(propertyGet(*go, PropertyId::RotationZ) - 90.0f, 360.0f)) < 1e-3f);
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::ScaleX), 2.0f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::ScaleY), 1.0f));
+    // El eje X del transform ya rotado 90 grados en Z apunta a +Y.
+    CHECK(glm::length(glm::normalize(glm::vec3(go->localTransform[0])) - glm::vec3(0, 1, 0)) < 1e-4f);
+}
+
+static void test_property_light_and_material()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Farola");
+    CHECK(!propertyAvailable(*go, PropertyId::LightIntensity));   // sin LightComponent
+    go->setLight(std::make_shared<LightComponent>());
+    go->getLight()->setIntensity(2.0f);
+    go->getLight()->setColor(glm::vec3(1, 0, 0));
+    CHECK(propertyAvailable(*go, PropertyId::LightIntensity));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::LightIntensity), 2.0f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::LightColorG), 0.0f));
+
+    bool  escritas[(int)PropertyId::Count] = {};
+    float valores [(int)PropertyId::Count] = {};
+    escritas[(int)PropertyId::LightIntensity] = true; valores[(int)PropertyId::LightIntensity] = 5.0f;
+    escritas[(int)PropertyId::LightColorG]    = true; valores[(int)PropertyId::LightColorG]    = 1.0f;
+    escritas[(int)PropertyId::MaterialMetallic] = true; valores[(int)PropertyId::MaterialMetallic] = 0.75f;
+    propertyApply(*go, escritas, valores);
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::LightIntensity), 5.0f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::LightColorG), 1.0f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::LightColorR), 1.0f));   // lo no escrito sigue
+    // El material va por el override del OBJETO, no por la malla: animar no
+    // puede copiar la malla cada frame (editMesh copia si está compartida).
+    CHECK(!go->materialOverrides.empty());
+    if (!go->materialOverrides.empty())
+        CHECK(nearlyEqual(go->materialOverrides[0].metallic, 0.75f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::MaterialMetallic), 0.75f));
+}
+
+// Puerta: Cerrada (clip "cerrar") -> Abierta (clip "abrir") por trigger.
+static AnimatorComponent makePuerta()
+{
+    AnimatorComponent a;
+    PropertyClip cerrar;
+    cerrar.name = "cerrar"; cerrar.duration = 1.0f;
+    PropertyTrack tc; tc.property = PropertyId::PositionY;
+    tc.keys = { { 0.0f, 0.0f }, { 1.0f, 0.0f } };
+    cerrar.tracks.push_back(tc);
+    PropertyClip abrir;
+    abrir.name = "abrir"; abrir.duration = 2.0f;
+    PropertyTrack ta; ta.property = PropertyId::PositionY;
+    ta.keys = { { 0.0f, 0.0f }, { 2.0f, 4.0f } };
+    abrir.tracks.push_back(ta);
+    a.addPropertyClip(cerrar);
+    a.addPropertyClip(abrir);
+    AnimatorComponent::State s;
+    s.name = "Cerrada"; s.propertyClipName = "cerrar";
+    a.addState(s);
+    s.name = "Abierta"; s.propertyClipName = "abrir";
+    a.addState(s);
+    a.setEntryState(0);
+    a.addParameter("abre", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 0.5f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "abre";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+    return a;
+}
+
+static void test_property_clip_binding_and_duration()
+{
+    AnimatorComponent a = makePuerta();
+    std::vector<std::string> avisos;
+    a.bindProperties(nullptr, &avisos);
+    CHECK(avisos.empty());
+    CHECK(a.states()[1].propertyClipIndex == 1);
+    // Sin clip de malla, la duración del estado sale del clip de propiedades.
+    CHECK(a.states()[1].ticksPerSecond > 0.0f);
+    CHECK(nearlyEqual(a.states()[1].duration / a.states()[1].ticksPerSecond, 2.0f));
+    // Un nombre que no existe avisa y deja el estado sin clip.
+    a.statesMutable()[0].propertyClipName = "noExiste";
+    avisos.clear();
+    a.bindProperties(nullptr, &avisos);
+    CHECK(a.states()[0].propertyClipIndex == -1);
+    CHECK(avisos.size() == 1u);
+    CHECK(a.addPropertyClip(PropertyClip{}) >= 0);
+    while (a.propertyClips().size() < (size_t)AnimatorComponent::kMaxPropertyClips)
+        CHECK(a.addPropertyClip(PropertyClip{}) >= 0);
+    CHECK(a.addPropertyClip(PropertyClip{}) == -1);
+}
+
+static void test_property_clip_tracks_resolved_against_object()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Farola");
+    AnimatorComponent a;
+    PropertyClip parpadeo;
+    parpadeo.name = "parpadeo"; parpadeo.duration = 1.0f;
+    PropertyTrack luz; luz.property = PropertyId::LightIntensity;
+    luz.keys = { { 0.0f, 0.0f }, { 1.0f, 5.0f } };
+    PropertyTrack pos; pos.property = PropertyId::PositionY;
+    pos.keys = { { 0.0f, 0.0f }, { 1.0f, 1.0f } };
+    parpadeo.tracks = { luz, pos };
+    a.addPropertyClip(parpadeo);
+    std::vector<std::string> avisos;
+    a.bindProperties(go, &avisos);
+    CHECK(!a.propertyClips()[0].tracks[0].resolved);   // no hay LightComponent
+    CHECK(a.propertyClips()[0].tracks[1].resolved);
+    CHECK(avisos.size() == 1u);
+    go->setLight(std::make_shared<LightComponent>());
+    avisos.clear();
+    a.bindProperties(go, &avisos);
+    CHECK(a.propertyClips()[0].tracks[0].resolved);
+    CHECK(avisos.empty());
+}
+
+static void test_property_samples_follow_the_graph()
+{
+    AnimatorComponent a = makePuerta();
+    a.bindProperties(nullptr, nullptr);
+    a.reset();
+    a.update(0.1f, true);
+    AnimatorComponent::PropertySampleRef m[8];
+    int n = a.propertySamples(m, 8);
+    CHECK(n == 1);
+    CHECK(m[0].clip == 0 && nearlyEqual(m[0].weight, 1.0f));
+    CHECK(nearlyEqual(m[0].time, 0.1f));          // tiempo EN SEGUNDOS
+    // En el cross-fade suenan los dos, con pesos que suman 1. Hacen falta DOS
+    // updates: en el que dispara la transición el fade va por 0, así que el
+    // estado nuevo entra con peso 0 y todavía no aporta muestra.
+    a.setTrigger("abre");
+    a.update(0.016f, true);
+    a.update(0.25f, true);
+    n = a.propertySamples(m, 8);
+    CHECK(n == 2);
+    CHECK(nearlyEqual(m[0].weight + m[1].weight, 1.0f));
+    CHECK(m[0].weight > 0.0f && m[1].weight > 0.0f);
+    CHECK(m[0].clip != m[1].clip);
+    // Un estado sin clip de propiedades no aporta muestra.
+    a.statesMutable()[1].propertyClipName.clear();
+    a.bindProperties(nullptr, nullptr);
+    a.reset();
+    a.update(0.016f, true);
+    a.setTrigger("abre");
+    a.update(0.016f, true);
+    a.update(0.25f, true);      // a mitad del fade: el estado nuevo YA pesa
+    n = a.propertySamples(m, 8);
+    CHECK(n == 1 && m[0].clip == 0);
+}
+
+static void test_property_clips_drive_a_non_skinned_object()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Puerta");
+    auto a = std::make_shared<AnimatorComponent>(makePuerta());
+    go->setAnimator(a);
+    a->bindProperties(go, nullptr);
+    a->reset();
+    CHECK(go->skinnedRenderIndex < 0);           // no es skinned: antes no se animaba
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.5f, /*evaluateTransitions=*/true);
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionY), 0.0f));   // "cerrar" es plano
+    a->setTrigger("abre");
+    applySkinnedFrame(*go, r, 0.016f, true);     // entra en "Abierta"
+    applySkinnedFrame(*go, r, 1.0f, true);       // 1 s de un clip de 2 s: mitad del recorrido
+    const float y = propertyGet(*go, PropertyId::PositionY);
+    CHECK(y > 0.5f && y < 4.0f);
+    // En Edit el grafo no transiciona, pero el tiempo del estado corre.
+    Scene scene2("Test");
+    GameObject* go2 = scene2.addGameObject("Puerta");
+    auto b = std::make_shared<AnimatorComponent>(makePuerta());
+    go2->setAnimator(b);
+    b->bindProperties(go2, nullptr);
+    b->reset();
+    b->setTrigger("abre");
+    applySkinnedFrame(*go2, r, 0.5f, /*evaluateTransitions=*/false);
+    CHECK(b->currentStateName() == "Cerrada");
+}
+
+static void test_property_clips_material_goes_to_the_backend()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    go->staticRenderIndex = 3;
+    auto a = std::make_shared<AnimatorComponent>();
+    PropertyClip brillo;
+    brillo.name = "brillo"; brillo.duration = 1.0f;
+    PropertyTrack tr; tr.property = PropertyId::MaterialMetallic;
+    tr.keys = { { 0.0f, 0.0f }, { 1.0f, 1.0f } };
+    brillo.tracks.push_back(tr);
+    a->addPropertyClip(brillo);
+    AnimatorComponent::State s;
+    s.name = "Brilla"; s.propertyClipName = "brillo";
+    a->addState(s);
+    a->setEntryState(0);
+    go->setAnimator(a);
+    a->bindProperties(go, nullptr);
+    a->reset();
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.5f, true);
+    CHECK(r.factoresRecibidos);
+    CHECK(r.factoresIndice == 3u);
+    CHECK(r.factorMetallic > 0.1f);
+    CHECK(nearlyEqual(r.factorMetallic, propertyGet(*go, PropertyId::MaterialMetallic)));
+}
+
+static void test_property_clips_serialization(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Puerta");
+    const uint64_t id = go->id;
+    go->setAnimator(std::make_shared<AnimatorComponent>(makePuerta()));
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& anim = *found->getAnimator();
+    CHECK(anim.propertyClips().size() == 2u);
+    if (anim.propertyClips().size() != 2u) return;
+    CHECK(anim.propertyClips()[1].name == "abrir");
+    CHECK(nearlyEqual(anim.propertyClips()[1].duration, 2.0f));
+    CHECK(anim.propertyClips()[1].tracks.size() == 1u);
+    CHECK(anim.propertyClips()[1].tracks[0].property == PropertyId::PositionY);
+    // El tamaño ANTES de indexar: sin esta guarda, un fallo de lectura de las
+    // keys no daba FAIL sino un abort mudo (exit 3) al salirse del vector.
+    CHECK(anim.propertyClips()[1].tracks[0].keys.size() == 2u);
+    if (anim.propertyClips()[1].tracks[0].keys.size() != 2u) return;
+    CHECK(nearlyEqual(anim.propertyClips()[1].tracks[0].keys[1].value, 4.0f));
+    CHECK(anim.states()[1].propertyClipName == "abrir");
+    // Un Animator sin clips de propiedades no escribe ninguna clave nueva.
+    AnimatorComponent vacio;
+    const std::string texto = animatorToJson(vacio).dump();
+    CHECK(texto.find("propertyClip") == std::string::npos);
+}
+
+static void test_property_clips_bad_file_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Puerta");
+    go->setAnimator(std::make_shared<AnimatorComponent>(makePuerta()));
+    nlohmann::json j = scene.toJson();
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        node["animator"]["propertyClips"][0]["tracks"][0]["property"] = "noExiste";
+        node["animator"]["propertyClips"][1]["duration"] = 0.0f;
+        while (node["animator"]["propertyClips"].size() < 20)
+            node["animator"]["propertyClips"].push_back(node["animator"]["propertyClips"][0]);
+    }
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool prop = false, dur = false, tope = false;
+    for (const auto& w : loaded.lastWarnings())
+    {
+        if (w.find("noExiste") != std::string::npos) prop = true;
+        if (w.find("duración") != std::string::npos) dur = true;
+        if (w.find("clips de propiedades") != std::string::npos) tope = true;
+    }
+    CHECK(prop && dur && tope);
+    GameObject* found = loaded.getRoot().children[0].get();
+    const auto& anim = *found->getAnimator();
+    CHECK(anim.propertyClips().size() == (size_t)AnimatorComponent::kMaxPropertyClips);
+    CHECK(anim.propertyClips()[0].tracks.empty());              // la pista mala se descarta
+    CHECK(anim.propertyClips()[1].duration > 0.0f);             // la duración se acota
+}
+
+static void test_property_clips_apply_graph_restores()
+{
+    AnimatorComponent a = makePuerta();
+    const AnimatorComponent::Graph snap = a.graph();
+    a.propertyClipsMutable()[1].duration = 9.0f;
+    a.removePropertyClip(0);
+    a.applyGraph(snap);
+    CHECK(a.propertyClips().size() == 2u);
+    if (a.propertyClips().size() == 2u) CHECK(nearlyEqual(a.propertyClips()[1].duration, 2.0f));
+}
+
+// El host propaga los worldTransform y empuja el transform ANTES de llamar al
+// helper: lo que se anima en este frame tiene que reenviarse, o el objeto iría
+// un frame por detrás (y sus hijos, dos).
+static void test_property_clips_push_transform_and_world()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Puerta");
+    go->staticRenderIndex = 7;
+    GameObject* hijo = scene.addGameObject("Pomo", go);
+    hijo->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 1));
+    auto a = std::make_shared<AnimatorComponent>(makePuerta());
+    go->setAnimator(a);
+    a->bindProperties(go, nullptr);
+    a->reset();
+    scene.getRoot().updateWorldTransforms();
+
+    SkinnedRendererDoble r;
+    a->setTrigger("abre");
+    applySkinnedFrame(*go, r, 0.016f, true);
+    applySkinnedFrame(*go, r, 1.0f, true);
+    CHECK(r.transformEstaticoRecibido);
+    CHECK(r.transformEstaticoIndice == 7);
+    const float y = propertyGet(*go, PropertyId::PositionY);
+    CHECK(y > 0.5f);
+    // El transform que recibe el backend es el de ESTE frame, no el anterior.
+    CHECK(nearlyEqual(r.transformEstatico[3].y, go->worldTransform[3].y));
+    CHECK(nearlyEqual(go->worldTransform[3].y, y));
+    // Y el hijo ya cuelga de la posición nueva, sin esperar al frame siguiente.
+    CHECK(nearlyEqual(hijo->worldTransform[3].y, y));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -8177,6 +8569,18 @@ int main()
     test_layers_state_index_by_editor_id();
     test_ik_constraint_management();
     test_ik_chain_resolution();
+    test_property_track_sampling();
+    test_property_blend_short_path();
+    test_property_names_round_trip();
+    test_property_get_set_transform();
+    test_property_light_and_material();
+    test_property_clip_binding_and_duration();
+    test_property_clip_tracks_resolved_against_object();
+    test_property_samples_follow_the_graph();
+    test_property_clips_drive_a_non_skinned_object();
+    test_property_clips_material_goes_to_the_backend();
+    test_property_clips_push_transform_and_world();
+    test_property_clips_apply_graph_restores();
     test_ik_graph_key_and_apply_graph();
     test_ik_lookat();
     test_ik_twobone_reaches_target();
@@ -8193,6 +8597,8 @@ int main()
     test_layers_too_many_warns(pm, am);
     test_ik_serialization(pm, am);
     test_ik_bad_file_warns(pm, am);
+    test_property_clips_serialization(pm, am);
+    test_property_clips_bad_file_warns(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
     test_animation_sources_survive_scene_round_trip(pm, am);

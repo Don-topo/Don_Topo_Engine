@@ -6,6 +6,7 @@
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/AnimatorSerialization.h"
+#include "DonTopo/Core/PropertyTracks.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
@@ -544,6 +545,9 @@ namespace DonTopo
                                       {"clip", s.clipName},
                                       {"loop", s.loop},
                                       {"pos", nlohmann::json::array({ s.editorPos.x, s.editorPos.y })} };
+                // Clip de propiedades: solo si el estado lo usa, así un grafo
+                // de los de siempre se guarda exactamente igual que antes.
+                if (!s.propertyClipName.empty()) sj["propertyClip"] = s.propertyClipName;
                 // Blend por parámetro: solo si el estado lo usa. Emitirlo siempre
                 // llenaría de campos vacíos el .scene de cualquier grafo normal.
                 // clipIndex/duration de cada entrada NO se guardan: son del FBX,
@@ -679,6 +683,24 @@ namespace DonTopo
                                {"maxAngle", c.maxAngle} });
             out["ik"] = std::move(ik);
         }
+        // Clips de propiedades: ídem, solo si hay.
+        if (!a.propertyClips().empty())
+        {
+            auto clips = nlohmann::json::array();
+            for (const auto& c : a.propertyClips())
+            {
+                auto pistas = nlohmann::json::array();
+                for (const auto& tr : c.tracks)
+                {
+                    auto keys = nlohmann::json::array();
+                    for (const auto& k : tr.keys)
+                        keys.push_back({ {"t", k.time}, {"v", k.value} });
+                    pistas.push_back({ {"property", propertyName(tr.property)}, {"keys", std::move(keys)} });
+                }
+                clips.push_back({ {"name", c.name}, {"duration", c.duration}, {"tracks", std::move(pistas)} });
+            }
+            out["propertyClips"] = std::move(clips);
+        }
         return out;
     }
 
@@ -731,7 +753,8 @@ namespace
                     // Ausentes en escenas anteriores al blend por parámetro: sin
                     // entradas el estado es de un solo clip, como siempre.
                     const std::string ctxBlend = "animator.state." + st.name;
-                    st.blendParam  = s.value("blendParam", std::string());
+                    st.propertyClipName = s.value("propertyClip", std::string());
+                st.blendParam  = s.value("blendParam", std::string());
                     st.blendParamY = s.value("blendParamY", std::string());
                     if (s.contains("blendEntries") && s["blendEntries"].is_array())
                     {
@@ -910,6 +933,58 @@ namespace
                                      " estado(s) en el grafo), se arranca en el estado 0");
             a->setEntryState(entrada, capa);
         };
+        // Clips de propiedades: el índice de cada estado y el `resolved` de
+        // cada pista los rehace bindProperties, que necesita el GameObject.
+        if (j.contains("propertyClips") && j["propertyClips"].is_array())
+        {
+            const auto& lista = j["propertyClips"];
+            if ((int)lista.size() > AnimatorComponent::kMaxPropertyClips && warnings)
+                warnings->push_back("Animator: el fichero trae " + std::to_string(lista.size()) +
+                                     " clips de propiedades; se cargan los " +
+                                     std::to_string(AnimatorComponent::kMaxPropertyClips));
+            for (const auto& cj : lista)
+            {
+                if (!cj.is_object()) continue;
+                DonTopo::PropertyClip clip;
+                clip.name = cj.value("name", std::string());
+                const std::string ctxClip = "animator.propertyClip." + clip.name;
+                clip.duration = readFloat(cj, "duration", 1.0f, warnings, ctxClip);
+                if (clip.duration <= 0.0f)
+                {
+                    if (warnings)
+                        warnings->push_back(ctxClip + ": duración no positiva (" +
+                                             std::to_string(clip.duration) + "), se acota");
+                    clip.duration = 0.001f;
+                }
+                if (cj.contains("tracks") && cj["tracks"].is_array())
+                    for (const auto& tj : cj["tracks"])
+                    {
+                        if (!tj.is_object()) continue;
+                        DonTopo::PropertyTrack tr;
+                        const std::string prop = tj.value("property", std::string());
+                        tr.property = DonTopo::propertyFromName(prop);
+                        if (tr.property == DonTopo::PropertyId::Count)
+                        {
+                            if (warnings)
+                                warnings->push_back(ctxClip + ": propiedad '" + prop +
+                                                     "' desconocida, la pista se descarta");
+                            continue;
+                        }
+                        if (tj.contains("keys") && tj["keys"].is_array())
+                            for (const auto& kj : tj["keys"])
+                            {
+                                if (!kj.is_object()) continue;
+                                DonTopo::PropertyKey k;
+                                k.time  = readFloat(kj, "t", 0.0f, warnings, ctxClip + ".keys");
+                                k.value = readFloat(kj, "v", 0.0f, warnings, ctxClip + ".keys");
+                                tr.keys.push_back(k);
+                            }
+                        clip.tracks.push_back(std::move(tr));
+                    }
+                if (a->addPropertyClip(std::move(clip)) < 0) break;
+            }
+        }
+
         leerGrafo(j, 0);
 
         // IK: el peso, el objetivo y el ángulo SÍ son edición, así que la clave
@@ -3022,6 +3097,10 @@ namespace
             // quedan a -1 y currentClipIndex cae a 0.
             if (auto* sm = node->getSkinnedMesh())
                 anim->bindClips(*sm, warnings);
+            // Las pistas de propiedades se resuelven contra el OBJETO (qué
+            // componentes tiene), no contra la malla: un grafo sin esqueleto
+            // también tiene que quedar resuelto.
+            anim->bindProperties(node, warnings);
             node->setAnimator(std::move(anim));
         }
         if (j.contains("audioClip"))

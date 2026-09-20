@@ -692,9 +692,17 @@ carry named **animation events** at normalized times of its cycle, delivered to 
 `OnAnimationEvent`. The root of each state has three modes: **normal** (the pose moves it),
 **locked** (the clip plays in place) and **root motion**: the horizontal travel of the root
 moves the GameObject — as a velocity when it has a dynamic Rigidbody, so it collides and falls —
-while the vertical bob stays in the pose; rotation isn't applied. The component is opt-in:
-**Properties → Add → Animator**, greyed out on non-skinned objects (an Animator has no clips
-to name without a skeleton).
+while the vertical bob stays in the pose; rotation isn't applied. The Animator also plays **property clips**, authored in the editor and stored with the scene:
+a clip is a duration in seconds plus tracks, and a track is one scalar property of the object
+with its keyframes (linear between keys; outside the range, the end key holds). The sixteen
+animatable properties are local position, rotation (degrees) and scale, the light's colour,
+intensity and range, and the material's metallic and roughness. Each state can reference one,
+so a door, a platform, a camera or a blinking light gets the whole graph — transitions,
+conditions, exit time, cross-fade, layers and the Lua API — and a character can run its mesh
+clip and a property clip at once. Properties no track animates are left alone, and during a
+cross-fade the values blend (rotations take the short way round). Layer masks are about bones,
+so they do not apply to properties. The component is opt-in: **Properties → Add → Animator**,
+now available on any object — without a skinned mesh it simply has no mesh clips to name.
 
 The Animator has **layers**, like Unity's. Layer 0 is the base graph; every extra layer is a
 full state machine of its own (states, transitions, entry, Any State) that reads the same
