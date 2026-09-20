@@ -1,4 +1,5 @@
-﻿#include "DonTopo/Renderer/PoseBlock.h"
+﻿#include "DonTopo/Renderer/IkBlock.h"
+#include "DonTopo/Renderer/PoseBlock.h"
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/Gizmos.h"
 #include "DonTopo/Core/GameObject.h"
@@ -3658,6 +3659,12 @@ namespace DonTopo {
             obj.poseBlockMapped = nullptr;
         }
         destroy(obj.poseBlockBuffer,      obj.poseBlockMemory);
+        if (obj.ikBlockMapped)
+        {
+            vkUnmapMemory(m_gpu.device(), obj.ikBlockMemory);
+            obj.ikBlockMapped = nullptr;
+        }
+        destroy(obj.ikBlockBuffer,        obj.ikBlockMemory);
         destroy(obj.outputVertexBuffer,   obj.outputVertexMemory);
         destroy(obj.indexBuffer,          obj.indexMemory);
 
@@ -3829,6 +3836,14 @@ namespace DonTopo {
         if (vkMapMemory(m_gpu.device(), obj.poseBlockMemory, 0, VK_WHOLE_SIZE, 0, &obj.poseBlockMapped) != VK_SUCCESS)
             throw std::runtime_error("failed to map the pose block!");
 
+        // Bloque de IK: igual, una copia por frame en vuelo.
+        m_res.createBuffer((uint32_t)(MAX_FRAMES * ikBlockUints() * sizeof(uint32_t)),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            obj.ikBlockBuffer, obj.ikBlockMemory);
+        if (vkMapMemory(m_gpu.device(), obj.ikBlockMemory, 0, VK_WHOLE_SIZE, 0, &obj.ikBlockMapped) != VK_SUCCESS)
+            throw std::runtime_error("failed to map the ik block!");
+
         // --- Output vertex buffer: SSBO + VB, stride 80 bytes (5×vec4) ---
         constexpr VkDeviceSize OUT_VERT = 5 * sizeof(glm::vec4);
         m_res.createBuffer((uint32_t)vertexCount * OUT_VERT,
@@ -3844,7 +3859,7 @@ namespace DonTopo {
         if (obj.computeDescPool == VK_NULL_HANDLE)
             throw std::runtime_error("failed to allocate compute descriptor set!");
 
-        VkDescriptorBufferInfo bufInfos[11]{};
+        VkDescriptorBufferInfo bufInfos[12]{};
         bufInfos[0] = { obj.keyframePosBuffer,    0, VK_WHOLE_SIZE };
         bufInfos[1] = { obj.keyframeRotBuffer,    0, VK_WHOLE_SIZE };
         bufInfos[2] = { obj.keyframeScaleBuffer,  0, VK_WHOLE_SIZE };
@@ -3856,9 +3871,10 @@ namespace DonTopo {
         bufInfos[8] = { obj.poseTrsBuffer,        0, VK_WHOLE_SIZE };
         bufInfos[9] = { obj.frozenTrsBuffer,      0, VK_WHOLE_SIZE };
         bufInfos[10] = { obj.poseBlockBuffer,     0, VK_WHOLE_SIZE };
+        bufInfos[11] = { obj.ikBlockBuffer,       0, VK_WHOLE_SIZE };
 
-        VkWriteDescriptorSet writes[11]{};
-        for (int i = 0; i < 11; i++)
+        VkWriteDescriptorSet writes[12]{};
+        for (int i = 0; i < 12; i++)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = obj.computeDescSet;
@@ -3867,7 +3883,7 @@ namespace DonTopo {
             writes[i].descriptorCount = 1;
             writes[i].pBufferInfo     = &bufInfos[i];
         }
-        vkUpdateDescriptorSets(m_gpu.device(), 11, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_gpu.device(), 12, writes, 0, nullptr);
 
         // --- Texturas y descriptor sets por material ---
         constexpr uint8_t white[4] = {255, 255, 255, 255};
@@ -4059,6 +4075,17 @@ namespace DonTopo {
         // Una sola muestra a partir de aquí: la pose de un Animator la vuelve a
         // mandar setAnimationPose cada frame si hace falta.
         obj.hasPose = false;
+    }
+
+    void Renderer::setAnimationIk(int index, const AnimationIk& ik)
+    {
+        if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
+        // Los índices de hueso vienen del Animator, que los resolvió contra el
+        // MISMO esqueleto: solo se filtra lo que no cabe en el SSBO.
+        auto& obj = m_skinnedObjects[index];
+        obj.ik = ik;
+        for (int k = 0; k < obj.ik.count; k++)
+            if (obj.ik.solves[k].bone >= (int)obj.boneCount) obj.ik.solves[k].bone = -1;
     }
 
     void Renderer::setAnimationPose(int index, const AnimationPose& pose)

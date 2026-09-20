@@ -29,6 +29,9 @@ layout(push_constant) uniform PC {
     // --- Solo los lee bone_eval.comp (ver allí) ---
     uint rootMotionMode;
     uint poseBlockOffset;
+    // --- bone_ik.comp y bone_hierarchy.comp ---
+    uint ikBlockOffset;   // en uints: copia del bloque de IK de este frame
+    uint flags;           // bit 0: la jerarquía escribe SOLO mundo (para bone_ik)
 } push;
 
 void main()

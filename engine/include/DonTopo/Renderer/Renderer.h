@@ -474,6 +474,9 @@ namespace DonTopo {
             // La pose de un Animator: hasta 6 muestras y la congelada (ver
             // AnimationPose). Cada clip se acota como en setAnimationState.
             void setAnimationPose(int index, const AnimationPose& pose);
+            // Las restricciones de IK del frame, ya resueltas y en espacio del
+            // modelo (ver AnimationIk). count 0 = sin IK.
+            void setAnimationIk(int index, const AnimationIk& ik);
             void setSkinnedTransform(int index, const glm::mat4& transform);
 
             // ── Frustum culling ──────────────────────────────────────────────

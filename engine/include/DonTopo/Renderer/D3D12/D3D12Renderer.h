@@ -177,6 +177,7 @@ public:
     // Renderer de Vulkan: es un sink, no avanza el tiempo.
     void setAnimationState(int index, uint32_t clipIndex, float animTime) override;
     void setAnimationPose(int index, const AnimationPose& pose) override;
+    void setAnimationIk(int index, const AnimationIk& ik) override;
     void updateAnimation(int index, float deltaTime) override;
 
     // Proyección por vista del frame, la misma con la que se dibuja: es lo que

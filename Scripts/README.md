@@ -914,6 +914,11 @@ GameObject haya perdido su Animator entre el `GetComponent` y la llamada.
 | `a:SetLayerWeight(capa, peso)` | Peso 0..1 de una capa superior; la base (0) vale siempre 1 y no cambia. Una capa que no existe se ignora; NaN/Inf se ignora con aviso |
 | `a:GetLayerWeight(capa)` | Peso de la capa; 1 en la base, 0 si no existe |
 | `a:GetLayerCount()` | Número de capas, base incluida |
+| `a:SetIkWeight(nombre, peso)` | Peso 0..1 de una restricción de IK. Un nombre que no existe se ignora; NaN/Inf se ignora con aviso |
+| `a:GetIkWeight(nombre)` | Peso de la restricción; 0 si no existe |
+| `a:SetIkTarget(nombre, entidad)` | Objetivo de la IK. Con `nil` se quita, y la restricción deja de aplicarse |
+| `a:SetIkPole(nombre, entidad)` | Pole de una IK de dos huesos: hacia dónde apunta el codo o la rodilla. `nil` lo quita |
+| `a:GetIkCount()` | Número de restricciones de IK del Animator |
 | `a:GetBlendWeight()` | 0 = solo el estado que se apaga, 1 = solo el nuevo. Vale 1 si no hay mezcla |
 | `a:GetPreviousState()` | Nombre del estado que se apaga, `""` si no hay mezcla |
 | `a:GetPoseWeight()` | El peso que va de verdad a la GPU: el del cross-fade si lo hay, si no el del blend por parámetro, y 1 si no hay mezcla |

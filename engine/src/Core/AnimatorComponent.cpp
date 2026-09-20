@@ -164,13 +164,17 @@ namespace DonTopo
     AnimatorComponent::Graph AnimatorComponent::graph() const
     {
         const Layer& L = m_layers[0];
-        Graph g{ L.states, L.transitions, m_parameters, L.entryState, {} };
+        Graph g{ L.states, L.transitions, m_parameters, L.entryState, {}, m_ik };
         g.extraLayers.assign(m_layers.begin() + 1, m_layers.end());
         return g;
     }
 
     void AnimatorComponent::applyGraph(const Graph& g)
     {
+        // La IK es diseño entero: entra tal cual (sus índices los rehace
+        // rebindClips, como los clipIndex).
+        m_ik = g.ik;
+
         const std::vector<Parameter> oldParams = m_parameters;
         auto oldBools    = m_bools;
         auto oldTriggers = m_triggers;
@@ -587,6 +591,55 @@ namespace DonTopo
         return -1;
     }
 
+    int AnimatorComponent::addIkConstraint(IkConstraint c)
+    {
+        if ((int)m_ik.size() >= kMaxIkConstraints) return -1;
+        m_ik.push_back(std::move(c));
+        return (int)m_ik.size() - 1;
+    }
+
+    void AnimatorComponent::removeIkConstraint(int i)
+    {
+        if (i < 0 || i >= (int)m_ik.size()) return;
+        m_ik.erase(m_ik.begin() + i);
+    }
+
+    AnimatorComponent::IkConstraint* AnimatorComponent::ikPorNombre(const std::string& n)
+    {
+        for (auto& c : m_ik)
+            if (c.name == n) return &c;
+        return nullptr;
+    }
+
+    const AnimatorComponent::IkConstraint* AnimatorComponent::ikPorNombre(const std::string& n) const
+    {
+        for (const auto& c : m_ik)
+            if (c.name == n) return &c;
+        return nullptr;
+    }
+
+    void AnimatorComponent::setIkWeight(const std::string& nombre, float w)
+    {
+        if (IkConstraint* c = ikPorNombre(nombre))
+            c->weight = std::isfinite(w) ? std::clamp(w, 0.0f, 1.0f) : 0.0f;
+    }
+
+    float AnimatorComponent::ikWeight(const std::string& nombre) const
+    {
+        const IkConstraint* c = ikPorNombre(nombre);
+        return c ? c->weight : 0.0f;
+    }
+
+    void AnimatorComponent::setIkTarget(const std::string& nombre, uint64_t id)
+    {
+        if (IkConstraint* c = ikPorNombre(nombre)) c->targetId = id;
+    }
+
+    void AnimatorComponent::setIkPole(const std::string& nombre, uint64_t id)
+    {
+        if (IkConstraint* c = ikPorNombre(nombre)) c->poleId = id;
+    }
+
     int AnimatorComponent::addLayer(const std::string& name)
     {
         if ((int)m_layers.size() >= kMaxLayers) return -1;
@@ -763,6 +816,34 @@ namespace DonTopo
                 }
                 L.maskResolved[(size_t)(it - mesh.skeleton.names.begin())] = 1;
             }
+        }
+
+        // Huesos de las restricciones de IK, por nombre como los clips. En
+        // TwoBone el hueso es el EXTREMO y la cadena son sus dos padres: sin
+        // ellos no se puede resolver, así que la restricción se apaga y avisa.
+        for (auto& c : m_ik)
+        {
+            c.boneIndex = c.parentIndex = c.grandParentIndex = -1;
+            auto it = std::find(mesh.skeleton.names.begin(), mesh.skeleton.names.end(), c.boneName);
+            if (it == mesh.skeleton.names.end())
+            {
+                if (warnings && !c.boneName.empty())
+                    warnings->push_back("Animator: la IK '" + c.name + "' usa el hueso '" + c.boneName +
+                                        "', que el modelo no tiene");
+                continue;
+            }
+            const int   bi     = (int)(it - mesh.skeleton.names.begin());
+            const auto& padres = mesh.skeleton.parentIndex;
+            const int   p      = bi < (int)padres.size() ? padres[(size_t)bi] : -1;
+            const int   gp     = (p >= 0 && p < (int)padres.size()) ? padres[(size_t)p] : -1;
+            if (c.type == IkType::TwoBone && (p < 0 || gp < 0))
+            {
+                if (warnings)
+                    warnings->push_back("Animator: la IK '" + c.name + "' necesita una cadena de tres "
+                                        "huesos y '" + c.boneName + "' no tiene padre y abuelo");
+                continue;
+            }
+            c.boneIndex = bi; c.parentIndex = p; c.grandParentIndex = gp;
         }
     }
 

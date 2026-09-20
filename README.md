@@ -708,6 +708,18 @@ GameObject with root motion; animation events fire from every layer whose weight
 In the panel the layer list sits above the graph: **+** / **−**, the arrows reorder, and a
 double click renames; the graph shown is the selected layer's.
 
+An Animator can also carry up to four **IK constraints**, solved on the GPU after the pose is
+evaluated, so they bend whatever the graph is playing. **Look at** turns one bone (a head, a
+chest) until its chosen local axis points at the target, capped by a maximum angle; **two
+bone** solves a three-bone chain (shoulder-elbow-hand, hip-knee-foot) so its tip reaches the
+target, with a *pole* object deciding which way the elbow or knee points. The bone is named
+like a clip is, the target and the pole are GameObjects, and a weight of 0..1 fades the
+constraint in and out — from the **IK** section of the Animator panel, or from Lua with
+`SetIkWeight`, `SetIkTarget` and `SetIkPole`. A target further away than the chain leaves it
+stretched, not broken, and a chain that cannot be resolved (the bone is missing, or it has no
+parent and grandparent) is reported and skipped. The solver assumes the character's scale is
+uniform.
+
 Open the graph with **View → Animator**. In the node panel:
 
 - **Add State from Clip** adds a node from one of the model's clips.

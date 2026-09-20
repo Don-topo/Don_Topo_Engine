@@ -101,6 +101,14 @@ namespace {
     // editorIdFromRawId: pasados por esa fórmula casarían con un editorId
     // (300000) que ningún grafo alcanza, pero isOutputPin los clasificaría
     // mal — por eso esPinDeSalida.
+    // Límites del ancho de la columna izquierda (fuentes, capas, IK,
+    // parámetros), que el usuario arrastra por el borde. El mínimo deja ver la
+    // lista de parámetros, que es el widget más ancho; el máximo evita dejar el
+    // lienzo en nada de un tirón.
+    const float kAnchoColumnaMin = 200.0f;
+    const float kAnchoColumnaMax = 700.0f;
+    const float kAnchoAgarre     = 6.0f;
+
     const int kAnyStateNodeId   = 900001;
     const int kAnyStateOutPinId = 900002;
 
@@ -184,181 +192,308 @@ void AnimatorPanel::syncPositionsToComponent(GameObject* go)
 
 void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
 {
-    auto anim = go->getAnimator();
-
-    // 260 y no 200: con el widget de valor de int/float al lado del nombre, a
-    // 200 el DragFloat se comía el botón de borrado.
-    ImGui::BeginChild("params", ImVec2(260, 0), true);
-    ImGui::TextUnformatted("Parameters");
-    ImGui::Separator();
-
-    std::string toRemove;
-    for (const auto& p : anim->parameters())
+    // Desplegable, como las fuentes de animación, las capas y la IK: las
+    // cuatro secciones de la columna se abren y se cierran igual, y el
+    // scroll es el de la columna. Antes esto era un hijo con alto propio y
+    // su propia barra, que ni cuadraba con el resto ni hacía falta.
+    ImGui::PushID("params");
+    if (ImGui::CollapsingHeader("Parameters", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::PushID(p.name.c_str());
-        ImGui::TextUnformatted(p.name.c_str());
-        ImGui::SameLine();
-        ImGui::TextDisabled("(%s)", paramTypeLabel(p.type));
-        ImGui::SameLine();
+        auto anim = go->getAnimator();
 
-        // Valor editable in situ: en Play permite provocar una transición a mano
-        // sin escribir Lua, que es como se depura un grafo.
-        ImGui::SetNextItemWidth(70);
-        switch (p.type)
+        std::string toRemove;
+        for (const auto& p : anim->parameters())
         {
-            case AnimatorComponent::ParamType::Bool:
+            ImGui::PushID(p.name.c_str());
+            ImGui::TextUnformatted(p.name.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%s)", paramTypeLabel(p.type));
+            ImGui::SameLine();
+
+            // Valor editable in situ: en Play permite provocar una transición a mano
+            // sin escribir Lua, que es como se depura un grafo.
+            ImGui::SetNextItemWidth(70);
+            switch (p.type)
             {
-                bool v = anim->getBool(p.name);
-                if (ImGui::Checkbox("##val", &v)) anim->setBool(p.name, v);
-                break;
+                case AnimatorComponent::ParamType::Bool:
+                {
+                    bool v = anim->getBool(p.name);
+                    if (ImGui::Checkbox("##val", &v)) anim->setBool(p.name, v);
+                    break;
+                }
+                case AnimatorComponent::ParamType::Trigger:
+                    // Un trigger no tiene valor que mostrar: se arma y lo consume la
+                    // primera transición que lo mire (ver consumeTriggers).
+                    if (ImGui::SmallButton("Set")) anim->setTrigger(p.name);
+                    break;
+                case AnimatorComponent::ParamType::Int:
+                {
+                    int v = anim->getInt(p.name);
+                    if (ImGui::DragInt("##val", &v)) anim->setInt(p.name, v);
+                    break;
+                }
+                case AnimatorComponent::ParamType::Float:
+                {
+                    float v = anim->getFloat(p.name);
+                    if (ImGui::DragFloat("##val", &v, 0.01f)) anim->setFloat(p.name, v);
+                    break;
+                }
             }
-            case AnimatorComponent::ParamType::Trigger:
-                // Un trigger no tiene valor que mostrar: se arma y lo consume la
-                // primera transición que lo mire (ver consumeTriggers).
-                if (ImGui::SmallButton("Set")) anim->setTrigger(p.name);
-                break;
-            case AnimatorComponent::ParamType::Int:
-            {
-                int v = anim->getInt(p.name);
-                if (ImGui::DragInt("##val", &v)) anim->setInt(p.name, v);
-                break;
-            }
-            case AnimatorComponent::ParamType::Float:
-            {
-                float v = anim->getFloat(p.name);
-                if (ImGui::DragFloat("##val", &v, 0.01f)) anim->setFloat(p.name, v);
-                break;
-            }
+
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X")) toRemove = p.name;
+            ImGui::PopID();
+        }
+        // Diferido: borrar dentro del for-range invalidaría el iterador.
+        if (!toRemove.empty())
+        {
+            m_graphUndo.setLabel("Quitar parámetro");
+            anim->removeParameter(toRemove);
+            ctx.pushLog("Animator: parámetro '" + toRemove + "' eliminado");
         }
 
-        ImGui::SameLine();
-        if (ImGui::SmallButton("X")) toRemove = p.name;
-        ImGui::PopID();
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(110);
+        ImGui::InputText("##newparam", m_newParamName, sizeof(m_newParamName));
+        // El orden coincide con el del enum ParamType, así que el índice del combo
+        // castea directo: si el enum crece, esta lista crece con él.
+        const char* types[] = { "bool", "trigger", "int", "float" };
+        ImGui::SetNextItemWidth(110);
+        ImGui::Combo("##newparamtype", &m_newParamType, types, IM_ARRAYSIZE(types));
+        if (ImGui::Button("Add Parameter") && m_newParamName[0] != '\0')
+        {
+            m_graphUndo.setLabel("Añadir parámetro");
+            anim->addParameter(m_newParamName, (AnimatorComponent::ParamType)m_newParamType);
+            ctx.pushLog(std::string("Animator: parámetro '") + m_newParamName + "' añadido");
+            m_newParamName[0] = '\0';
+        }
     }
-    // Diferido: borrar dentro del for-range invalidaría el iterador.
-    if (!toRemove.empty())
-    {
-        m_graphUndo.setLabel("Quitar parámetro");
-        anim->removeParameter(toRemove);
-        ctx.pushLog("Animator: parámetro '" + toRemove + "' eliminado");
-    }
+    ImGui::PopID();
 
-    ImGui::Separator();
-    ImGui::SetNextItemWidth(110);
-    ImGui::InputText("##newparam", m_newParamName, sizeof(m_newParamName));
-    // El orden coincide con el del enum ParamType, así que el índice del combo
-    // castea directo: si el enum crece, esta lista crece con él.
-    const char* types[] = { "bool", "trigger", "int", "float" };
-    ImGui::SetNextItemWidth(110);
-    ImGui::Combo("##newparamtype", &m_newParamType, types, IM_ARRAYSIZE(types));
-    if (ImGui::Button("Add Parameter") && m_newParamName[0] != '\0')
-    {
-        m_graphUndo.setLabel("Añadir parámetro");
-        anim->addParameter(m_newParamName, (AnimatorComponent::ParamType)m_newParamType);
-        ctx.pushLog(std::string("Animator: parámetro '") + m_newParamName + "' añadido");
-        m_newParamName[0] = '\0';
-    }
-
-    ImGui::EndChild();
 }
 
 void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
 {
     auto anim = go->getAnimator();
     ImGui::PushID("capas");
+    // El acotado va FUERA del desplegable: la capa seleccionada tiene que
+    // seguir siendo válida aunque la sección esté cerrada (el grafo que se
+    // dibuja es el suyo).
     m_layer = std::clamp(m_layer, 0, anim->layerCount() - 1);
-    ImGui::TextUnformatted("Layers");
-    for (int li = 0; li < anim->layerCount(); li++)
+    if (ImGui::CollapsingHeader("Layers", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::PushID(li);
-        if (m_renamingLayer == li)
+        for (int li = 0; li < anim->layerCount(); li++)
         {
-            if (m_focusRename) { ImGui::SetKeyboardFocusHere(); m_focusRename = false; }
+            ImGui::PushID(li);
+            if (m_renamingLayer == li)
+            {
+                if (m_focusRename) { ImGui::SetKeyboardFocusHere(); m_focusRename = false; }
+                ImGui::SetNextItemWidth(200.0f);
+                ImGui::InputText("##nombre", m_layerNameBuf, sizeof(m_layerNameBuf),
+                                 ImGuiInputTextFlags_AutoSelectAll);
+                // Al soltar el foco (Enter, clic fuera): se guarda si no está vacío.
+                if (ImGui::IsItemDeactivated())
+                {
+                    if (m_layerNameBuf[0] != '\0') anim->layerMutable(li).name = m_layerNameBuf;
+                    m_renamingLayer = -1;
+                }
+            }
+            else if (ImGui::Selectable(anim->layer(li).name.c_str(), m_layer == li,
+                                       ImGuiSelectableFlags_AllowDoubleClick, ImVec2(200.0f, 0.0f)))
+            {
+                m_layer = li;
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                {
+                    m_renamingLayer = li;
+                    m_focusRename   = true;
+                    std::snprintf(m_layerNameBuf, sizeof(m_layerNameBuf), "%s", anim->layer(li).name.c_str());
+                }
+            }
+            if (li == 0 && ImGui::IsItemHovered())
+                ImGui::SetTooltip("Capa base: siempre override, peso 1 y todo el cuerpo.");
+            ImGui::PopID();
+        }
+
+        ImGui::BeginDisabled(anim->layerCount() >= AnimatorComponent::kMaxLayers);
+        if (ImGui::Button("+##addLayer"))
+        {
+            const int n = anim->addLayer("Layer " + std::to_string(anim->layerCount()));
+            if (n >= 0)
+            {
+                m_layer = n;
+                ctx.pushLog("Animator: capa '" + anim->layer(n).name + "' añadida");
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_layer == 0);
+        if (ImGui::Button("-##removeLayer"))
+        {
+            ctx.pushLog("Animator: capa '" + anim->layer(m_layer).name + "' quitada");
+            anim->removeLayer(m_layer);
+            m_layer = std::min(m_layer, anim->layerCount() - 1);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_layer <= 1);
+        if (ImGui::ArrowButton("##layerUp", ImGuiDir_Up))
+        {
+            anim->moveLayer(m_layer, m_layer - 1);
+            m_layer--;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_layer == 0 || m_layer >= anim->layerCount() - 1);
+        if (ImGui::ArrowButton("##layerDown", ImGuiDir_Down))
+        {
+            anim->moveLayer(m_layer, m_layer + 1);
+            m_layer++;
+        }
+        ImGui::EndDisabled();
+
+        // La base no tiene peso, modo ni máscara propios.
+        if (m_layer > 0)
+        {
+            const auto& L = anim->layer(m_layer);
+            float peso = L.weight;
             ImGui::SetNextItemWidth(200.0f);
-            ImGui::InputText("##nombre", m_layerNameBuf, sizeof(m_layerNameBuf),
-                             ImGuiInputTextFlags_AutoSelectAll);
-            // Al soltar el foco (Enter, clic fuera): se guarda si no está vacío.
-            if (ImGui::IsItemDeactivated())
-            {
-                if (m_layerNameBuf[0] != '\0') anim->layerMutable(li).name = m_layerNameBuf;
-                m_renamingLayer = -1;
-            }
+            if (ImGui::SliderFloat("Weight##lw", &peso, 0.0f, 1.0f, "%.2f"))
+                anim->setLayerWeight(m_layer, peso);
+            int modo = (int)L.mode;
+            const char* modos[] = { "Override", "Additive" };
+            ImGui::SetNextItemWidth(200.0f);
+            if (ImGui::Combo("Mode##lm", &modo, modos, 2))
+                anim->setLayerMode(m_layer, (AnimatorComponent::LayerMode)modo);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Override sustituye la pose de los huesos de la máscara;\n"
+                                  "Additive le suma la diferencia de cada clip con su primer fotograma.");
+            const std::string etiqueta = L.maskBones.empty()
+                ? std::string("Mask: todo el cuerpo")
+                : "Mask: " + std::to_string(L.maskBones.size()) + " hueso(s)";
+            if (ImGui::Button((etiqueta + "##lmask").c_str(), ImVec2(200.0f, 0.0f)))
+                ImGui::OpenPopup("layerMask");
+            drawLayerMaskPopup(go);
         }
-        else if (ImGui::Selectable(anim->layer(li).name.c_str(), m_layer == li,
-                                   ImGuiSelectableFlags_AllowDoubleClick, ImVec2(200.0f, 0.0f)))
-        {
-            m_layer = li;
-            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-            {
-                m_renamingLayer = li;
-                m_focusRename   = true;
-                std::snprintf(m_layerNameBuf, sizeof(m_layerNameBuf), "%s", anim->layer(li).name.c_str());
-            }
-        }
-        if (li == 0 && ImGui::IsItemHovered())
-            ImGui::SetTooltip("Capa base: siempre override, peso 1 y todo el cuerpo.");
-        ImGui::PopID();
     }
+    ImGui::PopID();
 
-    ImGui::BeginDisabled(anim->layerCount() >= AnimatorComponent::kMaxLayers);
-    if (ImGui::Button("+##addLayer"))
-    {
-        const int n = anim->addLayer("Layer " + std::to_string(anim->layerCount()));
-        if (n >= 0)
-        {
-            m_layer = n;
-            ctx.pushLog("Animator: capa '" + anim->layer(n).name + "' añadida");
-        }
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(m_layer == 0);
-    if (ImGui::Button("-##removeLayer"))
-    {
-        ctx.pushLog("Animator: capa '" + anim->layer(m_layer).name + "' quitada");
-        anim->removeLayer(m_layer);
-        m_layer = std::min(m_layer, anim->layerCount() - 1);
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(m_layer <= 1);
-    if (ImGui::ArrowButton("##layerUp", ImGuiDir_Up))
-    {
-        anim->moveLayer(m_layer, m_layer - 1);
-        m_layer--;
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(m_layer == 0 || m_layer >= anim->layerCount() - 1);
-    if (ImGui::ArrowButton("##layerDown", ImGuiDir_Down))
-    {
-        anim->moveLayer(m_layer, m_layer + 1);
-        m_layer++;
-    }
-    ImGui::EndDisabled();
+}
 
-    // La base no tiene peso, modo ni máscara propios.
-    if (m_layer > 0)
+void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
+{
+    auto anim = go->getAnimator();
+    const SkinnedMesh* mesh = go->getSkinnedMesh();
+    ImGui::PushID("ik");
+    if (ImGui::CollapsingHeader("IK"))
     {
-        const auto& L = anim->layer(m_layer);
-        float peso = L.weight;
-        ImGui::SetNextItemWidth(200.0f);
-        if (ImGui::SliderFloat("Weight##lw", &peso, 0.0f, 1.0f, "%.2f"))
-            anim->setLayerWeight(m_layer, peso);
-        int modo = (int)L.mode;
-        const char* modos[] = { "Override", "Additive" };
-        ImGui::SetNextItemWidth(200.0f);
-        if (ImGui::Combo("Mode##lm", &modo, modos, 2))
-            anim->setLayerMode(m_layer, (AnimatorComponent::LayerMode)modo);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Override sustituye la pose de los huesos de la máscara;\n"
-                              "Additive le suma la diferencia de cada clip con su primer fotograma.");
-        const std::string etiqueta = L.maskBones.empty()
-            ? std::string("Mask: todo el cuerpo")
-            : "Mask: " + std::to_string(L.maskBones.size()) + " hueso(s)";
-        if (ImGui::Button((etiqueta + "##lmask").c_str(), ImVec2(200.0f, 0.0f)))
-            ImGui::OpenPopup("layerMask");
-        drawLayerMaskPopup(go);
+        // Objetivo y pole son GameObjects de la escena: se listan en preorden,
+        // como el panel de jerarquía, y el propio personaje no entra.
+        std::vector<const GameObject*> objetos;
+        std::function<void(const GameObject&)> recorrer = [&](const GameObject& n) {
+            for (const auto& h : n.children)
+            {
+                objetos.push_back(h.get());
+                recorrer(*h);
+            }
+        };
+        if (ctx.scene) recorrer(ctx.scene->getRoot());
+        auto selectorObjeto = [&](const char* etiqueta, uint64_t& id) {
+            const GameObject* actual = nullptr;
+            for (const auto* o : objetos)
+                if (o->id == id) actual = o;
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::BeginCombo(etiqueta, actual ? actual->name.c_str() : "(ninguno)"))
+            {
+                if (ImGui::Selectable("(ninguno)", id == 0)) id = 0;
+                for (const auto* o : objetos)
+                {
+                    if (o == go) continue;
+                    ImGui::PushID((int)o->id);
+                    if (ImGui::Selectable(o->name.c_str(), o->id == id)) id = o->id;
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+        };
+
+        int quitar = -1;
+        auto& lista = anim->ikConstraintsMutable();
+        for (int i = 0; i < (int)lista.size(); i++)
+        {
+            auto& c = lista[i];
+            ImGui::PushID(i);
+            char nombre[64];
+            std::snprintf(nombre, sizeof(nombre), "%s", c.name.c_str());
+            ImGui::SetNextItemWidth(140.0f);
+            if (ImGui::InputText("##nombre", nombre, sizeof(nombre))) c.name = nombre;
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x")) quitar = i;
+
+            int tipo = (int)c.type;
+            const char* tipos[] = { "Look at", "Two bone" };
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::Combo("Tipo##tipo", &tipo, tipos, 2))
+            {
+                c.type = (AnimatorComponent::IkType)tipo;
+                // La cadena (padre y abuelo) depende del tipo: hay que
+                // re-resolverla. rebindClips y no bindClips: puede estar
+                // corriendo Play Mode.
+                if (mesh) anim->rebindClips(*mesh, nullptr);
+            }
+
+            // Hueso: el que mira (look-at) o el EXTREMO de la cadena (two bone).
+            const bool roto = c.boneIndex < 0;
+            if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::BeginCombo("Hueso##hueso", c.boneName.empty() ? "(elige hueso)" : c.boneName.c_str()))
+            {
+                if (mesh)
+                    for (const auto& n : mesh->skeleton.names)
+                        if (ImGui::Selectable(n.c_str(), n == c.boneName))
+                        {
+                            c.boneName = n;
+                            anim->rebindClips(*mesh, nullptr);
+                        }
+                ImGui::EndCombo();
+            }
+            if (roto) ImGui::PopStyleColor();
+            if (roto && ImGui::IsItemHovered())
+                ImGui::SetTooltip("El hueso no existe en el modelo, o la cadena no llega a tres huesos:\n"
+                                  "la restricción no se aplica.");
+
+            selectorObjeto("Objetivo##objetivo", c.targetId);
+            if (c.type == AnimatorComponent::IkType::TwoBone)
+            {
+                selectorObjeto("Pole##pole", c.poleId);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Hacia dónde apunta el codo o la rodilla.");
+            }
+            ImGui::SetNextItemWidth(160.0f);
+            ImGui::SliderFloat("Peso##peso", &c.weight, 0.0f, 1.0f, "%.2f");
+            if (c.type == AnimatorComponent::IkType::LookAt)
+            {
+                ImGui::SetNextItemWidth(160.0f);
+                ImGui::DragFloat3("Eje##eje", &c.aimAxis.x, 0.01f);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Eje LOCAL del hueso que apunta al objetivo.");
+                ImGui::SetNextItemWidth(160.0f);
+                ImGui::SliderFloat("Angulo max##ang", &c.maxAngle, 0.0f, 180.0f, "%.0f");
+            }
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+        if (quitar >= 0) anim->removeIkConstraint(quitar);
+
+        ImGui::BeginDisabled((int)lista.size() >= AnimatorComponent::kMaxIkConstraints);
+        if (ImGui::Button("+ IK##addIk"))
+        {
+            AnimatorComponent::IkConstraint nueva;
+            nueva.name = "IK " + std::to_string(anim->ikConstraints().size() + 1);
+            anim->addIkConstraint(nueva);
+            ctx.pushLog("Animator: restriccion de IK anadida");
+        }
+        ImGui::EndDisabled();
+        if (!mesh) ImGui::TextDisabled("Sin mesh skinned no hay huesos que elegir.");
     }
     ImGui::PopID();
 }
@@ -1451,8 +1586,24 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 grafoDibujado = true;
                 const bool historialMovido = ctx.undo->revision() != m_lastUndoRevision;
 
+                // Columna izquierda en un hijo CON SCROLL: fuentes, capas, IK,
+                // "Add State" y parámetros. Antes iban sueltos en la ventana y,
+                // al crecer (varias capas, varias restricciones de IK), lo de
+                // abajo quedaba fuera sin forma de llegar, y de paso aplastaban
+                // el lienzo. El lienzo sigue aparte, a la derecha: su rueda y su
+                // pan son suyos y este scroll no los toca.
+                // El máximo se acota también a la ventana: si se encoge, la
+                // columna no puede quedarse más ancha que ella y dejar el
+                // lienzo sin sitio.
+                const float anchoMax = std::max(kAnchoColumnaMin,
+                                                std::min(kAnchoColumnaMax,
+                                                         ImGui::GetContentRegionAvail().x - 120.0f));
+                m_anchoColumna = std::clamp(m_anchoColumna, kAnchoColumnaMin, anchoMax);
+                ImGui::BeginChild("columnaIzq", ImVec2(m_anchoColumna, 0), false,
+                                  ImGuiWindowFlags_HorizontalScrollbar);
                 drawAnimationSources(ctx, go);
                 drawLayerBar(ctx, go);
+                drawIkList(ctx, go);
 
                 // --- Añadir estado desde los clips del modelo ---
                 const SkinnedMesh* mesh = go->getSkinnedMesh();
@@ -1486,6 +1637,25 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 }
 
                 drawParameterList(ctx, go);
+                ImGui::EndChild();
+                ImGui::SameLine();
+
+                // Agarre para arrastrar el borde. Un InvisibleButton y no un
+                // Separator: hace falta que capture el arrastre (IsItemActive)
+                // para seguir moviéndolo aunque el cursor se salga del rect.
+                ImGui::InvisibleButton("##agarreColumna",
+                                       ImVec2(kAnchoAgarre, ImGui::GetContentRegionAvail().y));
+                const bool agarreActivo  = ImGui::IsItemActive();
+                const bool agarreEncima  = ImGui::IsItemHovered();
+                if (agarreActivo || agarreEncima) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                if (agarreActivo) m_anchoColumna = std::clamp(m_anchoColumna + ImGui::GetIO().MouseDelta.x,
+                                                              kAnchoColumnaMin, anchoMax);
+                // Sin pintarlo no se ve dónde agarrar: es invisible por diseño.
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                    ImGui::GetColorU32(agarreActivo ? ImGuiCol_SeparatorActive
+                                                    : (agarreEncima ? ImGuiCol_SeparatorHovered
+                                                                    : ImGuiCol_Separator)));
                 ImGui::SameLine();
 
                 ImGui::BeginChild("canvas", ImVec2(0, 0), false);

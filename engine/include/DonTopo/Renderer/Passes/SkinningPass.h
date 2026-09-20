@@ -37,8 +37,11 @@ public:
         // --- Solo los lee bone_eval.comp ---
         uint32_t rootMotionMode;    // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
         uint32_t poseBlockOffset;   // en uints
+        // --- bone_ik.comp y bone_hierarchy.comp ---
+        uint32_t ikBlockOffset;     // en uints
+        uint32_t flags;             // bit 0: la jerarquía escribe solo mundo
     };
-    static_assert(sizeof(Push) == 16, "Push: los 3 .comp y ComputePush de D3D12 declaran este layout");
+    static_assert(sizeof(Push) == 24, "Push: los 4 .comp y ComputePush de D3D12 declaran este layout");
 
     struct Context {
         GpuDevice& gpu;
@@ -93,6 +96,7 @@ private:
     VkPipelineLayout      m_pipelineLayout   = VK_NULL_HANDLE;
     VkPipeline            m_boneEval         = VK_NULL_HANDLE;
     VkPipeline            m_boneHierarchy    = VK_NULL_HANDLE;
+    VkPipeline            m_boneIk           = VK_NULL_HANDLE;
     VkPipeline            m_skinning         = VK_NULL_HANDLE;
 };
 

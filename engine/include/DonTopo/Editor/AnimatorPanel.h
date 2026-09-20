@@ -44,6 +44,9 @@ private:
     // para las que no son la base, peso, modo y máscara.
     void drawLayerBar(EditorContext& ctx, GameObject* go);
     void drawLayerMaskPopup(GameObject* go);
+    // Restricciones de IK del componente (no de una capa): tipo, hueso,
+    // objetivo, pole, peso y, en look-at, eje y ángulo máximo.
+    void drawIkList(EditorContext& ctx, GameObject* go);
     void drawGraph(EditorContext& ctx, GameObject* go);
     void drawConditionsPopup(EditorContext& ctx, GameObject* go);
     // Lista de clips ("blend") o de parámetros float ("by") de un estado. Se
@@ -75,6 +78,9 @@ private:
     // Capa cuyo grafo se muestra y edita, y la que tenía el canvas en el último
     // volcado de posiciones: al cambiar de capa se vuelcan otra vez, como al
     // cambiar de objeto.
+    // Ancho de la columna izquierda: lo arrastra el usuario por el borde. Vive
+    // en la sesión, no en el project.json (ahí va la visibilidad de paneles).
+    float m_anchoColumna  = 300.0f;
     int  m_layer          = 0;
     int  m_boundLayer     = -1;
     int  m_renamingLayer  = -1;

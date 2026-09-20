@@ -36,9 +36,12 @@ layout(push_constant) uniform PC {
     // --- Solo los lee bone_eval.comp ---
     uint rootMotionMode;    // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
     // Offset (en uints) de la copia de este frame del bloque de pose. El mismo
-    // bloque de 16 bytes en los tres .comp, en SkinningPass::Push y en
+    // bloque de 24 bytes en los cuatro .comp, en SkinningPass::Push y en
     // ComputePush de D3D12.
     uint poseBlockOffset;
+    // --- bone_ik.comp y bone_hierarchy.comp (ver allí) ---
+    uint ikBlockOffset;
+    uint flags;
 } push;
 
 vec4 slerpQ(vec4 a, vec4 b, float t)

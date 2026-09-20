@@ -663,6 +663,22 @@ namespace DonTopo
             }
             out["layers"] = std::move(capas);
         }
+        // IK: solo si hay restricciones, así un Animator sin ellas se guarda
+        // exactamente como antes de que existieran.
+        if (!a.ikConstraints().empty())
+        {
+            auto ik = nlohmann::json::array();
+            for (const auto& c : a.ikConstraints())
+                ik.push_back({ {"name", c.name},
+                               {"type", c.type == AnimatorComponent::IkType::TwoBone ? "twoBone" : "lookAt"},
+                               {"bone", c.boneName},
+                               {"target", c.targetId},
+                               {"pole", c.poleId},
+                               {"weight", c.weight},
+                               {"aimAxis", nlohmann::json::array({ c.aimAxis.x, c.aimAxis.y, c.aimAxis.z })},
+                               {"maxAngle", c.maxAngle} });
+            out["ik"] = std::move(ik);
+        }
         return out;
     }
 
@@ -895,6 +911,39 @@ namespace
             a->setEntryState(entrada, capa);
         };
         leerGrafo(j, 0);
+
+        // IK: el peso, el objetivo y el ángulo SÍ son edición, así que la clave
+        // del undo (animatorGraphKey) los conserva enteros.
+        if (j.contains("ik") && j["ik"].is_array())
+        {
+            const auto& lista = j["ik"];
+            if ((int)lista.size() > AnimatorComponent::kMaxIkConstraints && warnings)
+                warnings->push_back("Animator: el fichero trae " + std::to_string(lista.size()) +
+                                     " restricciones de IK; se cargan las " +
+                                     std::to_string(AnimatorComponent::kMaxIkConstraints));
+            for (const auto& cj : lista)
+            {
+                if (!cj.is_object()) continue;
+                AnimatorComponent::IkConstraint c;
+                c.name     = cj.value("name", std::string());
+                c.boneName = cj.value("bone", std::string());
+                const std::string tipo = cj.value("type", std::string("lookAt"));
+                if (tipo == "twoBone") c.type = AnimatorComponent::IkType::TwoBone;
+                else if (tipo != "lookAt" && warnings)
+                    warnings->push_back("animator.ik." + c.name + ": type '" + tipo +
+                                         "' desconocido, se usa lookAt");
+                c.targetId = cj.value("target", (uint64_t)0);
+                c.poleId   = cj.value("pole", (uint64_t)0);
+                const std::string ctxIk = "animator.ik." + c.name;
+                c.weight   = readFloat(cj, "weight", 1.0f, warnings, ctxIk);
+                c.maxAngle = readFloat(cj, "maxAngle", 80.0f, warnings, ctxIk);
+                if (cj.contains("aimAxis") && cj["aimAxis"].is_array() && cj["aimAxis"].size() == 3)
+                    c.aimAxis = glm::vec3(readArrayFloat(cj["aimAxis"], 0, 0.0f, warnings, ctxIk + ".aimAxis"),
+                                          readArrayFloat(cj["aimAxis"], 1, 0.0f, warnings, ctxIk + ".aimAxis"),
+                                          readArrayFloat(cj["aimAxis"], 2, 1.0f, warnings, ctxIk + ".aimAxis"));
+                if (a->addIkConstraint(std::move(c)) < 0) break;
+            }
+        }
 
         if (j.contains("layers") && j["layers"].is_array())
         {

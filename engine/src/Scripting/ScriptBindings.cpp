@@ -1539,6 +1539,25 @@ namespace DonTopo::ScriptBindings
                     return (capa >= 0 && capa < anim->layerCount()) ? anim->layerWeight(capa) : 0.0f;
                 },
                 "GetLayerCount", [animOf](const LuaAnimator& c) { return animOf(c)->layerCount(); },
+                // IK: el peso y los objetivos se conducen desde el juego; el
+                // hueso, el tipo y el eje son autoría del grafo (panel Animator).
+                "SetIkWeight", [animOf, &mgr](const LuaAnimator& c, const std::string& n, float peso) {
+                    AnimatorComponent* anim = animOf(c);
+                    if (!ensureFinite(mgr, "Animator.SetIkWeight", peso)) return;
+                    anim->setIkWeight(n, peso);
+                },
+                "GetIkWeight", [animOf](const LuaAnimator& c, const std::string& n) {
+                    return animOf(c)->ikWeight(n);
+                },
+                // La entidad puede ser nil: así se quita el objetivo y la
+                // restricción deja de aplicarse.
+                "SetIkTarget", [animOf](const LuaAnimator& c, const std::string& n, sol::optional<LuaEntity> e) {
+                    animOf(c)->setIkTarget(n, (e && e->go) ? e->go->id : 0);
+                },
+                "SetIkPole", [animOf](const LuaAnimator& c, const std::string& n, sol::optional<LuaEntity> e) {
+                    animOf(c)->setIkPole(n, (e && e->go) ? e->go->id : 0);
+                },
+                "GetIkCount", [animOf](const LuaAnimator& c) { return (int)animOf(c)->ikConstraints().size(); },
                 // Velocidad global del Animator (runtime, no se guarda). La
                 // velocidad por estado es autoría del grafo: se conduce con
                 // SetFloat sobre su parámetro multiplicador.

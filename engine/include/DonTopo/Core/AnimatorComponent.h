@@ -177,8 +177,41 @@ namespace DonTopo
                 ParamType   type = ParamType::Bool;
             };
 
-            // --- Capas ---
-            // Una capa es una máquina de estados completa. La 0 es la base; las
+            // --- IK ---
+            // Restricciones que corrigen la pose YA evaluada, en la GPU, entre
+            // la jerarquía y el skinning (bone_ik.comp). Son del componente, no
+            // de una capa: se aplican sobre la pose final.
+            enum class IkType { LookAt, TwoBone };
+            static constexpr int kMaxIkConstraints = 4;
+            struct IkConstraint
+            {
+                std::string name;                              // para Lua y el panel
+                IkType      type     = IkType::LookAt;
+                // LookAt: el hueso que mira. TwoBone: el EXTREMO de la cadena
+                // (mano, pie); los otros dos son su padre y su abuelo.
+                std::string boneName;
+                uint64_t    targetId = 0;                      // GameObject; 0 = sin objetivo
+                uint64_t    poleId   = 0;                      // TwoBone: hacia dónde va el codo
+                float       weight   = 1.0f;                   // 0..1
+                glm::vec3   aimAxis  = { 0.0f, 0.0f, 1.0f };   // LookAt: eje local que mira
+                float       maxAngle = 80.0f;                  // LookAt: grados
+                // --- Resuelto en bindClips, no se serializa ---
+                int boneIndex = -1, parentIndex = -1, grandParentIndex = -1;
+            };
+
+            const std::vector<IkConstraint>& ikConstraints() const { return m_ik; }
+            std::vector<IkConstraint>&       ikConstraintsMutable() { return m_ik; }
+            // Devuelve el índice, -1 si ya hay kMaxIkConstraints.
+            int   addIkConstraint(IkConstraint c);
+            void  removeIkConstraint(int i);
+            // Por NOMBRE, como los parámetros: uno que no existe no hace nada
+            // en los setters y devuelve 0 en el getter.
+            void  setIkWeight(const std::string& nombre, float w);   // acotado a [0,1]
+            float ikWeight(const std::string& nombre) const;
+            void  setIkTarget(const std::string& nombre, uint64_t id);
+            void  setIkPole(const std::string& nombre, uint64_t id);
+
+            // --- Capas --- La 0 es la base; las
             // demás se aplican encima, en orden, con su peso y su máscara:
             // override sustituye la pose, additive le suma su diferencia con
             // el primer fotograma de cada clip.
@@ -238,6 +271,9 @@ namespace DonTopo
                 int                     entryState = -1;
                 // Capas 1..N enteras (el diseño; su ejecución se ignora).
                 std::vector<Layer>      extraLayers;
+                // Las restricciones de IK son diseño entero: no tienen
+                // ejecución que conservar.
+                std::vector<IkConstraint> ik;
             };
 
             // --- Diseño (editor / carga de escena) ---
@@ -447,6 +483,10 @@ namespace DonTopo
             float layerWeight(int i) const;           // la 0 siempre 1
             void  setLayerMode(int i, LayerMode m);
 
+            // La restricción con ese nombre, null si no hay.
+            IkConstraint*       ikPorNombre(const std::string& n);
+            const IkConstraint* ikPorNombre(const std::string& n) const;
+
             // Blend 2D: hay blend (stateBlends) y blendParamY es Float declarado.
             bool stateBlends2D(int stateIdx, int layer = 0) const;
             // Las muestras de un estado con SU reloj: 1 o 2 en 1D (la pareja de
@@ -538,6 +578,7 @@ namespace DonTopo
             // velocidad, eventos y root motion son del componente.
             std::vector<Layer>      m_layers = std::vector<Layer>(1);
             std::vector<Parameter>  m_parameters;
+            std::vector<IkConstraint> m_ik;
             std::vector<std::string> m_firedEvents;
             std::vector<RootMotionSample> m_rootMotionSamples;
             float                   m_speed        = 1.0f;

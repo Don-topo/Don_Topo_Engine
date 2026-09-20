@@ -27,6 +27,9 @@ layout(push_constant) uniform PC {
     // --- Solo los lee bone_eval.comp (ver allí) ---
     uint rootMotionMode;
     uint poseBlockOffset;
+    // --- bone_ik.comp y bone_hierarchy.comp ---
+    uint ikBlockOffset;   // en uints: copia del bloque de IK de este frame
+    uint flags;           // bit 0: la jerarquía escribe SOLO mundo (para bone_ik)
 } push;
 
 shared uint sMaxDepth;
@@ -64,6 +67,12 @@ void main()
 
     // Pasada 2: inverse bind pose, independiente hueso a hueso. Va después de
     // la última barrera: sobrescribe en sitio y nadie lee ya el de mundo.
+    //
+    // Con el bit 0 de flags NO se hace: bone_ik necesita los transforms de
+    // MUNDO, así que en los personajes con IK este shader corre dos veces —
+    // la primera solo mundo, y la segunda (ya con los locales corregidos)
+    // entera.
+    if ((push.flags & 1u) != 0u) return;
     for (uint i = t; i < push.boneCount; i += 64u)
         finalBones.data[i] = finalBones.data[i] * boneInfos.data[i].inverseBindPose;
 }

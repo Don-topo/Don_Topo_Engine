@@ -1,4 +1,5 @@
 #pragma once
+#include "DonTopo/Core/AnimationIk.h"
 #include "DonTopo/Core/AnimationPose.h"
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
@@ -163,6 +164,12 @@ namespace DonTopo {
         // Copia de las máscaras de la pose: la del Animator solo vale durante
         // setAnimationPose.
         std::vector<uint8_t> poseMasks[kMaxLayersPose];
+        // IK: lo que manda el Animator (ya en espacio del modelo) y su bloque
+        // para la GPU, con una copia por frame en vuelo.
+        AnimationIk    ik;
+        VkBuffer       ikBlockBuffer  = VK_NULL_HANDLE;
+        VkDeviceMemory ikBlockMemory  = VK_NULL_HANDLE;
+        void*          ikBlockMapped  = nullptr;
         float     duration       = 0.0f;
         float     ticksPerSecond = 24.0f;
         glm::mat4 transform      {1.0f};
