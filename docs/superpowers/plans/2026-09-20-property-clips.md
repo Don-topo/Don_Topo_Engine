@@ -375,7 +375,8 @@ static void test_property_samples_follow_the_graph()
     a.reset();
     a.update(0.016f, true);
     a.setTrigger("abre");
-    a.update(0.25f, true);
+    a.update(0.016f, true);
+    a.update(0.25f, true);      // a mitad del fade: el estado nuevo YA pesa
     n = a.propertySamples(m, 8);
     CHECK(n == 1 && m[0].clip == 0);
 }
