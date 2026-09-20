@@ -52,7 +52,44 @@ namespace DonTopo
     {
         Layer& L = lay(layer);
         if (idx < 0 || idx >= (int)L.states.size()) return;
+
+        // Los descendientes se van con la caja. Dejarlos sueltos en la raíz es
+        // crear huérfanos que nadie ha pedido, y el undo es un snapshot del
+        // grafo entero, así que deshacer los devuelve todos.
+        //
+        // La caja se relocaliza por editorId y NO por índice: borrar un
+        // descendiente que iba antes que ella la desplaza, y seguir con el
+        // índice viejo borraría a otro estado.
+        if (L.states[(size_t)idx].isSubMachine)
+        {
+            const int idCaja = L.states[(size_t)idx].editorId;
+            for (;;)
+            {
+                const int caja = stateIndexByEditorId(idCaja, layer);
+                if (caja < 0) return;               // ya no está: nada que borrar
+                int hijo = -1;
+                for (int i = 0; i < (int)L.states.size(); i++)
+                    if (isDescendantOf(i, caja, layer)) { hijo = i; break; }
+                if (hijo < 0) { idx = caja; break; }   // no quedan descendientes
+                removeState(hijo, layer);              // recursivo: una caja hija se lleva los suyos
+            }
+        }
+
         L.states.erase(L.states.begin() + idx);
+
+        // La jerarquía se reindexa igual que las transiciones. `subEntry == idx`
+        // pasa al borrar el estado que era la entrada de su caja: la caja se
+        // queda vacía y deja de poder entrarse, que es lo correcto.
+        // `parent == idx` es defensivo y hoy INALCANZABLE —borrar una caja se
+        // lleva antes a sus descendientes—, así que ningún test lo cubre; está
+        // por si algún día se borra sin cascada.
+        for (auto& st : L.states)
+        {
+            if (st.parent   == idx) st.parent   = -1;
+            else if (st.parent   > idx) st.parent--;
+            if (st.subEntry == idx) st.subEntry = -1;
+            else if (st.subEntry > idx) st.subEntry--;
+        }
 
         // Las transiciones guardan índices: borrar un estado invalida las que lo
         // tocan y desplaza las que apuntan por encima. Sin esto, borrar un nodo

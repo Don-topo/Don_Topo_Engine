@@ -8542,6 +8542,70 @@ static void test_play_resolves_a_submachine()
     CHECK(!b.crossFade("Ataques", 0.2f, 0));
 }
 
+static void test_removing_a_submachine_removes_its_children()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    AnimatorComponent::State s;
+    s.name = "Otro";
+    a.addState(s);                       // 5, en la raíz, para ver que sobrevive
+    a.removeState(1, 0);                 // borra Ataques
+    // Quedan Base y Otro: Golpe, Combo y Uno se van con la caja.
+    CHECK(a.states().size() == 2u);
+    if (a.states().size() != 2u) return;
+    CHECK(a.states()[0].name == "Base");
+    CHECK(a.states()[1].name == "Otro");
+    // Y no queda ninguna transición apuntando a lo borrado.
+    for (const auto& t : a.transitions())
+    {
+        CHECK(t.fromState >= -2 && t.fromState < (int)a.states().size());
+        CHECK(t.toState   >= 0  && t.toState   < (int)a.states().size());
+    }
+}
+
+// Un hijo puede ir ANTES que su caja en el vector: el editor deja meter en una
+// caja nueva un estado que ya existía. Borrar la caja tiene entonces que
+// relocalizarla, porque borrar a ese hijo la desplaza.
+static void test_removing_a_submachine_whose_child_comes_first()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s;
+    s.name = "Viejo";   a.addState(s);                                  // 0
+    s = {}; s.name = "Testigo"; a.addState(s);                          // 1
+    s = {}; s.name = "Caja"; s.isSubMachine = true; a.addState(s);      // 2
+    a.statesMutable()[0].parent   = 2;    // Viejo entra en la Caja
+    a.statesMutable()[2].subEntry = 0;
+    a.setEntryState(1);
+    a.removeState(2, 0);                  // borra la Caja
+    // Se van Caja y Viejo; Testigo sobrevive y no se borra otro por el
+    // desplazamiento.
+    CHECK(a.states().size() == 1u);
+    if (a.states().size() != 1u) return;
+    CHECK(a.states()[0].name == "Testigo");
+}
+
+static void test_removing_a_state_reindexes_parent_and_entry()
+{
+    AnimatorComponent a = makeCajas();
+    a.removeState(0, 0);                 // borra Base, que va ANTES de las cajas
+    // Ataques pasa a 0, Golpe a 1, Combo a 2, Uno a 3.
+    CHECK(a.states().size() == 4u);
+    if (a.states().size() != 4u) return;
+    CHECK(a.states()[0].name == "Ataques" && a.states()[0].subEntry == 2);
+    CHECK(a.states()[1].name == "Golpe"   && a.states()[1].parent   == 0);
+    CHECK(a.states()[2].name == "Combo"   && a.states()[2].parent   == 0);
+    CHECK(a.states()[2].subEntry == 3);
+    CHECK(a.states()[3].name == "Uno"     && a.states()[3].parent   == 2);
+    // Y la jerarquía sigue significando lo mismo.
+    CHECK(a.resolveEntryLeaf(0, 0) == 3);
+
+    // Borrar el estado que ERA la entrada de su caja la deja vacía, no
+    // apuntando a otro estado por el desplazamiento de índices.
+    AnimatorComponent b = makeCajas();
+    b.removeState(4, 0);                 // Uno, la entrada de Combo
+    CHECK(b.states()[3].name == "Combo" && b.states()[3].subEntry == -1);
+    CHECK(b.resolveEntryLeaf(1, 0) == -1);   // Ataques -> Combo -> nada
+}
+
 static void test_mesh_clock_advances_in_ticks()
 {
     // dt en SEGUNDOS, reloj en TICKS: sin el ritmo, medio segundo de un clip a
@@ -9110,6 +9174,9 @@ int main()
     test_submachine_exit_fires_from_any_leaf();
     test_submachine_leaf_transition_wins_over_ancestor();
     test_play_resolves_a_submachine();
+    test_removing_a_submachine_removes_its_children();
+    test_removing_a_submachine_whose_child_comes_first();
+    test_removing_a_state_reindexes_parent_and_entry();
     test_mesh_clock_advances_in_ticks();
     test_curve_condition_thresholds();
     test_curve_draw_range();
