@@ -8537,6 +8537,67 @@ static void test_property_clips_serialization(PhysicsManager& pm, AudioManager& 
     CHECK(texto.find("propertyClip") == std::string::npos);
 }
 
+static void test_curve_serialization(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    a->addParameter("velocidad", AnimatorComponent::ParamType::Float);
+    PropertyClip c;
+    c.name = "acelera"; c.duration = 2.0f;
+    PropertyTrack cur; cur.target = TrackTarget::Parameter; cur.parameterName = "velocidad";
+    cur.keys = { { 0.0f, 1.0f }, { 2.0f, 7.0f } };
+    PropertyTrack pos; pos.property = PropertyId::PositionY;
+    pos.keys = { { 0.0f, 0.0f }, { 2.0f, 3.0f } };
+    c.tracks = { cur, pos };
+    a->addPropertyClip(c);
+    go->setAnimator(a);
+
+    const nlohmann::json ja = animatorToJson(*a);
+    // contains ANTES de indexar: si la clave no se escribe, nlohmann aborta
+    // (exit 3 mudo) en vez de dar FAIL.
+    const auto& pj = ja["propertyClips"][0]["tracks"];
+    CHECK(pj[0].contains("target"));
+    if (pj[0].contains("target"))
+    {
+        CHECK(pj[0]["target"] == "parameter");
+        CHECK(pj[0].contains("parameter") && pj[0]["parameter"] == "velocidad");
+    }
+    // La pista de propiedad se guarda como siempre: sin "target".
+    CHECK(!pj[1].contains("target"));
+
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& leido = *found->getAnimator();
+    CHECK(leido.propertyClips().size() == 1u);
+    if (leido.propertyClips().empty()) return;
+    const auto& pistas = leido.propertyClips()[0].tracks;
+    CHECK(pistas.size() == 2u);
+    if (pistas.size() != 2u) return;
+    CHECK(pistas[0].target == TrackTarget::Parameter);
+    CHECK(pistas[0].parameterName == "velocidad");
+    CHECK(pistas[0].keys.size() == 2u);
+    CHECK(pistas[1].target == TrackTarget::Property);
+    CHECK(pistas[1].property == PropertyId::PositionY);
+
+    // Una curva sin nombre de parámetro se descarta al cargar.
+    nlohmann::json roto = j;
+    for (auto& nodo : roto["root"]["children"])
+        if (nodo.contains("animator"))
+            nodo["animator"]["propertyClips"][0]["tracks"][0]["parameter"] = "";
+    Scene loaded2("Loaded2");
+    CHECK(loaded2.fromJson(roto, pm, am));
+    GameObject* f2 = loaded2.findById(id);
+    CHECK(f2 && f2->hasAnimator());
+    if (!f2 || !f2->hasAnimator()) return;
+    CHECK(f2->getAnimator()->propertyClips()[0].tracks.size() == 1u);
+}
+
 static void test_property_clips_bad_file_warns(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -8829,6 +8890,7 @@ int main()
     test_ik_serialization(pm, am);
     test_ik_bad_file_warns(pm, am);
     test_property_clips_serialization(pm, am);
+    test_curve_serialization(pm, am);
     test_property_clips_bad_file_warns(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
