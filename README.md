@@ -704,6 +704,18 @@ cross-fade the values blend (rotations take the short way round). Layer masks ar
 so they do not apply to properties. The component is opt-in: **Properties → Add → Animator**,
 now available on any object — without a skinned mesh it simply has no mesh clips to name.
 
+A track can also write a **Float parameter** of the Animator instead of a property of the
+object: that is a **clip curve**. It lets the animation's own time drive the state machine —
+a transition on `speed > 4`, a value feeding a state's speed parameter, a window that opens
+and closes during an attack. In the **Property Clips** section, `+ curva` adds one and the
+combo picks which Float parameter it writes; a curve naming a parameter that isn't a declared
+Float shows in red and does nothing. Two rules are worth knowing: a curve is evaluated
+**before** the transitions, so its value of this frame already decides this frame's
+transitions (the editor preview writes it too, so it overwrites whatever you typed into the
+panel while the preview runs); and if two layers have a curve for the same parameter the
+**last one wins** — the layer's weight does not scale the value (a pose is blended, a
+parameter is written), and a layer at weight 0 still writes its curve.
+
 The Animator has **layers**, like Unity's. Layer 0 is the base graph; every extra layer is a
 full state machine of its own (states, transitions, entry, Any State) that reads the same
 parameters, so one trigger can move several layers in the same frame. Each extra layer has a
