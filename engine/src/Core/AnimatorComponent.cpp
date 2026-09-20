@@ -591,6 +591,90 @@ namespace DonTopo
         return -1;
     }
 
+    int AnimatorComponent::addPropertyClip(PropertyClip c)
+    {
+        if ((int)m_propertyClips.size() >= kMaxPropertyClips) return -1;
+        m_propertyClips.push_back(std::move(c));
+        return (int)m_propertyClips.size() - 1;
+    }
+
+    void AnimatorComponent::removePropertyClip(int i)
+    {
+        if (i < 0 || i >= (int)m_propertyClips.size()) return;
+        m_propertyClips.erase(m_propertyClips.begin() + i);
+    }
+
+    void AnimatorComponent::bindProperties(const GameObject* go, std::vector<std::string>* warnings)
+    {
+        for (auto& L : m_layers)
+            for (auto& st : L.states)
+            {
+                st.propertyClipIndex = -1;
+                if (st.propertyClipName.empty()) continue;
+                for (int i = 0; i < (int)m_propertyClips.size(); i++)
+                    if (m_propertyClips[(size_t)i].name == st.propertyClipName) { st.propertyClipIndex = i; break; }
+                if (st.propertyClipIndex < 0)
+                {
+                    if (warnings)
+                        warnings->push_back("Animator: el estado '" + st.name + "' referencia el clip de "
+                                            "propiedades '" + st.propertyClipName + "', que no existe");
+                    continue;
+                }
+                // Sin clip de malla resuelto, el reloj del estado sale del clip
+                // de propiedades: el Animator cuenta en TICKS, así que se le da
+                // un ritmo fijo y la duración en ticks que le corresponde. Con
+                // clip de malla manda ese, y el de propiedades se muestrea por
+                // la fase del estado.
+                if (st.clipIndex < 0)
+                {
+                    st.ticksPerSecond = 30.0f;
+                    st.duration       = m_propertyClips[(size_t)st.propertyClipIndex].duration * st.ticksPerSecond;
+                }
+            }
+
+        for (auto& clip : m_propertyClips)
+            for (auto& tr : clip.tracks)
+            {
+                tr.resolved = !go || propertyAvailable(*go, tr.property);
+                if (!tr.resolved && warnings)
+                    warnings->push_back("Animator: la pista '" + std::string(propertyName(tr.property)) +
+                                        "' del clip '" + clip.name + "' necesita un componente que el objeto no tiene");
+            }
+    }
+
+    int AnimatorComponent::propertySamples(PropertySampleRef* out, int max) const
+    {
+        int n = 0;
+        // Mismo reparto que pose(): cada capa aporta su estado actual y, en un
+        // fade, también el que se apaga, con el peso de los dos multiplicado
+        // por el de la capa.
+        auto add = [&](int li, int stateIdx, float animTime, float peso) {
+            if (n >= max || peso <= 0.0f) return;
+            const Layer& L = m_layers[(size_t)li];
+            if (stateIdx < 0 || stateIdx >= (int)L.states.size()) return;
+            const State& st = L.states[(size_t)stateIdx];
+            if (st.propertyClipIndex < 0) return;
+            out[n++] = { st.propertyClipIndex,
+                         st.ticksPerSecond > 0.0f ? animTime / st.ticksPerSecond : 0.0f,
+                         peso };
+        };
+        for (int li = 0; li < (int)m_layers.size(); li++)
+        {
+            const Layer& L    = m_layers[(size_t)li];
+            const float  capa = layerWeight(li);
+            if (capa <= 0.0f) continue;
+            const float w = blendWeight(li);
+            if (blending(li))
+            {
+                add(li, L.prevState, L.prevAnimTime, capa * (1.0f - w));
+                add(li, L.currentState, L.animTime, capa * w);
+            }
+            else
+                add(li, L.currentState, L.animTime, capa);
+        }
+        return n;
+    }
+
     int AnimatorComponent::addIkConstraint(IkConstraint c)
     {
         if ((int)m_ik.size() >= kMaxIkConstraints) return -1;

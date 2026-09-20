@@ -358,8 +358,11 @@ static void test_property_samples_follow_the_graph()
     CHECK(n == 1);
     CHECK(m[0].clip == 0 && nearlyEqual(m[0].weight, 1.0f));
     CHECK(nearlyEqual(m[0].time, 0.1f));          // tiempo EN SEGUNDOS
-    // En el cross-fade suenan los dos, con pesos que suman 1.
+    // En el cross-fade suenan los dos, con pesos que suman 1. Hacen falta DOS
+    // updates: en el que dispara la transición el fade va por 0, así que el
+    // estado nuevo entra con peso 0 y todavía no aporta muestra.
     a.setTrigger("abre");
+    a.update(0.016f, true);
     a.update(0.25f, true);
     n = a.propertySamples(m, 8);
     CHECK(n == 2);

@@ -8117,6 +8117,118 @@ static void test_property_light_and_material()
     CHECK(nearlyEqual(propertyGet(*go, PropertyId::MaterialMetallic), 0.75f));
 }
 
+// Puerta: Cerrada (clip "cerrar") -> Abierta (clip "abrir") por trigger.
+static AnimatorComponent makePuerta()
+{
+    AnimatorComponent a;
+    PropertyClip cerrar;
+    cerrar.name = "cerrar"; cerrar.duration = 1.0f;
+    PropertyTrack tc; tc.property = PropertyId::PositionY;
+    tc.keys = { { 0.0f, 0.0f }, { 1.0f, 0.0f } };
+    cerrar.tracks.push_back(tc);
+    PropertyClip abrir;
+    abrir.name = "abrir"; abrir.duration = 2.0f;
+    PropertyTrack ta; ta.property = PropertyId::PositionY;
+    ta.keys = { { 0.0f, 0.0f }, { 2.0f, 4.0f } };
+    abrir.tracks.push_back(ta);
+    a.addPropertyClip(cerrar);
+    a.addPropertyClip(abrir);
+    AnimatorComponent::State s;
+    s.name = "Cerrada"; s.propertyClipName = "cerrar";
+    a.addState(s);
+    s.name = "Abierta"; s.propertyClipName = "abrir";
+    a.addState(s);
+    a.setEntryState(0);
+    a.addParameter("abre", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 0.5f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "abre";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+    return a;
+}
+
+static void test_property_clip_binding_and_duration()
+{
+    AnimatorComponent a = makePuerta();
+    std::vector<std::string> avisos;
+    a.bindProperties(nullptr, &avisos);
+    CHECK(avisos.empty());
+    CHECK(a.states()[1].propertyClipIndex == 1);
+    // Sin clip de malla, la duración del estado sale del clip de propiedades.
+    CHECK(a.states()[1].ticksPerSecond > 0.0f);
+    CHECK(nearlyEqual(a.states()[1].duration / a.states()[1].ticksPerSecond, 2.0f));
+    // Un nombre que no existe avisa y deja el estado sin clip.
+    a.statesMutable()[0].propertyClipName = "noExiste";
+    avisos.clear();
+    a.bindProperties(nullptr, &avisos);
+    CHECK(a.states()[0].propertyClipIndex == -1);
+    CHECK(avisos.size() == 1u);
+    CHECK(a.addPropertyClip(PropertyClip{}) >= 0);
+    while (a.propertyClips().size() < (size_t)AnimatorComponent::kMaxPropertyClips)
+        CHECK(a.addPropertyClip(PropertyClip{}) >= 0);
+    CHECK(a.addPropertyClip(PropertyClip{}) == -1);
+}
+
+static void test_property_clip_tracks_resolved_against_object()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Farola");
+    AnimatorComponent a;
+    PropertyClip parpadeo;
+    parpadeo.name = "parpadeo"; parpadeo.duration = 1.0f;
+    PropertyTrack luz; luz.property = PropertyId::LightIntensity;
+    luz.keys = { { 0.0f, 0.0f }, { 1.0f, 5.0f } };
+    PropertyTrack pos; pos.property = PropertyId::PositionY;
+    pos.keys = { { 0.0f, 0.0f }, { 1.0f, 1.0f } };
+    parpadeo.tracks = { luz, pos };
+    a.addPropertyClip(parpadeo);
+    std::vector<std::string> avisos;
+    a.bindProperties(go, &avisos);
+    CHECK(!a.propertyClips()[0].tracks[0].resolved);   // no hay LightComponent
+    CHECK(a.propertyClips()[0].tracks[1].resolved);
+    CHECK(avisos.size() == 1u);
+    go->setLight(std::make_shared<LightComponent>());
+    avisos.clear();
+    a.bindProperties(go, &avisos);
+    CHECK(a.propertyClips()[0].tracks[0].resolved);
+    CHECK(avisos.empty());
+}
+
+static void test_property_samples_follow_the_graph()
+{
+    AnimatorComponent a = makePuerta();
+    a.bindProperties(nullptr, nullptr);
+    a.reset();
+    a.update(0.1f, true);
+    AnimatorComponent::PropertySampleRef m[8];
+    int n = a.propertySamples(m, 8);
+    CHECK(n == 1);
+    CHECK(m[0].clip == 0 && nearlyEqual(m[0].weight, 1.0f));
+    CHECK(nearlyEqual(m[0].time, 0.1f));          // tiempo EN SEGUNDOS
+    // En el cross-fade suenan los dos, con pesos que suman 1. Hacen falta DOS
+    // updates: en el que dispara la transición el fade va por 0, así que el
+    // estado nuevo entra con peso 0 y todavía no aporta muestra.
+    a.setTrigger("abre");
+    a.update(0.016f, true);
+    a.update(0.25f, true);
+    n = a.propertySamples(m, 8);
+    CHECK(n == 2);
+    CHECK(nearlyEqual(m[0].weight + m[1].weight, 1.0f));
+    CHECK(m[0].weight > 0.0f && m[1].weight > 0.0f);
+    CHECK(m[0].clip != m[1].clip);
+    // Un estado sin clip de propiedades no aporta muestra.
+    a.statesMutable()[1].propertyClipName.clear();
+    a.bindProperties(nullptr, nullptr);
+    a.reset();
+    a.update(0.016f, true);
+    a.setTrigger("abre");
+    a.update(0.25f, true);
+    n = a.propertySamples(m, 8);
+    CHECK(n == 1 && m[0].clip == 0);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -8281,6 +8393,9 @@ int main()
     test_property_names_round_trip();
     test_property_get_set_transform();
     test_property_light_and_material();
+    test_property_clip_binding_and_duration();
+    test_property_clip_tracks_resolved_against_object();
+    test_property_samples_follow_the_graph();
     test_ik_graph_key_and_apply_graph();
     test_ik_lookat();
     test_ik_twobone_reaches_target();
