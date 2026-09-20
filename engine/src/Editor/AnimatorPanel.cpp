@@ -520,8 +520,12 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
             // cada clip recuerda su estado él solo.
             const std::string etiqueta = (clip.name.empty() ? std::string("(sin nombre)") : clip.name) +
                                          "###clip";
-            const bool abierto = ImGui::CollapsingHeader(etiqueta.c_str());
-            ImGui::SameLine();
+            // AllowOverlap: la cabecera ocupa la fila entera, así que sin el
+            // flag ImGui le da el clic a ella (el primer item enviado) y la "x"
+            // no se podía pulsar nunca. Mismo patrón que la lista de fuentes.
+            const bool abierto = ImGui::CollapsingHeader(etiqueta.c_str(),
+                                                         ImGuiTreeNodeFlags_AllowOverlap);
+            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f);
             if (ImGui::SmallButton("x###quitarClip")) quitarClip = i;
             if (abierto)
             {
