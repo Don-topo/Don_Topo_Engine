@@ -5055,6 +5055,10 @@ struct SkinnedRendererDoble
     bool      poseRecibida  = false;
     AnimationIk ik;
     bool      ikRecibida    = false;
+    bool      factoresRecibidos = false;
+    size_t    factoresIndice    = 0;
+    float     factorMetallic    = -1.0f;
+    float     factorRoughness   = -1.0f;
     float     dtSinAnimator = -1.0f;
     glm::mat4 transform     = glm::mat4(0.0f);
     float     ssr           = -1.0f;
@@ -5067,6 +5071,11 @@ struct SkinnedRendererDoble
         pose = p; poseRecibida = true;
     }
     void setAnimationIk(int, const AnimationIk& v) { orden.push_back("ik"); ik = v; ikRecibida = true; }
+    void setObjectMaterialFactors(size_t i, float m, float r)
+    {
+        orden.push_back("factores");
+        factoresRecibidos = true; factoresIndice = i; factorMetallic = m; factorRoughness = r;
+    }
     void setSkinnedTransform(int, const glm::mat4& m) { orden.push_back("transform"); transform = m; }
     void setSkinnedSsr(int, float s)                  { orden.push_back("ssr"); ssr = s; }
 
@@ -5227,8 +5236,10 @@ static void test_apply_skinned_frame_edit_mode_does_not_move_the_graph()
     CHECK(a->currentStateName() == "B");
 }
 
-// Un objeto que no está dado de alta en el backend no tiene índice: ni se
-// dibuja ni se le avanza el reloj, igual que hacía el `if` de los hosts.
+// Un objeto que no está dado de alta en el backend no tiene índice: no se le
+// manda NADA al backend. Su grafo sí corre: desde los clips de propiedades
+// (C14) el Animator anima objetos sin malla con esqueleto, y antes salía por
+// esta misma puerta sin hacer nada.
 static void test_apply_skinned_frame_ignores_unregistered_object()
 {
     Scene scene("Test");
@@ -5239,11 +5250,10 @@ static void test_apply_skinned_frame_ignores_unregistered_object()
     SkinnedRendererDoble r;
     applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
 
+    // Al backend, nada: ni pose, ni IK, ni transform, ni SSR.
     CHECK(r.orden.empty());
-    // El estado y no animTime: el trigger está armado, así que si el helper
-    // llegara a correr la transición dispararía y dejaría animTime a 0 de todas
-    // formas — esa aserción pasaría con la guarda quitada y no probaría nada.
-    CHECK(a->currentStateName() == "A");
+    // Pero el grafo sí avanza: el trigger armado dispara su transición.
+    CHECK(a->currentStateName() == "B");
 }
 
 // Transform y SSR van al backend con el resto del bloque, y el SSR apagado
@@ -8230,6 +8240,64 @@ static void test_property_samples_follow_the_graph()
     CHECK(n == 1 && m[0].clip == 0);
 }
 
+static void test_property_clips_drive_a_non_skinned_object()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Puerta");
+    auto a = std::make_shared<AnimatorComponent>(makePuerta());
+    go->setAnimator(a);
+    a->bindProperties(go, nullptr);
+    a->reset();
+    CHECK(go->skinnedRenderIndex < 0);           // no es skinned: antes no se animaba
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.5f, /*evaluateTransitions=*/true);
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionY), 0.0f));   // "cerrar" es plano
+    a->setTrigger("abre");
+    applySkinnedFrame(*go, r, 0.016f, true);     // entra en "Abierta"
+    applySkinnedFrame(*go, r, 1.0f, true);       // 1 s de un clip de 2 s: mitad del recorrido
+    const float y = propertyGet(*go, PropertyId::PositionY);
+    CHECK(y > 0.5f && y < 4.0f);
+    // En Edit el grafo no transiciona, pero el tiempo del estado corre.
+    Scene scene2("Test");
+    GameObject* go2 = scene2.addGameObject("Puerta");
+    auto b = std::make_shared<AnimatorComponent>(makePuerta());
+    go2->setAnimator(b);
+    b->bindProperties(go2, nullptr);
+    b->reset();
+    b->setTrigger("abre");
+    applySkinnedFrame(*go2, r, 0.5f, /*evaluateTransitions=*/false);
+    CHECK(b->currentStateName() == "Cerrada");
+}
+
+static void test_property_clips_material_goes_to_the_backend()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    go->staticRenderIndex = 3;
+    auto a = std::make_shared<AnimatorComponent>();
+    PropertyClip brillo;
+    brillo.name = "brillo"; brillo.duration = 1.0f;
+    PropertyTrack tr; tr.property = PropertyId::MaterialMetallic;
+    tr.keys = { { 0.0f, 0.0f }, { 1.0f, 1.0f } };
+    brillo.tracks.push_back(tr);
+    a->addPropertyClip(brillo);
+    AnimatorComponent::State s;
+    s.name = "Brilla"; s.propertyClipName = "brillo";
+    a->addState(s);
+    a->setEntryState(0);
+    go->setAnimator(a);
+    a->bindProperties(go, nullptr);
+    a->reset();
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.5f, true);
+    CHECK(r.factoresRecibidos);
+    CHECK(r.factoresIndice == 3u);
+    CHECK(r.factorMetallic > 0.1f);
+    CHECK(nearlyEqual(r.factorMetallic, propertyGet(*go, PropertyId::MaterialMetallic)));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -8397,6 +8465,8 @@ int main()
     test_property_clip_binding_and_duration();
     test_property_clip_tracks_resolved_against_object();
     test_property_samples_follow_the_graph();
+    test_property_clips_drive_a_non_skinned_object();
+    test_property_clips_material_goes_to_the_backend();
     test_ik_graph_key_and_apply_graph();
     test_ik_lookat();
     test_ik_twobone_reaches_target();

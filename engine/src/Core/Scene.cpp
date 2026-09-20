@@ -3022,6 +3022,10 @@ namespace
             // quedan a -1 y currentClipIndex cae a 0.
             if (auto* sm = node->getSkinnedMesh())
                 anim->bindClips(*sm, warnings);
+            // Las pistas de propiedades se resuelven contra el OBJETO (qué
+            // componentes tiene), no contra la malla: un grafo sin esqueleto
+            // también tiene que quedar resuelto.
+            anim->bindProperties(node, warnings);
             node->setAnimator(std::move(anim));
         }
         if (j.contains("audioClip"))

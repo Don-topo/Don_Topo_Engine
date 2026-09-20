@@ -500,6 +500,9 @@ void AnimatorGraphCommand::apply(const AnimatorComponent::Graph& g)
     // también protege un futuro undo a mitad de Play.
     if (const SkinnedMesh* mesh = go->getSkinnedMesh())
         go->getAnimator()->rebindClips(*mesh, nullptr);
+    // El snapshot trae los clips de propiedades enteros: sus índices y el
+    // `resolved` de cada pista se rehacen igual que los clipIndex.
+    go->getAnimator()->bindProperties(go, nullptr);
 }
 
 AnimationSourceCommand::AnimationSourceCommand(Scene& scene, EditorRenderer* renderer,
@@ -551,6 +554,7 @@ void AnimationSourceCommand::applyAdd()
     {
         std::vector<std::string> bindWarnings;
         go->getAnimator()->rebindClips(*mesh, &bindWarnings);
+        go->getAnimator()->bindProperties(go, &bindWarnings);
         // Sin canal de log desde Command.cpp (ICommand no conoce
         // EditorContext/pushLog, a diferencia de AnimatorPanel): se
         // descartan, mismo precedente que ya sienta este mismo método unas
@@ -641,6 +645,7 @@ void AnimationSourceCommand::applyRemove()
     {
         std::vector<std::string> bindWarnings;
         go->getAnimator()->rebindClips(*mesh, &bindWarnings);
+        go->getAnimator()->bindProperties(go, &bindWarnings);
         // Se descartan por el mismo motivo que en applyAdd: no hay canal de
         // log disponible desde un ICommand.
     }
