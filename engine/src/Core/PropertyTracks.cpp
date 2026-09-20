@@ -70,18 +70,24 @@ namespace DonTopo
         return glm::mix(lo->value, hi->value, (tiempo - lo->time) / span);
     }
 
-    float blendPropertyValues(PropertyId id, const PropertyContribution* c, int n)
+    float blendScalarValues(const PropertyContribution* c, int n)
     {
         if (n <= 0) return 0.0f;
         float total = 0.0f;
         for (int i = 0; i < n; i++) total += c[i].weight;
         if (total <= 0.0f) return 0.0f;
-        if (!propertyIsRotation(id))
-        {
-            float v = 0.0f;
-            for (int i = 0; i < n; i++) v += c[i].value * c[i].weight;
-            return v / total;
-        }
+        float v = 0.0f;
+        for (int i = 0; i < n; i++) v += c[i].value * c[i].weight;
+        return v / total;
+    }
+
+    float blendPropertyValues(PropertyId id, const PropertyContribution* c, int n)
+    {
+        if (n <= 0) return 0.0f;
+        if (!propertyIsRotation(id)) return blendScalarValues(c, n);
+        float total = 0.0f;
+        for (int i = 0; i < n; i++) total += c[i].weight;
+        if (total <= 0.0f) return 0.0f;
         // Ángulos: se mezcla la DIFERENCIA con la primera aportación,
         // normalizada a [-180, 180]. Mezclándolos en crudo, 350 y 10 darían
         // 180 (media aritmética) en vez de 0.

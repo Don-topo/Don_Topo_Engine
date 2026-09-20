@@ -67,6 +67,9 @@ namespace DonTopo
     // Mezcla de varias aportaciones a la MISMA propiedad. Las rotaciones van
     // por el camino corto: 350 y 10 dan 0, no 180.
     float blendPropertyValues(PropertyId id, const PropertyContribution* c, int n);
+    // Media ponderada a secas. Es lo que usa una curva: un parámetro no es un
+    // ángulo, así que no hay camino corto que respetar.
+    float blendScalarValues(const PropertyContribution* c, int n);
 
     // --- Acceso a las propiedades de un GameObject ---
     // El objeto tiene lo que hace falta para esta propiedad (la luz, sobre

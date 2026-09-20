@@ -8250,6 +8250,170 @@ static void test_curve_track_resolves_against_float_parameter()
     CHECK(PropertyTrack{}.target == TrackTarget::Property);
 }
 
+// Estado único con una curva 0 -> 10 en 1 s sobre el parámetro "velocidad".
+static AnimatorComponent makeCurvaVelocidad()
+{
+    AnimatorComponent a;
+    a.addParameter("velocidad", AnimatorComponent::ParamType::Float);
+    PropertyClip c;
+    c.name = "acelera"; c.duration = 1.0f;
+    PropertyTrack cur; cur.target = TrackTarget::Parameter; cur.parameterName = "velocidad";
+    cur.keys = { { 0.0f, 0.0f }, { 1.0f, 10.0f } };
+    c.tracks.push_back(cur);
+    a.addPropertyClip(c);
+    AnimatorComponent::State s;
+    s.name = "Arranca"; s.propertyClipName = "acelera";
+    a.addState(s);
+    a.setEntryState(0);
+    a.bindProperties(nullptr, nullptr);
+    return a;
+}
+
+static void test_curve_writes_the_parameter()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    a.update(0.25f, true);
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 2.5f));
+    a.update(0.25f, true);
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 5.0f));
+    // Una curva sin resolver no escribe: el parámetro se queda como estaba.
+    AnimatorComponent b = makeCurvaVelocidad();
+    b.propertyClipsMutable()[0].tracks[0].parameterName = "otro";
+    b.bindProperties(nullptr, nullptr);
+    b.setFloat("velocidad", -1.0f);
+    b.update(0.5f, true);
+    CHECK(nearlyEqual(b.getFloat("velocidad"), -1.0f));
+}
+
+static void test_curve_blends_during_cross_fade()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    // Segundo estado con una curva constante a 0 y transición por trigger.
+    PropertyClip frena;
+    frena.name = "frena"; frena.duration = 1.0f;
+    PropertyTrack cur; cur.target = TrackTarget::Parameter; cur.parameterName = "velocidad";
+    cur.keys = { { 0.0f, 0.0f }, { 1.0f, 0.0f } };
+    frena.tracks.push_back(cur);
+    a.addPropertyClip(frena);
+    AnimatorComponent::State s;
+    s.name = "Frena"; s.propertyClipName = "frena";
+    a.addState(s);
+    a.addParameter("para", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 1.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "para";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+    a.bindProperties(nullptr, nullptr);
+
+    // Arranca con curva CONSTANTE a 10: así lo que se mide es la mezcla y no
+    // dónde cae cada reloj (el estado hace loop y su rampa daría el wrap).
+    a.propertyClipsMutable()[0].tracks[0].keys = { { 0.0f, 10.0f }, { 1.0f, 10.0f } };
+    a.update(0.5f, true);
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 10.0f));
+    a.setTrigger("para");
+    a.update(0.0f, true);                 // arranca el fade, el destino pesa 0
+    a.update(0.5f, true);                 // mitad del fade: 0,5*10 + 0,5*0
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 5.0f));
+    a.update(0.5f, true);                 // fade terminado: manda Frena
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 0.0f));
+}
+
+static void test_curve_fires_its_transition_in_the_same_frame()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    AnimatorComponent::State s;
+    s.name = "Corre";
+    a.addState(s);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 0.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Float;
+    c.paramName = "velocidad"; c.compare = AnimatorComponent::Compare::Greater; c.threshold = 4.0f;
+    t.conditions.push_back(c);
+    a.addTransition(t);
+    a.bindProperties(nullptr, nullptr);
+    // En t=0,5 la curva vale 5: la transición salta en ESTE update, no en el
+    // siguiente.
+    a.update(0.5f, true);
+    CHECK(a.currentState() == 1);
+}
+
+static void test_curve_of_a_zero_weight_layer_still_writes()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    // Una capa con peso 0 no se ve, pero su máquina corre: su curva es
+    // información, no pose.
+    CHECK(a.addLayer("Info") == 1);
+    a.setLayerWeight(1, 0.0f);
+    a.addParameter("info", AnimatorComponent::ParamType::Float);
+    PropertyClip c;
+    c.name = "infoClip"; c.duration = 1.0f;
+    PropertyTrack cur; cur.target = TrackTarget::Parameter; cur.parameterName = "info";
+    cur.keys = { { 0.0f, 0.0f }, { 1.0f, 8.0f } };
+    c.tracks.push_back(cur);
+    a.addPropertyClip(c);
+    AnimatorComponent::State s;
+    s.name = "Info"; s.propertyClipName = "infoClip";
+    a.addState(s, 1);
+    a.setEntryState(0, 1);
+    a.bindProperties(nullptr, nullptr);
+    a.update(0.5f, true);
+    CHECK(nearlyEqual(a.getFloat("info"), 4.0f));
+}
+
+static void test_curve_last_layer_wins()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    CHECK(a.addLayer("Encima") == 1);
+    a.setLayerWeight(1, 1.0f);
+    PropertyClip c;
+    c.name = "encima"; c.duration = 1.0f;
+    PropertyTrack cur; cur.target = TrackTarget::Parameter; cur.parameterName = "velocidad";
+    cur.keys = { { 0.0f, 100.0f }, { 1.0f, 100.0f } };
+    c.tracks.push_back(cur);
+    a.addPropertyClip(c);
+    AnimatorComponent::State s;
+    s.name = "Encima"; s.propertyClipName = "encima";
+    a.addState(s, 1);
+    a.setEntryState(0, 1);
+    a.bindProperties(nullptr, nullptr);
+    a.update(0.5f, true);
+    // Las capas se recorren en orden: escribe la última.
+    CHECK(nearlyEqual(a.getFloat("velocidad"), 100.0f));
+}
+
+// El peso de la capa SÍ escala lo que se aplica al objeto (al revés que las
+// curvas, que se escriben tal cual).
+static void test_property_samples_scale_with_the_layer_weight()
+{
+    AnimatorComponent a = makePuerta();
+    CHECK(a.addLayer("Encima") == 1);
+    a.setLayerWeight(1, 0.25f);
+    PropertyClip c;
+    c.name = "sube"; c.duration = 1.0f;
+    PropertyTrack pos; pos.property = PropertyId::PositionY;
+    pos.keys = { { 0.0f, 0.0f }, { 1.0f, 4.0f } };
+    c.tracks.push_back(pos);
+    a.addPropertyClip(c);
+    AnimatorComponent::State s;
+    s.name = "Sube"; s.propertyClipName = "sube";
+    a.addState(s, 1);
+    a.setEntryState(0, 1);
+    a.bindProperties(nullptr, nullptr);
+    a.update(0.1f, true);
+
+    AnimatorComponent::PropertySampleRef m[8];
+    const int n = a.propertySamples(m, 8);
+    CHECK(n == 2);
+    if (n == 2)
+    {
+        CHECK(nearlyEqual(m[0].weight, 1.0f));     // capa base
+        CHECK(nearlyEqual(m[1].weight, 0.25f));    // capa con peso
+    }
+}
+
 static void test_property_samples_follow_the_graph()
 {
     AnimatorComponent a = makePuerta();
@@ -8613,6 +8777,12 @@ int main()
     test_property_clip_binding_and_duration();
     test_property_clip_tracks_resolved_against_object();
     test_curve_track_resolves_against_float_parameter();
+    test_curve_writes_the_parameter();
+    test_curve_blends_during_cross_fade();
+    test_curve_fires_its_transition_in_the_same_frame();
+    test_curve_of_a_zero_weight_layer_still_writes();
+    test_curve_last_layer_wins();
+    test_property_samples_scale_with_the_layer_weight();
     test_property_samples_follow_the_graph();
     test_property_clips_drive_a_non_skinned_object();
     test_property_clips_material_goes_to_the_backend();
