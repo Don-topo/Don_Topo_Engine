@@ -8317,7 +8317,10 @@ static void test_property_clips_serialization(PhysicsManager& pm, AudioManager& 
     CHECK(nearlyEqual(anim.propertyClips()[1].duration, 2.0f));
     CHECK(anim.propertyClips()[1].tracks.size() == 1u);
     CHECK(anim.propertyClips()[1].tracks[0].property == PropertyId::PositionY);
+    // El tamaño ANTES de indexar: sin esta guarda, un fallo de lectura de las
+    // keys no daba FAIL sino un abort mudo (exit 3) al salirse del vector.
     CHECK(anim.propertyClips()[1].tracks[0].keys.size() == 2u);
+    if (anim.propertyClips()[1].tracks[0].keys.size() != 2u) return;
     CHECK(nearlyEqual(anim.propertyClips()[1].tracks[0].keys[1].value, 4.0f));
     CHECK(anim.states()[1].propertyClipName == "abrir");
     // Un Animator sin clips de propiedades no escribe ninguna clave nueva.
