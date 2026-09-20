@@ -8582,6 +8582,29 @@ static void test_property_clips_apply_graph_restores()
 // El host propaga los worldTransform y empuja el transform ANTES de llamar al
 // helper: lo que se anima en este frame tiene que reenviarse, o el objeto iría
 // un frame por detrás (y sus hijos, dos).
+// Una curva no es una propiedad: no mueve el objeto ni marca el resultado del
+// frame. El parámetro sí se escribe (lo hace el componente en update).
+static void test_curve_does_not_touch_the_transform()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    go->staticRenderIndex = 3;
+    auto a = std::make_shared<AnimatorComponent>(makeCurvaVelocidad());
+    go->setAnimator(a);
+    a->bindProperties(go, nullptr);
+    a->reset();
+    scene.getRoot().updateWorldTransforms();
+    const float yAntes = propertyGet(*go, PropertyId::PositionY);
+    const float xAntes = propertyGet(*go, PropertyId::PositionX);
+
+    const AnimatorFrameResult r = applyAnimatorFrame(*go, 0.5f, true);
+    CHECK(!r.transform);
+    CHECK(!r.material);
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionX), xAntes));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionY), yAntes));
+    CHECK(nearlyEqual(a->getFloat("velocidad"), 5.0f));
+}
+
 static void test_property_clips_push_transform_and_world()
 {
     Scene scene("Test");
@@ -8787,6 +8810,7 @@ int main()
     test_property_clips_drive_a_non_skinned_object();
     test_property_clips_material_goes_to_the_backend();
     test_property_clips_push_transform_and_world();
+    test_curve_does_not_touch_the_transform();
     test_property_clips_apply_graph_restores();
     test_ik_graph_key_and_apply_graph();
     test_ik_lookat();
