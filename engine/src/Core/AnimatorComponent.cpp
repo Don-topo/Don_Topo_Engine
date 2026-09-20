@@ -1325,15 +1325,31 @@ namespace DonTopo
             // Hacia el estado actual solo con el flag: con un bool, reentrar
             // reiniciaría el estado cada frame.
             if (t.toState == L.currentState && !t.canTransitionToSelf) continue;
+            // Misma regla que abajo: una caja rota no dispara.
+            if (resolveEntryLeaf(t.toState, li) < 0) continue;
             if (transitionReady(t, n0, n1, conDuracion, li)) { elegida = &t; break; }
         }
         if (!elegida)
         {
-            for (const auto& t : L.transitions)
+            // Por NIVELES: primero las que salen de la hoja, luego las de su
+            // caja, luego las de la caja de arriba. Así una salida general de un
+            // bloque no le gana a una salida concreta de un estado solo porque
+            // se declarara antes. Any State ya se ha mirado arriba y sigue
+            // teniendo prioridad sobre todo esto.
+            int nivel = L.currentState;
+            for (int pasos = 0; nivel >= 0 && nivel < (int)L.states.size() && !elegida &&
+                                pasos <= (int)L.states.size(); pasos++)
             {
-                if (t.fromState != L.currentState) continue;
-                if (t.toState < 0 || t.toState >= (int)L.states.size()) continue;
-                if (transitionReady(t, n0, n1, conDuracion, li)) { elegida = &t; break; }
+                for (const auto& t : L.transitions)
+                {
+                    if (t.fromState != nivel) continue;
+                    if (t.toState < 0 || t.toState >= (int)L.states.size()) continue;
+                    // Entrar en una caja rota no dispara: mejor quedarse donde
+                    // se está que a medias en un estado que no existe.
+                    if (resolveEntryLeaf(t.toState, li) < 0) continue;
+                    if (transitionReady(t, n0, n1, conDuracion, li)) { elegida = &t; break; }
+                }
+                nivel = L.states[(size_t)nivel].parent;
             }
         }
         if (!elegida) return;
@@ -1425,7 +1441,9 @@ namespace DonTopo
     bool AnimatorComponent::play(const std::string& stateName, int layer)
     {
         const int idx = stateIndexByName(stateName, layer);
-        if (idx < 0) return false;
+        // Una caja entra por su hoja; si la cadena está rota no hay a dónde ir,
+        // y eso es un false, como un nombre que no existe.
+        if (idx < 0 || resolveEntryLeaf(idx, layer) < 0) return false;
         startTransitionTo(idx, 0.0f, layer);
         return true;
     }
@@ -1434,7 +1452,8 @@ namespace DonTopo
     {
         Layer& L = lay(layer);
         const int idx = stateIndexByName(stateName, layer);
-        if (idx < 0) return false;
+        // Misma guarda que play: una caja rota no tiene hoja a la que entrar.
+        if (idx < 0 || resolveEntryLeaf(idx, layer) < 0) return false;
         // Sin estado actual no hay nada que apagar: se entra con corte.
         const bool hayActual = L.currentState >= 0 && L.currentState < (int)L.states.size();
         startTransitionTo(idx, hayActual ? seconds : 0.0f, layer);

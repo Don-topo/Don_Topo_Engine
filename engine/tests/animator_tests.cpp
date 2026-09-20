@@ -8435,6 +8435,113 @@ static void test_submachine_hierarchy_helpers()
     CHECK(b.currentState() == 0);    // caja rota: no se mueve
 }
 
+// makeCajas + una transición Base -> Ataques y otra Ataques -> Base, por trigger.
+static AnimatorComponent makeCajasConTransiciones()
+{
+    AnimatorComponent a = makeCajas();
+    a.addParameter("entra", AnimatorComponent::ParamType::Trigger);
+    a.addParameter("sale",  AnimatorComponent::ParamType::Trigger);
+    auto liga = [&](int from, int to, const char* trigger) {
+        AnimatorComponent::Transition t;
+        t.fromState = from; t.toState = to; t.duration = 0.0f;
+        AnimatorComponent::Condition c;
+        c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = trigger;
+        t.conditions.push_back(c);
+        a.addTransition(t);
+    };
+    liga(0, 1, "entra");    // hacia la caja
+    liga(1, 0, "sale");     // desde la caja
+    return a;
+}
+
+static void test_submachine_transition_enters_the_leaf()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    a.reset();
+    CHECK(a.currentState() == 0);
+    a.setTrigger("entra");
+    a.update(0.016f, true);
+    // Ataques -> Combo -> Uno: se entra en la hoja, no en la caja.
+    CHECK(a.currentState() == 4);
+}
+
+static void test_submachine_broken_entry_does_not_fire()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    a.statesMutable()[3].subEntry = -1;    // Combo vacía
+    a.reset();
+    a.setTrigger("entra");
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);          // no se entra a medias
+
+    // Y la transición ni siquiera se ELIGE: si se eligiera, el trigger se
+    // consumiría (y el cross-fade arrancaría contra un estado que no cambia).
+    // Con la caja ya arreglada, el mismo trigger —sin volver a armarlo— tiene
+    // que entrar.
+    a.statesMutable()[3].subEntry = 4;
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 4);
+}
+
+static void test_submachine_exit_fires_from_any_leaf()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    a.reset();
+    a.setTrigger("entra");
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 4);          // dentro, a dos niveles
+    a.setTrigger("sale");
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);          // la transición DESDE la caja vale
+    // Y no dispara desde fuera: estando en Base, "sale" no hace nada.
+    a.setTrigger("sale");
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);
+}
+
+static void test_submachine_leaf_transition_wins_over_ancestor()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    AnimatorComponent::State s;
+    s.name = "Otro";
+    const int otro = a.addState(s);        // 5, en la raíz
+    a.addParameter("ya", AnimatorComponent::ParamType::Bool);
+    auto liga = [&](int from, int to) {
+        AnimatorComponent::Transition t;
+        t.fromState = from; t.toState = to; t.duration = 0.0f;
+        AnimatorComponent::Condition c;
+        c.type = AnimatorComponent::ConditionType::Bool; c.paramName = "ya"; c.expected = true;
+        t.conditions.push_back(c);
+        a.addTransition(t);
+    };
+    // La del ANCESTRO se declara antes que la de la hoja, a propósito: lo que
+    // decide es el nivel, no el orden del vector.
+    liga(1, 0);            // desde la caja -> Base
+    liga(4, otro);         // desde la hoja -> Otro
+    a.reset();
+    a.setTrigger("entra");
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 4);
+    a.setBool("ya", true);
+    a.update(0.016f, true);
+    CHECK(a.currentState() == otro);       // gana la de la hoja
+}
+
+static void test_play_resolves_a_submachine()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    a.reset();
+    CHECK(a.play("Ataques", 0));
+    CHECK(a.currentState() == 4);
+    // Caja vacía: no hay hoja a la que ir.
+    AnimatorComponent b = makeCajasConTransiciones();
+    b.statesMutable()[3].subEntry = -1;
+    b.reset();
+    CHECK(!b.play("Ataques", 0));
+    CHECK(b.currentState() == 0);
+    CHECK(!b.crossFade("Ataques", 0.2f, 0));
+}
+
 static void test_mesh_clock_advances_in_ticks()
 {
     // dt en SEGUNDOS, reloj en TICKS: sin el ritmo, medio segundo de un clip a
@@ -8998,6 +9105,11 @@ int main()
     test_curve_of_a_zero_weight_layer_still_writes();
     test_curve_last_layer_wins();
     test_submachine_hierarchy_helpers();
+    test_submachine_transition_enters_the_leaf();
+    test_submachine_broken_entry_does_not_fire();
+    test_submachine_exit_fires_from_any_leaf();
+    test_submachine_leaf_transition_wins_over_ancestor();
+    test_play_resolves_a_submachine();
     test_mesh_clock_advances_in_ticks();
     test_curve_condition_thresholds();
     test_curve_draw_range();
