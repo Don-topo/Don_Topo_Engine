@@ -35,7 +35,14 @@ namespace DonTopo
     void AnimatorComponent::enterState(int idx, int layer)
     {
         Layer& L = lay(layer);
-        L.currentState = idx;
+        // Una caja no se reproduce: se entra en su hoja. Si la cadena está rota
+        // no se mueve nada, que es la garantía de que currentState nunca es una
+        // caja venga de donde venga (transición, Play de Lua o el editor).
+        // idx < 0 sigue significando "sin estado": lo usa removeState al vaciar
+        // la capa.
+        const int hoja = resolveEntryLeaf(idx, layer);
+        if (idx >= 0 && hoja < 0) return;
+        L.currentState = hoja;
         L.animTime     = 0.0f;
         L.finished     = false;
         L.stateTicks   = 0.0;
@@ -1376,6 +1383,35 @@ namespace DonTopo
             L.freezePending = false;
         }
         enterState(idx, layer);
+    }
+
+    bool AnimatorComponent::isDescendantOf(int state, int maybeAncestor, int layer) const
+    {
+        const Layer& L = lay(layer);
+        if (maybeAncestor < 0 || state < 0 || state >= (int)L.states.size()) return false;
+        int actual = L.states[(size_t)state].parent;
+        // El tope es el número de estados: un fichero con un ciclo de parent no
+        // puede colgar el motor.
+        for (int pasos = 0; actual >= 0 && actual < (int)L.states.size() && pasos <= (int)L.states.size(); pasos++)
+        {
+            if (actual == maybeAncestor) return true;
+            actual = L.states[(size_t)actual].parent;
+        }
+        return false;
+    }
+
+    int AnimatorComponent::resolveEntryLeaf(int state, int layer) const
+    {
+        const Layer& L = lay(layer);
+        int actual = state;
+        for (int pasos = 0; pasos <= (int)L.states.size(); pasos++)
+        {
+            if (actual < 0 || actual >= (int)L.states.size()) return -1;
+            const State& st = L.states[(size_t)actual];
+            if (!st.isSubMachine) return actual;
+            actual = st.subEntry;
+        }
+        return -1;   // ciclo de subEntry
     }
 
     int AnimatorComponent::stateIndexByName(const std::string& name, int layer) const

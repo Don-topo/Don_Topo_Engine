@@ -8391,6 +8391,50 @@ static void test_curve_last_layer_wins()
 // con qué rango vertical.
 // El reloj del camino SIN Animator, que los dos backends comparten desde que
 // se descubrió que habían divergido (A13).
+// Base -> caja "Ataques" { Golpe, caja "Combo" { Uno } }
+static AnimatorComponent makeCajas()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s;
+    s.name = "Base";      a.addState(s);                                             // 0
+    s = {}; s.name = "Ataques"; s.isSubMachine = true;             a.addState(s);    // 1
+    s = {}; s.name = "Golpe";   s.parent = 1;                      a.addState(s);    // 2
+    s = {}; s.name = "Combo";   s.parent = 1; s.isSubMachine = true; a.addState(s);  // 3
+    s = {}; s.name = "Uno";     s.parent = 3;                      a.addState(s);    // 4
+    a.statesMutable()[1].subEntry = 3;   // Ataques entra por Combo
+    a.statesMutable()[3].subEntry = 4;   // Combo entra por Uno
+    a.setEntryState(0);
+    return a;
+}
+
+static void test_submachine_hierarchy_helpers()
+{
+    AnimatorComponent a = makeCajas();
+    CHECK(a.isDescendantOf(4, 1, 0));    // Uno está dentro de Ataques (dos niveles)
+    CHECK(a.isDescendantOf(2, 1, 0));
+    CHECK(!a.isDescendantOf(0, 1, 0));   // Base no
+    CHECK(!a.isDescendantOf(1, 1, 0));   // uno mismo no es su descendiente
+    // Entrar en una caja baja hasta la hoja.
+    CHECK(a.resolveEntryLeaf(1, 0) == 4);
+    CHECK(a.resolveEntryLeaf(2, 0) == 2);   // una hoja se resuelve a sí misma
+    // Caja vacía: no hay hoja, y eso NO es entrar a medias.
+    a.statesMutable()[3].subEntry = -1;
+    CHECK(a.resolveEntryLeaf(1, 0) == -1);
+    // Un ciclo de subEntry no puede colgar el motor.
+    a.statesMutable()[3].subEntry = 1;
+    CHECK(a.resolveEntryLeaf(1, 0) == -1);
+    // El estado actual nunca es una caja: entrar por la entrada de la capa
+    // (setEntryState -> resetPlayback -> enterState) resuelve la hoja.
+    AnimatorComponent b = makeCajas();
+    b.setEntryState(1, 0);
+    CHECK(b.currentState() == 4);
+    b.setEntryState(0, 0);
+    CHECK(b.currentState() == 0);
+    b.statesMutable()[3].subEntry = -1;
+    b.setEntryState(1, 0);
+    CHECK(b.currentState() == 0);    // caja rota: no se mueve
+}
+
 static void test_mesh_clock_advances_in_ticks()
 {
     // dt en SEGUNDOS, reloj en TICKS: sin el ritmo, medio segundo de un clip a
@@ -8953,6 +8997,7 @@ int main()
     test_curve_fires_its_transition_in_the_same_frame();
     test_curve_of_a_zero_weight_layer_still_writes();
     test_curve_last_layer_wins();
+    test_submachine_hierarchy_helpers();
     test_mesh_clock_advances_in_ticks();
     test_curve_condition_thresholds();
     test_curve_draw_range();

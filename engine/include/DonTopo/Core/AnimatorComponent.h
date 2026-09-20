@@ -131,6 +131,14 @@ namespace DonTopo
                 // el SkinnedMesh se reconstruye desde el FBX en cada carga y no
                 // se serializa, así que un loop guardado ahí se perdería.
                 bool        loop           = true;
+                // --- Sub-máquinas (C10) ---
+                // El vector de la capa sigue plano: esto es contención, no un
+                // grafo anidado. Una caja NO se reproduce y nunca es el estado
+                // actual; sirve para agrupar en el canvas y para escribir una
+                // transición contra el bloque entero.
+                int         parent         = -1;      // quién lo contiene; -1 = raíz de la capa
+                bool        isSubMachine   = false;   // es una caja
+                int         subEntry       = -1;      // hijo por el que se entra (solo si isSubMachine)
                 // --- Blend 1D por parámetro ---
                 // El clip principal (clipName) es una entrada más, con
                 // clipThreshold; blendEntries son los extra. Suenan los dos
@@ -510,6 +518,14 @@ namespace DonTopo
             // editor identifica nodos por editorId, y buscar en la base por
             // defecto hacía invisibles los nodos de las demás capas.
             int   stateIndexByEditorId(int editorId, int layer) const;
+            // ¿`state` está dentro de `maybeAncestor`, a cualquier profundidad?
+            // Uno mismo NO es descendiente de sí mismo.
+            bool  isDescendantOf(int state, int maybeAncestor, int layer) const;
+            // Hoja en la que hay que entrar al ir a `state`: él mismo si no es
+            // caja, o el final de la cadena de subEntry. -1 si la cadena se
+            // rompe (caja vacía, índice malo o ciclo): entrar a medias en un
+            // estado que no existe es peor que no moverse.
+            int   resolveEntryLeaf(int state, int layer) const;
             void  removeLayer(int i);                 // no la 0
             void  moveLayer(int from, int to);        // ni desde ni hacia la 0
             void  setLayerWeight(int i, float w);     // acotado a [0, 1]
