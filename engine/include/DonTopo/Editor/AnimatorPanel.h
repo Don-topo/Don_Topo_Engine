@@ -85,6 +85,10 @@ private:
     // en la sesión, no en el project.json (ahí va la visibilidad de paneles).
     float m_anchoColumna  = 300.0f;
     int  m_layer          = 0;
+    // Sub-máquina que se está mirando por dentro; -1 es la raíz de la capa. Se
+    // resetea al cambiar de capa o de objeto: su índice no significa nada en
+    // otro grafo.
+    int  m_nivel          = -1;
     int  m_boundLayer     = -1;
     int  m_renamingLayer  = -1;
     bool m_focusRename    = false;

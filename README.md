@@ -704,6 +704,17 @@ cross-fade the values blend (rotations take the short way round). Layer masks ar
 so they do not apply to properties. The component is opt-in: **Properties → Add → Animator**,
 now available on any object — without a skinned mesh it simply has no mesh clips to name.
 
+A state can also be a **sub-state machine**: a box that holds other states. It never plays —
+entering it enters its **entry** state, following the chain down to a leaf — and a transition
+drawn *from* the box fires from any state inside it, at any depth. A box whose entry chain is
+broken doesn't fire at all: entering half-way into a state that isn't there is worse than not
+moving. Transitions are evaluated Any State first, then the current state's own, then its
+box's, then the box above it, so a general exit never beats a specific one. Deleting a box
+deletes what it holds, in one undo step. Double-click a box to go in, use the breadcrumb above
+the canvas to come back out, and the `padre` button on a node to move it into a box. It
+organises a graph; it is not Unity's hierarchical state machine, as there is no active
+compound state.
+
 A track can also write a **Float parameter** of the Animator instead of a property of the
 object: that is a **clip curve**. It lets the animation's own time drive the state machine —
 a transition on `speed > 4`, a value feeding a state's speed parameter, a window that opens

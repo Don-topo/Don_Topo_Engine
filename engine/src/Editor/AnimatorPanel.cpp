@@ -367,6 +367,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
                                        ImGuiSelectableFlags_AllowDoubleClick, ImVec2(200.0f, 0.0f)))
             {
                 m_layer = li;
+                m_nivel = -1;   // el nivel es de la capa que se deja atras
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                 {
                     m_renamingLayer = li;
@@ -386,6 +387,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
             if (n >= 0)
             {
                 m_layer = n;
+                m_nivel = -1;   // el nivel es de la capa que se deja atras
                 ctx.pushLog("Animator: capa '" + anim->layer(n).name + "' añadida");
             }
         }
@@ -859,6 +861,29 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
 {
     auto anim = go->getAnimator();
 
+    // Breadcrumb del nivel, encima del lienzo: es la única forma de salir de una
+    // caja, y de ver dónde se está cuando el grafo visible no es el de la raíz.
+    {
+        const auto& sts = anim->states(m_layer);
+        if (ImGui::SmallButton("Base###nivelRaiz")) m_nivel = -1;
+        std::vector<int> cadena;
+        for (int n = m_nivel; n >= 0 && n < (int)sts.size(); n = sts[(size_t)n].parent)
+        {
+            cadena.push_back(n);
+            if ((int)cadena.size() > (int)sts.size()) break;   // jerarquía rota: no colgarse
+        }
+        for (int k = (int)cadena.size() - 1; k >= 0; k--)
+        {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("/");
+            ImGui::SameLine();
+            ImGui::PushID(cadena[(size_t)k]);
+            if (ImGui::SmallButton(sts[(size_t)cadena[(size_t)k]].name.c_str()))
+                m_nivel = cadena[(size_t)k];
+            ImGui::PopID();
+        }
+    }
+
     ed::SetCurrentEditor(m_ctx);
     // El tooltip de un widget de dentro de un nodo NO se puede dibujar aquí:
     // entre ed::Begin y ed::End el ratón y las ventanas van en coordenadas del
@@ -874,8 +899,34 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
 
     // --- Nodos ---
     const auto& states = anim->states(m_layer);
+    // El nivel puede haber quedado apuntando a un estado que ya no existe (se
+    // borró la caja que se estaba mirando por dentro): se vuelve a la raíz.
+    if (m_nivel >= (int)states.size() || (m_nivel >= 0 && !states[(size_t)m_nivel].isSubMachine))
+        m_nivel = -1;
+
+    // Fila de pines del nodo: la usan el estado normal y la caja, que se dibuja
+    // sin clip, loop ni eventos. Una sola copia para que las dos salgan iguales.
+    auto pinesDelNodo = [](int eid, float headerW) {
+        // "-> in" a la izquierda, "out ->" empujado al borde derecho del nodo
+        // (el ancho de la cabecera es el ancho real del nodo).
+        ed::BeginPin(inputPinId(eid), ed::PinKind::Input);
+        ImGui::TextUnformatted("-> in");
+        ed::EndPin();
+        ImGui::SameLine();
+        const float inW  = ImGui::CalcTextSize("-> in").x;
+        const float outW = ImGui::CalcTextSize("out ->").x;
+        const float pad  = headerW - inW - outW;
+        // Nodo muy estrecho: un hueco fijo pequeño basta para que no se solapen.
+        ImGui::Dummy(ImVec2(pad > 1.0f ? pad : 8.0f, 0.0f));
+        ImGui::SameLine();
+        ed::BeginPin(outputPinId(eid), ed::PinKind::Output);
+        ImGui::TextUnformatted("out ->");
+        ed::EndPin();
+    };
     for (size_t i = 0; i < states.size(); i++)
     {
+        // Solo lo de ESTE nivel: los hijos de una caja se ven al entrar en ella.
+        if (states[i].parent != m_nivel) continue;
         const int eid = states[i].editorId;
         ed::BeginNode(nodeId(eid));
 
@@ -896,14 +947,69 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             ImGui::TextUnformatted(states[i].name.c_str());
         }
 
+        // Una caja no reproduce nada: en vez del clip muestra por dónde se entra
+        // y avisa cuando está vacía, que es cuando las transiciones hacia ella
+        // no disparan.
+        if (states[i].isSubMachine)
+        {
+            ImGui::TextDisabled("sub-maquina");
+            const int ent = states[i].subEntry;
+            if (ent >= 0 && ent < (int)states.size())
+                ImGui::TextDisabled("entra por: %s", states[(size_t)ent].name.c_str());
+            else
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "sin entrada: no se puede entrar");
+        }
         // clipIndex < 0: el clip del grafo no existe en el modelo (bindClips ya
         // avisó al cargar). Se marca aquí también o el nodo mentiría.
-        if (states[i].clipIndex < 0)
+        else if (states[i].clipIndex < 0)
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "clip: %s (no existe)", states[i].clipName.c_str());
         else
             ImGui::TextDisabled("clip: %s", states[i].clipName.c_str());
 
         ImGui::PushID((int)i);
+
+        // Jerarquía: en qué caja está, y —si él es una caja— por dónde se entra.
+        // Botones y no combos: una lista dentro del nodo se abre en espacio de
+        // canvas (ver drawBlendPickPopup).
+        {
+            const int pa = states[i].parent;
+            const std::string etiqueta =
+                std::string("padre: ") +
+                (pa >= 0 && pa < (int)states.size() ? states[(size_t)pa].name : std::string("(raiz)")) +
+                "###padre";
+            if (ImGui::SmallButton(etiqueta.c_str()))
+            {
+                m_blendPickRequested = true;
+                m_blendPickEditorId  = eid;
+                m_blendPickKind      = 4;
+            }
+            if (states[i].isSubMachine)
+            {
+                const int ent = states[i].subEntry;
+                const std::string etEnt =
+                    std::string("entrada: ") +
+                    (ent >= 0 && ent < (int)states.size() ? states[(size_t)ent].name : std::string("(ninguna)")) +
+                    "###entrada";
+                if (ImGui::SmallButton(etEnt.c_str()))
+                {
+                    m_blendPickRequested = true;
+                    m_blendPickEditorId  = eid;
+                    m_blendPickKind      = 5;
+                }
+            }
+        }
+
+        // Una caja no reproduce clip, así que loop, velocidad, root motion,
+        // blend y eventos no le aplican: se salta todo eso.
+        if (states[i].isSubMachine)
+        {
+            ImGui::PopID();
+            ImGui::EndGroup();
+            pinesDelNodo(eid, ImGui::GetItemRectSize().x);
+            ed::EndNode();
+            continue;
+        }
+
         bool loop = states[i].loop;
         if (ImGui::Checkbox("loop", &loop))
             anim->statesMutable(m_layer)[i].loop = loop;
@@ -1125,25 +1231,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         ImGui::EndGroup();
         const float headerW = ImGui::GetItemRectSize().x;
 
-        // "-> in" a la izquierda, "out ->" empujado al borde derecho del nodo
-        // (el ancho de la cabecera es el ancho real del nodo: el contenido más
-        // ancho de las líneas de arriba). Antes ambos pines iban en la misma fila
-        // sin separación y quedaban apelotonados en la esquina inferior
-        // izquierda.
-        ed::BeginPin(inputPinId(eid), ed::PinKind::Input);
-        ImGui::TextUnformatted("-> in");
-        ed::EndPin();
-        ImGui::SameLine();
-        const float inW  = ImGui::CalcTextSize("-> in").x;
-        const float outW = ImGui::CalcTextSize("out ->").x;
-        const float pad  = headerW - inW - outW;
-        // Nodo muy estrecho (nombre/clip corto): un hueco fijo pequeño basta pa
-        // que los pines no se solapen, aunque ya no queden pegados al borde.
-        ImGui::Dummy(ImVec2(pad > 1.0f ? pad : 8.0f, 0.0f));
-        ImGui::SameLine();
-        ed::BeginPin(outputPinId(eid), ed::PinKind::Output);
-        ImGui::TextUnformatted("out ->");
-        ed::EndPin();
+        pinesDelNodo(eid, headerW);
 
         ed::EndNode();
     }
@@ -1174,9 +1262,22 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         const bool desdeAny = from == AnimatorComponent::kAnyState;
         if ((!desdeAny && (from < 0 || from >= (int)states.size())) ||
             to < 0 || to >= (int)states.size()) continue;
+        // Un extremo que vive dentro de otra caja se dibuja CONTRA la caja: si
+        // no, la transición desaparecería del grafo y parecería no existir.
+        auto visible = [&](int estado) {
+            int s = estado;
+            while (s >= 0 && s < (int)states.size() && states[(size_t)s].parent != m_nivel)
+                s = states[(size_t)s].parent;
+            return s;
+        };
+        const int vFrom = desdeAny ? from : visible(from);
+        const int vTo   = visible(to);
+        // Fuera de esta rama, o los dos extremos en el mismo nodo visible: no
+        // hay nada que dibujar en este nivel.
+        if ((!desdeAny && vFrom < 0) || vTo < 0 || (!desdeAny && vFrom == vTo)) continue;
         ed::Link(linkId((int)t),
-                 desdeAny ? kAnyStateOutPinId : outputPinId(states[from].editorId),
-                 inputPinId(states[to].editorId));
+                 desdeAny ? kAnyStateOutPinId : outputPinId(states[vFrom].editorId),
+                 inputPinId(states[vTo].editorId));
     }
 
     // --- Crear links arrastrando de pin a pin ---
@@ -1325,6 +1426,17 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     drawBlendPickPopup(go);
     ed::Resume();
 
+    // Doble clic en una caja: se entra a ver lo que tiene dentro. Se consulta
+    // ANTES de ed::End, que es donde el lienzo aún tiene el estado del frame.
+    if (ed::NodeId doble = ed::GetDoubleClickedNode())
+    {
+        // nodeId(eid) = eid * 3 + 1 (ver los helpers de arriba): el editorId
+        // sale de deshacer esa cuenta.
+        const int eid = ((int)doble.Get() - 1) / 3;
+        const int idx = anim->stateIndexByEditorId(eid, m_layer);
+        if (idx >= 0 && anim->states(m_layer)[(size_t)idx].isSubMachine) m_nivel = idx;
+    }
+
     ed::End();
     // Ya fuera del lienzo: aquí el ratón vuelve a estar en coordenadas de
     // pantalla y el tooltip sale junto al cursor.
@@ -1346,8 +1458,11 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     int idx = -1;
     for (int i = 0; i < (int)anim->states(m_layer).size(); i++)
         if (anim->states(m_layer)[i].editorId == m_blendPickEditorId) { idx = i; break; }
-    // El estado se borró (o la malla desapareció) con la lista abierta.
-    if (idx < 0 || !mesh)
+    // El estado se borró con la lista abierta. La malla solo hace falta para
+    // los kinds que listan clips: un objeto sin esqueleto también elige padre
+    // y entrada de sub-máquina.
+    const bool necesitaMesh = m_blendPickKind == 0;
+    if (idx < 0 || (necesitaMesh && !mesh))
     {
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -1355,7 +1470,36 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     }
     auto& st = anim->statesMutable(m_layer)[idx];
 
-    if (m_blendPickKind == 2)
+    if (m_blendPickKind == 4)
+    {
+        // Padre: la raíz o cualquier caja que no sea él mismo ni esté DENTRO de
+        // él (meter una caja dentro de sí misma haría un ciclo y dejaría a sus
+        // hijos inalcanzables).
+        if (ImGui::Selectable("(raiz)", st.parent < 0)) st.parent = -1;
+        const auto& sts = anim->states(m_layer);
+        for (int i = 0; i < (int)sts.size(); i++)
+        {
+            if (!sts[(size_t)i].isSubMachine) continue;
+            if (i == idx || anim->isDescendantOf(i, idx, m_layer)) continue;
+            if (ImGui::Selectable(sts[(size_t)i].name.c_str(), st.parent == i)) st.parent = i;
+        }
+    }
+    else if (m_blendPickKind == 5)
+    {
+        // Entrada de la caja: cualquiera de sus hijos DIRECTOS. Si no tiene, la
+        // caja está vacía y no se puede entrar en ella.
+        const auto& sts = anim->states(m_layer);
+        bool alguno = false;
+        for (int i = 0; i < (int)sts.size(); i++)
+        {
+            if (sts[(size_t)i].parent != idx) continue;
+            alguno = true;
+            if (ImGui::Selectable(sts[(size_t)i].name.c_str(), st.subEntry == i)) st.subEntry = i;
+        }
+        if (!alguno)
+            ImGui::TextDisabled("La sub-maquina esta vacia: mete algun estado con 'padre'.");
+    }
+    else if (m_blendPickKind == 2)
     {
         // Multiplicador de velocidad: "(ninguno)" o cualquier parámetro float.
         if (ImGui::Selectable("(ninguno)", st.speedParam.empty()))
@@ -1880,7 +2024,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 // nombre en el nuevo GameObject heredaría el modo edición y el
                 // buffer del clip del objeto anterior durante un frame.
                 const bool selectionChanged = (m_boundTo != go);
-                if (selectionChanged) { m_renamingClip.clear(); m_layer = 0; m_renamingLayer = -1; }
+                if (selectionChanged) { m_renamingClip.clear(); m_layer = 0; m_nivel = -1; m_renamingLayer = -1; }
 
                 // Undo del grafo: el bracket envuelve TODO lo que puede mutar el
                 // componente en este frame, desde drawAnimationSources hasta el
@@ -1942,6 +2086,23 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 }
 
                 auto anim = go->getAnimator();
+
+                // --- Añadir una sub-máquina ---
+                // Se crea en el nivel que se está viendo: crear una caja dentro
+                // de otra es entrar primero y pulsar aquí.
+                if (ImGui::Button("Add Sub-State Machine"))
+                {
+                    AnimatorComponent::State caja;
+                    caja.name         = "Sub-Machine";
+                    caja.isSubMachine = true;
+                    caja.parent       = m_nivel;
+                    const int idx = anim->addState(caja, m_layer);
+                    const int eid = anim->states(m_layer)[(size_t)idx].editorId;
+                    ed::SetCurrentEditor(m_ctx);
+                    ed::SetNodePosition(nodeId(eid), ImVec2(caja.editorPos.x, caja.editorPos.y));
+                    ed::SetCurrentEditor(nullptr);
+                    ctx.pushLog("Animator: sub-maquina anadida");
+                }
 
                 // --- Añadir estado desde un clip de propiedades ---
                 // Sin esto, un objeto SIN esqueleto no podía tener ni un estado
