@@ -58,4 +58,14 @@ namespace DonTopo
     // Mezcla de varias aportaciones a la MISMA propiedad. Las rotaciones van
     // por el camino corto: 350 y 10 dan 0, no 180.
     float blendPropertyValues(PropertyId id, const PropertyContribution* c, int n);
+
+    // --- Acceso a las propiedades de un GameObject ---
+    // El objeto tiene lo que hace falta para esta propiedad (la luz, sobre
+    // todo). Una pista sin ello se avisa al resolver y no se aplica.
+    bool  propertyAvailable(const GameObject& go, PropertyId id);
+    float propertyGet(const GameObject& go, PropertyId id);
+    // Escribe SOLO las propiedades marcadas en `escritas` (un bool y un float
+    // por PropertyId): lo que nadie anima no se toca. El transform se
+    // descompone y se recompone UNA vez, no una por propiedad.
+    void  propertyApply(GameObject& go, const bool* escritas, const float* valores);
 }

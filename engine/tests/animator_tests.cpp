@@ -4,6 +4,7 @@
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/Blend2D.h"
 #include "DonTopo/Core/PropertyTracks.h"
+#include "DonTopo/Core/LightComponent.h"
 #include "DonTopo/Renderer/PoseBlock.h"
 #include "DonTopo/Renderer/IkBlock.h"
 #include "DonTopo/Core/GameObject.h"
@@ -8063,6 +8064,59 @@ static void test_property_names_round_trip()
     CHECK(propertyIsRotation(PropertyId::RotationZ) && !propertyIsRotation(PropertyId::ScaleX));
 }
 
+static void test_property_get_set_transform()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Puerta");
+    go->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(1, 2, 3));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionY), 2.0f));
+    CHECK(propertyAvailable(*go, PropertyId::PositionY));
+
+    bool  escritas[(int)PropertyId::Count] = {};
+    float valores [(int)PropertyId::Count] = {};
+    escritas[(int)PropertyId::PositionY] = true; valores[(int)PropertyId::PositionY] = 9.0f;
+    escritas[(int)PropertyId::RotationZ] = true; valores[(int)PropertyId::RotationZ] = 90.0f;
+    escritas[(int)PropertyId::ScaleX]    = true; valores[(int)PropertyId::ScaleX]    = 2.0f;
+    propertyApply(*go, escritas, valores);
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionY), 9.0f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionX), 1.0f));   // lo no escrito NO cambia
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::PositionZ), 3.0f));
+    CHECK(std::fabs(std::remainder(propertyGet(*go, PropertyId::RotationZ) - 90.0f, 360.0f)) < 1e-3f);
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::ScaleX), 2.0f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::ScaleY), 1.0f));
+    // El eje X del transform ya rotado 90 grados en Z apunta a +Y.
+    CHECK(glm::length(glm::normalize(glm::vec3(go->localTransform[0])) - glm::vec3(0, 1, 0)) < 1e-4f);
+}
+
+static void test_property_light_and_material()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Farola");
+    CHECK(!propertyAvailable(*go, PropertyId::LightIntensity));   // sin LightComponent
+    go->setLight(std::make_shared<LightComponent>());
+    go->getLight()->setIntensity(2.0f);
+    go->getLight()->setColor(glm::vec3(1, 0, 0));
+    CHECK(propertyAvailable(*go, PropertyId::LightIntensity));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::LightIntensity), 2.0f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::LightColorG), 0.0f));
+
+    bool  escritas[(int)PropertyId::Count] = {};
+    float valores [(int)PropertyId::Count] = {};
+    escritas[(int)PropertyId::LightIntensity] = true; valores[(int)PropertyId::LightIntensity] = 5.0f;
+    escritas[(int)PropertyId::LightColorG]    = true; valores[(int)PropertyId::LightColorG]    = 1.0f;
+    escritas[(int)PropertyId::MaterialMetallic] = true; valores[(int)PropertyId::MaterialMetallic] = 0.75f;
+    propertyApply(*go, escritas, valores);
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::LightIntensity), 5.0f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::LightColorG), 1.0f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::LightColorR), 1.0f));   // lo no escrito sigue
+    // El material va por el override del OBJETO, no por la malla: animar no
+    // puede copiar la malla cada frame (editMesh copia si está compartida).
+    CHECK(!go->materialOverrides.empty());
+    if (!go->materialOverrides.empty())
+        CHECK(nearlyEqual(go->materialOverrides[0].metallic, 0.75f));
+    CHECK(nearlyEqual(propertyGet(*go, PropertyId::MaterialMetallic), 0.75f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -8225,6 +8279,8 @@ int main()
     test_property_track_sampling();
     test_property_blend_short_path();
     test_property_names_round_trip();
+    test_property_get_set_transform();
+    test_property_light_and_material();
     test_ik_graph_key_and_apply_graph();
     test_ik_lookat();
     test_ik_twobone_reaches_target();
