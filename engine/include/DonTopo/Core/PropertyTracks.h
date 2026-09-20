@@ -61,6 +61,12 @@ namespace DonTopo
     // lo rodean; fuera del rango, la key del extremo; sin keys, `actual`.
     float samplePropertyTrack(const PropertyTrack& t, float tiempo, float actual);
 
+    // Rango vertical con el que dibujar una pista: cubre sus keys y los valores
+    // de `extra` (los umbrales de las condiciones), con un margen. Una pista
+    // plana —o sin keys— no puede dar un rango de altura cero, o la línea
+    // saldría pegada al borde: se abre a ±0,5.
+    void curveRange(const PropertyTrack& t, const float* extra, int nExtra, float& lo, float& hi);
+
     // Una aportación a una propiedad: su valor y el peso con el que entra (el
     // del cross-fade por el de su capa).
     struct PropertyContribution { float value = 0.0f; float weight = 0.0f; };

@@ -26,6 +26,70 @@ namespace ed = ax::NodeEditor;
 namespace DonTopo {
 
 namespace {
+    // Dibujo de SOLO LECTURA de una pista: la forma de la curva, sus keys, los
+    // umbrales de las condiciones que leen su parámetro y el playhead del
+    // preview. Responde de un vistazo la única pregunta que se le hace a una
+    // curva —¿cruza el umbral, y cuándo?—, que con la lista de DragFloat hay
+    // que reconstruir a mano. Las keys se siguen editando en la lista: el
+    // arrastre sobre el lienzo es la fila C15 del audit.
+    void dibujarCurva(const PropertyTrack& pista, float duracion, float tiempoActual,
+                      const float* umbrales, int numUmbrales)
+    {
+        const float ancho = ImGui::GetContentRegionAvail().x;
+        if (ancho < 40.0f || duracion <= 0.0f || pista.keys.empty()) return;
+        const float alto = 56.0f;
+        ImGui::Dummy(ImVec2(ancho, alto));
+        const ImVec2  p0 = ImGui::GetItemRectMin();
+        const ImVec2  p1 = ImGui::GetItemRectMax();
+        ImDrawList*   dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(p0, p1, IM_COL32(24, 24, 28, 255));
+        dl->AddRect(p0, p1, IM_COL32(70, 70, 80, 255));
+
+        float lo = 0.0f, hi = 0.0f;
+        curveRange(pista, umbrales, numUmbrales, lo, hi);
+        auto aY = [&](float v) { return p1.y - (v - lo) / (hi - lo) * (p1.y - p0.y); };
+        auto aX = [&](float t) {
+            const float x = p0.x + (t / duracion) * (p1.x - p0.x);
+            return std::min(std::max(x, p0.x), p1.x);   // una key más allá del clip se queda en el borde
+        };
+
+        // Los umbrales van debajo de la curva: lo que interesa es dónde la cruza.
+        for (int i = 0; i < numUmbrales; i++)
+        {
+            const float y = aY(umbrales[i]);
+            dl->AddLine(ImVec2(p0.x, y), ImVec2(p1.x, y), IM_COL32(220, 190, 80, 150));
+            char txt[32];
+            std::snprintf(txt, sizeof(txt), "%.2f", umbrales[i]);
+            dl->AddText(ImVec2(p1.x - 36.0f, y - 15.0f), IM_COL32(220, 190, 80, 200), txt);
+        }
+
+        // Muestreada, no unida key con key: así el dibujo sigue siendo el valor
+        // real si algún día la interpolación deja de ser lineal.
+        constexpr int kMuestras = 64;
+        ImVec2 pts[kMuestras + 1];
+        for (int s = 0; s <= kMuestras; s++)
+        {
+            const float t = duracion * (float)s / (float)kMuestras;
+            pts[s] = ImVec2(aX(t), aY(samplePropertyTrack(pista, t, 0.0f)));
+        }
+        dl->AddPolyline(pts, kMuestras + 1, IM_COL32(120, 200, 255, 255), 0, 1.5f);
+        for (const auto& k : pista.keys)
+            dl->AddCircleFilled(ImVec2(aX(k.time), aY(k.value)), 3.0f, IM_COL32(255, 255, 255, 230));
+        if (tiempoActual >= 0.0f)
+        {
+            const float x = aX(tiempoActual);
+            dl->AddLine(ImVec2(x, p0.y), ImVec2(x, p1.y), IM_COL32(255, 120, 120, 200));
+        }
+
+        // Los extremos del rango: sin ellos la altura de la curva es una
+        // adivinanza, porque el rango se ajusta a cada pista.
+        char txt[32];
+        std::snprintf(txt, sizeof(txt), "%.2f", hi);
+        dl->AddText(ImVec2(p0.x + 3.0f, p0.y + 1.0f), IM_COL32(150, 150, 160, 200), txt);
+        std::snprintf(txt, sizeof(txt), "%.2f", lo);
+        dl->AddText(ImVec2(p0.x + 3.0f, p1.y - 16.0f), IM_COL32(150, 150, 160, 200), txt);
+    }
+
     // Lienzo de solo lectura del blend 2D: los puntos con su clip, las aristas
     // de la triangulación y el valor actual de (X, Y). Los puntos son los de
     // stateBlendSamples: el principal y las entradas con clip resuelto.
@@ -546,6 +610,17 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     anim->bindProperties(go, nullptr);
                 }
 
+                // Dónde va el playhead de ESTE clip, si es que suena ahora: lo
+                // dice la misma lista de muestras que se aplica al objeto, así
+                // que el preview y el dibujo no pueden discrepar.
+                float tiempoClip = -1.0f;
+                {
+                    AnimatorComponent::PropertySampleRef ms[kMaxLayersPose * kMaxPoseSamplesPerLayer];
+                    const int nm = anim->propertySamples(ms, (int)(sizeof(ms) / sizeof(ms[0])));
+                    for (int k = 0; k < nm; k++)
+                        if (ms[k].clip == i) { tiempoClip = ms[k].time; break; }
+                }
+
                 int quitarPista = -1;
                 for (int p = 0; p < (int)clip.tracks.size(); p++)
                 {
@@ -616,6 +691,15 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                                                 "no se aplica.");
                     ImGui::SameLine();
                     if (ImGui::SmallButton("x###pista")) quitarPista = p;
+
+                    // Una curva se lee contra los umbrales de las condiciones
+                    // que miran su parámetro; una pista de propiedad no tiene
+                    // ninguno que pintar.
+                    float umbrales[4];
+                    const int numUmbrales = pista.target == TrackTarget::Parameter
+                                                ? anim->conditionThresholds(pista.parameterName, umbrales, 4)
+                                                : 0;
+                    dibujarCurva(pista, clip.duration, tiempoClip, umbrales, numUmbrales);
 
                     int quitarKey = -1;
                     for (int k = 0; k < (int)pista.keys.size(); k++)

@@ -8386,6 +8386,76 @@ static void test_curve_last_layer_wins()
 
 // El peso de la capa SÍ escala lo que se aplica al objeto (al revés que las
 // curvas, que se escriben tal cual).
+// Lo que el panel necesita para pintar una curva: contra qué umbrales se lee y
+// con qué rango vertical.
+static void test_curve_condition_thresholds()
+{
+    AnimatorComponent a = makeCurvaVelocidad();
+    AnimatorComponent::State s;
+    s.name = "Corre";
+    a.addState(s);
+    auto liga = [&](AnimatorComponent::ConditionType tipo, const char* nombre, float umbral, int capa) {
+        AnimatorComponent::Transition t;
+        t.fromState = 0; t.toState = capa == 0 ? 1 : 0;
+        AnimatorComponent::Condition c;
+        c.type = tipo; c.paramName = nombre; c.threshold = umbral;
+        t.conditions.push_back(c);
+        a.addTransition(t, capa);
+    };
+    liga(AnimatorComponent::ConditionType::Float, "velocidad", 4.0f, 0);
+    liga(AnimatorComponent::ConditionType::Float, "velocidad", 4.0f, 0);   // repetido: uno solo
+    liga(AnimatorComponent::ConditionType::Float, "velocidad", 9.0f, 0);
+    liga(AnimatorComponent::ConditionType::Int,   "velocidad", 7.0f, 0);   // no es Float
+    liga(AnimatorComponent::ConditionType::Float, "otro",      1.0f, 0);   // otro parámetro
+    CHECK(a.addLayer("Encima") == 1);
+    a.addState(s, 1);
+    liga(AnimatorComponent::ConditionType::Float, "velocidad", 2.0f, 1);   // otra capa: cuenta
+
+    float u[8];
+    const int n = a.conditionThresholds("velocidad", u, 8);
+    CHECK(n == 3);
+    if (n != 3) return;
+    bool tiene4 = false, tiene9 = false, tiene2 = false;
+    for (int i = 0; i < n; i++)
+    {
+        tiene4 = tiene4 || nearlyEqual(u[i], 4.0f);
+        tiene9 = tiene9 || nearlyEqual(u[i], 9.0f);
+        tiene2 = tiene2 || nearlyEqual(u[i], 2.0f);
+    }
+    CHECK(tiene4 && tiene9 && tiene2);
+    // El tope se respeta: con sitio para uno, uno.
+    CHECK(a.conditionThresholds("velocidad", u, 1) == 1);
+    CHECK(a.conditionThresholds("noExiste", u, 8) == 0);
+}
+
+static void test_curve_draw_range()
+{
+    PropertyTrack t;
+    t.keys = { { 0.0f, 1.0f }, { 1.0f, 3.0f } };
+    float lo = 0.0f, hi = 0.0f;
+    curveRange(t, nullptr, 0, lo, hi);
+    CHECK(lo < 1.0f && hi > 3.0f);            // margen a los dos lados
+    CHECK(hi - lo < 4.0f);                    // pero no desproporcionado
+
+    // El umbral entra en el rango aunque quede fuera de las keys: si no, la
+    // línea de la condición se saldría del dibujo.
+    const float umbral = 10.0f;
+    curveRange(t, &umbral, 1, lo, hi);
+    CHECK(hi > 10.0f);
+
+    // Pista plana: rango de altura cero sería una línea pegada al borde.
+    PropertyTrack plana;
+    plana.keys = { { 0.0f, 2.0f }, { 1.0f, 2.0f } };
+    curveRange(plana, nullptr, 0, lo, hi);
+    CHECK(hi - lo >= 0.9f);
+    CHECK(lo < 2.0f && hi > 2.0f);
+
+    // Sin keys tampoco puede salir un rango degenerado.
+    PropertyTrack vacia;
+    curveRange(vacia, nullptr, 0, lo, hi);
+    CHECK(hi > lo);
+}
+
 static void test_property_samples_scale_with_the_layer_weight()
 {
     AnimatorComponent a = makePuerta();
@@ -8866,6 +8936,8 @@ int main()
     test_curve_fires_its_transition_in_the_same_frame();
     test_curve_of_a_zero_weight_layer_still_writes();
     test_curve_last_layer_wins();
+    test_curve_condition_thresholds();
+    test_curve_draw_range();
     test_property_samples_scale_with_the_layer_weight();
     test_property_samples_follow_the_graph();
     test_property_clips_drive_a_non_skinned_object();

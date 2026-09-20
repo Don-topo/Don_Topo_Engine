@@ -383,6 +383,11 @@ namespace DonTopo
             // que hace resoluble una curva de clip (una pista cuyo destino es
             // un parámetro).
             bool  hasFloatParameter(const std::string& n) const;
+            // Umbrales de las condiciones Float que miran ese parámetro, en
+            // TODAS las capas y sin repetir. Es lo que el panel pinta sobre la
+            // curva: ver dónde la cruza es la única pregunta que se le hace de
+            // un vistazo. Devuelve cuántos ha escrito.
+            int   conditionThresholds(const std::string& n, float* out, int max) const;
 
             // Desarma un trigger que nadie ha consumido todavía. Nombre no
             // declarado o de otro tipo: no hace nada, como setTrigger.
