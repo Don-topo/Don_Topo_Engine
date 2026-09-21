@@ -35,7 +35,14 @@ namespace DonTopo
     void AnimatorComponent::enterState(int idx, int layer)
     {
         Layer& L = lay(layer);
-        L.currentState = idx;
+        // Una caja no se reproduce: se entra en su hoja. Si la cadena está rota
+        // no se mueve nada, que es la garantía de que currentState nunca es una
+        // caja venga de donde venga (transición, Play de Lua o el editor).
+        // idx < 0 sigue significando "sin estado": lo usa removeState al vaciar
+        // la capa.
+        const int hoja = resolveEntryLeaf(idx, layer);
+        if (idx >= 0 && hoja < 0) return;
+        L.currentState = hoja;
         L.animTime     = 0.0f;
         L.finished     = false;
         L.stateTicks   = 0.0;
@@ -45,7 +52,44 @@ namespace DonTopo
     {
         Layer& L = lay(layer);
         if (idx < 0 || idx >= (int)L.states.size()) return;
+
+        // Los descendientes se van con la caja. Dejarlos sueltos en la raíz es
+        // crear huérfanos que nadie ha pedido, y el undo es un snapshot del
+        // grafo entero, así que deshacer los devuelve todos.
+        //
+        // La caja se relocaliza por editorId y NO por índice: borrar un
+        // descendiente que iba antes que ella la desplaza, y seguir con el
+        // índice viejo borraría a otro estado.
+        if (L.states[(size_t)idx].isSubMachine)
+        {
+            const int idCaja = L.states[(size_t)idx].editorId;
+            for (;;)
+            {
+                const int caja = stateIndexByEditorId(idCaja, layer);
+                if (caja < 0) return;               // ya no está: nada que borrar
+                int hijo = -1;
+                for (int i = 0; i < (int)L.states.size(); i++)
+                    if (isDescendantOf(i, caja, layer)) { hijo = i; break; }
+                if (hijo < 0) { idx = caja; break; }   // no quedan descendientes
+                removeState(hijo, layer);              // recursivo: una caja hija se lleva los suyos
+            }
+        }
+
         L.states.erase(L.states.begin() + idx);
+
+        // La jerarquía se reindexa igual que las transiciones. `subEntry == idx`
+        // pasa al borrar el estado que era la entrada de su caja: la caja se
+        // queda vacía y deja de poder entrarse, que es lo correcto.
+        // `parent == idx` es defensivo y hoy INALCANZABLE —borrar una caja se
+        // lleva antes a sus descendientes—, así que ningún test lo cubre; está
+        // por si algún día se borra sin cascada.
+        for (auto& st : L.states)
+        {
+            if (st.parent   == idx) st.parent   = -1;
+            else if (st.parent   > idx) st.parent--;
+            if (st.subEntry == idx) st.subEntry = -1;
+            else if (st.subEntry > idx) st.subEntry--;
+        }
 
         // Las transiciones guardan índices: borrar un estado invalida las que lo
         // tocan y desplaza las que apuntan por encima. Sin esto, borrar un nodo
@@ -1318,15 +1362,31 @@ namespace DonTopo
             // Hacia el estado actual solo con el flag: con un bool, reentrar
             // reiniciaría el estado cada frame.
             if (t.toState == L.currentState && !t.canTransitionToSelf) continue;
+            // Misma regla que abajo: una caja rota no dispara.
+            if (resolveEntryLeaf(t.toState, li) < 0) continue;
             if (transitionReady(t, n0, n1, conDuracion, li)) { elegida = &t; break; }
         }
         if (!elegida)
         {
-            for (const auto& t : L.transitions)
+            // Por NIVELES: primero las que salen de la hoja, luego las de su
+            // caja, luego las de la caja de arriba. Así una salida general de un
+            // bloque no le gana a una salida concreta de un estado solo porque
+            // se declarara antes. Any State ya se ha mirado arriba y sigue
+            // teniendo prioridad sobre todo esto.
+            int nivel = L.currentState;
+            for (int pasos = 0; nivel >= 0 && nivel < (int)L.states.size() && !elegida &&
+                                pasos <= (int)L.states.size(); pasos++)
             {
-                if (t.fromState != L.currentState) continue;
-                if (t.toState < 0 || t.toState >= (int)L.states.size()) continue;
-                if (transitionReady(t, n0, n1, conDuracion, li)) { elegida = &t; break; }
+                for (const auto& t : L.transitions)
+                {
+                    if (t.fromState != nivel) continue;
+                    if (t.toState < 0 || t.toState >= (int)L.states.size()) continue;
+                    // Entrar en una caja rota no dispara: mejor quedarse donde
+                    // se está que a medias en un estado que no existe.
+                    if (resolveEntryLeaf(t.toState, li) < 0) continue;
+                    if (transitionReady(t, n0, n1, conDuracion, li)) { elegida = &t; break; }
+                }
+                nivel = L.states[(size_t)nivel].parent;
             }
         }
         if (!elegida) return;
@@ -1378,6 +1438,35 @@ namespace DonTopo
         enterState(idx, layer);
     }
 
+    bool AnimatorComponent::isDescendantOf(int state, int maybeAncestor, int layer) const
+    {
+        const Layer& L = lay(layer);
+        if (maybeAncestor < 0 || state < 0 || state >= (int)L.states.size()) return false;
+        int actual = L.states[(size_t)state].parent;
+        // El tope es el número de estados: un fichero con un ciclo de parent no
+        // puede colgar el motor.
+        for (int pasos = 0; actual >= 0 && actual < (int)L.states.size() && pasos <= (int)L.states.size(); pasos++)
+        {
+            if (actual == maybeAncestor) return true;
+            actual = L.states[(size_t)actual].parent;
+        }
+        return false;
+    }
+
+    int AnimatorComponent::resolveEntryLeaf(int state, int layer) const
+    {
+        const Layer& L = lay(layer);
+        int actual = state;
+        for (int pasos = 0; pasos <= (int)L.states.size(); pasos++)
+        {
+            if (actual < 0 || actual >= (int)L.states.size()) return -1;
+            const State& st = L.states[(size_t)actual];
+            if (!st.isSubMachine) return actual;
+            actual = st.subEntry;
+        }
+        return -1;   // ciclo de subEntry
+    }
+
     int AnimatorComponent::stateIndexByName(const std::string& name, int layer) const
     {
         const Layer& L = lay(layer);
@@ -1389,7 +1478,9 @@ namespace DonTopo
     bool AnimatorComponent::play(const std::string& stateName, int layer)
     {
         const int idx = stateIndexByName(stateName, layer);
-        if (idx < 0) return false;
+        // Una caja entra por su hoja; si la cadena está rota no hay a dónde ir,
+        // y eso es un false, como un nombre que no existe.
+        if (idx < 0 || resolveEntryLeaf(idx, layer) < 0) return false;
         startTransitionTo(idx, 0.0f, layer);
         return true;
     }
@@ -1398,7 +1489,8 @@ namespace DonTopo
     {
         Layer& L = lay(layer);
         const int idx = stateIndexByName(stateName, layer);
-        if (idx < 0) return false;
+        // Misma guarda que play: una caja rota no tiene hoja a la que entrar.
+        if (idx < 0 || resolveEntryLeaf(idx, layer) < 0) return false;
         // Sin estado actual no hay nada que apagar: se entra con corte.
         const bool hayActual = L.currentState >= 0 && L.currentState < (int)L.states.size();
         startTransitionTo(idx, hayActual ? seconds : 0.0f, layer);

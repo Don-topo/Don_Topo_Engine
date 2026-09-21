@@ -8391,6 +8391,221 @@ static void test_curve_last_layer_wins()
 // con qué rango vertical.
 // El reloj del camino SIN Animator, que los dos backends comparten desde que
 // se descubrió que habían divergido (A13).
+// Base -> caja "Ataques" { Golpe, caja "Combo" { Uno } }
+static AnimatorComponent makeCajas()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s;
+    s.name = "Base";      a.addState(s);                                             // 0
+    s = {}; s.name = "Ataques"; s.isSubMachine = true;             a.addState(s);    // 1
+    s = {}; s.name = "Golpe";   s.parent = 1;                      a.addState(s);    // 2
+    s = {}; s.name = "Combo";   s.parent = 1; s.isSubMachine = true; a.addState(s);  // 3
+    s = {}; s.name = "Uno";     s.parent = 3;                      a.addState(s);    // 4
+    a.statesMutable()[1].subEntry = 3;   // Ataques entra por Combo
+    a.statesMutable()[3].subEntry = 4;   // Combo entra por Uno
+    a.setEntryState(0);
+    return a;
+}
+
+static void test_submachine_hierarchy_helpers()
+{
+    AnimatorComponent a = makeCajas();
+    CHECK(a.isDescendantOf(4, 1, 0));    // Uno está dentro de Ataques (dos niveles)
+    CHECK(a.isDescendantOf(2, 1, 0));
+    CHECK(!a.isDescendantOf(0, 1, 0));   // Base no
+    CHECK(!a.isDescendantOf(1, 1, 0));   // uno mismo no es su descendiente
+    // Entrar en una caja baja hasta la hoja.
+    CHECK(a.resolveEntryLeaf(1, 0) == 4);
+    CHECK(a.resolveEntryLeaf(2, 0) == 2);   // una hoja se resuelve a sí misma
+    // Caja vacía: no hay hoja, y eso NO es entrar a medias.
+    a.statesMutable()[3].subEntry = -1;
+    CHECK(a.resolveEntryLeaf(1, 0) == -1);
+    // Un ciclo de subEntry no puede colgar el motor.
+    a.statesMutable()[3].subEntry = 1;
+    CHECK(a.resolveEntryLeaf(1, 0) == -1);
+    // El estado actual nunca es una caja: entrar por la entrada de la capa
+    // (setEntryState -> resetPlayback -> enterState) resuelve la hoja.
+    AnimatorComponent b = makeCajas();
+    b.setEntryState(1, 0);
+    CHECK(b.currentState() == 4);
+    b.setEntryState(0, 0);
+    CHECK(b.currentState() == 0);
+    b.statesMutable()[3].subEntry = -1;
+    b.setEntryState(1, 0);
+    CHECK(b.currentState() == 0);    // caja rota: no se mueve
+}
+
+// makeCajas + una transición Base -> Ataques y otra Ataques -> Base, por trigger.
+static AnimatorComponent makeCajasConTransiciones()
+{
+    AnimatorComponent a = makeCajas();
+    a.addParameter("entra", AnimatorComponent::ParamType::Trigger);
+    a.addParameter("sale",  AnimatorComponent::ParamType::Trigger);
+    auto liga = [&](int from, int to, const char* trigger) {
+        AnimatorComponent::Transition t;
+        t.fromState = from; t.toState = to; t.duration = 0.0f;
+        AnimatorComponent::Condition c;
+        c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = trigger;
+        t.conditions.push_back(c);
+        a.addTransition(t);
+    };
+    liga(0, 1, "entra");    // hacia la caja
+    liga(1, 0, "sale");     // desde la caja
+    return a;
+}
+
+static void test_submachine_transition_enters_the_leaf()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    a.reset();
+    CHECK(a.currentState() == 0);
+    a.setTrigger("entra");
+    a.update(0.016f, true);
+    // Ataques -> Combo -> Uno: se entra en la hoja, no en la caja.
+    CHECK(a.currentState() == 4);
+}
+
+static void test_submachine_broken_entry_does_not_fire()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    a.statesMutable()[3].subEntry = -1;    // Combo vacía
+    a.reset();
+    a.setTrigger("entra");
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);          // no se entra a medias
+
+    // Y la transición ni siquiera se ELIGE: si se eligiera, el trigger se
+    // consumiría (y el cross-fade arrancaría contra un estado que no cambia).
+    // Con la caja ya arreglada, el mismo trigger —sin volver a armarlo— tiene
+    // que entrar.
+    a.statesMutable()[3].subEntry = 4;
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 4);
+}
+
+static void test_submachine_exit_fires_from_any_leaf()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    a.reset();
+    a.setTrigger("entra");
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 4);          // dentro, a dos niveles
+    a.setTrigger("sale");
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);          // la transición DESDE la caja vale
+    // Y no dispara desde fuera: estando en Base, "sale" no hace nada.
+    a.setTrigger("sale");
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);
+}
+
+static void test_submachine_leaf_transition_wins_over_ancestor()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    AnimatorComponent::State s;
+    s.name = "Otro";
+    const int otro = a.addState(s);        // 5, en la raíz
+    a.addParameter("ya", AnimatorComponent::ParamType::Bool);
+    auto liga = [&](int from, int to) {
+        AnimatorComponent::Transition t;
+        t.fromState = from; t.toState = to; t.duration = 0.0f;
+        AnimatorComponent::Condition c;
+        c.type = AnimatorComponent::ConditionType::Bool; c.paramName = "ya"; c.expected = true;
+        t.conditions.push_back(c);
+        a.addTransition(t);
+    };
+    // La del ANCESTRO se declara antes que la de la hoja, a propósito: lo que
+    // decide es el nivel, no el orden del vector.
+    liga(1, 0);            // desde la caja -> Base
+    liga(4, otro);         // desde la hoja -> Otro
+    a.reset();
+    a.setTrigger("entra");
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 4);
+    a.setBool("ya", true);
+    a.update(0.016f, true);
+    CHECK(a.currentState() == otro);       // gana la de la hoja
+}
+
+static void test_play_resolves_a_submachine()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    a.reset();
+    CHECK(a.play("Ataques", 0));
+    CHECK(a.currentState() == 4);
+    // Caja vacía: no hay hoja a la que ir.
+    AnimatorComponent b = makeCajasConTransiciones();
+    b.statesMutable()[3].subEntry = -1;
+    b.reset();
+    CHECK(!b.play("Ataques", 0));
+    CHECK(b.currentState() == 0);
+    CHECK(!b.crossFade("Ataques", 0.2f, 0));
+}
+
+static void test_removing_a_submachine_removes_its_children()
+{
+    AnimatorComponent a = makeCajasConTransiciones();
+    AnimatorComponent::State s;
+    s.name = "Otro";
+    a.addState(s);                       // 5, en la raíz, para ver que sobrevive
+    a.removeState(1, 0);                 // borra Ataques
+    // Quedan Base y Otro: Golpe, Combo y Uno se van con la caja.
+    CHECK(a.states().size() == 2u);
+    if (a.states().size() != 2u) return;
+    CHECK(a.states()[0].name == "Base");
+    CHECK(a.states()[1].name == "Otro");
+    // Y no queda ninguna transición apuntando a lo borrado.
+    for (const auto& t : a.transitions())
+    {
+        CHECK(t.fromState >= -2 && t.fromState < (int)a.states().size());
+        CHECK(t.toState   >= 0  && t.toState   < (int)a.states().size());
+    }
+}
+
+// Un hijo puede ir ANTES que su caja en el vector: el editor deja meter en una
+// caja nueva un estado que ya existía. Borrar la caja tiene entonces que
+// relocalizarla, porque borrar a ese hijo la desplaza.
+static void test_removing_a_submachine_whose_child_comes_first()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s;
+    s.name = "Viejo";   a.addState(s);                                  // 0
+    s = {}; s.name = "Testigo"; a.addState(s);                          // 1
+    s = {}; s.name = "Caja"; s.isSubMachine = true; a.addState(s);      // 2
+    a.statesMutable()[0].parent   = 2;    // Viejo entra en la Caja
+    a.statesMutable()[2].subEntry = 0;
+    a.setEntryState(1);
+    a.removeState(2, 0);                  // borra la Caja
+    // Se van Caja y Viejo; Testigo sobrevive y no se borra otro por el
+    // desplazamiento.
+    CHECK(a.states().size() == 1u);
+    if (a.states().size() != 1u) return;
+    CHECK(a.states()[0].name == "Testigo");
+}
+
+static void test_removing_a_state_reindexes_parent_and_entry()
+{
+    AnimatorComponent a = makeCajas();
+    a.removeState(0, 0);                 // borra Base, que va ANTES de las cajas
+    // Ataques pasa a 0, Golpe a 1, Combo a 2, Uno a 3.
+    CHECK(a.states().size() == 4u);
+    if (a.states().size() != 4u) return;
+    CHECK(a.states()[0].name == "Ataques" && a.states()[0].subEntry == 2);
+    CHECK(a.states()[1].name == "Golpe"   && a.states()[1].parent   == 0);
+    CHECK(a.states()[2].name == "Combo"   && a.states()[2].parent   == 0);
+    CHECK(a.states()[2].subEntry == 3);
+    CHECK(a.states()[3].name == "Uno"     && a.states()[3].parent   == 2);
+    // Y la jerarquía sigue significando lo mismo.
+    CHECK(a.resolveEntryLeaf(0, 0) == 3);
+
+    // Borrar el estado que ERA la entrada de su caja la deja vacía, no
+    // apuntando a otro estado por el desplazamiento de índices.
+    AnimatorComponent b = makeCajas();
+    b.removeState(4, 0);                 // Uno, la entrada de Combo
+    CHECK(b.states()[3].name == "Combo" && b.states()[3].subEntry == -1);
+    CHECK(b.resolveEntryLeaf(1, 0) == -1);   // Ataques -> Combo -> nada
+}
+
 static void test_mesh_clock_advances_in_ticks()
 {
     // dt en SEGUNDOS, reloj en TICKS: sin el ritmo, medio segundo de un clip a
@@ -8622,6 +8837,98 @@ static void test_property_clips_serialization(PhysicsManager& pm, AudioManager& 
     AnimatorComponent vacio;
     const std::string texto = animatorToJson(vacio).dump();
     CHECK(texto.find("propertyClip") == std::string::npos);
+}
+
+static void test_submachine_serialization(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Bicho");
+    const uint64_t id = go->id;
+    go->setAnimator(std::make_shared<AnimatorComponent>(makeCajas()));
+
+    const nlohmann::json ja = animatorToJson(*go->getAnimator());
+    CHECK(ja["states"][1].contains("subMachine"));
+    CHECK(ja["states"][2].contains("parent"));
+    // Un estado normal no escribe ninguna clave nueva.
+    CHECK(!ja["states"][0].contains("parent"));
+    CHECK(!ja["states"][0].contains("subMachine"));
+    CHECK(!ja["states"][0].contains("subEntry"));
+
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& anim = *found->getAnimator();
+    CHECK(anim.states().size() == 5u);
+    if (anim.states().size() != 5u) return;
+    CHECK(anim.states()[1].isSubMachine);
+    CHECK(anim.states()[2].parent == 1);
+    CHECK(anim.states()[1].subEntry == 3);
+    CHECK(anim.resolveEntryLeaf(1, 0) == 4);
+
+    // Un Animator sin cajas no escribe ninguna clave nueva.
+    AnimatorComponent plano;
+    AnimatorComponent::State s;
+    s.name = "Solo";
+    plano.addState(s);
+    const std::string texto = animatorToJson(plano).dump();
+    CHECK(texto.find("subMachine") == std::string::npos);
+    CHECK(texto.find("parent") == std::string::npos);
+    CHECK(texto.find("subEntry") == std::string::npos);
+}
+
+static void test_submachine_bad_file_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Bicho");
+    const uint64_t id = go->id;
+    go->setAnimator(std::make_shared<AnimatorComponent>(makeCajas()));
+    nlohmann::json j = scene.toJson();
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        node["animator"]["states"][2]["parent"] = 99;   // fuera de rango
+        node["animator"]["states"][4]["parent"] = 0;    // Base no es una caja
+    }
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    CHECK(found->getAnimator()->states()[2].parent == -1);
+    CHECK(found->getAnimator()->states()[4].parent == -1);
+    bool rango = false, noCaja = false;
+    for (const auto& w : loaded.lastWarnings())
+    {
+        if (w.find("fuera de rango") != std::string::npos)        rango = true;
+        if (w.find("no es una sub-maquina") != std::string::npos) noCaja = true;
+    }
+    CHECK(rango);
+    CHECK(noCaja);
+
+    // Ciclo de contención: Ataques dentro de Combo, que ya está dentro de
+    // Ataques. Sin la pasada de ciclos, subir por parent no terminaría.
+    nlohmann::json c = scene.toJson();
+    for (auto& node : c["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        node["animator"]["states"][1]["parent"] = 3;
+    }
+    Scene conCiclo("Ciclo");
+    CHECK(conCiclo.fromJson(c, pm, am));
+    GameObject* f2 = conCiclo.findById(id);
+    CHECK(f2 && f2->hasAnimator());
+    if (!f2 || !f2->hasAnimator()) return;
+    const auto& anim = *f2->getAnimator();
+    CHECK(anim.states().size() == 5u);
+    if (anim.states().size() != 5u) return;
+    CHECK(anim.states()[1].parent == -1 || anim.states()[3].parent == -1);
+    bool ciclo = false;
+    for (const auto& w : conCiclo.lastWarnings())
+        if (w.find("ciclo") != std::string::npos) ciclo = true;
+    CHECK(ciclo);
 }
 
 static void test_curve_serialization(PhysicsManager& pm, AudioManager& am)
@@ -8953,6 +9260,15 @@ int main()
     test_curve_fires_its_transition_in_the_same_frame();
     test_curve_of_a_zero_weight_layer_still_writes();
     test_curve_last_layer_wins();
+    test_submachine_hierarchy_helpers();
+    test_submachine_transition_enters_the_leaf();
+    test_submachine_broken_entry_does_not_fire();
+    test_submachine_exit_fires_from_any_leaf();
+    test_submachine_leaf_transition_wins_over_ancestor();
+    test_play_resolves_a_submachine();
+    test_removing_a_submachine_removes_its_children();
+    test_removing_a_submachine_whose_child_comes_first();
+    test_removing_a_state_reindexes_parent_and_entry();
     test_mesh_clock_advances_in_ticks();
     test_curve_condition_thresholds();
     test_curve_draw_range();
@@ -8981,6 +9297,8 @@ int main()
     test_ik_bad_file_warns(pm, am);
     test_property_clips_serialization(pm, am);
     test_curve_serialization(pm, am);
+    test_submachine_serialization(pm, am);
+    test_submachine_bad_file_warns(pm, am);
     test_property_clips_bad_file_warns(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
