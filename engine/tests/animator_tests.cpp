@@ -8407,6 +8407,69 @@ static AnimatorComponent makeCajas()
     return a;
 }
 
+// A9, el caso que ningún asset del repo produce: un vértice que el FBX no pesó
+// contra ningún hueso.
+static void test_normalize_bone_weights()
+{
+    float out[4] = { -1.0f, -1.0f, -1.0f, -1.0f };
+    const float dos[4] = { 2.0f, 2.0f, 0.0f, 0.0f };
+    CHECK(normalizeBoneWeights(dos, out));
+    CHECK(nearlyEqual(out[0], 0.5f) && nearlyEqual(out[1], 0.5f));
+    CHECK(nearlyEqual(out[2], 0.0f) && nearlyEqual(out[3], 0.0f));
+
+    // Ya normalizados: no los toca.
+    const float uno[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
+    CHECK(normalizeBoneWeights(uno, out));
+    CHECK(nearlyEqual(out[0], 1.0f));
+
+    // Sin pesos: false y CUATRO CEROS. Es el dato que hace que el shader tenga
+    // que usar identidad en vez de la matriz a cero.
+    const float nada[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    CHECK(!normalizeBoneWeights(nada, out));
+    for (int i = 0; i < 4; i++) CHECK(nearlyEqual(out[i], 0.0f));
+}
+
+// A9: el cargador normaliza los pesos de cada vértice a 1, y deja CUATRO CEROS
+// cuando el FBX no pesó ese vértice contra ningún hueso. Lo segundo lo cuenta
+// verticesWithoutWeights, porque un vértice así no lo mueve nadie: el shader lo
+// deja en su sitio (identidad) en vez de mandarlo al origen.
+static void test_loader_normalizes_bone_weights()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    CHECK(!m.skinnedVertices.empty());
+    int cero = 0;
+    float minSuma = 1e9f, maxSuma = 0.0f;
+    for (const auto& v : m.skinnedVertices)
+    {
+        float s = 0.0f;
+        for (int i = 0; i < 4; i++)
+        {
+            CHECK(v.boneWeights[i] >= 0.0f);          // un peso negativo daría una pose imposible
+            s += v.boneWeights[i];
+        }
+        if (s <= 0.0f) cero++;
+        else { minSuma = std::min(minSuma, s); maxSuma = std::max(maxSuma, s); }
+    }
+    // El asset del repo está bien pesado: si alguien lo cambia por uno que no lo
+    // esté, esto lo dice en vez de salir como geometría rara en pantalla.
+    CHECK(cero == 0);
+    CHECK(m.verticesWithoutWeights == cero);
+    CHECK(nearlyEqual(minSuma, 1.0f));
+    CHECK(nearlyEqual(maxSuma, 1.0f));
+
+    // La otra mitad de A9: las normales se transforman con `skin` y no con su
+    // inversa transpuesta, lo que solo es incorrecto con escala NO uniforme en
+    // algún hueso. Medido: este rig no tiene ninguna, así que no se paga esa
+    // inversa por vértice. Si algún día un rig la trae, este test lo dice.
+    int noUniformes = 0;
+    for (const auto& clip : m.animationClips)
+        for (const auto& ch : clip.channels)
+            for (const auto& k : ch.scaleKeys)
+                if (std::fabs(k.value.x - k.value.y) > 1e-3f ||
+                    std::fabs(k.value.y - k.value.z) > 1e-3f) noUniformes++;
+    CHECK(noUniformes == 0);
+}
+
 static void test_submachine_hierarchy_helpers()
 {
     AnimatorComponent a = makeCajas();
@@ -9260,6 +9323,8 @@ int main()
     test_curve_fires_its_transition_in_the_same_frame();
     test_curve_of_a_zero_weight_layer_still_writes();
     test_curve_last_layer_wins();
+    test_normalize_bone_weights();
+    test_loader_normalizes_bone_weights();
     test_submachine_hierarchy_helpers();
     test_submachine_transition_enters_the_leaf();
     test_submachine_broken_entry_does_not_fire();

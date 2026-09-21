@@ -67,6 +67,21 @@ namespace DonTopo
         std::vector<std::string> clipNames; // nombres finales, en el orden en que se añadieron
     };
 
+    // Reparte los pesos de un vértice para que sumen 1 (A9). Devuelve false
+    // cuando el FBX no pesó ese vértice contra NINGÚN hueso: entonces los
+    // cuatro salen a 0 y el shader lo deja donde está, porque una matriz de
+    // skinning a cero mandaría el vértice al origen.
+    //
+    // Vive aquí y no dentro del bucle del cargador para poder probar el caso
+    // degenerado, que ningún asset del repo produce.
+    inline bool normalizeBoneWeights(const float in[4], float out[4])
+    {
+        float total = 0.0f;
+        for (int i = 0; i < 4; i++) total += in[i];
+        for (int i = 0; i < 4; i++) out[i] = (total > 0.0f) ? in[i] / total : 0.0f;
+        return total > 0.0f;
+    }
+
     struct SkinnedMesh : Mesh
     {
         std::vector<SkinnedVertex>   skinnedVertices;
@@ -80,6 +95,12 @@ namespace DonTopo
         std::vector<AnimationSource> animationSources;
         std::vector<SubMeshRange>    subMeshRanges;
         std::vector<Material>        materials;
+        // Vértices que el FBX no pesó contra ningún hueso (A9). No los mueve
+        // nadie: el shader los deja donde están (identidad) en vez de mandarlos
+        // al origen, pero se ven quietos mientras el resto anima. Es un defecto
+        // del modelo, y sin este contador no hay forma de distinguirlo de un
+        // fallo del motor.
+        int                          verticesWithoutWeights = 0;
     };
 
     struct GpuPosKey

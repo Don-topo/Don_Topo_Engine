@@ -252,12 +252,17 @@ namespace DonTopo
                     : glm::vec4{ 0.0f };
                 v.color    = { 1.0f, 1.0f, 1.0f, 1.0f };
 
-                float totalW = 0.0f;
-                for (int s = 0; s < 4; s++) totalW += tempW[i][s].second;
+                float crudos[4], normalizados[4];
+                for (int s = 0; s < 4; s++) crudos[s] = tempW[i][s].second;
+                // Sin pesos el vértice no lo mueve ningún hueso. Se cuentan para
+                // poder decirlo: el shader lo resuelve con identidad (se queda en
+                // su sitio en espacio de modelo), pero verlo quieto mientras el
+                // resto anima parece un fallo del motor y es del FBX.
+                if (!normalizeBoneWeights(crudos, normalizados)) smesh.verticesWithoutWeights++;
                 for (int s = 0; s < 4; s++)
                 {
                     v.boneIndices[s] = (tempW[i][s].first < 0) ? 0 : tempW[i][s].first;
-                    v.boneWeights[s] = (totalW > 0.0f) ? tempW[i][s].second / totalW : 0.0f;
+                    v.boneWeights[s] = normalizados[s];
                 }
                 smesh.skinnedVertices.push_back(v);
             }
