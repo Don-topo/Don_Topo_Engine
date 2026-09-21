@@ -41,12 +41,20 @@ void main()
 
     InputVertex v = inputVerts.data[vi];
 
-    mat4 skin = mat4(0.0);
+    mat4  skin  = mat4(0.0);
+    float total = 0.0;
     for (int i = 0; i < 4; i++)
     {
         float w = v.boneWeights[i];
-        if (w > 0.0) skin += w * finalBones.data[v.boneIndices[i]];
+        if (w > 0.0) { skin += w * finalBones.data[v.boneIndices[i]]; total += w; }
     }
+    // Vértice sin ningún hueso: `skin` sería mat4(0) y lo mandaría al ORIGEN,
+    // estirando la malla hasta allí. El cargador normaliza los pesos y escribe
+    // cuatro ceros cuando el FBX no pesa ese vértice (ModelLoader.cpp: el
+    // ternario de totalW), así que el dato puede llegar aquí perfectamente.
+    // Con identidad el vértice se queda donde está en espacio de modelo, que es
+    // lo que se ve como "esa parte no está animada" en vez de como un pincho.
+    if (total <= 0.0) skin = mat4(1.0);
 
     outputVerts.data[vi].pos     = skin * vec4(v.position.xyz, 1.0);
     outputVerts.data[vi].color   = v.color;
