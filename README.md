@@ -715,6 +715,12 @@ the canvas to come back out, and the `padre` button on a node to move it into a 
 organises a graph; it is not Unity's hierarchical state machine, as there is no active
 compound state.
 
+When two states transition **both ways**, the return link hangs off a second pair of pins —
+its own row on the node, with a wider curve — so the two don't overlap: the way back has to go
+around both nodes and would otherwise run straight over the way there. Which one moves is
+decided by the order the transitions were created, not by where the nodes sit, so dragging a
+node never reshuffles the curves.
+
 A track can also write a **Float parameter** of the Animator instead of a property of the
 object: that is a **clip curve**. It lets the animation's own time drive the state machine —
 a transition on `speed > 4`, a value feeding a state's speed parameter, a window that opens
