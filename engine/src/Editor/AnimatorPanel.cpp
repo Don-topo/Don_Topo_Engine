@@ -367,7 +367,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
                                        ImGuiSelectableFlags_AllowDoubleClick, ImVec2(200.0f, 0.0f)))
             {
                 m_layer = li;
-                m_nivel = -1;   // el nivel es de la capa que se deja atras
+                m_nivelId = -1;   // el nivel es de la capa que se deja atras
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                 {
                     m_renamingLayer = li;
@@ -387,7 +387,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
             if (n >= 0)
             {
                 m_layer = n;
-                m_nivel = -1;   // el nivel es de la capa que se deja atras
+                m_nivelId = -1;   // el nivel es de la capa que se deja atras
                 ctx.pushLog("Animator: capa '" + anim->layer(n).name + "' añadida");
             }
         }
@@ -857,17 +857,31 @@ void AnimatorPanel::drawLayerMaskPopup(GameObject* go)
     ImGui::EndPopup();
 }
 
+int AnimatorPanel::nivelActual(const AnimatorComponent& anim) const
+{
+    if (m_nivelId < 0) return -1;
+    const int idx = anim.stateIndexByEditorId(m_nivelId, m_layer);
+    // La caja ya no está (se borró estando dentro) o dejó de serlo: raíz.
+    if (idx < 0 || !anim.states(m_layer)[(size_t)idx].isSubMachine) return -1;
+    return idx;
+}
+
 void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
 {
     auto anim = go->getAnimator();
+    // El nivel se resuelve UNA vez por frame desde el editorId: dentro del
+    // frame los índices no se mueven, y entre frames el id sobrevive a los
+    // borrados.
+    const int nivel = nivelActual(*anim);
+    if (nivel < 0) m_nivelId = -1;   // la caja se fue: no dejar el id colgando
 
     // Breadcrumb del nivel, encima del lienzo: es la única forma de salir de una
     // caja, y de ver dónde se está cuando el grafo visible no es el de la raíz.
     {
         const auto& sts = anim->states(m_layer);
-        if (ImGui::SmallButton("Base###nivelRaiz")) m_nivel = -1;
+        if (ImGui::SmallButton("Base###nivelRaiz")) m_nivelId = -1;
         std::vector<int> cadena;
-        for (int n = m_nivel; n >= 0 && n < (int)sts.size(); n = sts[(size_t)n].parent)
+        for (int n = nivel; n >= 0 && n < (int)sts.size(); n = sts[(size_t)n].parent)
         {
             cadena.push_back(n);
             if ((int)cadena.size() > (int)sts.size()) break;   // jerarquía rota: no colgarse
@@ -879,7 +893,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             ImGui::SameLine();
             ImGui::PushID(cadena[(size_t)k]);
             if (ImGui::SmallButton(sts[(size_t)cadena[(size_t)k]].name.c_str()))
-                m_nivel = cadena[(size_t)k];
+                m_nivelId = sts[(size_t)cadena[(size_t)k]].editorId;
             ImGui::PopID();
         }
     }
@@ -901,8 +915,6 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     const auto& states = anim->states(m_layer);
     // El nivel puede haber quedado apuntando a un estado que ya no existe (se
     // borró la caja que se estaba mirando por dentro): se vuelve a la raíz.
-    if (m_nivel >= (int)states.size() || (m_nivel >= 0 && !states[(size_t)m_nivel].isSubMachine))
-        m_nivel = -1;
 
     // Fila de pines del nodo: la usan el estado normal y la caja, que se dibuja
     // sin clip, loop ni eventos. Una sola copia para que las dos salgan iguales.
@@ -926,7 +938,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     for (size_t i = 0; i < states.size(); i++)
     {
         // Solo lo de ESTE nivel: los hijos de una caja se ven al entrar en ella.
-        if (states[i].parent != m_nivel) continue;
+        if (states[i].parent != nivel) continue;
         const int eid = states[i].editorId;
         ed::BeginNode(nodeId(eid));
 
@@ -1266,7 +1278,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // no, la transición desaparecería del grafo y parecería no existir.
         auto visible = [&](int estado) {
             int s = estado;
-            while (s >= 0 && s < (int)states.size() && states[(size_t)s].parent != m_nivel)
+            while (s >= 0 && s < (int)states.size() && states[(size_t)s].parent != nivel)
                 s = states[(size_t)s].parent;
             return s;
         };
@@ -1434,7 +1446,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // sale de deshacer esa cuenta.
         const int eid = ((int)doble.Get() - 1) / 3;
         const int idx = anim->stateIndexByEditorId(eid, m_layer);
-        if (idx >= 0 && anim->states(m_layer)[(size_t)idx].isSubMachine) m_nivel = idx;
+        if (idx >= 0 && anim->states(m_layer)[(size_t)idx].isSubMachine)
+            m_nivelId = anim->states(m_layer)[(size_t)idx].editorId;
     }
 
     ed::End();
@@ -2024,7 +2037,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 // nombre en el nuevo GameObject heredaría el modo edición y el
                 // buffer del clip del objeto anterior durante un frame.
                 const bool selectionChanged = (m_boundTo != go);
-                if (selectionChanged) { m_renamingClip.clear(); m_layer = 0; m_nivel = -1; m_renamingLayer = -1; }
+                if (selectionChanged) { m_renamingClip.clear(); m_layer = 0; m_nivelId = -1; m_renamingLayer = -1; }
 
                 // Undo del grafo: el bracket envuelve TODO lo que puede mutar el
                 // componente en este frame, desde drawAnimationSources hasta el
@@ -2095,7 +2108,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                     AnimatorComponent::State caja;
                     caja.name         = "Sub-Machine";
                     caja.isSubMachine = true;
-                    caja.parent       = m_nivel;
+                    caja.parent       = nivelActual(*anim);
                     const int idx = anim->addState(caja, m_layer);
                     const int eid = anim->states(m_layer)[(size_t)idx].editorId;
                     ed::SetCurrentEditor(m_ctx);

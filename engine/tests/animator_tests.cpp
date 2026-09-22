@@ -8473,6 +8473,25 @@ static void test_loader_normalizes_bone_weights()
 // A10: el grafo se puede escribir a pelo desde la UI (statesMutable /
 // transitionsMutable). sanitizeGraph es la pasada que deja utilizable lo que
 // entre, venga del editor o de un .scene manipulado.
+// El panel recuerda por editorId la sub-máquina en la que está metido, NO por
+// índice: borrar un nodo anterior reindexa el vector y con un índice guardado
+// el editor se salía de la caja solo. Esta es la invariante que lo sostiene.
+static void test_editor_id_survives_deleting_an_earlier_state()
+{
+    AnimatorComponent a = makeCajas();       // Base(0), Ataques(1, caja), Golpe(2), Combo(3, caja), Uno(4)
+    const int idCaja = a.states()[1].editorId;
+    CHECK(a.stateIndexByEditorId(idCaja, 0) == 1);
+    a.removeState(0, 0);                     // borra Base, que va ANTES de la caja
+    // Mismo estado, índice nuevo: el id es lo único que no se mueve.
+    CHECK(a.stateIndexByEditorId(idCaja, 0) == 0);
+    CHECK(a.states()[0].isSubMachine);
+    CHECK(a.states()[0].name == "Ataques");
+    // Y borrar la caja entera sí deja el id sin resolver: es cuando el panel
+    // tiene que volver a la raíz.
+    a.removeState(0, 0);
+    CHECK(a.stateIndexByEditorId(idCaja, 0) == -1);
+}
+
 static void test_sanitize_graph_fixes_bad_indices()
 {
     AnimatorComponent a = makeCajas();
@@ -9409,6 +9428,7 @@ int main()
     test_curve_last_layer_wins();
     test_normalize_bone_weights();
     test_loader_normalizes_bone_weights();
+    test_editor_id_survives_deleting_an_earlier_state();
     test_sanitize_graph_fixes_bad_indices();
     test_sanitize_graph_leaves_a_good_graph_alone();
     test_submachine_hierarchy_helpers();
