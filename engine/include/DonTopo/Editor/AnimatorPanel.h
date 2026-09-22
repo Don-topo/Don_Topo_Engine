@@ -88,7 +88,15 @@ private:
     // Sub-máquina que se está mirando por dentro; -1 es la raíz de la capa. Se
     // resetea al cambiar de capa o de objeto: su índice no significa nada en
     // otro grafo.
-    int  m_nivel          = -1;
+    // Sub-máquina que se está mirando por dentro, por **editorId** y no por
+    // índice: removeState reindexa el vector, así que un índice guardado aquí
+    // pasa a señalar a otro estado en cuanto se borra cualquier nodo anterior
+    // —y la app se salía de la caja sola—. Es la misma razón por la que el
+    // canvas identifica sus nodos por editorId. -1 = raíz de la capa.
+    int  m_nivelId        = -1;
+    // El índice que le corresponde en la capa actual, resuelto cada frame desde
+    // m_nivelId. -1 si la caja ya no existe (la borraron estando dentro).
+    int  nivelActual(const AnimatorComponent& anim) const;
     int  m_boundLayer     = -1;
     int  m_renamingLayer  = -1;
     bool m_focusRename    = false;
