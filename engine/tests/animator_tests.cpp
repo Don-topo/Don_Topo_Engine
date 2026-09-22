@@ -8826,6 +8826,51 @@ static void test_curve_condition_thresholds()
     CHECK(a.conditionThresholds("noExiste", u, 8) == 0);
 }
 
+// C15: arrastrar una key es convertir pantalla <-> datos. Los bordes y la
+// inversión del eje Y son donde viven los off-by-one.
+static void test_curve_canvas_conversions()
+{
+    // Lienzo de 200x50 en (100, 20). Clip de 2 s, valores de -1 a 3.
+    const float x0 = 100.0f, x1 = 300.0f, y0 = 20.0f, y1 = 70.0f;
+    const float dur = 2.0f, lo = -1.0f, hi = 3.0f;
+
+    // Esquinas: abajo-izquierda es (t=0, v=lo); arriba-derecha es (t=dur, v=hi).
+    CurvePoint a = canvasToCurve(x0, y1, x0, x1, y0, y1, dur, lo, hi);
+    CHECK(nearlyEqual(a.time, 0.0f) && nearlyEqual(a.value, lo));
+    CurvePoint b = canvasToCurve(x1, y0, x0, x1, y0, y1, dur, lo, hi);
+    CHECK(nearlyEqual(b.time, dur) && nearlyEqual(b.value, hi));
+    // El centro cae en la mitad de las dos escalas.
+    CurvePoint c = canvasToCurve((x0 + x1) * 0.5f, (y0 + y1) * 0.5f, x0, x1, y0, y1, dur, lo, hi);
+    CHECK(nearlyEqual(c.time, 1.0f) && nearlyEqual(c.value, 1.0f));
+
+    // Arrastrar ARRIBA sube el valor: el eje de pantalla va al revés.
+    CurvePoint arriba = canvasToCurve(x0, y0 + 5.0f, x0, x1, y0, y1, dur, lo, hi);
+    CurvePoint abajo  = canvasToCurve(x0, y1 - 5.0f, x0, x1, y0, y1, dur, lo, hi);
+    CHECK(arriba.value > abajo.value);
+
+    // El tiempo se acota al clip aunque el ratón se salga; el valor no.
+    CurvePoint fuera = canvasToCurve(x1 + 500.0f, y0 - 500.0f, x0, x1, y0, y1, dur, lo, hi);
+    CHECK(nearlyEqual(fuera.time, dur));
+    CHECK(fuera.value > hi);
+    CurvePoint izq = canvasToCurve(x0 - 500.0f, y1, x0, x1, y0, y1, dur, lo, hi);
+    CHECK(nearlyEqual(izq.time, 0.0f));
+
+    // Ida y vuelta: lo que se dibuja y lo que se lee tienen que coincidir, o la
+    // key saltaría al agarrarla.
+    float x = 0.0f, y = 0.0f;
+    curveToCanvas(1.5f, 2.0f, x0, x1, y0, y1, dur, lo, hi, x, y);
+    CurvePoint v = canvasToCurve(x, y, x0, x1, y0, y1, dur, lo, hi);
+    CHECK(nearlyEqual(v.time, 1.5f));
+    CHECK(nearlyEqual(v.value, 2.0f));
+
+    // Rango de altura cero (lo == hi): no puede dar NaN ni dividir por cero.
+    float xd = 0.0f, yd = 0.0f;
+    curveToCanvas(1.0f, 5.0f, x0, x1, y0, y1, dur, 2.0f, 2.0f, xd, yd);
+    CHECK(std::isfinite(xd) && std::isfinite(yd));
+    CurvePoint d = canvasToCurve(x0, y1, x0, x1, y0, y1, dur, 2.0f, 2.0f);
+    CHECK(std::isfinite(d.value));
+}
+
 static void test_curve_draw_range()
 {
     PropertyTrack t;
@@ -9442,6 +9487,7 @@ int main()
     test_removing_a_state_reindexes_parent_and_entry();
     test_mesh_clock_advances_in_ticks();
     test_curve_condition_thresholds();
+    test_curve_canvas_conversions();
     test_curve_draw_range();
     test_property_samples_scale_with_the_layer_weight();
     test_property_samples_follow_the_graph();

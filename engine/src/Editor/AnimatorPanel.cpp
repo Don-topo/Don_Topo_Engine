@@ -32,26 +32,101 @@ namespace {
     // curva —¿cruza el umbral, y cuándo?—, que con la lista de DragFloat hay
     // que reconstruir a mano. Las keys se siguen editando en la lista: el
     // arrastre sobre el lienzo es la fila C15 del audit.
-    void dibujarCurva(const PropertyTrack& pista, float duracion, float tiempoActual,
+    // Estado del arrastre de una key, entre frames. La pista se identifica por
+    // el ID de ImGui del lienzo (único por clip y pista, ver el PushID de la
+    // llamada), no por índices: dentro del gesto nadie borra nada, pero así no
+    // hay tres índices que mantener coherentes.
+    struct ArrastreKey
+    {
+        ImGuiID lienzo = 0;    // 0 = no hay arrastre
+        int     key    = -1;
+        // El rango se CONGELA mientras dura: si se recalculara, mover la key
+        // reescalaría el dibujo y la key se escaparía del cursor.
+        float   lo = 0.0f, hi = 0.0f;
+    };
+    ArrastreKey g_arrastre;
+
+    // Devuelve true si tocó la pista (para que el llamante sepa que hay que
+    // re-resolver y que el undo tiene algo que registrar).
+    bool dibujarCurva(PropertyTrack& pista, float duracion, float tiempoActual,
                       const float* umbrales, int numUmbrales)
     {
         const float ancho = ImGui::GetContentRegionAvail().x;
-        if (ancho < 40.0f || duracion <= 0.0f || pista.keys.empty()) return;
+        if (ancho < 40.0f || duracion <= 0.0f || pista.keys.empty()) return false;
         const float alto = 56.0f;
-        ImGui::Dummy(ImVec2(ancho, alto));
+        // InvisibleButton y no Dummy: es lo que captura el clic y el arrastre
+        // sin pelearse con el scroll de la columna. AllowOverlap porque el
+        // lienzo convive con los widgets de la lista de abajo.
+        ImGui::InvisibleButton("##curva", ImVec2(ancho, alto),
+                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        const ImGuiID idLienzo = ImGui::GetItemID();
+        const bool    hover    = ImGui::IsItemHovered();
         const ImVec2  p0 = ImGui::GetItemRectMin();
         const ImVec2  p1 = ImGui::GetItemRectMax();
         ImDrawList*   dl = ImGui::GetWindowDrawList();
         dl->AddRectFilled(p0, p1, IM_COL32(24, 24, 28, 255));
-        dl->AddRect(p0, p1, IM_COL32(70, 70, 80, 255));
+        dl->AddRect(p0, p1, hover ? IM_COL32(110, 110, 125, 255) : IM_COL32(70, 70, 80, 255));
 
         float lo = 0.0f, hi = 0.0f;
         curveRange(pista, umbrales, numUmbrales, lo, hi);
+        const bool arrastrandoEsta = g_arrastre.lienzo == idLienzo && g_arrastre.key >= 0;
+        if (arrastrandoEsta) { lo = g_arrastre.lo; hi = g_arrastre.hi; }
         auto aY = [&](float v) { return p1.y - (v - lo) / (hi - lo) * (p1.y - p0.y); };
         auto aX = [&](float t) {
             const float x = p0.x + (t / duracion) * (p1.x - p0.x);
             return std::min(std::max(x, p0.x), p1.x);   // una key más allá del clip se queda en el borde
         };
+
+        // --- Ratón: agarrar, arrastrar, añadir y quitar keys ---
+        bool tocada = false;
+        const ImVec2 raton = ImGui::GetIO().MousePos;
+        // La key más cercana al cursor dentro del radio de agarre.
+        int cercana = -1;
+        {
+            float mejor = 7.0f * 7.0f;   // radio de agarre al cuadrado
+            for (int k = 0; k < (int)pista.keys.size(); k++)
+            {
+                const float dx = aX(pista.keys[(size_t)k].time)  - raton.x;
+                const float dy = aY(pista.keys[(size_t)k].value) - raton.y;
+                const float d2 = dx * dx + dy * dy;
+                if (d2 < mejor) { mejor = d2; cercana = k; }
+            }
+        }
+
+        if (hover && cercana >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            g_arrastre = { idLienzo, cercana, lo, hi };
+        }
+        else if (hover && cercana >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+        {
+            pista.keys.erase(pista.keys.begin() + cercana);
+            tocada = true;
+        }
+        else if (hover && cercana < 0 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        {
+            const CurvePoint p = canvasToCurve(raton.x, raton.y, p0.x, p1.x, p0.y, p1.y, duracion, lo, hi);
+            pista.keys.push_back({ p.time, p.value });
+            tocada = true;
+        }
+
+        if (g_arrastre.lienzo == idLienzo)
+        {
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || g_arrastre.key >= (int)pista.keys.size())
+            {
+                g_arrastre = {};   // soltó, o la key se fue
+            }
+            else
+            {
+                const CurvePoint p = canvasToCurve(raton.x, raton.y, p0.x, p1.x, p0.y, p1.y,
+                                                   duracion, g_arrastre.lo, g_arrastre.hi);
+                PropertyKey& k = pista.keys[(size_t)g_arrastre.key];
+                if (k.time != p.time || k.value != p.value) tocada = true;
+                // No hace falta reordenar: samplePropertyTrack busca el tramo
+                // COMPARANDO tiempos, no por posición en el vector.
+                k.time  = p.time;
+                k.value = p.value;
+            }
+        }
 
         // Los umbrales van debajo de la curva: lo que interesa es dónde la cruza.
         for (int i = 0; i < numUmbrales; i++)
@@ -73,8 +148,15 @@ namespace {
             pts[s] = ImVec2(aX(t), aY(samplePropertyTrack(pista, t, 0.0f)));
         }
         dl->AddPolyline(pts, kMuestras + 1, IM_COL32(120, 200, 255, 255), 0, 1.5f);
-        for (const auto& k : pista.keys)
-            dl->AddCircleFilled(ImVec2(aX(k.time), aY(k.value)), 3.0f, IM_COL32(255, 255, 255, 230));
+        for (int k = 0; k < (int)pista.keys.size(); k++)
+        {
+            // La que se puede agarrar se ve más grande: sin esa pista, acertar
+            // con el radio de 7 px es a ciegas.
+            const bool activa = (arrastrandoEsta && g_arrastre.key == k) || (hover && cercana == k);
+            dl->AddCircleFilled(ImVec2(aX(pista.keys[(size_t)k].time), aY(pista.keys[(size_t)k].value)),
+                                activa ? 5.0f : 3.0f,
+                                activa ? IM_COL32(255, 220, 120, 255) : IM_COL32(255, 255, 255, 230));
+        }
         if (tiempoActual >= 0.0f)
         {
             const float x = aX(tiempoActual);
@@ -88,6 +170,11 @@ namespace {
         dl->AddText(ImVec2(p0.x + 3.0f, p0.y + 1.0f), IM_COL32(150, 150, 160, 200), txt);
         std::snprintf(txt, sizeof(txt), "%.2f", lo);
         dl->AddText(ImVec2(p0.x + 3.0f, p1.y - 16.0f), IM_COL32(150, 150, 160, 200), txt);
+
+        if (hover && cercana < 0 && !arrastrandoEsta)
+            ImGui::SetTooltip("Arrastra una key para moverla.\n"
+                              "Doble clic: nueva key.  Clic derecho sobre una: la quita.");
+        return tocada;
     }
 
     // Lienzo de solo lectura del blend 2D: los puntos con su clip, las aristas
@@ -701,6 +788,10 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     const int numUmbrales = pista.target == TrackTarget::Parameter
                                                 ? anim->conditionThresholds(pista.parameterName, umbrales, 4)
                                                 : 0;
+                    // El lienzo edita las keys con el ratón. El ID sale del
+                    // PushID(p) de esta pista, dentro del PushID(i) del clip:
+                    // eso es lo que distingue un lienzo de otro cuando hay
+                    // varios abiertos a la vez.
                     dibujarCurva(pista, clip.duration, tiempoClip, umbrales, numUmbrales);
 
                     int quitarKey = -1;

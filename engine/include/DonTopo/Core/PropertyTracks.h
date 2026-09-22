@@ -67,6 +67,23 @@ namespace DonTopo
     // saldría pegada al borde: se abre a ±0,5.
     void curveRange(const PropertyTrack& t, const float* extra, int nExtra, float& lo, float& hi);
 
+    // Conversión entre el lienzo de la curva y los datos de la pista, para poder
+    // arrastrar las keys con el ratón. Vive aquí, y no en el panel, porque es
+    // donde caben los off-by-one y es lo único de ese gesto que se puede probar
+    // sin ventana.
+    //
+    // `x0`/`x1` e `y0`/`y1` son los bordes del rectángulo en pantalla (y crece
+    // hacia ABAJO, al revés que el valor). El tiempo sale acotado a
+    // [0, duracion]; el valor no se acota, porque el rango del dibujo se ajusta
+    // a lo que haya.
+    struct CurvePoint { float time = 0.0f; float value = 0.0f; };
+    CurvePoint canvasToCurve(float x, float y, float x0, float x1, float y0, float y1,
+                             float duracion, float lo, float hi);
+    // La inversa: dónde cae en pantalla una key. Con el tiempo fuera del clip
+    // devuelve el borde, que es donde se dibuja.
+    void curveToCanvas(float time, float value, float x0, float x1, float y0, float y1,
+                       float duracion, float lo, float hi, float& x, float& y);
+
     // Una aportación a una propiedad: su valor y el peso con el que entra (el
     // del cross-fade por el de su capa).
     struct PropertyContribution { float value = 0.0f; float weight = 0.0f; };

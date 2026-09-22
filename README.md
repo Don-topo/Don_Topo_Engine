@@ -727,7 +727,11 @@ panel while the preview runs); and if two layers have a curve for the same param
 **last one wins** — the layer's weight does not scale the value (a pose is blended, a
 parameter is written), and a layer at weight 0 still writes its curve.
 
-Every track draws itself above its keyframe list: the sampled shape, a dot per key, the
+Every track draws itself above its keyframe list, and that canvas is **editable**: drag a key
+to move it in time and value, double-click empty space to add one, right-click a key to
+remove it. The list below stays for typing exact numbers. One drag is one undo step, and the
+vertical range freezes while you drag — otherwise the plot would rescale under the cursor and
+the key would slip away. The canvas shows the sampled shape, a dot per key, the
 range's ends, and — while the preview runs — a playhead at the clip's current time. A curve
 also draws a line for each **threshold** of the Float conditions that read its parameter, so
 whether it crosses `speed > 4`, and when, is one glance rather than arithmetic. The canvas is
