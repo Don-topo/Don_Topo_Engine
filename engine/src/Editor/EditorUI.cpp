@@ -1173,7 +1173,17 @@ void EditorUI::handleGizmoModeShortcut()
 
 void EditorUI::handleUndoRedoShortcut()
 {
-    if (!m_scene || m_isPlaying || !ImGui::GetIO().KeyCtrl || ImGui::GetIO().WantTextInput)
+    // En Play TAMBIÉN se deshace (A11). Lo que se deshace ahí es solo lo hecho
+    // DURANTE Play: la historia se vacía al pulsar Play, y el Stop restaura la
+    // escena desde el snapshot y la vuelve a vaciar. Así que esto no puede
+    // dejar un estado raro permanente, y no añade ninguna capacidad nueva —
+    // crear, borrar y editar objetos o el grafo del Animator ya se permite con
+    // la escena corriendo, sin pasar por aquí.
+    //
+    // Es además lo que hace útil que AnimatorGraphCommand conserve los valores
+    // de los parámetros y el playhead al aplicar un grafo: esa garantía se
+    // escribió "porque corre en Play" y con el gate era inalcanzable.
+    if (!m_scene || !ImGui::GetIO().KeyCtrl || ImGui::GetIO().WantTextInput)
         return;
 
     if (ImGui::IsKeyPressed(ImGuiKey_Z) && m_undoHistory.canUndo())
