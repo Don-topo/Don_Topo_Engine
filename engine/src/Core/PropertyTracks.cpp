@@ -89,6 +89,29 @@ namespace DonTopo
         hi += margen;
     }
 
+    CurvePoint canvasToCurve(float x, float y, float x0, float x1, float y0, float y1,
+                             float duracion, float lo, float hi)
+    {
+        CurvePoint p;
+        const float ancho = x1 - x0;
+        const float alto  = y1 - y0;
+        p.time  = ancho > 0.0f ? (x - x0) / ancho * duracion : 0.0f;
+        p.time  = glm::clamp(p.time, 0.0f, duracion);
+        // La pantalla crece hacia abajo y el valor hacia arriba: sin esta
+        // inversión, arrastrar hacia arriba bajaría el valor.
+        p.value = alto > 0.0f ? hi - (y - y0) / alto * (hi - lo) : lo;
+        return p;
+    }
+
+    void curveToCanvas(float time, float value, float x0, float x1, float y0, float y1,
+                       float duracion, float lo, float hi, float& x, float& y)
+    {
+        const float span = hi - lo;
+        x = duracion > 0.0f ? x0 + (time / duracion) * (x1 - x0) : x0;
+        x = glm::clamp(x, x0, x1);      // una key más allá del clip se queda en el borde
+        y = span > 0.0f ? y1 - (value - lo) / span * (y1 - y0) : y1;
+    }
+
     float blendScalarValues(const PropertyContribution* c, int n)
     {
         if (n <= 0) return 0.0f;
