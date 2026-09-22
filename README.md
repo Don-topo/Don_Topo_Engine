@@ -1,52 +1,70 @@
 # Don Topo Engine
 
 A game engine written in C++20, with two interchangeable render backends: **Vulkan** and
-**DirectX 12**.
+**DirectX 12**. It ships an ImGui editor, a PhysX-backed scene, Lua gameplay scripting and a
+game exporter that packages a standalone runtime linking no editor code at all.
+
+## Contents
+
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Getting Started](#getting-started) — [Prerequisites](#prerequisites) · [Build (Windows)](#build-windows) · [Build (Linux)](#build-linux)
+- [Project Structure](#project-structure)
+- [Rendering](#rendering) — [DirectX 12 Backend](#directx-12-backend) · [HDR & Bloom](#hdr--bloom) · [Screen-Space Effects](#screen-space-effects) · [Motion Blur](#motion-blur) · [Anti-aliasing](#anti-aliasing) · [Lights](#lights) · [Reflection Probes](#reflection-probes) · [Skybox & Environment](#skybox--environment) · [Mesh Visibility](#mesh-visibility) · [Batching, Culling & Asset Streaming](#batching-culling--asset-streaming)
+- [Editor](#editor) — [Selection Outline](#selection-outline) · [Viewport Picking](#viewport-picking) · [Viewport Transform Gizmo](#viewport-transform-gizmo) · [Scene, Play Mode & Undo](#scene-play-mode--undo)
+- [Gameplay](#gameplay) — [Camera](#camera) · [Physics](#physics) · [Audio](#audio) · [Game UI](#game-ui)
+- [Animation](#animation) — [Animator](#animator)
+- [Tooling](#tooling) — [Performance Panel](#performance-panel) · [Rendering Panel](#rendering-panel) · [Sprite Editor](#sprite-editor) · [Input Actions](#input-actions) · [Export Game](#export-game)
+- [Scripting](#scripting) — [Lua Scripting](#lua-scripting)
+- [Planned](#planned)
+- [License](#license)
 
 ## Features
 
-- **Two render backends**: Vulkan and DirectX 12, picked per project and swapped on restart. They render the same scene from the same GLSL sources and reach the same feature set — the exported game carries whichever one you chose (see below)
-- PBR rendering (Cook-Torrance GGX) on an HDR pipeline: the scene is lit in linear float and only tonemapped (ACES + gamma) once, in the composition pass
-- **Image-based lighting**: the skybox cubemap is convolved on the GPU into an irradiance map (diffuse) and a roughness-prefiltered map (specular, Karis analytic BRDF), with a live `Ambient (IBL)` weight
-- **HDR bloom**: threshold with soft knee, mip chain of compute downsample/upsample passes, additive composition — `threshold`, `knee` and `intensity` are live editor sliders (see below)
-- **SSAO**: depth-only pre-pass + compute occlusion (16-sample hemisphere kernel, normals reconstructed from depth) and a blur, applied to the ambient term only; toggle plus `radius`/`bias`/`intensity`/`power` sliders (see below)
-- **Screen space reflections**: view-space ray march with binary refinement, added into the HDR target *before* bloom so reflections bloom and tonemap like everything else; enabled and weighted **per GameObject**, with a global switch and 5 sliders (see below)
-- **Volumetric fog**: height-exponential fog ray-marched in a compute pass over the HDR target, with Henyey-Greenstein in-scattering from the key light and its cascaded shadows; global switch, off by default, and 6 sliders (see below)
-- **Light component**: any GameObject can be a light — `Point` / `Spot` / `Directional` / `Area`, several of each per scene (64 reach the shader, and the editor says so when a scene holds more), position and direction taken from its transform, with a direction gizmo in the editor (see below)
-- **Reflection probes**: placeable environment probes that capture the scene from their position into a cubemap and replace the global IBL for the objects inside their radius; baked on demand, never per frame (see below)
-- **Anti-aliasing**: `None` / `FXAA` / `SSAA` / `MSAA` / `TAA`, mutually exclusive and switchable at runtime from the View menu, each with its own resources rebuilt between frames
-- **Forward+ light culling**: `Off` / `Tiled` / `Clustered`, a compute pre-pass that bins lights into a screen grid so `pbr.frag` only iterates the ones that reach each pixel; `Off` records no commands and lights exactly as before
-- GPU skeletal animation (compute shader skinning: bone eval → hierarchy → skinning)
-- **Shadows**: 4 cascades for the key light, PCF 3×3 sized from the map's *real* resolution; `1024`–`8192` map resolution, shadow distance and cascade split all live from the editor. Beyond the key light, secondary `Spot` and `Point` lights also cast — a narrow spot in perspective, a point light (or a spot open enough that one face would look bad) through a 6-face cubemap — sharing a budget of 6 extra layers (see below)
-- **Motion blur**: **camera** motion blur in a compute pass, the per-pixel velocity taken from reprojecting the depth pre-pass with the same `prevViewProj × inverse(currViewProj)` the TAA already uses; it runs after the fog and before the bloom, so the streak blooms with the highlights. `intensity`, `max radius` and `samples` sliders, off by default, both backends. Objects that move on their own contribute no velocity of their own — that would need a per-object velocity buffer
-- Normal maps + tangent space
-- Cubemap skybox (fullscreen quad, inverse view-projection), **picked per project and swapped live**: the **Environment** window takes a folder holding the six faces (`px`/`nx`/`py`/`ny`/`pz`/`nz`), by typing it, by browsing, or by dragging a folder in from the Content Browser. Changing it also re-convolves the ambient lighting, which comes from that same cubemap
-- Wireframe render mode
-- 3D spatial audio (FMOD): `AudioClipComponent` (loop, 3D/2D toggle, per-channel volume and pitch, 3D min/max attenuation distances with viewport gizmo), non-blocking clip loading
-- **Audio Listener component**: one per scene — its GameObject transform is where the scene is heard from (position, `-Z` forward, `+Y` up), falling back to the camera when absent; a scene with no listener still plays its clips — they are simply heard from the camera, and the log says so once per Play
-- Dockable ImGui editor with offscreen viewport
-- Scene graph (hierarchical transforms), GameObject hierarchy panel (create/delete/rename, drag-drop reorder)
-- Basic shapes menu (Cube/Sphere/Plane/Capsule), Content Browser (asset browsing, rename/delete)
-- **Transform gizmo in the viewport** (ImGuizmo): move, rotate and scale the selected object by dragging it, live; the mode is picked with three toolbar buttons or with `W` / `E` / `R`, and releasing leaves a single `Ctrl+Z`-able command. Plus the camera-oriented axis gizmo, debug-draw gizmos and collider gizmos
-- **Mesh visibility toggle**: a `Visible` checkbox on the Mesh component; unchecked, the mesh is submitted to no pass at all — no scene draw, no shadow, no AO, and no skinning dispatch — while physics, colliders, picking and scripting are untouched (see below)
-- **Selection outline**: the selected GameObject is traced with an orange contour in the viewport (see below)
-- **Click-to-select in the viewport**: left-clicking a mesh in the viewport selects it, clicking empty space clears the selection (CPU ray picking, see below)
-- **Camera component**: any GameObject can be the scene camera (perspective/orthographic, fov, near/far); frustum gizmo in edit mode, renders from it on Play
-- **Animator component**: Unity-style animation state graph (node = clip, link = transition; `bool`/`trigger`/`int`/`float`/`animation finished` conditions), edited in a node panel with undo (one step per gesture); transitions cross-fade over a configurable duration (0 = instant cut, the default), can wait for an exit time, and can start from an **Any State** node; a state can be a 1D blend of any number of clips by a float parameter; driven from Lua
-- Physics (PhysX): Box/Sphere/Capsule/Plane colliders (shape, per-collider material — static/dynamic friction and bounciness — and `Is Trigger`) + `Rigidbody` (mass, gravity, drag, kinematic, 6-axis constraints, forces/impulses), raycasting. All of it editable in Properties and scriptable from Lua (see below)
-- Scene serialization (JSON save/load, full GameObject tree incl. mesh/colliders/audio/scripts)
-- Play Mode (edit/play toggle, snapshot restore, physics gated to Play), undo/redo of editor actions — including **while playing**, where it undoes what you did during that Play session: entering Play clears the history, and Stop restores the scene from its snapshot and clears it again
-- Log Console panel (edit-action history, live value editing)
-- **Rendering panel**: the 41 render settings — ambient, probes, skybox, presentation, shadows, bloom, SSAO, SSR, fog, motion blur, anti-aliasing, Forward+ and the backend selector — as a **dockable panel** instead of a menu that closed on mouse release, so an effect can be tuned while watching the viewport. Every control is undoable with `Ctrl+Z` and persisted to `project.json`, and each section prints its own GPU time (see below)
-- **Performance panel**: live framerate/frame-time graphs, GPU time per pass from timestamp queries (read from frame `N-2`, never blocking), draw/instance/culled counters, and process RAM/CPU/VRAM — and it costs literally nothing while closed (see below)
-- **Frustum culling** in the main, shadow and skinned passes; skinned meshes bounded by a pose-independent sphere so no character can vanish mid-animation
-- **Draw batching**: objects sharing a mesh+material collapse into one instanced draw, and their GPU resources (buffers, textures) are deduplicated by a content key so identical meshes are uploaded once — in both backends
-- **Async asset loading**: worker thread pool (`JobSystem`), off-thread image decode, batched GPU uploads with deferred visibility and deferred destruction — no `vkDeviceWaitIdle` stalls on drop or scene load
-- **Export Game**: packages a standalone runtime (scene, assets, scripts, shaders, splash screen, FMOD and MSVC CRT DLLs) that links no editor code at all
-- **Lua scripting**: `ScriptComponent` (multiple per GameObject), Unity-style lifecycle (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy), Entity/Transform/Scene/Time/Input/Audio/Light/Camera API, runtime scene switching (`DonTopo.loadScene`), hot reload, auto-generated property UI
-- **UI components** (14): `Canvas` (scale modes, reference resolution, safe area), `Panel`, `Image` (simple/sliced/tiled/filled), `Text` (font, size, outline, shadow, align, wrap/overflow), `Button` (5 states, color-tint/sprite-swap/fade transitions, optional text label), `Slider`, `Checkbox`, `Toggle`, `Scrollbar`, `ProgressBar` (value range, fill direction, background/fill sprites), `InputField` (caret, content types), `Dropdown`, `ScrollView` and `Layout` (horizontal/vertical/grid auto-layout with padding, spacing, cell size, cross-axis alignment, content-size fitters and per-child `ignoreLayout`; on a GameObject with no other UI component it builds its own non-drawing container that groups, places and clips). They are **data-only** components of the scene: a single per-frame sync rebuilds/updates the live canvas tree from them, so what you see in Play and in the exported game comes from the scene, not from a hand-wired tree. Editable in Properties and **fully scriptable from Lua** — every field, plus `OnClick`/`OnDoubleClick` callbacks and the button state (see below)
-- **World-space canvases and multi-canvas**: a `Canvas` can render as a quad **inside the scene** instead of on the screen (`renderMode`, `worldScale`, `billboard` none/yaw-only/full, `depthTest`) — health bars over enemies, diegetic screens. World canvases are drawn in the scene pass, sorted back-to-front, so geometry occludes them; screen canvases stay on top as before. A scene can hold **any number of canvases**, each with its own tree; pointer input goes to the topmost one under the cursor, and a canvas that owns a press keeps it until release. Both backends. Three known limits: a world canvas cannot be clicked (select it from the Hierarchy), `clipChildren` does not clip on one, and fog/motion blur/TAA read the depth of whatever is *behind* it
-- FBX / OBJ model loading (embedded textures supported)
+One line each; the detail lives in the section each row points at.
+
+| Rendering | What it is |
+| --- | --- |
+| [Two render backends](#directx-12-backend) | Vulkan and DirectX 12, picked per project, from the same GLSL sources and with the same feature set |
+| [PBR and image-based lighting](#hdr--bloom) | Cook-Torrance GGX lit in linear float; the skybox cubemap is convolved into an irradiance map and a roughness-prefiltered one, with a live `Ambient (IBL)` weight |
+| [HDR bloom](#hdr--bloom) | Soft-knee threshold, compute mip chain, additive composition; ACES + gamma applied once, in the composition pass |
+| [SSAO](#ssao) | Depth-only pre-pass plus a 16-sample compute occlusion and its blur, on the ambient term only |
+| [Screen-space reflections](#ssr) | View-space ray march with binary refinement, enabled and weighted **per GameObject** |
+| [Volumetric fog](#volumetric-fog) | Height-exponential fog with Henyey-Greenstein in-scattering and the key light's cascaded shadows |
+| [Motion blur](#motion-blur) | Camera motion blur from the reprojected depth pre-pass; objects contribute no velocity of their own |
+| [Lights](#lights) | `Point` / `Spot` / `Directional` / `Area` on any GameObject, several of each, 64 of them reach the shader |
+| [Shadows](#shadows-beyond-the-key-light) | 4 cascades for the key light and 6 shared layers for secondary spots and points, PCF 3×3 |
+| [Reflection probes](#reflection-probes) | Placeable captures that replace the global IBL inside their radius, baked on demand and never per frame |
+| [Anti-aliasing](#anti-aliasing) | `None` / `FXAA` / `SSAA` / `MSAA` / `TAA`, mutually exclusive and switchable at runtime |
+| [Forward+ light culling](#lights) | `Off` / `Tiled` / `Clustered` compute pre-pass that bins lights into a screen grid |
+| [GPU skeletal animation](#animator) | Compute skinning (bone eval → hierarchy → skinning); a mesh with no Animator loops its first clip |
+| [Skybox and environment](#skybox--environment) | Cubemap picked per project and swapped live; changing it re-convolves the ambient lighting |
+| Normal maps, wireframe | Tangent-space normal mapping, and a wireframe render mode |
+| [Mesh visibility](#mesh-visibility) | A `Visible` checkbox that removes the mesh from every pass while physics and scripting keep running |
+| [Batching, culling, streaming](#batching-culling--asset-streaming) | Instanced draws of shared meshes, frustum culling in every pass, async asset loading |
+
+| Editor | What it is |
+| --- | --- |
+| Dockable ImGui editor | Offscreen viewport, hierarchy with drag-drop reorder, Content Browser, basic shapes and a Log Console |
+| [Transform gizmo](#viewport-transform-gizmo) | ImGuizmo move / rotate / scale with `W` / `E` / `R`; one drag leaves one undoable command |
+| [Selection outline](#selection-outline) | An orange inverted-hull contour around the selected object |
+| [Click-to-select](#viewport-picking) | CPU ray picking in the viewport; clicking empty space clears the selection |
+| [Play Mode and undo](#scene-play-mode--undo) | Snapshot restore, physics gated to Play, and undo/redo that also works while playing |
+| [Scene serialization](#scene-play-mode--undo) | JSON save/load of the whole GameObject tree |
+| [Rendering panel](#rendering-panel) | The 43 render settings, each undoable and persisted to `project.json`, with its own GPU time |
+| [Performance panel](#performance-panel) | Framerate graphs, GPU time per pass, draw counters and RAM/CPU/VRAM — free while closed |
+| [Sprite editor](#sprite-editor) · [Input actions](#input-actions) | Slice a texture into named sprites; bind named actions to keys, mouse and gamepad |
+| [Export Game](#export-game) | Packages a standalone runtime that links no editor code at all |
+
+| Gameplay | What it is |
+| --- | --- |
+| [Camera component](#camera) | Any GameObject can be the scene camera; frustum gizmo in edit mode, renders from it on Play |
+| [Animator](#animator) | State graph with layers, 1D/2D blends, sub-state machines, IK, property clips and clip curves |
+| [Physics](#physics) | PhysX colliders and `Rigidbody`, triggers, raycasts and collision layers |
+| [Audio](#audio) | FMOD 3D spatial clips and one Audio Listener per scene |
+| [Game UI](#game-ui) | Fourteen data-only UI components, on screen-space and world-space canvases |
+| [Lua scripting](#lua-scripting) | `ScriptComponent` with a Unity-style lifecycle, hot reload and auto-generated property UI |
+| Model loading | FBX / OBJ, embedded textures supported |
 
 ## Tech Stack
 
@@ -64,6 +82,8 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 | Transform gizmo | ImGuizmo | Auto-fetched |
 | Node graph UI | imgui-node-editor (thedmd) | Auto-fetched |
 | Script code editor | ImGuiColorTextEdit | Auto-fetched |
+| Font rasterisation (game UI) | FreeType 2.13.3 | Auto-fetched |
+| SDF glyph atlas (game UI) | msdfgen 1.12 | Auto-fetched |
 | Physics | NVIDIA PhysX 5.8.0 | Auto-fetched |
 | Audio | FMOD Studio (optional) | Manual install |
 | Scene serialization | nlohmann/json 3.11.3 | Auto-fetched |
@@ -71,7 +91,9 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 | Build | CMake 3.25+ | — |
 | Language | C++20 | — |
 
-## Prerequisites
+## Getting Started
+
+### Prerequisites
 
 | Tool | Version | Notes |
 | --- | --- | --- |
@@ -81,14 +103,14 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 | FMOD Studio API | Latest | Optional — audio disabled if not found |
 
 GLFW, GLM, Assimp, stb_image, ImGui, ImGuiFileDialog, ImGuizmo, ImGuiColorTextEdit,
-imgui-node-editor, PhysX, nlohmann/json, Lua, sol2 and D3D12MemoryAllocator are downloaded and
-built automatically by CMake.
+imgui-node-editor, PhysX, nlohmann/json, Lua, sol2, FreeType, msdfgen and D3D12MemoryAllocator
+are downloaded and built automatically by CMake.
 
 The DirectX 12 backend is built by default on Windows (`DTE_ENABLE_D3D12=ON`) and forced off
 everywhere else. It needs no extra download — `spirv-cross` and `dxc` ship inside the Vulkan SDK
 you already have — but configure with `-DDTE_ENABLE_D3D12=OFF` to skip it and build Vulkan only.
 
-## Build (Windows)
+### Build (Windows)
 
 ```batch
 # Debug (build-ninja\)
@@ -129,7 +151,8 @@ while Lua `print()` goes to the editor's Log Console panel.
 
 Shaders are compiled from `shaders/*.{vert,frag,comp}` to SPIR-V automatically during build and
 copied to both the executable directory and `shaders/`. With the DX12 backend enabled each SPIR-V
-module is then translated to HLSL and lowered to DXIL in the same step (see below). The source
+module is then translated to HLSL and lowered to DXIL in the same step (see
+[DirectX 12 Backend](#directx-12-backend)). The source
 list is globbed, so a brand-new shader needs a re-run of `configure.bat` before `build.bat` will
 see it.
 
@@ -142,26 +165,29 @@ build.bat
 for %f in (build-ninja\engine\tests\dt_*_tests.exe) do @%f
 ```
 
-## Build (Linux)
+### Build (Linux)
 
-Ubuntu/Debian recientes (GCC 12+, cmake 3.25+):
+Recent Ubuntu/Debian (GCC 12+, CMake 3.25+):
 
 ```bash
 sudo apt install build-essential cmake ninja-build glslc libvulkan-dev \
     libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
     libwayland-dev libxkbcommon-dev wayland-protocols pkg-config
-# FMOD: descargar "FMOD Engine" para Linux de fmod.com y extraerlo en third_party/fmod
+# FMOD: download "FMOD Engine" for Linux from fmod.com and unpack it into third_party/fmod
 ./configure.sh && ./build.sh                               # Debug   (build-linux/)
 ./configure.sh linux-release && ./build.sh linux-release   # Release (build-linux-release/)
 ```
 
-Los tests se lanzan desde la raíz del repo (`build-linux/engine/tests/dt_*`).
-El backend DirectX 12 no existe en Linux; el editor usa Vulkan.
+Tests are launched **from the repository root** (`build-linux/engine/tests/dt_*`) — several of
+them resolve `assets/` relative to the working directory. There is no DirectX 12 backend on
+Linux; the editor runs on Vulkan. The `linux` GitHub Actions job builds Release on Ubuntu 24.04
+and runs the whole suite on every push, without FMOD — everything has to compile and pass with
+audio disabled too.
 
-Audio: FMOD saca el sonido por PulseAudio o ALSA (`libpulse0`, `libasound2t64`).
-Un Ubuntu de escritorio ya las trae; la imagen mínima de WSL no, y sin ellas
-FMOD arranca sin salida y no suena nada. En WSLg funciona todo (ventana y
-audio), con Vulkan por software (llvmpipe).
+**Audio.** FMOD outputs through PulseAudio or ALSA (`libpulse0`, `libasound2t64`). A desktop
+Ubuntu already ships them; the minimal WSL image does not, and without them FMOD starts with no
+output and nothing is heard. Under WSLg everything works — window and audio — with software
+Vulkan (llvmpipe).
 
 ## Project Structure
 
@@ -173,13 +199,14 @@ Don_Topo_Engine/
 ├── docs/           # Design specs and implementation plans (superpowers/)
 ├── engine/         # Two static libraries: DonTopoCore and DonTopoEditor
 │   ├── include/    # Public headers, mirroring the module layout (DonTopo/<Module>/)
-│   ├── src/        # Implementation, split into seven modules:
+│   ├── src/        # Implementation, split into eight modules:
 │   │   ├── Core/       # Engine loop, Window, Input, Scene, GameObject, Camera
 │   │   ├── Renderer/   # Vulkan device, meshes, materials, model loading, skybox, gizmos
 │   │   │   └── D3D12/  # DirectX 12 backend (same feature set, own device/PSOs)
 │   │   ├── Physics/    # PhysX integration, Rigidbody, Colliders/
 │   │   ├── Audio/      # FMOD wrapper, AudioClipComponent, AudioListenerComponent
 │   │   ├── Scripting/  # Lua/sol2 bindings, ScriptManager, syntax check
+│   │   ├── UI/         # Game UI: canvas tree, sprite batch, atlas, MSDF fonts
 │   │   ├── Editor/     # ImGui panels, undo/redo, game exporter  -> DonTopoEditor
 │   │   └── Files/      # Filesystem helpers
 │   └── tests/      # Headless unit tests (plain main + asserts), one executable per area
@@ -193,10 +220,12 @@ exporter and the ImGui backends build into **`DonTopoEditor`**, which depends on
 the other way round. The renderer only ever sees the editor through a `UiLayer` interface, so
 `DonTopoRuntime` links Core alone and pulls in no ImGui symbols at all.
 
-## DirectX 12 Backend
+## Rendering
 
-A second, complete render backend. It is chosen per project in **View → Render backend**, stored
-as a name in `project.json`, and applied on the next start — a device, its swapchain and every
+### DirectX 12 Backend
+
+A second, complete render backend. It is chosen per project in **View → Rendering → Render
+backend**, stored as a name in `project.json`, and applied on the next start — a device, its swapchain and every
 pipeline are built once at init, so nothing can swap them mid-run. **File → Export Game** has its
 own selector: what the packaged game starts with is written to `game.cfg`, and it need not match
 the editor you exported from. If a build was configured without DX12, or the machine cannot
@@ -241,7 +270,7 @@ Four places where the implementation differs rather than the result:
   has N, so with MSAA the single-sample depth from the pre-pass is used instead — which is why
   that pre-pass also runs when something is selected.
 
-## HDR & Bloom
+### HDR & Bloom
 
 The frame is rendered in three stages. The **scene pass** draws geometry and skybox into an
 `R16G16B16A16_SFLOAT` target and writes linear radiance with no clamping — material shaders do
@@ -261,7 +290,7 @@ by plain memory barriers instead of layout transitions.
 `threshold`, `knee` and `intensity` are push constants of the bloom pipelines, not UBO fields,
 so they take effect on the next frame without recreating anything — the UBO block is declared in
 five shaders and adding a member there would silently shift everything behind it under std140.
-The **View** menu exposes the three as sliders plus the measured GPU cost (~0.2 ms at 1280×720,
+The **Rendering** panel exposes the three as sliders plus the measured GPU cost (~0.2 ms at 1280×720,
 including composition and tonemap). With `intensity = 0` the image is identical to the one
 before the feature existed, which is the check that the tonemap was moved without drift.
 
@@ -269,7 +298,7 @@ The selection outline and the gizmos are drawn **in the composition pass**, afte
 so they keep their exact flat colours and never bloom. The skybox stays in the scene pass and is
 tonemapped with the rest — that is what lets a bright sky feed the bloom.
 
-## Screen-Space Effects
+### Screen-Space Effects
 
 Several effects share one **depth-only pre-pass** that draws the whole scene into a sampled
 `D32_SFLOAT` image before the scene pass, with the same frustum culling and the same instanced
@@ -281,20 +310,20 @@ geometric normal from that depth alone
 silhouette does not blend two surfaces), which is why neither needs a G-buffer, an extra
 attachment on the scene pass, or a new UBO member.
 
-### SSAO
+#### SSAO
 
 A compute shader traces 16 samples in a cosine-weighted hemisphere around each pixel, packed
 towards the origin where contact occlusion actually lives, with a per-pixel rotation so the
 kernel does not band; a second pass blurs the result. The AO multiplies the **ambient term only**
 — applying it to direct light would dim shadows the cascade maps already compute.
 
-The **View** menu carries a toggle plus `radius`, `bias`, `intensity` and `power`, all push
+The **Rendering** panel carries a toggle plus `radius`, `bias`, `intensity` and `power`, all push
 constants, so they take effect the next frame. Turned off, neither the pre-pass nor the two
 dispatches are recorded: the AO map is cleared to 1.0 **once** (on creation and on switch-off)
 and `pbr.frag` multiplies by unity, so the image is identical to the one before the feature and
 the GPU cost is zero, not "computed and multiplied by zero".
 
-### SSR
+#### SSR
 
 Reflections run **after the scene pass** — they need colour that is already lit — and write into
 the HDR target **before** the bloom chain, so a reflection blooms and goes through ACES exactly
@@ -323,7 +352,7 @@ polished floor or water behaves. Because it is a push constant per shared entry 
 and `roughness` already were — it also enters the **instancing key**: two objects sharing a mesh
 but not a reflectivity are split into two draws, and nothing else about batching changes.
 
-The **View** menu has the global switch plus `distance`, `thickness`, `steps`, `edge fade` and
+The **Rendering** panel has the global switch plus `distance`, `thickness`, `steps`, `edge fade` and
 `intensity`, and reports the measured GPU cost (~0.3 ms at 1280×720 with 32 steps, pre-pass
 included). With the switch off — or on with no object marked — not a single dispatch is recorded
 and the HDR image is left exactly as the scene pass produced it.
@@ -332,7 +361,7 @@ Normals come from depth, not from an attachment, so the normal map's detail does
 reflection: polished metal with a normal map mirrors as if it were flat. And being screen-space,
 anything off-screen or hidden behind another object simply is not reflected.
 
-### Volumetric Fog
+#### Volumetric Fog
 
 A single compute dispatch (`fog.comp`) recorded **after** the scene pass and the SSR — it needs
 colour that is already lit and already has its reflections in — and **before** the bloom chain, so
@@ -360,12 +389,42 @@ push constant is already at the exact 128 bytes Vulkan guarantees. The shader bi
 declared only up to `cascadeSplits` (the members after it are laid out later, so omitting them
 moves no offset) to get the view matrix and the four cascade matrices.
 
-The **View** menu carries the global switch plus `density`, `height falloff`, `base height`,
+The **Rendering** panel carries the global switch plus `density`, `height falloff`, `base height`,
 `anisotropy`, `steps` and the scattering colour, and reports the measured GPU cost. **Off by
 default**: with the switch off not a single dispatch, barrier or timestamp is recorded, `Fog GPU`
 reads `0.000 ms`, and the HDR image is left exactly as the scene pass and the SSR produced it.
 
-## Lights
+### Motion Blur
+
+**Camera** motion blur, in a compute pass. The per-pixel velocity is stored nowhere: it comes
+from reprojecting the depth pre-pass with the same `prevViewProj × inverse(currViewProj)` the
+TAA already uses. It runs after the fog and before the bloom chain, so a streak blooms with the
+highlight that produced it. `intensity`, `max radius` and `samples` are live sliders, it is off
+by default, and both backends have it.
+
+Objects that move on their own contribute no velocity of their own: a spinning fan under a
+still camera does not smear. That needs a per-object velocity buffer, which is on the
+[Planned](#planned) list.
+
+### Anti-aliasing
+
+Five mutually exclusive modes, switched at runtime from the Rendering panel — `None`, `FXAA`,
+`SSAA`, `MSAA` and `TAA` — each with its own resources, rebuilt between frames and never
+mid-frame.
+
+| Mode | What it costs | Its settings |
+| --- | --- | --- |
+| `FXAA` | A pass of its own | `subpixel`, `edge threshold`, `edge min` |
+| `SSAA` | A pass of its own, on a larger render target | factor `1×`–`4×`, applied on release (it rebuilds targets) |
+| `MSAA` | Spread through the render | sample count, from `1×` up to what the device supports for colour *and* depth |
+| `TAA` | A pass of its own | `feedback`, `jitter` |
+| `None` | — | — |
+
+Because two of the five spread their cost instead of concentrating it in one pass, the section
+prints the whole render's GPU time next to the AA pass's own: comparing that total against
+`None` is the only way to read the real overhead of MSAA or supersampling.
+
+### Lights
 
 Any GameObject can be a light — **Properties → Add → Light**. The component holds only what
 the light *is* (type, colour, intensity and the parameters of its shape); **where it is and
@@ -398,13 +457,16 @@ means recompiling the shaders that declare the block, so it is not a UI setting.
 two cosines and the area width), which is why the shaders that declare it were all touched: in
 std140 a struct that changes size shifts everything behind it.
 
-Under **Forward+** the same data reaches the culling compute shaders, with one special case: a
+**Forward+ light culling** is a compute pre-pass that bins the lights into a screen grid so
+`pbr.frag` only iterates the ones that reach each pixel. It has three modes — `Off`, `Tiled`
+and `Clustered` — and `Off` records no command at all and lights the scene exactly as before
+the feature existed. Under it the same light data reaches the culling compute shaders, with one special case: a
 `Directional` light has neither position nor range, so it is marked visible in *every* tile and
 cluster instead of being tested against the volume. The radius used for binning is the same
 reach the fragment shader uses (`Range`, or `Width / 2` for an area light) — if they differed, a
 light would pop off as it crossed a tile edge.
 
-### Shadows beyond the key light
+#### Shadows beyond the key light
 
 The shadow map is a **12-layer** array. The first six belong to the **key** light, which is
 the only one that can use more than one: 4 if it is `Directional` (one per cascade), 6 if it
@@ -451,7 +513,7 @@ that sphere plus the four edge generatrices of the cone for `Spot`, a long ray f
 *and* in Play, and it lives in the editor's viewport panel — which is why the exported game,
 that links no editor code, can never show it.
 
-## Reflection Probes
+### Reflection Probes
 
 A **Reflection Probe** is a component on any GameObject (**Properties → Add → Reflection
 Probe**). It captures the environment from that GameObject's position and replaces the global
@@ -460,8 +522,8 @@ inside its radius of influence. `Radius` and `Intensity` are serialised with the
 cubemap is not, it is rebaked.
 
 **The bake is an event, never a pass.** It does not record a single command into the frame's
-command buffer: it is its own set of submits, triggered by the **Bake** button, by **View →
-Bake All Reflection Probes**, or automatically when a probe has no valid capture yet (on
+command buffer: it is its own set of submits, triggered by the **Bake** button, by **Bake All
+Reflection Probes** in the Rendering panel, or automatically when a probe has no valid capture yet (on
 creation and on scene load, so `DonTopoRuntime` renders the same image as the editor without
 anyone pressing anything). Auto-bake waits for the settings to stop moving, so dragging a
 slider costs one bake on release rather than one per frame. With probes already baked the
@@ -503,9 +565,21 @@ per GameObject. Two instances of the same mesh under different probes share a pr
 one in traversal order wins. Splitting them would mean duplicating the sets and losing the
 instanced draw. The DirectX 12 backend does not have this limitation: there the descriptor block
 is per object and only the resources behind it are shared, so the probe is per GameObject and
-still groups into one draw (see above).
+still groups into one draw (see [DirectX 12 Backend](#directx-12-backend)).
 
-## Mesh Visibility
+### Skybox & Environment
+
+The sky is a cubemap drawn as a fullscreen quad through the inverse view-projection, **picked
+per project and swapped live**. The **Environment** window takes a folder holding the six faces
+(`px`/`nx`/`py`/`ny`/`pz`/`nz`) — typed in, browsed for, or dragged in from the Content Browser
+— and the choice is stored in `project.json`. Changing it also re-convolves the ambient
+lighting, because the irradiance and prefiltered maps come from that same cubemap.
+
+The window is its own, not a section of the Rendering panel: an ImGui popup closes when the
+mouse is released outside it, so a folder cannot be dropped onto one. The Rendering panel's
+**Skybox** section only holds the entry that opens it.
+
+### Mesh Visibility
 
 The Mesh component in the Properties panel carries a `Visible` checkbox, on by default. Unchecked,
 the mesh is not handed to the GPU in **any** pass: it disappears from the scene pass, stops casting
@@ -528,7 +602,33 @@ One thing the checkbox does *not* do is free GPU memory: the vertex buffers, tex
 descriptor sets stay resident so re-showing the mesh costs nothing. Removing the component with
 the `x` button is still the way to release them.
 
-## Selection Outline
+### Batching, Culling & Asset Streaming
+
+**Frustum culling** runs in the main, the shadow and the skinned passes. Skinned meshes are
+bounded by a pose-independent sphere, so no character can vanish mid-animation because its pose
+left the bounds its vertices had at load time.
+
+**Draw batching**: objects sharing a mesh and a material collapse into one instanced draw, and
+their GPU resources — buffers, textures — are deduplicated by a content key, so identical
+meshes are uploaded once. Both backends. Whatever travels as a push constant per entry
+(`metallic`, `roughness`, the per-object SSR reflectivity, and the reflection probe in the
+D3D12 backend) is part of the grouping key: two objects that differ there are two draws.
+
+**Async asset loading**: a worker thread pool (`JobSystem`) decodes images off-thread and the
+GPU uploads are batched, with deferred visibility and deferred destruction — dropping a model
+in or loading a scene never stalls on `vkDeviceWaitIdle`.
+
+## Editor
+
+| Shortcut | What it does |
+| --- | --- |
+| `W` / `E` / `R` | Transform gizmo: move / rotate / scale |
+| Right mouse held | Flies the editor camera: `W`/`A`/`S`/`D` to move, `Q`/`E` down and up. Released, the letters go back to the gizmo |
+| Gamepad | Flies the camera at all times — it competes with no shortcut |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo, in edit mode and during Play |
+| `Ctrl+F` / `Ctrl+G` | Script Editor: find and replace, go to line |
+
+### Selection Outline
 
 Selecting a GameObject that carries a mesh — static or skinned — traces it with an orange
 contour in the viewport; deselecting clears it the same frame. Objects without a mesh (empties,
@@ -562,7 +662,7 @@ frame with the selection's render indices (or `-1`). It defaults to "nothing sel
 what the exported runtime always sees — no outline is ever drawn there, and no editor code
 reaches the runtime path.
 
-## Viewport Picking
+### Viewport Picking
 
 Left-clicking inside the viewport selects whatever mesh is under the cursor; clicking empty
 space clears the selection. It is the same selection state the Scene panel writes
@@ -589,7 +689,7 @@ widget is active, no ImGuizmo handle is hovered or being dragged, the camera axi
 take the click, and no load modal is up. Dragging the transform gizmo therefore never changes the
 selection.
 
-## Viewport Transform Gizmo
+### Viewport Transform Gizmo
 
 Selecting a GameObject puts an ImGuizmo handle on it: drag it and the object moves, rotates or
 scales live in the viewport, with the Properties panel and the collider keeping up. One mode at a
@@ -653,7 +753,25 @@ frozen — and the next touch of any `DragFloat` recomposed the matrix from that
 wiped the move. It now also re-reads when `localTransform` differs from what it last decomposed
 and no drag is in progress.
 
-## Camera
+### Scene, Play Mode & Undo
+
+The scene is a tree of GameObjects with hierarchical transforms, edited in the **Scene** panel:
+create, delete, rename and drag-drop to reorder, plus a basic-shapes menu (Cube, Sphere, Plane,
+Capsule) and right-click shortcuts such as **Create Camera**. The **Content Browser** browses,
+renames and deletes assets, and is the drag source for models, textures and skybox folders. The
+**Log Console** keeps the history of edit actions and the values they wrote. All of it is
+serialised to JSON — the whole tree, with meshes, colliders, audio, scripts, UI components and
+the Animator graph.
+
+**Play Mode** toggles between editing and running: entering it snapshots the scene and starts
+the physics step, which never runs in edit mode, and Stop restores that snapshot, so nothing a
+script did survives. Editor actions are undoable with `Ctrl+Z` **including while playing** —
+entering Play clears the history, undo then walks back what you did *during* that Play session,
+and Stop restores from the snapshot and clears the history again.
+
+## Gameplay
+
+### Camera
 
 Any GameObject can be the scene's camera — via **Properties → Add → Camera**, or in one
 click with **right-click → Create Camera** in the Scene panel. The GameObject's transform
@@ -673,7 +791,64 @@ won't deliver. On Play the renderer switches to that camera; on Stop it returns 
 editor's fly camera exactly where it was. With no camera in the scene, Play still starts,
 falls back to the editor camera, and logs why the view didn't change.
 
-## Animator
+### Physics
+
+PhysX. A GameObject can carry one of four colliders — **Box**, **Sphere**, **Capsule** or
+**Plane** — each with its shape, its own material (static and dynamic friction, bounciness) and
+an `Is Trigger` flag, and a **Rigidbody** with mass, gravity, drag, a kinematic switch, 6-axis
+constraints and forces/impulses. Raycasts, sphere casts, overlaps and collision layers complete
+it; the layer matrix is in **View → Collision Layers**. Everything is editable in Properties,
+drawn as yellow gizmos in the viewport, and scriptable from Lua. The simulation only steps in
+Play.
+
+### Audio
+
+FMOD, and optional: without it the build succeeds and the engine runs, silently.
+`AudioClipComponent` carries the clip — loop, a 3D/2D toggle, per-channel volume and pitch, and
+the 3D min/max attenuation distances with a gizmo in the viewport — and loading one never
+blocks the frame. The global mixer, one-shot clips at a point and reverb zones are reachable
+from Lua.
+
+**Audio Listener**: one per scene, and its GameObject's transform is where the scene is heard
+from — position, `-Z` forward, `+Y` up. With none in the scene the camera is used instead: the
+clips still play, they are simply heard from the camera, and the log says so once per Play.
+
+### Game UI
+
+Fourteen UI components, **data-only** components of the scene: one per-frame sync rebuilds or
+updates the live canvas tree from them, so what you see in Play and in the exported game comes
+from the scene and not from a hand-wired tree. All of them are editable in Properties and
+**fully scriptable from Lua** — every field, plus `OnClick`/`OnDoubleClick` callbacks and the
+button state.
+
+| Component | Notable settings |
+| --- | --- |
+| `Canvas` | Scale modes, reference resolution, safe area, render mode (see below) |
+| `Panel` | — |
+| `Image` | Simple / sliced / tiled / filled |
+| `Text` | Font, size, outline, shadow, alignment, wrap and overflow |
+| `Button` | 5 states, colour-tint / sprite-swap / fade transitions, optional text label |
+| `Slider`, `Checkbox`, `Toggle`, `Scrollbar` | — |
+| `ProgressBar` | Value range, fill direction, background and fill sprites |
+| `InputField` | Caret, content types |
+| `Dropdown`, `ScrollView` | — |
+| `Layout` | Horizontal / vertical / grid auto-layout with padding, spacing, cell size, cross-axis alignment, content-size fitters and per-child `ignoreLayout`; on a GameObject with no other UI component it builds its own non-drawing container that groups, places and clips |
+
+**World-space canvases and multi-canvas.** A `Canvas` can render as a quad **inside the scene**
+instead of on the screen (`renderMode`, `worldScale`, `billboard` none/yaw-only/full,
+`depthTest`) — health bars over enemies, diegetic screens. World canvases are drawn in the
+scene pass, sorted back to front, so geometry occludes them; screen canvases stay on top as
+before. A scene can hold **any number of canvases**, each with its own tree: pointer input goes
+to the topmost one under the cursor, and a canvas that owns a press keeps it until release.
+Both backends.
+
+Three known limits of a world canvas: it cannot be clicked (select it from the Hierarchy),
+`clipChildren` does not clip on one, and fog, motion blur and TAA read the depth of whatever is
+*behind* it.
+
+## Animation
+
+### Animator
 
 A Unity-style animation state machine for skinned meshes. A **node** is a state holding one
 of the model's animation clips; a **link** is a directed transition. A transition cross-fades
@@ -692,7 +867,11 @@ carry named **animation events** at normalized times of its cycle, delivered to 
 `OnAnimationEvent`. The root of each state has three modes: **normal** (the pose moves it),
 **locked** (the clip plays in place) and **root motion**: the horizontal travel of the root
 moves the GameObject — as a velocity when it has a dynamic Rigidbody, so it collides and falls —
-while the vertical bob stays in the pose; rotation isn't applied. The Animator also plays **property clips**, authored in the editor and stored with the scene:
+while the vertical bob stays in the pose; rotation isn't applied.
+
+#### Property clips
+
+The Animator also plays **property clips**, authored in the editor and stored with the scene:
 a clip is a duration in seconds plus tracks, and a track is one scalar property of the object
 with its keyframes (linear between keys; outside the range, the end key holds). The sixteen
 animatable properties are local position, rotation (degrees) and scale, the light's colour,
@@ -703,6 +882,8 @@ clip and a property clip at once. Properties no track animates are left alone, a
 cross-fade the values blend (rotations take the short way round). Layer masks are about bones,
 so they do not apply to properties. The component is opt-in: **Properties → Add → Animator**,
 now available on any object — without a skinned mesh it simply has no mesh clips to name.
+
+#### Sub-state machines
 
 A state can also be a **sub-state machine**: a box that holds other states. It never plays —
 entering it enters its **entry** state, following the chain down to a leaf — and a transition
@@ -715,11 +896,15 @@ the canvas to come back out, and the `padre` button on a node to move it into a 
 organises a graph; it is not Unity's hierarchical state machine, as there is no active
 compound state.
 
+#### Links that go both ways
+
 When two states transition **both ways**, the return link hangs off a second pair of pins —
 its own row on the node, with a wider curve — so the two don't overlap: the way back has to go
 around both nodes and would otherwise run straight over the way there. Which one moves is
 decided by the order the transitions were created, not by where the nodes sit, so dragging a
 node never reshuffles the curves.
+
+#### Clip curves
 
 A track can also write a **Float parameter** of the Animator instead of a property of the
 object: that is a **clip curve**. It lets the animation's own time drive the state machine —
@@ -740,8 +925,9 @@ vertical range freezes while you drag — otherwise the plot would rescale under
 the key would slip away. The canvas shows the sampled shape, a dot per key, the
 range's ends, and — while the preview runs — a playhead at the clip's current time. A curve
 also draws a line for each **threshold** of the Float conditions that read its parameter, so
-whether it crosses `speed > 4`, and when, is one glance rather than arithmetic. The canvas is
-read-only; keys are still edited in the list below it.
+whether it crosses `speed > 4`, and when, is one glance rather than arithmetic.
+
+#### Layers
 
 The Animator has **layers**, like Unity's. Layer 0 is the base graph; every extra layer is a
 full state machine of its own (states, transitions, entry, Any State) that reads the same
@@ -755,6 +941,8 @@ GameObject with root motion; animation events fire from every layer whose weight
 In the panel the layer list sits above the graph: **+** / **−**, the arrows reorder, and a
 double click renames; the graph shown is the selected layer's.
 
+#### IK constraints
+
 An Animator can also carry up to four **IK constraints**, solved on the GPU after the pose is
 evaluated, so they bend whatever the graph is playing. **Look at** turns one bone (a head, a
 chest) until its chosen local axis points at the target, capped by a maximum angle; **two
@@ -766,6 +954,8 @@ constraint in and out — from the **IK** section of the Animator panel, or from
 stretched, not broken, and a chain that cannot be resolved (the bone is missing, or it has no
 parent and grandparent) is reported and skipped. The solver assumes the character's scale is
 uniform.
+
+#### The node panel
 
 Open the graph with **View → Animator**. In the node panel:
 
@@ -796,18 +986,25 @@ Every edit to the graph (states, transitions, conditions, parameters, blend, ent
 undoable with Ctrl+Z, one step per gesture — dragging a value is a single step. Moving nodes
 on the canvas is not recorded.
 
-A parameter is one of four types — **`bool`**, **`trigger`**, **`int`** or **`float`** —
-declared in the Animator's parameter list and set/queried from code by name. A condition
-matches a `bool` or `trigger` parameter's own value, or, independent of any parameter,
-**`animation finished`** (the current clip reached its end). `int`/`float` parameters
-condition by comparing a threshold with `>`, `<`, `==` or `!=`. On a `float`, `==` means
-exact binary equality: a value you assign with `SetFloat` matches, one you arrive at by
-accumulating usually will not. A transition fires when *all* its conditions hold; a
-transition with no conditions never fires.
+#### Parameters and conditions
+
+Parameters are declared in the Animator's parameter list and set or queried from code **by
+name**. A transition fires when *all* its conditions hold; a transition with no conditions
+never fires.
+
+| Condition on | How it reads |
+| --- | --- |
+| `bool` | the parameter's own value |
+| `trigger` | the parameter's own value; `ResetTrigger` disarms a pending one |
+| `int` | a threshold compared with `>`, `<`, `==` or `!=` |
+| `float` | the same comparisons — but `==` is exact binary equality: a value you assign with `SetFloat` matches, one you arrive at by accumulating usually will not |
+| nothing | `animation finished`, independent of any parameter: the current clip reached its end |
 
 The graph only evaluates transitions in **Play** mode. In **Edit** the entry state's clip
 previews in place. Stopping Play resets to the entry state — the scene rebuilds from its JSON,
 so no runtime state is carried over.
+
+#### From Lua
 
 It is driven from Lua via `GetComponent("Animator")`: the graph's `bool`, `trigger`, `int`
 and `float` parameters are read and written **by name**, and the active state, the blend
@@ -821,12 +1018,31 @@ loop, so `2.5` is two and a half loops). Parameter names are never fatal — an
 undeclared name is ignored by the setters and returns the neutral value from the getters.
 See [`Scripts/README.md`](Scripts/README.md) for the method list.
 
+#### Saving, sanitising, and skinning without an Animator
+
 The whole graph — nodes, canvas positions, links, conditions, parameters, per-node loop and
 the entry state — is saved in the scene file. Clips are referenced **by name**, so
 re-exporting the model with a clip renamed unlinks that state (it warns on load rather than
 silently pointing at the wrong animation).
 
-## Performance Panel
+A loaded graph is not trusted as it comes. A single sanitising pass runs where the graph is
+known to have just changed — on load, and when an editor gesture closes its undo step — and
+drops what cannot hold: references out of range, a transition whose endpoints no longer exist,
+a sub-machine entry that exists but is not a child of its own box (entering it would leave the
+box). A healthy graph comes out of it byte for byte identical, which is why calling it too
+often is free.
+
+**A skinned mesh needs no Animator.** Without the component it simply loops its first clip,
+and the backend keeps the clock: one shared `advanceMeshClock` paces it in Assimp ticks, wraps
+it at the clip's duration and freezes it while the mesh is hidden — the same in Vulkan and in
+D3D12, which is the point of it living in one place. Vertices the FBX left with no bone weight
+at all keep their bind position instead of collapsing to the origin — the skinning compute falls
+back to the identity when the four weights add up to zero — and the loader counts them on the
+mesh (`verticesWithoutWeights`), so a badly exported asset is a number rather than a mystery.
+
+## Tooling
+
+### Performance Panel
 
 Open it with **View → Performance**. It is an editor-only panel — nothing in it links into
 `DonTopoCore` or the exported runtime — and it monitors, live, in collapsible sections:
@@ -909,13 +1125,13 @@ which reports the usage of *this process*: Vulkan cannot report it without
 `VK_EXT_memory_budget`, and enabling that extension would mean touching device creation in
 Core for a number only the editor displays.
 
-## Rendering Panel
+### Rendering Panel
 
-Open it with **View → Rendering**. It gathers the 41 render settings that used to live
+Open it with **View → Rendering**. It gathers the 43 render settings that used to live
 inside the `View` menu: **Ambient (IBL)**, **Reflection probes**, **Skybox**,
 **Presentation (vsync)**, **Shadows**, **Bloom**, **SSAO**, **SSR**, **Fog**, **Motion
 blur**, **Anti-aliasing**, **Forward+** and the **render backend** selector, one
-`CollapsingHeader` each — only the first open by default, since eleven expanded sections
+`CollapsingHeader` each — only the first open by default, since thirteen expanded sections
 do not fit a narrow column. ImGui remembers in `imgui.ini` which ones you left open, and
 the panel's own visibility is stored per project in `project.json`.
 
@@ -948,7 +1164,44 @@ Each effect's section also prints its own **GPU time**, from the same timestamp 
 the Performance panel reads, so the cost of a setting is visible right next to the
 slider that changes it. A pass that measured nothing reads `--`, never `0.000 ms`.
 
-## Lua Scripting
+### Sprite Editor
+
+Open it with **View → Sprite Editor**, or with the **Editar sprites...** button that every UI
+component with an atlas offers. It shows the image and lets you cut named rectangles out of it:
+drag to draw one, drag a corner to resize it, rename it in the list. A rect is kept inside the
+image and never degenerate — one that ran past the edge would sample UVs outside `[0, 1]` and
+the sampler would repeat or stretch the border without saying anything.
+
+The result is a sidecar next to the image, `<atlas>.sprites.json`. UI components reference a
+sprite **by name** inside that atlas, so renaming one in the editor is what unlinks it, not
+moving the file. Reopening the same image does not discard what is being edited.
+
+### Input Actions
+
+Open it with **View → Input Actions**. It maps **named actions** to keys, mouse buttons,
+gamepad buttons and stick/trigger directions — bindings are captured by pressing the key or
+button rather than by picking from a list. It is a panel of its own and not a Properties block
+because the map is global to the project: there is no selection to hang it from. It is stored
+in `input_actions.json` next to the editor's `imgui.ini`, and a missing or unreadable file
+leaves the panel empty instead of stopping the editor from starting.
+
+Actions are read from Lua by name, and the panel publishes them into the **Script Editor's
+autocomplete**, so an action added here is offered there without retyping it. A binding with no
+equivalent in the runtime's own input map (a mouse wheel, an exotic key) is still drawn in the
+panel, but it never reaches the game.
+
+### Export Game
+
+**File → Export Game** packages a standalone runtime: the scene, its assets, the Lua scripts,
+the compiled shaders, the splash screen and the DLLs it needs (FMOD and the MSVC CRT). The
+runtime links `DonTopoCore` alone — no editor code, no ImGui symbols — and the exporter has its
+own **render backend** selector, written to `game.cfg`, which need not match the editor you
+exported from. Export from a **Release** editor: see [Build (Windows)](#build-windows) for what
+a Debug package drags along and why it only runs on the machine that built it.
+
+## Scripting
+
+### Lua Scripting
 
 Gameplay is scripted in **Lua 5.4** (sol2). Attach one or more `ScriptComponent`s to a
 GameObject via **Properties → Add → Script**; the scripts themselves are `.lua` files
@@ -981,8 +1234,8 @@ table and every method, with the caveats that are otherwise found out the hard w
 
 | System | Candidates |
 | --- | --- |
-| Post-processing | Depth of field, per-object motion vectors |
-| Platforms | Linux and macOS — the Vulkan backend already covers Linux on paper, but the window/build/tooling layer is Windows-only today; macOS would need a Metal backend |
+| Post-processing | Depth of field, per-object motion vectors (camera motion blur is in; objects contribute no velocity of their own) |
+| Platforms | macOS — it would need a Metal backend, and neither the build presets nor the platform layer target it today. Windows (Vulkan + DirectX 12) and Linux (Vulkan, `configure.sh`/`build.sh`, `linux` CI job building Release and running the test suite) are supported; Linux is verified on Ubuntu 24.04 and under WSLg, other distributions are not |
 
 ## License
 
