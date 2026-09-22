@@ -2183,10 +2183,21 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 syncPositionsToComponent(go);
                 ed::SetCurrentEditor(nullptr);
 
+                // Al terminar el gesto, el grafo pasa por la misma pasada de
+                // saneamiento que la carga (A10): este panel escribe los
+                // vectores a pelo por statesMutable/transitionsMutable, así que
+                // es aquí —donde se sabe que acaba de cambiar y antes de que el
+                // snapshot del undo lo congele— donde toca comprobar que lo
+                // escrito es representable. Un grafo sano no cambia, así que
+                // esto no ensucia el diff que decide si hay comando.
+                const bool gestoActivo = ImGui::IsAnyItemActive();
+                if (!gestoActivo)
+                    if (auto& anim = go->getAnimator()) anim->sanitizeGraph(m_layer, nullptr);
+
                 // Fin del bracket del undo. IsAnyItemActive: mientras un drag
                 // siga activo, el gesto no ha terminado y no se apila nada.
                 if (auto cmd = m_graphUndo.endFrame(*ctx.scene, go->getAnimator().get(),
-                                                    ImGui::IsAnyItemActive(), ctx.undo->revision()))
+                                                    gestoActivo, ctx.undo->revision()))
                 {
                     ctx.pushLog("Animator: " + cmd->label());
                     // Sin execute(): el cambio ya está aplicado (contrato de push).

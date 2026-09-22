@@ -850,61 +850,15 @@ namespace
                     a->addState(st, capa);
                 }
 
-                // La jerarquía se valida con TODOS los estados ya cargados: es
-                // cuando se puede mirar a quién apunta cada índice. Un fichero
-                // manipulado no puede dejar una jerarquía que cuelgue los
-                // recorridos ni un padre que no sea una caja.
-                auto& estados = a->statesMutable(capa);
-                for (auto& st : estados)
-                {
-                    if (st.parent >= (int)estados.size() || st.parent < -1)
-                    {
-                        if (warnings)
-                            warnings->push_back("animator.state." + st.name +
-                                                 ": padre fuera de rango, se deja en la raiz");
-                        st.parent = -1;
-                    }
-                    // Su propia comprobación de rango, no un `else` de la de
-                    // arriba: una guarda que se apoya en otra deja de proteger
-                    // en cuanto alguien toca la primera, y aquí eso es indexar
-                    // fuera del vector.
-                    if (st.parent >= 0 && st.parent < (int)estados.size() &&
-                        !estados[(size_t)st.parent].isSubMachine)
-                    {
-                        if (warnings)
-                            warnings->push_back("animator.state." + st.name +
-                                                 ": el padre no es una sub-maquina, se deja en la raiz");
-                        st.parent = -1;
-                    }
-                    if (st.subEntry >= (int)estados.size() || st.subEntry < -1)
-                    {
-                        if (warnings)
-                            warnings->push_back("animator.state." + st.name +
-                                                 ": entrada fuera de rango, la sub-maquina queda vacia");
-                        st.subEntry = -1;
-                    }
-                }
-                // Ciclos de contención: subir desde cada estado con un tope. Si
-                // se pasa, ese estado a la raíz; sin esto, isDescendantOf y
-                // resolveEntryLeaf tendrían que fiarse de su propio tope en cada
-                // frame.
-                for (int i = 0; i < (int)estados.size(); i++)
-                {
-                    int p = estados[(size_t)i].parent;
-                    int pasos = 0;
-                    while (p >= 0 && p < (int)estados.size() && pasos <= (int)estados.size())
-                    {
-                        p = estados[(size_t)p].parent;
-                        pasos++;
-                    }
-                    if (pasos > (int)estados.size())
-                    {
-                        if (warnings)
-                            warnings->push_back("animator.state." + estados[(size_t)i].name +
-                                                 ": ciclo de sub-maquinas, se deja en la raiz");
-                        estados[(size_t)i].parent = -1;
-                    }
-                }
+                // Todo lo que entra del fichero pasa por la misma pasada que usa el
+                // editor: indices imposibles, padres que no son cajas, entradas que no
+                // son hijas y ciclos de contencion. Antes esto estaba escrito aqui a
+                // mano y solo servia a la carga.
+                //
+                // Las transiciones se leen DESPUES de esto, asi que sus indices se
+                // validan en su propio bucle (ver mas abajo) y aqui no hay ninguna que
+                // mirar todavia.
+                a->sanitizeGraph(capa, warnings);
             }
 
             // Ausente en escenas anteriores a Any State: se queda la posición por

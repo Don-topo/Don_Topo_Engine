@@ -518,6 +518,19 @@ namespace DonTopo
             // editor identifica nodos por editorId, y buscar en la base por
             // defecto hacía invisibles los nodos de las demás capas.
             int   stateIndexByEditorId(int editorId, int layer) const;
+            // Deja el grafo de una capa en un estado representable: descarta las
+            // transiciones con índices imposibles y devuelve a la raíz lo que no
+            // puede estar donde dice (padre inexistente o que no es caja,
+            // entrada que no es hija suya, ciclos de contención).
+            //
+            // Existe porque statesMutable()/transitionsMutable() exponen los
+            // vectores enteros (A10): el panel es su único usuario legítimo,
+            // pero nadie garantiza lo que escribe. En vez de 9 setters con
+            // validación, una pasada que se llama donde SÍ se sabe que el grafo
+            // acaba de cambiar: al cargarlo y al cerrar la sesión de undo del
+            // editor. Un grafo sano no cambia nada, así que llamarla de más es
+            // gratis.
+            void sanitizeGraph(int layer, std::vector<std::string>* warnings);
             // ¿`state` está dentro de `maybeAncestor`, a cualquier profundidad?
             // Uno mismo NO es descendiente de sí mismo.
             bool  isDescendantOf(int state, int maybeAncestor, int layer) const;
