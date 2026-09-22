@@ -8470,6 +8470,90 @@ static void test_loader_normalizes_bone_weights()
     CHECK(noUniformes == 0);
 }
 
+// A10: el grafo se puede escribir a pelo desde la UI (statesMutable /
+// transitionsMutable). sanitizeGraph es la pasada que deja utilizable lo que
+// entre, venga del editor o de un .scene manipulado.
+static void test_sanitize_graph_fixes_bad_indices()
+{
+    AnimatorComponent a = makeCajas();
+    a.addParameter("t", AnimatorComponent::ParamType::Trigger);
+    auto liga = [&](int from, int to) {
+        AnimatorComponent::Transition tr;
+        tr.fromState = from; tr.toState = to;
+        AnimatorComponent::Condition c;
+        c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "t";
+        tr.conditions.push_back(c);
+        a.addTransition(tr);
+    };
+    liga(0, 2);      // buena
+    liga(0, 99);     // destino fuera de rango
+    liga(42, 0);     // origen fuera de rango
+    liga(AnimatorComponent::kAnyState, 1);   // Any State: el centinela NO es basura
+
+    // Jerarquía rota a mano, como la dejaría un widget con un bug.
+    a.statesMutable()[2].parent   = 99;    // padre inexistente
+    a.statesMutable()[4].parent   = 0;     // Base no es una caja
+    a.statesMutable()[1].subEntry = 77;    // entrada inexistente
+
+    std::vector<std::string> avisos;
+    a.sanitizeGraph(0, &avisos);
+
+    // Quedan la buena y la de Any State; las dos con índices imposibles se van.
+    CHECK(a.transitions().size() == 2u);
+    for (const auto& t : a.transitions())
+    {
+        CHECK(t.toState >= 0 && t.toState < (int)a.states().size());
+        CHECK(t.fromState == AnimatorComponent::kAnyState ||
+              (t.fromState >= 0 && t.fromState < (int)a.states().size()));
+    }
+    CHECK(a.states()[2].parent == -1);
+    CHECK(a.states()[4].parent == -1);
+    CHECK(a.states()[1].subEntry == -1);
+    CHECK(avisos.size() >= 5u);
+
+    // Una entrada que EXISTE pero no es hija de la caja: entrar en ella sacaría
+    // del bloque, que es lo contrario de lo que significa. El caso no lo cubre
+    // la guarda de rango.
+    AnimatorComponent b = makeCajas();
+    b.statesMutable()[1].subEntry = 0;    // Base es raíz, no hija de Ataques
+    avisos.clear();
+    b.sanitizeGraph(0, &avisos);
+    CHECK(b.states()[1].subEntry == -1);
+    CHECK(!avisos.empty());
+
+    // Ciclo de contención: subir por parent tiene que terminar.
+    AnimatorComponent c = makeCajas();
+    c.statesMutable()[1].parent = 3;      // Ataques dentro de Combo, que ya está dentro de Ataques
+    avisos.clear();
+    c.sanitizeGraph(0, &avisos);
+    CHECK(!avisos.empty());
+    CHECK(c.states()[1].parent == -1 || c.states()[3].parent == -1);
+}
+
+static void test_sanitize_graph_leaves_a_good_graph_alone()
+{
+    AnimatorComponent a = makeCajas();
+    a.addParameter("t", AnimatorComponent::ParamType::Trigger);
+    {
+        AnimatorComponent::Transition tr;
+        tr.fromState = 0; tr.toState = 1;
+        AnimatorComponent::Condition c;
+        c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "t";
+        tr.conditions.push_back(c);
+        a.addTransition(tr);
+        tr.fromState = AnimatorComponent::kAnyState; tr.toState = 2;
+        a.addTransition(tr);
+    }
+    const std::string antes = animatorToJson(a).dump();
+    std::vector<std::string> avisos;
+    a.sanitizeGraph(0, &avisos);
+    // Un grafo sano no cambia NI UN CAMPO y no genera un solo aviso: si no,
+    // llamarlo tras cada edición del editor iría corrompiendo el grafo poco a
+    // poco.
+    CHECK(avisos.empty());
+    CHECK(animatorToJson(a).dump() == antes);
+}
+
 static void test_submachine_hierarchy_helpers()
 {
     AnimatorComponent a = makeCajas();
@@ -9325,6 +9409,8 @@ int main()
     test_curve_last_layer_wins();
     test_normalize_bone_weights();
     test_loader_normalizes_bone_weights();
+    test_sanitize_graph_fixes_bad_indices();
+    test_sanitize_graph_leaves_a_good_graph_alone();
     test_submachine_hierarchy_helpers();
     test_submachine_transition_enters_the_leaf();
     test_submachine_broken_entry_does_not_fire();

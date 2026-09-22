@@ -1438,6 +1438,95 @@ namespace DonTopo
         enterState(idx, layer);
     }
 
+    void AnimatorComponent::sanitizeGraph(int layer, std::vector<std::string>* warnings)
+    {
+        Layer& L = lay(layer);
+        const int n = (int)L.states.size();
+        auto avisa = [&](const std::string& msg) { if (warnings) warnings->push_back(msg); };
+
+        // Transiciones con índices imposibles: se van. Acotarlas seria peor,
+        // porque dejaria un link apuntando a un estado que el usuario no eligio.
+        // kAnyState es un centinela, no un indice fuera de rango.
+        const size_t antes = L.transitions.size();
+        L.transitions.erase(
+            std::remove_if(L.transitions.begin(), L.transitions.end(),
+                [&](const Transition& t) {
+                    const bool origenOk = t.fromState == kAnyState || (t.fromState >= 0 && t.fromState < n);
+                    const bool destinoOk = t.toState >= 0 && t.toState < n;
+                    if (origenOk && destinoOk) return false;
+                    avisa("animator: transicion " + std::to_string(t.fromState) + " -> " +
+                          std::to_string(t.toState) + " con indices fuera de rango, se descarta");
+                    return true;
+                }),
+            L.transitions.end());
+        (void)antes;
+
+        for (auto& st : L.states)
+        {
+            if (st.parent < -1 || st.parent >= n)
+            {
+                avisa("animator.state." + st.name + ": padre fuera de rango, se deja en la raiz");
+                st.parent = -1;
+            }
+            // Su propia comprobacion de rango, no un `else` de la de arriba: una
+            // guarda que se apoya en otra deja de proteger en cuanto alguien
+            // toca la primera, y aqui eso es indexar fuera del vector.
+            if (st.parent >= 0 && st.parent < n && !L.states[(size_t)st.parent].isSubMachine)
+            {
+                avisa("animator.state." + st.name + ": el padre no es una sub-maquina, se deja en la raiz");
+                st.parent = -1;
+            }
+            if (st.subEntry < -1 || st.subEntry >= n)
+            {
+                avisa("animator.state." + st.name + ": entrada fuera de rango, la sub-maquina queda vacia");
+                st.subEntry = -1;
+            }
+        }
+
+        // La entrada de una caja tiene que ser HIJA suya: apuntar a otro sitio
+        // haria que entrar en la caja saliera de ella.
+        for (int i = 0; i < n; i++)
+        {
+            State& st = L.states[(size_t)i];
+            if (st.subEntry < 0) continue;
+            if (!st.isSubMachine)
+            {
+                st.subEntry = -1;   // no es una caja: el campo no significa nada
+                continue;
+            }
+            if (L.states[(size_t)st.subEntry].parent != i)
+            {
+                avisa("animator.state." + st.name + ": la entrada no es hija suya, la sub-maquina queda vacia");
+                st.subEntry = -1;
+            }
+        }
+
+        // Ciclos de contencion: subir desde cada estado con un tope. Si se pasa,
+        // ese estado a la raiz; sin esto, isDescendantOf y resolveEntryLeaf
+        // tendrian que fiarse de su propio tope en cada frame.
+        for (int i = 0; i < n; i++)
+        {
+            int p = L.states[(size_t)i].parent, pasos = 0;
+            while (p >= 0 && p < n && pasos <= n) { p = L.states[(size_t)p].parent; pasos++; }
+            if (pasos > n)
+            {
+                avisa("animator.state." + L.states[(size_t)i].name +
+                      ": ciclo de sub-maquinas, se deja en la raiz");
+                L.states[(size_t)i].parent = -1;
+            }
+        }
+
+        // Entrada de la capa y playhead: un indice imposible aqui deja la capa
+        // sin arrancar.
+        if (L.entryState < -1 || L.entryState >= n)
+        {
+            avisa("animator: entrada de la capa fuera de rango");
+            L.entryState = n > 0 ? 0 : -1;
+        }
+        if (L.currentState < -1 || L.currentState >= n) L.currentState = -1;
+        if (L.prevState    < -1 || L.prevState    >= n) L.prevState    = -1;
+    }
+
     bool AnimatorComponent::isDescendantOf(int state, int maybeAncestor, int layer) const
     {
         const Layer& L = lay(layer);
