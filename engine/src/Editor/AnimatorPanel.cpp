@@ -1,4 +1,5 @@
 #include "DonTopo/Editor/AnimatorPanel.h"
+#include "DonTopo/Editor/AnimatorCanvasIds.h"
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Editor/Command.h"
@@ -237,21 +238,26 @@ namespace {
     // estado de en medio, y si el id del canvas fuera el índice, un
     // superviviente heredaría el slot visual (posición/selección) del nodo
     // borrado — imgui-node-editor cachea esas cosas por id, no por contenido.
-    int nodeId(int eid)      { return eid * 3 + 1; }
-    int inputPinId(int eid)  { return eid * 3 + 2; }
-    int outputPinId(int eid) { return eid * 3 + 3; }
-    int linkId(int transIdx) { return 100000 + transIdx; }
+    // Los ids del lienzo viven en Editor/AnimatorCanvasIds.h: son la pieza
+    // con riesgo del canvas (un fallo al decodificar borra el nodo equivocado
+    // en vez de dar un error), así que están fuera para poder probarlos.
+    using namespace canvasIds;
+    int nodeId(int eid)       { return canvasIds::node(eid); }
+    int inputPinId(int eid)   { return canvasIds::inputPin(eid); }
+    int outputPinId(int eid)  { return canvasIds::outputPin(eid); }
+    int inputPinId2(int eid)  { return canvasIds::inputPin2(eid); }
+    int outputPinId2(int eid) { return canvasIds::outputPin2(eid); }
+    int linkId(int transIdx)  { return canvasIds::link(transIdx); }
+    int editorIdFromRawId(int rawId) { return canvasIds::editorIdFrom(rawId); }
+    // Curvatura de los pines secundarios. El default de la librería es 100;
+    // subirlo abre la curva, que es la otra mitad de lo que separa la de vuelta
+    // de la de ida (la primera es que arranca en otra fila).
+    constexpr float kFuerzaLinkVuelta = 300.0f;
 
-    // Decodifica el editorId codificado en un id de nodo o de pin (la fórmula
-    // es la misma división entera pa las tres variantes de nodeId/inputPinId/
-    // outputPinId, así que un solo decode sirve pa las tres).
-    int editorIdFromRawId(int rawId) { return (rawId - 1) / 3; }
-    bool isOutputPin(int pin) { return (pin - 1) % 3 == 2; }
-
-    // Nodo Any State: ids FUERA del esquema de los estados (eid*3+1..3) y de
+    // Nodo Any State: ids FUERA del esquema de los estados (eid*5+1..5) y de
     // los links (100000+idx). Se comprueban SIEMPRE antes de decodificar con
     // editorIdFromRawId: pasados por esa fórmula casarían con un editorId
-    // (300000) que ningún grafo alcanza, pero isOutputPin los clasificaría
+    // (180000) que ningún grafo alcanza, pero isOutputPin los clasificaría
     // mal — por eso esPinDeSalida.
     // Límites del ancho de la columna izquierda (fuentes, capas, IK,
     // parámetros), que el usuario arrastra por el borde. El mínimo deja ver la
@@ -261,8 +267,8 @@ namespace {
     const float kAnchoColumnaMax = 700.0f;
     const float kAnchoAgarre     = 6.0f;
 
-    const int kAnyStateNodeId   = 900001;
-    const int kAnyStateOutPinId = 900002;
+    const int kAnyStateNodeId   = canvasIds::kAnyStateNode;
+    const int kAnyStateOutPinId = canvasIds::kAnyStateOutPin;
 
     bool esPinDeSalida(int pin) { return pin == kAnyStateOutPinId || (pin != kAnyStateNodeId && isOutputPin(pin)); }
 
@@ -1025,6 +1031,28 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         ed::BeginPin(outputPinId(eid), ed::PinKind::Output);
         ImGui::TextUnformatted("out ->");
         ed::EndPin();
+
+        // Par SECUNDARIO, para la transición de vuelta de un par mutuo. Va en
+        // su propia fila (debajo) y con más curvatura, que son las dos cosas
+        // que separan su curva de la de ida: el arranque y la forma. La
+        // curvatura es propiedad del pin, así que se empuja AQUÍ y no al
+        // dibujar el link.
+        //
+        // Sin texto: son puntos de anclaje, no algo a lo que el usuario tenga
+        // que apuntar. Se dibujan siempre (no solo cuando hay par mutuo) para
+        // que el nodo no cambie de alto según sus transiciones, que haría
+        // bailar el layout al crear o borrar una.
+        ed::PushStyleVar(ed::StyleVar_LinkStrength, kFuerzaLinkVuelta);
+        ed::BeginPin(inputPinId2(eid), ed::PinKind::Input);
+        ImGui::Dummy(ImVec2(1.0f, 1.0f));
+        ed::EndPin();
+        ImGui::SameLine();
+        ImGui::Dummy(ImVec2(pad > 1.0f ? pad : 8.0f, 0.0f));
+        ImGui::SameLine();
+        ed::BeginPin(outputPinId2(eid), ed::PinKind::Output);
+        ImGui::Dummy(ImVec2(1.0f, 1.0f));
+        ed::EndPin();
+        ed::PopStyleVar();
     };
     for (size_t i = 0; i < states.size(); i++)
     {
@@ -1378,9 +1406,35 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // Fuera de esta rama, o los dos extremos en el mismo nodo visible: no
         // hay nada que dibujar en este nivel.
         if ((!desdeAny && vFrom < 0) || vTo < 0 || (!desdeAny && vFrom == vTo)) continue;
-        ed::Link(linkId((int)t),
-                 desdeAny ? kAnyStateOutPinId : outputPinId(states[vFrom].editorId),
-                 inputPinId(states[vTo].editorId));
+
+        // Dos estados enlazados en los DOS sentidos: la curva de vuelta tiene
+        // que rodear ambos nodos y acaba pasando sobre la de ida. La de vuelta
+        // se cuelga del par de pines SECUNDARIO, que está en otra fila y con
+        // más curvatura, así que las dos se leen por separado.
+        //
+        // "La de vuelta" es la que aparece DESPUÉS en el vector: se decide por
+        // orden y no por geometría, para que mover un nodo no reordene las
+        // curvas mientras se arrastra. Se comparan los extremos VISIBLES en
+        // este nivel, así que también separa dos transiciones que acaban en la
+        // misma caja.
+        bool esVuelta = false;
+        if (!desdeAny)
+        {
+            for (size_t u = 0; u < t; u++)
+            {
+                const int uFrom = transitions[u].fromState;
+                const int uTo   = transitions[u].toState;
+                if (uFrom == AnimatorComponent::kAnyState) continue;
+                if (uFrom < 0 || uFrom >= (int)states.size() || uTo < 0 || uTo >= (int)states.size()) continue;
+                if (visible(uFrom) == vTo && visible(uTo) == vFrom) { esVuelta = true; break; }
+            }
+        }
+        const int pinSalida = desdeAny ? kAnyStateOutPinId
+                                       : (esVuelta ? outputPinId2(states[vFrom].editorId)
+                                                   : outputPinId(states[vFrom].editorId));
+        const int pinEntrada = esVuelta ? inputPinId2(states[vTo].editorId)
+                                        : inputPinId(states[vTo].editorId);
+        ed::Link(linkId((int)t), pinSalida, pinEntrada);
     }
 
     // --- Crear links arrastrando de pin a pin ---
@@ -1533,9 +1587,9 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     // ANTES de ed::End, que es donde el lienzo aún tiene el estado del frame.
     if (ed::NodeId doble = ed::GetDoubleClickedNode())
     {
-        // nodeId(eid) = eid * 3 + 1 (ver los helpers de arriba): el editorId
-        // sale de deshacer esa cuenta.
-        const int eid = ((int)doble.Get() - 1) / 3;
+        // El editorId sale de deshacer la cuenta de nodeId (ver los helpers de
+        // arriba), que es la misma para nodos y pines.
+        const int eid = editorIdFromRawId((int)doble.Get());
         const int idx = anim->stateIndexByEditorId(eid, m_layer);
         if (idx >= 0 && anim->states(m_layer)[(size_t)idx].isSubMachine)
             m_nivelId = anim->states(m_layer)[(size_t)idx].editorId;

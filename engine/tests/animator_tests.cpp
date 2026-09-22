@@ -17,6 +17,7 @@
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Renderer/SkinnedFrameSync.h"
 #include "DonTopo/Renderer/MeshClock.h"
+#include "DonTopo/Editor/AnimatorCanvasIds.h"
 #include "DonTopo/Renderer/RootMotion.h"
 #include "DonTopo/Core/RootMotionApply.h"
 #include "DonTopo/Physics/Rigidbody.h"
@@ -8476,6 +8477,41 @@ static void test_loader_normalizes_bone_weights()
 // El panel recuerda por editorId la sub-máquina en la que está metido, NO por
 // índice: borrar un nodo anterior reindexa el vector y con un índice guardado
 // el editor se salía de la caja solo. Esta es la invariante que lo sostiene.
+// Los ids del lienzo: codificar y decodificar tiene que cerrar el círculo para
+// CADA una de las cinco ranuras. Un fallo aquí no da error de compilación —se
+// ve como "borro un nodo y desaparece otro"—, así que se mide.
+static void test_canvas_ids_round_trip()
+{
+    using namespace canvasIds;
+    for (int eid = 0; eid < 64; eid++)
+    {
+        const int ids[5] = { node(eid), inputPin(eid), outputPin(eid), inputPin2(eid), outputPin2(eid) };
+        for (int k = 0; k < 5; k++) CHECK(editorIdFrom(ids[k]) == eid);
+        // Ninguna ranura se confunde con otra, ni con la de otro estado.
+        for (int k = 0; k < 5; k++)
+            for (int j = k + 1; j < 5; j++) CHECK(ids[k] != ids[j]);
+        if (eid > 0) CHECK(node(eid) != outputPin2(eid - 1));
+
+        // Entrada y salida, bien clasificadas en los dos pares.
+        CHECK(!isOutputPin(inputPin(eid)));
+        CHECK(isOutputPin(outputPin(eid)));
+        CHECK(!isOutputPin(inputPin2(eid)));
+        CHECK(isOutputPin(outputPin2(eid)));
+        // Y el par secundario se distingue del normal.
+        CHECK(!isSecondaryPin(inputPin(eid)) && !isSecondaryPin(outputPin(eid)));
+        CHECK(isSecondaryPin(inputPin2(eid)) && isSecondaryPin(outputPin2(eid)));
+    }
+
+    // Los ids de link viven en su propio rango, lejos de los de estado: con
+    // 100000 harían falta 20.000 estados para chocar.
+    CHECK(link(0) > outputPin2(19000));
+    // Any State está fuera del esquema y su editorId decodificado es
+    // inalcanzable, que es lo que permite comprobarlo por igualdad antes de
+    // decodificar.
+    CHECK(editorIdFrom(kAnyStateNode) > 100000);
+    CHECK(kAnyStateNode != node(0) && kAnyStateOutPin != outputPin(0));
+}
+
 static void test_editor_id_survives_deleting_an_earlier_state()
 {
     AnimatorComponent a = makeCajas();       // Base(0), Ataques(1, caja), Golpe(2), Combo(3, caja), Uno(4)
@@ -9473,6 +9509,7 @@ int main()
     test_curve_last_layer_wins();
     test_normalize_bone_weights();
     test_loader_normalizes_bone_weights();
+    test_canvas_ids_round_trip();
     test_editor_id_survives_deleting_an_earlier_state();
     test_sanitize_graph_fixes_bad_indices();
     test_sanitize_graph_leaves_a_good_graph_alone();
