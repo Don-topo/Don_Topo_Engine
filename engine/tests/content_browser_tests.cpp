@@ -378,6 +378,39 @@ static void test_unique_folder_name(const fs::path& root)
     CHECK(uniqueFolderName(dir) == "Nueva carpeta 4");
 }
 
+// breadcrumbSegments: de la raiz del proyecto a la carpeta actual, con rutas
+// acumulativas. Fuera de la raiz (o la propia raiz) solo queda el tramo raiz.
+static void test_breadcrumb_segments(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path deep = root / "bc_assets" / "Imported";
+    fs::create_directories(deep, ec);
+
+    std::vector<BreadcrumbSegment> atRoot = breadcrumbSegments(root, root);
+    CHECK(atRoot.size() == 1);
+    if (atRoot.size() == 1)
+    {
+        CHECK(atRoot[0].name == root.filename().string());
+        CHECK(atRoot[0].path == root);
+    }
+
+    std::vector<BreadcrumbSegment> nested = breadcrumbSegments(root, deep);
+    CHECK(nested.size() == 3);
+    if (nested.size() == 3)
+    {
+        CHECK(nested[0].path == root);
+        CHECK(nested[1].name == "bc_assets");
+        CHECK(nested[1].path == root / "bc_assets");
+        CHECK(nested[2].name == "Imported");
+        CHECK(nested[2].path == deep);
+    }
+
+    // Una carpeta hermana de la raiz no cuelga de ella: solo el tramo raiz.
+    std::vector<BreadcrumbSegment> outside =
+        breadcrumbSegments(root, root.parent_path() / "otra_carpeta_ajena");
+    CHECK(outside.size() == 1);
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -398,6 +431,7 @@ int main()
     test_classify_asset();
     test_asset_matches_filter();
     test_unique_folder_name(root);
+    test_breadcrumb_segments(root);
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL CONTENT BROWSER TESTS PASSED\n");
