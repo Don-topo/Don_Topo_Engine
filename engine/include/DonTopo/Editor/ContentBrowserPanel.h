@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 #include "DonTopo/Editor/EditorContext.h"
@@ -27,6 +28,25 @@ std::vector<AssetImportOutcome> importDroppedFilesInto(
     const std::vector<DroppedFile>& dropped,
     float rectX, float rectY, float rectW, float rectH,
     const std::filesystem::path& targetDir);
+
+// Tipo de un asset para el Content Browser: lo comparten el icono del grid y el
+// filtro por tipo, para que no puedan discrepar.
+enum class AssetKind { Folder, Model3D, Audio, Image, Font, Scene, Script, Shader, Other };
+
+// ext con el punto y en cualquier combinación de mayúsculas ("" si no tiene). Una
+// carpeta es siempre Folder, aunque se llame "a.png".
+AssetKind classifyAsset(const std::string& ext, bool isDir);
+
+// true si el asset pasa el filtro del grid: texto = subcadena sin distinguir
+// mayúsculas (vacío deja pasar todo) y kindFilter = igualdad exacta de tipo
+// (nullopt = todos). Ambos se combinan con AND, así que con un tipo elegido las
+// carpetas quedan fuera salvo que el tipo sea Folder.
+bool assetMatchesFilter(const std::string& name, AssetKind kind,
+                        const std::string& text, std::optional<AssetKind> kindFilter);
+
+// Nombre libre para una carpeta nueva dentro de dir: "Nueva carpeta", y si ya
+// hay algo (carpeta o fichero) con ese nombre, "Nueva carpeta 2", "3"...
+std::string uniqueFolderName(const std::filesystem::path& dir);
 
 // Las tres funciones siguientes no tocan estado privado de ContentBrowserPanel
 // (sólo sus parámetros), así que se declaran aquí como funciones libres —igual
@@ -91,6 +111,13 @@ private:
     // carpetas, y por tanto el límite natural de navegación del panel.
     std::filesystem::path m_projectRoot;
     std::vector<std::filesystem::path> m_assets;
+
+    // Filtros del grid (solo la carpeta actual). m_filterKindIndex indexa la
+    // tabla de opciones del combo en draw(); m_filterKind es su traducción y
+    // se recalcula cada frame.
+    char                    m_filterText[64] = {};
+    int                     m_filterKindIndex = 0;
+    std::optional<AssetKind> m_filterKind;
 
     // Asset rename — popup modal disparado por right-click > Rename en el
     // grid derecho del Content Browser.

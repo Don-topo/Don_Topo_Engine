@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <system_error>
 #include <vector>
@@ -324,6 +325,59 @@ static void test_import_dropped_files_into(const fs::path& root)
     CHECK(ss.str() == "version-vieja"); // el conflicto no lo toco
 }
 
+// classifyAsset: una sola clasificacion para el icono del grid y para el filtro
+// por tipo. Mayusculas da igual; una carpeta es Folder aunque se llame "a.png".
+static void test_classify_asset()
+{
+    CHECK(classifyAsset(".fbx",  false) == AssetKind::Model3D);
+    CHECK(classifyAsset(".GLB",  false) == AssetKind::Model3D);
+    CHECK(classifyAsset(".wav",  false) == AssetKind::Audio);
+    CHECK(classifyAsset(".png",  false) == AssetKind::Image);
+    CHECK(classifyAsset(".bmp",  false) == AssetKind::Image);
+    CHECK(classifyAsset(".ttf",  false) == AssetKind::Font);
+    CHECK(classifyAsset(".json", false) == AssetKind::Scene);
+    CHECK(classifyAsset(".lua",  false) == AssetKind::Script);
+    CHECK(classifyAsset(".spv",  false) == AssetKind::Shader);
+    CHECK(classifyAsset(".xyz",  false) == AssetKind::Other);
+    CHECK(classifyAsset("",      false) == AssetKind::Other);
+    CHECK(classifyAsset(".png",  true)  == AssetKind::Folder);
+}
+
+// assetMatchesFilter: texto = subcadena sin distinguir mayusculas; tipo = igualdad
+// exacta; los dos se combinan con AND; "sin filtro" deja pasar todo.
+static void test_asset_matches_filter()
+{
+    CHECK(assetMatchesFilter("Hero.fbx", AssetKind::Model3D, "", std::nullopt));
+    CHECK(assetMatchesFilter("Hero.fbx", AssetKind::Model3D, "hero", std::nullopt));
+    CHECK(assetMatchesFilter("Hero.fbx", AssetKind::Model3D, "RO.F", std::nullopt));
+    CHECK(!assetMatchesFilter("Hero.fbx", AssetKind::Model3D, "villain", std::nullopt));
+    CHECK(assetMatchesFilter("Hero.fbx", AssetKind::Model3D, "", AssetKind::Model3D));
+    CHECK(!assetMatchesFilter("Hero.fbx", AssetKind::Model3D, "", AssetKind::Audio));
+    // Con un tipo elegido, las carpetas se ocultan (salvo que el tipo sea Folder).
+    CHECK(!assetMatchesFilter("Models", AssetKind::Folder, "", AssetKind::Model3D));
+    CHECK(assetMatchesFilter("Models", AssetKind::Folder, "", AssetKind::Folder));
+    // AND: el tipo coincide pero el texto no.
+    CHECK(!assetMatchesFilter("Hero.fbx", AssetKind::Model3D, "villain", AssetKind::Model3D));
+}
+
+// uniqueFolderName: "Nueva carpeta", y si existe "Nueva carpeta 2", "3"... sin
+// reutilizar el primer hueco de forma ambigua.
+static void test_unique_folder_name(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path dir = root / "unique_name_dir";
+    fs::create_directories(dir, ec);
+
+    CHECK(uniqueFolderName(dir) == "Nueva carpeta");
+    fs::create_directories(dir / "Nueva carpeta", ec);
+    CHECK(uniqueFolderName(dir) == "Nueva carpeta 2");
+    fs::create_directories(dir / "Nueva carpeta 2", ec);
+    CHECK(uniqueFolderName(dir) == "Nueva carpeta 3");
+    // Un FICHERO con ese nombre tambien ocupa el sitio.
+    std::ofstream(dir / "Nueva carpeta 3") << "x";
+    CHECK(uniqueFolderName(dir) == "Nueva carpeta 4");
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -341,6 +395,9 @@ int main()
     test_detach_clears_material_override_baseline();
     test_rename_rewrites_material_override_baseline();
     test_import_dropped_files_into(root);
+    test_classify_asset();
+    test_asset_matches_filter();
+    test_unique_folder_name(root);
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL CONTENT BROWSER TESTS PASSED\n");

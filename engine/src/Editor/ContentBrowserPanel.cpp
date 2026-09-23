@@ -8,6 +8,8 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include <imgui.h>
 #include <algorithm>
+#include <cctype>
+#include <cfloat>
 #include <cstring>
 #include <filesystem>
 #include <set>
@@ -192,6 +194,53 @@ std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::pat
     }
     std::sort(out.begin(), out.end());
     return out;
+}
+
+namespace {
+std::string lowerAscii(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+} // namespace
+
+AssetKind classifyAsset(const std::string& ext, bool isDir)
+{
+    if (isDir) return AssetKind::Folder;
+    const std::string e = lowerAscii(ext);
+    if (e == ".fbx" || e == ".obj" || e == ".gltf" || e == ".glb")            return AssetKind::Model3D;
+    if (e == ".mp3" || e == ".wav" || e == ".ogg" || e == ".flac")            return AssetKind::Audio;
+    if (e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".tga" || e == ".bmp") return AssetKind::Image;
+    if (e == ".ttf" || e == ".otf" || e == ".ttc")                            return AssetKind::Font;
+    if (e == ".json")                                                         return AssetKind::Scene;
+    if (e == ".lua")                                                          return AssetKind::Script;
+    if (e == ".spv")                                                          return AssetKind::Shader;
+    return AssetKind::Other;
+}
+
+bool assetMatchesFilter(const std::string& name, AssetKind kind,
+                        const std::string& text, std::optional<AssetKind> kindFilter)
+{
+    if (kindFilter && *kindFilter != kind)
+        return false;
+    if (text.empty())
+        return true;
+    return lowerAscii(name).find(lowerAscii(text)) != std::string::npos;
+}
+
+std::string uniqueFolderName(const std::filesystem::path& dir)
+{
+    const std::string base = "Nueva carpeta";
+    std::error_code ec;
+    if (!std::filesystem::exists(dir / base, ec))
+        return base;
+    for (int n = 2; ; ++n)
+    {
+        const std::string candidate = base + " " + std::to_string(n);
+        if (!std::filesystem::exists(dir / candidate, ec))
+            return candidate;
+    }
 }
 
 std::vector<AssetImportOutcome> importDroppedFilesInto(
@@ -654,8 +703,35 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         float cellW = ICON_SIZE + CELL_PAD;
         float paneW = ImGui::GetContentRegionAvail().x;
         int   cols  = std::max(1, (int)(paneW / cellW));
-        ImGui::Columns(cols, "##AssetGrid", false);
 
+        // Filtros del grid (solo la carpeta actual): texto por nombre y combo por
+        // tipo. Se dibujan ANTES de Columns: dentro de una columna el campo de
+        // texto se encogería al ancho de una celda.
+        {
+            struct KindOption { const char* label; std::optional<AssetKind> kind; };
+            static const KindOption kOptions[] = {
+                {"Todos", std::nullopt},           {"Carpetas", AssetKind::Folder},
+                {"3D", AssetKind::Model3D},        {"Audio", AssetKind::Audio},
+                {"Imagen", AssetKind::Image},      {"Fuente", AssetKind::Font},
+                {"Escena", AssetKind::Scene},      {"Script", AssetKind::Script},
+                {"Shader", AssetKind::Shader},     {"Otros", AssetKind::Other},
+            };
+            ImGui::SetNextItemWidth(std::max(80.0f, paneW - 140.0f));
+            ImGui::InputTextWithHint("##AssetFilterText", "Buscar por nombre...",
+                                     m_filterText, sizeof(m_filterText));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::BeginCombo("##AssetFilterKind", kOptions[m_filterKindIndex].label))
+            {
+                for (int i = 0; i < (int)(sizeof(kOptions) / sizeof(kOptions[0])); ++i)
+                    if (ImGui::Selectable(kOptions[i].label, i == m_filterKindIndex))
+                        m_filterKindIndex = i;
+                ImGui::EndCombo();
+            }
+            m_filterKind = kOptions[m_filterKindIndex].kind;
+        }
+
+        ImGui::Columns(cols, "##AssetGrid", false);
 
         for (auto& path : m_assets) {
             std::error_code isDirEc;
@@ -663,20 +739,22 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             std::string ext = isDir ? "" : path.extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
+            const AssetKind kind = classifyAsset(ext, isDir);
+            if (!assetMatchesFilter(path.filename().string(), kind, m_filterText, m_filterKind))
+                continue;
+
             ImVec4      btnColor;
             const char* label;
-            if (isDir) {
-                btnColor = ImVec4(0.55f, 0.55f, 0.60f, 1.0f); label = "DIR";
-            } else if (ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".glb") {
-                btnColor = ImVec4(0.15f, 0.55f, 0.85f, 1.0f); label = "3D";
-            } else if (ext == ".mp3" || ext == ".wav" || ext == ".ogg" || ext == ".flac") {
-                btnColor = ImVec4(0.20f, 0.72f, 0.35f, 1.0f); label = "SFX";
-            } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga") {
-                btnColor = ImVec4(0.85f, 0.72f, 0.10f, 1.0f); label = "IMG";
-            } else if (ext == ".spv") {
-                btnColor = ImVec4(0.80f, 0.35f, 0.10f, 1.0f); label = "SPV";
-            } else {
-                btnColor = ImVec4(0.40f, 0.40f, 0.40f, 1.0f); label = "...";
+            switch (kind) {
+            case AssetKind::Folder:  btnColor = ImVec4(0.55f, 0.55f, 0.60f, 1.0f); label = "DIR"; break;
+            case AssetKind::Model3D: btnColor = ImVec4(0.15f, 0.55f, 0.85f, 1.0f); label = "3D";  break;
+            case AssetKind::Audio:   btnColor = ImVec4(0.20f, 0.72f, 0.35f, 1.0f); label = "SFX"; break;
+            case AssetKind::Image:   btnColor = ImVec4(0.85f, 0.72f, 0.10f, 1.0f); label = "IMG"; break;
+            case AssetKind::Font:    btnColor = ImVec4(0.65f, 0.40f, 0.80f, 1.0f); label = "FNT"; break;
+            case AssetKind::Scene:   btnColor = ImVec4(0.20f, 0.65f, 0.65f, 1.0f); label = "SCN"; break;
+            case AssetKind::Script:  btnColor = ImVec4(0.30f, 0.40f, 0.85f, 1.0f); label = "LUA"; break;
+            case AssetKind::Shader:  btnColor = ImVec4(0.80f, 0.35f, 0.10f, 1.0f); label = "SPV"; break;
+            default:                 btnColor = ImVec4(0.40f, 0.40f, 0.40f, 1.0f); label = "..."; break;
             }
 
             ImGui::PushID(path.string().c_str());
@@ -761,6 +839,33 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             ImGui::PopID();
         }
         ImGui::Columns(1);
+
+        // Clic derecho en el vacío del grid (sobre un asset sale su propio menú
+        // Rename/Delete): mismo patrón que el menú Create del ScenePanel. La
+        // carpeta se crea ya en disco con un nombre libre y se abre el Rename,
+        // como hace Unity, para que el usuario la nombre sin pasos extra.
+        if (ImGui::BeginPopupContextWindow("##AssetPaneContext",
+                ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+        {
+            if (ImGui::MenuItem("Create Folder"))
+            {
+                const std::filesystem::path parent(m_currentDir);
+                const std::filesystem::path created = parent / uniqueFolderName(parent);
+                std::error_code mkEc;
+                std::filesystem::create_directory(created, mkEc);
+                if (mkEc)
+                {
+                    ctx.pushLog("No se pudo crear la carpeta: " + mkEc.message());
+                }
+                else
+                {
+                    ctx.pushLog("Carpeta creada: " + created.filename().string());
+                    m_scanned = false;
+                    beginAssetRename(created, /*isDir=*/true);
+                }
+            }
+            ImGui::EndPopup();
+        }
 
         if (m_openScenePromptPopup)
         {
