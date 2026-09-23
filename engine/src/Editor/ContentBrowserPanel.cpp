@@ -229,6 +229,32 @@ bool assetMatchesFilter(const std::string& name, AssetKind kind,
     return lowerAscii(name).find(lowerAscii(text)) != std::string::npos;
 }
 
+std::vector<BreadcrumbSegment> breadcrumbSegments(const std::filesystem::path& root,
+                                                  const std::filesystem::path& current)
+{
+    std::vector<BreadcrumbSegment> out;
+    out.push_back({ root.filename().string(), root });
+    if (!pathUnderDir(current, root))
+        return out;
+
+    // Los dos canonicalizados igual que pathUnderDir, para que el resto sea
+    // una relativa limpia aunque vengan con distinto casing o separadores.
+    std::error_code ecR, ecC;
+    const std::filesystem::path canonRoot = std::filesystem::weakly_canonical(root, ecR);
+    const std::filesystem::path canonCur  = std::filesystem::weakly_canonical(current, ecC);
+    if (ecR || ecC)
+        return out;
+
+    std::filesystem::path accumulated = root;
+    for (const auto& part : canonCur.lexically_relative(canonRoot))
+    {
+        if (part.empty() || part == ".") continue;
+        accumulated /= part;
+        out.push_back({ part.string(), accumulated });
+    }
+    return out;
+}
+
 std::string uniqueFolderName(const std::filesystem::path& dir)
 {
     const std::string base = "Nueva carpeta";
@@ -703,6 +729,34 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         float cellW = ICON_SIZE + CELL_PAD;
         float paneW = ImGui::GetContentRegionAvail().x;
         int   cols  = std::max(1, (int)(paneW / cellW));
+
+        // Breadcrumb: raíz > ... > carpeta actual. Cada tramo salta a su carpeta;
+        // el último (la actual) va deshabilitado porque pulsarlo no haría nada.
+        // Se pide reveal del árbol por si el usuario había colapsado esa rama.
+        {
+            const std::vector<BreadcrumbSegment> segments =
+                breadcrumbSegments(m_projectRoot, std::filesystem::path(m_currentDir));
+            for (size_t i = 0; i < segments.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    ImGui::SameLine(0.0f, 4.0f);
+                    ImGui::TextDisabled(">");
+                    ImGui::SameLine(0.0f, 4.0f);
+                }
+                const bool isLast = (i + 1 == segments.size());
+                ImGui::PushID(static_cast<int>(i));
+                ImGui::BeginDisabled(isLast);
+                if (ImGui::SmallButton(segments[i].name.c_str()))
+                {
+                    m_currentDir       = segments[i].path.string();
+                    m_scanned          = false;
+                    m_revealCurrentDir = true;
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+        }
 
         // Filtros del grid (solo la carpeta actual): texto por nombre y combo por
         // tipo. Se dibujan ANTES de Columns: dentro de una columna el campo de

@@ -44,6 +44,17 @@ AssetKind classifyAsset(const std::string& ext, bool isDir);
 bool assetMatchesFilter(const std::string& name, AssetKind kind,
                         const std::string& text, std::optional<AssetKind> kindFilter);
 
+// Un tramo del breadcrumb: lo que se pinta y a dónde salta al pulsarlo.
+struct BreadcrumbSegment {
+    std::string           name;
+    std::filesystem::path path;
+};
+
+// Tramos desde la raíz del proyecto hasta current, con rutas acumulativas. Si
+// current es la propia raíz o no cuelga de ella, devuelve solo el tramo raíz.
+std::vector<BreadcrumbSegment> breadcrumbSegments(const std::filesystem::path& root,
+                                                  const std::filesystem::path& current);
+
 // Nombre libre para una carpeta nueva dentro de dir: "Nueva carpeta", y si ya
 // hay algo (carpeta o fichero) con ese nombre, "Nueva carpeta 2", "3"...
 std::string uniqueFolderName(const std::filesystem::path& dir);
