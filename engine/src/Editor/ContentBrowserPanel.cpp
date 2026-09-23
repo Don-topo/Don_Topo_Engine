@@ -229,6 +229,69 @@ bool assetMatchesFilter(const std::string& name, AssetKind kind,
     return lowerAscii(name).find(lowerAscii(text)) != std::string::npos;
 }
 
+bool AssetSelection::contains(const std::filesystem::path& p) const
+{
+    return std::find(items.begin(), items.end(), p) != items.end();
+}
+
+namespace {
+// Índice de p en visible, o -1.
+int indexIn(const std::vector<std::filesystem::path>& visible, const std::filesystem::path& p)
+{
+    const auto it = std::find(visible.begin(), visible.end(), p);
+    return it == visible.end() ? -1 : static_cast<int>(it - visible.begin());
+}
+
+// Reordena items según su posición en visible (los que ya no están, al final).
+void sortByVisibleOrder(std::vector<std::filesystem::path>& items,
+                        const std::vector<std::filesystem::path>& visible)
+{
+    std::stable_sort(items.begin(), items.end(),
+        [&](const std::filesystem::path& a, const std::filesystem::path& b) {
+            int ia = indexIn(visible, a), ib = indexIn(visible, b);
+            if (ia < 0) ia = static_cast<int>(visible.size());
+            if (ib < 0) ib = static_cast<int>(visible.size());
+            return ia < ib;
+        });
+}
+} // namespace
+
+void applyAssetClick(AssetSelection& sel, const std::vector<std::filesystem::path>& visible,
+                     const std::filesystem::path& clicked, bool ctrl, bool shift)
+{
+    if (shift)
+    {
+        const int a = sel.anchor ? indexIn(visible, *sel.anchor) : -1;
+        const int b = indexIn(visible, clicked);
+        if (a >= 0 && b >= 0)
+        {
+            sel.items.assign(visible.begin() + std::min(a, b), visible.begin() + std::max(a, b) + 1);
+            return; // Shift no mueve el ancla
+        }
+        // Sin ancla visible: cae al clic normal de abajo.
+    }
+    else if (ctrl)
+    {
+        const auto it = std::find(sel.items.begin(), sel.items.end(), clicked);
+        if (it != sel.items.end()) sel.items.erase(it);
+        else                       sel.items.push_back(clicked);
+        sortByVisibleOrder(sel.items, visible);
+        sel.anchor = clicked;
+        return;
+    }
+    sel.items  = { clicked };
+    sel.anchor = clicked;
+}
+
+void pruneSelection(AssetSelection& sel, const std::vector<std::filesystem::path>& existing)
+{
+    sel.items.erase(std::remove_if(sel.items.begin(), sel.items.end(),
+        [&](const std::filesystem::path& p) { return indexIn(existing, p) < 0; }),
+        sel.items.end());
+    if (sel.anchor && indexIn(existing, *sel.anchor) < 0)
+        sel.anchor.reset();
+}
+
 MoveOutcome moveAsset(const std::filesystem::path& src, const std::filesystem::path& destDir)
 {
     std::error_code ec;
@@ -545,11 +608,15 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
     });
 }
 
-void ContentBrowserPanel::beginAssetDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir)
+void ContentBrowserPanel::beginAssetDelete(GameObject* sceneRoot,
+                                           std::vector<std::pair<std::filesystem::path, bool>> targets)
 {
-    m_assetDeleteTarget         = path;
-    m_assetDeleteIsDir          = isDir;
-    m_assetDeleteAffectedCount  = countSceneReferences(sceneRoot, path, isDir);
+    m_assetDeleteTargets        = std::move(targets);
+    // Con varios, es la suma por elemento: un objeto que use dos de ellos cuenta
+    // dos veces. Basta para el aviso ("cuánto se va a romper"), no es un recuento exacto.
+    m_assetDeleteAffectedCount  = 0;
+    for (const auto& [path, isDir] : m_assetDeleteTargets)
+        m_assetDeleteAffectedCount += countSceneReferences(sceneRoot, path, isDir);
     m_assetDeleteError.clear();
     m_openAssetDeletePopup      = true;
 }
@@ -558,17 +625,39 @@ void ContentBrowserPanel::acceptAssetDropOnFolder(const std::filesystem::path& d
 {
     if (!ImGui::BeginDragDropTarget())
         return;
-    // Los mismos dos payloads que emite el grid: ficheros y carpetas van con
-    // tipos distintos a propósito (ver el comentario de la fuente del arrastre).
-    for (const char* type : { "DT_ASSET_PATH", "DT_ASSET_DIR" })
+    // Los payloads que emite el grid: ficheros y carpetas sueltos van con tipos
+    // distintos a propósito (ver el comentario de la fuente del arrastre), y una
+    // selección de varios va como DT_ASSET_MULTI, un path por línea. Solo las
+    // carpetas aceptan el múltiple: las zonas de Properties esperan UN asset.
+    for (const char* type : { "DT_ASSET_PATH", "DT_ASSET_DIR", "DT_ASSET_MULTI" })
     {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(type))
+        const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(type);
+        if (!payload)
+            continue;
+
+        std::vector<std::filesystem::path> srcs;
+        const std::string data(static_cast<const char*>(payload->Data));
+        if (std::string_view(type) == "DT_ASSET_MULTI")
         {
-            const std::filesystem::path src(static_cast<const char*>(payload->Data));
-            // Soltar una carpeta sobre sí misma no es un error digno de log.
-            if (!samePath(src, destDir))
-                m_pendingMove = PendingMove{ src, destDir };
+            size_t start = 0;
+            while (start < data.size())
+            {
+                size_t end = data.find('\n', start);
+                if (end == std::string::npos) end = data.size();
+                if (end > start) srcs.emplace_back(data.substr(start, end - start));
+                start = end + 1;
+            }
         }
+        else
+        {
+            srcs.emplace_back(data);
+        }
+        // Soltar una carpeta sobre sí misma no es un error digno de log.
+        srcs.erase(std::remove_if(srcs.begin(), srcs.end(),
+                       [&](const std::filesystem::path& s) { return samePath(s, destDir); }),
+                   srcs.end());
+        if (!srcs.empty())
+            m_pendingMove = PendingMove{ std::move(srcs), destDir };
     }
     ImGui::EndDragDropTarget();
 }
@@ -590,48 +679,61 @@ void ContentBrowserPanel::applyPendingMove(EditorContext& ctx, GameObject* scene
 
     // El payload lo emite este mismo panel, pero se comprueba igual: origen y
     // destino tienen que estar dentro de la raíz del proyecto.
-    const bool srcInside  = pathUnderDir(mv.src, m_projectRoot);
     const bool destInside = samePath(mv.destDir, m_projectRoot) || pathUnderDir(mv.destDir, m_projectRoot);
-    if (!srcInside || !destInside)
+
+    int moved = 0;
+    for (const std::filesystem::path& src : mv.srcs)
     {
-        ctx.pushLog("Movimiento rechazado: origen o destino fuera del proyecto");
-        return;
+        // Cada elemento del lote se resuelve por su cuenta: un rechazo no aborta
+        // a los demás (mismo criterio que el import de varios ficheros).
+        if (!pathUnderDir(src, m_projectRoot) || !destInside)
+        {
+            ctx.pushLog("Movimiento rechazado: origen o destino fuera del proyecto");
+            continue;
+        }
+
+        std::error_code dirEc;
+        const bool isDir = std::filesystem::is_directory(src, dirEc);
+        const MoveOutcome outcome = moveAsset(src, mv.destDir);
+        switch (outcome.result)
+        {
+        case MoveResult::Moved:
+        {
+            ++moved;
+            updateSceneReferencesForRename(ctx, sceneRoot, src, outcome.newPath, isDir);
+            // Si la carpeta actual era la movida (o colgaba de ella) ya no existe
+            // con esa ruta: seguirla a su sitio nuevo en vez de dejar el grid
+            // apuntando a una carpeta que desapareció.
+            const std::filesystem::path current(m_currentDir);
+            if (isDir && samePath(current, src))
+                m_currentDir = outcome.newPath.string();
+            else if (isDir && pathUnderDir(current, src))
+                m_currentDir = replacePathPrefix(m_currentDir, src, outcome.newPath);
+            m_scanned = false;
+            break;
+        }
+        case MoveResult::RejectedSameFolder:
+            break; // ya estaba ahí: no hay nada que decir
+        case MoveResult::RejectedIntoSelf:
+            ctx.pushLog("No se puede mover una carpeta dentro de sí misma");
+            break;
+        case MoveResult::RejectedNameConflict:
+            ctx.pushLog("Movimiento rechazado: ya existe '" + src.filename().string() +
+                        "' en '" + mv.destDir.filename().string() + "'");
+            break;
+        case MoveResult::RejectedFailed:
+            ctx.pushLog("No se pudo mover '" + src.filename().string() + "': " + outcome.errorMessage);
+            break;
+        }
     }
 
-    std::error_code dirEc;
-    const bool isDir = std::filesystem::is_directory(mv.src, dirEc);
-    const MoveOutcome outcome = moveAsset(mv.src, mv.destDir);
-    switch (outcome.result)
-    {
-    case MoveResult::Moved:
-    {
-        ctx.pushLog("Asset movido: '" + mv.src.filename().string() + "' -> '" +
+    if (moved == 1 && mv.srcs.size() == 1)
+        ctx.pushLog("Asset movido: '" + mv.srcs[0].filename().string() + "' -> '" +
                     mv.destDir.filename().string() + "'");
-        updateSceneReferencesForRename(ctx, sceneRoot, mv.src, outcome.newPath, isDir);
-        // Si la carpeta actual era la movida (o colgaba de ella) ya no existe con
-        // esa ruta: seguirla a su sitio nuevo en vez de dejar el grid apuntando
-        // a una carpeta que desapareció.
-        const std::filesystem::path current(m_currentDir);
-        if (isDir && samePath(current, mv.src))
-            m_currentDir = outcome.newPath.string();
-        else if (isDir && pathUnderDir(current, mv.src))
-            m_currentDir = replacePathPrefix(m_currentDir, mv.src, outcome.newPath);
-        m_scanned = false;
-        break;
-    }
-    case MoveResult::RejectedSameFolder:
-        break; // ya estaba ahí: no hay nada que decir
-    case MoveResult::RejectedIntoSelf:
-        ctx.pushLog("No se puede mover una carpeta dentro de sí misma");
-        break;
-    case MoveResult::RejectedNameConflict:
-        ctx.pushLog("Movimiento rechazado: ya existe '" + mv.src.filename().string() +
-                    "' en '" + mv.destDir.filename().string() + "'");
-        break;
-    case MoveResult::RejectedFailed:
-        ctx.pushLog("No se pudo mover '" + mv.src.filename().string() + "': " + outcome.errorMessage);
-        break;
-    }
+    else if (moved == 1)
+        ctx.pushLog("1 asset movido a '" + mv.destDir.filename().string() + "'");
+    else if (moved > 1)
+        ctx.pushLog(std::to_string(moved) + " assets movidos a '" + mv.destDir.filename().string() + "'");
 }
 
 void ContentBrowserPanel::drawFolderTree(const std::filesystem::path& dir)
@@ -897,17 +999,34 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             m_filterKind = kOptions[m_filterKindIndex].kind;
         }
 
+        // Lo que pasa el filtro, resuelto UNA vez: la selección por rango
+        // (Shift+clic) necesita el orden visible completo antes de pintar, y así
+        // el bucle de abajo no repite el stat por elemento.
+        struct GridItem { std::filesystem::path path; bool isDir; std::string ext; AssetKind kind; };
+        std::vector<GridItem>              items;
+        std::vector<std::filesystem::path> visible;
+        for (const auto& p : m_assets)
+        {
+            std::error_code isDirEc;
+            const bool isDir = std::filesystem::is_directory(p, isDirEc);
+            std::string ext = isDir ? "" : p.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            const AssetKind kind = classifyAsset(ext, isDir);
+            if (!assetMatchesFilter(p.filename().string(), kind, m_filterText, m_filterKind))
+                continue;
+            items.push_back({ p, isDir, std::move(ext), kind });
+            visible.push_back(p);
+        }
+        // Cambiar de carpeta, filtrar o rescanear no deja selección fantasma.
+        pruneSelection(m_selection, visible);
+
         ImGui::Columns(cols, "##AssetGrid", false);
 
-        for (auto& path : m_assets) {
-            std::error_code isDirEc;
-            bool isDir = std::filesystem::is_directory(path, isDirEc);
-            std::string ext = isDir ? "" : path.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-            const AssetKind kind = classifyAsset(ext, isDir);
-            if (!assetMatchesFilter(path.filename().string(), kind, m_filterText, m_filterKind))
-                continue;
+        for (const GridItem& item : items) {
+            const std::filesystem::path& path = item.path;
+            const bool                   isDir = item.isDir;
+            const std::string&           ext   = item.ext;
+            const AssetKind              kind  = item.kind;
 
             ImVec4      btnColor;
             const char* label;
@@ -924,11 +1043,30 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             }
 
             ImGui::PushID(path.string().c_str());
+            // Seleccionado: borde claro y color más vivo. El borde se apila ANTES
+            // que los colores del botón para poder sacarlo el último.
+            const bool selected = m_selection.contains(path);
+            if (selected)
+            {
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 1.0f, 0.9f));
+                btnColor = ImVec4(btnColor.x + 0.10f, btnColor.y + 0.10f, btnColor.z + 0.10f, 1.0f);
+            }
             ImGui::PushStyleColor(ImGuiCol_Button, btnColor);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                 ImVec4(btnColor.x + 0.15f, btnColor.y + 0.15f, btnColor.z + 0.15f, 1.0f));
-            ImGui::Button(label, ImVec2(ICON_SIZE, ICON_SIZE));
+            const bool clicked = ImGui::Button(label, ImVec2(ICON_SIZE, ICON_SIZE));
             ImGui::PopStyleColor(2);
+            if (selected)
+            {
+                ImGui::PopStyleColor();
+                ImGui::PopStyleVar();
+            }
+            if (clicked)
+            {
+                const ImGuiIO& io = ImGui::GetIO();
+                applyAssetClick(m_selection, visible, path, io.KeyCtrl, io.KeyShift);
+            }
 
             // Soltar un asset sobre una carpeta del grid lo mueve dentro. Tiene
             // que ir aquí, antes de cualquier otro widget: opera sobre el botón.
@@ -983,22 +1121,60 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             // proposito: las 14 zonas de drop que ya existen esperan un fichero
             // de una extension concreta, y con un tipo aparte ninguna acepta una
             // carpeta por accidente.
-            const bool arrastrable = isDir || isImportableExtension(ext);
+            // Arrastrar varios seleccionados (empezando por uno de ellos) sale con
+            // un payload propio aunque alguno no sea "arrastrable" suelto: mover
+            // no depende de qué zonas de drop sepan aceptar el tipo.
+            const bool inMultiSelection = m_selection.items.size() > 1 && m_selection.contains(path);
+            const bool arrastrable = isDir || isImportableExtension(ext) || inMultiSelection;
             if (arrastrable && ImGui::BeginDragDropSource())
             {
-                std::string fullPath = path.string();
-                ImGui::SetDragDropPayload(isDir ? "DT_ASSET_DIR" : "DT_ASSET_PATH",
-                                          fullPath.c_str(), fullPath.size() + 1);
-                ImGui::Text("%s", fullPath.c_str());
+                // Arrastrar algo que no estaba seleccionado lo convierte en la
+                // selección (como en el Explorador).
+                if (!m_selection.contains(path))
+                    applyAssetClick(m_selection, visible, path, false, false);
+
+                if (m_selection.items.size() > 1)
+                {
+                    std::string joined;
+                    for (const auto& p : m_selection.items)
+                        joined += p.string() + "\n";
+                    ImGui::SetDragDropPayload("DT_ASSET_MULTI", joined.c_str(), joined.size() + 1);
+                    ImGui::Text("%zu elementos", m_selection.items.size());
+                }
+                else
+                {
+                    std::string fullPath = path.string();
+                    ImGui::SetDragDropPayload(isDir ? "DT_ASSET_DIR" : "DT_ASSET_PATH",
+                                              fullPath.c_str(), fullPath.size() + 1);
+                    ImGui::Text("%s", fullPath.c_str());
+                }
                 ImGui::EndDragDropSource();
             }
 
+            // Clic derecho sobre algo no seleccionado lo selecciona solo, como el
+            // Explorador; sobre la selección, el menú actúa sobre toda ella.
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && !m_selection.contains(path))
+                applyAssetClick(m_selection, visible, path, false, false);
             if (ImGui::BeginPopupContextItem())
             {
-                if (ImGui::MenuItem("Rename"))
+                const size_t selCount = m_selection.items.size();
+                // Renombrar es de uno en uno.
+                if (ImGui::MenuItem("Rename", nullptr, false, selCount <= 1))
                     beginAssetRename(path, isDir);
-                if (ImGui::MenuItem("Delete"))
-                    beginAssetDelete(sceneRoot, path, isDir);
+                const std::string deleteLabel =
+                    selCount > 1 ? "Delete (" + std::to_string(selCount) + ")" : std::string("Delete");
+                if (ImGui::MenuItem(deleteLabel.c_str()))
+                {
+                    std::vector<std::pair<std::filesystem::path, bool>> targets;
+                    for (const auto& p : m_selection.items)
+                    {
+                        std::error_code tEc;
+                        targets.emplace_back(p, std::filesystem::is_directory(p, tEc));
+                    }
+                    if (targets.empty())
+                        targets.emplace_back(path, isDir);
+                    beginAssetDelete(sceneRoot, std::move(targets));
+                }
                 ImGui::EndPopup();
             }
 
@@ -1010,6 +1186,12 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             ImGui::PopID();
         }
         ImGui::Columns(1);
+
+        // Clic izquierdo en el vacío del grid deselecciona. IsAnyItemHovered deja
+        // fuera los widgets de arriba (breadcrumb, filtros) y los iconos.
+        if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            !ImGui::IsAnyItemHovered())
+            m_selection.clear();
 
         // Clic derecho en el vacío del grid (sobre un asset sale su propio menú
         // Rename/Delete): mismo patrón que el menú Create del ScenePanel. La
@@ -1146,7 +1328,10 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         }
         if (ImGui::BeginPopupModal("Delete Asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         {
-            ImGui::Text("Borrar '%s'?", m_assetDeleteTarget.filename().string().c_str());
+            if (m_assetDeleteTargets.size() == 1)
+                ImGui::Text("Borrar '%s'?", m_assetDeleteTargets[0].first.filename().string().c_str());
+            else
+                ImGui::Text("Borrar %zu elementos?", m_assetDeleteTargets.size());
             if (m_assetDeleteAffectedCount > 0)
                 ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
                     "%d objeto(s) lo usan y perderan la referencia.", m_assetDeleteAffectedCount);
@@ -1159,22 +1344,39 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 
             if (confirm)
             {
-                std::error_code removeEc;
-                if (m_assetDeleteIsDir)
-                    std::filesystem::remove_all(m_assetDeleteTarget, removeEc);
-                else
-                    std::filesystem::remove(m_assetDeleteTarget, removeEc);
-
-                if (removeEc)
+                // Cada elemento por su cuenta: uno que falle no impide borrar los
+                // demás. Los que fallan se quedan en el modal, con el primer error.
+                std::vector<std::pair<std::filesystem::path, bool>> failed;
+                std::string firstError;
+                for (const auto& [target, isDir] : m_assetDeleteTargets)
                 {
-                    m_assetDeleteError = removeEc.message();
+                    std::error_code removeEc;
+                    if (isDir)
+                        std::filesystem::remove_all(target, removeEc);
+                    else
+                        std::filesystem::remove(target, removeEc);
+
+                    if (removeEc)
+                    {
+                        if (firstError.empty()) firstError = removeEc.message();
+                        failed.emplace_back(target, isDir);
+                    }
+                    else
+                    {
+                        ctx.pushLog("Asset eliminado: " + target.string());
+                        detachSceneReferencesForDelete(ctx, sceneRoot, target, isDir);
+                    }
+                }
+                m_scanned = false;
+                if (failed.empty())
+                {
+                    m_assetDeleteTargets.clear();
+                    ImGui::CloseCurrentPopup();
                 }
                 else
                 {
-                    ctx.pushLog("Asset eliminado: " + m_assetDeleteTarget.string());
-                    detachSceneReferencesForDelete(ctx, sceneRoot, m_assetDeleteTarget, m_assetDeleteIsDir);
-                    m_scanned = false;
-                    ImGui::CloseCurrentPopup();
+                    m_assetDeleteTargets = std::move(failed);
+                    m_assetDeleteError = firstError;
                 }
             }
             else if (cancel)

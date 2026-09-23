@@ -55,6 +55,26 @@ struct BreadcrumbSegment {
 std::vector<BreadcrumbSegment> breadcrumbSegments(const std::filesystem::path& root,
                                                   const std::filesystem::path& current);
 
+// Selección del grid: los paths marcados (siempre en el orden en que se ven) y el
+// ancla desde la que Shift+clic calcula el rango.
+struct AssetSelection {
+    std::vector<std::filesystem::path>   items;
+    std::optional<std::filesystem::path> anchor;
+
+    bool contains(const std::filesystem::path& p) const;
+    void clear() { items.clear(); anchor.reset(); }
+};
+
+// Aplica un clic sobre `clicked` a la selección. visible es el orden actual del
+// grid (con los filtros ya aplicados). Clic = solo ese; Ctrl = alterna ese; Shift
+// = rango desde el ancla hasta ese (sin ancla visible, como un clic normal).
+void applyAssetClick(AssetSelection& sel, const std::vector<std::filesystem::path>& visible,
+                     const std::filesystem::path& clicked, bool ctrl, bool shift);
+
+// Quita de la selección lo que ya no está en existing; si el ancla desaparece se
+// olvida. Se llama tras cambiar de carpeta o rescanear.
+void pruneSelection(AssetSelection& sel, const std::vector<std::filesystem::path>& existing);
+
 enum class MoveResult {
     Moved,
     RejectedSameFolder,    // destDir ya es la carpeta padre de src
@@ -120,7 +140,9 @@ private:
     void beginAssetRename(const std::filesystem::path& path, bool isDir);
     // Arma el popup modal "Delete Asset", precalculando cuántos GameObjects
     // referencian path (mesh o audio) para mostrarlo en el texto de aviso.
-    void beginAssetDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
+    // targets = (ruta, esCarpeta) de todo lo seleccionado; un solo modal para todos.
+    void beginAssetDelete(GameObject* sceneRoot,
+                          std::vector<std::pair<std::filesystem::path, bool>> targets);
     // Pinta recursivamente dir y sus subcarpetas visibles como TreeNodes.
     // Click en la etiqueta selecciona la carpeta (m_currentDir); click en la
     // flecha sólo expande. Escanea disco en cada frame para los nodos
@@ -136,10 +158,14 @@ private:
     void applyPendingMove(EditorContext& ctx, GameObject* sceneRoot);
 
     struct PendingMove {
-        std::filesystem::path src;
-        std::filesystem::path destDir;
+        std::vector<std::filesystem::path> srcs;   // uno, o toda la selección arrastrada
+        std::filesystem::path              destDir;
     };
     std::optional<PendingMove> m_pendingMove;
+
+    // Selección del grid (ver AssetSelection). Se poda contra lo visible cada
+    // frame, así que cambiar de carpeta, filtrar o rescanear no deja fantasmas.
+    AssetSelection m_selection;
 
     bool m_open = true;
     bool m_scanned = false;
@@ -172,8 +198,7 @@ private:
     bool                   m_openAssetRenamePopup = false;
 
     // Asset delete — popup modal disparado por right-click > Delete.
-    std::filesystem::path m_assetDeleteTarget;
-    bool                   m_assetDeleteIsDir = false;
+    std::vector<std::pair<std::filesystem::path, bool>> m_assetDeleteTargets;
     int                    m_assetDeleteAffectedCount = 0;
     bool                   m_openAssetDeletePopup = false;
     std::string            m_assetDeleteError;

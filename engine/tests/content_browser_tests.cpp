@@ -470,6 +470,68 @@ static void test_move_asset(const fs::path& root)
     CHECK(!m7.errorMessage.empty());
 }
 
+static bool selectionIs(const AssetSelection& s, std::initializer_list<const char*> names)
+{
+    if (s.items.size() != names.size()) return false;
+    size_t i = 0;
+    for (const char* n : names)
+        if (s.items[i++] != fs::path(n)) return false;
+    return true;
+}
+
+// applyAssetClick: clic = solo ese; Ctrl = alterna; Shift = rango desde el ancla
+// en el orden VISIBLE. Los seleccionados quedan siempre en orden visible.
+static void test_apply_asset_click()
+{
+    const std::vector<fs::path> vis = { "a", "b", "c", "d", "e" };
+    AssetSelection s;
+
+    applyAssetClick(s, vis, "b", false, false);
+    CHECK(selectionIs(s, {"b"}));
+    CHECK(s.anchor && *s.anchor == fs::path("b"));
+
+    applyAssetClick(s, vis, "d", true, false);          // Ctrl anade
+    CHECK(selectionIs(s, {"b", "d"}));
+    applyAssetClick(s, vis, "a", true, false);          // orden visible, no de clic
+    CHECK(selectionIs(s, {"a", "b", "d"}));
+    applyAssetClick(s, vis, "b", true, false);          // Ctrl sobre uno ya marcado lo quita
+    CHECK(selectionIs(s, {"a", "d"}));
+    CHECK(s.anchor && *s.anchor == fs::path("b"));      // el ancla es el ultimo clic
+
+    applyAssetClick(s, vis, "c", false, false);         // clic simple reemplaza todo
+    CHECK(selectionIs(s, {"c"}));
+    applyAssetClick(s, vis, "e", false, true);          // Shift: rango c..e
+    CHECK(selectionIs(s, {"c", "d", "e"}));
+    CHECK(s.anchor && *s.anchor == fs::path("c"));      // Shift no mueve el ancla
+    applyAssetClick(s, vis, "a", false, true);          // rango hacia atras: a..c
+    CHECK(selectionIs(s, {"a", "b", "c"}));
+
+    // Sin ancla, Shift se comporta como un clic normal.
+    AssetSelection empty;
+    applyAssetClick(empty, vis, "d", false, true);
+    CHECK(selectionIs(empty, {"d"}));
+
+    // Ancla que ya no esta visible (un filtro la oculto): tambien clic normal.
+    AssetSelection stale;
+    stale.items  = { "z" };
+    stale.anchor = fs::path("z");
+    applyAssetClick(stale, vis, "c", false, true);
+    CHECK(selectionIs(stale, {"c"}));
+}
+
+// pruneSelection: quita lo que ya no existe; si el ancla desaparece, se olvida.
+static void test_prune_selection()
+{
+    AssetSelection s;
+    s.items  = { "a", "b", "c" };
+    s.anchor = fs::path("b");
+    pruneSelection(s, { "a", "c", "d" });
+    CHECK(selectionIs(s, {"a", "c"}));
+    CHECK(!s.anchor);
+    CHECK(s.contains("a"));
+    CHECK(!s.contains("b"));
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -492,6 +554,8 @@ int main()
     test_unique_folder_name(root);
     test_breadcrumb_segments(root);
     test_move_asset(root);
+    test_apply_asset_click();
+    test_prune_selection();
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL CONTENT BROWSER TESTS PASSED\n");
