@@ -92,4 +92,52 @@ ThumbnailResult makeThumbnail(const std::filesystem::path& path)
     return out;
 }
 
+ThumbnailSlots::ThumbnailSlots(uint32_t capacity) : m_slots(capacity) {}
+
+uint32_t ThumbnailSlots::find(uint64_t key)
+{
+    const auto it = m_byKey.find(key);
+    if (it == m_byKey.end()) return kNone;
+    m_slots[it->second].lastFrame = m_frame;
+    return it->second;
+}
+
+uint32_t ThumbnailSlots::assign(uint64_t key, std::optional<uint64_t>* evicted)
+{
+    if (evicted) evicted->reset();
+    if (const uint32_t existing = find(key); existing != kNone)
+        return existing;
+
+    uint32_t target = kNone;
+    for (uint32_t i = 0; i < m_slots.size(); ++i)
+        if (!m_slots[i].used) { target = i; break; }
+
+    if (target == kNone)
+    {
+        // Sin hueco libre: la menos usada recientemente que NO se uso este frame.
+        uint64_t oldest = UINT64_MAX;
+        for (uint32_t i = 0; i < m_slots.size(); ++i)
+            if (m_slots[i].lastFrame < m_frame && m_slots[i].lastFrame < oldest)
+            {
+                oldest = m_slots[i].lastFrame;
+                target = i;
+            }
+        if (target == kNone) return kNone;
+        m_byKey.erase(m_slots[target].key);
+        if (evicted) *evicted = m_slots[target].key;
+    }
+
+    m_slots[target] = { key, true, m_frame };
+    m_byKey[key]    = target;
+    return target;
+}
+
+void ThumbnailSlots::release(uint64_t key)
+{
+    const auto it = m_byKey.find(key);
+    if (it == m_byKey.end()) return;
+    m_slots[it->second].used = false;
+    m_byKey.erase(it);
+}
+
 } // namespace DonTopo

@@ -209,6 +209,91 @@ static void test_thumbnail_uv()
     CHECK(nearF(last.v1, 2047.5f / size));
 }
 
+// ThumbnailSlots: reparto, reutilizacion de la misma clave, desalojo LRU y
+// "no desalojar lo usado este frame".
+static void test_slots_basic_assignment()
+{
+    ThumbnailSlots s(4);
+    s.beginFrame();
+    const uint32_t a = s.assign(101);
+    const uint32_t b = s.assign(102);
+    const uint32_t c = s.assign(103);
+    const uint32_t d = s.assign(104);
+    CHECK(a != ThumbnailSlots::kNone && b != ThumbnailSlots::kNone);
+    CHECK(a != b && a != c && a != d && b != c && b != d && c != d);
+    CHECK(a < 4 && b < 4 && c < 4 && d < 4);
+
+    CHECK(s.assign(101) == a);        // misma clave: misma casilla
+    CHECK(s.find(102) == b);
+    CHECK(s.find(999) == ThumbnailSlots::kNone);
+    CHECK(s.capacity() == 4);
+}
+
+// Todo el atlas usado ESTE frame: no hay a quien desalojar -> kNone, y nada se pierde.
+static void test_slots_full_this_frame_returns_none()
+{
+    ThumbnailSlots s(2);
+    s.beginFrame();
+    const uint32_t a = s.assign(1);
+    const uint32_t b = s.assign(2);
+    CHECK(s.assign(3) == ThumbnailSlots::kNone);
+    CHECK(s.find(1) == a);
+    CHECK(s.find(2) == b);
+}
+
+// Frame nuevo: se desaloja la menos usada recientemente y se avisa de cual.
+static void test_slots_evict_least_recently_used()
+{
+    ThumbnailSlots s(4);
+    s.beginFrame();                                     // frame A
+    const uint32_t slot1 = s.assign(1);
+    s.assign(2); s.assign(3); s.assign(4);
+
+    s.beginFrame();                                     // frame B: solo se toca la 2
+    s.find(2);
+
+    s.beginFrame();                                     // frame C
+    std::optional<uint64_t> evicted;
+    const uint32_t slot5 = s.assign(5, &evicted);
+    CHECK(slot5 != ThumbnailSlots::kNone);
+    CHECK(evicted.has_value());
+    // Las candidatas (1, 3, 4) se usaron en el frame A; la 2 en el B. Empate en
+    // la mas antigua: gana la de indice de casilla menor, o sea la 1.
+    CHECK(evicted && *evicted == 1);
+    CHECK(slot5 == slot1);
+    CHECK(s.find(1) == ThumbnailSlots::kNone);
+    CHECK(s.find(2) != ThumbnailSlots::kNone);          // la tocada en B sobrevive
+}
+
+// Una clave usada en el frame actual nunca se desaloja aunque sea la mas antigua en indice.
+static void test_slots_never_evict_current_frame()
+{
+    ThumbnailSlots s(2);
+    s.beginFrame();
+    s.assign(1); s.assign(2);
+    s.beginFrame();
+    s.find(1);                                          // 1 usada ahora
+    std::optional<uint64_t> evicted;
+    s.assign(3, &evicted);
+    CHECK(evicted && *evicted == 2);
+    CHECK(s.find(1) != ThumbnailSlots::kNone);
+}
+
+// release() libera la casilla sin desalojar a nadie.
+static void test_slots_release_frees_a_slot()
+{
+    ThumbnailSlots s(2);
+    s.beginFrame();
+    s.assign(1);
+    const uint32_t b = s.assign(2);
+    s.release(2);
+    CHECK(s.find(2) == ThumbnailSlots::kNone);
+    std::optional<uint64_t> evicted;
+    CHECK(s.assign(3, &evicted) == b);                  // reutiliza el hueco liberado
+    CHECK(!evicted.has_value());
+    s.release(12345);                                   // clave inexistente: no pasa nada
+}
+
 int main()
 {
     fs::path dir = makeDir();
@@ -222,6 +307,11 @@ int main()
     test_unreadable_files(dir);
     test_huge_image_is_rejected_without_decoding(dir);
     test_thumbnail_uv();
+    test_slots_basic_assignment();
+    test_slots_full_this_frame_returns_none();
+    test_slots_evict_least_recently_used();
+    test_slots_never_evict_current_frame();
+    test_slots_release_frees_a_slot();
     std::error_code ec;
     fs::remove_all(dir, ec);
     if (g_failures == 0) std::printf("ALL THUMBNAIL TESTS PASSED\n");
