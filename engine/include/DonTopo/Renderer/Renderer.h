@@ -1143,6 +1143,9 @@ namespace DonTopo {
             {
                 VkImage        image = VK_NULL_HANDLE;
                 VkDeviceMemory mem   = VK_NULL_HANDLE;
+                // Formato con el que se creo la imagen (lo decide resolveSrgb): la
+                // vista de cada personaje que la comparte tiene que declararlo igual.
+                VkFormat       format = VK_FORMAT_UNDEFINED;
                 bool operator==(const MaterialImage& o) const { return image == o.image && mem == o.mem; }
             };
             SharedTextureCache<MaterialImage> m_skinnedTextures;

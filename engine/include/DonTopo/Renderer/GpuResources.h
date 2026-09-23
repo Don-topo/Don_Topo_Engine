@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstddef>
 #include <cstdint>
+#include "DonTopo/Renderer/TextureImport.h"
 
 namespace DonTopo {
 
@@ -39,7 +40,8 @@ public:
     void createImage(uint32_t w, uint32_t h, VkFormat fmt,
                      VkImageTiling tiling, VkImageUsageFlags usage,
                      VkMemoryPropertyFlags props,
-                     VkImage& img, VkDeviceMemory& mem);
+                     VkImage& img, VkDeviceMemory& mem,
+                     uint32_t mipLevels = 1);
     void transitionImageLayout(VkImage img,
                                VkImageLayout from, VkImageLayout to,
                                TransferBatch* batch = nullptr);
@@ -59,9 +61,13 @@ public:
     // imagen antes y ~0,4 después. Con `batch` no hay espera ninguna: el submit
     // y la fence son de quien lo posee, y la imagen no es legible hasta que
     // señale.
+    //
+    // `mips` son los niveles 1..N-1 de la cadena (el 0 es `pixels`); van en el
+    // MISMO staging y la MISMA copia, y la barrera cubre todos los niveles.
     void uploadPixelsToImage(const void* pixels, uint32_t w, uint32_t h, VkFormat fmt,
                              VkImage& img, VkDeviceMemory& mem,
-                             TransferBatch* batch = nullptr);
+                             TransferBatch* batch = nullptr,
+                             const TextureMip* mips = nullptr, size_t mipCount = 0);
 
     // Imagen NUEVA, toda transparente y ya en SHADER_READ_ONLY_OPTIMAL. Para
     // texturas que se irán rellenando por regiones (uploadPixelsToImageRegions).
@@ -76,14 +82,18 @@ public:
     void uploadPixelsToImageRegions(VkImage img, const ImageTileUpload* tiles, size_t count,
                                     TransferBatch* batch = nullptr);
 
+    // `outFormat` (opcional) recibe el formato con el que quedo la imagen: lo
+    // decide resolveSrgb (slot + sidecar) y la VISTA tiene que declarar el mismo.
     void createTextureImage(const std::string& path,
                             const std::vector<uint8_t>& embedded,
                             VkImage& img, VkDeviceMemory& mem,
-                            TransferBatch* batch = nullptr);
+                            TransferBatch* batch = nullptr,
+                            VkFormat* outFormat = nullptr);
     void createNormalMapImage(const std::string& path,
                               const std::vector<uint8_t>& embedded,
                               VkImage& img, VkDeviceMemory& mem,
-                              TransferBatch* batch = nullptr);
+                              TransferBatch* batch = nullptr,
+                              VkFormat* outFormat = nullptr);
     void createSolidColorImage(const uint8_t rgba[4],
                                VkImage& img, VkDeviceMemory& mem,
                                TransferBatch* batch = nullptr);
@@ -91,12 +101,12 @@ public:
     // Variantes que reciben los píxeles ya decodificados por el worker. Son las
     // que usa la carga asíncrona: repetir el stbi_load en el hilo principal
     // tiraría por tierra la mitad de la ganancia.
-    void createTextureImageFromPixels(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                      VkImage& img, VkDeviceMemory& mem,
-                                      TransferBatch* batch = nullptr);
-    void createNormalMapImageFromPixels(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                        VkImage& img, VkDeviceMemory& mem,
-                                        TransferBatch* batch = nullptr);
+    // El formato lo decide quien llama (resolveSrgb sobre el slot y los ajustes
+    // que trajo el worker); los mips son los niveles 1..N-1.
+    void createMaterialImageFromPixels(const uint8_t* rgba, uint32_t w, uint32_t h, VkFormat fmt,
+                                       const TextureMip* mips, size_t mipCount,
+                                       VkImage& img, VkDeviceMemory& mem,
+                                       TransferBatch* batch = nullptr);
     void createTextureImageView(VkImage img, VkImageView& view,
                                 VkFormat fmt = VK_FORMAT_R8G8B8A8_SRGB);
     // Crea un sampler NUEVO, que pasa a ser del llamante y este debe destruir.

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -215,8 +216,39 @@ static void test_decode_embedded_ignores_sidecars()
     CHECK(tex && tex.colorSpace == ColorSpaceOverride::Auto && tex.mips.empty());
 }
 
+static std::string readAll(const fs::path& p)
+{
+    std::ifstream in(p, std::ios::binary);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+static size_t countOf(const std::string& hay, const std::string& needle)
+{
+    size_t n = 0;
+    for (size_t at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + needle.size())) ++n;
+    return n;
+}
+
+// Politica: el formato de una textura de material lo decide resolveSrgb, no un
+// literal en cada uploader. Si alguien vuelve a hardcodear el formato de un slot,
+// los ajustes de importacion dejan de respetarse en silencio.
+static void test_policy_vulkan_material_format_comes_from_resolveSrgb()
+{
+    const std::string res = readAll("engine/src/Renderer/GpuResources.cpp");
+    const std::string rnd = readAll("engine/src/Renderer/Renderer.cpp");
+    CHECK(!res.empty() && !rnd.empty());
+    CHECK(countOf(res, "resolveSrgb(") >= 2);                       // createTextureImage y createNormalMapImage
+    CHECK(countOf(rnd, "createTextureImageView(obj.textureImage, obj.textureView);") == 0);
+    CHECK(countOf(rnd, "createTextureImageView(gpu.textureImage, gpu.textureView);") == 0);
+    CHECK(countOf(rnd, "createTextureImageView(mgfx.textureImage, mgfx.textureView);") == 0);
+    CHECK(countOf(rnd, "normalView, VK_FORMAT_R8G8B8A8_UNORM)") == 0);
+    CHECK(countOf(rnd, "ormView, VK_FORMAT_R8G8B8A8_UNORM)") == 0);
+}
+
 int main()
 {
+    test_policy_vulkan_material_format_comes_from_resolveSrgb();
     test_decode_without_sidecar_is_unchanged();
     test_decode_with_sidecar_carries_settings_and_mips();
     test_decode_1x1_with_mipmaps_has_no_extra_levels();

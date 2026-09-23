@@ -3379,31 +3379,50 @@ namespace DonTopo {
             return nullptr;
         };
 
+        // El formato de cada imagen lo decide resolveSrgb (slot + ajustes del
+        // sidecar) y la vista tiene que declarar EXACTAMENTE el mismo: la imagen
+        // no se crea con MUTABLE_FORMAT.
+        VkFormat albedoFmt = VK_FORMAT_R8G8B8A8_SRGB;
         if (const DecodedImage* albedo = findSlot(DecodedImage::Albedo))
-            m_res.createTextureImageFromPixels(albedo->pixels.data(),
-                                               (uint32_t)albedo->w, (uint32_t)albedo->h,
-                                               obj.textureImage, obj.textureMem, batch);
+        {
+            albedoFmt = resolveSrgb(TextureKind::BaseColor, albedo->colorSpace)
+                            ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+            m_res.createMaterialImageFromPixels(albedo->pixels.data(),
+                                                (uint32_t)albedo->w, (uint32_t)albedo->h, albedoFmt,
+                                                albedo->mips.data(), albedo->mips.size(),
+                                                obj.textureImage, obj.textureMem, batch);
+        }
         else
             m_res.createTextureImage(mesh.material.texturePath, mesh.material.embeddedTexture,
-                                     obj.textureImage, obj.textureMem, batch);
-        m_res.createTextureImageView(obj.textureImage, obj.textureView);
+                                     obj.textureImage, obj.textureMem, batch, &albedoFmt);
+        m_res.createTextureImageView(obj.textureImage, obj.textureView, albedoFmt);
         obj.sampler = m_res.sharedMaterialSampler();
 
+        VkFormat normalFmt = VK_FORMAT_R8G8B8A8_UNORM;
         if (const DecodedImage* normal = findSlot(DecodedImage::Normal))
-            m_res.createNormalMapImageFromPixels(normal->pixels.data(),
-                                                 (uint32_t)normal->w, (uint32_t)normal->h,
-                                                 obj.normalImage, obj.normalMem, batch);
+        {
+            normalFmt = resolveSrgb(TextureKind::Normal, normal->colorSpace)
+                            ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+            m_res.createMaterialImageFromPixels(normal->pixels.data(),
+                                                (uint32_t)normal->w, (uint32_t)normal->h, normalFmt,
+                                                normal->mips.data(), normal->mips.size(),
+                                                obj.normalImage, obj.normalMem, batch);
+        }
         else
             m_res.createNormalMapImage(mesh.material.normalMapPath, mesh.material.embeddedNormalMap,
-                                       obj.normalImage, obj.normalMem, batch);
-        m_res.createTextureImageView(obj.normalImage, obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
+                                       obj.normalImage, obj.normalMem, batch, &normalFmt);
+        m_res.createTextureImageView(obj.normalImage, obj.normalView, normalFmt);
         obj.normalSampler = m_res.sharedMaterialSampler();
 
+        VkFormat ormFmt = VK_FORMAT_R8G8B8A8_UNORM;
         if (const DecodedImage* orm = findSlot(DecodedImage::ORM))
         {
-            m_res.createNormalMapImageFromPixels(orm->pixels.data(),
-                                                 (uint32_t)orm->w, (uint32_t)orm->h,
-                                                 obj.ormImage, obj.ormMem, batch);
+            ormFmt = resolveSrgb(TextureKind::Orm, orm->colorSpace)
+                         ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+            m_res.createMaterialImageFromPixels(orm->pixels.data(),
+                                                (uint32_t)orm->w, (uint32_t)orm->h, ormFmt,
+                                                orm->mips.data(), orm->mips.size(),
+                                                obj.ormImage, obj.ormMem, batch);
             obj.hasOrmMap = true;
         }
         else if (!mesh.material.metallicRoughnessPath.empty()
@@ -3411,7 +3430,7 @@ namespace DonTopo {
         {
             m_res.createNormalMapImage(mesh.material.metallicRoughnessPath,
                                        mesh.material.embeddedMetallicRoughness,
-                                       obj.ormImage, obj.ormMem, batch);
+                                       obj.ormImage, obj.ormMem, batch, &ormFmt);
             obj.hasOrmMap = true;
         }
         else
@@ -3422,7 +3441,7 @@ namespace DonTopo {
             m_res.sharedWhiteOrm(obj.ormImage, obj.ormMem);
             obj.hasOrmMap = false;
         }
-        m_res.createTextureImageView(obj.ormImage, obj.ormView, VK_FORMAT_R8G8B8A8_UNORM);
+        m_res.createTextureImageView(obj.ormImage, obj.ormView, ormFmt);
         obj.ormSampler = m_res.sharedMaterialSampler();
     }
 
@@ -3970,35 +3989,42 @@ namespace DonTopo {
             // Color, normal y ORM, compartidos entre personajes del mismo FBX
             // (m_skinnedTextures). Sin textura, la blanca de relleno de siempre,
             // que no entra en la caché.
+            // El formato con el que se creo la imagen (resolveSrgb) viaja en la
+            // entrada de la cache: quien la comparte declara la MISMA vista.
             auto pedir = [&](const std::string& ruta, const std::vector<uint8_t>& emb, TextureKind tipo,
-                             VkImage& img, VkDeviceMemory& mem) {
-                const MaterialImage m = m_skinnedTextures.acquire(makeTextureKey(ruta, emb, tipo), [&] {
+                             VkImage& img, VkDeviceMemory& mem, VkFormat& fmt) {
+                const MaterialImage m = m_skinnedTextures.acquire(
+                    makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta)), [&] {
                     MaterialImage nueva;
                     if (tipo == TextureKind::BaseColor)
-                        m_res.createTextureImage(ruta, emb, nueva.image, nueva.mem, batch);
+                        m_res.createTextureImage(ruta, emb, nueva.image, nueva.mem, batch, &nueva.format);
                     else
-                        m_res.createNormalMapImage(ruta, emb, nueva.image, nueva.mem, batch);
+                        m_res.createNormalMapImage(ruta, emb, nueva.image, nueva.mem, batch, &nueva.format);
                     return nueva;
                 });
                 img = m.image;
                 mem = m.mem;
+                fmt = m.format;
             };
 
             // Diffuse
-            pedir(smat.texturePath, smat.embeddedTexture, TextureKind::BaseColor, mgfx.textureImage, mgfx.textureMem);
-            m_res.createTextureImageView(mgfx.textureImage, mgfx.textureView);
+            VkFormat albedoFmt = VK_FORMAT_R8G8B8A8_SRGB;
+            pedir(smat.texturePath, smat.embeddedTexture, TextureKind::BaseColor, mgfx.textureImage, mgfx.textureMem, albedoFmt);
+            m_res.createTextureImageView(mgfx.textureImage, mgfx.textureView, albedoFmt);
             mgfx.sampler = m_res.sharedMaterialSampler();
 
             // Normal map
-            pedir(smat.normalMapPath, smat.embeddedNormalMap, TextureKind::Normal, mgfx.normalImage, mgfx.normalMem);
-            m_res.createTextureImageView(mgfx.normalImage, mgfx.normalView, VK_FORMAT_R8G8B8A8_UNORM);
+            VkFormat normalFmt = VK_FORMAT_R8G8B8A8_UNORM;
+            pedir(smat.normalMapPath, smat.embeddedNormalMap, TextureKind::Normal, mgfx.normalImage, mgfx.normalMem, normalFmt);
+            m_res.createTextureImageView(mgfx.normalImage, mgfx.normalView, normalFmt);
             mgfx.normalSampler = m_res.sharedMaterialSampler();
 
             // ORM
+            VkFormat ormFmt = VK_FORMAT_R8G8B8A8_UNORM;
             if (!smat.metallicRoughnessPath.empty() || !smat.embeddedMetallicRoughness.empty())
             {
                 pedir(smat.metallicRoughnessPath, smat.embeddedMetallicRoughness, TextureKind::Orm,
-                      mgfx.ormImage, mgfx.ormMem);
+                      mgfx.ormImage, mgfx.ormMem, ormFmt);
                 mgfx.metallic  = 1.0f;
                 mgfx.roughness = 1.0f;
             }
@@ -4008,7 +4034,7 @@ namespace DonTopo {
                 mgfx.metallic  = smat.metallic;
                 mgfx.roughness = smat.roughness;
             }
-            m_res.createTextureImageView(mgfx.ormImage, mgfx.ormView, VK_FORMAT_R8G8B8A8_UNORM);
+            m_res.createTextureImageView(mgfx.ormImage, mgfx.ormView, ormFmt);
             mgfx.ormSampler = m_res.sharedMaterialSampler();
 
             // Descriptor sets
@@ -4627,35 +4653,38 @@ namespace DonTopo {
         }
 
         // Las tres nuevas por el mismo camino y con los mismos formatos que
-        // createSharedGpuMesh: SRGB en la difusa (el que createTextureImage
-        // hardcodea) y UNORM en normal y ORM. La imagen no se crea con
-        // MUTABLE_FORMAT, así que la vista tiene que declarar EXACTAMENTE el
+        // createSharedGpuMesh: el formato que devuelve createTextureImage /
+        // createNormalMapImage (resolveSrgb: slot + sidecar). La imagen no se crea
+        // con MUTABLE_FORMAT, así que la vista tiene que declarar EXACTAMENTE el
         // formato con el que se creó.
         //
         // Sin TransferBatch: la variante síncrona espera ella misma a la cola,
         // así que al volver las imágenes ya son legibles. Es lo que quiere esta
         // ruta —un clic del usuario, no un frame— y evita tener que tocar el
         // uploadTicket de una entrada que ya se está dibujando.
+        VkFormat albedoFmt = VK_FORMAT_R8G8B8A8_SRGB;
         m_res.createTextureImage(mesh.material.texturePath, mesh.material.embeddedTexture,
-                                 gpu.textureImage, gpu.textureMem);
-        m_res.createTextureImageView(gpu.textureImage, gpu.textureView);
+                                 gpu.textureImage, gpu.textureMem, nullptr, &albedoFmt);
+        m_res.createTextureImageView(gpu.textureImage, gpu.textureView, albedoFmt);
         gpu.sampler = m_res.sharedMaterialSampler();
 
+        VkFormat normalFmt = VK_FORMAT_R8G8B8A8_UNORM;
         m_res.createNormalMapImage(mesh.material.normalMapPath, mesh.material.embeddedNormalMap,
-                                   gpu.normalImage, gpu.normalMem);
-        m_res.createTextureImageView(gpu.normalImage, gpu.normalView, VK_FORMAT_R8G8B8A8_UNORM);
+                                   gpu.normalImage, gpu.normalMem, nullptr, &normalFmt);
+        m_res.createTextureImageView(gpu.normalImage, gpu.normalView, normalFmt);
         gpu.normalSampler = m_res.sharedMaterialSampler();
 
         // Mismo reparto que addStaticMesh: con mapa ORM los factores valen 1 y
         // los pone la textura; sin él, la blanca compartida y los factores del
         // material. chooseTextureSource es el sitio único que decide de dónde
         // salen los píxeles (la ruta gana a los bytes embebidos).
+        VkFormat ormFmt = VK_FORMAT_R8G8B8A8_UNORM;
         if (chooseTextureSource(mesh.material.metallicRoughnessPath,
                                 mesh.material.embeddedMetallicRoughness) != TextureSource::None)
         {
             m_res.createNormalMapImage(mesh.material.metallicRoughnessPath,
                                        mesh.material.embeddedMetallicRoughness,
-                                       gpu.ormImage, gpu.ormMem);
+                                       gpu.ormImage, gpu.ormMem, nullptr, &ormFmt);
             gpu.hasOrmMap = true;
         }
         else
@@ -4663,7 +4692,7 @@ namespace DonTopo {
             m_res.sharedWhiteOrm(gpu.ormImage, gpu.ormMem);
             gpu.hasOrmMap = false;
         }
-        m_res.createTextureImageView(gpu.ormImage, gpu.ormView, VK_FORMAT_R8G8B8A8_UNORM);
+        m_res.createTextureImageView(gpu.ormImage, gpu.ormView, ormFmt);
         gpu.ormSampler = m_res.sharedMaterialSampler();
 
         // El wait va AQUÍ y no antes de crear las imágenes: lo que hay que
