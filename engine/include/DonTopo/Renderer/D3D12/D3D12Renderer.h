@@ -235,6 +235,8 @@ public:
     uint32_t uiWidth() const override;
     uint32_t uiHeight() const override;
     uint64_t uiAtlasTextureId(const UiTextureAtlas* atlas) override;
+    uint64_t uiThumbnailAtlasId() override;
+    bool     uploadUiThumbnails(const ThumbnailTile* tiles, size_t count) override;
     float    viewportAspect() const override;
 
     void      setUiLayer(UiLayer* ui) override;
