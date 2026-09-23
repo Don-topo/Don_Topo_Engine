@@ -1,6 +1,7 @@
 #pragma once
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/TextureImport.h"
 
 #include <cstdint>
 #include <memory>
@@ -23,6 +24,10 @@ namespace DonTopo
         int                  w    = 0;
         int                  h    = 0;
         std::vector<uint8_t> pixels;   // w*h*4, RGBA8, sin padding
+        // Ajustes de importacion de la textura (sidecar): quien sube a GPU
+        // resuelve el formato con resolveSrgb y sube los niveles.
+        ColorSpaceOverride      colorSpace = ColorSpaceOverride::Auto;
+        std::vector<TextureMip> mips;
     };
 
     // Resultado de una petición. Viaja por valor del worker al hilo principal:

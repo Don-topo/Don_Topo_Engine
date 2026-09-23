@@ -2,10 +2,13 @@
 // como decodeMaterialTexture lee los ajustes. Sin GPU. Desde la raiz del repo.
 #include "DonTopo/Renderer/TextureImport.h"
 #include "DonTopo/Renderer/SharedTextureCache.h"
+#include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Core/ImportSettings.h"
 
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -137,8 +140,88 @@ static void test_texture_key_suffix_and_key()
           makeTextureKey("", emb, TextureKind::BaseColor));
 }
 
+static void writeTga(const fs::path& p, int w, int h, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    std::ofstream o(p, std::ios::binary);
+    const uint8_t hd[18] = { 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                             static_cast<uint8_t>(w & 255), static_cast<uint8_t>(w >> 8),
+                             static_cast<uint8_t>(h & 255), static_cast<uint8_t>(h >> 8), 32, 0x28 };
+    o.write(reinterpret_cast<const char*>(hd), 18);
+    for (int i = 0; i < w * h; ++i) { o.put(static_cast<char>(b)); o.put(static_cast<char>(g)); o.put(static_cast<char>(r)); o.put(static_cast<char>(a)); }
+}
+
+static void test_decode_without_sidecar_is_unchanged()
+{
+    const fs::path d = makeDir();
+    writeTga(d / "t.tga", 8, 4, 10, 20, 30, 255);
+    const DecodedTexture tex = decodeMaterialTexture((d / "t.tga").string(), {});
+    CHECK(tex && tex.w == 8 && tex.h == 4);
+    CHECK(tex.colorSpace == ColorSpaceOverride::Auto);
+    CHECK(tex.mips.empty());
+}
+
+static void test_decode_with_sidecar_carries_settings_and_mips()
+{
+    const fs::path d = makeDir();
+    writeTga(d / "t.tga", 8, 4, 10, 20, 30, 255);
+    TextureImportSettings s;
+    s.colorSpace = ColorSpaceOverride::Linear;
+    s.mipmaps    = true;
+    std::string err;
+    CHECK(saveTextureImportSettings(d / "t.tga", s, &err));
+
+    const DecodedTexture tex = decodeMaterialTexture((d / "t.tga").string(), {});
+    CHECK(tex);
+    CHECK(tex.colorSpace == ColorSpaceOverride::Linear);
+    CHECK(tex.mips.size() == mipLevelCount(8, 4) - 1);          // 8x4 -> 4x2 -> 2x1 -> 1x1
+    CHECK(!tex.mips.empty() && tex.mips.front().w == 4 && tex.mips.front().h == 2);
+    CHECK(!tex.mips.empty() && tex.mips.back().w == 1 && tex.mips.back().h == 1);
+}
+
+static void test_decode_1x1_with_mipmaps_has_no_extra_levels()
+{
+    const fs::path d = makeDir();
+    writeTga(d / "one.tga", 1, 1, 1, 2, 3, 255);
+    TextureImportSettings s;
+    s.mipmaps = true;
+    std::string err;
+    CHECK(saveTextureImportSettings(d / "one.tga", s, &err));
+    const DecodedTexture tex = decodeMaterialTexture((d / "one.tga").string(), {});
+    CHECK(tex && tex.mips.empty());
+}
+
+// Un sidecar roto no impide cargar la textura: defecto.
+static void test_decode_with_broken_sidecar_falls_back_to_default()
+{
+    const fs::path d = makeDir();
+    writeTga(d / "t.tga", 4, 4, 1, 2, 3, 255);
+    std::ofstream(importSidecarPath(d / "t.tga")) << "{ roto";
+    const DecodedTexture tex = decodeMaterialTexture((d / "t.tga").string(), {});
+    CHECK(tex && tex.colorSpace == ColorSpaceOverride::Auto && tex.mips.empty());
+}
+
+// Las embebidas del FBX no tienen sidecar: siempre el defecto.
+static void test_decode_embedded_ignores_sidecars()
+{
+    const fs::path d = makeDir();
+    writeTga(d / "t.tga", 4, 4, 1, 2, 3, 255);
+    std::ifstream in(d / "t.tga", std::ios::binary);
+    const std::vector<uint8_t> bytes{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+    TextureImportSettings s;
+    s.mipmaps = true;
+    std::string err;
+    CHECK(saveTextureImportSettings(d / "t.tga", s, &err));
+    const DecodedTexture tex = decodeMaterialTexture("", bytes);
+    CHECK(tex && tex.colorSpace == ColorSpaceOverride::Auto && tex.mips.empty());
+}
+
 int main()
 {
+    test_decode_without_sidecar_is_unchanged();
+    test_decode_with_sidecar_carries_settings_and_mips();
+    test_decode_1x1_with_mipmaps_has_no_extra_levels();
+    test_decode_with_broken_sidecar_falls_back_to_default();
+    test_decode_embedded_ignores_sidecars();
     test_mip_level_count();
     test_mip_chain_shapes();
     test_mip_chain_alpha_weighted_and_input_untouched();
