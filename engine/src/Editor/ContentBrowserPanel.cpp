@@ -204,9 +204,7 @@ std::vector<AssetImportOutcome> importDroppedFilesInto(
     {
         if (!pointInsideRect(f.screenX, f.screenY, rectX, rectY, rectW, rectH))
             continue;
-        std::string ext = f.path.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (!isImportableExtension(ext))
+        if (!isImportableExtension(f.path.extension().string()))
         {
             out.push_back({ AssetImportResult::RejectedExtension, {}, "", f.path });
             continue;

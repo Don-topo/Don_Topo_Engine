@@ -268,7 +268,7 @@ int main()
             glfwSetFramebufferSizeCallback(
                 window.getNativeWindow(), [](GLFWwindow* w, int width, int height) {
                     auto* c = static_cast<D3D12WindowCtx*>(glfwGetWindowUserPointer(w));
-                    if (c->renderer)
+                    if (c && c->renderer)
                         c->renderer->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
                 });
             glfwSetDropCallback(window.getNativeWindow(), [](GLFWwindow* w, int count, const char** paths) {
@@ -1200,6 +1200,12 @@ int main()
             renderer.drawFrame(window);
             window.pollEvents();
         }
+
+        // El proveedor de drops captura `ctx` por referencia, y ctx (declarado
+        // DESPUÉS de editor, porque guarda punteros a él) muere antes que el
+        // editor. Soltarlo aquí evita que quede una lambda colgando durante el
+        // resto del apagado.
+        editor.setDroppedFilesProvider(nullptr);
 
         // PRIMERO el JobSystem: si se destruyera después del Renderer/Scene, un
         // worker aún en vuelo (un ReadFile de FBX a medias) podría tocar memoria

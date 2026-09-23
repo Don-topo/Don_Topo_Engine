@@ -49,8 +49,14 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
     if (!std::filesystem::is_regular_file(source, ec) || ec)
         return { AssetImportResult::RejectedCopyFailed, {}, "El origen no es un fichero", source };
 
+    // "" / "x.png" es un path relativo: copiaria al CWD del proceso.
+    if (destDir.empty())
+        return { AssetImportResult::RejectedCopyFailed, {}, "La carpeta destino esta vacia", source };
+
     std::filesystem::create_directories(destDir, ec);
-    ec.clear();
+    if (ec)
+        return { AssetImportResult::RejectedCopyFailed, {},
+                 "No se pudo crear la carpeta destino: " + ec.message(), source };
 
     const std::filesystem::path dest = destDir / source.filename();
     const bool ok = std::filesystem::copy_file(source, dest, ec);

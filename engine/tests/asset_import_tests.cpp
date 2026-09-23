@@ -97,6 +97,37 @@ static void test_import_name_conflict_does_not_overwrite(const fs::path& root)
     CHECK(ss.str() == "version-vieja");
 }
 
+// destDir vacio: "" / "x.png" resolveria a un path relativo y copiaria al CWD
+// del proceso. Se rechaza antes de tocar disco.
+static void test_import_empty_dest_dir_is_rejected(const fs::path& root)
+{
+    fs::path source = root / "source" / "vacio.png";
+    std::ofstream(source) << "x";
+
+    AssetImportOutcome outcome = importExternalAsset(source, fs::path());
+
+    CHECK(outcome.result == AssetImportResult::RejectedCopyFailed);
+    CHECK(!outcome.errorMessage.empty());
+    std::error_code ec;
+    CHECK(!fs::exists(fs::path("vacio.png"), ec)); // nada aterrizo en el CWD
+}
+
+// Si destDir no se puede crear (un tramo del path es un FICHERO), el mensaje
+// tiene que decir que falto la carpeta, no el vago "no se encuentra la ruta"
+// que devuelve copy_file despues.
+static void test_import_uncreatable_dest_dir_reports_cause(const fs::path& root)
+{
+    fs::path blocker = root / "dest" / "es_un_fichero";
+    std::ofstream(blocker) << "x";
+    fs::path source = root / "source" / "bloqueado.png";
+    std::ofstream(source) << "x";
+
+    AssetImportOutcome outcome = importExternalAsset(source, blocker / "subcarpeta");
+
+    CHECK(outcome.result == AssetImportResult::RejectedCopyFailed);
+    CHECK(outcome.errorMessage.rfind("No se pudo crear la carpeta destino", 0) == 0);
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -106,6 +137,8 @@ int main()
     test_import_missing_source_fails(root);
     test_import_directory_source_fails(root);
     test_import_name_conflict_does_not_overwrite(root);
+    test_import_empty_dest_dir_is_rejected(root);
+    test_import_uncreatable_dest_dir_reports_cause(root);
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL ASSET IMPORT TESTS PASSED\n");
