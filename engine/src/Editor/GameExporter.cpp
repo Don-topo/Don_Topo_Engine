@@ -1,6 +1,7 @@
 #include "DonTopo/Editor/GameExporter.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
@@ -243,6 +244,20 @@ std::vector<ExportAsset> collectSceneAssets(
         out.push_back(std::move(a));
     };
 
+    // Una textura de material con ajustes de importacion lleva su sidecar: el
+    // runtime lo busca junto a la textura. Es un ExportAsset mas: comparte la
+    // carpeta de origen, asi que la numeracion de assets/_external/N y la
+    // jerarquia dentro del proyecto salen iguales que las de la textura.
+    auto addTexture = [&](const std::string& raw)
+    {
+        if (raw.empty()) return;
+        add(raw);
+        const fs::path sidecar = importSidecarPath(fs::path(raw));
+        std::error_code sec;
+        if (fs::exists(sidecar, sec) && !sec)
+            add(sidecar.string());
+    };
+
     scene.traverse([&](GameObject* go)
     {
         if (go->hasMesh())
@@ -258,9 +273,9 @@ std::vector<ExportAsset> collectSceneAssets(
             for (const Material* m : materialsOf(go))
             {
                 // Los embedded* no aportan path: viajan dentro del FBX.
-                add(m->texturePath);
-                add(m->normalMapPath);
-                add(m->metallicRoughnessPath);
+                addTexture(m->texturePath);
+                addTexture(m->normalMapPath);
+                addTexture(m->metallicRoughnessPath);
             }
         }
 

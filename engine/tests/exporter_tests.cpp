@@ -9,6 +9,7 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
@@ -1029,10 +1030,47 @@ static void test_linux_package(const fs::path& root)
         fs::remove(root / f, ec);
 }
 
+// El runtime lee "<textura>.import.json" relativo a la textura: tiene que viajar
+// en el paquete con la misma jerarquia. Solo las texturas de MATERIAL.
+static void test_texture_sidecar_travels_with_the_texture(const fs::path& root)
+{
+    std::error_code ec;
+    const fs::path tex = root / "assets" / "tablero.png";
+    std::ofstream(tex) << "png";
+    TextureImportSettings s;
+    s.mipmaps = true;
+    std::string err;
+    CHECK(saveTextureImportSettings(tex, s, &err));
+
+    const fs::path plain = root / "assets" / "liso.png";        // sin sidecar
+    std::ofstream(plain) << "png";
+
+    Scene scene;
+    auto* go = scene.addGameObject("suelo");
+    go->setMesh(makeMesh(root / "assets" / "hero.fbx", tex));
+    auto* go2 = scene.addGameObject("pared");
+    go2->setMesh(makeMesh(root / "assets" / "chars" / "enemy.fbx", plain));
+
+    const std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    std::vector<std::string> pkg;
+    for (const ExportAsset& a : assets) pkg.push_back(a.packagePath);
+
+    CHECK(std::find(pkg.begin(), pkg.end(), "assets/tablero.png")             != pkg.end());
+    CHECK(std::find(pkg.begin(), pkg.end(), "assets/tablero.png.import.json") != pkg.end());
+    CHECK(std::find(pkg.begin(), pkg.end(), "assets/liso.png.import.json")    == pkg.end());
+    for (const ExportAsset& a : assets)
+        if (a.packagePath == "assets/tablero.png.import.json") CHECK(a.existsOnDisk);
+
+    fs::remove(tex, ec);
+    fs::remove(importSidecarPath(tex), ec);
+    fs::remove(plain, ec);
+}
+
 int main()
 {
     fs::path root = makeProjectFixture();
 
+    test_texture_sidecar_travels_with_the_texture(root);
     test_collects_exactly_referenced(root);
     test_button_assets(root);
     test_procedural_mesh_contributes_nothing(root);
