@@ -172,6 +172,13 @@ bool pointInsideRect(float px, float py, float rectX, float rectY, float rectW, 
 
 namespace DonTopo {
 
+std::string assetIconButtonLabel(const char* text, bool hasThumbnail)
+{
+    // "###" fija el id: ImGui hashea la etiqueta entera, y sin esto el boton
+    // cambiaria de id (y perderia el click en curso) al llegar la miniatura.
+    return std::string(hasThumbnail ? "" : text) + "###icon";
+}
+
 std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::path& dir)
 {
     std::vector<std::filesystem::path> out;
@@ -964,7 +971,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 EditorRenderer* renderer = ctx.renderer;
                 JobSystem*      jobs     = ctx.jobs;
                 m_thumbs = std::make_unique<ThumbnailCache>(
-                    [jobs](std::function<void()> job) { jobs->submit(std::move(job)); },
+                    [jobs](std::function<void()> job) { return jobs->submit(std::move(job)) != 0; },
                     [renderer](const ThumbnailTile* tiles, size_t count) {
                         return renderer->uploadUiThumbnails(tiles, count);
                     });
@@ -1140,7 +1147,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 ImVec4(btnColor.x + 0.15f, btnColor.y + 0.15f, btnColor.z + 0.15f, 1.0f));
             // Con miniatura el botón va sin etiqueta y la imagen se dibuja encima,
             // dentro del borde de selección.
-            const bool clicked = ImGui::Button(thumb ? "" : label, ImVec2(ICON_SIZE, ICON_SIZE));
+            const bool clicked = ImGui::Button(assetIconButtonLabel(label, thumb.has_value()).c_str(),
+                                               ImVec2(ICON_SIZE, ICON_SIZE));
             ImGui::PopStyleColor(2);
             if (selected)
             {

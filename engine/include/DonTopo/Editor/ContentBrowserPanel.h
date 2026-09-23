@@ -12,6 +12,10 @@ namespace DonTopo {
 
 class GameObject;
 
+// Etiqueta del boton de icono del grid. El id de ImGui sale de ella, asi que no
+// puede cambiar cuando aparece la miniatura.
+std::string assetIconButtonLabel(const char* text, bool hasThumbnail);
+
 // Subcarpetas directas de dir, ordenadas por path, filtrando el ruido que
 // no interesa ver en el árbol del Content Browser: entradas ocultas (nombre
 // que empieza por '.') y el directorio de build. Devuelve vacío —sin

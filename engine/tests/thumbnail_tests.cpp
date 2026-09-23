@@ -1,6 +1,9 @@
 // Tests headless de las miniaturas del Content Browser (sin GPU ni ImGui).
 // Plain main + CHECK, mismo patron que content_browser_tests.cpp.
+#include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/Thumbnail.h"
+
+#include <imgui.h>
 
 #include <algorithm>
 #include <array>
@@ -10,6 +13,9 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <istream>
+#include <stdexcept>
+#include <streambuf>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -305,14 +311,18 @@ struct CacheHarness
     std::vector<std::function<void()>>  pending;   // jobs encolados sin ejecutar
     std::vector<std::vector<uint32_t>>  uploads;   // slots de cada llamada al Uploader
     bool                                uploadOk = true;
+    bool                                runnerAccepts = true;   // false: el pool rechaza el job
     size_t                              maxPendingSeen = 0;
     ThumbnailCache                      cache;
 
-    explicit CacheHarness(uint32_t maxInFlight = 4, uint32_t slotCapacity = kThumbSlotCount)
+    explicit CacheHarness(uint32_t maxInFlight = 4, uint32_t slotCapacity = kThumbSlotCount,
+                          ThumbnailCache::Decoder decoder = {})
         : cache(
               [this](std::function<void()> job) {
+                  if (!runnerAccepts) return false;
                   pending.push_back(std::move(job));
                   maxPendingSeen = std::max(maxPendingSeen, pending.size());
+                  return true;
               },
               [this](const ThumbnailTile* tiles, size_t count) {
                   std::vector<uint32_t> slots;
@@ -320,15 +330,19 @@ struct CacheHarness
                   uploads.push_back(std::move(slots));
                   return uploadOk;
               },
-              maxInFlight, slotCapacity)
+              maxInFlight, slotCapacity, std::move(decoder))
     {}
 
     // Termina todos los jobs encolados (como si los workers acabaran a la vez).
+    // Igual que el worker del JobSystem, TRAGA las excepciones de un job.
     void runAll()
     {
         std::vector<std::function<void()>> jobs = std::move(pending);
         pending.clear();
-        for (auto& job : jobs) job();
+        for (auto& job : jobs)
+        {
+            try { job(); } catch (...) {}
+        }
     }
 
     size_t tilesUploaded() const
@@ -578,7 +592,7 @@ static void test_cache_late_result_after_destruction_is_harmless(const fs::path&
     std::vector<std::function<void()>> orphan;
     {
         ThumbnailCache c(
-            [&orphan](std::function<void()> job) { orphan.push_back(std::move(job)); },
+            [&orphan](std::function<void()> job) { orphan.push_back(std::move(job)); return true; },
             [](const ThumbnailTile*, size_t) { return true; });
         c.beginFrame();
         c.request(f);
@@ -586,6 +600,132 @@ static void test_cache_late_result_after_destruction_is_harmless(const fs::path&
     }                                                     // el cache muere con el job sin ejecutar
     CHECK(orphan.size() == 1);
     for (auto& job : orphan) job();                       // no debe caerse
+}
+
+// ── Fix pass de la revision final ────────────────────────────────────────────
+
+// Fichero virtual: cabecera de un TGA de 20000x20000 a 32 bpp y despues ceros,
+// generados al vuelo (sin memoria). Cuenta cuantos bytes se le pidieron.
+class VirtualHugeTga : public std::streambuf
+{
+public:
+    explicit VirtualHugeTga(uint64_t totalBytes) : m_total(totalBytes) {}
+    uint64_t served() const { return m_served; }
+
+protected:
+    int_type underflow() override
+    {
+        if (m_served >= m_total) return traits_type::eof();
+        const uint64_t n = std::min<uint64_t>(sizeof(m_chunk), m_total - m_served);
+        for (uint64_t i = 0; i < n; ++i)
+        {
+            const uint64_t at = m_served + i;
+            m_chunk[i] = at < sizeof(kHeader) ? static_cast<char>(kHeader[at]) : 0;
+        }
+        m_served += n;
+        setg(m_chunk, m_chunk, m_chunk + n);
+        return traits_type::to_int_type(m_chunk[0]);
+    }
+
+private:
+    // 20000 = 0x4E20 en little endian.
+    static constexpr uint8_t kHeader[18] = { 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                             0x20, 0x4E, 0x20, 0x4E, 32, 0x28 };
+    char     m_chunk[65536];
+    uint64_t m_total;
+    uint64_t m_served = 0;
+};
+
+// Review Focus 1, de verdad: rechazar por dimensiones debe costar la CABECERA, no
+// leer el fichero entero a memoria. Un TGA de 20000x20000 son 1,6 GB.
+static void test_huge_image_does_not_read_the_whole_file()
+{
+    VirtualHugeTga buf(200ull * 1024 * 1024);          // 200 MB de "fichero"
+    std::istream   in(&buf);
+    ThumbnailResult r = makeThumbnailFromStream(in);
+    CHECK(r.status == ThumbnailStatus::TooLarge);
+    CHECK(buf.served() <= 1024 * 1024);                // solo la cabecera, no el fichero
+}
+
+// Un job que lanza NO informa (el worker del JobSystem se traga la excepcion): si
+// el cache no se protege, m_inFlight queda colgado y con tope 1 no carga nada mas.
+static void test_cache_throwing_decoder_does_not_leak_in_flight(const fs::path& dir)
+{
+    CacheHarness h(1, kThumbSlotCount,
+                   [](const fs::path&) -> ThumbnailResult { throw std::runtime_error("boom"); });
+    const fs::path a = makeImage(dir, "boom_a.tga");
+    const fs::path b = makeImage(dir, "boom_b.tga");
+
+    h.cache.beginFrame();
+    h.cache.request(a);
+    h.cache.request(b);
+    h.cache.pump();
+    CHECK(h.pending.size() == 1);                       // tope 1: solo lanza uno
+    h.runAll();                                         // ese job lanza
+    h.cache.pump();
+    CHECK(h.cache.inFlight() == 1);                     // ya lanzo el SEGUNDO: el hueco se libero
+    CHECK(h.pending.size() == 1);
+    h.runAll();
+    h.cache.pump();
+    CHECK(h.cache.inFlight() == 0);
+    CHECK(h.uploads.empty());
+    h.cache.beginFrame();
+    CHECK(!h.cache.request(a));                         // Failed: no se reintenta
+}
+
+// El pool rechaza el job (parado): el hueco en vuelo se devuelve y la entrada queda
+// en Failed, sin reintentar en bucle.
+static void test_cache_rejected_job_does_not_leak_in_flight(const fs::path& dir)
+{
+    CacheHarness h(1);
+    h.runnerAccepts = false;
+    const fs::path a = makeImage(dir, "rej_a.tga");
+
+    h.cache.beginFrame();
+    h.cache.request(a);
+    h.cache.pump();
+    CHECK(h.cache.inFlight() == 0);
+
+    h.runnerAccepts = true;
+    h.cache.beginFrame();
+    CHECK(!h.cache.request(a));
+    h.cache.pump();
+    CHECK(h.pending.empty());                           // Failed: no se vuelve a intentar
+}
+
+// El id de un boton de ImGui sale del HASH de su etiqueta entera: pasar de "IMG" a
+// "" cuando llega la miniatura cambia el id y ImGui pierde el clic o el arrastre en
+// curso. La etiqueta estable lleva "###icon".
+static void test_icon_button_id_is_stable_when_thumbnail_appears()
+{
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename  = nullptr;
+    io.LogFilename  = nullptr;
+    io.DisplaySize  = ImVec2(800.0f, 600.0f);
+    io.DeltaTime    = 1.0f / 60.0f;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    io.Fonts->AddFontDefault();
+
+    auto idOf = [&](const std::string& label) {
+        ImGui::NewFrame();
+        ImGui::Begin("Test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        ImGui::PushID("asset");
+        ImGui::Button(label.c_str());
+        const ImGuiID id = ImGui::GetItemID();
+        ImGui::PopID();
+        ImGui::End();
+        ImGui::Render();
+        return id;
+    };
+
+    const ImGuiID withoutThumb = idOf(assetIconButtonLabel("IMG", false));
+    const ImGuiID withThumb    = idOf(assetIconButtonLabel("IMG", true));
+    CHECK(withoutThumb == withThumb);
+    // Control: con las etiquetas a pelo el id SI cambia, o el test no probaria nada.
+    CHECK(idOf("IMG") != idOf(""));
+
+    ImGui::DestroyContext(ctx);
 }
 
 int main()
@@ -617,6 +757,10 @@ int main()
     test_cache_new_generation_keeps_ready_entries(dir);
     test_cache_evicted_slot_is_requested_again(dir);
     test_cache_late_result_after_destruction_is_harmless(dir);
+    test_huge_image_does_not_read_the_whole_file();
+    test_cache_throwing_decoder_does_not_leak_in_flight(dir);
+    test_cache_rejected_job_does_not_leak_in_flight(dir);
+    test_icon_button_id_is_stable_when_thumbnail_appears();
     std::error_code ec;
     fs::remove_all(dir, ec);
     if (g_failures == 0) std::printf("ALL THUMBNAIL TESTS PASSED\n");

@@ -13,30 +13,79 @@ namespace DonTopo {
 
 ThumbnailResult makeThumbnail(const std::filesystem::path& path)
 {
-    ThumbnailResult out;
-
-    // Se lee el fichero entero y se decodifica desde memoria: stbi_load recibe un
-    // char* en la codepage local y falla con rutas Unicode en Windows; ifstream no.
     std::ifstream in(path, std::ios::binary);
-    if (!in) return out;
-    const std::vector<unsigned char> bytes{ std::istreambuf_iterator<char>(in),
-                                            std::istreambuf_iterator<char>() };
-    if (bytes.empty() || bytes.size() > static_cast<size_t>(INT_MAX)) return out;
+    if (!in) return {};
+    return makeThumbnailFromStream(in);
+}
 
-    int w = 0, h = 0, comp = 0;
-    if (!stbi_info_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &comp) ||
-        w <= 0 || h <= 0)
-        return out;
-    if (static_cast<uint64_t>(w) * static_cast<uint64_t>(h) > kThumbMaxSourcePixels)
+namespace {
+
+// stb_image leyendo de un istream: la cabecera cuesta unos bytes, no el fichero.
+int streamRead(void* user, char* data, int size)
+{
+    auto& in = *static_cast<std::istream*>(user);
+    in.read(data, size);
+    return static_cast<int>(in.gcount());
+}
+
+void streamSkip(void* user, int n)
+{
+    auto& in = *static_cast<std::istream*>(user);
+    if (n >= 0)
     {
-        out.status = ThumbnailStatus::TooLarge;
-        return out;
+        in.ignore(n);
+        return;
     }
+    in.clear();
+    in.seekg(n, std::ios::cur);
+}
 
-    std::unique_ptr<unsigned char, decltype(&stbi_image_free)> px(
-        stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &comp, 4),
-        &stbi_image_free);
-    if (!px) return out;
+int streamEof(void* user)
+{
+    auto& in = *static_cast<std::istream*>(user);
+    return in.peek() == std::char_traits<char>::eof() ? 1 : 0;
+}
+
+ThumbnailResult downscaleToCell(const unsigned char* px, int w, int h);
+
+} // namespace
+
+ThumbnailResult makeThumbnailFromStream(std::istream& in)
+{
+    ThumbnailResult out;
+    try
+    {
+        // Callbacks en vez de leer el fichero entero: rechazar una imagen enorme
+        // por su cabecera no puede costar leerla. Ademas stbi_load recibe un char*
+        // en la codepage local y falla con rutas Unicode; el ifstream no.
+        const stbi_io_callbacks cb{ streamRead, streamSkip, streamEof };
+        int w = 0, h = 0, comp = 0;
+        if (!stbi_info_from_callbacks(&cb, &in, &w, &h, &comp) || w <= 0 || h <= 0)
+            return out;
+        if (static_cast<uint64_t>(w) * static_cast<uint64_t>(h) > kThumbMaxSourcePixels)
+        {
+            out.status = ThumbnailStatus::TooLarge;
+            return out;
+        }
+
+        in.clear();
+        in.seekg(0);
+        std::unique_ptr<unsigned char, decltype(&stbi_image_free)> px(
+            stbi_load_from_callbacks(&cb, &in, &w, &h, &comp, 4), &stbi_image_free);
+        if (!px) return out;
+        return downscaleToCell(px.get(), w, h);
+    }
+    catch (...)
+    {
+        return ThumbnailResult{};
+    }
+}
+
+namespace {
+
+ThumbnailResult downscaleToCell(const unsigned char* px, int w, int h)
+{
+    ThumbnailResult out;
 
     // Tamano destino: lo que ya cabe no se amplia; lo demas, a kThumbCell en el lado largo.
     uint32_t dw = static_cast<uint32_t>(w);
@@ -69,7 +118,7 @@ ThumbnailResult makeThumbnail(const std::filesystem::path& path)
             for (uint32_t sy = y0; sy < y1; ++sy)
                 for (uint32_t sx = x0; sx < x1; ++sx)
                 {
-                    const unsigned char* p = px.get() + (static_cast<size_t>(sy) * w + sx) * 4;
+                    const unsigned char* p = px + (static_cast<size_t>(sy) * w + sx) * 4;
                     const uint64_t a = p[3];
                     sumR += p[0] * a;
                     sumG += p[1] * a;
@@ -91,6 +140,8 @@ ThumbnailResult makeThumbnail(const std::filesystem::path& path)
     out.status = ThumbnailStatus::Ok;
     return out;
 }
+
+} // namespace
 
 ThumbnailSlots::ThumbnailSlots(uint32_t capacity) : m_slots(capacity) {}
 
@@ -141,9 +192,10 @@ void ThumbnailSlots::release(uint64_t key)
 }
 
 ThumbnailCache::ThumbnailCache(Runner run, Uploader upload, uint32_t maxInFlight,
-                               uint32_t slotCapacity)
+                               uint32_t slotCapacity, Decoder decode)
     : m_run(std::move(run))
     , m_upload(std::move(upload))
+    , m_decode(decode ? std::move(decode) : Decoder(makeThumbnail))
     , m_maxInFlight(maxInFlight)
     , m_slots(slotCapacity)
 {}
@@ -271,14 +323,24 @@ void ThumbnailCache::startJobs()
         const std::shared_ptr<Shared>     shared = m_shared;
         const uint64_t                    gen    = m_generation;
         const std::filesystem::path       path   = it->second.path;
-        m_run([shared, gen, id, path]() {
+        const Decoder decode = m_decode;
+        const bool accepted = m_run([shared, gen, id, path, decode]() {
             Done d;
             d.generation = gen;
             d.path       = id;
-            d.result     = makeThumbnail(path);
+            // Un Done SIEMPRE llega: si el decodificador lanza, el hueco en vuelo
+            // se recogeria nunca y tras maxInFlight fallos no habria mas miniaturas.
+            try { d.result = decode(path); }
+            catch (...) { d.result = ThumbnailResult{}; }
             std::lock_guard<std::mutex> lock(shared->mutex);
             shared->done.push_back(std::move(d));
         });
+        if (!accepted)
+        {
+            // El pool no lo ejecutara jamas (parado): sin esto el hueco no se devuelve.
+            --m_inFlight;
+            it->second.state = State::Failed;
+        }
     }
 }
 

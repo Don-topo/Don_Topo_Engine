@@ -5,6 +5,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <istream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -31,6 +32,12 @@ struct ThumbnailResult
 // ya cabe, lo centra y deja el resto transparente. CPU pura: se llama desde un
 // worker. Nunca lanza.
 ThumbnailResult makeThumbnail(const std::filesystem::path& path);
+
+// Lo mismo desde un stream recien abierto (en su posicion 0). Solo se rebobina
+// (seekg) si la imagen pasa el filtro de tamano y hay que cargarla. Existe
+// aparte para poder probar que rechazar una imagen enorme cuesta su CABECERA y no
+// leer el fichero entero.
+ThumbnailResult makeThumbnailFromStream(std::istream& in);
 
 // Reparto de las casillas del atlas entre claves (una por miniatura), con
 // desalojo LRU. "Uso" = pedir la casilla en el frame actual (assign/find).
@@ -80,12 +87,17 @@ private:
 class ThumbnailCache
 {
 public:
-    using Runner   = std::function<void(std::function<void()>)>;
+    // Lanza el job fuera del hilo principal. false = el pool lo rechazo (parado):
+    // la entrada queda en Failed y el hueco en vuelo se devuelve.
+    using Runner   = std::function<bool(std::function<void()>)>;
     // Copia el lote de casillas al atlas. false = no se pudo (todo el lote falla).
     using Uploader = std::function<bool(const ThumbnailTile* tiles, size_t count)>;
+    // Decodifica UNA imagen a casilla. Por defecto makeThumbnail; existe como
+    // parametro para poder probar un decodificador que lanza.
+    using Decoder  = std::function<ThumbnailResult(const std::filesystem::path&)>;
 
     ThumbnailCache(Runner run, Uploader upload, uint32_t maxInFlight = 4,
-                   uint32_t slotCapacity = kThumbSlotCount);
+                   uint32_t slotCapacity = kThumbSlotCount, Decoder decode = {});
     ThumbnailCache(const ThumbnailCache&)            = delete;
     ThumbnailCache& operator=(const ThumbnailCache&) = delete;
 
@@ -146,6 +158,7 @@ private:
 
     Runner                                 m_run;
     Uploader                               m_upload;
+    Decoder                                m_decode;
     uint32_t                               m_maxInFlight;
     uint32_t                               m_inFlight   = 0;
     uint64_t                               m_frame      = 1;
