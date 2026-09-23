@@ -411,6 +411,65 @@ static void test_breadcrumb_segments(const fs::path& root)
     CHECK(outside.size() == 1);
 }
 
+static std::string readAll(const fs::path& p)
+{
+    std::ifstream in(p);
+    std::stringstream ss; ss << in.rdbuf();
+    return ss.str();
+}
+
+// moveAsset: mueve un fichero o carpeta a otra carpeta SIN sobreescribir nunca.
+static void test_move_asset(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path base = root / "mv";
+    fs::path dest = base / "dest";
+    fs::create_directories(dest, ec);
+
+    // Fichero a otra carpeta.
+    std::ofstream(base / "a.png") << "contenido-a";
+    MoveOutcome m1 = moveAsset(base / "a.png", dest);
+    CHECK(m1.result == MoveResult::Moved);
+    CHECK(m1.newPath == dest / "a.png");
+    CHECK(!fs::exists(base / "a.png", ec));
+    CHECK(readAll(dest / "a.png") == "contenido-a");
+
+    // Carpeta con contenido.
+    fs::create_directories(base / "folderX" / "sub", ec);
+    std::ofstream(base / "folderX" / "inner.txt") << "dentro";
+    MoveOutcome m2 = moveAsset(base / "folderX", dest);
+    CHECK(m2.result == MoveResult::Moved);
+    CHECK(m2.newPath == dest / "folderX");
+    CHECK(readAll(dest / "folderX" / "inner.txt") == "dentro");
+    CHECK(fs::exists(dest / "folderX" / "sub", ec));
+    CHECK(!fs::exists(base / "folderX", ec));
+
+    // Ya esta en esa carpeta: no hay nada que mover.
+    MoveOutcome m3 = moveAsset(dest / "a.png", dest);
+    CHECK(m3.result == MoveResult::RejectedSameFolder);
+    CHECK(fs::exists(dest / "a.png", ec));
+
+    // Una carpeta no puede entrar en si misma ni en un descendiente.
+    MoveOutcome m4 = moveAsset(dest / "folderX", dest / "folderX");
+    CHECK(m4.result == MoveResult::RejectedIntoSelf);
+    MoveOutcome m5 = moveAsset(dest / "folderX", dest / "folderX" / "sub");
+    CHECK(m5.result == MoveResult::RejectedIntoSelf);
+    CHECK(fs::exists(dest / "folderX" / "inner.txt", ec));
+
+    // Conflicto de nombre: rechaza y no toca ni el destino ni el origen.
+    fs::create_directories(base / "otra", ec);
+    std::ofstream(base / "otra" / "a.png") << "version-nueva";
+    MoveOutcome m6 = moveAsset(base / "otra" / "a.png", dest);
+    CHECK(m6.result == MoveResult::RejectedNameConflict);
+    CHECK(readAll(dest / "a.png") == "contenido-a");
+    CHECK(readAll(base / "otra" / "a.png") == "version-nueva");
+
+    // Origen inexistente.
+    MoveOutcome m7 = moveAsset(base / "no_existe.png", dest);
+    CHECK(m7.result == MoveResult::RejectedFailed);
+    CHECK(!m7.errorMessage.empty());
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -432,6 +491,7 @@ int main()
     test_asset_matches_filter();
     test_unique_folder_name(root);
     test_breadcrumb_segments(root);
+    test_move_asset(root);
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL CONTENT BROWSER TESTS PASSED\n");

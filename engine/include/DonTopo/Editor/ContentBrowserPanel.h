@@ -55,6 +55,26 @@ struct BreadcrumbSegment {
 std::vector<BreadcrumbSegment> breadcrumbSegments(const std::filesystem::path& root,
                                                   const std::filesystem::path& current);
 
+enum class MoveResult {
+    Moved,
+    RejectedSameFolder,    // destDir ya es la carpeta padre de src
+    RejectedIntoSelf,      // una carpeta dentro de sí misma o de un descendiente
+    RejectedNameConflict,  // ya hay algo con ese nombre en destDir
+    RejectedFailed,        // origen inexistente o error del sistema
+};
+
+struct MoveOutcome {
+    MoveResult            result = MoveResult::RejectedFailed;
+    std::filesystem::path newPath;       // válido solo si result == Moved
+    std::string           errorMessage;  // vacío salvo RejectedFailed
+};
+
+// Mueve src (fichero o carpeta) dentro de destDir con el mismo nombre. Nunca
+// sobreescribe: un nombre ya ocupado es un rechazo, no un reemplazo. No toca la
+// escena: quien llama actualiza las referencias con updateSceneReferencesForRename.
+// Nunca lanza (sobrecargas con std::error_code).
+MoveOutcome moveAsset(const std::filesystem::path& src, const std::filesystem::path& destDir);
+
 // Nombre libre para una carpeta nueva dentro de dir: "Nueva carpeta", y si ya
 // hay algo (carpeta o fichero) con ese nombre, "Nueva carpeta 2", "3"...
 std::string uniqueFolderName(const std::filesystem::path& dir);
@@ -107,6 +127,19 @@ private:
     // abiertos: sin caché que invalidar y los cambios hechos fuera del editor
     // aparecen solos.
     void drawFolderTree(const std::filesystem::path& dir);
+    // Convierte el último ítem dibujado en destino de soltar un asset (fichero o
+    // carpeta del grid). NO mueve nada: anota en m_pendingMove, que draw() aplica
+    // fuera del recorrido del árbol/grid (mover a mitad invalidaría lo que se pinta).
+    void acceptAssetDropOnFolder(const std::filesystem::path& destDir);
+    // Aplica y vacía m_pendingMove: mueve en disco, reescribe las referencias de
+    // la escena y reubica m_currentDir si la carpeta movida la contenía.
+    void applyPendingMove(EditorContext& ctx, GameObject* sceneRoot);
+
+    struct PendingMove {
+        std::filesystem::path src;
+        std::filesystem::path destDir;
+    };
+    std::optional<PendingMove> m_pendingMove;
 
     bool m_open = true;
     bool m_scanned = false;

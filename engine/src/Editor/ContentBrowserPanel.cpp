@@ -229,6 +229,30 @@ bool assetMatchesFilter(const std::string& name, AssetKind kind,
     return lowerAscii(name).find(lowerAscii(text)) != std::string::npos;
 }
 
+MoveOutcome moveAsset(const std::filesystem::path& src, const std::filesystem::path& destDir)
+{
+    std::error_code ec;
+    if (!std::filesystem::exists(src, ec) || ec)
+        return { MoveResult::RejectedFailed, {}, "El origen no existe" };
+
+    if (samePath(src.parent_path(), destDir))
+        return { MoveResult::RejectedSameFolder, {}, "" };
+
+    const bool isDir = std::filesystem::is_directory(src, ec);
+    if (isDir && (samePath(src, destDir) || pathUnderDir(destDir, src)))
+        return { MoveResult::RejectedIntoSelf, {}, "" };
+
+    const std::filesystem::path dest = destDir / src.filename();
+    if (std::filesystem::exists(dest, ec))
+        return { MoveResult::RejectedNameConflict, {}, "" };
+
+    ec.clear();
+    std::filesystem::rename(src, dest, ec);
+    if (ec)
+        return { MoveResult::RejectedFailed, {}, ec.message() };
+    return { MoveResult::Moved, dest, "" };
+}
+
 std::vector<BreadcrumbSegment> breadcrumbSegments(const std::filesystem::path& root,
                                                   const std::filesystem::path& current)
 {
@@ -530,6 +554,86 @@ void ContentBrowserPanel::beginAssetDelete(GameObject* sceneRoot, const std::fil
     m_openAssetDeletePopup      = true;
 }
 
+void ContentBrowserPanel::acceptAssetDropOnFolder(const std::filesystem::path& destDir)
+{
+    if (!ImGui::BeginDragDropTarget())
+        return;
+    // Los mismos dos payloads que emite el grid: ficheros y carpetas van con
+    // tipos distintos a propósito (ver el comentario de la fuente del arrastre).
+    for (const char* type : { "DT_ASSET_PATH", "DT_ASSET_DIR" })
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(type))
+        {
+            const std::filesystem::path src(static_cast<const char*>(payload->Data));
+            // Soltar una carpeta sobre sí misma no es un error digno de log.
+            if (!samePath(src, destDir))
+                m_pendingMove = PendingMove{ src, destDir };
+        }
+    }
+    ImGui::EndDragDropTarget();
+}
+
+void ContentBrowserPanel::applyPendingMove(EditorContext& ctx, GameObject* sceneRoot)
+{
+    if (!m_pendingMove)
+        return;
+    const PendingMove mv = *m_pendingMove;
+    m_pendingMove.reset();
+
+    // Mismo veto que los drops de asset de Properties: con Load Scene en vuelo
+    // la escena se está reemplazando y reescribir sus referencias no tiene sentido.
+    if (ctx.editingLocked)
+    {
+        ctx.pushLog("Carga de escena en curso: el movimiento del asset se descarta");
+        return;
+    }
+
+    // El payload lo emite este mismo panel, pero se comprueba igual: origen y
+    // destino tienen que estar dentro de la raíz del proyecto.
+    const bool srcInside  = pathUnderDir(mv.src, m_projectRoot);
+    const bool destInside = samePath(mv.destDir, m_projectRoot) || pathUnderDir(mv.destDir, m_projectRoot);
+    if (!srcInside || !destInside)
+    {
+        ctx.pushLog("Movimiento rechazado: origen o destino fuera del proyecto");
+        return;
+    }
+
+    std::error_code dirEc;
+    const bool isDir = std::filesystem::is_directory(mv.src, dirEc);
+    const MoveOutcome outcome = moveAsset(mv.src, mv.destDir);
+    switch (outcome.result)
+    {
+    case MoveResult::Moved:
+    {
+        ctx.pushLog("Asset movido: '" + mv.src.filename().string() + "' -> '" +
+                    mv.destDir.filename().string() + "'");
+        updateSceneReferencesForRename(ctx, sceneRoot, mv.src, outcome.newPath, isDir);
+        // Si la carpeta actual era la movida (o colgaba de ella) ya no existe con
+        // esa ruta: seguirla a su sitio nuevo en vez de dejar el grid apuntando
+        // a una carpeta que desapareció.
+        const std::filesystem::path current(m_currentDir);
+        if (isDir && samePath(current, mv.src))
+            m_currentDir = outcome.newPath.string();
+        else if (isDir && pathUnderDir(current, mv.src))
+            m_currentDir = replacePathPrefix(m_currentDir, mv.src, outcome.newPath);
+        m_scanned = false;
+        break;
+    }
+    case MoveResult::RejectedSameFolder:
+        break; // ya estaba ahí: no hay nada que decir
+    case MoveResult::RejectedIntoSelf:
+        ctx.pushLog("No se puede mover una carpeta dentro de sí misma");
+        break;
+    case MoveResult::RejectedNameConflict:
+        ctx.pushLog("Movimiento rechazado: ya existe '" + mv.src.filename().string() +
+                    "' en '" + mv.destDir.filename().string() + "'");
+        break;
+    case MoveResult::RejectedFailed:
+        ctx.pushLog("No se pudo mover '" + mv.src.filename().string() + "': " + outcome.errorMessage);
+        break;
+    }
+}
+
 void ContentBrowserPanel::drawFolderTree(const std::filesystem::path& dir)
 {
     std::vector<std::filesystem::path> subdirs = listVisibleSubdirs(dir);
@@ -561,6 +665,9 @@ void ContentBrowserPanel::drawFolderTree(const std::filesystem::path& dir)
         m_currentDir = dir.string();
         m_scanned    = false;
     }
+
+    // Justo tras el nodo: BeginDragDropTarget opera sobre el último ítem.
+    acceptAssetDropOnFolder(dir);
 
     if (open)
     {
@@ -683,6 +790,11 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     // header): una vez pintado el árbol con la rama forzada abierta, se
     // limpia para que el usuario pueda volver a colapsarla a mano.
     m_revealCurrentDir = false;
+
+    // Los destinos de soltar (árbol y carpetas del grid) solo anotan el
+    // movimiento; se aplica aquí, con el árbol ya pintado y ANTES de escanear el
+    // grid, para que este mismo frame ya vea el resultado.
+    applyPendingMove(ctx, sceneRoot);
 
     ImGui::SameLine();
 
@@ -817,6 +929,11 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 ImVec4(btnColor.x + 0.15f, btnColor.y + 0.15f, btnColor.z + 0.15f, 1.0f));
             ImGui::Button(label, ImVec2(ICON_SIZE, ICON_SIZE));
             ImGui::PopStyleColor(2);
+
+            // Soltar un asset sobre una carpeta del grid lo mueve dentro. Tiene
+            // que ir aquí, antes de cualquier otro widget: opera sobre el botón.
+            if (isDir)
+                acceptAssetDropOnFolder(path);
 
             if (isDir && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
