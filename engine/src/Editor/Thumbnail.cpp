@@ -140,4 +140,185 @@ void ThumbnailSlots::release(uint64_t key)
     m_byKey.erase(it);
 }
 
+ThumbnailCache::ThumbnailCache(Runner run, Uploader upload, uint32_t maxInFlight,
+                               uint32_t slotCapacity)
+    : m_run(std::move(run))
+    , m_upload(std::move(upload))
+    , m_maxInFlight(maxInFlight)
+    , m_slots(slotCapacity)
+{}
+
+void ThumbnailCache::beginFrame()
+{
+    ++m_frame;
+    m_slots.beginFrame();
+}
+
+uint64_t ThumbnailCache::makeKey(const std::filesystem::path& path,
+                                 std::filesystem::file_time_type mtime)
+{
+    // Ruta + mtime: cambiar el contenido con el mismo nombre cambia la clave.
+    const uint64_t h = std::hash<std::string>{}(path.string());
+    const uint64_t t = static_cast<uint64_t>(mtime.time_since_epoch().count());
+    return h ^ (t + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2));
+}
+
+std::optional<UvRect> ThumbnailCache::request(const std::filesystem::path& path)
+{
+    const std::string id = path.string();
+    auto it = m_entries.find(id);
+    if (it == m_entries.end())
+    {
+        Entry e;
+        e.path = path;
+        std::error_code ec;
+        e.mtime            = std::filesystem::last_write_time(path, ec);
+        e.key              = makeKey(path, e.mtime);
+        e.state            = ec ? State::Failed : State::Queued;
+        e.lastRequestFrame = m_frame;
+        const bool queue   = (e.state == State::Queued);
+        m_entries.emplace(id, std::move(e));
+        if (queue) m_queue.push_back(id);
+        return std::nullopt;
+    }
+
+    Entry& e = it->second;
+    e.lastRequestFrame = m_frame;
+    if (e.state == State::Ready)
+    {
+        const uint32_t slot = m_slots.find(e.key);
+        if (slot != ThumbnailSlots::kNone)
+            return thumbnailUv(slot);
+        // Otra miniatura reutilizo su casilla: hay que decodificarla otra vez.
+        e.state = State::Queued;
+        m_queue.push_back(id);
+    }
+    return std::nullopt;
+}
+
+void ThumbnailCache::pump(int maxUploads)
+{
+    // 1. Resultados de los workers.
+    std::vector<Done> done;
+    {
+        std::lock_guard<std::mutex> lock(m_shared->mutex);
+        done.swap(m_shared->done);
+    }
+    for (Done& d : done)
+    {
+        if (m_inFlight > 0) --m_inFlight;                    // el hueco se libera siempre
+        if (d.generation != m_generation) continue;          // carpeta anterior: se ignora
+        const auto it = m_entries.find(d.path);
+        if (it == m_entries.end() || it->second.state != State::Running) continue;
+        Entry& e = it->second;
+        if (d.result.status != ThumbnailStatus::Ok)
+        {
+            e.state = State::Failed;
+            continue;
+        }
+        e.pixels = std::move(d.result.rgba);
+        e.state  = State::Decoded;
+    }
+
+    // 2. Subida: un lote, una llamada.
+    std::vector<ThumbnailTile> tiles;
+    std::vector<Entry*>        batch;
+    for (auto& kv : m_entries)
+    {
+        if (static_cast<int>(tiles.size()) >= maxUploads) break;
+        Entry& e = kv.second;
+        if (e.state != State::Decoded) continue;
+        const uint32_t slot = m_slots.assign(e.key);
+        if (slot == ThumbnailSlots::kNone) continue;         // atlas lleno este frame: mas tarde
+        tiles.push_back({ slot, e.pixels.data() });
+        batch.push_back(&e);
+    }
+    if (!tiles.empty())
+    {
+        const bool ok = m_upload && m_upload(tiles.data(), tiles.size());
+        for (Entry* e : batch)
+        {
+            if (ok)
+            {
+                e->state = State::Ready;
+            }
+            else
+            {
+                e->state = State::Failed;
+                m_slots.release(e->key);
+            }
+            e->pixels.clear();
+            e->pixels.shrink_to_fit();
+        }
+    }
+
+    // 3. Nuevas decodificaciones, hasta el tope.
+    startJobs();
+}
+
+void ThumbnailCache::startJobs()
+{
+    if (!m_run) return;
+    while (m_inFlight < m_maxInFlight && !m_queue.empty())
+    {
+        const std::string id = m_queue.front();
+        m_queue.pop_front();
+        const auto it = m_entries.find(id);
+        if (it == m_entries.end() || it->second.state != State::Queued) continue;
+
+        it->second.state = State::Running;
+        ++m_inFlight;
+        const std::shared_ptr<Shared>     shared = m_shared;
+        const uint64_t                    gen    = m_generation;
+        const std::filesystem::path       path   = it->second.path;
+        m_run([shared, gen, id, path]() {
+            Done d;
+            d.generation = gen;
+            d.path       = id;
+            d.result     = makeThumbnail(path);
+            std::lock_guard<std::mutex> lock(shared->mutex);
+            shared->done.push_back(std::move(d));
+        });
+    }
+}
+
+void ThumbnailCache::refreshStamps()
+{
+    for (auto it = m_entries.begin(); it != m_entries.end();)
+    {
+        Entry& e = it->second;
+        // Solo lo que se ha estado viendo, y nunca lo que tiene un job en marcha.
+        const bool recent  = e.lastRequestFrame + 1 >= m_frame;
+        const bool pending = (e.state == State::Queued || e.state == State::Running);
+        if (!recent || pending)
+        {
+            ++it;
+            continue;
+        }
+        std::error_code ec;
+        const auto now = std::filesystem::last_write_time(e.path, ec);
+        if (ec || now == e.mtime)
+        {
+            ++it;
+            continue;
+        }
+        m_slots.release(e.key);      // no-op si nunca tuvo casilla
+        it = m_entries.erase(it);    // la siguiente peticion la trata como nueva
+    }
+}
+
+void ThumbnailCache::newGeneration()
+{
+    ++m_generation;
+    m_queue.clear();
+    for (auto it = m_entries.begin(); it != m_entries.end();)
+    {
+        const State s = it->second.state;
+        if (s == State::Queued || s == State::Running || s == State::Decoded)
+            it = m_entries.erase(it);
+        else
+            ++it;
+    }
+}
+
 } // namespace DonTopo
