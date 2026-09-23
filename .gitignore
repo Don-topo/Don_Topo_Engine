@@ -2,6 +2,8 @@
 build/
 build-ninja/
 build-ninja-release/
+build-linux-debug/
+build-linux-release/
 cmake-build-*/
 .cmake/
 out/
