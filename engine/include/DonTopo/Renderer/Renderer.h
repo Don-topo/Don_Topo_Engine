@@ -210,6 +210,8 @@ namespace DonTopo {
             uint32_t uiWidth()  const { return effectiveViewport().width; }
             uint32_t uiHeight() const { return effectiveViewport().height; }
             uint64_t uiAtlasTextureId(const UiTextureAtlas* atlas) override;
+            uint64_t uiThumbnailAtlasId() override;
+            bool     uploadUiThumbnails(const ThumbnailTile* tiles, size_t count) override;
             // Tamano EXACTO del area de imagen del panel Viewport del editor, en
             // pixeles. Lo llama el editor una vez por frame. Sin esto el render
             // iria al tamano de la VENTANA y el panel lo reescalaria al dibujarlo:
@@ -1192,6 +1194,15 @@ namespace DonTopo {
             // reserva un descriptor set POR LLAMADA, y llamarlo cada frame se
             // come el pool del editor en segundos.
             std::unordered_map<const UiTextureAtlas*, uint64_t> m_uiAtlasImGuiId;
+            // Atlas compartido de miniaturas del Content Browser (ver
+            // EditorRenderer::uiThumbnailAtlasId). Se crea la primera vez que se
+            // pide; si falla, no se reintenta cada frame.
+            VkImage        m_thumbImage    = VK_NULL_HANDLE;
+            VkDeviceMemory m_thumbMemory   = VK_NULL_HANDLE;
+            VkImageView    m_thumbView     = VK_NULL_HANDLE;
+            uint64_t       m_thumbImGuiId  = 0;
+            bool           m_thumbFailed   = false;
+            void           destroyThumbAtlas();
             GameObject* m_sceneRoot = nullptr;
             Scene* m_scene = nullptr;
     };

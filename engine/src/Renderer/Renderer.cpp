@@ -753,6 +753,8 @@ namespace DonTopo {
         // pueda volver a pedir.
         m_uiAtlasByPath.clear();
         m_uiAtlasImGuiId.clear();
+        // El atlas de miniaturas, con los demás atlas y antes de que muera el device.
+        destroyThumbAtlas();
         for (auto& font : m_uiFonts) font->destroy(m_gpu);
         m_uiFonts.clear();
         m_uiBatch.shutdown(m_gpu);
@@ -794,6 +796,76 @@ namespace DonTopo {
                                                     (uint64_t)atlas->view());
         m_uiAtlasImGuiId[atlas] = id;
         return id;
+    }
+
+    namespace
+    {
+        // El swapchain del editor es B8G8R8A8_SRGB: sampleo sRGB -> lineal, y la
+        // escritura vuelve a codificar. Identidad, así que las miniaturas salen con
+        // los colores de la imagen. (D3D12 usa otra por su RTV UNORM.)
+        constexpr VkFormat kThumbFormat = VK_FORMAT_R8G8B8A8_SRGB;
+    }
+
+    uint64_t Renderer::uiThumbnailAtlasId()
+    {
+        if (m_thumbImGuiId != 0) return m_thumbImGuiId;
+        if (m_thumbFailed || !m_ui) return 0;
+
+        try
+        {
+            m_res.createBlankImage(kThumbAtlasSize, kThumbAtlasSize, kThumbFormat,
+                                   m_thumbImage, m_thumbMemory);
+            m_res.createTextureImageView(m_thumbImage, m_thumbView, kThumbFormat);
+        }
+        catch (const std::exception&)
+        {
+            destroyThumbAtlas();
+            m_thumbFailed = true;
+            return 0;
+        }
+        m_thumbImGuiId = m_ui->registerUiTexture((uint64_t)m_uiBatch.sampler(),
+                                                 (uint64_t)m_thumbView);
+        return m_thumbImGuiId;
+    }
+
+    bool Renderer::uploadUiThumbnails(const ThumbnailTile* tiles, size_t count)
+    {
+        if (m_thumbImGuiId == 0 || !tiles || count == 0) return false;
+
+        std::vector<ImageTileUpload> uploads;
+        uploads.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (tiles[i].slot >= kThumbSlotCount || !tiles[i].rgba) return false;
+            ImageTileUpload u;
+            u.x    = (tiles[i].slot % kThumbAtlasCells) * kThumbCell;
+            u.y    = (tiles[i].slot / kThumbAtlasCells) * kThumbCell;
+            u.w    = kThumbCell;
+            u.h    = kThumbCell;
+            u.rgba = tiles[i].rgba;
+            uploads.push_back(u);
+        }
+        try
+        {
+            m_res.uploadPixelsToImageRegions(m_thumbImage, uploads.data(), uploads.size());
+        }
+        catch (const std::exception&)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    void Renderer::destroyThumbAtlas()
+    {
+        const VkDevice device = m_gpu.device();
+        if (m_thumbView   != VK_NULL_HANDLE) vkDestroyImageView(device, m_thumbView, nullptr);
+        if (m_thumbImage  != VK_NULL_HANDLE) vkDestroyImage(device, m_thumbImage, nullptr);
+        if (m_thumbMemory != VK_NULL_HANDLE) vkFreeMemory(device, m_thumbMemory, nullptr);
+        m_thumbView    = VK_NULL_HANDLE;
+        m_thumbImage   = VK_NULL_HANDLE;
+        m_thumbMemory  = VK_NULL_HANDLE;
+        m_thumbImGuiId = 0;
     }
 
     UiFont* Renderer::loadUiFont(const std::string& path, float bakePx)
