@@ -12,8 +12,13 @@
 #include "DonTopo/Renderer/SharedGpuMesh.h"
 #include "DonTopo/Renderer/Mesh.h"
 
+#include "DonTopo/Core/ImportSettings.h"
+
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <string>
+#include <system_error>
 #include <vector>
 
 using namespace DonTopo;
@@ -458,8 +463,41 @@ static void test_key_of_entrada_viva_y_muerta()
     CHECK(cache.keyOf(reciclado) == "99|7|otra_malla.png");
 }
 
+// Review Focus 3: dos mallas identicas con el mismo fichero de textura pero con
+// ajustes de importacion distintos NO comparten entrada en VRAM.
+static void test_key_changes_with_texture_import_settings()
+{
+    std::error_code ec;
+    const std::filesystem::path d = std::filesystem::temp_directory_path(ec) / "dt_meshkey_import_test";
+    std::filesystem::remove_all(d, ec);
+    std::filesystem::create_directories(d, ec);
+
+    Mesh a = makeMesh("A");
+    a.material.texturePath = (d / "t.png").string();
+    const std::string sinSidecar = makeSharedMeshKey(a);
+
+    TextureImportSettings s;
+    s.mipmaps = true;
+    std::string err;
+    CHECK(saveTextureImportSettings(d / "t.png", s, &err));
+    const std::string conMips = makeSharedMeshKey(a);
+    CHECK(conMips != sinSidecar);
+
+    // El prefijo de geometria (los dos primeros campos) no se altera: lo usa
+    // rebuildStaticMesh para saber si la geometria sigue siendo la misma.
+    auto prefijo = [](const std::string& k) { return k.substr(0, k.find('|', k.find('|') + 1)); };
+    CHECK(prefijo(conMips) == prefijo(sinSidecar));
+
+    // Sin sidecar de ningun tipo, la clave es la de siempre.
+    Mesh b = makeMesh("A");
+    b.material.texturePath = (d / "otra.png").string();
+    CHECK(makeSharedMeshKey(b).find("|ts") == std::string::npos);
+    std::filesystem::remove_all(d, ec);
+}
+
 int main()
 {
+    test_key_changes_with_texture_import_settings();
     test_objetos_identicos_comparten_handles();
     test_mallas_distintas_no_comparten();
     test_factores_distintos_si_comparten();

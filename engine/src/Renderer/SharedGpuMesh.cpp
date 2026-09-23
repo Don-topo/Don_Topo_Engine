@@ -1,5 +1,6 @@
 #include "DonTopo/Renderer/SharedGpuMesh.h"
 #include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/TextureImport.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -82,6 +83,18 @@ namespace DonTopo
         key += '|';
         key += std::to_string(m.embeddedMetallicRoughness.size());
         key += tail;
+
+        // Ajustes de importacion de las tres texturas, AL FINAL (el prefijo de
+        // geometria que compara rebuildStaticMesh son los dos primeros campos) y
+        // solo si alguno no es el de siempre: las claves de hoy no cambian.
+        const std::string ts0 = textureKeySuffix(m.texturePath);
+        const std::string ts1 = textureKeySuffix(m.normalMapPath);
+        const std::string ts2 = textureKeySuffix(m.metallicRoughnessPath);
+        if (!ts0.empty() || !ts1.empty() || !ts2.empty())
+        {
+            key += "|ts";
+            key += ts0; key += '|'; key += ts1; key += '|'; key += ts2;
+        }
         return key;
     }
 

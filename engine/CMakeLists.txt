@@ -59,6 +59,7 @@ add_library(DonTopoCore STATIC
     src/Renderer/GpuDevice.cpp
     src/Renderer/GpuResources.cpp
     src/Renderer/MaterialTextureSource.cpp
+    src/Renderer/TextureImport.cpp
     src/Renderer/SharedGpuMesh.cpp
     src/Renderer/InstanceBatching.cpp
     src/Renderer/InstanceBuffers.cpp

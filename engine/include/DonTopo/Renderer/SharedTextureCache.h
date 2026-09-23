@@ -16,17 +16,21 @@ namespace DonTopo
     // textura: esos materiales usan la blanca de relleno, que ya se presta por
     // su cuenta (GpuResources::releaseMaterialImage) y NO debe entrar aquí.
     inline std::string makeTextureKey(const std::string& path, const std::vector<uint8_t>& embedded,
-                                      TextureKind kind)
+                                      TextureKind kind, const std::string& settingsSuffix = {})
     {
         if (path.empty() && embedded.empty()) return {};
         const char tipo = kind == TextureKind::BaseColor ? 'c' : (kind == TextureKind::Normal ? 'n' : 'o');
+        // Los ajustes de importacion son de un FICHERO: sin ruta no hay sidecar.
+        // Por valor a proposito: una referencia ligada a un ternario que mezcla
+        // un temporal y un lvalue dependeria de la extension de vida del temporal.
+        const std::string sufijo = path.empty() ? std::string() : settingsSuffix;
         if (!embedded.empty())
         {
             uint64_t h = 1469598103934665603ull;
             for (uint8_t b : embedded) { h ^= b; h *= 1099511628211ull; }
-            return std::string(1, tipo) + ":emb:" + std::to_string(embedded.size()) + ":" + std::to_string(h);
+            return std::string(1, tipo) + ":emb:" + std::to_string(embedded.size()) + ":" + std::to_string(h) + sufijo;
         }
-        return std::string(1, tipo) + ":" + path;
+        return std::string(1, tipo) + ":" + path + sufijo;
     }
 
     // Texturas de material compartidas con recuento de referencias. No sabe nada
