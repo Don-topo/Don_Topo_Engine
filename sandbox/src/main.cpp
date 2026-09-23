@@ -255,13 +255,29 @@ int main()
             d3dJobs.start();
             DonTopo::AsyncAssetLoader d3dAssets(d3dJobs);
 
-            glfwSetWindowUserPointer(window.getNativeWindow(), &d3d12);
+            // Antes el user pointer era &d3d12 a secas: el drop de ficheros
+            // externos necesita una cola propia además del renderer, así que
+            // gana un struct pequeño en vez de un puntero suelto — mismo
+            // patrón que el AppCtx del camino de Vulkan.
+            struct D3D12WindowCtx {
+                DonTopo::D3D12::D3D12Renderer* renderer;
+                std::vector<DonTopo::DroppedFile> drops;
+            };
+            D3D12WindowCtx d3dWindowCtx{ &d3d12, {} };
+            glfwSetWindowUserPointer(window.getNativeWindow(), &d3dWindowCtx);
             glfwSetFramebufferSizeCallback(
                 window.getNativeWindow(), [](GLFWwindow* w, int width, int height) {
-                    auto* r = static_cast<DonTopo::D3D12::D3D12Renderer*>(glfwGetWindowUserPointer(w));
-                    if (r)
-                        r->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+                    auto* c = static_cast<D3D12WindowCtx*>(glfwGetWindowUserPointer(w));
+                    if (c->renderer)
+                        c->renderer->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
                 });
+            glfwSetDropCallback(window.getNativeWindow(), [](GLFWwindow* w, int count, const char** paths) {
+                auto* c = static_cast<D3D12WindowCtx*>(glfwGetWindowUserPointer(w));
+                double x, y;
+                glfwGetCursorPos(w, &x, &y);
+                for (int i = 0; i < count; ++i)
+                    c->drops.push_back({ std::filesystem::path(paths[i]), (float)x, (float)y });
+            });
 
             // El editor, con este backend detrás. A partir de aquí el camino
             // es el mismo que con Vulkan: los paneles hablan con la interfaz.
@@ -300,6 +316,11 @@ int main()
             editor.setPhysicsManager(&d3dPhysics);
             editor.setAudioManager(&d3dAudio);
             editor.setAssetLoader(&d3dAssets);
+            editor.setDroppedFilesProvider([&d3dWindowCtx]() {
+                std::vector<DonTopo::DroppedFile> out;
+                out.swap(d3dWindowCtx.drops);
+                return out;
+            });
 
             // Scripting, con el mismo cableado que el camino de Vulkan.
             d3dScripts.setScene(&d3dScene);
@@ -841,8 +862,13 @@ int main()
         std::vector<float>          frameLightRadii;
         renderer.setLights(defaultLights);
 
-        struct AppCtx { DonTopo::Camera* cam; DonTopo::Renderer* rnd; DonTopo::EditorUI* ed; };
-        AppCtx ctx{ &camera, &renderer, &editor };
+        struct AppCtx {
+            DonTopo::Camera* cam;
+            DonTopo::Renderer* rnd;
+            DonTopo::EditorUI* ed;
+            std::vector<DonTopo::DroppedFile> drops;
+        };
+        AppCtx ctx{ &camera, &renderer, &editor, {} };
         glfwSetWindowUserPointer(window.getNativeWindow(), &ctx);
 
         glfwSetFramebufferSizeCallback(window.getNativeWindow(), [](GLFWwindow* w, int, int) {
@@ -892,6 +918,14 @@ int main()
             }
         });
 
+        glfwSetDropCallback(window.getNativeWindow(), [](GLFWwindow* w, int count, const char** paths) {
+            auto* ctx = static_cast<AppCtx*>(glfwGetWindowUserPointer(w));
+            double x, y;
+            glfwGetCursorPos(w, &x, &y);
+            for (int i = 0; i < count; ++i)
+                ctx->drops.push_back({ std::filesystem::path(paths[i]), (float)x, (float)y });
+        });
+
         // JobSystem + loader asíncrono de assets. Se crean tras todo el setup y
         // ANTES del bucle: el drop de FBX y Load Scene encolan aquí, y el pump
         // por frame (más abajo) drena los resultados. El shutdown del JobSystem
@@ -901,6 +935,11 @@ int main()
         jobSystem.start();
         DonTopo::AsyncAssetLoader assetLoader(jobSystem);
         editor.setAssetLoader(&assetLoader);
+        editor.setDroppedFilesProvider([&ctx]() {
+            std::vector<DonTopo::DroppedFile> out;
+            out.swap(ctx.drops);
+            return out;
+        });
 
         // ─── Selector de proyecto ────────────────────────────────────────────
         // Primer estado del bucle de ImGui que ya existe: misma ventana, mismo
