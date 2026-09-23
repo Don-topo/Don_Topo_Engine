@@ -44,6 +44,19 @@ AssetKind classifyAsset(const std::string& ext, bool isDir);
 bool assetMatchesFilter(const std::string& name, AssetKind kind,
                         const std::string& text, std::optional<AssetKind> kindFilter);
 
+// Ficheros y carpetas visibles de UNA carpeta (no recursivo), ordenados por path.
+// Las carpetas ocultas y de build quedan fuera con el mismo predicado que el
+// árbol; los ficheros no se filtran. Vacío —sin lanzar— si dir no existe, es un
+// fichero o no se puede leer. Es lo que el grid pinta y lo que el polling compara
+// entre pasadas para detectar cambios hechos fuera del editor.
+std::vector<std::filesystem::path> listVisibleEntries(const std::filesystem::path& dir);
+
+// Ancestro existente más cercano de dir sin salir de root: dir misma si existe,
+// y root si dir está fuera de root o no queda ningún nivel existente hasta ella.
+// Con esto el panel sigue funcionando si la carpeta actual se borra por fuera.
+std::filesystem::path nearestExistingDir(const std::filesystem::path& dir,
+                                         const std::filesystem::path& root);
+
 // Un tramo del breadcrumb: lo que se pinta y a dónde salta al pulsarlo.
 struct BreadcrumbSegment {
     std::string           name;
@@ -169,6 +182,11 @@ private:
 
     bool m_open = true;
     bool m_scanned = false;
+    // Cada cuánto se relee la carpeta actual para detectar cambios hechos fuera
+    // del editor (mismo enfoque que ScriptManager::pollChanges: comparar en vez de
+    // vigilar). Latencia máxima de un refresco externo ≈ este intervalo.
+    static constexpr double kDirPollIntervalSeconds = 0.5;
+    double m_lastPollTime = 0.0;
     std::string m_currentDir;
     // Reveal de un solo frame: sólo el doble-clic en una carpeta del grid
     // derecho la pone a true (esa carpeta puede no estar visible aún en el

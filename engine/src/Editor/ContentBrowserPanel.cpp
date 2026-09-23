@@ -229,6 +229,54 @@ bool assetMatchesFilter(const std::string& name, AssetKind kind,
     return lowerAscii(name).find(lowerAscii(text)) != std::string::npos;
 }
 
+std::vector<std::filesystem::path> listVisibleEntries(const std::filesystem::path& dir)
+{
+    std::vector<std::filesystem::path> out;
+    std::error_code existsEc;
+    if (!std::filesystem::exists(dir, existsEc) || existsEc)
+        return out;
+
+    std::error_code iterEc;
+    std::filesystem::directory_iterator it(dir, iterEc);
+    // Avance manual con la sobrecarga que no lanza. exists() y la iteración son
+    // dos llamadas a disco separadas (TOCTOU) — la carpeta puede desaparecer entre
+    // medias (checkout, build, herramienta externa) — y esto corre desde el render
+    // loop, así que un fallo debe dejar la lista vacía ese frame en vez de tirar el
+    // editor.
+    static const std::filesystem::directory_iterator kEnd;
+    for (; !iterEc && it != kEnd; it.increment(iterEc))
+    {
+        const auto& entry = *it;
+        std::error_code fileEc, dirEc;
+        const bool isFile     = entry.is_regular_file(fileEc);
+        const bool isDirEntry = entry.is_directory(dirEc);
+        // Carpetas ocultas/ruido filtradas igual que el árbol izquierdo (mismo
+        // predicado); los ficheros no se filtran, se listan todos.
+        if (isDirEntry && isHiddenDir(entry.path()))
+            continue;
+        if (isFile || isDirEntry)
+            out.push_back(entry.path());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::filesystem::path nearestExistingDir(const std::filesystem::path& dir,
+                                         const std::filesystem::path& root)
+{
+    if (!pathUnderDir(dir, root))
+        return root; // dir == root o fuera de la raíz
+    std::filesystem::path cur = dir;
+    while (pathUnderDir(cur, root))
+    {
+        std::error_code ec;
+        if (std::filesystem::is_directory(cur, ec) && !ec)
+            return cur;
+        cur = cur.parent_path();
+    }
+    return root;
+}
+
 bool AssetSelection::contains(const std::filesystem::path& p) const
 {
     return std::find(items.begin(), items.end(), p) != items.end();
@@ -903,39 +951,36 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     // Right: Asset browser with type icons
     ImGui::BeginChild("##AssetPane", ImVec2(0, totalHeight), false);
     {
-        if (!m_scanned) {
-            m_assets.clear();
-            std::error_code existsEc;
-            if (std::filesystem::exists(m_currentDir, existsEc) && !existsEc)
+        const double now = ImGui::GetTime();
+        if (!m_scanned)
+        {
+            m_assets      = listVisibleEntries(m_currentDir);
+            m_scanned     = true;
+            m_lastPollTime = now;
+        }
+        else if (visible && now - m_lastPollTime >= kDirPollIntervalSeconds)
+        {
+            // Polling: alguien pudo crear, borrar o renombrar cosas por fuera del
+            // editor. Se relee la carpeta actual y solo se sustituye la lista si
+            // difiere, así que en reposo no hay cambio alguno. El árbol de la
+            // izquierda no necesita esto: ya reescanea cada frame.
+            m_lastPollTime = now;
+            const std::filesystem::path stillThere =
+                nearestExistingDir(std::filesystem::path(m_currentDir), m_projectRoot);
+            if (!samePath(stillThere, std::filesystem::path(m_currentDir)))
             {
-                std::error_code iterEc;
-                std::filesystem::directory_iterator it(m_currentDir, iterEc);
-                // Mismo patrón que listVisibleSubdirs: avance manual con la
-                // sobrecarga que no lanza. exists() y la iteración son dos
-                // llamadas a disco separadas (TOCTOU) — la carpeta puede
-                // desaparecer entre medias (checkout, build, herramienta
-                // externa) — y este bloque corre cada frame desde el render
-                // loop, así que un fallo debe dejar el grid vacío ese frame
-                // en vez de tirar el editor.
-                static const std::filesystem::directory_iterator kEnd;
-                for (; it != kEnd; it.increment(iterEc))
-                {
-                    if (iterEc) break;
-                    const auto& entry = *it;
-                    std::error_code fileEc, dirEc;
-                    bool isFile      = entry.is_regular_file(fileEc);
-                    bool isDirEntry  = entry.is_directory(dirEc);
-                    // Filtrar carpetas ocultas/ruido igual que el árbol
-                    // izquierdo (mismo predicado); los ficheros no se
-                    // filtran, se listan todos como siempre.
-                    if (isDirEntry && isHiddenDir(entry.path()))
-                        continue;
-                    if (isFile || isDirEntry)
-                        m_assets.push_back(entry.path());
-                }
+                // La carpeta actual se borró por fuera: subir al ancestro que
+                // quede (sin salir de la raíz) y que el árbol muestre esa rama.
+                m_currentDir       = stillThere.string();
+                m_scanned          = false;
+                m_revealCurrentDir = true;
             }
-            std::sort(m_assets.begin(), m_assets.end());
-            m_scanned = true;
+            else
+            {
+                std::vector<std::filesystem::path> fresh = listVisibleEntries(m_currentDir);
+                if (fresh != m_assets)
+                    m_assets = std::move(fresh);
+            }
         }
 
         constexpr float ICON_SIZE = 56.0f;

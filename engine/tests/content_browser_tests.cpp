@@ -532,6 +532,64 @@ static void test_prune_selection()
     CHECK(!s.contains("b"));
 }
 
+// listVisibleEntries: ficheros y carpetas visibles de UNA carpeta, ordenados; las
+// carpetas ocultas / de build quedan fuera igual que en el arbol. Es lo que el
+// polling compara entre pasadas para saber si algo cambio por fuera del editor.
+static void test_list_visible_entries(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path dir = root / "lve";
+    fs::create_directories(dir / "sub", ec);
+    fs::create_directories(dir / ".hidden", ec);
+    fs::create_directories(dir / "build-ninja", ec);
+    std::ofstream(dir / "b.txt") << "x";
+    std::ofstream(dir / "a.txt") << "x";
+
+    std::vector<fs::path> before = listVisibleEntries(dir);
+    CHECK(before.size() == 3);
+    if (before.size() == 3)
+    {
+        CHECK(before[0].filename() == "a.txt");
+        CHECK(before[1].filename() == "b.txt");
+        CHECK(before[2].filename() == "sub");
+    }
+
+    // Alguien crea un fichero por fuera: la siguiente lectura ya lo trae.
+    std::ofstream(dir / "c.txt") << "x";
+    std::vector<fs::path> afterCreate = listVisibleEntries(dir);
+    CHECK(afterCreate.size() == 4);
+    CHECK(afterCreate != before);
+
+    // ...y otro lo borra.
+    fs::remove(dir / "a.txt", ec);
+    std::vector<fs::path> afterRemove = listVisibleEntries(dir);
+    CHECK(afterRemove.size() == 3);
+    CHECK(afterRemove != afterCreate);
+
+    // Sin cambios, dos lecturas iguales (es lo que evita refrescar en falso).
+    CHECK(listVisibleEntries(dir) == afterRemove);
+
+    // Carpeta inexistente o un fichero: vacio, sin lanzar.
+    CHECK(listVisibleEntries(dir / "no_existe").empty());
+    CHECK(listVisibleEntries(dir / "b.txt").empty());
+}
+
+// nearestExistingDir: si la carpeta actual desaparece por fuera, el panel sube al
+// ancestro existente mas cercano sin salirse de la raiz del proyecto.
+static void test_nearest_existing_dir(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path a = root / "ned" / "a";
+    fs::create_directories(a, ec);
+
+    CHECK(nearestExistingDir(a, root) == a);                         // existe: ella misma
+    CHECK(nearestExistingDir(a / "b" / "c", root) == a);             // faltan dos niveles
+    CHECK(nearestExistingDir(root / "ned" / "x", root) == root / "ned");
+    CHECK(nearestExistingDir(root / "zzz" / "y", root) == root);     // falta todo hasta la raiz
+    CHECK(nearestExistingDir(root, root) == root);
+    CHECK(nearestExistingDir(root.parent_path() / "ajena", root) == root); // fuera de la raiz
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -556,6 +614,8 @@ int main()
     test_move_asset(root);
     test_apply_asset_click();
     test_prune_selection();
+    test_list_visible_entries(root);
+    test_nearest_existing_dir(root);
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL CONTENT BROWSER TESTS PASSED\n");
