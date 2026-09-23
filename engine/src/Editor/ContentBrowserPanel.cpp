@@ -584,6 +584,30 @@ void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
     });
 }
 
+TextureImportApplyResult applyTextureImportSettings(GameObject* sceneRoot,
+                                                    const std::filesystem::path& asset,
+                                                    const TextureImportSettings& settings,
+                                                    const std::function<void(GameObject&)>& rebuild)
+{
+    TextureImportApplyResult r;
+    if (!saveTextureImportSettings(asset, settings, &r.error))
+        return r;                                    // nada reconstruido si no se pudo escribir
+    r.ok = true;
+    if (!sceneRoot || !rebuild) return r;
+
+    sceneRoot->traverse([&](GameObject* go)
+    {
+        auto coincide = [&](const std::string& field)
+        {
+            return !field.empty() && samePath(field, asset);
+        };
+        if (!go->hasMesh() || !tocaAlgunMaterial(go, coincide)) return;
+        rebuild(*go);
+        ++r.refreshed;
+    });
+    return r;
+}
+
 int countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir)
 {
     if (!sceneRoot) return 0;
@@ -1319,6 +1343,16 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 // Renombrar es de uno en uno.
                 if (ImGui::MenuItem("Rename", nullptr, false, selCount <= 1))
                     beginAssetRename(path, isDir);
+                // Ajustes de importacion: solo de UNA textura.
+                if (selCount <= 1 && !isDir &&
+                    classifyAsset(path.extension().string(), false) == AssetKind::Image &&
+                    ImGui::MenuItem("Import Settings..."))
+                {
+                    m_importTarget    = path;
+                    m_importEdit      = loadTextureImportSettings(path);
+                    m_importError.clear();
+                    m_openImportPopup = true;
+                }
                 const std::string deleteLabel =
                     selCount > 1 ? "Delete (" + std::to_string(selCount) + ")" : std::string("Delete");
                 if (ImGui::MenuItem(deleteLabel.c_str()))
@@ -1536,6 +1570,64 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 {
                     m_assetDeleteTargets = std::move(failed);
                     m_assetDeleteError = firstError;
+                }
+            }
+            else if (cancel)
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        // Ajustes de importacion de UNA textura (menu contextual). Aplicar escribe
+        // el sidecar y reconstruye los materiales que usan la textura; si no se
+        // puede escribir, el modal se queda abierto con el error.
+        if (m_openImportPopup)
+        {
+            ImGui::OpenPopup("Import Settings");
+            m_openImportPopup = false;
+        }
+        if (ImGui::BeginPopupModal("Import Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("%s", m_importTarget.filename().string().c_str());
+            ImGui::Separator();
+
+            int colorSpace = static_cast<int>(m_importEdit.colorSpace);
+            if (ImGui::Combo("Color space", &colorSpace, "Auto (por slot)\0sRGB\0Linear\0"))
+                m_importEdit.colorSpace = static_cast<ColorSpaceOverride>(colorSpace);
+            ImGui::Checkbox("Mipmaps", &m_importEdit.mipmaps);
+            ImGui::TextDisabled("Auto: color base sRGB, normal y ORM lineal.");
+
+            if (!m_importError.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_importError.c_str());
+            ImGui::Separator();
+
+            const bool apply  = ImGui::Button("Aplicar");
+            ImGui::SameLine();
+            const bool cancel = ImGui::Button("Cancelar");
+
+            if (apply)
+            {
+                // El mismo par de llamadas que MaterialTextureCommand::apply.
+                const TextureImportApplyResult r = applyTextureImportSettings(
+                    sceneRoot, m_importTarget, m_importEdit,
+                    [&ctx](GameObject& go)
+                    {
+                        if (!ctx.renderer) return;
+                        if (const SkinnedMesh* sm = go.getSkinnedMesh(); sm && go.skinnedRenderIndex >= 0)
+                            ctx.renderer->rebuildSkinnedMesh(go.skinnedRenderIndex, *sm);
+                        else if (go.staticRenderIndex >= 0)
+                            ctx.renderer->rebuildStaticMesh(go.staticRenderIndex, *go.getMesh());
+                    });
+                if (r.ok)
+                {
+                    ctx.pushLog("Import settings aplicados: " + m_importTarget.filename().string() +
+                                " (" + std::to_string(r.refreshed) + " objeto(s) actualizados)");
+                    ImGui::CloseCurrentPopup();
+                }
+                else
+                {
+                    m_importError = r.error;   // el modal NO se cierra
                 }
             }
             else if (cancel)

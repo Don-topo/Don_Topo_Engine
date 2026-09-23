@@ -5,6 +5,7 @@
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 
@@ -721,8 +722,101 @@ static void test_remove_asset_path_removes_sidecar()
     CHECK(moveAsset(base / "otra.png", base / "dest").result == MoveResult::Moved);
 }
 
+static std::shared_ptr<Mesh> meshWithTexture(const fs::path& tex)
+{
+    auto m = std::make_shared<Mesh>();
+    m->material.texturePath = tex.string();
+    return m;
+}
+
+static void test_apply_writes_sidecar_and_rebuilds_only_users()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    const fs::path foto = base / "foto.png";
+    const fs::path otra = base / "otra.png";
+    std::ofstream(foto) << "x";
+    std::ofstream(otra) << "x";
+
+    GameObject root("root");
+    GameObject* a = root.addChild("A");
+    GameObject* b = root.addChild("B");
+    root.addChild("C");                         // sin mesh
+    a->setMesh(meshWithTexture(foto));
+    b->setMesh(meshWithTexture(otra));
+
+    std::vector<GameObject*> rebuilt;
+    const auto rebuild = [&](GameObject& go) { rebuilt.push_back(&go); };
+
+    TextureImportSettings s;
+    s.colorSpace = ColorSpaceOverride::Linear;
+    s.mipmaps    = true;
+    TextureImportApplyResult r = applyTextureImportSettings(&root, foto, s, rebuild);
+    CHECK(r.ok);
+    CHECK(r.error.empty());
+    CHECK(r.refreshed == 1);
+    CHECK(rebuilt.size() == 1 && rebuilt[0] == a);
+    CHECK(loadTextureImportSettings(foto) == s);
+
+    // Con el defecto: borra el sidecar y sigue reconstruyendo al que la usa.
+    rebuilt.clear();
+    r = applyTextureImportSettings(&root, foto, TextureImportSettings{}, rebuild);
+    CHECK(r.ok);
+    CHECK(r.refreshed == 1);
+    CHECK(rebuilt.size() == 1 && rebuilt[0] == a);
+    CHECK(!fs::exists(importSidecarPath(foto)));
+}
+
+// Review Focus 6.
+static void test_apply_reports_write_failure_and_rebuilds_nothing()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply_fail";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    const fs::path foto = base / "no_existe_carpeta" / "foto.png";     // el sidecar no se puede escribir
+
+    GameObject root("root");
+    root.addChild("A")->setMesh(meshWithTexture(foto));
+
+    int calls = 0;
+    TextureImportSettings s;
+    s.mipmaps = true;
+    const TextureImportApplyResult r =
+        applyTextureImportSettings(&root, foto, s, [&](GameObject&) { ++calls; });
+    CHECK(!r.ok);
+    CHECK(!r.error.empty());
+    CHECK(r.refreshed == 0);
+    CHECK(calls == 0);
+}
+
+static void test_apply_without_renderer_still_writes()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply_norender";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    const fs::path foto = base / "foto.png";
+    std::ofstream(foto) << "x";
+
+    GameObject root("root");
+    root.addChild("A")->setMesh(meshWithTexture(foto));
+
+    TextureImportSettings s;
+    s.mipmaps = true;
+    const TextureImportApplyResult r = applyTextureImportSettings(&root, foto, s, {});
+    CHECK(r.ok);
+    CHECK(r.refreshed == 0);
+    CHECK(loadTextureImportSettings(foto) == s);
+}
+
 int main()
 {
+    test_apply_writes_sidecar_and_rebuilds_only_users();
+    test_apply_reports_write_failure_and_rebuilds_nothing();
+    test_apply_without_renderer_still_writes();
     test_list_hides_import_sidecars();
     test_move_asset_carries_sidecar();
     test_move_asset_rejects_when_destination_sidecar_exists();

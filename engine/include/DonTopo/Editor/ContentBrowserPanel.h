@@ -1,10 +1,12 @@
 #pragma once
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
+#include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Editor/Thumbnail.h"
@@ -120,6 +122,21 @@ struct RenameFileOutcome {
 };
 RenameFileOutcome renameAssetFile(const std::filesystem::path& from, const std::filesystem::path& to,
                                   bool isDir);
+
+struct TextureImportApplyResult {
+    bool        ok = false;
+    std::string error;       // causa si !ok (el modal la muestra y no se cierra)
+    int         refreshed = 0;   // objetos cuyo material se reconstruyo
+};
+
+// Escribe los ajustes de importacion de `asset` (el defecto borra el sidecar) y
+// llama a `rebuild` con cada objeto de la escena cuyo material use esa textura,
+// para que el cambio se vea sin reiniciar. Si el sidecar no se puede escribir no
+// se reconstruye nada. `rebuild` nula = solo se escribe (sin renderer).
+TextureImportApplyResult applyTextureImportSettings(GameObject* sceneRoot,
+                                                    const std::filesystem::path& asset,
+                                                    const TextureImportSettings& settings,
+                                                    const std::function<void(GameObject&)>& rebuild);
 
 // Borra un fichero (con su .import.json) o una carpeta entera. El error del
 // sistema, si lo hay; vacio = borrado.
@@ -244,6 +261,13 @@ private:
     char                   m_assetRenameBuffer[128] = {};
     std::string            m_assetRenameError;
     bool                   m_openAssetRenamePopup = false;
+
+    // Import Settings — modal disparado por right-click > Import Settings... sobre
+    // UNA textura. m_importEdit es la copia que se edita; Aplicar la escribe.
+    std::filesystem::path  m_importTarget;
+    TextureImportSettings  m_importEdit;
+    std::string            m_importError;
+    bool                   m_openImportPopup = false;
 
     // Asset delete — popup modal disparado por right-click > Delete.
     std::vector<std::pair<std::filesystem::path, bool>> m_assetDeleteTargets;
