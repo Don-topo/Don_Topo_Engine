@@ -2,11 +2,12 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/AssetImport.h"
 
 namespace DonTopo {
 
 class GameObject;
-struct EditorContext;
 
 // Subcarpetas directas de dir, ordenadas por path, filtrando el ruido que
 // no interesa ver en el árbol del Content Browser: entradas ocultas (nombre
@@ -15,6 +16,17 @@ struct EditorContext;
 // Declarada aquí (y no en el anonymous namespace del .cpp) para que el test
 // headless pueda enlazarla.
 std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::path& dir);
+
+// Importa cada DroppedFile cuyo (screenX, screenY) caiga dentro del rect
+// (rectX, rectY, rectW, rectH) a targetDir; los que caen fuera no generan
+// ninguna entrada en el resultado (se ignoran en silencio). Un fallo
+// individual (extension no importable, conflicto de nombre) no aborta el
+// resto del lote. Declarada aquí, no en el anonymous namespace del .cpp,
+// para que el test headless pueda enlazarla.
+std::vector<AssetImportOutcome> importDroppedFilesInto(
+    const std::vector<DroppedFile>& dropped,
+    float rectX, float rectY, float rectW, float rectH,
+    const std::filesystem::path& targetDir);
 
 // Las tres funciones siguientes no tocan estado privado de ContentBrowserPanel
 // (sólo sus parámetros), así que se declaran aquí como funciones libres —igual

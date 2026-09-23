@@ -2,6 +2,7 @@
 #include <functional>
 #include <string>
 #include <filesystem>
+#include <vector>
 #include <glm/glm.hpp>
 
 namespace DonTopo {
@@ -16,6 +17,16 @@ class ScriptManager;
 class UndoManager;
 class AsyncAssetLoader;
 class ProjectContext;
+
+// Fichero soltado sobre la ventana del editor desde fuera del proceso (drag
+// desde el Explorador de Windows), con la posicion de pantalla en la que
+// cayo. screenX/screenY son coordenadas de pantalla de ImGui (las mismas que
+// ImGui::GetMousePos()/GetWindowPos()), no coordenadas de la ventana GLFW.
+struct DroppedFile {
+    std::filesystem::path path;
+    float screenX = 0.0f;
+    float screenY = 0.0f;
+};
 
 // Estado compartido entre los paneles del editor, construido de nuevo cada
 // frame dentro de EditorUI::draw() y pasado por referencia a cada
@@ -108,6 +119,14 @@ struct EditorContext {
     // diálogo Save Scene del menú File y encadena la carga a su confirmación;
     // si el usuario lo cancela, no se carga nada.
     std::function<void(const std::filesystem::path& thenLoad)> requestSaveScene;
+
+    // Vacia la cola de ficheros soltados sobre la ventana este frame (drop
+    // OS-level via glfwSetDropCallback, no el drag&drop interno de ImGui
+    // payloads DT_ASSET_PATH). Se consume una vez: llamarlo dos veces en el
+    // mismo frame devuelve vacio la segunda. Vacio/no asignado en los tests
+    // headless y en runtime — solo lo rellena EditorUI::draw() a partir de
+    // EditorUI::m_droppedFilesProvider (wiring de sandbox/main.cpp).
+    std::function<std::vector<DroppedFile>()> takeDroppedFiles;
 };
 
 } // namespace DonTopo

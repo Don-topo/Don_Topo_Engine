@@ -2,6 +2,7 @@
 // asserts, sin framework — mismo patrón que physics_tests.cpp.
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
@@ -10,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <system_error>
 #include <vector>
 
@@ -278,6 +280,50 @@ static void test_rename_rewrites_material_override_baseline()
     CHECK(go->materialOverrides[0].baseOrm    == newPath);
 }
 
+// importDroppedFilesInto: dentro del rect se importa, fuera se ignora en
+// silencio, extension no importable se rechaza, y un conflicto de nombre no
+// aborta el resto del lote (las cuatro reglas del diseño de drop externo).
+static void test_import_dropped_files_into(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path externalDir = root / "external_src";
+    fs::create_directories(externalDir, ec);
+    fs::path destDir = root / "import_dest";
+    fs::create_directories(destDir, ec);
+
+    std::ofstream(externalDir / "nuevo.png")     << "nuevo";
+    std::ofstream(externalDir / "conflicto.png") << "version-nueva";
+    std::ofstream(destDir     / "conflicto.png") << "version-vieja"; // ya existe
+    std::ofstream(externalDir / "notas.txt")     << "no importable";
+    std::ofstream(externalDir / "lejos.png")     << "fuera del rect";
+
+    const float rectX = 0.0f, rectY = 0.0f, rectW = 100.0f, rectH = 100.0f;
+    std::vector<DroppedFile> dropped = {
+        { externalDir / "nuevo.png",     50.0f, 50.0f },   // dentro
+        { externalDir / "conflicto.png", 50.0f, 50.0f },   // dentro, conflicto
+        { externalDir / "notas.txt",     50.0f, 50.0f },   // dentro, no importable
+        { externalDir / "lejos.png",     500.0f, 500.0f }, // fuera del rect
+    };
+
+    std::vector<AssetImportOutcome> outcomes =
+        importDroppedFilesInto(dropped, rectX, rectY, rectW, rectH, destDir);
+
+    // "lejos.png" ni siquiera genera una entrada: cayo fuera del rect.
+    CHECK(outcomes.size() == 3);
+    if (outcomes.size() == 3)
+    {
+        CHECK(outcomes[0].result == AssetImportResult::Copied);
+        CHECK(outcomes[0].destPath == destDir / "nuevo.png");
+        CHECK(outcomes[1].result == AssetImportResult::RejectedNameConflict);
+        CHECK(outcomes[2].result == AssetImportResult::RejectedExtension);
+    }
+    CHECK(fs::exists(destDir / "nuevo.png"));
+    CHECK(!fs::exists(destDir / "lejos.png"));
+    std::ifstream in(destDir / "conflicto.png");
+    std::stringstream ss; ss << in.rdbuf();
+    CHECK(ss.str() == "version-vieja"); // el conflicto no lo toco
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -294,6 +340,7 @@ int main()
     test_detach_clears_material_override_path();
     test_detach_clears_material_override_baseline();
     test_rename_rewrites_material_override_baseline();
+    test_import_dropped_files_into(root);
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL CONTENT BROWSER TESTS PASSED\n");

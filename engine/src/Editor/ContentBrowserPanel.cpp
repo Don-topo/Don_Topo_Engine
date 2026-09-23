@@ -1,5 +1,6 @@
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Core/GameObject.h"
@@ -157,6 +158,13 @@ bool isHiddenDir(const std::filesystem::path& dir)
     return std::filesystem::exists(dir / "CMakeCache.txt", ec) && !ec;
 }
 
+// Contencion de rect simple: borde superior/izquierdo inclusive, inferior/
+// derecho exclusivo — estandar para hit-test de rects en pantalla.
+bool pointInsideRect(float px, float py, float rectX, float rectY, float rectW, float rectH)
+{
+    return px >= rectX && px < rectX + rectW && py >= rectY && py < rectY + rectH;
+}
+
 } // namespace
 
 namespace DonTopo {
@@ -183,6 +191,28 @@ std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::pat
         out.push_back(entry.path());
     }
     std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::vector<AssetImportOutcome> importDroppedFilesInto(
+    const std::vector<DroppedFile>& dropped,
+    float rectX, float rectY, float rectW, float rectH,
+    const std::filesystem::path& targetDir)
+{
+    std::vector<AssetImportOutcome> out;
+    for (const DroppedFile& f : dropped)
+    {
+        if (!pointInsideRect(f.screenX, f.screenY, rectX, rectY, rectW, rectH))
+            continue;
+        std::string ext = f.path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (!isImportableExtension(ext))
+        {
+            out.push_back({ AssetImportResult::RejectedExtension, {}, "" });
+            continue;
+        }
+        out.push_back(importExternalAsset(f.path, targetDir));
+    }
     return out;
 }
 
@@ -522,6 +552,29 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     }
     if (m_currentDir.empty())
         m_currentDir = m_projectRoot.string();
+
+    // Drop OS-level (Explorer -> ventana): se consume una vez por frame, y
+    // solo importa lo que cae dentro del rect de ESTA ventana — soltar sobre
+    // otro panel dockeado no hace nada aquí (nadie más lo reclama).
+    if (ctx.takeDroppedFiles)
+    {
+        const ImVec2 winPos  = ImGui::GetWindowPos();
+        const ImVec2 winSize = ImGui::GetWindowSize();
+        std::vector<AssetImportOutcome> outcomes = importDroppedFilesInto(
+            ctx.takeDroppedFiles(), winPos.x, winPos.y, winSize.x, winSize.y, m_currentDir);
+        for (const AssetImportOutcome& o : outcomes)
+        {
+            if (o.result == AssetImportResult::Copied)
+            {
+                ctx.pushLog("Asset importado: " + o.destPath.filename().string());
+                m_scanned = false;
+            }
+            else
+            {
+                ctx.pushLog("Import rechazado: " + describeImportResult(o));
+            }
+        }
+    }
 
     // Left: árbol de carpetas
     ImGui::BeginChild("##FolderTreePane", ImVec2(leftWidth, totalHeight), false);
