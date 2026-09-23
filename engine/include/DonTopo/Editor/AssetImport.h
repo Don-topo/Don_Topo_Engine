@@ -21,6 +21,11 @@ struct AssetImportOutcome {
     std::filesystem::path destPath;
     // Vacio salvo RejectedCopyFailed (mensaje de std::error_code).
     std::string errorMessage;
+    // El fichero de origen que se intento importar. Lo rellena el llamante
+    // que sabe cual era (importExternalAsset e importDroppedFilesInto), para
+    // que un log de rechazo en un lote de varios ficheros pueda decir CUAL
+    // fallo y no solo por que.
+    std::filesystem::path sourcePath;
 };
 
 // true si ext (con el punto, cualquier combinacion de mayusc/minusc) es uno

@@ -55,6 +55,7 @@ static void test_import_copies_file(const fs::path& root)
 
     CHECK(outcome.result == AssetImportResult::Copied);
     CHECK(outcome.destPath == destDir / "modelo.fbx");
+    CHECK(outcome.sourcePath == source);
     CHECK(fs::exists(outcome.destPath));
     std::ifstream in(outcome.destPath);
     std::stringstream ss; ss << in.rdbuf();

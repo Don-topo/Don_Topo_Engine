@@ -57,11 +57,20 @@ namespace {
 // por la que un asset de OTRO proyecto podía entrar en la escena y acabar en el
 // paquete de export.
 //
-// Lo que se rechaza es exactamente eso: un asset que caiga dentro del workspace
-// `projects/` pero fuera del proyecto abierto. Lo de fuera del workspace (los
-// assets compartidos del repo: mallas, fuentes, audio) se sigue permitiendo,
-// mismo criterio que la carpeta Scripts/ o el skybox del motor. Sin proyecto
-// abierto (tests headless) pasa todo, como antes de que el concepto existiera.
+// Dos casos de "no está en el proyecto abierto", con destino distinto:
+// - Dentro del workspace `projects/` pero de OTRO proyecto: se rechaza sin
+//   más (mismo mensaje de siempre). Cruzar assets entre dos proyectos
+//   separados sigue sin ser el flujo que se quiere soportar.
+// - Genuinamente fuera del workspace (Escritorio, Descargas, un USB...): se
+//   IMPORTA — se copia a assets/Imported/<Tipo>/ si la extensión es de las
+//   soportadas, igual que el drop externo sobre el Content Browser. Antes de
+//   esta función existir, este caso se aceptaba sin copiar (referenciaba la
+//   ruta externa tal cual); ese "aceptar sin copiar" era precisamente el
+//   agujero que esta feature cierra — la corrección inicial invertía sin
+//   querer las dos ramas y dejaba este caso, el más común de los dos,
+//   comportándose exactamente como antes (encontrado en la revisión final).
+// Sin proyecto abierto (tests headless) pasa todo, como antes de que el
+// concepto existiera.
 // Los 18 diálogos de assets de este panel pasan por aquí al drenarse, y NADIE
 // aplica una ruta sin preguntar antes. Por eso el veto de edición vive en esta
 // función y no en cada botón "Browse...": gatear el botón solo tapa el caso de
@@ -93,19 +102,24 @@ std::optional<std::filesystem::path> canAcceptAsset(const DonTopo::EditorContext
 
     // El workspace lo crea el selector al arrancar, así que este contains()
     // responde sobre una carpeta que existe; si aun así fallara, contains()
-    // devuelve false y el asset se trata como compartido, no como ajeno.
+    // devuelve false y el path se trata como genuinamente externo (importable),
+    // no como de otro proyecto.
     const DonTopo::ProjectContext workspace(DonTopo::ProjectContext::workspaceDir());
-    if (!workspace.contains(path)) return path;
+    if (workspace.contains(path))
+    {
+        ctx.logModule("Project", "Asset de otro proyecto, rechazado: " + path.string());
+        return std::nullopt;
+    }
 
-    // Asset fuera del proyecto y del workspace compartido: antes se rechazaba
-    // sin más. Ahora, si la extensión es de las que el editor ya sabe
-    // importar, se copia al proyecto en vez de descartarse — mismo mecanismo
-    // que el drop externo sobre el Content Browser.
+    // Genuinamente fuera del workspace: se intenta importar. Si la extensión
+    // no es de las soportadas, se rechaza en vez de aceptarla sin copiar —
+    // referenciar una ruta absoluta fuera del proyecto es justo lo que esta
+    // feature quiere dejar de hacer.
     std::string ext = path.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     if (!DonTopo::isImportableExtension(ext))
     {
-        ctx.logModule("Project", "Asset de otro proyecto, rechazado: " + path.string());
+        ctx.logModule("Project", "Extension no soportada para importar: " + path.string());
         return std::nullopt;
     }
 

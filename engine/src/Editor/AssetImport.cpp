@@ -47,7 +47,7 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
 {
     std::error_code ec;
     if (!std::filesystem::is_regular_file(source, ec) || ec)
-        return { AssetImportResult::RejectedCopyFailed, {}, "El origen no es un fichero" };
+        return { AssetImportResult::RejectedCopyFailed, {}, "El origen no es un fichero", source };
 
     std::filesystem::create_directories(destDir, ec);
     ec.clear();
@@ -57,10 +57,10 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
     if (!ok)
     {
         if (ec == std::errc::file_exists)
-            return { AssetImportResult::RejectedNameConflict, {}, "" };
-        return { AssetImportResult::RejectedCopyFailed, {}, ec.message() };
+            return { AssetImportResult::RejectedNameConflict, {}, "", source };
+        return { AssetImportResult::RejectedCopyFailed, {}, ec.message(), source };
     }
-    return { AssetImportResult::Copied, dest, "" };
+    return { AssetImportResult::Copied, dest, "", source };
 }
 
 std::string describeImportResult(const AssetImportOutcome& outcome)
