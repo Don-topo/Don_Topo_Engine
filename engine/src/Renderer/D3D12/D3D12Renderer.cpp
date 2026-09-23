@@ -1760,16 +1760,21 @@ struct D3D12Renderer::Impl {
 
     // Sube una textura 2D (o un array de slices 1x1) y le crea su SRV en el
     // hueco `srvIndex` del heap.
+    // `mips` son los niveles 1..N-1 de una textura 2D (arraySize == 1); con
+    // arraySize > 1 no se usan.
     D3D12MA::Allocation* uploadTexture(const void* pixels, UINT width, UINT height,
                                        UINT arraySize, DXGI_FORMAT format,
-                                       UINT bytesPerPixel, UINT srvIndex);
+                                       UINT bytesPerPixel, UINT srvIndex,
+                                       const TextureMip* mips = nullptr, size_t mipCount = 0);
 
     // Decodifica la textura del material (embebida o de fichero), la sube y le
     // crea el SRV en `srvIndex`. nullptr si no hay textura o no se pudo leer:
-    // quien llama pone ahí la vista de la 1x1 global.
+    // quien llama pone ahí la vista de la 1x1 global. El formato lo decide
+    // resolveSrgb: el slot (`kind`) da el valor por defecto y el sidecar puede
+    // pisarlo.
     D3D12MA::Allocation* uploadMaterialTexture(const std::string& path,
-                                               const std::vector<uint8_t>& embedded, bool srgb,
-                                               UINT srvIndex);
+                                               const std::vector<uint8_t>& embedded,
+                                               TextureKind kind, UINT srvIndex);
 
     // Vista de una textura 2D ya subida en un hueco cualquiera. Para repetir
     // las 1x1 globales dentro de la terna de un objeto sin volver a subirlas.
@@ -2474,14 +2479,20 @@ void D3D12Renderer::Impl::createGridGeometry()
 D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT width,
                                                         UINT height, UINT arraySize,
                                                         DXGI_FORMAT format, UINT bytesPerPixel,
-                                                        UINT srvIndex)
+                                                        UINT srvIndex,
+                                                        const TextureMip* mips, size_t mipCount)
 {
+    // Con array de slices no hay mips (los del array los usa el cubemap del cielo
+    // y las sombras, que son de un nivel).
+    const UINT mipLevels    = 1 + (arraySize == 1 ? static_cast<UINT>(mipCount) : 0);
+    const UINT subresources = mipLevels * arraySize;
+
     D3D12_RESOURCE_DESC texDesc{};
     texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     texDesc.Width            = width;
     texDesc.Height           = height;
     texDesc.DepthOrArraySize = static_cast<UINT16>(arraySize);
-    texDesc.MipLevels        = 1;
+    texDesc.MipLevels        = static_cast<UINT16>(mipLevels);
     texDesc.Format           = format;
     texDesc.SampleDesc.Count = 1;
     texDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -2498,11 +2509,11 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
     // El staging no se escribe fila a fila como en memoria: cada fila va
     // alineada a D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, y cada slice del array es
     // un subrecurso propio con su footprint.
-    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(arraySize);
-    std::vector<UINT>                               rowCounts(arraySize);
-    std::vector<UINT64>                             rowSizes(arraySize);
+    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(subresources);
+    std::vector<UINT>                               rowCounts(subresources);
+    std::vector<UINT64>                             rowSizes(subresources);
     UINT64                                          stagingSize = 0;
-    device->GetCopyableFootprints(&texDesc, 0, arraySize, 0, footprints.data(), rowCounts.data(),
+    device->GetCopyableFootprints(&texDesc, 0, subresources, 0, footprints.data(), rowCounts.data(),
                                   rowSizes.data(), &stagingSize);
 
     D3D12_RESOURCE_DESC bufferDesc{};
@@ -2536,13 +2547,21 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
         throwIfFailed(hr, "ID3D12Resource::Map(staging de textura)");
     }
 
+    // Subrecurso i = nivel + slice * mipLevels. El nivel 0 sale de `pixels`
+    // (slice a slice) y los demas de `mips`, cada uno con su propio ancho.
     const auto* source = static_cast<const uint8_t*>(pixels);
-    for (UINT slice = 0; slice < arraySize; ++slice) {
-        for (UINT row = 0; row < rowCounts[slice]; ++row) {
-            std::memcpy(mapped + footprints[slice].Offset +
-                            static_cast<UINT64>(row) * footprints[slice].Footprint.RowPitch,
-                        source + (static_cast<UINT64>(slice) * height + row) * width * bytesPerPixel,
-                        static_cast<size_t>(rowSizes[slice]));
+    for (UINT i = 0; i < subresources; ++i) {
+        const UINT slice = i / mipLevels;
+        const UINT level = i % mipLevels;
+        const uint8_t* src = level == 0
+            ? source + static_cast<UINT64>(slice) * height * width * bytesPerPixel
+            : mips[level - 1].rgba.data();
+        const UINT srcWidth = level == 0 ? width : mips[level - 1].w;
+        for (UINT row = 0; row < rowCounts[i]; ++row) {
+            std::memcpy(mapped + footprints[i].Offset +
+                            static_cast<UINT64>(row) * footprints[i].Footprint.RowPitch,
+                        src + static_cast<UINT64>(row) * srcWidth * bytesPerPixel,
+                        static_cast<size_t>(rowSizes[i]));
         }
     }
     staging->GetResource()->Unmap(0, nullptr);
@@ -2551,16 +2570,16 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
     throwIfFailed(commandList->Reset(allocators[frameIndex].Get(), nullptr),
                   "ID3D12GraphicsCommandList::Reset(textura)");
 
-    for (UINT slice = 0; slice < arraySize; ++slice) {
+    for (UINT i = 0; i < subresources; ++i) {
         D3D12_TEXTURE_COPY_LOCATION dst{};
         dst.pResource        = destination->GetResource();
         dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        dst.SubresourceIndex = slice;
+        dst.SubresourceIndex = i;
 
         D3D12_TEXTURE_COPY_LOCATION src{};
         src.pResource       = staging->GetResource();
         src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        src.PlacedFootprint = footprints[slice];
+        src.PlacedFootprint = footprints[i];
 
         commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
     }
@@ -2588,7 +2607,7 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
         srvDesc.Texture2DArray.ArraySize       = arraySize;
     } else {
         srvDesc.ViewDimension       = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Texture2D.MipLevels = 1;
+        srvDesc.Texture2D.MipLevels = mipLevels;
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -2599,21 +2618,31 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
 }
 
 D3D12MA::Allocation* D3D12Renderer::Impl::uploadMaterialTexture(
-    const std::string& path, const std::vector<uint8_t>& embedded, bool srgb, UINT srvIndex)
+    const std::string& path, const std::vector<uint8_t>& embedded, TextureKind kind, UINT srvIndex)
 {
     const DecodedTexture tex = decodeMaterialTexture(path, embedded);
     if (!tex)
         return nullptr;  // el caller (fuera de esta función) pone su relleno
 
-    // sRGB para el color base y lineal para las normales: una normal
-    // interpretada como color se descodifica con gamma y apunta a otro sitio.
+    // El slot da el valor por defecto (sRGB el color base, lineal las normales:
+    // una normal interpretada como color se descodifica con gamma y apunta a otro
+    // sitio) y el sidecar de importacion puede pisarlo. resolveSrgb es el unico
+    // sitio que lo decide.
+    const bool srgb = resolveSrgb(kind, tex.colorSpace);
     const DXGI_FORMAT format =
         srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
 
     // `tex` suelta los píxeles al salir, también si uploadTexture lanza: el
     // try/catch que había aquí solo existía para no fugarlos en ese caso.
     return uploadTexture(tex.pixels.get(), static_cast<UINT>(tex.w), static_cast<UINT>(tex.h), 1,
-                         format, 4, srvIndex);
+                         format, 4, srvIndex, tex.mips.data(), tex.mips.size());
+}
+
+// El formato con el que se creo el recurso: las vistas de reuso lo leen de aqui
+// en vez de suponerlo por el slot (el sidecar puede haberlo cambiado).
+static DXGI_FORMAT formatOf(D3D12MA::Allocation* a)
+{
+    return a->GetResource()->GetDesc().Format;
 }
 
 void D3D12Renderer::Impl::createTexture2DSrv(ID3D12Resource* resource, DXGI_FORMAT format,
@@ -2623,7 +2652,9 @@ void D3D12Renderer::Impl::createTexture2DSrv(ID3D12Resource* resource, DXGI_FORM
     srvDesc.Format                  = format;
     srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Texture2D.MipLevels     = 1;
+    // -1 = todos los niveles del recurso: 1 para las 1x1 globales, N para una
+    // textura de material con mips.
+    srvDesc.Texture2D.MipLevels     = static_cast<UINT>(-1);
 
     D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
     handle.ptr += static_cast<SIZE_T>(srvIndex) * srvSize;
@@ -3536,15 +3567,14 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
             // relleno, y la caché no lo guarda.
             auto pedirTextura = [&](const std::string& ruta, const std::vector<uint8_t>& emb,
                                     TextureKind tipo, UINT srvIndex) -> D3D12MA::Allocation* {
-                const bool srgb = tipo == TextureKind::BaseColor;
                 bool creada = false;
                 D3D12MA::Allocation* a = skinnedTextures.acquire(
-                    makeTextureKey(ruta, emb, tipo),
-                    [&] { return uploadMaterialTexture(ruta, emb, srgb, srvIndex); }, &creada);
+                    makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta)),
+                    [&] { return uploadMaterialTexture(ruta, emb, tipo, srvIndex); }, &creada);
+                // En acierto, el formato es el del recurso ya subido (resolveSrgb
+                // lo decidio cuando se creo), no una suposicion por el slot.
                 if (a && !creada)
-                    createTexture2DSrv(a->GetResource(),
-                                       srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM,
-                                       srvIndex);
+                    createTexture2DSrv(a->GetResource(), formatOf(a), srvIndex);
                 return a;
             };
 
@@ -10091,17 +10121,18 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
 
         if (reusa) {
             // Mismos recursos, vistas nuevas. Los formatos son los que eligió
-            // uploadMaterialTexture: sRGB para el color, lineal para el resto.
+            // uploadMaterialTexture (resolveSrgb: slot + sidecar): se leen del
+            // propio recurso.
             if (object.baseColorAllocation)
                 d.createTexture2DSrv(object.baseColorAllocation->GetResource(),
-                                     DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, slot + 0);
+                                     formatOf(object.baseColorAllocation), slot + 0);
             else
                 d.createTexture2DSrv(d.baseColorAllocation->GetResource(),
                                      DXGI_FORMAT_R8G8B8A8_UNORM, slot + 0);
 
             if (object.normalMapAllocation)
                 d.createTexture2DSrv(object.normalMapAllocation->GetResource(),
-                                     DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
+                                     formatOf(object.normalMapAllocation), slot + 1);
             else
                 d.createTexture2DSrv(d.normalMapAllocation->GetResource(),
                                      DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
@@ -10110,10 +10141,11 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
 
             if (object.metalRoughAllocation)
                 d.createTexture2DSrv(object.metalRoughAllocation->GetResource(),
-                                     DXGI_FORMAT_R8G8B8A8_UNORM, slot + 3);
+                                     formatOf(object.metalRoughAllocation), slot + 3);
         } else {
             object.baseColorAllocation = d.uploadMaterialTexture(
-                mesh.material.texturePath, mesh.material.embeddedTexture, true, slot + 0);
+                mesh.material.texturePath, mesh.material.embeddedTexture, TextureKind::BaseColor,
+                slot + 0);
             if (!object.baseColorAllocation) {
                 // Sin material que pida textura, blanco; si la pedia y no se
                 // pudo leer, damero. Antes las dos caian en blanco y un fichero
@@ -10128,7 +10160,8 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
             }
 
             object.normalMapAllocation = d.uploadMaterialTexture(
-                mesh.material.normalMapPath, mesh.material.embeddedNormalMap, false, slot + 1);
+                mesh.material.normalMapPath, mesh.material.embeddedNormalMap, TextureKind::Normal,
+                slot + 1);
             if (!object.normalMapAllocation)
                 d.createTexture2DSrv(d.normalMapAllocation->GetResource(),
                                      DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
@@ -10140,7 +10173,8 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
             // acaba de dejar fillSharedSlots.
             object.metalRoughAllocation =
                 d.uploadMaterialTexture(mesh.material.metallicRoughnessPath,
-                                        mesh.material.embeddedMetallicRoughness, false, slot + 3);
+                                        mesh.material.embeddedMetallicRoughness, TextureKind::Orm,
+                                        slot + 3);
         }
     }
 
@@ -10790,7 +10824,8 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         // los neutros globales, nunca a las texturas PRESTADAS del dueño del que
         // este objeto está a punto de desengancharse.
         nuevoColor = d.uploadMaterialTexture(mesh.material.texturePath,
-                                             mesh.material.embeddedTexture, true, slot + 0);
+                                             mesh.material.embeddedTexture, TextureKind::BaseColor,
+                                             slot + 0);
         if (!nuevoColor) {
             // La pidió y no se pudo leer: damero, que se note. No la pidió: blanco.
             const bool sePidio =
@@ -10803,7 +10838,8 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         }
 
         nuevaNormal = d.uploadMaterialTexture(mesh.material.normalMapPath,
-                                              mesh.material.embeddedNormalMap, false, slot + 1);
+                                              mesh.material.embeddedNormalMap, TextureKind::Normal,
+                                              slot + 1);
         if (!nuevaNormal)
             d.createTexture2DSrv(d.normalMapAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
                                  slot + 1);
@@ -10814,8 +10850,8 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         // sonda de reflexión que lleva este objeto es suya y rellenarlos otra vez
         // la cambiaría por la global.
         nuevoOrm = d.uploadMaterialTexture(mesh.material.metallicRoughnessPath,
-                                           mesh.material.embeddedMetallicRoughness, false,
-                                           slot + 3);
+                                           mesh.material.embeddedMetallicRoughness,
+                                           TextureKind::Orm, slot + 3);
         if (!nuevoOrm)
             d.createTexture2DSrv(d.metalRoughAllocation->GetResource(),
                                  DXGI_FORMAT_R8G8B8A8_UNORM, slot + 3);

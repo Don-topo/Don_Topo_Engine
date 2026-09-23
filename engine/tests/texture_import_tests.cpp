@@ -246,8 +246,22 @@ static void test_policy_vulkan_material_format_comes_from_resolveSrgb()
     CHECK(countOf(rnd, "ormView, VK_FORMAT_R8G8B8A8_UNORM)") == 0);
 }
 
+static void test_policy_d3d12_material_format_comes_from_resolveSrgb()
+{
+    const std::string d3d = readAll("engine/src/Renderer/D3D12/D3D12Renderer.cpp");
+    CHECK(!d3d.empty());
+    CHECK(countOf(d3d, "resolveSrgb(") >= 1);                                       // uploadMaterialTexture
+    // La regla antigua ("srgb ? UNORM_SRGB : UNORM" segun el slot) y las vistas de
+    // reuso con el formato escrito a mano ya no existen.
+    CHECK(countOf(d3d, "srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM") == 1);
+    CHECK(countOf(d3d, "DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, slot + 0)") == 0);
+    // Y la firma de uploadMaterialTexture ya no recibe un bool srgb.
+    CHECK(countOf(d3d, "const std::string& path, const std::vector<uint8_t>& embedded, bool srgb, UINT srvIndex") == 0);
+}
+
 int main()
 {
+    test_policy_d3d12_material_format_comes_from_resolveSrgb();
     test_policy_vulkan_material_format_comes_from_resolveSrgb();
     test_decode_without_sidecar_is_unchanged();
     test_decode_with_sidecar_carries_settings_and_mips();
