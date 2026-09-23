@@ -1,6 +1,7 @@
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
+#include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Core/GameObject.h"
@@ -170,6 +171,13 @@ bool pointInsideRect(float px, float py, float rectX, float rectY, float rectW, 
 } // namespace
 
 namespace DonTopo {
+
+std::string assetIconButtonLabel(const char* text, bool hasThumbnail)
+{
+    // "###" fija el id: ImGui hashea la etiqueta entera, y sin esto el boton
+    // cambiaria de id (y perderia el click en curso) al llegar la miniatura.
+    return std::string(hasThumbnail ? "" : text) + "###icon";
+}
 
 std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::path& dir)
 {
@@ -951,6 +959,35 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     // Right: Asset browser with type icons
     ImGui::BeginChild("##AssetPane", ImVec2(0, totalHeight), false);
     {
+        // Miniaturas: el cache se crea la primera vez que el backend da atlas y hay
+        // JobSystem; cambiar de carpeta abre una generacion nueva (lo pendiente de
+        // la anterior ya no interesa) y cada frame empieza con beginFrame.
+        if (!m_thumbs && ctx.renderer && ctx.jobs)
+        {
+            const uint64_t atlasId = ctx.renderer->uiThumbnailAtlasId();
+            if (atlasId != 0)
+            {
+                m_thumbAtlasId = atlasId;
+                EditorRenderer* renderer = ctx.renderer;
+                JobSystem*      jobs     = ctx.jobs;
+                m_thumbs = std::make_unique<ThumbnailCache>(
+                    [jobs](std::function<void()> job) { return jobs->submit(std::move(job)) != 0; },
+                    [renderer](const ThumbnailTile* tiles, size_t count) {
+                        return renderer->uploadUiThumbnails(tiles, count);
+                    });
+                m_thumbDir = m_currentDir;
+            }
+        }
+        if (m_thumbs)
+        {
+            if (m_thumbDir != m_currentDir)
+            {
+                m_thumbs->newGeneration();
+                m_thumbDir = m_currentDir;
+            }
+            m_thumbs->beginFrame();
+        }
+
         const double now = ImGui::GetTime();
         if (!m_scanned)
         {
@@ -965,6 +1002,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             // difiere, así que en reposo no hay cambio alguno. El árbol de la
             // izquierda no necesita esto: ya reescanea cada frame.
             m_lastPollTime = now;
+            // Regenerar las miniaturas de lo que cambio de contenido con el mismo nombre.
+            if (m_thumbs) m_thumbs->refreshStamps();
             const std::filesystem::path stillThere =
                 nearestExistingDir(std::filesystem::path(m_currentDir), m_projectRoot);
             if (!samePath(stillThere, std::filesystem::path(m_currentDir)))
@@ -1088,6 +1127,12 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             }
 
             ImGui::PushID(path.string().c_str());
+            // Solo las imágenes que están a la vista: una carpeta de miles de
+            // texturas no debe lanzar miles de decodificaciones.
+            std::optional<UvRect> thumb;
+            if (m_thumbs && kind == AssetKind::Image &&
+                ImGui::IsRectVisible(ImVec2(ICON_SIZE, ICON_SIZE)))
+                thumb = m_thumbs->request(path);
             // Seleccionado: borde claro y color más vivo. El borde se apila ANTES
             // que los colores del botón para poder sacarlo el último.
             const bool selected = m_selection.contains(path);
@@ -1100,12 +1145,25 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             ImGui::PushStyleColor(ImGuiCol_Button, btnColor);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                 ImVec4(btnColor.x + 0.15f, btnColor.y + 0.15f, btnColor.z + 0.15f, 1.0f));
-            const bool clicked = ImGui::Button(label, ImVec2(ICON_SIZE, ICON_SIZE));
+            // Con miniatura el botón va sin etiqueta y la imagen se dibuja encima,
+            // dentro del borde de selección.
+            const bool clicked = ImGui::Button(assetIconButtonLabel(label, thumb.has_value()).c_str(),
+                                               ImVec2(ICON_SIZE, ICON_SIZE));
             ImGui::PopStyleColor(2);
             if (selected)
             {
                 ImGui::PopStyleColor();
                 ImGui::PopStyleVar();
+            }
+            if (thumb)
+            {
+                const ImVec2 mn  = ImGui::GetItemRectMin();
+                const ImVec2 mx  = ImGui::GetItemRectMax();
+                const float  pad = 3.0f;
+                ImGui::GetWindowDrawList()->AddImage(
+                    (ImTextureID)m_thumbAtlasId,
+                    ImVec2(mn.x + pad, mn.y + pad), ImVec2(mx.x - pad, mx.y - pad),
+                    ImVec2(thumb->u0, thumb->v0), ImVec2(thumb->u1, thumb->v1));
             }
             if (clicked)
             {
@@ -1230,6 +1288,9 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             ImGui::NextColumn();
             ImGui::PopID();
         }
+        // Recoge lo decodificado y lo sube al atlas: se ve a partir del frame siguiente.
+        if (m_thumbs) m_thumbs->pump();
+
         ImGui::Columns(1);
 
         // Clic izquierdo en el vacío del grid deselecciona. IsAnyItemHovered deja

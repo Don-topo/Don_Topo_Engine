@@ -365,6 +365,10 @@ constexpr UINT kSrvViewport = kSrvTaaHistory + 2;
 constexpr UINT kSrvUiAtlas    = kSrvViewport + 1;
 constexpr UINT kMaxUiAtlases  = 16;
 
+// Atlas compartido de miniaturas del Content Browser: UN hueco propio, para no
+// gastar uno de los 16 de la UI 2D del juego.
+constexpr UINT kSrvThumbAtlas = kSrvUiAtlas + kMaxUiAtlases;
+
 // ─── Sondas de reflexión ─────────────────────────────────────────────────────
 // Cada sonda tiene lo mismo que el IBL global —irradiancia y entorno
 // prefiltrado— más el cubemap donde se captura la escena antes de
@@ -379,7 +383,7 @@ constexpr UINT kMaxProbes = 8;
 constexpr UINT kSrvPerProbe = 1                     // captura
                             + 1 + 1                 // irradiancia: lectura y escritura
                             + 1 + kIblPrefilterMips;// prefiltrado: lectura y un UAV por mip
-constexpr UINT kSrvProbes   = kSrvUiAtlas + kMaxUiAtlases;
+constexpr UINT kSrvProbes   = kSrvThumbAtlas + 1;
 
 // Pareja contigua para componer con el bloom APAGADO. bloom_composite.frag
 // hace `color += bloom * intensity` SIEMPRE, y su tabla pide [escena, bloom]
@@ -1500,6 +1504,13 @@ struct D3D12Renderer::Impl {
     std::unordered_map<const UiTextureAtlas*, UINT>       uiAtlasSrv;
     std::vector<D3D12MA::Allocation*>                     uiAtlasTextures;
     UINT                                                  uiNextAtlasSlot = 0;
+
+    // Atlas compartido de miniaturas (ver EditorRenderer::uiThumbnailAtlasId). Se
+    // crea la primera vez que se pide; si falla, no se reintenta cada frame.
+    D3D12MA::Allocation* thumbAtlas       = nullptr;
+    bool                 thumbAtlasFailed = false;
+    bool ensureThumbAtlas();
+    bool uploadThumbnailTiles(const ThumbnailTile* tiles, size_t count);
 
     // Sube los píxeles que el atlas ya tiene cargados y le crea su SRV. false
     // si no hay hueco o la subida falla: el lote se dibujará con la 1x1 blanca.
@@ -7248,6 +7259,146 @@ bool D3D12Renderer::Impl::registerUiAtlas(UiTextureAtlas& atlas)
     return true;
 }
 
+namespace
+{
+    // El RTV de ImGui en D3D12 es R8G8B8A8_UNORM (EditorUI::initUiD3D12 /
+    // uiInfo.d3dRtvFormat): sampleando un SRV sRGB hacia un RTV UNORM la imagen
+    // saldria mas oscura. El atlas es UNORM, asi que los bytes sRGB de la imagen
+    // llegan tal cual a pantalla. Si la comprobacion manual dice otra cosa, esta es
+    // la unica constante que cambiar.
+    constexpr DXGI_FORMAT kThumbAtlasFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+}
+
+bool D3D12Renderer::Impl::ensureThumbAtlas()
+{
+    if (thumbAtlas) return true;
+    if (thumbAtlasFailed || !initialized || !srvHeap) return false;
+
+    try
+    {
+        // Transparente. uploadTexture la deja en PIXEL_SHADER_RESOURCE y crea su SRV.
+        const std::vector<uint8_t> blank(static_cast<size_t>(kThumbAtlasSize) * kThumbAtlasSize * 4, 0);
+        thumbAtlas = uploadTexture(blank.data(), kThumbAtlasSize, kThumbAtlasSize, 1,
+                                   kThumbAtlasFormat, 4, kSrvThumbAtlas);
+    }
+    catch (const std::exception&)
+    {
+        thumbAtlas = nullptr;
+    }
+    if (!thumbAtlas)
+    {
+        thumbAtlasFailed = true;
+        return false;
+    }
+    thumbAtlas->SetName(L"ThumbnailAtlas");
+    diagLog("ensureThumbAtlas: atlas de miniaturas " + std::to_string(kThumbAtlasSize) + "x" +
+            std::to_string(kThumbAtlasSize) + " en el slot " + std::to_string(kSrvThumbAtlas));
+    return true;
+}
+
+bool D3D12Renderer::Impl::uploadThumbnailTiles(const ThumbnailTile* tiles, size_t count)
+{
+    if (!thumbAtlas || !tiles || count == 0) return false;
+
+    // Una casilla son 64 filas de 256 bytes: la fila ya cumple
+    // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT y la casilla entera (16 KiB) cumple
+    // D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, asi que las N casillas van
+    // contiguas en el staging sin relleno.
+    constexpr UINT kRowBytes  = kThumbCell * 4;
+    constexpr UINT kTileBytes = kRowBytes * kThumbCell;
+    static_assert(kRowBytes % D3D12_TEXTURE_DATA_PITCH_ALIGNMENT == 0);
+    static_assert(kTileBytes % D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT == 0);
+
+    for (size_t i = 0; i < count; ++i)
+        if (tiles[i].slot >= kThumbSlotCount || !tiles[i].rgba)
+            return false;
+
+    try
+    {
+        D3D12_RESOURCE_DESC bufferDesc{};
+        bufferDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufferDesc.Width            = static_cast<UINT64>(kTileBytes) * count;
+        bufferDesc.Height           = 1;
+        bufferDesc.DepthOrArraySize = 1;
+        bufferDesc.MipLevels        = 1;
+        bufferDesc.Format           = DXGI_FORMAT_UNKNOWN;
+        bufferDesc.SampleDesc.Count = 1;
+        bufferDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        D3D12MA::ALLOCATION_DESC uploadDesc{};
+        uploadDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
+        D3D12MA::Allocation* staging = nullptr;
+        throwIfFailed(allocator->CreateResource(&uploadDesc, &bufferDesc,
+                                                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                &staging, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(staging de miniaturas)");
+
+        uint8_t*          mapped = nullptr;
+        const D3D12_RANGE noRead{0, 0};
+        HRESULT hr = staging->GetResource()->Map(0, &noRead, reinterpret_cast<void**>(&mapped));
+        if (FAILED(hr)) {
+            staging->Release();
+            throwIfFailed(hr, "ID3D12Resource::Map(staging de miniaturas)");
+        }
+        for (size_t i = 0; i < count; ++i)
+            std::memcpy(mapped + i * kTileBytes, tiles[i].rgba, kTileBytes);
+        staging->GetResource()->Unmap(0, nullptr);
+
+        // Mismo camino que uploadTexture: una lista, una espera. Las N casillas
+        // comparten las dos barreras y la espera.
+        throwIfFailed(allocators[frameIndex]->Reset(), "ID3D12CommandAllocator::Reset(miniaturas)");
+        throwIfFailed(commandList->Reset(allocators[frameIndex].Get(), nullptr),
+                      "ID3D12GraphicsCommandList::Reset(miniaturas)");
+
+        D3D12_RESOURCE_BARRIER toCopy{};
+        toCopy.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toCopy.Transition.pResource   = thumbAtlas->GetResource();
+        toCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        toCopy.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
+        toCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &toCopy);
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            D3D12_TEXTURE_COPY_LOCATION dst{};
+            dst.pResource        = thumbAtlas->GetResource();
+            dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            dst.SubresourceIndex = 0;
+
+            D3D12_TEXTURE_COPY_LOCATION src{};
+            src.pResource                          = staging->GetResource();
+            src.Type                               = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            src.PlacedFootprint.Offset             = static_cast<UINT64>(i) * kTileBytes;
+            src.PlacedFootprint.Footprint.Format   = kThumbAtlasFormat;
+            src.PlacedFootprint.Footprint.Width    = kThumbCell;
+            src.PlacedFootprint.Footprint.Height   = kThumbCell;
+            src.PlacedFootprint.Footprint.Depth    = 1;
+            src.PlacedFootprint.Footprint.RowPitch = kRowBytes;
+
+            const UINT x = (tiles[i].slot % kThumbAtlasCells) * kThumbCell;
+            const UINT y = (tiles[i].slot / kThumbAtlasCells) * kThumbCell;
+            commandList->CopyTextureRegion(&dst, x, y, 0, &src, nullptr);
+        }
+
+        D3D12_RESOURCE_BARRIER toShader = toCopy;
+        toShader.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        toShader.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        commandList->ResourceBarrier(1, &toShader);
+
+        throwIfFailed(commandList->Close(), "ID3D12GraphicsCommandList::Close(miniaturas)");
+        ID3D12CommandList* lists[] = {commandList.Get()};
+        queue->ExecuteCommandLists(1, lists);
+        waitForGpu();
+        staging->Release();
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+    return true;
+}
+
 void D3D12Renderer::Impl::ensureUiBuffers(UINT vertexCount, UINT indexCount)
 {
     auto grow = [&](D3D12MA::Allocation*& allocation, void*& mapped, UINT& capacity, UINT needed,
@@ -11169,6 +11320,24 @@ uint64_t D3D12Renderer::uiAtlasTextureId(const UiTextureAtlas* atlas)
     return handle.ptr;
 }
 
+uint64_t D3D12Renderer::uiThumbnailAtlasId()
+{
+    Impl& d = *m_impl;
+    if (!d.ensureThumbAtlas())
+        return 0;
+
+    // Mismo criterio que uiAtlasTextureId: el handle de GPU del SRV ES lo que
+    // ImGui entiende por textura.
+    D3D12_GPU_DESCRIPTOR_HANDLE handle = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<UINT64>(kSrvThumbAtlas) * d.srvSize;
+    return handle.ptr;
+}
+
+bool D3D12Renderer::uploadUiThumbnails(const ThumbnailTile* tiles, size_t count)
+{
+    return m_impl->uploadThumbnailTiles(tiles, count);
+}
+
 UiFont* D3D12Renderer::loadUiFont(const std::string& path, float bakePx)
 {
     Impl& d = *m_impl;
@@ -11623,6 +11792,14 @@ void D3D12Renderer::shutdown()
             atlas->Release();
     }
     d.uiAtlasTextures.clear();
+    // El atlas de miniaturas, con los demas atlas de UI y por la misma razon: su
+    // allocation tiene que estar suelta antes de allocator->Release() o D3D12MA
+    // hace assert al destruirse (abort en Debug, exit code 3, sin dump).
+    if (d.thumbAtlas) {
+        d.thumbAtlas->Release();
+        d.thumbAtlas = nullptr;
+    }
+    d.thumbAtlasFailed = false;
     // Punteros y índices a lo que se acaba de soltar: fuera antes de que nadie
     // los pueda volver a pedir. uiAtlasSrv es el equivalente exacto del
     // m_uiAtlasImGuiId de Vulkan (es lo que lee uiAtlasTextureId), y

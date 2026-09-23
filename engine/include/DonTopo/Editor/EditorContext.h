@@ -17,6 +17,7 @@ class ScriptManager;
 class UndoManager;
 class AsyncAssetLoader;
 class ProjectContext;
+class JobSystem;
 
 // Fichero soltado sobre la ventana del editor desde fuera del proceso (drag
 // desde el Explorador de Windows), con la posicion de pantalla en la que
@@ -127,6 +128,11 @@ struct EditorContext {
     // headless y en runtime — solo lo rellena EditorUI::draw() a partir de
     // EditorUI::m_droppedFilesProvider (wiring de sandbox/main.cpp).
     std::function<std::vector<DroppedFile>()> takeDroppedFiles;
+
+    // Pool de workers del motor (vive en main.cpp, no-propietario). Lo usan las
+    // miniaturas del Content Browser para decodificar imagenes fuera del hilo
+    // principal. Sin el, no hay miniaturas y el grid se comporta como siempre.
+    JobSystem* jobs = nullptr;
 };
 
 } // namespace DonTopo

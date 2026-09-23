@@ -34,6 +34,7 @@ namespace DonTopo {
 class GameObject;
 class PhysicsManager;
 class AudioManager;
+class JobSystem;
 class Renderer;
 class EditorRenderer;
 class Camera;
@@ -144,6 +145,9 @@ public:
     // Content Browser y no se importa nada, mismo patrón que setAssetLoader.
     void setDroppedFilesProvider(std::function<std::vector<DroppedFile>()> fn)
     { m_droppedFilesProvider = std::move(fn); }
+    // Lo rellena main() antes del bucle, como setAssetLoader. Sin él no hay
+    // miniaturas en el Content Browser.
+    void setJobSystem(JobSystem* jobs) { m_jobSystem = jobs; }
 
     // Selector de proyecto: primer estado del bucle de ImGui. Mientras haya un
     // selector puesto, draw() le cede el frame ENTERO y no dibuja ni menú, ni
@@ -411,6 +415,7 @@ private:
     AsyncAssetLoader* m_assetLoader = nullptr;
     // Ver setDroppedFilesProvider. Vacío en tests headless.
     std::function<std::vector<DroppedFile>()> m_droppedFilesProvider;
+    JobSystem* m_jobSystem = nullptr;
 
     // Ver setProjectSelector/setProject. Vacío/nullptr en los tests headless: sin
     // selector el editor dibuja como siempre, y sin proyecto las guardas de ruta

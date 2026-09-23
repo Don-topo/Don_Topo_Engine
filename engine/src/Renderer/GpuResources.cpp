@@ -217,6 +217,86 @@ void GpuResources::uploadPixelsToImage(const void* pixels, uint32_t w, uint32_t 
     }
 }
 
+void GpuResources::createBlankImage(uint32_t w, uint32_t h, VkFormat fmt,
+                                    VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
+{
+    createImage(w, h, fmt, VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem);
+
+    CmdScope scope(m_gpu, batch);
+    grabarTransicion(scope.cmd, img, VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    const VkClearColorValue clear{};   // ceros: transparente
+    VkImageSubresourceRange range{};
+    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+    vkCmdClearColorImage(scope.cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+
+    grabarTransicion(scope.cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
+void GpuResources::uploadPixelsToImageRegions(VkImage img, const ImageTileUpload* tiles,
+                                              size_t count, TransferBatch* batch)
+{
+    if (!tiles || count == 0) return;
+
+    VkDeviceSize total = 0;
+    for (size_t i = 0; i < count; ++i)
+        total += static_cast<VkDeviceSize>(tiles[i].w) * tiles[i].h * 4;
+
+    VkBuffer       staging    = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+    createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 staging, stagingMem);
+
+    void* data = nullptr;
+    vkMapMemory(m_gpu.device(), stagingMem, 0, total, 0, &data);
+    std::vector<VkBufferImageCopy> regions(count);
+    VkDeviceSize offset = 0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(tiles[i].w) * tiles[i].h * 4;
+        memcpy(static_cast<uint8_t*>(data) + offset, tiles[i].rgba, static_cast<size_t>(bytes));
+
+        VkBufferImageCopy& r = regions[i];
+        r.bufferOffset                    = offset;
+        r.bufferRowLength                 = 0;
+        r.bufferImageHeight               = 0;
+        r.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        r.imageSubresource.mipLevel       = 0;
+        r.imageSubresource.baseArrayLayer = 0;
+        r.imageSubresource.layerCount     = 1;
+        r.imageOffset                     = { static_cast<int32_t>(tiles[i].x),
+                                              static_cast<int32_t>(tiles[i].y), 0 };
+        r.imageExtent                     = { tiles[i].w, tiles[i].h, 1 };
+        offset += bytes;
+    }
+    vkUnmapMemory(m_gpu.device(), stagingMem);
+
+    {
+        // Un solo scope: sin batch, un submit y una espera para las N regiones.
+        CmdScope scope(m_gpu, batch);
+        grabarTransicion(scope.cmd, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        vkCmdCopyBufferToImage(scope.cmd, staging, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               static_cast<uint32_t>(regions.size()), regions.data());
+        grabarTransicion(scope.cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    if (batch)
+        batch->addStaging(staging, stagingMem);
+    else
+    {
+        vkDestroyBuffer(m_gpu.device(), staging, nullptr);
+        vkFreeMemory(m_gpu.device(), stagingMem, nullptr);
+    }
+}
+
 namespace {
 void grabarTransicion(VkCommandBuffer cmd, VkImage image,
                       VkImageLayout oldLayout, VkImageLayout newLayout)
@@ -246,6 +326,13 @@ void grabarTransicion(VkCommandBuffer cmd, VkImage image,
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else if(oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        // Reescribir una imagen que la GPU puede estar leyendo en un frame en vuelo:
+        // la barrera espera a esas lecturas antes de dejar escribir.
+        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        srcStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     } else {
         throw std::runtime_error("unsupported layout transition!");
     }

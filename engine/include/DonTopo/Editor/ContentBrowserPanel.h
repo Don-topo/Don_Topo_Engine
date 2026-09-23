@@ -1,14 +1,20 @@
 #pragma once
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
+#include "DonTopo/Editor/Thumbnail.h"
 
 namespace DonTopo {
 
 class GameObject;
+
+// Etiqueta del boton de icono del grid. El id de ImGui sale de ella, asi que no
+// puede cambiar cuando aparece la miniatura.
+std::string assetIconButtonLabel(const char* text, bool hasThumbnail);
 
 // Subcarpetas directas de dir, ordenadas por path, filtrando el ruido que
 // no interesa ver en el árbol del Content Browser: entradas ocultas (nombre
@@ -179,6 +185,13 @@ private:
     // Selección del grid (ver AssetSelection). Se poda contra lo visible cada
     // frame, así que cambiar de carpeta, filtrar o rescanear no deja fantasmas.
     AssetSelection m_selection;
+
+    // Miniaturas de texturas. Se crea de forma perezosa cuando hay renderer con
+    // atlas de miniaturas Y JobSystem; sin ellos queda en nullptr y el grid pinta
+    // el icono de color de siempre.
+    std::unique_ptr<ThumbnailCache> m_thumbs;
+    uint64_t                        m_thumbAtlasId = 0;
+    std::string                     m_thumbDir;    // carpeta de la generacion actual
 
     bool m_open = true;
     bool m_scanned = false;

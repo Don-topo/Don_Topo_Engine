@@ -2,12 +2,23 @@
 #include <vulkan/vulkan.h>
 #include <string>
 #include <vector>
+#include <cstddef>
 #include <cstdint>
 
 namespace DonTopo {
 
 class GpuDevice;
 class TransferBatch;
+
+// Una región rectangular de píxeles RGBA8 que sustituye a otra dentro de una
+// imagen ya creada. Es lo que necesita el atlas de miniaturas: copiar UNA casilla
+// sin volver a subir los 16 MB del atlas.
+struct ImageTileUpload
+{
+    uint32_t       x = 0, y = 0;    // esquina superior izquierda dentro de la imagen
+    uint32_t       w = 0, h = 0;
+    const uint8_t* rgba = nullptr;  // w*h*4 bytes
+};
 
 class GpuResources {
 public:
@@ -51,6 +62,19 @@ public:
     void uploadPixelsToImage(const void* pixels, uint32_t w, uint32_t h, VkFormat fmt,
                              VkImage& img, VkDeviceMemory& mem,
                              TransferBatch* batch = nullptr);
+
+    // Imagen NUEVA, toda transparente y ya en SHADER_READ_ONLY_OPTIMAL. Para
+    // texturas que se irán rellenando por regiones (uploadPixelsToImageRegions).
+    void createBlankImage(uint32_t w, uint32_t h, VkFormat fmt,
+                          VkImage& img, VkDeviceMemory& mem,
+                          TransferBatch* batch = nullptr);
+
+    // Copia N regiones a una imagen que ya está en SHADER_READ_ONLY_OPTIMAL y la
+    // deja igual. Un solo staging, un solo command buffer y —sin batch— UNA sola
+    // espera para las N regiones. La barrera de entrada cubre las lecturas de
+    // shader de frames ya enviados a la misma cola.
+    void uploadPixelsToImageRegions(VkImage img, const ImageTileUpload* tiles, size_t count,
+                                    TransferBatch* batch = nullptr);
 
     void createTextureImage(const std::string& path,
                             const std::vector<uint8_t>& embedded,

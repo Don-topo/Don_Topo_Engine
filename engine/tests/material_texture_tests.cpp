@@ -1563,6 +1563,11 @@ static void test_no_uploader_decodes_embedded_on_its_own()
             // El .cpp la llama y el .h la nombra en el comentario que explica
             // todo esto: los dos son la casa de la funcion.
             if (e.path().stem() == "MaterialTextureSource") continue;
+            // Las miniaturas del Content Browser no son un uploader de material:
+            // leen SU fichero (por ifstream, que acepta rutas Unicode) y comprueban
+            // las dimensiones con stbi_info antes de decodificar. No hay embebida
+            // que elegir, que es lo unico que este test vigila.
+            if (e.path().stem() == "Thumbnail") continue;
             const std::vector<uint8_t> bytes = leeFichero(e.path().string());
             const std::string texto(bytes.begin(), bytes.end());
             if (texto.find("stbi_load_from_memory") != std::string::npos)

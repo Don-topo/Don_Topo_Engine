@@ -757,8 +757,13 @@ and no drag is in progress.
 
 The scene is a tree of GameObjects with hierarchical transforms, edited in the **Scene** panel:
 create, delete, rename and drag-drop to reorder, plus a basic-shapes menu (Cube, Sphere, Plane,
-Capsule) and right-click shortcuts such as **Create Camera**. The **Content Browser** browses,
-renames and deletes assets, and is the drag source for models, textures and skybox folders. The
+Capsule) and right-click shortcuts such as **Create Camera**. The **Content Browser** browses the project as a folder
+tree with a breadcrumb, filters by name and by asset type, creates folders, renames, moves (by
+dragging onto a folder, with scene references rewritten) and deletes assets — one or several at
+once with Ctrl/Shift selection — shows real thumbnails for textures, follows changes made on disk
+outside the editor, and imports files dropped from the OS file explorer or picked in a Browse
+dialog by copying them into `assets/Imported/`. It is also the drag source for models, textures
+and skybox folders. The
 **Log Console** keeps the history of edit actions and the values they wrote. All of it is
 serialised to JSON — the whole tree, with meshes, colliders, audio, scripts, UI components and
 the Animator graph.
