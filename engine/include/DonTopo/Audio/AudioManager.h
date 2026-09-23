@@ -319,6 +319,12 @@ public:
         AudioLoadMode loadMode = AudioLoadMode::Sample);
 
 private:
+    // FUERA del #ifdef a propósito: outputWarning() es público y NO está
+    // guardado, así que el miembro tiene que existir también en el build sin
+    // FMOD (el CI de Linux compila sin audio). Sin FMOD nadie lo escribe y
+    // queda vacío, que es justo lo que documenta el getter.
+    std::string m_outputWarning;
+
 #ifdef DT_FMOD_ENABLED
     // FMOD::ChannelGroup* del bus, o el master del sistema. nullptr sin sistema.
     void* groupForBus(AudioBus bus) const;
@@ -379,7 +385,6 @@ private:
     // primer frame invente una velocidad enorme desde el origen.
     glm::vec3                m_lastListenerPos{0.0f};
     bool                     m_hasLastListenerPos = false;
-    std::string              m_outputWarning;
     std::vector<glm::vec3>   m_soundLastPos;   // paralelo a m_sounds
     std::vector<char>        m_soundHasLastPos;
 #endif
