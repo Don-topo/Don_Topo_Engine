@@ -1,10 +1,12 @@
 #pragma once
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
+#include "DonTopo/Editor/Thumbnail.h"
 
 namespace DonTopo {
 
@@ -179,6 +181,13 @@ private:
     // Selección del grid (ver AssetSelection). Se poda contra lo visible cada
     // frame, así que cambiar de carpeta, filtrar o rescanear no deja fantasmas.
     AssetSelection m_selection;
+
+    // Miniaturas de texturas. Se crea de forma perezosa cuando hay renderer con
+    // atlas de miniaturas Y JobSystem; sin ellos queda en nullptr y el grid pinta
+    // el icono de color de siempre.
+    std::unique_ptr<ThumbnailCache> m_thumbs;
+    uint64_t                        m_thumbAtlasId = 0;
+    std::string                     m_thumbDir;    // carpeta de la generacion actual
 
     bool m_open = true;
     bool m_scanned = false;

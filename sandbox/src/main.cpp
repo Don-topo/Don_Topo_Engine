@@ -316,6 +316,7 @@ int main()
             editor.setPhysicsManager(&d3dPhysics);
             editor.setAudioManager(&d3dAudio);
             editor.setAssetLoader(&d3dAssets);
+            editor.setJobSystem(&d3dJobs);
             editor.setDroppedFilesProvider([&d3dWindowCtx]() {
                 std::vector<DonTopo::DroppedFile> out;
                 out.swap(d3dWindowCtx.drops);
@@ -940,6 +941,7 @@ int main()
             out.swap(ctx.drops);
             return out;
         });
+        editor.setJobSystem(&jobSystem);
 
         // ─── Selector de proyecto ────────────────────────────────────────────
         // Primer estado del bucle de ImGui que ya existe: misma ventana, mismo

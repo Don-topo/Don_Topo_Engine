@@ -3,6 +3,7 @@
 #include "DonTopo/Core/AnimationIk.h"
 #include "DonTopo/Core/AnimationPose.h"
 #include "DonTopo/Renderer/RendererState.h"
+#include "DonTopo/Renderer/ThumbnailAtlas.h"
 #include "DonTopo/Renderer/UniformBufferObject.h"
 
 #include <glm/glm.hpp>
@@ -214,6 +215,26 @@ namespace DonTopo
             // cada backend a su manera y se cachea: registrar la misma textura
             // en cada frame agota el pool de descriptores en segundos.
             virtual uint64_t uiAtlasTextureId(const UiTextureAtlas* atlas)    = 0;
+
+            // Atlas compartido de miniaturas del Content Browser: UNA textura de
+            // kThumbAtlasSize² con un solo descriptor de ImGui (los pools de ImGui
+            // son de 48 sets en Vulkan y 16 huecos en D3D12: una textura por
+            // miniatura no cabe). No son puros: un backend sin soporte responde
+            // "no", y el grid se queda con su icono de color.
+            //
+            // Id del atlas (lo que ImGui::AddImage entiende por textura), o 0 si el
+            // backend no lo soporta o no pudo crearlo. Se crea en la primera
+            // llamada y despues devuelve siempre el mismo valor.
+            virtual uint64_t uiThumbnailAtlasId() { return 0; }
+            // Copia las casillas al atlas, TODAS en una sola espera de GPU. false =
+            // no se pudo y no se copió nada fiable (el lote entero falla).
+            virtual bool uploadUiThumbnails(const ThumbnailTile* tiles, size_t count)
+            {
+                (void)tiles;
+                (void)count;
+                return false;
+            }
+
             virtual float    viewportAspect() const                           = 0;
 
             // La capa de interfaz que dibuja encima. El backend la llama dentro
