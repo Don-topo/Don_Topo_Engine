@@ -14,6 +14,28 @@ Documentación previa revisada: `docs/superpowers/plans/2026-07-16-content-brows
 CERRADO y en main) y `docs/superpowers/plans/2026-07-14-editor-panel-split.md`
 (extrajo `ContentBrowserPanel` de `EditorUI`, ya CERRADO y en main).
 
+## Estado vigente (2026-09-23)
+
+Las tablas de las secciones 2 y 3 son el **diagnóstico original**: su evidencia
+`file:line` describe el código tal y como estaba al medir, y no se ha reescrito. El
+estado actual de cada hallazgo es este:
+
+| ID | Estado | Cómo se cerró |
+|---|---|---|
+| U1 (import real de ficheros externos) | **CERRADO** | `AssetImport` (copia a `assets/Imported/<Tipo>/`, nunca sobreescribe) y `acceptOrImportAsset` en los 18 diálogos Browse; merge `8e65a5f`. La revisión final encontró que la primera versión dejaba pasar sin copiar justo el caso del Escritorio; corregido en `d7841cb`. |
+| U2 (drop desde el Explorador) | **CERRADO** | `glfwSetDropCallback` en las dos ramas de `sandbox/src/main.cpp` (Vulkan y D3D12); `8e65a5f` |
+| U3 (miniaturas) | **CERRADO solo para texturas** | Atlas compartido de 2048² con casillas de 64², decodificación en el `JobSystem`, subida en lote en Vulkan y D3D12. Modelos y materiales siguen sin miniatura. |
+| U4 (breadcrumb / crear carpeta) | **CERRADO** | Breadcrumb `ab3994c`; Create Folder `5561836` |
+| U5 (menú Create) | **CERRADO solo para carpeta** | No hay más tipos creables porque el Core no tiene asset de Material ni de otro tipo |
+| U6 (búsqueda y filtro) | **CERRADO** | Filtro por nombre y por tipo, `5561836` |
+| U7 (multiselección) | **CERRADO** | Ctrl/Shift+clic, arrastre y borrado de varios, `338de1d`; mover arrastrando a una carpeta, `d4eb633` |
+| U8 (import settings por asset) | **ABIERTO** | Depende de decidir dónde vive el metadato persistente en el Core |
+| U9 (refresco ante cambios externos) | **CERRADO por polling** | Relectura de la carpeta actual cada 0,5 s, `56dad33`. No se hizo un watcher nativo a propósito: el repo ya usa polling de `last_write_time` para el hot reload de Lua y el árbol ya reescanea cada frame |
+
+En la comparación con Unity (§3): las capacidades 1, 3, 4, 5, 7 y 8 pasan a
+**EXISTE** (la 8 con latencia ≤ 0,5 s), la 2 a **EXISTE solo para texturas**, y la 6
+(import settings) sigue en **NO EXISTE**.
+
 ## 0. Qué ya estaba decidido y no se re-litiga aquí
 
 - **El árbol de carpetas propio ya existe** (`drawFolderTree`,
