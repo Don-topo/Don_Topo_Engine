@@ -69,10 +69,24 @@ alternativa"):
 // entiende por textura), o 0 si el backend no lo soporta. Se crea y registra en
 // la primera llamada; después devuelve siempre el mismo valor.
 virtual uint64_t uiThumbnailAtlasId() { return 0; }
-// Copia una casilla kThumbCell×kThumbCell RGBA8 (sRGB) a `slot`. false = no se
-// pudo (sin backend, slot fuera de rango, fallo de GPU).
-virtual bool uploadUiThumbnail(uint32_t slot, const uint8_t* rgba) { (void)slot; (void)rgba; return false; }
+// Copia un LOTE de casillas kThumbCell×kThumbCell RGBA8 al atlas en una sola
+// espera de GPU. false = no se pudo y el lote entero falla.
+virtual bool uploadUiThumbnails(const ThumbnailTile* tiles, size_t count) { return false; }
 ```
+
+> **Revisión al escribir el plan:** el spec decía `uploadUiThumbnail(slot, rgba)`
+> (una casilla por llamada). Los subidores existentes hacen una espera de GPU por
+> llamada (`CmdScope` sin batch en Vulkan, `waitForGpu()` en D3D12), así que 8
+> casillas por frame serían 8 esperas. La interfaz pasa a ser por lote, que es lo
+> que el riesgo nº 2 de este mismo documento ya pedía. El `Uploader` de
+> `ThumbnailCache` cambia igual: `bool(const ThumbnailTile*, size_t)`.
+
+> **Revisión al escribir el plan — formato por backend:** el atlas de Vulkan es
+> `R8G8B8A8_SRGB` (el swapchain del editor es sRGB, así que el ciclo sampleo →
+> escritura es identidad), pero el de D3D12 es `R8G8B8A8_UNORM` porque el RTV de
+> ImGui es `R8G8B8A8_UNORM` y sampleando un SRV sRGB hacia él las miniaturas
+> saldrían más oscuras. Cada backend lo fija en una constante y la comprobación
+> manual entre backends decide si hay que cambiarla.
 
 **Vulkan** (`Renderer`): imagen `R8G8B8A8_SRGB` de `kThumbAtlasSize`², uso
 `SAMPLED | TRANSFER_DST`, creada de forma perezosa, inicializada a transparente y
@@ -130,7 +144,7 @@ public:
 class ThumbnailCache {
 public:
     using Runner   = std::function<void(std::function<void()>)>;        // JobSystem::submit
-    using Uploader = std::function<bool(uint32_t slot, const uint8_t* rgba)>;
+    using Uploader = std::function<bool(const ThumbnailTile* tiles, size_t count)>;
     ThumbnailCache(Runner run, Uploader upload, uint32_t maxInFlight = 4);
 
     void beginFrame();
