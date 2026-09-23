@@ -29,12 +29,12 @@ estado actual de cada hallazgo es este:
 | U5 (menú Create) | **CERRADO solo para carpeta** | No hay más tipos creables porque el Core no tiene asset de Material ni de otro tipo |
 | U6 (búsqueda y filtro) | **CERRADO** | Filtro por nombre y por tipo, `5561836` |
 | U7 (multiselección) | **CERRADO** | Ctrl/Shift+clic, arrastre y borrado de varios, `338de1d`; mover arrastrando a una carpeta, `d4eb633` |
-| U8 (import settings por asset) | **ABIERTO** | Depende de decidir dónde vive el metadato persistente en el Core |
+| U8 (import settings por asset) | **CERRADO para texturas de material** | Sidecar `<asset>.import.json` con espacio de color (auto/sRGB/lineal) y mipmaps; modal "Import Settings..." en el menú contextual; Vulkan y D3D12; viaja con el asset y con el export. **Modelos y audio siguen abiertos**: son la siguiente spec (el formato del sidecar ya lleva `type`). Spec `docs/superpowers/specs/2026-09-24-texture-import-settings-design.md` |
 | U9 (refresco ante cambios externos) | **CERRADO por polling** | Relectura de la carpeta actual cada 0,5 s, `56dad33`. No se hizo un watcher nativo a propósito: el repo ya usa polling de `last_write_time` para el hot reload de Lua y el árbol ya reescanea cada frame |
 
 En la comparación con Unity (§3): las capacidades 1, 3, 4, 5, 7 y 8 pasan a
 **EXISTE** (la 8 con latencia ≤ 0,5 s), la 2 a **EXISTE solo para texturas**, y la 6
-(import settings) sigue en **NO EXISTE**.
+(import settings) a **EXISTE solo para texturas de material** (modelos y audio, sin hacer).
 
 ## 0. Qué ya estaba decidido y no se re-litiga aquí
 
