@@ -40,4 +40,20 @@ bool saveTextureImportSettings(const std::filesystem::path& asset,
                                const TextureImportSettings& settings,
                                std::string* error = nullptr);
 
+// ── Ciclo de vida del sidecar: viaja con el asset ────────────────────────────
+
+// true si el asset de origen Y el de destino ya tienen sidecar: mover uno encima
+// del otro pisaria los ajustes del destino, asi que quien mueve o renombra lo
+// rechaza antes de tocar nada.
+bool importSidecarConflict(const std::filesystem::path& from, const std::filesystem::path& to);
+
+// Mueve el sidecar de oldAsset a newAsset. true si no habia nada que mover.
+bool moveImportSidecar(const std::filesystem::path& oldAsset, const std::filesystem::path& newAsset,
+                       std::string* error = nullptr);
+// Copia el sidecar de srcAsset a dstAsset (sin pisar uno existente). true si no habia.
+bool copyImportSidecar(const std::filesystem::path& srcAsset, const std::filesystem::path& dstAsset,
+                       std::string* error = nullptr);
+// Borra el sidecar de asset, si existe. Silencioso.
+void removeImportSidecar(const std::filesystem::path& asset);
+
 } // namespace DonTopo

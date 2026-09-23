@@ -169,4 +169,40 @@ bool saveTextureImportSettings(const std::filesystem::path& asset,
     return true;
 }
 
+bool importSidecarConflict(const std::filesystem::path& from, const std::filesystem::path& to)
+{
+    std::error_code a, b;
+    return std::filesystem::exists(importSidecarPath(from), a) && !a &&
+           std::filesystem::exists(importSidecarPath(to), b) && !b;
+}
+
+bool moveImportSidecar(const std::filesystem::path& oldAsset, const std::filesystem::path& newAsset,
+                       std::string* error)
+{
+    const std::filesystem::path from = importSidecarPath(oldAsset);
+    std::error_code ec;
+    if (!std::filesystem::exists(from, ec) || ec) return true;        // nada que mover
+    std::filesystem::rename(from, importSidecarPath(newAsset), ec);
+    if (ec) { if (error) *error = ec.message(); return false; }
+    return true;
+}
+
+bool copyImportSidecar(const std::filesystem::path& srcAsset, const std::filesystem::path& dstAsset,
+                       std::string* error)
+{
+    const std::filesystem::path from = importSidecarPath(srcAsset);
+    std::error_code ec;
+    if (!std::filesystem::exists(from, ec) || ec) return true;
+    std::filesystem::copy_file(from, importSidecarPath(dstAsset),
+                               std::filesystem::copy_options::skip_existing, ec);
+    if (ec) { if (error) *error = ec.message(); return false; }
+    return true;
+}
+
+void removeImportSidecar(const std::filesystem::path& asset)
+{
+    std::error_code ec;
+    std::filesystem::remove(importSidecarPath(asset), ec);
+}
+
 } // namespace DonTopo

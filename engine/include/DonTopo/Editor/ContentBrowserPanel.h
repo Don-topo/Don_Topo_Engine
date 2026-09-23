@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <vector>
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
@@ -105,8 +106,24 @@ enum class MoveResult {
 struct MoveOutcome {
     MoveResult            result = MoveResult::RejectedFailed;
     std::filesystem::path newPath;       // válido solo si result == Moved
-    std::string           errorMessage;  // vacío salvo RejectedFailed
+    // RejectedFailed: la causa. Moved: un AVISO si el asset se movio pero no su
+    // .import.json (vacio si todo fue bien).
+    std::string           errorMessage;
 };
+
+// Renombra un fichero o carpeta llevandose el .import.json del fichero. Si el
+// destino ya tiene sidecar, se rechaza sin tocar nada. Nunca lanza.
+struct RenameFileOutcome {
+    bool        ok = false;
+    std::string error;    // causa si !ok
+    std::string warning;  // ok pero el sidecar no se pudo mover
+};
+RenameFileOutcome renameAssetFile(const std::filesystem::path& from, const std::filesystem::path& to,
+                                  bool isDir);
+
+// Borra un fichero (con su .import.json) o una carpeta entera. El error del
+// sistema, si lo hay; vacio = borrado.
+std::error_code removeAssetPath(const std::filesystem::path& path, bool isDir);
 
 // Mueve src (fichero o carpeta) dentro de destDir con el mismo nombre. Nunca
 // sobreescribe: un nombre ya ocupado es un rechazo, no un reemplazo. No toca la

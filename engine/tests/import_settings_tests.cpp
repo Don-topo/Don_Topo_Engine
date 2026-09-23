@@ -165,8 +165,50 @@ static void test_save_into_missing_folder_reports_error()
     CHECK(!err.empty());
 }
 
+static void test_move_copy_remove_sidecar()
+{
+    const fs::path d = makeDir();
+    TextureImportSettings s;
+    s.mipmaps = true;
+    std::string err;
+
+    // Sin sidecar: mover y copiar son un no-op que va bien.
+    CHECK(moveImportSidecar(d / "a.png", d / "b.png", &err));
+    CHECK(copyImportSidecar(d / "a.png", d / "c.png", &err));
+    CHECK(!fs::exists(importSidecarPath(d / "b.png")));
+
+    CHECK(saveTextureImportSettings(d / "a.png", s, &err));
+    CHECK(copyImportSidecar(d / "a.png", d / "c.png", &err));
+    CHECK(loadTextureImportSettings(d / "c.png") == s);
+    CHECK(fs::exists(importSidecarPath(d / "a.png")));           // copiar no quita el original
+
+    CHECK(moveImportSidecar(d / "a.png", d / "b.png", &err));
+    CHECK(!fs::exists(importSidecarPath(d / "a.png")));
+    CHECK(loadTextureImportSettings(d / "b.png") == s);
+
+    removeImportSidecar(d / "b.png");
+    CHECK(!fs::exists(importSidecarPath(d / "b.png")));
+    removeImportSidecar(d / "b.png");                             // ya no hay: no pasa nada
+}
+
+// Review Focus 4: si el destino YA tiene sidecar, hay conflicto y no se pisa.
+static void test_sidecar_conflict_detection()
+{
+    const fs::path d = makeDir();
+    TextureImportSettings s;
+    s.mipmaps = true;
+    std::string err;
+    CHECK(!importSidecarConflict(d / "a.png", d / "b.png"));
+    CHECK(saveTextureImportSettings(d / "a.png", s, &err));
+    CHECK(!importSidecarConflict(d / "a.png", d / "b.png"));      // solo el origen
+    CHECK(saveTextureImportSettings(d / "b.png", s, &err));
+    CHECK(importSidecarConflict(d / "a.png", d / "b.png"));
+}
+
 int main()
 {
+    test_move_copy_remove_sidecar();
+    test_sidecar_conflict_detection();
     test_sidecar_path_and_detection();
     test_missing_file_is_default_without_warning();
     test_roundtrip_and_default_removes_sidecar();
