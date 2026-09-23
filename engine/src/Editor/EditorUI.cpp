@@ -1048,6 +1048,7 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
             if (saved && !thenLoad.empty())
                 loadSceneFile(thenLoad.string());
         },
+        m_droppedFilesProvider,
     };
 
     m_scenePanel.draw(ctx, sceneRoot);

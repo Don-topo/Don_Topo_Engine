@@ -1,5 +1,6 @@
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Core/GameObject.h"
@@ -157,6 +158,13 @@ bool isHiddenDir(const std::filesystem::path& dir)
     return std::filesystem::exists(dir / "CMakeCache.txt", ec) && !ec;
 }
 
+// Contencion de rect simple: borde superior/izquierdo inclusive, inferior/
+// derecho exclusivo — estandar para hit-test de rects en pantalla.
+bool pointInsideRect(float px, float py, float rectX, float rectY, float rectW, float rectH)
+{
+    return px >= rectX && px < rectX + rectW && py >= rectY && py < rectY + rectH;
+}
+
 } // namespace
 
 namespace DonTopo {
@@ -183,6 +191,28 @@ std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::pat
         out.push_back(entry.path());
     }
     std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::vector<AssetImportOutcome> importDroppedFilesInto(
+    const std::vector<DroppedFile>& dropped,
+    float rectX, float rectY, float rectW, float rectH,
+    const std::filesystem::path& targetDir)
+{
+    std::vector<AssetImportOutcome> out;
+    for (const DroppedFile& f : dropped)
+    {
+        if (!pointInsideRect(f.screenX, f.screenY, rectX, rectY, rectW, rectH))
+            continue;
+        std::string ext = f.path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (!isImportableExtension(ext))
+        {
+            out.push_back({ AssetImportResult::RejectedExtension, {}, "", f.path });
+            continue;
+        }
+        out.push_back(importExternalAsset(f.path, targetDir));
+    }
     return out;
 }
 
@@ -470,7 +500,18 @@ void ContentBrowserPanel::drawFolderTree(const std::filesystem::path& dir)
 
 void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 {
-    if (!m_open) return;
+    if (!m_open)
+    {
+        // Drenar igualmente aunque la ventana esté cerrada: si no, la cola de
+        // sandbox/main.cpp crece sin límite mientras el panel no está a la
+        // vista, y al reabrirlo se importaría de golpe un lote entero contra
+        // coordenadas de pantalla ya obsoletas. Sin panel visible no hay rect
+        // contra el que comparar, así que estos drops se descartan en
+        // silencio — el usuario no pudo soltar sobre algo que no veía.
+        if (ctx.takeDroppedFiles)
+            ctx.takeDroppedFiles();
+        return;
+    }
 
     // Decisión del modal (o clic directo) del frame anterior: la carga ocurre
     // aquí, fuera de cualquier popup y antes de abrir la ventana.
@@ -490,7 +531,11 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         }
     }
 
-    ImGui::Begin("Content Browser", &m_open);
+    // ImGui::Begin devuelve false para un tab dockeado sin foco (o ventana
+    // colapsada): en ese caso el panel no está realmente a la vista, aunque
+    // m_open siga en true, y soltar sobre lo que SÍ se ve (otro tab del mismo
+    // dock, p.ej.) no debe importar aquí — visible gatea el bloque de drop.
+    const bool visible = ImGui::Begin("Content Browser", &m_open);
     float totalWidth  = ImGui::GetContentRegionAvail().x;
     float totalHeight = ImGui::GetContentRegionAvail().y;
     float leftWidth   = totalWidth * 0.38f;
@@ -522,6 +567,40 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     }
     if (m_currentDir.empty())
         m_currentDir = m_projectRoot.string();
+
+    // Drop OS-level (Explorer -> ventana): se consume una vez por frame, y
+    // solo importa lo que cae dentro del rect de ESTA ventana — soltar sobre
+    // otro panel dockeado no hace nada aquí (nadie más lo reclama). Si el
+    // panel no está visible (tab de fondo, colapsado) igualmente se drena la
+    // cola para no acumularla, pero se descarta sin más: sin rect real no hay
+    // nada contra qué comparar la posición del drop.
+    if (ctx.takeDroppedFiles)
+    {
+        if (!visible)
+        {
+            ctx.takeDroppedFiles();
+        }
+        else
+        {
+            const ImVec2 winPos  = ImGui::GetWindowPos();
+            const ImVec2 winSize = ImGui::GetWindowSize();
+            std::vector<AssetImportOutcome> outcomes = importDroppedFilesInto(
+                ctx.takeDroppedFiles(), winPos.x, winPos.y, winSize.x, winSize.y, m_currentDir);
+            for (const AssetImportOutcome& o : outcomes)
+            {
+                if (o.result == AssetImportResult::Copied)
+                {
+                    ctx.pushLog("Asset importado: " + o.destPath.filename().string());
+                    m_scanned = false;
+                }
+                else
+                {
+                    ctx.pushLog("Import rechazado (" + o.sourcePath.filename().string() + "): " +
+                                describeImportResult(o));
+                }
+            }
+        }
+    }
 
     // Left: árbol de carpetas
     ImGui::BeginChild("##FolderTreePane", ImVec2(leftWidth, totalHeight), false);
@@ -579,17 +658,6 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         int   cols  = std::max(1, (int)(paneW / cellW));
         ImGui::Columns(cols, "##AssetGrid", false);
 
-        // Todo lo que alguna zona de drop del editor sepa aceptar: mallas,
-        // audio, y las imágenes y fuentes de las cajas de asset de UI. La lista
-        // no filtra por destino a propósito —quién rechaza qué se decide en el
-        // que aplica el valor (loadMeshForSelected, loadAudioClipForSelected y
-        // los set*Path de PropertiesPanel, todos con su veto por extensión)—;
-        // aquí solo decide si el arrastre puede empezar.
-        static const std::set<std::string> kDraggableExt = {
-            ".fbx",
-            ".wav", ".mp3", ".ogg", ".flac",
-            ".png", ".jpg", ".jpeg", ".bmp", ".tga",
-            ".ttf", ".otf", ".ttc"};
 
         for (auto& path : m_assets) {
             std::error_code isDirEc;
@@ -668,7 +736,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             // proposito: las 14 zonas de drop que ya existen esperan un fichero
             // de una extension concreta, y con un tipo aparte ninguna acepta una
             // carpeta por accidente.
-            const bool arrastrable = isDir || kDraggableExt.count(ext);
+            const bool arrastrable = isDir || isImportableExtension(ext);
             if (arrastrable && ImGui::BeginDragDropSource())
             {
                 std::string fullPath = path.string();

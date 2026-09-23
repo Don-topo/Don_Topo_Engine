@@ -2,6 +2,7 @@
 #include "DonTopo/Core/CopyToBuffer.h"
 #include "DonTopo/Core/TransformDecompose.h"
 #include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Core/Scene.h"
@@ -31,6 +32,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <set>
 #include <type_traits>
 #include <variant>
@@ -55,11 +57,20 @@ namespace {
 // por la que un asset de OTRO proyecto podía entrar en la escena y acabar en el
 // paquete de export.
 //
-// Lo que se rechaza es exactamente eso: un asset que caiga dentro del workspace
-// `projects/` pero fuera del proyecto abierto. Lo de fuera del workspace (los
-// assets compartidos del repo: mallas, fuentes, audio) se sigue permitiendo,
-// mismo criterio que la carpeta Scripts/ o el skybox del motor. Sin proyecto
-// abierto (tests headless) pasa todo, como antes de que el concepto existiera.
+// Dos casos de "no está en el proyecto abierto", con destino distinto:
+// - Dentro del workspace `projects/` pero de OTRO proyecto: se rechaza sin
+//   más (mismo mensaje de siempre). Cruzar assets entre dos proyectos
+//   separados sigue sin ser el flujo que se quiere soportar.
+// - Genuinamente fuera del workspace (Escritorio, Descargas, un USB...): se
+//   IMPORTA — se copia a assets/Imported/<Tipo>/ si la extensión es de las
+//   soportadas, igual que el drop externo sobre el Content Browser. Antes de
+//   esta función existir, este caso se aceptaba sin copiar (referenciaba la
+//   ruta externa tal cual); ese "aceptar sin copiar" era precisamente el
+//   agujero que esta feature cierra — la corrección inicial invertía sin
+//   querer las dos ramas y dejaba este caso, el más común de los dos,
+//   comportándose exactamente como antes (encontrado en la revisión final).
+// Sin proyecto abierto (tests headless) pasa todo, como antes de que el
+// concepto existiera.
 // Los 18 diálogos de assets de este panel pasan por aquí al drenarse, y NADIE
 // aplica una ruta sin preguntar antes. Por eso el veto de edición vive en esta
 // función y no en cada botón "Browse...": gatear el botón solo tapa el caso de
@@ -72,7 +83,8 @@ namespace {
 // El nombre dice "aceptar", no "pertenece al proyecto", justo porque ya
 // responde a dos preguntas: de quién es el asset, y si el panel está en
 // condiciones de aplicarlo ahora mismo.
-bool canAcceptAsset(const DonTopo::EditorContext& ctx, const std::filesystem::path& path)
+std::optional<std::filesystem::path> canAcceptAsset(const DonTopo::EditorContext& ctx,
+                                                     const std::filesystem::path& path)
 {
     // Veto mientras el modal de Load Scene está activo: la escena sobre la que
     // se abrió el diálogo está siendo reemplazada, así que aplicar la elección
@@ -82,20 +94,45 @@ bool canAcceptAsset(const DonTopo::EditorContext& ctx, const std::filesystem::pa
     if (ctx.editingLocked)
     {
         ctx.logModule("Project", "Carga de escena en curso: el asset elegido se descarta");
-        return false;
+        return std::nullopt;
     }
 
-    if (!ctx.project || !ctx.project->valid()) return true;
-    if (ctx.project->contains(path))           return true;
+    if (!ctx.project || !ctx.project->valid()) return path;
+    if (ctx.project->contains(path))           return path;
 
     // El workspace lo crea el selector al arrancar, así que este contains()
     // responde sobre una carpeta que existe; si aun así fallara, contains()
-    // devuelve false y el asset se trata como compartido, no como ajeno.
+    // devuelve false y el path se trata como genuinamente externo (importable),
+    // no como de otro proyecto.
     const DonTopo::ProjectContext workspace(DonTopo::ProjectContext::workspaceDir());
-    if (!workspace.contains(path)) return true;
+    if (workspace.contains(path))
+    {
+        ctx.logModule("Project", "Asset de otro proyecto, rechazado: " + path.string());
+        return std::nullopt;
+    }
 
-    ctx.logModule("Project", "Asset de otro proyecto, rechazado: " + path.string());
-    return false;
+    // Genuinamente fuera del workspace: se intenta importar. Si la extensión
+    // no es de las soportadas, se rechaza en vez de aceptarla sin copiar —
+    // referenciar una ruta absoluta fuera del proyecto es justo lo que esta
+    // feature quiere dejar de hacer.
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (!DonTopo::isImportableExtension(ext))
+    {
+        ctx.logModule("Project", "Extension no soportada para importar: " + path.string());
+        return std::nullopt;
+    }
+
+    const std::filesystem::path destDir = DonTopo::importedAssetDestDir(ctx.project->root(), ext);
+    const DonTopo::AssetImportOutcome outcome = DonTopo::importExternalAsset(path, destDir);
+    if (outcome.result != DonTopo::AssetImportResult::Copied)
+    {
+        ctx.logModule("Project", "Import rechazado (" + path.filename().string() + "): " +
+                      DonTopo::describeImportResult(outcome));
+        return std::nullopt;
+    }
+    ctx.logModule("Project", "Asset importado: " + outcome.destPath.filename().string());
+    return outcome.destPath;
 }
 
 // 2 decimales — suficiente para leer el valor de un vistazo en el Log sin
@@ -1336,20 +1373,22 @@ void PropertiesPanel::drawButtonPathDialogs(EditorContext& ctx)
     // siempre (mismo motivo que drawMeshDialog).
     if (m_fontDlgOpen && m_fontFileDialog->Display("ButtonFontDlg"))
     {
-        if (m_fontFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_fontFileDialog->GetFilePathName()))
-            setButtonAssetPath(ctx, m_fontDlgOwner, /*isFont=*/true,
-                                m_fontFileDialog->GetFilePathName());
+        if (m_fontFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_fontFileDialog->GetFilePathName()))
+                setButtonAssetPath(ctx, m_fontDlgOwner, /*isFont=*/true, resolved->string());
+        }
         m_fontFileDialog->Close();
         m_fontDlgOpen = false;
     }
 
     if (m_uiAtlasDlgOpen && m_uiAtlasFileDialog->Display("ButtonAtlasDlg"))
     {
-        if (m_uiAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_uiAtlasFileDialog->GetFilePathName()))
-            setButtonAssetPath(ctx, m_uiAtlasDlgOwner, /*isFont=*/false,
-                                m_uiAtlasFileDialog->GetFilePathName());
+        if (m_uiAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_uiAtlasFileDialog->GetFilePathName()))
+                setButtonAssetPath(ctx, m_uiAtlasDlgOwner, /*isFont=*/false, resolved->string());
+        }
         m_uiAtlasFileDialog->Close();
         m_uiAtlasDlgOpen = false;
     }
@@ -1799,9 +1838,11 @@ void PropertiesPanel::drawTextPathDialog(EditorContext& ctx)
     // selección con el diálogo abierto deja el flag atascado en true.
     if (m_textFontDlgOpen && m_textFontFileDialog->Display("TextFontDlg"))
     {
-        if (m_textFontFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_textFontFileDialog->GetFilePathName()))
-            setTextFontPath(ctx, m_textFontDlgOwner, m_textFontFileDialog->GetFilePathName());
+        if (m_textFontFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_textFontFileDialog->GetFilePathName()))
+                setTextFontPath(ctx, m_textFontDlgOwner, resolved->string());
+        }
         m_textFontFileDialog->Close();
         m_textFontDlgOpen = false;
     }
@@ -2179,10 +2220,11 @@ void PropertiesPanel::drawProgressBarPathDialog(EditorContext& ctx)
     // cambiar de selección con el diálogo abierto deja el flag atascado.
     if (m_barAtlasDlgOpen && m_barAtlasFileDialog->Display("BarImageDlg"))
     {
-        if (m_barAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_barAtlasFileDialog->GetFilePathName()))
-            setProgressBarImagePath(ctx, m_barAtlasDlgOwner, m_barAtlasDlgField,
-                                    m_barAtlasFileDialog->GetFilePathName());
+        if (m_barAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_barAtlasFileDialog->GetFilePathName()))
+                setProgressBarImagePath(ctx, m_barAtlasDlgOwner, m_barAtlasDlgField, resolved->string());
+        }
         m_barAtlasFileDialog->Close();
         m_barAtlasDlgOpen = false;
     }
@@ -2817,10 +2859,11 @@ void PropertiesPanel::drawPanelPathDialog(EditorContext& ctx)
     // siempre (mismo motivo que drawMeshDialog).
     if (m_panelAtlasDlgOpen && m_panelAtlasFileDialog->Display("PanelAtlasDlg"))
     {
-        if (m_panelAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_panelAtlasFileDialog->GetFilePathName()))
-            setPanelAtlasPath(ctx, m_panelAtlasDlgOwner,
-                              m_panelAtlasFileDialog->GetFilePathName());
+        if (m_panelAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_panelAtlasFileDialog->GetFilePathName()))
+                setPanelAtlasPath(ctx, m_panelAtlasDlgOwner, resolved->string());
+        }
         m_panelAtlasFileDialog->Close();
         m_panelAtlasDlgOpen = false;
     }
@@ -3133,10 +3176,11 @@ void PropertiesPanel::drawImagePathDialog(EditorContext& ctx)
 {
     if (m_imageAtlasDlgOpen && m_imageAtlasFileDialog->Display("ImageAtlasDlg"))
     {
-        if (m_imageAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_imageAtlasFileDialog->GetFilePathName()))
-            setImageAtlasPath(ctx, m_imageAtlasDlgOwner,
-                              m_imageAtlasFileDialog->GetFilePathName());
+        if (m_imageAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_imageAtlasFileDialog->GetFilePathName()))
+                setImageAtlasPath(ctx, m_imageAtlasDlgOwner, resolved->string());
+        }
         m_imageAtlasFileDialog->Close();
         m_imageAtlasDlgOpen = false;
     }
@@ -3587,9 +3631,11 @@ void PropertiesPanel::drawSliderPathDialog(EditorContext& ctx)
     // con el dialogo abierto deja el flag atascado en true para siempre.
     if (m_sliderAtlasDlgOpen && m_sliderAtlasFileDialog->Display("SliderAtlasDlg"))
     {
-        if (m_sliderAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_sliderAtlasFileDialog->GetFilePathName()))
-            setSliderAtlasPath(ctx, m_sliderAtlasDlgOwner, m_sliderAtlasFileDialog->GetFilePathName());
+        if (m_sliderAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_sliderAtlasFileDialog->GetFilePathName()))
+                setSliderAtlasPath(ctx, m_sliderAtlasDlgOwner, resolved->string());
+        }
         m_sliderAtlasFileDialog->Close();
         m_sliderAtlasDlgOpen = false;
     }
@@ -3986,9 +4032,11 @@ void PropertiesPanel::drawCheckboxPathDialog(EditorContext& ctx)
     // con el dialogo abierto deja el flag atascado en true para siempre.
     if (m_checkboxAtlasDlgOpen && m_checkboxAtlasFileDialog->Display("CheckboxAtlasDlg"))
     {
-        if (m_checkboxAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_checkboxAtlasFileDialog->GetFilePathName()))
-            setCheckboxAtlasPath(ctx, m_checkboxAtlasDlgOwner, m_checkboxAtlasFileDialog->GetFilePathName());
+        if (m_checkboxAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_checkboxAtlasFileDialog->GetFilePathName()))
+                setCheckboxAtlasPath(ctx, m_checkboxAtlasDlgOwner, resolved->string());
+        }
         m_checkboxAtlasFileDialog->Close();
         m_checkboxAtlasDlgOpen = false;
     }
@@ -4368,9 +4416,11 @@ void PropertiesPanel::drawTogglePathDialog(EditorContext& ctx)
     // con el dialogo abierto deja el flag atascado en true para siempre.
     if (m_toggleAtlasDlgOpen && m_toggleAtlasFileDialog->Display("ToggleAtlasDlg"))
     {
-        if (m_toggleAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_toggleAtlasFileDialog->GetFilePathName()))
-            setToggleAtlasPath(ctx, m_toggleAtlasDlgOwner, m_toggleAtlasFileDialog->GetFilePathName());
+        if (m_toggleAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_toggleAtlasFileDialog->GetFilePathName()))
+                setToggleAtlasPath(ctx, m_toggleAtlasDlgOwner, resolved->string());
+        }
         m_toggleAtlasFileDialog->Close();
         m_toggleAtlasDlgOpen = false;
     }
@@ -4754,9 +4804,11 @@ void PropertiesPanel::drawScrollbarPathDialog(EditorContext& ctx)
     // con el dialogo abierto deja el flag atascado en true para siempre.
     if (m_scrollbarAtlasDlgOpen && m_scrollbarAtlasFileDialog->Display("ScrollbarAtlasDlg"))
     {
-        if (m_scrollbarAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_scrollbarAtlasFileDialog->GetFilePathName()))
-            setScrollbarAtlasPath(ctx, m_scrollbarAtlasDlgOwner, m_scrollbarAtlasFileDialog->GetFilePathName());
+        if (m_scrollbarAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_scrollbarAtlasFileDialog->GetFilePathName()))
+                setScrollbarAtlasPath(ctx, m_scrollbarAtlasDlgOwner, resolved->string());
+        }
         m_scrollbarAtlasFileDialog->Close();
         m_scrollbarAtlasDlgOpen = false;
     }
@@ -5219,18 +5271,22 @@ void PropertiesPanel::drawInputFieldPathDialog(EditorContext& ctx)
     // con el dialogo abierto deja el flag atascado en true para siempre.
     if (m_inputFieldAtlasDlgOpen && m_inputFieldAtlasFileDialog->Display("InputFieldAtlasDlg"))
     {
-        if (m_inputFieldAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_inputFieldAtlasFileDialog->GetFilePathName()))
-            setInputFieldAtlasPath(ctx, m_inputFieldAtlasDlgOwner, m_inputFieldAtlasFileDialog->GetFilePathName());
+        if (m_inputFieldAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_inputFieldAtlasFileDialog->GetFilePathName()))
+                setInputFieldAtlasPath(ctx, m_inputFieldAtlasDlgOwner, resolved->string());
+        }
         m_inputFieldAtlasFileDialog->Close();
         m_inputFieldAtlasDlgOpen = false;
     }
 
     if (m_inputFieldFontDlgOpen && m_inputFieldFontFileDialog->Display("InputFieldFontDlg"))
     {
-        if (m_inputFieldFontFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_inputFieldFontFileDialog->GetFilePathName()))
-            setInputFieldFontPath(ctx, m_inputFieldFontDlgOwner, m_inputFieldFontFileDialog->GetFilePathName());
+        if (m_inputFieldFontFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_inputFieldFontFileDialog->GetFilePathName()))
+                setInputFieldFontPath(ctx, m_inputFieldFontDlgOwner, resolved->string());
+        }
         m_inputFieldFontFileDialog->Close();
         m_inputFieldFontDlgOpen = false;
     }
@@ -5729,18 +5785,22 @@ void PropertiesPanel::drawDropdownPathDialog(EditorContext& ctx)
     // con el dialogo abierto deja el flag atascado en true para siempre.
     if (m_dropdownAtlasDlgOpen && m_dropdownAtlasFileDialog->Display("DropdownAtlasDlg"))
     {
-        if (m_dropdownAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_dropdownAtlasFileDialog->GetFilePathName()))
-            setDropdownAtlasPath(ctx, m_dropdownAtlasDlgOwner, m_dropdownAtlasFileDialog->GetFilePathName());
+        if (m_dropdownAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_dropdownAtlasFileDialog->GetFilePathName()))
+                setDropdownAtlasPath(ctx, m_dropdownAtlasDlgOwner, resolved->string());
+        }
         m_dropdownAtlasFileDialog->Close();
         m_dropdownAtlasDlgOpen = false;
     }
 
     if (m_dropdownFontDlgOpen && m_dropdownFontFileDialog->Display("DropdownFontDlg"))
     {
-        if (m_dropdownFontFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_dropdownFontFileDialog->GetFilePathName()))
-            setDropdownFontPath(ctx, m_dropdownFontDlgOwner, m_dropdownFontFileDialog->GetFilePathName());
+        if (m_dropdownFontFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_dropdownFontFileDialog->GetFilePathName()))
+                setDropdownFontPath(ctx, m_dropdownFontDlgOwner, resolved->string());
+        }
         m_dropdownFontFileDialog->Close();
         m_dropdownFontDlgOpen = false;
     }
@@ -6279,9 +6339,11 @@ void PropertiesPanel::drawScrollViewPathDialog(EditorContext& ctx)
     // con el dialogo abierto deja el flag atascado en true para siempre.
     if (m_scrollViewAtlasDlgOpen && m_scrollViewAtlasFileDialog->Display("ScrollViewAtlasDlg"))
     {
-        if (m_scrollViewAtlasFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_scrollViewAtlasFileDialog->GetFilePathName()))
-            setScrollViewAtlasPath(ctx, m_scrollViewAtlasDlgOwner, m_scrollViewAtlasFileDialog->GetFilePathName());
+        if (m_scrollViewAtlasFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_scrollViewAtlasFileDialog->GetFilePathName()))
+                setScrollViewAtlasPath(ctx, m_scrollViewAtlasDlgOwner, resolved->string());
+        }
         m_scrollViewAtlasFileDialog->Close();
         m_scrollViewAtlasDlgOpen = false;
     }
@@ -8308,9 +8370,11 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
     // estado interno del diálogo de Audio ni viceversa.
     if (m_meshDlgOpen && m_meshFileDialog->Display("AddMeshDlg"))
     {
-        if (m_meshFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_meshFileDialog->GetFilePathName()))
-            loadMeshForSelected(ctx, m_meshDlgOwner, m_meshFileDialog->GetFilePathName());
+        if (m_meshFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_meshFileDialog->GetFilePathName()))
+                loadMeshForSelected(ctx, m_meshDlgOwner, resolved->string());
+        }
         m_meshFileDialog->Close();
         m_meshDlgOpen = false;
     }
@@ -8320,10 +8384,12 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
     // el estado interno del de Mesh ni el de Audio.
     if (m_textureDlgOpen && m_textureFileDialog->Display("PickTextureDlg"))
     {
-        if (m_textureFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_textureFileDialog->GetFilePathName()))
-            assignMaterialTexture(ctx, m_textureDlgOwner, m_textureDlgMaterial, m_textureDlgSlot,
-                                  m_textureFileDialog->GetFilePathName());
+        if (m_textureFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_textureFileDialog->GetFilePathName()))
+                assignMaterialTexture(ctx, m_textureDlgOwner, m_textureDlgMaterial, m_textureDlgSlot,
+                                      resolved->string());
+        }
         m_textureFileDialog->Close();
         m_textureDlgOpen = false;
     }
@@ -8704,9 +8770,11 @@ void PropertiesPanel::drawAudioClipDialog(EditorContext& ctx)
     // drawMeshDialog).
     if (m_audioDlgOpen && m_audioFileDialog->Display("AddAudioDlg"))
     {
-        if (m_audioFileDialog->IsOk() &&
-            canAcceptAsset(ctx, m_audioFileDialog->GetFilePathName()))
-            loadAudioClipForSelected(ctx, m_audioFileDialog->GetFilePathName());
+        if (m_audioFileDialog->IsOk())
+        {
+            if (auto resolved = canAcceptAsset(ctx, m_audioFileDialog->GetFilePathName()))
+                loadAudioClipForSelected(ctx, resolved->string());
+        }
         m_audioFileDialog->Close();
         m_audioDlgOpen = false;
     }

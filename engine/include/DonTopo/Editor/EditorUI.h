@@ -10,6 +10,7 @@
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 #include "DonTopo/Editor/UndoManager.h"
+#include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/LogPanel.h"
 #include "DonTopo/Editor/ScenePanel.h"
 #include "DonTopo/Editor/ViewportPanel.h"
@@ -137,6 +138,12 @@ public:
     // Lo rellena main() antes del bucle; sin él, los drops no encolan nada y
     // Load Scene se queda en la ruta síncrona.
     void setAssetLoader(AsyncAssetLoader* loader) { m_assetLoader = loader; }
+    // Lo rellena main() antes del bucle: drena la cola de ficheros soltados
+    // sobre la ventana desde fuera del proceso (glfwSetDropCallback). Vacío
+    // por defecto — sin proveedor, ctx.takeDroppedFiles llega vacía al
+    // Content Browser y no se importa nada, mismo patrón que setAssetLoader.
+    void setDroppedFilesProvider(std::function<std::vector<DroppedFile>()> fn)
+    { m_droppedFilesProvider = std::move(fn); }
 
     // Selector de proyecto: primer estado del bucle de ImGui. Mientras haya un
     // selector puesto, draw() le cede el frame ENTERO y no dibuja ni menú, ni
@@ -402,6 +409,8 @@ private:
     // Loader asíncrono no-propietario (vive en main.cpp). Lo rellena
     // setAssetLoader antes del bucle. nullptr => Load Scene cae a síncrono.
     AsyncAssetLoader* m_assetLoader = nullptr;
+    // Ver setDroppedFilesProvider. Vacío en tests headless.
+    std::function<std::vector<DroppedFile>()> m_droppedFilesProvider;
 
     // Ver setProjectSelector/setProject. Vacío/nullptr en los tests headless: sin
     // selector el editor dibuja como siempre, y sin proyecto las guardas de ruta
