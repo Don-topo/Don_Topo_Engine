@@ -1,6 +1,7 @@
 // Test headless de AssetImport (sin GUI). Plain main + CHECK, mismo patron
 // que content_browser_tests.cpp.
 #include "DonTopo/Editor/AssetImport.h"
+#include "DonTopo/Core/ImportSettings.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -128,9 +129,35 @@ static void test_import_uncreatable_dest_dir_reports_cause(const fs::path& root)
     CHECK(outcome.errorMessage.rfind("No se pudo crear la carpeta destino", 0) == 0);
 }
 
+static void test_import_external_copies_sidecar(const fs::path& root)
+{
+    const fs::path source = root / "source" / "tablero.png";
+    std::ofstream(source) << "png";
+    TextureImportSettings s;
+    s.colorSpace = ColorSpaceOverride::Linear;
+    s.mipmaps    = true;
+    std::string err;
+    CHECK(saveTextureImportSettings(source, s, &err));
+
+    const fs::path destDir = root / "dest" / "conSidecar";
+    const AssetImportOutcome outcome = importExternalAsset(source, destDir);
+    CHECK(outcome.result == AssetImportResult::Copied);
+    CHECK(outcome.errorMessage.empty());
+    CHECK(loadTextureImportSettings(outcome.destPath) == s);
+    CHECK(fs::exists(importSidecarPath(source)));                   // el origen conserva el suyo
+
+    // Sin sidecar en el origen: no aparece ninguno en el destino.
+    const fs::path plain = root / "source" / "liso.png";
+    std::ofstream(plain) << "png";
+    const AssetImportOutcome o2 = importExternalAsset(plain, destDir);
+    CHECK(o2.result == AssetImportResult::Copied);
+    CHECK(!fs::exists(importSidecarPath(o2.destPath)));
+}
+
 int main()
 {
     fs::path root = makeFixture();
+    test_import_external_copies_sidecar(root);
     test_is_importable_extension();
     test_imported_asset_dest_dir();
     test_import_copies_file(root);

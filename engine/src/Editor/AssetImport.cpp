@@ -1,4 +1,5 @@
 #include "DonTopo/Editor/AssetImport.h"
+#include "DonTopo/Core/ImportSettings.h"
 
 #include <algorithm>
 #include <cctype>
@@ -66,6 +67,12 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
             return { AssetImportResult::RejectedNameConflict, {}, "", source };
         return { AssetImportResult::RejectedCopyFailed, {}, ec.message(), source };
     }
+    // Si el origen traia ajustes de importacion, viajan con la copia. Un fallo
+    // aqui no deshace la importacion: el asset ya esta; se avisa en el mensaje.
+    std::string sidecarError;
+    if (!copyImportSidecar(source, dest, &sidecarError))
+        return { AssetImportResult::Copied, dest,
+                 "no se pudo copiar el .import.json: " + sidecarError, source };
     return { AssetImportResult::Copied, dest, "", source };
 }
 
@@ -73,7 +80,9 @@ std::string describeImportResult(const AssetImportOutcome& outcome)
 {
     switch (outcome.result)
     {
-        case AssetImportResult::Copied:              return "importado";
+        case AssetImportResult::Copied:
+            return outcome.errorMessage.empty() ? std::string("importado")
+                                                : "importado (" + outcome.errorMessage + ")";
         case AssetImportResult::RejectedExtension:    return "extension no soportada para importar";
         case AssetImportResult::RejectedNameConflict: return "ya existe un fichero con ese nombre en el destino";
         case AssetImportResult::RejectedCopyFailed:

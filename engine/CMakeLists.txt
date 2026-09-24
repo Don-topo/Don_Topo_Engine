@@ -39,6 +39,7 @@ add_library(DonTopoCore STATIC
     src/Core/GameObject.cpp
     src/Core/RootMotionApply.cpp
     src/Core/JobSystem.cpp
+    src/Core/ImportSettings.cpp
     src/Core/Scene.cpp
     src/Files/FileManager.cpp
     src/Audio/AudioManager.cpp
@@ -58,6 +59,7 @@ add_library(DonTopoCore STATIC
     src/Renderer/GpuDevice.cpp
     src/Renderer/GpuResources.cpp
     src/Renderer/MaterialTextureSource.cpp
+    src/Renderer/TextureImport.cpp
     src/Renderer/SharedGpuMesh.cpp
     src/Renderer/InstanceBatching.cpp
     src/Renderer/InstanceBuffers.cpp

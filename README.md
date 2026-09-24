@@ -762,8 +762,11 @@ tree with a breadcrumb, filters by name and by asset type, creates folders, rena
 dragging onto a folder, with scene references rewritten) and deletes assets — one or several at
 once with Ctrl/Shift selection — shows real thumbnails for textures, follows changes made on disk
 outside the editor, and imports files dropped from the OS file explorer or picked in a Browse
-dialog by copying them into `assets/Imported/`. It is also the drag source for models, textures
-and skybox folders. The
+dialog by copying them into `assets/Imported/`. Right-clicking a texture opens **Import Settings...**:
+a colour space (Auto = decided by the material slot, sRGB or Linear) and mipmaps on/off, saved next to
+the image as `<name>.import.json` (only when it differs from the defaults, and it follows the asset when
+you move, rename or delete it, and into the exported game); applying it rebuilds the materials that use
+that texture. It is also the drag source for models, textures and skybox folders. The
 **Log Console** keeps the history of edit actions and the values they wrote. All of it is
 serialised to JSON — the whole tree, with meshes, colliders, audio, scripts, UI components and
 the Animator graph.

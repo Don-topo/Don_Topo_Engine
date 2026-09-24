@@ -16,6 +16,10 @@ dt_add_test(dt_asset_import_tests asset_import_tests.cpp DonTopoEditor)
 
 dt_add_test(dt_thumbnail_tests thumbnail_tests.cpp DonTopoEditor)
 
+dt_add_test(dt_import_settings_tests import_settings_tests.cpp DonTopoCore)
+
+dt_add_test(dt_texture_import_tests texture_import_tests.cpp DonTopoCore)
+
 dt_add_test(dt_camera_tests camera_tests.cpp DonTopoEditor)
 
 # DonTopoEditor por lo mismo que dt_content_browser_tests: LogPanel vive en la

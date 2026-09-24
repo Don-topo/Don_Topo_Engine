@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "DonTopo/Renderer/TextureImport.h"
 
 namespace DonTopo
 {
@@ -43,6 +44,10 @@ namespace DonTopo
     {
         int w = 0, h = 0;
         std::unique_ptr<unsigned char, StbPixelsFree> pixels;
+        // Ajustes de importacion del fichero (sidecar). Las texturas embebidas y
+        // las que no tienen sidecar llevan el defecto: Auto y sin mips.
+        ColorSpaceOverride      colorSpace = ColorSpaceOverride::Auto;
+        std::vector<TextureMip> mips;   // niveles 1..N-1; vacio si mipmaps esta apagado
         explicit operator bool() const { return pixels != nullptr; }
     };
 

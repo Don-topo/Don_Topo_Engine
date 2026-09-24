@@ -120,14 +120,14 @@ void GpuResources::uploadBuffer(const void* data, VkDeviceSize size,
     }
 }
 
-void GpuResources::createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags props, VkImage& image, VkDeviceMemory& memory)
+void GpuResources::createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags props, VkImage& image, VkDeviceMemory& memory, uint32_t mipLevels)
 {
     VkImageCreateInfo imageInfo{};
     imageInfo.sType             = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType         = VK_IMAGE_TYPE_2D;
     imageInfo.format            = format;
     imageInfo.extent            = { w, h, 1 };
-    imageInfo.mipLevels         = 1;
+    imageInfo.mipLevels         = mipLevels;
     imageInfo.arrayLayers       = 1;
     imageInfo.samples           = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling            = tiling;
@@ -159,7 +159,8 @@ namespace {
     // mete las TRES —transición, copia, transición— en el mismo buffer: por los
     // métodos serían tres submits y tres esperas para el mismo trabajo.
     void grabarTransicion(VkCommandBuffer cmd, VkImage image,
-                          VkImageLayout oldLayout, VkImageLayout newLayout);
+                          VkImageLayout oldLayout, VkImageLayout newLayout,
+                          uint32_t levelCount = 1);
     void grabarCopiaABufferImagen(VkCommandBuffer cmd, VkBuffer buffer, VkImage image,
                                   uint32_t w, uint32_t h);
 }
@@ -177,33 +178,62 @@ void GpuResources::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t w,
 }
 
 void GpuResources::uploadPixelsToImage(const void* pixels, uint32_t w, uint32_t h, VkFormat fmt,
-                                       VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
+                                       VkImage& img, VkDeviceMemory& mem, TransferBatch* batch,
+                                       const TextureMip* mips, size_t mipCount)
 {
-    const VkDeviceSize imageSize = static_cast<VkDeviceSize>(w) * h * 4;
+    const uint32_t levels = 1 + static_cast<uint32_t>(mipCount);
+
+    VkDeviceSize total = static_cast<VkDeviceSize>(w) * h * 4;
+    for (size_t i = 0; i < mipCount; ++i)
+        total += static_cast<VkDeviceSize>(mips[i].w) * mips[i].h * 4;
 
     VkBuffer       staging    = VK_NULL_HANDLE;
     VkDeviceMemory stagingMem = VK_NULL_HANDLE;
-    createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  staging, stagingMem);
 
     void* data = nullptr;
-    vkMapMemory(m_gpu.device(), stagingMem, 0, imageSize, 0, &data);
-    memcpy(data, pixels, static_cast<size_t>(imageSize));
+    vkMapMemory(m_gpu.device(), stagingMem, 0, total, 0, &data);
+
+    // Todos los niveles en UN staging y UNA llamada de copia: el nivel i ocupa
+    // w*h*4 bytes (multiplo de 4, el alineado que pide RGBA8) a continuacion del
+    // anterior.
+    std::vector<VkBufferImageCopy> regions(levels);
+    VkDeviceSize offset = 0;
+    auto poner = [&](uint32_t level, const void* src, uint32_t lw, uint32_t lh) {
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(lw) * lh * 4;
+        memcpy(static_cast<uint8_t*>(data) + offset, src, static_cast<size_t>(bytes));
+        VkBufferImageCopy& r = regions[level];
+        r                                 = {};
+        r.bufferOffset                    = offset;
+        r.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        r.imageSubresource.mipLevel       = level;
+        r.imageSubresource.baseArrayLayer = 0;
+        r.imageSubresource.layerCount     = 1;
+        r.imageExtent                     = { lw, lh, 1 };
+        offset += bytes;
+    };
+    poner(0, pixels, w, h);
+    for (size_t i = 0; i < mipCount; ++i)
+        poner(static_cast<uint32_t>(i) + 1, mips[i].rgba.data(), mips[i].w, mips[i].h);
     vkUnmapMemory(m_gpu.device(), stagingMem);
 
     createImage(w, h, fmt, VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem);
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem, levels);
 
-    // Un solo scope para las tres: sin batch eso es un submit en vez de tres.
+    // Un solo scope para las tres: sin batch eso es un submit en vez de tres. La
+    // barrera cubre TODOS los niveles: un nivel sin transicionar es exactamente el
+    // aviso de layout que la validacion de sincronizacion caza.
     {
         CmdScope scope(m_gpu, batch);
         grabarTransicion(scope.cmd, img, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        grabarCopiaABufferImagen(scope.cmd, staging, img, w, h);
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, levels);
+        vkCmdCopyBufferToImage(scope.cmd, staging, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               levels, regions.data());
         grabarTransicion(scope.cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, levels);
     }
     // El destructor del scope ya ha esperado si no habia batch, asi que el
     // staging se puede soltar. Con batch la copia sigue en vuelo y se libera al
@@ -299,7 +329,8 @@ void GpuResources::uploadPixelsToImageRegions(VkImage img, const ImageTileUpload
 
 namespace {
 void grabarTransicion(VkCommandBuffer cmd, VkImage image,
-                      VkImageLayout oldLayout, VkImageLayout newLayout)
+                      VkImageLayout oldLayout, VkImageLayout newLayout,
+                      uint32_t levelCount)
 {
     VkImageMemoryBarrier barrier{};
     barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -310,7 +341,7 @@ void grabarTransicion(VkCommandBuffer cmd, VkImage image,
     barrier.image                           = image;
     barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     barrier.subresourceRange.baseMipLevel   = 0;
-    barrier.subresourceRange.levelCount     = 1;
+    barrier.subresourceRange.levelCount     = levelCount;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount     = 1;
 
@@ -358,8 +389,9 @@ void grabarCopiaABufferImagen(VkCommandBuffer cmd, VkBuffer buffer, VkImage imag
 }
 } // namespace
 
-void GpuResources::createTextureImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
+void GpuResources::createTextureImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch, VkFormat* outFormat)
 {
+    if (outFormat) *outFormat = VK_FORMAT_R8G8B8A8_SRGB;   // relleno y blanca compartida
     // Material que NO pide textura -una primitiva procedural, por ejemplo-: la
     // blanca compartida, prestada. Antes cada malla se llevaba su propia 1x1
     // blanca, con su asignacion de memoria y la de su staging. El caso de
@@ -395,12 +427,22 @@ void GpuResources::createTextureImage(const std::string& path, const std::vector
         pixels = placeholder.data();
     }
 
+    // El formato lo decide resolveSrgb (slot + sidecar) SOLO cuando hay textura
+    // decodificada; los rellenos siguen siendo sRGB, como hasta ahora.
+    VkFormat fmt = VK_FORMAT_R8G8B8A8_SRGB;
+    if (tex)
+        fmt = resolveSrgb(TextureKind::BaseColor, tex.colorSpace) ? VK_FORMAT_R8G8B8A8_SRGB
+                                                                   : VK_FORMAT_R8G8B8A8_UNORM;
+    if (outFormat) *outFormat = fmt;
+
     // Copiados al staging aquí dentro: `tex` suelta los de stb al salir.
-    uploadPixelsToImage(pixels, (uint32_t)w, (uint32_t)h, VK_FORMAT_R8G8B8A8_SRGB, img, mem, batch);
+    uploadPixelsToImage(pixels, (uint32_t)w, (uint32_t)h, fmt, img, mem, batch,
+                        tex.mips.data(), tex.mips.size());
 }
 
-void GpuResources::createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
+void GpuResources::createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch, VkFormat* outFormat)
 {
+    if (outFormat) *outFormat = VK_FORMAT_R8G8B8A8_UNORM;   // relleno y plana compartida
     // Sin normal map: la plana compartida (0,0,1 en tangent space).
     if (path.empty() && embedded.empty())
     {
@@ -422,7 +464,15 @@ void GpuResources::createNormalMapImage(const std::string& path, const std::vect
         w = h = 1;
     }
 
-    uploadPixelsToImage(pixels, (uint32_t)w, (uint32_t)h, VK_FORMAT_R8G8B8A8_UNORM, img, mem, batch);
+    // Tambien lo usa el ORM: resolveSrgb(Normal, o) == resolveSrgb(Orm, o) siempre.
+    VkFormat fmt = VK_FORMAT_R8G8B8A8_UNORM;
+    if (tex)
+        fmt = resolveSrgb(TextureKind::Normal, tex.colorSpace) ? VK_FORMAT_R8G8B8A8_SRGB
+                                                                : VK_FORMAT_R8G8B8A8_UNORM;
+    if (outFormat) *outFormat = fmt;
+
+    uploadPixelsToImage(pixels, (uint32_t)w, (uint32_t)h, fmt, img, mem, batch,
+                        tex.mips.data(), tex.mips.size());
 }
 
 void GpuResources::createTextureImageView(VkImage image, VkImageView& view, VkFormat format)
@@ -434,7 +484,7 @@ void GpuResources::createTextureImageView(VkImage image, VkImageView& view, VkFo
     viewInfo.format                          = format;
     viewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel   = 0;
-    viewInfo.subresourceRange.levelCount     = 1;
+    viewInfo.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;   // 1 o N, la que tenga la imagen
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount     = 1;
 
@@ -456,6 +506,10 @@ void GpuResources::createTextureSampler(VkSampler& outSampler)
     samplerInfo.unnormalizedCoordinates = VK_FALSE;
     samplerInfo.compareEnable           = VK_FALSE;
     samplerInfo.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    // Con maxLod a 0 (el valor por defecto de la struct) los mips no se leerian
+    // nunca. Las imagenes de un solo nivel siguen leyendo el 0.
+    samplerInfo.minLod                  = 0.0f;
+    samplerInfo.maxLod                  = VK_LOD_CLAMP_NONE;
 
     if(vkCreateSampler(m_gpu.device(), &samplerInfo, nullptr, &outSampler) != VK_SUCCESS)
         throw std::runtime_error("failed to create texture sampler!");
@@ -557,18 +611,13 @@ void GpuResources::createSolidColorImage(const uint8_t rgba[4], VkImage& img, Vk
     uploadPixelsToImage(rgba, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, img, mem, batch);
 }
 
-void GpuResources::createTextureImageFromPixels(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                                VkImage& img, VkDeviceMemory& mem,
-                                                TransferBatch* batch)
+void GpuResources::createMaterialImageFromPixels(const uint8_t* rgba, uint32_t w, uint32_t h,
+                                                 VkFormat fmt,
+                                                 const TextureMip* mips, size_t mipCount,
+                                                 VkImage& img, VkDeviceMemory& mem,
+                                                 TransferBatch* batch)
 {
-    uploadPixelsToImage(rgba, w, h, VK_FORMAT_R8G8B8A8_SRGB, img, mem, batch);
-}
-
-void GpuResources::createNormalMapImageFromPixels(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                                  VkImage& img, VkDeviceMemory& mem,
-                                                  TransferBatch* batch)
-{
-    uploadPixelsToImage(rgba, w, h, VK_FORMAT_R8G8B8A8_UNORM, img, mem, batch);
+    uploadPixelsToImage(rgba, w, h, fmt, img, mem, batch, mips, mipCount);
 }
 
 } // namespace DonTopo

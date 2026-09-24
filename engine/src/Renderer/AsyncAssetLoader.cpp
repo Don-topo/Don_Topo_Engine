@@ -32,6 +32,8 @@ namespace DonTopo
             img.h    = tex.h;
             img.pixels.assign(tex.pixels.get(),
                               tex.pixels.get() + static_cast<size_t>(tex.w) * tex.h * 4);
+            img.colorSpace = tex.colorSpace;
+            img.mips       = tex.mips;
             out.push_back(std::move(img));
             return true;
         }

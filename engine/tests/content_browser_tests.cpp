@@ -4,6 +4,8 @@
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 
@@ -590,8 +592,256 @@ static void test_nearest_existing_dir(const fs::path& root)
     CHECK(nearestExistingDir(root.parent_path() / "ajena", root) == root); // fuera de la raiz
 }
 
+static TextureImportSettings mipsOn()
+{
+    TextureImportSettings s;
+    s.mipmaps = true;
+    return s;
+}
+
+static void test_list_hides_import_sidecars()
+{
+    std::error_code ec;
+    const fs::path dir = fs::temp_directory_path(ec) / "dt_cb_sidecar_list";
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    std::ofstream(dir / "foto.png") << "x";
+    std::ofstream(dir / "escena.json") << "{}";
+    std::string err;
+    CHECK(saveTextureImportSettings(dir / "foto.png", mipsOn(), &err));
+    CHECK(fs::exists(importSidecarPath(dir / "foto.png")));
+
+    const std::vector<fs::path> entries = listVisibleEntries(dir);
+    CHECK(entries.size() == 2);                       // foto.png y escena.json, NO el sidecar
+    for (const fs::path& p : entries)
+        CHECK(!isImportSidecar(p));
+}
+
+static void test_move_asset_carries_sidecar()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_sidecar_move";
+    fs::remove_all(base, ec);
+    fs::create_directories(base / "A", ec);
+    fs::create_directories(base / "B", ec);
+    std::ofstream(base / "A" / "foto.png") << "x";
+    std::string err;
+    CHECK(saveTextureImportSettings(base / "A" / "foto.png", mipsOn(), &err));
+
+    const MoveOutcome m = moveAsset(base / "A" / "foto.png", base / "B");
+    CHECK(m.result == MoveResult::Moved);
+    CHECK(fs::exists(base / "B" / "foto.png"));
+    CHECK(loadTextureImportSettings(base / "B" / "foto.png") == mipsOn());
+    CHECK(!fs::exists(importSidecarPath(base / "A" / "foto.png")));
+}
+
+// Review Focus 4.
+static void test_move_asset_rejects_when_destination_sidecar_exists()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_sidecar_move_conflict";
+    fs::remove_all(base, ec);
+    fs::create_directories(base / "A", ec);
+    fs::create_directories(base / "B", ec);
+    std::ofstream(base / "A" / "foto.png") << "x";
+    std::string err;
+    CHECK(saveTextureImportSettings(base / "A" / "foto.png", mipsOn(), &err));
+    // Sidecar HUERFANO en el destino: la foto no existe alli, su sidecar si.
+    TextureImportSettings other;
+    other.colorSpace = ColorSpaceOverride::Linear;
+    CHECK(saveTextureImportSettings(base / "B" / "foto.png", other, &err));
+
+    const MoveOutcome m = moveAsset(base / "A" / "foto.png", base / "B");
+    CHECK(m.result == MoveResult::RejectedNameConflict);
+    CHECK(fs::exists(base / "A" / "foto.png"));
+    CHECK(loadTextureImportSettings(base / "A" / "foto.png") == mipsOn());     // origen intacto
+    CHECK(loadTextureImportSettings(base / "B" / "foto.png") == other);        // destino sin pisar
+    CHECK(!fs::exists(base / "B" / "foto.png"));
+}
+
+static void test_rename_asset_file_carries_sidecar_and_rejects_conflict()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_sidecar_rename";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    std::ofstream(base / "x.png") << "x";
+    std::string err;
+    CHECK(saveTextureImportSettings(base / "x.png", mipsOn(), &err));
+
+    RenameFileOutcome r = renameAssetFile(base / "x.png", base / "y.png", false);
+    CHECK(r.ok);
+    CHECK(r.warning.empty());
+    CHECK(fs::exists(base / "y.png"));
+    CHECK(loadTextureImportSettings(base / "y.png") == mipsOn());
+    CHECK(!fs::exists(importSidecarPath(base / "x.png")));
+
+    // El destino ya tiene un sidecar (huerfano): se rechaza sin tocar nada.
+    std::ofstream(base / "z.png") << "z";
+    CHECK(saveTextureImportSettings(base / "z.png", mipsOn(), &err));
+    fs::remove(base / "z.png", ec);                                  // queda solo el sidecar
+    r = renameAssetFile(base / "y.png", base / "z.png", false);
+    CHECK(!r.ok);
+    CHECK(!r.error.empty());
+    CHECK(fs::exists(base / "y.png"));
+    CHECK(loadTextureImportSettings(base / "y.png") == mipsOn());
+    CHECK(!fs::exists(base / "z.png"));
+
+    // Una carpeta se renombra sin mirar sidecars.
+    fs::create_directories(base / "dirA", ec);
+    r = renameAssetFile(base / "dirA", base / "dirB", true);
+    CHECK(r.ok);
+    CHECK(fs::is_directory(base / "dirB"));
+}
+
+// Fix del review final: en un sistema de ficheros que no distingue mayusculas
+// (NTFS), renombrar "foto.png" a "Foto.png" tiene el MISMO sidecar en origen y
+// destino: eso no es un conflicto, es el mismo fichero.
+static void test_rename_asset_file_case_only_is_not_a_sidecar_conflict()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_sidecar_rename_case";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    std::ofstream(base / "foto.png") << "x";
+    std::string err;
+    CHECK(saveTextureImportSettings(base / "foto.png", mipsOn(), &err));
+
+    const RenameFileOutcome r = renameAssetFile(base / "foto.png", base / "Foto.png", false);
+    CHECK(r.ok);
+    CHECK(r.error.empty());
+    CHECK(loadTextureImportSettings(base / "Foto.png") == mipsOn());   // los ajustes siguen ahi
+}
+
+// Review Focus 5.
+static void test_remove_asset_path_removes_sidecar()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_sidecar_remove";
+    fs::remove_all(base, ec);
+    fs::create_directories(base / "carpeta" / "sub", ec);
+    std::ofstream(base / "foto.png") << "x";
+    std::ofstream(base / "carpeta" / "sub" / "t.png") << "x";
+    std::string err;
+    CHECK(saveTextureImportSettings(base / "foto.png", mipsOn(), &err));
+    CHECK(saveTextureImportSettings(base / "carpeta" / "sub" / "t.png", mipsOn(), &err));
+
+    CHECK(!removeAssetPath(base / "foto.png", false));
+    CHECK(!fs::exists(base / "foto.png"));
+    CHECK(!fs::exists(importSidecarPath(base / "foto.png")));
+
+    CHECK(!removeAssetPath(base / "carpeta", true));
+    CHECK(!fs::exists(base / "carpeta"));
+
+    // Un sidecar HUERFANO no da error al listar ni al mover otro asset.
+    CHECK(saveTextureImportSettings(base / "fantasma.png", mipsOn(), &err));
+    CHECK(listVisibleEntries(base).empty());
+    std::ofstream(base / "otra.png") << "x";
+    fs::create_directories(base / "dest", ec);
+    CHECK(moveAsset(base / "otra.png", base / "dest").result == MoveResult::Moved);
+}
+
+static std::shared_ptr<Mesh> meshWithTexture(const fs::path& tex)
+{
+    auto m = std::make_shared<Mesh>();
+    m->material.texturePath = tex.string();
+    return m;
+}
+
+static void test_apply_writes_sidecar_and_rebuilds_only_users()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    const fs::path foto = base / "foto.png";
+    const fs::path otra = base / "otra.png";
+    std::ofstream(foto) << "x";
+    std::ofstream(otra) << "x";
+
+    GameObject root("root");
+    GameObject* a = root.addChild("A");
+    GameObject* b = root.addChild("B");
+    root.addChild("C");                         // sin mesh
+    a->setMesh(meshWithTexture(foto));
+    b->setMesh(meshWithTexture(otra));
+
+    std::vector<GameObject*> rebuilt;
+    const auto rebuild = [&](GameObject& go) { rebuilt.push_back(&go); };
+
+    TextureImportSettings s;
+    s.colorSpace = ColorSpaceOverride::Linear;
+    s.mipmaps    = true;
+    TextureImportApplyResult r = applyTextureImportSettings(&root, foto, s, rebuild);
+    CHECK(r.ok);
+    CHECK(r.error.empty());
+    CHECK(r.refreshed == 1);
+    CHECK(rebuilt.size() == 1 && rebuilt[0] == a);
+    CHECK(loadTextureImportSettings(foto) == s);
+
+    // Con el defecto: borra el sidecar y sigue reconstruyendo al que la usa.
+    rebuilt.clear();
+    r = applyTextureImportSettings(&root, foto, TextureImportSettings{}, rebuild);
+    CHECK(r.ok);
+    CHECK(r.refreshed == 1);
+    CHECK(rebuilt.size() == 1 && rebuilt[0] == a);
+    CHECK(!fs::exists(importSidecarPath(foto)));
+}
+
+// Review Focus 6.
+static void test_apply_reports_write_failure_and_rebuilds_nothing()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply_fail";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    const fs::path foto = base / "no_existe_carpeta" / "foto.png";     // el sidecar no se puede escribir
+
+    GameObject root("root");
+    root.addChild("A")->setMesh(meshWithTexture(foto));
+
+    int calls = 0;
+    TextureImportSettings s;
+    s.mipmaps = true;
+    const TextureImportApplyResult r =
+        applyTextureImportSettings(&root, foto, s, [&](GameObject&) { ++calls; });
+    CHECK(!r.ok);
+    CHECK(!r.error.empty());
+    CHECK(r.refreshed == 0);
+    CHECK(calls == 0);
+}
+
+static void test_apply_without_renderer_still_writes()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply_norender";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    const fs::path foto = base / "foto.png";
+    std::ofstream(foto) << "x";
+
+    GameObject root("root");
+    root.addChild("A")->setMesh(meshWithTexture(foto));
+
+    TextureImportSettings s;
+    s.mipmaps = true;
+    const TextureImportApplyResult r = applyTextureImportSettings(&root, foto, s, {});
+    CHECK(r.ok);
+    CHECK(r.refreshed == 0);
+    CHECK(loadTextureImportSettings(foto) == s);
+}
+
 int main()
 {
+    test_apply_writes_sidecar_and_rebuilds_only_users();
+    test_apply_reports_write_failure_and_rebuilds_nothing();
+    test_apply_without_renderer_still_writes();
+    test_list_hides_import_sidecars();
+    test_move_asset_carries_sidecar();
+    test_move_asset_rejects_when_destination_sidecar_exists();
+    test_rename_asset_file_carries_sidecar_and_rejects_conflict();
+    test_rename_asset_file_case_only_is_not_a_sidecar_conflict();
+    test_remove_asset_path_removes_sidecar();
     fs::path root = makeFixture();
     test_filters_noise(root);
     test_hides_build_tree_by_content(root);

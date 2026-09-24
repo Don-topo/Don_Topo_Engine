@@ -2,6 +2,7 @@
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Core/JobSystem.h"
+#include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Core/GameObject.h"
@@ -262,6 +263,10 @@ std::vector<std::filesystem::path> listVisibleEntries(const std::filesystem::pat
         // predicado); los ficheros no se filtran, se listan todos.
         if (isDirEntry && isHiddenDir(entry.path()))
             continue;
+        // Los .import.json son de sus assets, no assets: no se listan (y sin esto
+        // el grid los clasificaria como escenas por su extension .json).
+        if (isFile && isImportSidecar(entry.path()))
+            continue;
         if (isFile || isDirEntry)
             out.push_back(entry.path());
     }
@@ -364,12 +369,64 @@ MoveOutcome moveAsset(const std::filesystem::path& src, const std::filesystem::p
     const std::filesystem::path dest = destDir / src.filename();
     if (std::filesystem::exists(dest, ec))
         return { MoveResult::RejectedNameConflict, {}, "" };
+    // Un sidecar del destino (aunque sea huerfano) tambien es conflicto: mover
+    // encima pisaria sus ajustes.
+    if (!isDir && importSidecarConflict(src, dest))
+        return { MoveResult::RejectedNameConflict, {}, "" };
 
     ec.clear();
     std::filesystem::rename(src, dest, ec);
     if (ec)
         return { MoveResult::RejectedFailed, {}, ec.message() };
+
+    if (!isDir)
+    {
+        std::string sidecarError;
+        if (!moveImportSidecar(src, dest, &sidecarError))
+            return { MoveResult::Moved, dest,
+                     "el asset se movio pero no su .import.json: " + sidecarError };
+    }
     return { MoveResult::Moved, dest, "" };
+}
+
+RenameFileOutcome renameAssetFile(const std::filesystem::path& from, const std::filesystem::path& to,
+                                  bool isDir)
+{
+    RenameFileOutcome out;
+    // Si origen y destino son el MISMO sidecar (renombrar solo cambiando
+    // mayusculas en un sistema que no las distingue) no hay conflicto: es el
+    // mismo fichero.
+    if (!isDir && !samePath(importSidecarPath(from), importSidecarPath(to)) &&
+        importSidecarConflict(from, to))
+    {
+        out.error = "Ya existe un .import.json con ese nombre";
+        return out;
+    }
+    std::error_code ec;
+    std::filesystem::rename(from, to, ec);
+    if (ec)
+    {
+        out.error = ec.message();
+        return out;
+    }
+    out.ok = true;
+    if (!isDir)
+    {
+        std::string sidecarError;
+        if (!moveImportSidecar(from, to, &sidecarError))
+            out.warning = "El asset se renombro pero no su .import.json: " + sidecarError;
+    }
+    return out;
+}
+
+std::error_code removeAssetPath(const std::filesystem::path& path, bool isDir)
+{
+    std::error_code ec;
+    if (isDir) std::filesystem::remove_all(path, ec);
+    else       std::filesystem::remove(path, ec);
+    if (!ec && !isDir)
+        removeImportSidecar(path);
+    return ec;
 }
 
 std::vector<BreadcrumbSegment> breadcrumbSegments(const std::filesystem::path& root,
@@ -529,6 +586,30 @@ void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
             }
         }
     });
+}
+
+TextureImportApplyResult applyTextureImportSettings(GameObject* sceneRoot,
+                                                    const std::filesystem::path& asset,
+                                                    const TextureImportSettings& settings,
+                                                    const std::function<void(GameObject&)>& rebuild)
+{
+    TextureImportApplyResult r;
+    if (!saveTextureImportSettings(asset, settings, &r.error))
+        return r;                                    // nada reconstruido si no se pudo escribir
+    r.ok = true;
+    if (!sceneRoot || !rebuild) return r;
+
+    sceneRoot->traverse([&](GameObject* go)
+    {
+        auto coincide = [&](const std::string& field)
+        {
+            return !field.empty() && samePath(field, asset);
+        };
+        if (!go->hasMesh() || !tocaAlgunMaterial(go, coincide)) return;
+        rebuild(*go);
+        ++r.refreshed;
+    });
+    return r;
 }
 
 int countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir)
@@ -756,6 +837,8 @@ void ContentBrowserPanel::applyPendingMove(EditorContext& ctx, GameObject* scene
         case MoveResult::Moved:
         {
             ++moved;
+            if (!outcome.errorMessage.empty())
+                ctx.pushLog("Aviso al mover '" + src.filename().string() + "': " + outcome.errorMessage);
             updateSceneReferencesForRename(ctx, sceneRoot, src, outcome.newPath, isDir);
             // Si la carpeta actual era la movida (o colgaba de ella) ya no existe
             // con esa ruta: seguirla a su sitio nuevo en vez de dejar el grid
@@ -1264,6 +1347,16 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 // Renombrar es de uno en uno.
                 if (ImGui::MenuItem("Rename", nullptr, false, selCount <= 1))
                     beginAssetRename(path, isDir);
+                // Ajustes de importacion: solo de UNA textura.
+                if (selCount <= 1 && !isDir &&
+                    classifyAsset(path.extension().string(), false) == AssetKind::Image &&
+                    ImGui::MenuItem("Import Settings..."))
+                {
+                    m_importTarget    = path;
+                    m_importEdit      = loadTextureImportSettings(path);
+                    m_importError.clear();
+                    m_openImportPopup = true;
+                }
                 const std::string deleteLabel =
                     selCount > 1 ? "Delete (" + std::to_string(selCount) + ")" : std::string("Delete");
                 if (ImGui::MenuItem(deleteLabel.c_str()))
@@ -1403,14 +1496,16 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     }
                     else
                     {
-                        std::error_code renameEc;
-                        std::filesystem::rename(m_assetRenameTarget, newPath, renameEc);
-                        if (renameEc)
+                        const RenameFileOutcome renamed =
+                            renameAssetFile(m_assetRenameTarget, newPath, m_assetRenameIsDir);
+                        if (!renamed.ok)
                         {
-                            m_assetRenameError = renameEc.message();
+                            m_assetRenameError = renamed.error;
                         }
                         else
                         {
+                            if (!renamed.warning.empty())
+                                ctx.pushLog(renamed.warning);
                             ctx.pushLog("Asset renombrado: '" + m_assetRenameTarget.filename().string() +
                                     "' -> '" + newPath.filename().string() + "'");
                             updateSceneReferencesForRename(ctx, sceneRoot, m_assetRenameTarget, newPath, m_assetRenameIsDir);
@@ -1456,11 +1551,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 std::string firstError;
                 for (const auto& [target, isDir] : m_assetDeleteTargets)
                 {
-                    std::error_code removeEc;
-                    if (isDir)
-                        std::filesystem::remove_all(target, removeEc);
-                    else
-                        std::filesystem::remove(target, removeEc);
+                    const std::error_code removeEc = removeAssetPath(target, isDir);
 
                     if (removeEc)
                     {
@@ -1483,6 +1574,64 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 {
                     m_assetDeleteTargets = std::move(failed);
                     m_assetDeleteError = firstError;
+                }
+            }
+            else if (cancel)
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        // Ajustes de importacion de UNA textura (menu contextual). Aplicar escribe
+        // el sidecar y reconstruye los materiales que usan la textura; si no se
+        // puede escribir, el modal se queda abierto con el error.
+        if (m_openImportPopup)
+        {
+            ImGui::OpenPopup("Import Settings");
+            m_openImportPopup = false;
+        }
+        if (ImGui::BeginPopupModal("Import Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("%s", m_importTarget.filename().string().c_str());
+            ImGui::Separator();
+
+            int colorSpace = static_cast<int>(m_importEdit.colorSpace);
+            if (ImGui::Combo("Color space", &colorSpace, "Auto (por slot)\0sRGB\0Linear\0"))
+                m_importEdit.colorSpace = static_cast<ColorSpaceOverride>(colorSpace);
+            ImGui::Checkbox("Mipmaps", &m_importEdit.mipmaps);
+            ImGui::TextDisabled("Auto: color base sRGB, normal y ORM lineal.");
+
+            if (!m_importError.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_importError.c_str());
+            ImGui::Separator();
+
+            const bool apply  = ImGui::Button("Aplicar");
+            ImGui::SameLine();
+            const bool cancel = ImGui::Button("Cancelar");
+
+            if (apply)
+            {
+                // El mismo par de llamadas que MaterialTextureCommand::apply.
+                const TextureImportApplyResult r = applyTextureImportSettings(
+                    sceneRoot, m_importTarget, m_importEdit,
+                    [&ctx](GameObject& go)
+                    {
+                        if (!ctx.renderer) return;
+                        if (const SkinnedMesh* sm = go.getSkinnedMesh(); sm && go.skinnedRenderIndex >= 0)
+                            ctx.renderer->rebuildSkinnedMesh(go.skinnedRenderIndex, *sm);
+                        else if (go.staticRenderIndex >= 0)
+                            ctx.renderer->rebuildStaticMesh(go.staticRenderIndex, *go.getMesh());
+                    });
+                if (r.ok)
+                {
+                    ctx.pushLog("Import settings aplicados: " + m_importTarget.filename().string() +
+                                " (" + std::to_string(r.refreshed) + " objeto(s) actualizados)");
+                    ImGui::CloseCurrentPopup();
+                }
+                else
+                {
+                    m_importError = r.error;   // el modal NO se cierra
                 }
             }
             else if (cancel)

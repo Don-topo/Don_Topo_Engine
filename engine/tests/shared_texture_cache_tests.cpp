@@ -105,8 +105,19 @@ static void test_embedded_key_by_content()
     CHECK(makeTextureKey("x.fbx", a, TextureKind::BaseColor) != makeTextureKey("x.fbx", a, TextureKind::Normal));
 }
 
+static void test_suffix_separates_same_file_same_kind()
+{
+    reiniciar();
+    SharedTextureCache<int> c;
+    const int a = c.acquire(makeTextureKey("a.png", {}, TextureKind::BaseColor, "#am"), crear);
+    const int b = c.acquire(makeTextureKey("a.png", {}, TextureKind::BaseColor, "#lm"), crear);
+    CHECK(a != b);
+    CHECK(g_creadas == 2);
+}
+
 int main()
 {
+    test_suffix_separates_same_file_same_kind();
     test_same_key_creates_once();
     test_same_path_other_kind_is_other_image();
     test_release_destroys_at_zero();
