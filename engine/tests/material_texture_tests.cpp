@@ -857,6 +857,37 @@ static void test_discard_overridden_decoded_images_ignores_other_index()
     CHECK(images.size() == 1);
 }
 
+static void test_discard_overridden_decoded_images_considers_mat_asset()
+{
+    std::error_code ec;
+    const std::filesystem::path d = std::filesystem::temp_directory_path(ec) / "dt_discard_matasset";
+    std::filesystem::remove_all(d, ec);
+    std::filesystem::create_directories(d, ec);
+    MaterialAsset m; m.normal = (d / "n.png").string();   // solo normal
+    std::string err;
+    CHECK(saveMaterialAsset(d / "x.mat", m, &err));
+
+    DecodedImage albedo; albedo.slot = DecodedImage::Albedo;
+    DecodedImage normal; normal.slot = DecodedImage::Normal;
+    DecodedImage orm;    orm.slot    = DecodedImage::ORM;
+    std::vector<DecodedImage> images{albedo, normal, orm};
+
+    MaterialOverride ov; ov.index = 0; ov.matAsset = (d / "x.mat").string();   // sin overrides propias
+    std::vector<MaterialOverride> overrides{ov};
+
+    discardOverriddenDecodedImages(images, overrides);
+
+    CHECK(images.size() == 2);
+    bool hasAlbedo = false, hasNormal = false;
+    for (const DecodedImage& img : images)
+    {
+        if (img.slot == DecodedImage::Albedo) hasAlbedo = true;
+        if (img.slot == DecodedImage::Normal) hasNormal = true;
+    }
+    CHECK(hasAlbedo);    // el .mat no aporta albedo: la decodificada del FBX se queda
+    CHECK(!hasNormal);   // el .mat SI aporta normal: se descarta la del FBX
+}
+
 // Ronda de revisión de Task 7, punto 2 (Important): el baseline pertenece a
 // LA MALLA de la que salió. setMesh es el único punto por el que cambia la
 // malla, así que tiene que resetear ahí los base*/base*Taken — si
@@ -1983,6 +2014,7 @@ int main()
     test_clone_clear_restores_fbx_texture_not_override(pm, am);
     test_discard_overridden_decoded_images_removes_only_overridden_slot();
     test_discard_overridden_decoded_images_ignores_other_index();
+    test_discard_overridden_decoded_images_considers_mat_asset();
     test_set_mesh_resets_stale_baseline();
     test_reload_after_failed_load_recaptures_correct_baseline();
     test_command_undo_redo_assignment(pm, am);
