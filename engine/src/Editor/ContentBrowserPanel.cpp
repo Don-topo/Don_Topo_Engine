@@ -596,6 +596,7 @@ void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
                 updateField(ov.baseAlbedo);
                 updateField(ov.baseNormal);
                 updateField(ov.baseOrm);
+                updateField(ov.matAsset);
             }
         }
         if (go->hasAudioClip())
@@ -700,6 +701,8 @@ int countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& pat
             if (matches(mat->texturePath) || matches(mat->normalMapPath) ||
                 matches(mat->metallicRoughnessPath))
                 textureMatches = true;
+        for (const MaterialOverride& ov : go->materialOverrides)
+            if (matches(ov.matAsset)) textureMatches = true;
 
         bool meshMatches = go->hasMesh() &&
             (matches(go->getMesh()->sourcePath) || textureMatches);
@@ -805,6 +808,7 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                     if (matches(ov.baseAlbedo)) ov.baseAlbedo.clear();
                     if (matches(ov.baseNormal)) ov.baseNormal.clear();
                     if (matches(ov.baseOrm))    ov.baseOrm.clear();
+                    if (matches(ov.matAsset))   ov.matAsset.clear();
                 }
             }
         }

@@ -215,6 +215,60 @@ static void test_detach_clears_material_override_path()
     CHECK(go->materialOverrides[0].orm.empty());
 }
 
+static std::unique_ptr<GameObject> makeMatAssetFixture(const std::string& matPath)
+{
+    auto go = std::make_unique<GameObject>("ConMaterial");
+    go->setMesh(std::make_shared<Mesh>());
+    MaterialOverride ov; ov.index = 0; ov.matAsset = matPath;
+    go->materialOverrides = {ov};
+    return go;
+}
+
+// Review Focus 4.
+static void test_count_references_finds_mat_asset()
+{
+    const std::string knownPath = "assets/rojo.mat";
+    auto go = makeMatAssetFixture(knownPath);
+    CHECK(countSceneReferences(go.get(), knownPath, /*isDir=*/false) == 1);
+    CHECK(countSceneReferences(go.get(), std::string("assets/otro.mat"), false) == 0);
+}
+
+static void test_rename_rewrites_mat_asset_path()
+{
+    const std::string oldPath = "assets/rojo.mat";
+    const std::string newPath = "assets/carmesi.mat";
+    auto go = makeMatAssetFixture(oldPath);
+    GameObject* selected = nullptr;
+    bool isPlaying = false;
+    EditorContext ctx{selected, isPlaying};
+    updateSceneReferencesForRename(ctx, go.get(), oldPath, newPath, /*isDir=*/false);
+    CHECK(go->materialOverrides[0].matAsset == newPath);
+}
+
+// Un objeto que NO usa el .mat renombrado no se toca.
+static void test_rename_leaves_other_mat_asset_untouched()
+{
+    auto go = makeMatAssetFixture("assets/otro.mat");
+    GameObject* selected = nullptr;
+    bool isPlaying = false;
+    EditorContext ctx{selected, isPlaying};
+    updateSceneReferencesForRename(ctx, go.get(), "assets/rojo.mat", "assets/carmesi.mat", false);
+    CHECK(go->materialOverrides[0].matAsset == "assets/otro.mat");
+}
+
+// Review Focus 5: borrar el .mat en uso vacia matAsset y el objeto vuelve al modelo.
+static void test_detach_clears_mat_asset_and_falls_back_to_model()
+{
+    const std::string knownPath = "assets/rojo.mat";
+    auto go = makeMatAssetFixture(knownPath);
+    go->editMesh()->material.texturePath = "assets/rojo.png";   // lo que puso el .mat via applyMaterialOverrides en la app real
+    GameObject* selected = nullptr;
+    bool isPlaying = false;
+    EditorContext ctx{selected, isPlaying};
+    detachSceneReferencesForDelete(ctx, go.get(), knownPath, /*isDir=*/false);
+    CHECK(go->materialOverrides[0].matAsset.empty());
+}
+
 // El baseline (base*) apuntando al fichero que se acaba de borrar no era un
 // detalle cosmético: con el override vacío y el flag *Taken en alto,
 // applyMaterialOverrides toma la rama "vuelve al baseline" y REESCRIBE esa
@@ -1013,6 +1067,10 @@ int main()
     test_detach_clears_material_override_path();
     test_detach_clears_material_override_baseline();
     test_rename_rewrites_material_override_baseline();
+    test_count_references_finds_mat_asset();
+    test_rename_rewrites_mat_asset_path();
+    test_rename_leaves_other_mat_asset_untouched();
+    test_detach_clears_mat_asset_and_falls_back_to_model();
     test_import_dropped_files_into(root);
     test_classify_asset();
     test_asset_matches_filter();
