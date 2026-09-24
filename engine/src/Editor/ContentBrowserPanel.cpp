@@ -393,7 +393,11 @@ RenameFileOutcome renameAssetFile(const std::filesystem::path& from, const std::
                                   bool isDir)
 {
     RenameFileOutcome out;
-    if (!isDir && importSidecarConflict(from, to))
+    // Si origen y destino son el MISMO sidecar (renombrar solo cambiando
+    // mayusculas en un sistema que no las distingue) no hay conflicto: es el
+    // mismo fichero.
+    if (!isDir && !samePath(importSidecarPath(from), importSidecarPath(to)) &&
+        importSidecarConflict(from, to))
     {
         out.error = "Ya existe un .import.json con ese nombre";
         return out;

@@ -694,6 +694,25 @@ static void test_rename_asset_file_carries_sidecar_and_rejects_conflict()
     CHECK(fs::is_directory(base / "dirB"));
 }
 
+// Fix del review final: en un sistema de ficheros que no distingue mayusculas
+// (NTFS), renombrar "foto.png" a "Foto.png" tiene el MISMO sidecar en origen y
+// destino: eso no es un conflicto, es el mismo fichero.
+static void test_rename_asset_file_case_only_is_not_a_sidecar_conflict()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_sidecar_rename_case";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    std::ofstream(base / "foto.png") << "x";
+    std::string err;
+    CHECK(saveTextureImportSettings(base / "foto.png", mipsOn(), &err));
+
+    const RenameFileOutcome r = renameAssetFile(base / "foto.png", base / "Foto.png", false);
+    CHECK(r.ok);
+    CHECK(r.error.empty());
+    CHECK(loadTextureImportSettings(base / "Foto.png") == mipsOn());   // los ajustes siguen ahi
+}
+
 // Review Focus 5.
 static void test_remove_asset_path_removes_sidecar()
 {
@@ -821,6 +840,7 @@ int main()
     test_move_asset_carries_sidecar();
     test_move_asset_rejects_when_destination_sidecar_exists();
     test_rename_asset_file_carries_sidecar_and_rejects_conflict();
+    test_rename_asset_file_case_only_is_not_a_sidecar_conflict();
     test_remove_asset_path_removes_sidecar();
     fs::path root = makeFixture();
     test_filters_noise(root);
