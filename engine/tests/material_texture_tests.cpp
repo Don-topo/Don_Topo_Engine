@@ -335,6 +335,56 @@ static void test_overrides_survive_round_trip(PhysicsManager& pm, AudioManager& 
     CHECK(leido->materialOverrides[0].baseAlbedo.empty());
 }
 
+// Review Focus 6: una entrada con SOLO matAsset (sin texturas ni factores) no
+// se omite al guardar, y sobrevive a guardar y cargar.
+static void test_mat_asset_survives_round_trip_alone(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto mesh = std::make_shared<SkinnedMesh>();
+    mesh->sourcePath = "assets/hero.fbx";
+    mesh->materials.resize(1);
+    go->setMesh(std::move(mesh));
+
+    MaterialOverride ov; ov.index = 0; ov.matAsset = "assets/rojo.mat";
+    go->materialOverrides = {ov};
+
+    const nlohmann::json j = scene.toJson();
+    CHECK(j["root"]["children"][0]["mesh"].contains("materials"));
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Personaje") leido = n; });
+    CHECK(leido != nullptr);
+    if (!leido) return;
+    CHECK(leido->materialOverrides.size() == 1);
+    if (leido->materialOverrides.empty()) return;
+    CHECK(leido->materialOverrides[0].matAsset == "assets/rojo.mat");
+}
+
+// Una escena vieja, sin el campo matAsset en absoluto, carga igual que hoy.
+static void test_scene_without_mat_asset_field_loads_unchanged(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->material.texturePath = "assets/fbx_albedo.png";
+    go->setMesh(std::move(mesh));
+    MaterialOverride ov; ov.index = 0; ov.albedo = "assets/override.png";
+    go->materialOverrides = {ov};
+
+    nlohmann::json j = scene.toJson();
+    CHECK(!j["root"]["children"][0]["mesh"]["materials"][0].contains("matAsset"));
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Cubo") leido = n; });
+    CHECK(leido && leido->materialOverrides.size() == 1);
+    if (leido) CHECK(leido->materialOverrides[0].matAsset.empty());
+}
+
 // Un objeto sin overrides no escribe la clave: las escenas viejas y las nuevas
 // sin texturas tocadas son byte a byte iguales.
 static void test_no_overrides_writes_no_key()
@@ -1915,6 +1965,8 @@ int main()
     test_none_when_empty();
     test_path_when_no_embedded();
     test_overrides_survive_round_trip(pm, am);
+    test_mat_asset_survives_round_trip_alone(pm, am);
+    test_scene_without_mat_asset_field_loads_unchanged(pm, am);
     test_no_overrides_writes_no_key();
     test_scene_without_materials_key_loads_clean(pm, am);
     test_path_under_root_is_stored_relative(pm, am);
