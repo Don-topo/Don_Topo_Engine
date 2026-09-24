@@ -437,17 +437,23 @@ static bool mixMatrixDims(FMOD::System* sys, FMOD::Sound* snd, int& out, int& in
     return true;
 }
 
-static void applyForceMono(FMOD::System* sys, FMOD::Channel* ch, FMOD::Sound* snd)
+// `stereoPan` [-1, 1] va DENTRO de la matriz: Channel::setPan de FMOD reemplaza
+// la matriz entera, asi que un setPan posterior deshacia el mono en silencio. Por
+// eso esta funcion se llama DESPUES del setPan y aplica ella el paneo: ley de
+// balance (el lado contrario al pan se atenua linealmente, el centro no toca nada).
+static void applyForceMono(FMOD::System* sys, FMOD::Channel* ch, FMOD::Sound* snd, float stereoPan)
 {
     FMOD_MODE mode = 0;
     if (snd->getMode(&mode) != FMOD_OK || (mode & FMOD_3D)) return;
     int out = 0, in = 0;
     if (!mixMatrixDims(sys, snd, out, in) || in < 2 || out < 1) return;
+    const float pan = std::isfinite(stereoPan) ? std::clamp(stereoPan, -1.0f, 1.0f) : 0.0f;
+    const float gainRow[2] = { 1.0f - std::max(0.0f, pan), 1.0f - std::max(0.0f, -pan) };
     std::vector<float> m(static_cast<size_t>(out) * in, 0.0f);
     const float g = 1.0f / static_cast<float>(in);
     for (int row = 0; row < std::min(out, 2); ++row)
         for (int col = 0; col < in; ++col)
-            m[static_cast<size_t>(row) * in + col] = g;
+            m[static_cast<size_t>(row) * in + col] = g * gainRow[row];
     ch->setMixMatrix(m.data(), out, in, in);
 }
 
@@ -525,13 +531,25 @@ bool AudioManager::isVoiceForcedMono(int id) const
     int out = 0, in = 0;
     if (!ch || !mixMatrixDims(SYS, reinterpret_cast<FMOD::Sound*>(m_sounds[id]), out, in) ||
         in < 2 || out < 1) return false;
+    const int wantOut = out, wantIn = in;
     std::vector<float> m(static_cast<size_t>(out) * in, 0.0f);
     if (ch->getMixMatrix(m.data(), &out, &in, in) != FMOD_OK) return false;
-    const float g = 1.0f / static_cast<float>(in);
+    // FMOD puede devolver otras dimensiones que las pedidas: sin re-comprobar,
+    // un 0,0 daria "true" con los dos bucles vacios.
+    if (out != wantOut || in != wantIn) return false;
+    // Mono = cada una de las dos filas frontales lleva el MISMO valor en todas las
+    // entradas (con paneo la fila del lado contrario esta atenuada, asi que no se
+    // compara contra 1/N), y alguna de las dos no es cero. Una matriz de fabrica
+    // (identidad) tiene filas [1,0]: no es constante.
+    bool anyNonZero = false;
     for (int row = 0; row < std::min(out, 2); ++row)
+    {
+        const float first = m[static_cast<size_t>(row) * in];
         for (int col = 0; col < in; ++col)
-            if (std::fabs(m[static_cast<size_t>(row) * in + col] - g) > 1e-4f) return false;
-    return true;
+            if (std::fabs(m[static_cast<size_t>(row) * in + col] - first) > 1e-4f) return false;
+        if (first > 1e-4f) anyNonZero = true;
+    }
+    return anyNonZero;
 #else
     (void)id;
     return false;
@@ -610,7 +628,6 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
     m_soundVolume[id] = volume;
     ch->setVolume(voiceVolume(id, volume));
     ch->setPitch(pitch);
-    if (m_soundImport[id].forceMono) applyForceMono(SYS, ch, snd);
 
     FMOD_MODE mode = 0; snd->getMode(&mode);
     if (mode & FMOD_3D) {
@@ -629,6 +646,9 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
     // su propia condicion, para que quede claro que NO es una propiedad 3D.
     if (!(mode & FMOD_3D) && stereoPan != 0.0f)
         ch->setPan(stereoPan);
+    // DESPUES del setPan: este reemplaza la matriz de mezcla entera, y el mono es
+    // una matriz. applyForceMono lleva el paneo dentro.
+    if (m_soundImport[id].forceMono) applyForceMono(SYS, ch, snd, stereoPan);
 
     ch->setPaused(false);
 #else
@@ -799,7 +819,6 @@ void AudioManager::playSoundOneShot(int id, const glm::vec3& worldPos, float vol
     // voz no se puede alcanzar despues.
     ch->setVolume(voiceVolume(id, volume));
     ch->setPitch(pitch);
-    if (m_soundImport[id].forceMono) applyForceMono(SYS, ch, snd);
 
     FMOD_MODE mode = 0; snd->getMode(&mode);
     if (mode & FMOD_3D) {
@@ -818,6 +837,8 @@ void AudioManager::playSoundOneShot(int id, const glm::vec3& worldPos, float vol
     // su propia condicion, para que quede claro que NO es una propiedad 3D.
     if (!(mode & FMOD_3D) && stereoPan != 0.0f)
         ch->setPan(stereoPan);
+    // DESPUES del setPan: este reemplaza la matriz de mezcla entera (ver playSound).
+    if (m_soundImport[id].forceMono) applyForceMono(SYS, ch, snd, stereoPan);
     // Sin referencia guardada, esta voz tampoco la alcanza el seguimiento 3D
     // por frame (setSoundPosition): un one-shot suena donde se disparó. Para
     // clips cortos —que es su caso de uso— la diferencia no se oye.

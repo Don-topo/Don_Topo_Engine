@@ -1967,6 +1967,16 @@ static void test_import_force_mono_on_a_2d_stereo_voice(AudioManager& am)
     am.playSound(m, {}, 1.0f);
     CHECK(am.isVoiceForcedMono(m));
 
+    // Fix del review final: setPan de FMOD REEMPLAZA toda la matriz de mezcla, asi
+    // que con Stereo Pan != 0 el mono se perdia en silencio. Con paneo, la voz
+    // sigue siendo mono (la matriz lleva el paneo dentro).
+    am.stopSound(m);
+    am.playSound(m, {}, 1.0f, 1.0f, AudioBus::Sfx, 1.0f, 100.0f, 0.0f, /*stereoPan=*/-0.5f);
+    CHECK(am.isVoiceForcedMono(m));
+    am.stopSound(m);
+    am.playSound(m, {}, 1.0f, 1.0f, AudioBus::Sfx, 1.0f, 100.0f, 0.0f, /*stereoPan=*/0.75f);
+    CHECK(am.isVoiceForcedMono(m));
+
     am.stopSound(m); am.stopSound(p); am.stopSound(o); am.stopSound(s3);
     am.unloadSound(m); am.unloadSound(p); am.unloadSound(o); am.unloadSound(s3);
 }
