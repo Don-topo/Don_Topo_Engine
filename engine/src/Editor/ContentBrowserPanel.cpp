@@ -7,6 +7,7 @@
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
+#include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include <imgui.h>
 #include <algorithm>
@@ -609,6 +610,29 @@ TextureImportApplyResult applyTextureImportSettings(GameObject* sceneRoot,
         rebuild(*go);
         ++r.refreshed;
     });
+    return r;
+}
+
+ImportSettingsKind importSettingsKindFor(const std::string& ext, bool isDir)
+{
+    if (isDir) return ImportSettingsKind::None;
+    switch (classifyAsset(ext, false))
+    {
+        case AssetKind::Image: return ImportSettingsKind::Texture;
+        case AssetKind::Audio: return ImportSettingsKind::Audio;
+        default:               return ImportSettingsKind::None;
+    }
+}
+
+AudioImportApplyResult applyAudioImportSettings(const std::filesystem::path& asset,
+                                                const AudioImportSettings& settings,
+                                                const std::function<void(const std::string&)>& refresh)
+{
+    AudioImportApplyResult r;
+    if (!saveAudioImportSettings(asset, settings, &r.error))
+        return r;                                    // nada refrescado si no se pudo escribir
+    r.ok = true;
+    if (refresh) refresh(asset.string());
     return r;
 }
 
@@ -1347,13 +1371,17 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 // Renombrar es de uno en uno.
                 if (ImGui::MenuItem("Rename", nullptr, false, selCount <= 1))
                     beginAssetRename(path, isDir);
-                // Ajustes de importacion: solo de UNA textura.
-                if (selCount <= 1 && !isDir &&
-                    classifyAsset(path.extension().string(), false) == AssetKind::Image &&
+                // Ajustes de importacion: solo de UN asset con ajustes (textura o audio).
+                const ImportSettingsKind importKind = importSettingsKindFor(path.extension().string(), isDir);
+                if (selCount <= 1 && importKind != ImportSettingsKind::None &&
                     ImGui::MenuItem("Import Settings..."))
                 {
-                    m_importTarget    = path;
-                    m_importEdit      = loadTextureImportSettings(path);
+                    m_importTarget = path;
+                    m_importKind   = importKind;
+                    if (importKind == ImportSettingsKind::Audio)
+                        m_importAudioEdit = loadAudioImportSettings(path);
+                    else
+                        m_importEdit = loadTextureImportSettings(path);
                     m_importError.clear();
                     m_openImportPopup = true;
                 }
@@ -1596,11 +1624,24 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             ImGui::Text("%s", m_importTarget.filename().string().c_str());
             ImGui::Separator();
 
-            int colorSpace = static_cast<int>(m_importEdit.colorSpace);
-            if (ImGui::Combo("Color space", &colorSpace, "Auto (por slot)\0sRGB\0Linear\0"))
-                m_importEdit.colorSpace = static_cast<ColorSpaceOverride>(colorSpace);
-            ImGui::Checkbox("Mipmaps", &m_importEdit.mipmaps);
-            ImGui::TextDisabled("Auto: color base sRGB, normal y ORM lineal.");
+            if (m_importKind == ImportSettingsKind::Audio)
+            {
+                // Edita una copia y no se aplica nada hasta "Aplicar": un
+                // SliderFloat normal basta (no hay escritura por frame que diferir).
+                ImGui::SliderFloat("Gain (dB)", &m_importAudioEdit.gainDb,
+                                   kAudioGainMinDb, kAudioGainMaxDb, "%.1f dB");
+                ImGui::Checkbox("Force mono", &m_importAudioEdit.forceMono);
+                ImGui::TextDisabled("La ganancia se suma al volumen del componente.");
+                ImGui::TextDisabled("Mono: solo clips 2D y desde la proxima reproduccion.");
+            }
+            else
+            {
+                int colorSpace = static_cast<int>(m_importEdit.colorSpace);
+                if (ImGui::Combo("Color space", &colorSpace, "Auto (por slot)\0sRGB\0Linear\0"))
+                    m_importEdit.colorSpace = static_cast<ColorSpaceOverride>(colorSpace);
+                ImGui::Checkbox("Mipmaps", &m_importEdit.mipmaps);
+                ImGui::TextDisabled("Auto: color base sRGB, normal y ORM lineal.");
+            }
 
             if (!m_importError.empty())
                 ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_importError.c_str());
@@ -1610,7 +1651,22 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             ImGui::SameLine();
             const bool cancel = ImGui::Button("Cancelar");
 
-            if (apply)
+            if (apply && m_importKind == ImportSettingsKind::Audio)
+            {
+                const AudioImportApplyResult r = applyAudioImportSettings(
+                    m_importTarget, m_importAudioEdit,
+                    [&ctx](const std::string& p) { if (ctx.audio) ctx.audio->refreshImportSettings(p); });
+                if (r.ok)
+                {
+                    ctx.pushLog("Import settings aplicados: " + m_importTarget.filename().string());
+                    ImGui::CloseCurrentPopup();
+                }
+                else
+                {
+                    m_importError = r.error;   // el modal NO se cierra
+                }
+            }
+            else if (apply)
             {
                 // El mismo par de llamadas que MaterialTextureCommand::apply.
                 const TextureImportApplyResult r = applyTextureImportSettings(
