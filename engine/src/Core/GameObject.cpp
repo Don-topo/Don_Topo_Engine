@@ -1,4 +1,5 @@
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/MaterialAsset.h"
 // Los 28 componentes se incluyen AQUÍ y no en el header (ver la nota de
 // GameObject.h): el destructor de GameObject destruye los 28 shared_ptr, así
 // que es esta unidad de traducción la que necesita los tipos completos.
@@ -151,6 +152,19 @@ namespace DonTopo
                           std::to_string(nMats) + " material(es) en el mesh), "
                           "el override de ese slot se ignora");
         }
+        // Un .mat invalido no rompe la carga (se hereda todo en silencio en
+        // applyMaterialOverrides, que no tiene canal de log y corre en cada
+        // clon), pero SI se avisa aqui: esta funcion solo la llama el lector de
+        // escena, que tiene canal para darlo.
+        for (const MaterialOverride& ov : go.materialOverrides)
+        {
+            if (ov.matAsset.empty()) continue;
+            std::string warning;
+            loadMaterialAsset(ov.matAsset, &warning);
+            if (!warning.empty())
+                out.push_back("mesh de '" + go.name + "'.materials: material '" +
+                              ov.matAsset + "': " + warning);
+        }
     }
 
     void applyMaterialOverrides(GameObject& go)
@@ -176,6 +190,25 @@ namespace DonTopo
             // que es quien tiene canal para darlo.
             if (ov.index < 0 || ov.index >= (int)mats.size()) continue;
             Material& mat = *mats[(size_t)ov.index];
+
+            // El .mat (si lo hay) resuelve lo que el objeto NO overridee: se
+            // computa un valor "efectivo" por campo y se alimenta al MISMO
+            // mecanismo de baseline de siempre, sin tocarlo. Sin matAsset,
+            // matAsset queda en su defecto (todo vacio/-1) y effective(...)
+            // devuelve el override del objeto tal cual: el resultado es
+            // identico al de antes de que este campo existiera.
+            MaterialAsset matAsset;
+            if (!ov.matAsset.empty())
+                matAsset = loadMaterialAsset(ov.matAsset);   // tolerante: invalido = heredar todo
+
+            auto effective = [](const std::string& objOverride, const std::string& matValue)
+            {
+                return !objOverride.empty() ? objOverride : matValue;
+            };
+            auto effectiveFactor = [](float objOverride, float matValue)
+            {
+                return objOverride >= 0.0f ? objOverride : matValue;
+            };
 
             // El baseline se captura UNA vez por slot, la primera que se pisa:
             // si se recapturase en cada pasada, el segundo cambio de textura
@@ -207,9 +240,9 @@ namespace DonTopo
             // heurística "base vacío = no tomado" el Clear dejaría puesta la
             // textura del usuario en vez de devolver el slot a su vacío
             // original.
-            aplica(ov.albedo, ov.baseAlbedo, ov.baseAlbedoTaken, mat.texturePath);
-            aplica(ov.normal, ov.baseNormal, ov.baseNormalTaken, mat.normalMapPath);
-            aplica(ov.orm,    ov.baseOrm,    ov.baseOrmTaken,    mat.metallicRoughnessPath);
+            aplica(effective(ov.albedo, matAsset.albedo), ov.baseAlbedo, ov.baseAlbedoTaken, mat.texturePath);
+            aplica(effective(ov.normal, matAsset.normal), ov.baseNormal, ov.baseNormalTaken, mat.normalMapPath);
+            aplica(effective(ov.orm,    matAsset.orm),    ov.baseOrm,    ov.baseOrmTaken,    mat.metallicRoughnessPath);
 
             // Mismo mecanismo que `aplica`, pero con un centinela float en vez
             // de una cadena vacía: 0.0 y 1.0 son valores válidos de slider, así
@@ -230,8 +263,8 @@ namespace DonTopo
                 }
                 destino = override_;
             };
-            aplicaFactor(ov.metallic,  ov.baseMetallic,  ov.baseMetallicTaken,  mat.metallic);
-            aplicaFactor(ov.roughness, ov.baseRoughness, ov.baseRoughnessTaken, mat.roughness);
+            aplicaFactor(effectiveFactor(ov.metallic, matAsset.metallic), ov.baseMetallic, ov.baseMetallicTaken, mat.metallic);
+            aplicaFactor(effectiveFactor(ov.roughness, matAsset.roughness), ov.baseRoughness, ov.baseRoughnessTaken, mat.roughness);
         }
 
         auto distinto = [](const Material& a, const Material& b)

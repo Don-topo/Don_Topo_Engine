@@ -1,6 +1,7 @@
 // Test headless de los overrides de textura del Mesh (sin GPU). Plain main +
 // asserts, sin framework — mismo patrón que content_browser_tests.cpp.
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
@@ -1737,8 +1738,157 @@ static void test_deferred_slider_forgets_drag_of_vanished_widget()
     CHECK(r.value == material);
 }
 
+static std::filesystem::path matAssetTestDir(const char* name)
+{
+    std::error_code ec;
+    std::filesystem::path d = std::filesystem::temp_directory_path(ec) / name;
+    std::filesystem::remove_all(d, ec);
+    std::filesystem::create_directories(d, ec);
+    return d;
+}
+
+// El .mat manda cuando NO hay override del objeto para ese campo.
+static void test_mat_asset_supplies_texture_when_no_override()
+{
+    const auto d = matAssetTestDir("dt_matasset_no_override");
+    MaterialAsset m; m.albedo = (d / "rojo.png").string();
+    std::string err;
+    CHECK(saveMaterialAsset(d / "x.mat", m, &err));
+
+    auto go = makeStaticFixture();   // material.texturePath = "assets/fbx_albedo.png"
+    go->materialOverrides.push_back(MaterialOverride{});
+    go->materialOverrides[0].matAsset = (d / "x.mat").string();
+    applyMaterialOverrides(*go);
+
+    CHECK(go->getMesh()->material.texturePath == m.albedo);
+}
+
+// La override del OBJETO manda sobre el .mat.
+static void test_object_override_wins_over_mat_asset()
+{
+    const auto d = matAssetTestDir("dt_matasset_object_wins");
+    MaterialAsset m; m.albedo = (d / "rojo.png").string();
+    std::string err;
+    CHECK(saveMaterialAsset(d / "x.mat", m, &err));
+
+    auto go = makeStaticFixture();
+    MaterialOverride ov; ov.matAsset = (d / "x.mat").string();
+    ov.albedo = (d / "azul.png").string();
+    go->materialOverrides.push_back(ov);
+    applyMaterialOverrides(*go);
+
+    CHECK(go->getMesh()->material.texturePath == ov.albedo);
+}
+
+// Review Focus 3: un .mat con SOLO roughness deja las tres texturas del FBX.
+static void test_mat_asset_with_only_one_field_leaves_the_rest_alone()
+{
+    const auto d = matAssetTestDir("dt_matasset_partial");
+    MaterialAsset m; m.roughness = 0.2f;
+    std::string err;
+    CHECK(saveMaterialAsset(d / "x.mat", m, &err));
+
+    auto go = makeStaticFixture();
+    const std::string fbxAlbedo = go->getMesh()->material.texturePath;
+    go->materialOverrides.push_back(MaterialOverride{});
+    go->materialOverrides[0].matAsset = (d / "x.mat").string();
+    applyMaterialOverrides(*go);
+
+    CHECK(go->getMesh()->material.texturePath == fbxAlbedo);   // intacta
+    CHECK(go->getMesh()->material.roughness == 0.2f);
+}
+
+// Clear del objeto (override vacio) cae al .mat, no al modelo.
+static void test_clear_falls_back_to_mat_asset_not_model()
+{
+    const auto d = matAssetTestDir("dt_matasset_clear");
+    MaterialAsset m; m.albedo = (d / "rojo.png").string();
+    std::string err;
+    CHECK(saveMaterialAsset(d / "x.mat", m, &err));
+
+    auto go = makeStaticFixture();
+    const std::string fbxAlbedo = go->getMesh()->material.texturePath;
+    MaterialOverride ov; ov.matAsset = (d / "x.mat").string();
+    ov.albedo = (d / "azul.png").string();
+    go->materialOverrides.push_back(ov);
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.texturePath == ov.albedo);
+
+    go->materialOverrides[0].albedo.clear();                  // Clear
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.texturePath == m.albedo);   // al .mat, no al FBX
+    CHECK(go->getMesh()->material.texturePath != fbxAlbedo);
+}
+
+// Desvincular el .mat (matAsset = "") cae al modelo.
+static void test_unlinking_mat_asset_falls_back_to_model()
+{
+    const auto d = matAssetTestDir("dt_matasset_unlink");
+    MaterialAsset m; m.albedo = (d / "rojo.png").string();
+    std::string err;
+    CHECK(saveMaterialAsset(d / "x.mat", m, &err));
+
+    auto go = makeStaticFixture();
+    const std::string fbxAlbedo = go->getMesh()->material.texturePath;
+    go->materialOverrides.push_back(MaterialOverride{});
+    go->materialOverrides[0].matAsset = (d / "x.mat").string();
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.texturePath == m.albedo);
+
+    go->materialOverrides[0].matAsset.clear();
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.texturePath == fbxAlbedo);
+}
+
+// Review Focus 1: un .mat inexistente hereda todo, sin lanzar.
+static void test_missing_mat_asset_inherits_everything()
+{
+    auto go = makeStaticFixture();
+    const std::string fbxAlbedo = go->getMesh()->material.texturePath;
+    go->materialOverrides.push_back(MaterialOverride{});
+    go->materialOverrides[0].matAsset = "no/existe/en/el/repo.mat";
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.texturePath == fbxAlbedo);
+}
+
+// El .mat funciona igual en skinned, en un indice distinto de 0.
+static void test_mat_asset_on_skinned_slot_two()
+{
+    const auto d = matAssetTestDir("dt_matasset_skinned");
+    MaterialAsset m; m.metallic = 0.7f;
+    std::string err;
+    CHECK(saveMaterialAsset(d / "x.mat", m, &err));
+
+    auto go = makeSkinnedFixture();   // 3 materiales
+    MaterialOverride ov; ov.index = 2; ov.matAsset = (d / "x.mat").string();
+    go->materialOverrides.push_back(ov);
+    applyMaterialOverrides(*go);
+
+    CHECK(go->getSkinnedMesh()->materials[2].metallic == 0.7f);
+    CHECK(go->getSkinnedMesh()->materials[0].metallic == 0.0f);   // el 0 no se toca
+}
+
+// Sin matAsset (con o sin otras overrides), el resultado es IDENTICO a hoy.
+static void test_no_mat_asset_is_unchanged()
+{
+    auto go = makeStaticFixture();
+    const std::string before = go->getMesh()->material.texturePath;
+    go->materialOverrides.push_back(MaterialOverride{});   // sin matAsset, sin nada
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.texturePath == before);
+}
+
 int main()
 {
+    test_mat_asset_supplies_texture_when_no_override();
+    test_object_override_wins_over_mat_asset();
+    test_mat_asset_with_only_one_field_leaves_the_rest_alone();
+    test_clear_falls_back_to_mat_asset_not_model();
+    test_unlinking_mat_asset_falls_back_to_model();
+    test_missing_mat_asset_inherits_everything();
+    test_mat_asset_on_skinned_slot_two();
+    test_no_mat_asset_is_unchanged();
+
     // PhysicsManager/AudioManager comparten instancia entre los tests que la
     // necesitan: crear y destruir un PhysicsManager por test crashea al
     // segundo init (una PxFoundation por proceso), mismo patrón que
