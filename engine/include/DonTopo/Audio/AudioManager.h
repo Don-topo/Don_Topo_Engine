@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 
 #include "DonTopo/Audio/AudioBus.h"
+#include "DonTopo/Core/ImportSettings.h"
 
 namespace DonTopo {
 
@@ -174,6 +175,28 @@ public:
     // aplicará en el siguiente playSound.
     void setChannelVolume(int soundId, float volume);
     void setChannelPitch (int soundId, float pitch);
+
+    // Ajustes de importacion (sidecar <clip>.import.json) del sonido: ganancia y
+    // mono. El defecto si el id no existe.
+    AudioImportSettings getSoundImportSettings(int soundId) const;
+
+    // Relee el sidecar de `path` y lo aplica a TODOS los sonidos vivos de esa ruta
+    // (2D y 3D, con o sin loop: son sonidos distintos del mismo fichero) y reajusta
+    // el volumen de su voz viva. Los de otras rutas no se tocan. El mono aplica
+    // desde la siguiente reproduccion.
+    void refreshImportSettings(const std::string& path);
+
+    // Volumen REAL de la voz viva de soundId (la que siguen setChannelVolume y el
+    // seguimiento 3D), o -1 si no hay voz. Existe para que la ganancia sea
+    // observable desde un test: quitarla dejaba la feature entera sin efecto y la
+    // suite en verde.
+    float getChannelVolume(int soundId) const;
+
+    // ¿La voz viva de soundId lleva la matriz de mono (cada entrada a 1/N en las
+    // dos salidas frontales)? Existe para que forzar a mono sea observable desde
+    // un test: quitar la llamada a applyForceMono dejaba la feature entera sin
+    // efecto y la suite en verde.
+    bool isVoiceForcedMono(int soundId) const;
 
     // Atenuación 3D del sonido: por debajo de minDistance suena a volumen
     // pleno, y de ahí a maxDistance va cayendo. Se escribe en el FMOD::Sound
@@ -359,6 +382,19 @@ private:
     std::vector<int>         m_soundRefs;
     // Clave de cada slot, para poder borrar la entrada del mapa al liberarlo.
     std::vector<std::string> m_soundKeys;
+    // Ajustes de importacion del fichero de cada sonido (sidecar), y el ULTIMO
+    // volumen que el componente pidio para su voz (playSound / setChannelVolume).
+    // Paralelos a m_sounds y reciclados con el slot. m_soundVolume existe para que
+    // refreshImportSettings reaplique voiceVolume(id, volumenDelComponente) en vez
+    // de multiplicar el volumen que ya lleve el canal (compondria la ganancia dos
+    // veces). Los one-shots NO lo tocan: su voz no se puede alcanzar.
+    std::vector<AudioImportSettings> m_soundImport;
+    std::vector<float>               m_soundVolume;
+
+    // Volumen efectivo de una voz de `id`: el pedido por el componente por la
+    // ganancia del fichero. El UNICO sitio donde se multiplica la ganancia.
+    float voiceVolume(int id, float volume) const;
+
     // Slots libres, para reutilizarlos en vez de crecer sin techo: cada ciclo
     // Play->Stop recrea la escena entera y pedía ids nuevos.
     std::vector<int>         m_freeSlots;

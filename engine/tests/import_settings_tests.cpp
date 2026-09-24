@@ -2,9 +2,11 @@
 // mismo patron que content_browser_tests.cpp. Se ejecuta desde la raiz del repo.
 #include "DonTopo/Core/ImportSettings.h"
 
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <system_error>
 
@@ -205,8 +207,138 @@ static void test_sidecar_conflict_detection()
     CHECK(importSidecarConflict(d / "a.png", d / "b.png"));
 }
 
+static bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) < eps; }
+
+static void test_audio_gain_math()
+{
+    CHECK(audioGainLinear(0.0f) == 1.0f);                    // EXACTO: sin ajuste el volumen no cambia
+    CHECK(near(audioGainLinear(-6.0f), 0.501187f, 1e-4f));
+    CHECK(near(audioGainLinear(12.0f), 3.981072f, 1e-3f));
+    CHECK(near(audioGainLinear(-30.0f), 0.031623f, 1e-4f));
+    // Fuera de rango se acota ANTES de convertir.
+    CHECK(near(audioGainLinear(1000.0f), audioGainLinear(12.0f), 1e-3f));
+    CHECK(near(audioGainLinear(-1000.0f), audioGainLinear(-30.0f), 1e-5f));
+    // Review Focus 1: NaN no llega a la ganancia.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    CHECK(clampAudioGainDb(nan) == 0.0f);
+    CHECK(clampAudioGainDb(inf) == kAudioGainMaxDb);
+    CHECK(clampAudioGainDb(-inf) == kAudioGainMinDb);
+    CHECK(audioGainLinear(nan) == 1.0f);
+}
+
+static void test_audio_roundtrip_and_default_removes_sidecar()
+{
+    const fs::path d = makeDir();
+    const fs::path clip = d / "disparo.wav";
+    std::string err;
+
+    AudioImportSettings in;
+    in.gainDb    = -6.5f;
+    in.forceMono = true;
+    CHECK(saveAudioImportSettings(clip, in, &err));
+    CHECK(fs::exists(importSidecarPath(clip)));
+    CHECK(loadAudioImportSettings(clip) == in);
+
+    CHECK(saveAudioImportSettings(clip, AudioImportSettings{}, &err));      // el defecto BORRA
+    CHECK(!fs::exists(importSidecarPath(clip)));
+    CHECK(saveAudioImportSettings(clip, AudioImportSettings{}, &err));      // y sin fichero previo no es error
+
+    // Guardar un dB fuera de rango escribe el valor ACOTADO.
+    AudioImportSettings hot;
+    hot.gainDb = 50.0f;
+    CHECK(saveAudioImportSettings(clip, hot, &err));
+    CHECK(loadAudioImportSettings(clip).gainDb == kAudioGainMaxDb);
+}
+
+static void test_audio_missing_and_broken_are_default()
+{
+    const fs::path d = makeDir();
+    std::string warning = "x";
+    CHECK(isDefault(loadAudioImportSettings(d / "no_existe.wav", &warning)));
+    CHECK(warning.empty());                                    // ausente no es un problema
+
+    writeText(importSidecarPath(d / "roto.wav"), "{ esto no es json");
+    warning.clear();
+    CHECK(isDefault(loadAudioImportSettings(d / "roto.wav", &warning)));
+    CHECK(!warning.empty());
+}
+
+// Un sidecar de textura leido como audio (y al reves) da el defecto con aviso.
+static void test_audio_type_crossing()
+{
+    const fs::path d = makeDir();
+    std::string err;
+    TextureImportSettings tex;
+    tex.mipmaps = true;
+    CHECK(saveTextureImportSettings(d / "x.wav", tex, &err));
+    std::string warning;
+    CHECK(isDefault(loadAudioImportSettings(d / "x.wav", &warning)));
+    CHECK(!warning.empty());
+
+    AudioImportSettings au;
+    au.gainDb = 3.0f;
+    CHECK(saveAudioImportSettings(d / "y.png", au, &err));
+    warning.clear();
+    CHECK(isDefault(loadTextureImportSettings(d / "y.png", &warning)));
+    CHECK(!warning.empty());
+}
+
+// Review Focus 1: valores hostiles en gainDb.
+static void test_audio_hostile_gain_values()
+{
+    const fs::path d = makeDir();
+    struct Case { const char* name; const char* json; float wantGain; bool wantMono; };
+    const Case cases[] = {
+        { "big.wav",   R"({"version":1,"type":"audio","gainDb":1e30,"forceMono":true})",    kAudioGainMaxDb, true  },
+        { "small.wav", R"({"version":1,"type":"audio","gainDb":-1e30,"forceMono":false})",  kAudioGainMinDb, false },
+        { "str.wav",   R"({"version":1,"type":"audio","gainDb":"alto","forceMono":true})",  0.0f,            true  },
+        { "null.wav",  R"({"version":1,"type":"audio","gainDb":null,"forceMono":true})",    0.0f,            true  },
+        { "mono.wav",  R"({"version":1,"type":"audio","gainDb":2.5,"forceMono":"si"})",     2.5f,            false },
+    };
+    for (const Case& c : cases)
+    {
+        writeText(importSidecarPath(d / c.name), c.json);
+        std::string warning;
+        const AudioImportSettings s = loadAudioImportSettings(d / c.name, &warning);
+        CHECK(s.gainDb == c.wantGain);
+        CHECK(s.forceMono == c.wantMono);
+        CHECK(std::isfinite(s.gainDb));
+        CHECK(!warning.empty());
+    }
+    // 1e999 desborda el double: el parser lo da como infinito o lo descarta; en
+    // los dos casos el resultado es finito y sin lanzar.
+    writeText(importSidecarPath(d / "inf.wav"), R"({"version":1,"type":"audio","gainDb":1e999})");
+    CHECK(std::isfinite(loadAudioImportSettings(d / "inf.wav").gainDb));
+
+    // Sidecar hostil de tamano: mismo tope que las texturas.
+    writeText(importSidecarPath(d / "huge.wav"), std::string(5 * 1024 * 1024, 'x'));
+    std::string warning;
+    CHECK(isDefault(loadAudioImportSettings(d / "huge.wav", &warning)));
+    CHECK(!warning.empty());
+}
+
+static void test_same_asset_path()
+{
+    const fs::path d = makeDir();
+    writeText(d / "a.wav", "x");
+    CHECK(sameAssetPath(d / "a.wav", d / "a.wav"));
+    CHECK(sameAssetPath(d / "sub" / ".." / "a.wav", d / "a.wav"));      // normaliza
+    CHECK(!sameAssetPath(d / "a.wav", d / "b.wav"));
+    // Ninguno existe: se compara lexicamente, sin lanzar.
+    CHECK(sameAssetPath(d / "no" / "x.wav", d / "no" / "x.wav"));
+    CHECK(!sameAssetPath(d / "no" / "x.wav", d / "no" / "y.wav"));
+    CHECK(!sameAssetPath("", d / "a.wav"));
+}
+
 int main()
 {
+    test_audio_gain_math();
+    test_audio_roundtrip_and_default_removes_sidecar();
+    test_audio_missing_and_broken_are_default();
+    test_audio_type_crossing();
+    test_audio_hostile_gain_values();
+    test_same_asset_path();
     test_move_copy_remove_sidecar();
     test_sidecar_conflict_detection();
     test_sidecar_path_and_detection();

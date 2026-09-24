@@ -244,11 +244,11 @@ std::vector<ExportAsset> collectSceneAssets(
         out.push_back(std::move(a));
     };
 
-    // Una textura de material con ajustes de importacion lleva su sidecar: el
-    // runtime lo busca junto a la textura. Es un ExportAsset mas: comparte la
-    // carpeta de origen, asi que la numeracion de assets/_external/N y la
-    // jerarquia dentro del proyecto salen iguales que las de la textura.
-    auto addTexture = [&](const std::string& raw)
+    // Un asset con ajustes de importacion (textura de material, clip de audio)
+    // lleva su sidecar: el runtime lo busca junto al asset. Es un ExportAsset mas:
+    // comparte la carpeta de origen, asi que la numeracion de assets/_external/N y
+    // la jerarquia dentro del proyecto salen iguales que las del asset.
+    auto addWithSidecar = [&](const std::string& raw)
     {
         if (raw.empty()) return;
         add(raw);
@@ -273,14 +273,14 @@ std::vector<ExportAsset> collectSceneAssets(
             for (const Material* m : materialsOf(go))
             {
                 // Los embedded* no aportan path: viajan dentro del FBX.
-                addTexture(m->texturePath);
-                addTexture(m->normalMapPath);
-                addTexture(m->metallicRoughnessPath);
+                addWithSidecar(m->texturePath);
+                addWithSidecar(m->normalMapPath);
+                addWithSidecar(m->metallicRoughnessPath);
             }
         }
 
         if (go->hasAudioClip())
-            add(go->getAudioClip()->getPath());
+            addWithSidecar(go->getAudioClip()->getPath());
 
         if (go->hasButton())
         {

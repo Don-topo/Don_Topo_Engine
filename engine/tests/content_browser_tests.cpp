@@ -831,8 +831,85 @@ static void test_apply_without_renderer_still_writes()
     CHECK(loadTextureImportSettings(foto) == s);
 }
 
+static void test_apply_audio_writes_sidecar_and_refreshes_once()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply_audio";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    const fs::path clip = base / "disparo.wav";
+    std::ofstream(clip) << "wav";
+
+    std::vector<std::string> refreshed;
+    const auto refresh = [&](const std::string& p) { refreshed.push_back(p); };
+
+    AudioImportSettings s;
+    s.gainDb    = -4.0f;
+    s.forceMono = true;
+    AudioImportApplyResult r = applyAudioImportSettings(clip, s, refresh);
+    CHECK(r.ok);
+    CHECK(r.error.empty());
+    CHECK(refreshed.size() == 1 && refreshed[0] == clip.string());
+    CHECK(loadAudioImportSettings(clip) == s);
+
+    // El defecto borra el sidecar y aun asi refresca (la voz vuelve a su volumen).
+    r = applyAudioImportSettings(clip, AudioImportSettings{}, refresh);
+    CHECK(r.ok);
+    CHECK(refreshed.size() == 2);
+    CHECK(!fs::exists(importSidecarPath(clip)));
+}
+
+// Review Focus 8: si el sidecar no se puede escribir, no se refresca nada.
+static void test_apply_audio_write_failure_does_not_refresh()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply_audio_fail";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    int calls = 0;
+    AudioImportSettings s;
+    s.gainDb = 3.0f;
+    const AudioImportApplyResult r = applyAudioImportSettings(
+        base / "no_existe_carpeta" / "x.wav", s, [&](const std::string&) { ++calls; });
+    CHECK(!r.ok);
+    CHECK(!r.error.empty());
+    CHECK(calls == 0);
+}
+
+static void test_apply_audio_without_audio_manager_still_writes()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply_audio_norefresh";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    const fs::path clip = base / "a.wav";
+    std::ofstream(clip) << "wav";
+    AudioImportSettings s;
+    s.forceMono = true;
+    const AudioImportApplyResult r = applyAudioImportSettings(clip, s, {});
+    CHECK(r.ok);
+    CHECK(loadAudioImportSettings(clip) == s);
+}
+
+// Review Focus 8: que assets ofrecen "Import Settings...".
+static void test_import_settings_menu_kind()
+{
+    CHECK(importSettingsKindFor(".png", false)  == ImportSettingsKind::Texture);
+    CHECK(importSettingsKindFor(".WAV", false)  == ImportSettingsKind::Audio);
+    CHECK(importSettingsKindFor(".mp3", false)  == ImportSettingsKind::Audio);
+    CHECK(importSettingsKindFor(".ogg", false)  == ImportSettingsKind::Audio);
+    CHECK(importSettingsKindFor(".flac", false) == ImportSettingsKind::Audio);
+    CHECK(importSettingsKindFor(".fbx", false)  == ImportSettingsKind::None);   // modelos: siguiente spec
+    CHECK(importSettingsKindFor(".lua", false)  == ImportSettingsKind::None);
+    CHECK(importSettingsKindFor(".wav", true)   == ImportSettingsKind::None);   // una carpeta
+}
+
 int main()
 {
+    test_apply_audio_writes_sidecar_and_refreshes_once();
+    test_apply_audio_write_failure_does_not_refresh();
+    test_apply_audio_without_audio_manager_still_writes();
+    test_import_settings_menu_kind();
     test_apply_writes_sidecar_and_rebuilds_only_users();
     test_apply_reports_write_failure_and_rebuilds_nothing();
     test_apply_without_renderer_still_writes();

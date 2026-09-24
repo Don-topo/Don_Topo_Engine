@@ -6,6 +6,7 @@
 #include <fmod_errors.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <stdexcept>
 
@@ -151,6 +152,9 @@ void AudioManager::shutdown()
     m_soundRefs.clear(); m_soundKeys.clear(); m_freeSlots.clear();
     m_soundByKey.clear(); m_pinnedSounds.clear();
     m_soundLastPos.clear(); m_soundHasLastPos.clear();
+    // Paralelos a m_sounds: si se quedaran, tras un init() posterior el id 0 nuevo
+    // heredaria los ajustes del sonido viejo (y push_back los desalinearia).
+    m_soundImport.clear(); m_soundVolume.clear();
     // Los DSP ANTES que los grupos de los que cuelgan: liberar el grupo primero
     // dejaria los DSP colgando de algo que ya no existe. Son recursos nativos,
     // no punteros sueltos.
@@ -275,6 +279,12 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
     else if (rolloff == AudioRolloff::LinearSquare) mode |= FMOD_3D_LINEARSQUAREROLLOFF;
     FMOD::Sound* snd;
     if (SYS->createSound(path.c_str(), mode, nullptr, &snd) != FMOD_OK) return -1;
+    // Ajustes de importacion del fichero (sidecar): solo al CREAR el sonido; un
+    // acierto de cache ya devolvio antes con los suyos.
+    std::string importWarning;
+    const AudioImportSettings importSettings = loadAudioImportSettings(path, &importWarning);
+    if (!importWarning.empty())
+        std::fprintf(stderr, "[AudioImport] %s: %s\n", path.c_str(), importWarning.c_str());
     // Slot reciclado si lo hay: los ids no se reutilizaban nunca y los vectores
     // crecían una entrada por clip en CADA ciclo Play->Stop (que recrea la
     // escena entera desde el snapshot).
@@ -290,6 +300,8 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
         m_soundRefs[id]             = 1;
         m_soundKeys[id]             = key;
         m_soundHasLastPos[id]       = 0;
+        m_soundImport[id]           = importSettings;
+        m_soundVolume[id]           = 1.0f;
     }
     else
     {
@@ -301,6 +313,8 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
         m_soundKeys.push_back(key);
         m_soundLastPos.push_back(glm::vec3(0.0f));
         m_soundHasLastPos.push_back(0);
+        m_soundImport.push_back(importSettings);
+        m_soundVolume.push_back(1.0f);
         id = (int)m_sounds.size() - 1;
     }
     m_soundByKey[key] = id;
@@ -333,6 +347,8 @@ void AudioManager::unloadSound(int id)
     m_soundByKey.erase(m_soundKeys[id]);
     m_soundKeys[id].clear();
     m_soundHasLastPos[id] = 0;
+    m_soundImport[id] = AudioImportSettings{};
+    m_soundVolume[id] = 1.0f;
     m_freeSlots.push_back(id);
 #endif
 }
@@ -401,13 +417,61 @@ static FMOD::Channel* liveChannel(void* raw, void* expectedSound)
 }
 #endif
 
+#ifdef DT_FMOD_ENABLED
+// Mezcla a mono la voz de un sonido marcado forceMono: cada una de las dos
+// salidas frontales recibe la suma de TODAS las entradas a 1/N (el pico no pasa
+// de 1 aunque las entradas vayan en fase); el resto de salidas (surround, LFE)
+// queda en silencio. Solo sonidos 2D: en 3D el panner espacial de FMOD manda
+// sobre la matriz y un emisor 3D con spread 0 ya suena como un punto. Un clip
+// de un canal, o cualquier fallo al leer la matriz, deja la voz como esta.
+// Dimensiones de la matriz de mezcla de una voz de `snd`: entradas = canales del
+// sonido, salidas = canales de la salida del sistema. NO se le preguntan al canal:
+// getMixMatrix(nullptr, ...) devuelve OK con 0 y 0 en una voz recien creada que
+// aun no tiene matriz propia.
+static bool mixMatrixDims(FMOD::System* sys, FMOD::Sound* snd, int& out, int& in)
+{
+    FMOD_SPEAKERMODE speakerMode = FMOD_SPEAKERMODE_DEFAULT;
+    if (sys->getSoftwareFormat(nullptr, &speakerMode, nullptr) != FMOD_OK) return false;
+    if (sys->getSpeakerModeChannels(speakerMode, &out) != FMOD_OK) return false;
+    if (snd->getFormat(nullptr, nullptr, &in, nullptr) != FMOD_OK) return false;
+    return true;
+}
+
+// `stereoPan` [-1, 1] va DENTRO de la matriz: Channel::setPan de FMOD reemplaza
+// la matriz entera, asi que un setPan posterior deshacia el mono en silencio. Por
+// eso esta funcion se llama DESPUES del setPan y aplica ella el paneo: ley de
+// balance (el lado contrario al pan se atenua linealmente, el centro no toca nada).
+static void applyForceMono(FMOD::System* sys, FMOD::Channel* ch, FMOD::Sound* snd, float stereoPan)
+{
+    FMOD_MODE mode = 0;
+    if (snd->getMode(&mode) != FMOD_OK || (mode & FMOD_3D)) return;
+    int out = 0, in = 0;
+    if (!mixMatrixDims(sys, snd, out, in) || in < 2 || out < 1) return;
+    const float pan = std::isfinite(stereoPan) ? std::clamp(stereoPan, -1.0f, 1.0f) : 0.0f;
+    const float gainRow[2] = { 1.0f - std::max(0.0f, pan), 1.0f - std::max(0.0f, -pan) };
+    std::vector<float> m(static_cast<size_t>(out) * in, 0.0f);
+    const float g = 1.0f / static_cast<float>(in);
+    for (int row = 0; row < std::min(out, 2); ++row)
+        for (int col = 0; col < in; ++col)
+            m[static_cast<size_t>(row) * in + col] = g * gainRow[row];
+    ch->setMixMatrix(m.data(), out, in, in);
+}
+
+float AudioManager::voiceVolume(int id, float volume) const
+{
+    if (id < 0 || id >= static_cast<int>(m_soundImport.size())) return volume;
+    return volume * audioGainLinear(m_soundImport[id].gainDb);
+}
+#endif
+
 void AudioManager::setChannelVolume(int id, float volume)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
         id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
+    m_soundVolume[id] = volume;                       // lo ultimo que pidio el componente
     if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
-        ch->setVolume(volume);
+        ch->setVolume(voiceVolume(id, volume));
 #else
     (void)id; (void)volume;
 #endif
@@ -422,6 +486,88 @@ void AudioManager::setChannelPitch(int id, float pitch)
         ch->setPitch(pitch);
 #else
     (void)id; (void)pitch;
+#endif
+}
+
+AudioImportSettings AudioManager::getSoundImportSettings(int id) const
+{
+#ifdef DT_FMOD_ENABLED
+    if (id < 0 || id >= static_cast<int>(m_soundImport.size()) || !m_sounds[id])
+        return {};
+    return m_soundImport[id];
+#else
+    (void)id;
+    return {};
+#endif
+}
+
+void AudioManager::refreshImportSettings(const std::string& path)
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system) return;
+    for (size_t i = 0; i < m_sounds.size(); ++i)
+    {
+        if (!m_sounds[i] || !sameAssetPath(m_soundPaths[i], path)) continue;
+        std::string warning;
+        m_soundImport[i] = loadAudioImportSettings(m_soundPaths[i], &warning);
+        if (!warning.empty())
+            std::fprintf(stderr, "[AudioImport] %s: %s\n", m_soundPaths[i].c_str(), warning.c_str());
+        // La voz viva se reajusta al momento con el volumen del COMPONENTE, no con
+        // el del canal. El mono aplica desde la siguiente reproduccion.
+        if (FMOD::Channel* ch = liveChannel(m_sfxChannels[i], m_sounds[i]))
+            ch->setVolume(voiceVolume(static_cast<int>(i), m_soundVolume[i]));
+    }
+#else
+    (void)path;
+#endif
+}
+
+bool AudioManager::isVoiceForcedMono(int id) const
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return false;
+    FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]);
+    int out = 0, in = 0;
+    if (!ch || !mixMatrixDims(SYS, reinterpret_cast<FMOD::Sound*>(m_sounds[id]), out, in) ||
+        in < 2 || out < 1) return false;
+    const int wantOut = out, wantIn = in;
+    std::vector<float> m(static_cast<size_t>(out) * in, 0.0f);
+    if (ch->getMixMatrix(m.data(), &out, &in, in) != FMOD_OK) return false;
+    // FMOD puede devolver otras dimensiones que las pedidas: sin re-comprobar,
+    // un 0,0 daria "true" con los dos bucles vacios.
+    if (out != wantOut || in != wantIn) return false;
+    // Mono = cada una de las dos filas frontales lleva el MISMO valor en todas las
+    // entradas (con paneo la fila del lado contrario esta atenuada, asi que no se
+    // compara contra 1/N), y alguna de las dos no es cero. Una matriz de fabrica
+    // (identidad) tiene filas [1,0]: no es constante.
+    bool anyNonZero = false;
+    for (int row = 0; row < std::min(out, 2); ++row)
+    {
+        const float first = m[static_cast<size_t>(row) * in];
+        for (int col = 0; col < in; ++col)
+            if (std::fabs(m[static_cast<size_t>(row) * in + col] - first) > 1e-4f) return false;
+        if (first > 1e-4f) anyNonZero = true;
+    }
+    return anyNonZero;
+#else
+    (void)id;
+    return false;
+#endif
+}
+
+float AudioManager::getChannelVolume(int id) const
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return -1.0f;
+    FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]);
+    float v = -1.0f;
+    if (!ch || ch->getVolume(&v) != FMOD_OK) return -1.0f;
+    return v;
+#else
+    (void)id;
+    return -1.0f;
 #endif
 }
 
@@ -479,7 +625,8 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
     if (FMOD::Channel* prev = liveChannel(m_sfxChannels[id], m_sounds[id])) prev->stop();
     m_sfxChannels[id] = ch;
 
-    ch->setVolume(volume);
+    m_soundVolume[id] = volume;
+    ch->setVolume(voiceVolume(id, volume));
     ch->setPitch(pitch);
 
     FMOD_MODE mode = 0; snd->getMode(&mode);
@@ -499,6 +646,9 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
     // su propia condicion, para que quede claro que NO es una propiedad 3D.
     if (!(mode & FMOD_3D) && stereoPan != 0.0f)
         ch->setPan(stereoPan);
+    // DESPUES del setPan: este reemplaza la matriz de mezcla entera, y el mono es
+    // una matriz. applyForceMono lleva el paneo dentro.
+    if (m_soundImport[id].forceMono) applyForceMono(SYS, ch, snd, stereoPan);
 
     ch->setPaused(false);
 #else
@@ -664,8 +814,10 @@ void AudioManager::playSoundOneShot(int id, const glm::vec3& worldPos, float vol
     if (SYS->playSound(snd, group, true, &ch) != FMOD_OK) return;
 
     // Y AQUÍ la diferencia con playSound: ni se para la voz anterior ni se
-    // guarda esta en m_sfxChannels. Es lo que permite el solapamiento.
-    ch->setVolume(volume);
+    // guarda esta en m_sfxChannels. Es lo que permite el solapamiento. La
+    // ganancia del fichero se aplica igual, pero m_soundVolume no se toca: esta
+    // voz no se puede alcanzar despues.
+    ch->setVolume(voiceVolume(id, volume));
     ch->setPitch(pitch);
 
     FMOD_MODE mode = 0; snd->getMode(&mode);
@@ -685,6 +837,8 @@ void AudioManager::playSoundOneShot(int id, const glm::vec3& worldPos, float vol
     // su propia condicion, para que quede claro que NO es una propiedad 3D.
     if (!(mode & FMOD_3D) && stereoPan != 0.0f)
         ch->setPan(stereoPan);
+    // DESPUES del setPan: este reemplaza la matriz de mezcla entera (ver playSound).
+    if (m_soundImport[id].forceMono) applyForceMono(SYS, ch, snd, stereoPan);
     // Sin referencia guardada, esta voz tampoco la alcanza el seguimiento 3D
     // por frame (setSoundPosition): un one-shot suena donde se disparó. Para
     // clips cortos —que es su caso de uso— la diferencia no se oye.

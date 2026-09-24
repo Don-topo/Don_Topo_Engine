@@ -2,8 +2,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <system_error>
 
 namespace DonTopo {
@@ -23,6 +26,107 @@ const char* colorSpaceName(ColorSpaceOverride c)
         case ColorSpaceOverride::Auto:   break;
     }
     return "auto";
+}
+
+// Lee y valida el ENVOLTORIO comun de un sidecar (existencia, tamano, JSON,
+// version y tipo). nullopt = usar el defecto: `warning` explica por que salvo si
+// el fichero simplemente no existe o esta vacio (lo normal, sin aviso).
+std::optional<nlohmann::json> readSidecar(const std::filesystem::path& asset,
+                                          const char* expectedType, std::string* warning)
+{
+    if (warning) warning->clear();
+    auto warn = [&](const std::string& m) { if (warning) *warning = m; };
+
+    const std::filesystem::path sidecar = importSidecarPath(asset);
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(sidecar, ec) || ec)
+        return std::nullopt;
+
+    const std::uintmax_t size = std::filesystem::file_size(sidecar, ec);
+    if (ec || size > kMaxSidecarBytes)
+    {
+        warn("sidecar ilegible o demasiado grande; se usan los valores por defecto");
+        return std::nullopt;
+    }
+    if (size == 0)
+        return std::nullopt;
+
+    std::ifstream in(sidecar, std::ios::binary);
+    if (!in)
+    {
+        warn("no se pudo abrir el sidecar; se usan los valores por defecto");
+        return std::nullopt;
+    }
+    const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+
+    nlohmann::json j = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
+    if (j.is_discarded() || !j.is_object())
+    {
+        warn("JSON invalido; se usan los valores por defecto");
+        return std::nullopt;
+    }
+    const auto version = j.find("version");
+    if (version == j.end() || !version->is_number_integer() || version->get<long long>() != 1)
+    {
+        warn("version de sidecar desconocida; se usan los valores por defecto");
+        return std::nullopt;
+    }
+    const auto type = j.find("type");
+    if (type == j.end() || !type->is_string() || type->get<std::string>() != expectedType)
+    {
+        warn(std::string("el sidecar no es de tipo ") + expectedType +
+             "; se usan los valores por defecto");
+        return std::nullopt;
+    }
+    return j;
+}
+
+// Escritura por fichero temporal + rename: un corte a mitad no deja un sidecar a medias.
+bool writeSidecar(const std::filesystem::path& asset, const nlohmann::json& j, std::string* error)
+{
+    const std::filesystem::path sidecar = importSidecarPath(asset);
+    std::error_code ec;
+    std::filesystem::path tmp = sidecar;
+    tmp += ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out)
+        {
+            if (error) *error = "no se pudo escribir " + sidecar.string();
+            return false;
+        }
+        out << j.dump(2) << '\n';
+        if (!out)
+        {
+            if (error) *error = "escritura incompleta de " + sidecar.string();
+            out.close();
+            std::filesystem::remove(tmp, ec);
+            return false;
+        }
+    }
+    std::filesystem::rename(tmp, sidecar, ec);
+    if (ec)
+    {
+        if (error) *error = "no se pudo renombrar a " + sidecar.string() + ": " + ec.message();
+        std::error_code rmEc;
+        std::filesystem::remove(tmp, rmEc);
+        return false;
+    }
+    return true;
+}
+
+// Guardar el defecto = quitar el sidecar; ausente tampoco es error.
+bool removeSidecar(const std::filesystem::path& asset, std::string* error)
+{
+    std::error_code ec;
+    const std::filesystem::path sidecar = importSidecarPath(asset);
+    std::filesystem::remove(sidecar, ec);
+    if (ec)
+    {
+        if (error) *error = "no se pudo borrar " + sidecar.string() + ": " + ec.message();
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -53,53 +157,11 @@ TextureImportSettings loadTextureImportSettings(const std::filesystem::path& ass
                                                 std::string* warning)
 {
     TextureImportSettings out;
-    if (warning) warning->clear();
-    auto warn = [&](const std::string& m) { if (warning) *warning = m; };
-
-    const std::filesystem::path sidecar = importSidecarPath(asset);
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(sidecar, ec) || ec)
-        return out;                                   // ausente: lo normal, sin aviso
-
-    const std::uintmax_t size = std::filesystem::file_size(sidecar, ec);
-    if (ec || size > kMaxSidecarBytes)
-    {
-        warn("sidecar ilegible o demasiado grande; se usan los valores por defecto");
-        return out;
-    }
-    if (size == 0)
-        return out;
-
-    std::ifstream in(sidecar, std::ios::binary);
-    if (!in)
-    {
-        warn("no se pudo abrir el sidecar; se usan los valores por defecto");
-        return out;
-    }
-    const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
-
-    const nlohmann::json j = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
-    if (j.is_discarded() || !j.is_object())
-    {
-        warn("JSON invalido; se usan los valores por defecto");
-        return out;
-    }
-
-    const auto version = j.find("version");
-    if (version == j.end() || !version->is_number_integer() || version->get<long long>() != 1)
-    {
-        warn("version de sidecar desconocida; se usan los valores por defecto");
-        return out;
-    }
-    const auto type = j.find("type");
-    if (type == j.end() || !type->is_string() || type->get<std::string>() != "texture")
-    {
-        warn("el sidecar no es de tipo texture; se usan los valores por defecto");
-        return out;
-    }
+    const std::optional<nlohmann::json> j = readSidecar(asset, "texture", warning);
+    if (!j) return out;
 
     std::string problems;
-    if (const auto it = j.find("colorSpace"); it != j.end())
+    if (const auto it = j->find("colorSpace"); it != j->end())
     {
         const std::string v = it->is_string() ? it->get<std::string>() : std::string();
         if      (v == "auto")   out.colorSpace = ColorSpaceOverride::Auto;
@@ -107,66 +169,102 @@ TextureImportSettings loadTextureImportSettings(const std::filesystem::path& ass
         else if (v == "linear") out.colorSpace = ColorSpaceOverride::Linear;
         else problems += "colorSpace desconocido (se usa auto). ";
     }
-    if (const auto it = j.find("mipmaps"); it != j.end())
+    if (const auto it = j->find("mipmaps"); it != j->end())
     {
         if (it->is_boolean()) out.mipmaps = it->get<bool>();
         else                  problems += "mipmaps no es booleano (se usa false). ";
     }
-    if (!problems.empty()) warn(problems);
+    if (!problems.empty() && warning) *warning = problems;
     return out;
 }
 
 bool saveTextureImportSettings(const std::filesystem::path& asset,
                                const TextureImportSettings& settings, std::string* error)
 {
-    const std::filesystem::path sidecar = importSidecarPath(asset);
-    std::error_code ec;
-
     if (isDefault(settings))
-    {
-        std::filesystem::remove(sidecar, ec);         // ausente tampoco es error
-        if (ec)
-        {
-            if (error) *error = "no se pudo borrar " + sidecar.string() + ": " + ec.message();
-            return false;
-        }
-        return true;
-    }
+        return removeSidecar(asset, error);
 
     nlohmann::json j;
     j["version"]    = 1;
     j["type"]       = "texture";
     j["colorSpace"] = colorSpaceName(settings.colorSpace);
     j["mipmaps"]    = settings.mipmaps;
+    return writeSidecar(asset, j, error);
+}
 
-    // Fichero temporal + rename: un corte a mitad no deja un sidecar a medias.
-    std::filesystem::path tmp = sidecar;
-    tmp += ".tmp";
+float clampAudioGainDb(float gainDb)
+{
+    if (std::isnan(gainDb)) return 0.0f;
+    return std::clamp(gainDb, kAudioGainMinDb, kAudioGainMaxDb);
+}
+
+float audioGainLinear(float gainDb)
+{
+    const float db = clampAudioGainDb(gainDb);
+    if (db == 0.0f) return 1.0f;                       // exacto: sin ajuste no se toca el volumen
+    return std::pow(10.0f, db / 20.0f);
+}
+
+AudioImportSettings loadAudioImportSettings(const std::filesystem::path& asset, std::string* warning)
+{
+    AudioImportSettings out;
+    const std::optional<nlohmann::json> j = readSidecar(asset, "audio", warning);
+    if (!j) return out;
+
+    std::string problems;
+    if (const auto it = j->find("gainDb"); it != j->end())
     {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out)
+        if (it->is_number())
         {
-            if (error) *error = "no se pudo escribir " + sidecar.string();
-            return false;
+            const double v = it->get<double>();
+            if (!std::isfinite(v))
+                problems += "gainDb no es finito (se usa 0). ";
+            else
+            {
+                out.gainDb = clampAudioGainDb(static_cast<float>(v));
+                if (static_cast<double>(out.gainDb) != v)
+                    problems += "gainDb fuera de rango (acotado). ";
+            }
         }
-        out << j.dump(2) << '\n';
-        if (!out)
-        {
-            if (error) *error = "escritura incompleta de " + sidecar.string();
-            out.close();
-            std::filesystem::remove(tmp, ec);
-            return false;
-        }
+        else problems += "gainDb no es numerico (se usa 0). ";
     }
-    std::filesystem::rename(tmp, sidecar, ec);
-    if (ec)
+    if (const auto it = j->find("forceMono"); it != j->end())
     {
-        if (error) *error = "no se pudo renombrar a " + sidecar.string() + ": " + ec.message();
-        std::error_code rmEc;
-        std::filesystem::remove(tmp, rmEc);
-        return false;
+        if (it->is_boolean()) out.forceMono = it->get<bool>();
+        else                  problems += "forceMono no es booleano (se usa false). ";
     }
-    return true;
+    if (!problems.empty() && warning) *warning = problems;
+    return out;
+}
+
+bool saveAudioImportSettings(const std::filesystem::path& asset, const AudioImportSettings& settings,
+                             std::string* error)
+{
+    AudioImportSettings s = settings;
+    s.gainDb = clampAudioGainDb(s.gainDb);
+    if (isDefault(s))
+        return removeSidecar(asset, error);
+
+    nlohmann::json j;
+    j["version"]   = 1;
+    j["type"]      = "audio";
+    j["gainDb"]    = s.gainDb;
+    j["forceMono"] = s.forceMono;
+    return writeSidecar(asset, j, error);
+}
+
+bool sameAssetPath(const std::filesystem::path& a, const std::filesystem::path& b)
+{
+    if (a.empty() || b.empty()) return false;
+    std::error_code ec;
+    if (std::filesystem::equivalent(a, b, ec) && !ec) return true;
+    ec.clear();
+    const std::filesystem::path ca = std::filesystem::weakly_canonical(a, ec);
+    if (ec) return a.lexically_normal() == b.lexically_normal();
+    ec.clear();
+    const std::filesystem::path cb = std::filesystem::weakly_canonical(b, ec);
+    if (ec) return a.lexically_normal() == b.lexically_normal();
+    return ca == cb;
 }
 
 bool importSidecarConflict(const std::filesystem::path& from, const std::filesystem::path& to)

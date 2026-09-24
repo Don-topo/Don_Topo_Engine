@@ -138,6 +138,25 @@ TextureImportApplyResult applyTextureImportSettings(GameObject* sceneRoot,
                                                     const TextureImportSettings& settings,
                                                     const std::function<void(GameObject&)>& rebuild);
 
+// Que ajustes de importacion ofrece un asset. El menu contextual y el modal se
+// deciden por esto, no por comprobaciones sueltas: un tipo nuevo (modelos) se
+// anade aqui.
+enum class ImportSettingsKind { None, Texture, Audio };
+ImportSettingsKind importSettingsKindFor(const std::string& ext, bool isDir);
+
+struct AudioImportApplyResult {
+    bool        ok = false;
+    std::string error;       // causa si !ok (el modal la muestra y no se cierra)
+};
+
+// Escribe los ajustes de importacion del clip (el defecto borra el sidecar) y, si
+// se pudo, llama a `refresh` con la ruta para que las voces cargadas de ese
+// fichero los reciban sin reiniciar. Si el sidecar no se puede escribir no se
+// llama a `refresh`. `refresh` nula = solo se escribe (sin audio).
+AudioImportApplyResult applyAudioImportSettings(const std::filesystem::path& asset,
+                                                const AudioImportSettings& settings,
+                                                const std::function<void(const std::string&)>& refresh);
+
 // Borra un fichero (con su .import.json) o una carpeta entera. El error del
 // sistema, si lo hay; vacio = borrado.
 std::error_code removeAssetPath(const std::filesystem::path& path, bool isDir);
@@ -266,6 +285,8 @@ private:
     // UNA textura. m_importEdit es la copia que se edita; Aplicar la escribe.
     std::filesystem::path  m_importTarget;
     TextureImportSettings  m_importEdit;
+    ImportSettingsKind     m_importKind = ImportSettingsKind::None;
+    AudioImportSettings    m_importAudioEdit;
     std::string            m_importError;
     bool                   m_openImportPopup = false;
 

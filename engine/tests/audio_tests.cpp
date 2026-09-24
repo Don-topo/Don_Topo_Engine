@@ -12,6 +12,7 @@
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Core/ImportSettings.h"
 #ifdef DT_FMOD_ENABLED
 #include <fmod.hpp>
 #endif
@@ -26,11 +27,14 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <filesystem>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -1767,6 +1771,270 @@ static void test_mute_time_and_global_pause(PhysicsManager& pm, AudioManager& am
     CHECK(!am.isAudioPaused());
 }
 
+// ── Ajustes de importacion de audio (sidecar) ────────────────────────────────
+
+// WAV PCM 16 bit generado en el test: `channels` canales, silencio, `seconds`
+// de duracion. Sirve para probar ganancia y mono sin depender de un asset.
+static void writeWav(const std::filesystem::path& p, int channels, double seconds)
+{
+    const uint32_t rate = 44100;
+    const uint32_t frames = static_cast<uint32_t>(rate * seconds);
+    const uint16_t ch = static_cast<uint16_t>(channels);
+    const uint32_t dataBytes = frames * ch * 2;
+    auto w32 = [](std::ofstream& o, uint32_t v) { o.write(reinterpret_cast<const char*>(&v), 4); };
+    auto w16 = [](std::ofstream& o, uint16_t v) { o.write(reinterpret_cast<const char*>(&v), 2); };
+    std::ofstream o(p, std::ios::binary);
+    o.write("RIFF", 4); w32(o, 36 + dataBytes); o.write("WAVE", 4);
+    o.write("fmt ", 4); w32(o, 16); w16(o, 1); w16(o, ch); w32(o, rate);
+    w32(o, rate * ch * 2); w16(o, static_cast<uint16_t>(ch * 2)); w16(o, 16);
+    o.write("data", 4); w32(o, dataBytes);
+    const std::string zeros(dataBytes, '\0');
+    o.write(zeros.data(), static_cast<std::streamsize>(zeros.size()));
+}
+
+static bool waitReady(AudioManager& am, int id)
+{
+    for (int i = 0; i < 600 && am.getSoundState(id) == AudioManager::SoundLoadState::Loading; ++i)
+    {
+        am.update(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return am.getSoundState(id) == AudioManager::SoundLoadState::Ready;
+}
+
+static std::filesystem::path audioTestDir(const char* name)
+{
+    std::error_code ec;
+    std::filesystem::path d = std::filesystem::temp_directory_path(ec) / name;
+    std::filesystem::remove_all(d, ec);
+    std::filesystem::create_directories(d, ec);
+    return d;
+}
+
+static void setGain(const std::filesystem::path& clip, float db, bool mono = false)
+{
+    AudioImportSettings s;
+    s.gainDb    = db;
+    s.forceMono = mono;
+    std::string err;
+    CHECK(saveAudioImportSettings(clip, s, &err));
+}
+
+// Sin FMOD (o sin sonido) los getters son neutros.
+static void test_import_getters_are_neutral_without_a_sound(AudioManager& am)
+{
+    CHECK(isDefault(am.getSoundImportSettings(-1)));
+    CHECK(isDefault(am.getSoundImportSettings(123456)));
+    CHECK(am.getChannelVolume(-1) < 0.0f);
+    CHECK(am.getChannelVolume(123456) < 0.0f);
+    am.refreshImportSettings("no/existe.wav");           // no-op sin sonidos, sin lanzar
+    am.refreshImportSettings("");
+}
+
+static void test_import_gain_applies_and_refreshes(AudioManager& am)
+{
+    if (!am.available()) { std::printf("SKIP test_import_gain_applies_and_refreshes (FMOD no disponible)\n"); return; }
+    const auto d = audioTestDir("dt_audio_import_gain");
+    const std::string a = (d / "a.wav").string();
+    const std::string b = (d / "b.wav").string();
+    writeWav(a, 2, 3.0);
+    writeWav(b, 2, 3.0);
+    setGain(a, -6.0f);                                   // factor 0.501187
+
+    // a como 2D y como 3D (flags distintos = dos sonidos), y b sin sidecar.
+    const int a2d = am.loadSound(a, false, true);
+    const int a3d = am.loadSound(a, true, true);
+    const int bId = am.loadSound(b, false, true);
+    if (a2d < 0 || a3d < 0 || bId < 0) { CHECK(false); return; }
+    CHECK(a2d != a3d);
+    if (!waitReady(am, a2d) || !waitReady(am, a3d) || !waitReady(am, bId)) { CHECK(false); return; }
+
+    CHECK(am.getSoundImportSettings(a2d).gainDb == -6.0f);
+    CHECK(am.getSoundImportSettings(a3d).gainDb == -6.0f);
+    CHECK(isDefault(am.getSoundImportSettings(bId)));
+
+    am.playSound(a2d, {}, 0.8f);
+    am.playSound(a3d, {}, 0.8f);
+    am.playSound(bId, {}, 0.8f);
+    CHECK(nearlyEqual(am.getChannelVolume(a2d), 0.8f * 0.501187f, 1e-3f));
+    CHECK(nearlyEqual(am.getChannelVolume(a3d), 0.8f * 0.501187f, 1e-3f));
+    CHECK(am.getChannelVolume(bId) == 0.8f);             // sin sidecar: EXACTO, como antes
+
+    // Review Focus 3: el refresco cambia los dos ids de a y NO el de b.
+    setGain(a, 6.0f);                                    // factor 1.995262
+    am.refreshImportSettings(a);
+    CHECK(am.getSoundImportSettings(a2d).gainDb == 6.0f);
+    CHECK(nearlyEqual(am.getChannelVolume(a2d), 0.8f * 1.995262f, 1e-3f));
+    CHECK(nearlyEqual(am.getChannelVolume(a3d), 0.8f * 1.995262f, 1e-3f));
+    CHECK(am.getChannelVolume(bId) == 0.8f);
+
+    // Review Focus 4: tras refrescar, un setChannelVolume del componente NO
+    // acumula la ganancia (no es volumenDelCanal x factor).
+    am.setChannelVolume(a2d, 0.5f);
+    CHECK(nearlyEqual(am.getChannelVolume(a2d), 0.5f * 1.995262f, 1e-3f));
+    am.refreshImportSettings(a);                         // refrescar otra vez con el mismo sidecar
+    CHECK(nearlyEqual(am.getChannelVolume(a2d), 0.5f * 1.995262f, 1e-3f));
+
+    // Review Focus 5: quitar el sidecar y refrescar devuelve el volumen limpio.
+    setGain(a, 0.0f);                                    // el defecto borra el fichero
+    CHECK(!std::filesystem::exists(importSidecarPath(a)));
+    am.refreshImportSettings(a);
+    CHECK(isDefault(am.getSoundImportSettings(a2d)));
+    CHECK(am.getChannelVolume(a2d) == 0.5f);
+
+    // Un path distinto o inexistente no toca nada.
+    am.refreshImportSettings((d / "otra.wav").string());
+    CHECK(am.getChannelVolume(bId) == 0.8f);
+
+    am.stopSound(a2d); am.stopSound(a3d); am.stopSound(bId);
+    am.unloadSound(a2d); am.unloadSound(a3d); am.unloadSound(bId);
+}
+
+// Review Focus 2: un slot reciclado no hereda ganancia ni volumen guardado.
+static void test_import_recycled_slot_does_not_inherit(AudioManager& am)
+{
+    if (!am.available()) { std::printf("SKIP test_import_recycled_slot_does_not_inherit (FMOD no disponible)\n"); return; }
+    const auto d = audioTestDir("dt_audio_import_recycle");
+    const std::string a = (d / "a.wav").string();
+    const std::string b = (d / "b.wav").string();
+    writeWav(a, 2, 3.0);
+    writeWav(b, 2, 3.0);
+    setGain(a, 12.0f);
+
+    const int idA = am.loadSound(a, false, true);
+    if (idA < 0 || !waitReady(am, idA)) { CHECK(false); return; }
+    am.playSound(idA, {}, 0.9f);
+    CHECK(am.getSoundImportSettings(idA).gainDb == 12.0f);
+    am.stopSound(idA);
+    am.unloadSound(idA);                                  // libera el slot
+
+    const int idB = am.loadSound(b, false, true);         // sin sidecar: reutiliza el slot de a
+    if (idB < 0 || !waitReady(am, idB)) { CHECK(false); return; }
+    CHECK(idB == idA);                                    // el test ejercita el reciclado de verdad
+    CHECK(isDefault(am.getSoundImportSettings(idB)));
+    am.playSound(idB, {}, 0.7f);
+    CHECK(am.getChannelVolume(idB) == 0.7f);
+    // refrescar b no le mete la ganancia de a.
+    am.refreshImportSettings(b);
+    CHECK(am.getChannelVolume(idB) == 0.7f);
+    am.stopSound(idB);
+    am.unloadSound(idB);
+}
+
+// Sin FMOD el getter es neutro.
+static void test_mono_getter_is_neutral_without_a_voice(AudioManager& am)
+{
+    CHECK(!am.isVoiceForcedMono(-1));
+    CHECK(!am.isVoiceForcedMono(123456));
+}
+
+static void test_import_force_mono_on_a_2d_stereo_voice(AudioManager& am)
+{
+    if (!am.available()) { std::printf("SKIP test_import_force_mono_on_a_2d_stereo_voice (FMOD no disponible)\n"); return; }
+    const auto d = audioTestDir("dt_audio_import_mono");
+    const std::string stereoMono = (d / "m.wav").string();   // estereo CON forceMono
+    const std::string stereoPlain = (d / "p.wav").string();  // estereo sin sidecar
+    const std::string oneCh = (d / "one.wav").string();      // un canal CON forceMono
+    const std::string stereo3d = (d / "s3d.wav").string();   // estereo CON forceMono, cargado 3D
+    writeWav(stereoMono, 2, 3.0);
+    writeWav(stereoPlain, 2, 3.0);
+    writeWav(oneCh, 1, 3.0);
+    writeWav(stereo3d, 2, 3.0);
+    setGain(stereoMono, 0.0f, /*mono=*/true);
+    setGain(oneCh, 0.0f, true);
+    setGain(stereo3d, 0.0f, true);
+
+    const int m  = am.loadSound(stereoMono, false, true);
+    const int p  = am.loadSound(stereoPlain, false, true);
+    const int o  = am.loadSound(oneCh, false, true);
+    const int s3 = am.loadSound(stereo3d, true, true);
+    if (m < 0 || p < 0 || o < 0 || s3 < 0) { CHECK(false); return; }
+    if (!waitReady(am, m) || !waitReady(am, p) || !waitReady(am, o) || !waitReady(am, s3)) { CHECK(false); return; }
+    CHECK(am.getSoundImportSettings(m).forceMono);
+
+    am.playSound(m, {}, 1.0f);
+    am.playSound(p, {}, 1.0f);
+    am.playSound(o, {}, 1.0f);
+    am.playSound(s3, {}, 1.0f);
+    CHECK(am.isVoiceForcedMono(m));            // estereo 2D con el ajuste: mezclada a mono
+    CHECK(!am.isVoiceForcedMono(p));           // sin ajuste: matriz de fabrica
+    CHECK(!am.isVoiceForcedMono(o));           // Review Focus 6: un canal, no-op sin crash
+    CHECK(!am.isVoiceForcedMono(s3));          // Review Focus 6: 3D, no se toca
+    CHECK(am.isSoundPlaying(o));               // y sigue sonando
+
+    // Otra reproduccion de la misma voz conserva el mono (se aplica en cada arranque).
+    am.stopSound(m);
+    am.playSound(m, {}, 1.0f);
+    CHECK(am.isVoiceForcedMono(m));
+
+    // Fix del review final: setPan de FMOD REEMPLAZA toda la matriz de mezcla, asi
+    // que con Stereo Pan != 0 el mono se perdia en silencio. Con paneo, la voz
+    // sigue siendo mono (la matriz lleva el paneo dentro).
+    am.stopSound(m);
+    am.playSound(m, {}, 1.0f, 1.0f, AudioBus::Sfx, 1.0f, 100.0f, 0.0f, /*stereoPan=*/-0.5f);
+    CHECK(am.isVoiceForcedMono(m));
+    am.stopSound(m);
+    am.playSound(m, {}, 1.0f, 1.0f, AudioBus::Sfx, 1.0f, 100.0f, 0.0f, /*stereoPan=*/0.75f);
+    CHECK(am.isVoiceForcedMono(m));
+
+    am.stopSound(m); am.stopSound(p); am.stopSound(o); am.stopSound(s3);
+    am.unloadSound(m); am.unloadSound(p); am.unloadSound(o); am.unloadSound(s3);
+}
+
+// shutdown() vacia los vectores por sonido; los de ajustes de importacion tienen
+// que vaciarse con ellos. Si no, tras shutdown()+init() el sonido nuevo vuelve a
+// ser el id 0 pero m_soundImport conserva las entradas viejas y sus ajustes.
+static void test_import_settings_do_not_survive_shutdown_and_init(AudioManager& am)
+{
+    if (!am.available()) { std::printf("SKIP test_import_settings_do_not_survive_shutdown_and_init (FMOD no disponible)\n"); return; }
+    const auto d = audioTestDir("dt_audio_import_shutdown");
+    const std::string a = (d / "a.wav").string();
+    const std::string b = (d / "b.wav").string();
+    writeWav(a, 2, 3.0);
+    writeWav(b, 2, 3.0);
+    setGain(a, 9.0f, true);
+
+    am.shutdown();
+    CHECK(am.init());
+    if (!am.available()) return;
+
+    const int idA = am.loadSound(a, false, true);
+    if (idA < 0 || !waitReady(am, idA)) { CHECK(false); return; }
+    CHECK(am.getSoundImportSettings(idA).gainDb == 9.0f);
+    am.unloadSound(idA);
+
+    am.shutdown();                                        // vuelve a vaciar todo
+    CHECK(am.init());
+    if (!am.available()) return;
+    const int idB = am.loadSound(b, false, true);         // sin sidecar: id 0 otra vez
+    if (idB < 0 || !waitReady(am, idB)) { CHECK(false); return; }
+    CHECK(idB == idA);
+    CHECK(isDefault(am.getSoundImportSettings(idB)));
+    am.playSound(idB, {}, 0.6f);
+    CHECK(am.getChannelVolume(idB) == 0.6f);
+    am.stopSound(idB);
+    am.unloadSound(idB);
+}
+
+// Politica: la ganancia se multiplica en UN sitio. Si alguien vuelve a escribir
+// ch->setVolume(volume) en un camino de voz, ese camino ignora el sidecar en
+// silencio (los one-shots no se pueden observar desde un test, por eso el grep).
+static void test_policy_gain_is_applied_only_in_voiceVolume()
+{
+    std::ifstream in("engine/src/Audio/AudioManager.cpp", std::ios::binary);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    const std::string src = ss.str();
+    CHECK(!src.empty());
+    auto countOf = [&](const std::string& needle) {
+        size_t n = 0;
+        for (size_t at = src.find(needle); at != std::string::npos; at = src.find(needle, at + needle.size())) ++n;
+        return n;
+    };
+    CHECK(countOf("setVolume(volume)") == 0);                 // ningun canal recibe el volumen a pelo
+    CHECK(countOf("voiceVolume(") >= 4);                      // definicion + 3 usos (mas el refresco)
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -1824,6 +2092,13 @@ test_output_warning_only_without_output();
     test_bus_effects_are_idempotent_and_released(am);
     test_reverb_zones(pm, am);
     test_mute_time_and_global_pause(pm, am);
+    test_import_getters_are_neutral_without_a_sound(am);
+    test_import_gain_applies_and_refreshes(am);
+    test_import_recycled_slot_does_not_inherit(am);
+    test_mono_getter_is_neutral_without_a_voice(am);
+    test_import_force_mono_on_a_2d_stereo_voice(am);
+    test_import_settings_do_not_survive_shutdown_and_init(am);
+    test_policy_gain_is_applied_only_in_voiceVolume();
 
     am.shutdown();
     pm.shutdown();
