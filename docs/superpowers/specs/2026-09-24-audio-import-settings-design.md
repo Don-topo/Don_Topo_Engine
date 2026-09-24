@@ -102,15 +102,23 @@ Fichero: `{ "version": 1, "type": "audio", "gainDb": 0.0, "forceMono": false }`.
   que no quede ningún `->setVolume(volume)` de un canal de voz fuera del helper.
 - **Mono**: al arrancar cada voz (en `playSound` y `playSoundOneShot`, antes de
   despausarla), si el sonido está marcado, `Channel::setMixMatrix` con una matriz que
-  reparte cada canal de entrada a todas las salidas a igual nivel (mezcla a mono
-  conservando la energía). Función interna `applyForceMono(channel, sound)`. Un clip
-  ya mono no cambia. En 3D, la espacialización sigue aplicándose después.
+  manda la suma de TODAS las entradas, a 1/N cada una (el pico no pasa de 1 aunque
+  vayan en fase), a las dos salidas frontales; el resto de salidas (surround, LFE)
+  queda en silencio. Función interna `applyForceMono(channel, sound)`. Un clip ya mono
+  no cambia. **Solo sonidos 2D**: en 3D el panner espacial de FMOD manda sobre la
+  matriz de mezcla y un emisor 3D con `spread = 0` ya suena como un punto, así que
+  forzar mono no aporta nada allí y podría pelear con la espacialización; el modal lo
+  dice.
 - **Cambiar ajustes en caliente**: `void AudioManager::refreshImportSettings(const
   std::string& path)`. Recorre los soundId **vivos** cuya `m_soundPaths[id]` sea esa
   ruta (misma comparación de rutas que ya usa el proyecto, `samePath`), recarga su
   sidecar y, para cada uno, reaplica el volumen a su voz viva (`ch->setVolume(
   voiceVolume(id, volumeActual))`, con el volumen actual leído del canal ÷ ganancia
-  vieja, o guardado por sonido). Los sonidos de **otras rutas** no se tocan. El mono
+  vieja, o guardado por sonido). Los sonidos de **otras rutas** no se tocan.
+  El volumen del componente se guarda **por soundId** (`m_soundVolume`): el último que
+  pidieron `playSound` o `setChannelVolume` (los one-shots no lo actualizan, porque su
+  voz no se puede alcanzar). Así el refresco reaplica `voiceVolume(id, m_soundVolume[id])`
+  sin depender de lo que valga ya el canal. El mono
   aplica desde la siguiente reproducción (igual que spread y pan, con la misma
   limitación ya documentada en `AudioClipComponent.h`).
 - **Sin sidecar todo queda igual que antes**: `gainDb = 0` → factor 1.0 exacto, sin
@@ -173,14 +181,16 @@ cierre limpio. (No se puede comprobar el sonido desde un agente.)
 
 - **Saturación**: una ganancia positiva alta en un clip ya fuerte puede clipear; FMOD
   no lo limita. Por eso el tope es +12 dB y el valor por defecto 0.
-- **`setMixMatrix` con clips de más de dos canales o ya mono**: la matriz se construye
-  con los canales reales del sonido (`Sound::getFormat` para el número de canales); si
-  no se puede leerlos (sonido aún cargando, `NONBLOCKING`) la voz no arranca de todos
-  modos (`playSound` ya sale en `FMOD_OPENSTATE_LOADING`), así que no hay ventana sin
-  datos.
+- **`setMixMatrix` con clips de más de dos canales o ya mono**: las dimensiones de la
+  matriz se leen del propio canal (`Channel::getMixMatrix` sin matriz devuelve
+  entradas y salidas); un clip de un solo canal, o cualquier fallo al leerlas, deja la
+  voz como está. `playSound` ya sale en `FMOD_OPENSTATE_LOADING`, así que no hay
+  ventana sin datos.
 - **Volumen "actual" al refrescar**: la voz viva puede haber recibido `setChannelVolume`
-  del componente; el refresco debe reaplicar `voiceVolume(id, volumenDelComponente)`,
-  no `volumenDelCanal × factorNuevo` (compondría la ganancia dos veces). El plan
-  decide de dónde sale el volumen del componente (guardarlo por sonido o pedirlo al
-  llamante) y lo cubre con test.
+  del componente; el refresco reaplica `voiceVolume(id, m_soundVolume[id])`, nunca
+  `volumenDelCanal × factorNuevo` (compondría la ganancia dos veces). Cubierto con test
+  (después de refrescar, un `setChannelVolume` no acumula la ganancia).
+- **El mono no se puede oír desde un agente**: lo que sí se comprueba automáticamente
+  es la matriz que queda en la voz (`isVoiceForcedMono`), con un WAV estéreo generado
+  por el propio test. Que suene mono lo verifica el usuario.
 - **Ampliación**: los ajustes de modelos siguen abiertos (última parte de U8).
