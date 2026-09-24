@@ -6,6 +6,7 @@
 #include <fmod_errors.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <stdexcept>
 
@@ -275,6 +276,12 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
     else if (rolloff == AudioRolloff::LinearSquare) mode |= FMOD_3D_LINEARSQUAREROLLOFF;
     FMOD::Sound* snd;
     if (SYS->createSound(path.c_str(), mode, nullptr, &snd) != FMOD_OK) return -1;
+    // Ajustes de importacion del fichero (sidecar): solo al CREAR el sonido; un
+    // acierto de cache ya devolvio antes con los suyos.
+    std::string importWarning;
+    const AudioImportSettings importSettings = loadAudioImportSettings(path, &importWarning);
+    if (!importWarning.empty())
+        std::fprintf(stderr, "[AudioImport] %s: %s\n", path.c_str(), importWarning.c_str());
     // Slot reciclado si lo hay: los ids no se reutilizaban nunca y los vectores
     // crecían una entrada por clip en CADA ciclo Play->Stop (que recrea la
     // escena entera desde el snapshot).
@@ -290,6 +297,8 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
         m_soundRefs[id]             = 1;
         m_soundKeys[id]             = key;
         m_soundHasLastPos[id]       = 0;
+        m_soundImport[id]           = importSettings;
+        m_soundVolume[id]           = 1.0f;
     }
     else
     {
@@ -301,6 +310,8 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
         m_soundKeys.push_back(key);
         m_soundLastPos.push_back(glm::vec3(0.0f));
         m_soundHasLastPos.push_back(0);
+        m_soundImport.push_back(importSettings);
+        m_soundVolume.push_back(1.0f);
         id = (int)m_sounds.size() - 1;
     }
     m_soundByKey[key] = id;
@@ -333,6 +344,8 @@ void AudioManager::unloadSound(int id)
     m_soundByKey.erase(m_soundKeys[id]);
     m_soundKeys[id].clear();
     m_soundHasLastPos[id] = 0;
+    m_soundImport[id] = AudioImportSettings{};
+    m_soundVolume[id] = 1.0f;
     m_freeSlots.push_back(id);
 #endif
 }
@@ -401,13 +414,22 @@ static FMOD::Channel* liveChannel(void* raw, void* expectedSound)
 }
 #endif
 
+#ifdef DT_FMOD_ENABLED
+float AudioManager::voiceVolume(int id, float volume) const
+{
+    if (id < 0 || id >= static_cast<int>(m_soundImport.size())) return volume;
+    return volume * audioGainLinear(m_soundImport[id].gainDb);
+}
+#endif
+
 void AudioManager::setChannelVolume(int id, float volume)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
         id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
+    m_soundVolume[id] = volume;                       // lo ultimo que pidio el componente
     if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
-        ch->setVolume(volume);
+        ch->setVolume(voiceVolume(id, volume));
 #else
     (void)id; (void)volume;
 #endif
@@ -422,6 +444,54 @@ void AudioManager::setChannelPitch(int id, float pitch)
         ch->setPitch(pitch);
 #else
     (void)id; (void)pitch;
+#endif
+}
+
+AudioImportSettings AudioManager::getSoundImportSettings(int id) const
+{
+#ifdef DT_FMOD_ENABLED
+    if (id < 0 || id >= static_cast<int>(m_soundImport.size()) || !m_sounds[id])
+        return {};
+    return m_soundImport[id];
+#else
+    (void)id;
+    return {};
+#endif
+}
+
+void AudioManager::refreshImportSettings(const std::string& path)
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system) return;
+    for (size_t i = 0; i < m_sounds.size(); ++i)
+    {
+        if (!m_sounds[i] || !sameAssetPath(m_soundPaths[i], path)) continue;
+        std::string warning;
+        m_soundImport[i] = loadAudioImportSettings(m_soundPaths[i], &warning);
+        if (!warning.empty())
+            std::fprintf(stderr, "[AudioImport] %s: %s\n", m_soundPaths[i].c_str(), warning.c_str());
+        // La voz viva se reajusta al momento con el volumen del COMPONENTE, no con
+        // el del canal. El mono aplica desde la siguiente reproduccion.
+        if (FMOD::Channel* ch = liveChannel(m_sfxChannels[i], m_sounds[i]))
+            ch->setVolume(voiceVolume(static_cast<int>(i), m_soundVolume[i]));
+    }
+#else
+    (void)path;
+#endif
+}
+
+float AudioManager::getChannelVolume(int id) const
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return -1.0f;
+    FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]);
+    float v = -1.0f;
+    if (!ch || ch->getVolume(&v) != FMOD_OK) return -1.0f;
+    return v;
+#else
+    (void)id;
+    return -1.0f;
 #endif
 }
 
@@ -479,7 +549,8 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
     if (FMOD::Channel* prev = liveChannel(m_sfxChannels[id], m_sounds[id])) prev->stop();
     m_sfxChannels[id] = ch;
 
-    ch->setVolume(volume);
+    m_soundVolume[id] = volume;
+    ch->setVolume(voiceVolume(id, volume));
     ch->setPitch(pitch);
 
     FMOD_MODE mode = 0; snd->getMode(&mode);
@@ -664,8 +735,10 @@ void AudioManager::playSoundOneShot(int id, const glm::vec3& worldPos, float vol
     if (SYS->playSound(snd, group, true, &ch) != FMOD_OK) return;
 
     // Y AQUÍ la diferencia con playSound: ni se para la voz anterior ni se
-    // guarda esta en m_sfxChannels. Es lo que permite el solapamiento.
-    ch->setVolume(volume);
+    // guarda esta en m_sfxChannels. Es lo que permite el solapamiento. La
+    // ganancia del fichero se aplica igual, pero m_soundVolume no se toca: esta
+    // voz no se puede alcanzar despues.
+    ch->setVolume(voiceVolume(id, volume));
     ch->setPitch(pitch);
 
     FMOD_MODE mode = 0; snd->getMode(&mode);
