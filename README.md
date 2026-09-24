@@ -768,8 +768,11 @@ the image as `<name>.import.json` (only when it differs from the defaults, and i
 you move, rename or delete it, and into the exported game); applying it rebuilds the materials that use
 that texture. For audio clips (`.wav/.mp3/.ogg/.flac`) it offers a gain in dB (-30 to +12) added to
 every voice of that file and a Force mono switch for 2D clips; both are saved in the same
-`<name>.import.json`, and a gain change reaches a clip that is already playing. It is also the drag
-source for models, textures and skybox folders. The
+`<name>.import.json`, and a gain change reaches a clip that is already playing. Materials can be
+saved as a reusable `.mat` asset (right-click empty space → **Create → Material**), assigned to any
+material slot by dragging it from the grid, and edited by double-clicking it; editing a shared
+`.mat` updates every object that references it, while each object's own texture/factor overrides
+still win. It is also the drag source for models, textures and skybox folders. The
 **Log Console** keeps the history of edit actions and the values they wrote. All of it is
 serialised to JSON — the whole tree, with meshes, colliders, audio, scripts, UI components and
 the Animator graph.
