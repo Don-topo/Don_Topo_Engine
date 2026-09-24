@@ -956,6 +956,32 @@ static void test_reload_after_failed_load_recaptures_correct_baseline()
 
 // Undo/redo de una asignación, con el renderer a nullptr (sin GPU): lo que se
 // prueba es el dato, que es lo único que sobrevive al ciclo.
+static void test_set_material_asset_override_creates_entry_and_applies()
+{
+    auto go = makeStaticFixture();
+    setMaterialAssetOverride(*go, 0, "assets/rojo.mat");
+    CHECK(go->materialOverrides.size() == 1);
+    CHECK(go->materialOverrides[0].matAsset == "assets/rojo.mat");
+}
+
+static void test_material_asset_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    go->setMesh(std::make_shared<Mesh>());
+    const uint64_t id = go->id;
+
+    MaterialAssetCommand cmd(scene, nullptr, "Material de 'Cubo'", id, 0, "", "assets/rojo.mat");
+    cmd.execute();
+    CHECK(scene.findById(id)->materialOverrides[0].matAsset == "assets/rojo.mat");
+
+    cmd.undo();
+    CHECK(scene.findById(id)->materialOverrides[0].matAsset.empty());
+
+    cmd.execute();   // redo
+    CHECK(scene.findById(id)->materialOverrides[0].matAsset == "assets/rojo.mat");
+}
+
 static void test_command_undo_redo_assignment(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1961,6 +1987,8 @@ static void test_no_mat_asset_is_unchanged()
 
 int main()
 {
+    test_set_material_asset_override_creates_entry_and_applies();
+    test_material_asset_command_undo_redo();
     test_mat_asset_supplies_texture_when_no_override();
     test_object_override_wins_over_mat_asset();
     test_mat_asset_with_only_one_field_leaves_the_rest_alone();
