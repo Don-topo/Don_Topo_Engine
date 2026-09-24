@@ -7,6 +7,7 @@
 #include <system_error>
 #include <vector>
 #include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Editor/Thumbnail.h"
@@ -40,7 +41,7 @@ std::vector<AssetImportOutcome> importDroppedFilesInto(
 
 // Tipo de un asset para el Content Browser: lo comparten el icono del grid y el
 // filtro por tipo, para que no puedan discrepar.
-enum class AssetKind { Folder, Model3D, Audio, Image, Font, Scene, Script, Shader, Other };
+enum class AssetKind { Folder, Model3D, Audio, Image, Font, Scene, Script, Shader, Material, Other };
 
 // ext con el punto y en cualquier combinación de mayúsculas ("" si no tiene). Una
 // carpeta es siempre Folder, aunque se llame "a.png".
@@ -137,6 +138,20 @@ TextureImportApplyResult applyTextureImportSettings(GameObject* sceneRoot,
                                                     const std::filesystem::path& asset,
                                                     const TextureImportSettings& settings,
                                                     const std::function<void(GameObject&)>& rebuild);
+
+struct MaterialAssetApplyResult {
+    bool        ok = false;
+    std::string error;
+    int         refreshed = 0;
+};
+// Escribe el .mat y reconstruye (rebuild) cada objeto de la escena que lo
+// referencie desde cualquier slot. Sin escritura, no reconstruye nada.
+MaterialAssetApplyResult applyMaterialAssetSettings(GameObject* sceneRoot, const std::filesystem::path& mat,
+                                                    const MaterialAsset& asset,
+                                                    const std::function<void(GameObject&)>& rebuild);
+// Nombre libre para un material nuevo dentro de dir, mismo patron que
+// uniqueFolderName: "Nuevo material.mat", "Nuevo material 2.mat"...
+std::string uniqueMaterialName(const std::filesystem::path& dir);
 
 // Que ajustes de importacion ofrece un asset. El menu contextual y el modal se
 // deciden por esto, no por comprobaciones sueltas: un tipo nuevo (modelos) se

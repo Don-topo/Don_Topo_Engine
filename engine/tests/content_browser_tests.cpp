@@ -5,6 +5,7 @@
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
@@ -904,8 +905,87 @@ static void test_import_settings_menu_kind()
     CHECK(importSettingsKindFor(".wav", true)   == ImportSettingsKind::None);   // una carpeta
 }
 
+static void test_classify_material_extension()
+{
+    CHECK(classifyAsset(".mat", false) == AssetKind::Material);
+    CHECK(classifyAsset(".MAT", false) == AssetKind::Material);
+    CHECK(classifyAsset(".mat", true)  == AssetKind::Folder);   // una carpeta manda
+}
+
+static void test_unique_material_name()
+{
+    std::error_code ec;
+    const fs::path d = fs::temp_directory_path(ec) / "dt_cb_unique_mat";
+    fs::remove_all(d, ec);
+    fs::create_directories(d, ec);
+    CHECK(uniqueMaterialName(d) == "Nuevo material.mat");
+    std::ofstream(d / "Nuevo material.mat") << "x";
+    CHECK(uniqueMaterialName(d) == "Nuevo material 2.mat");
+}
+
+// applyMaterialAssetSettings escribe el fichero y reconstruye SOLO a quien
+// referencia ese .mat, sea cual sea el objeto (Review Focus 2: varios usuarios).
+static void test_apply_material_asset_writes_and_refreshes_all_users()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply_mat";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    const fs::path mat = base / "x.mat";
+    std::string err;
+    CHECK(saveMaterialAsset(mat, MaterialAsset{}, &err));
+
+    GameObject root("root");
+    GameObject* a = root.addChild("A");
+    GameObject* b = root.addChild("B");
+    GameObject* c = root.addChild("C");   // no usa el .mat
+    a->setMesh(std::make_shared<Mesh>());
+    b->setMesh(std::make_shared<Mesh>());
+    c->setMesh(std::make_shared<Mesh>());
+    MaterialOverride ovA; ovA.matAsset = mat.string();
+    a->materialOverrides = {ovA};
+    MaterialOverride ovB; ovB.matAsset = mat.string();
+    b->materialOverrides = {ovB};
+
+    std::vector<GameObject*> rebuilt;
+    const auto rebuild = [&](GameObject& go) { rebuilt.push_back(&go); };
+
+    MaterialAsset s; s.roughness = 0.3f;
+    const MaterialAssetApplyResult r = applyMaterialAssetSettings(&root, mat, s, rebuild);
+    CHECK(r.ok);
+    CHECK(r.error.empty());
+    CHECK(r.refreshed == 2);
+    CHECK(rebuilt.size() == 2);
+    CHECK((rebuilt[0] == a && rebuilt[1] == b) || (rebuilt[0] == b && rebuilt[1] == a));
+    CHECK(loadMaterialAsset(mat) == s);
+    CHECK(a->getMesh()->material.roughness == 0.3f);
+    CHECK(c->getMesh()->material.roughness == 0.5f);   // el defecto de Material, sin tocar
+}
+
+// Review Focus (escritura): un fallo de escritura no reconstruye nada.
+static void test_apply_material_asset_write_failure_rebuilds_nothing()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply_mat_fail";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    GameObject root("root");
+    root.addChild("A");
+    int calls = 0;
+    const MaterialAssetApplyResult r = applyMaterialAssetSettings(
+        &root, base / "no_existe_carpeta" / "x.mat", MaterialAsset{}, [&](GameObject&) { ++calls; });
+    CHECK(!r.ok);
+    CHECK(!r.error.empty());
+    CHECK(r.refreshed == 0);
+    CHECK(calls == 0);
+}
+
 int main()
 {
+    test_classify_material_extension();
+    test_unique_material_name();
+    test_apply_material_asset_writes_and_refreshes_all_users();
+    test_apply_material_asset_write_failure_rebuilds_nothing();
     test_apply_audio_writes_sidecar_and_refreshes_once();
     test_apply_audio_write_failure_does_not_refresh();
     test_apply_audio_without_audio_manager_still_writes();

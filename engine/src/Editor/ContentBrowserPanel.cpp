@@ -226,6 +226,7 @@ AssetKind classifyAsset(const std::string& ext, bool isDir)
     if (e == ".json")                                                         return AssetKind::Scene;
     if (e == ".lua")                                                          return AssetKind::Script;
     if (e == ".spv")                                                          return AssetKind::Shader;
+    if (e == ".mat")                                                          return AssetKind::Material;
     return AssetKind::Other;
 }
 
@@ -470,6 +471,20 @@ std::string uniqueFolderName(const std::filesystem::path& dir)
     }
 }
 
+std::string uniqueMaterialName(const std::filesystem::path& dir)
+{
+    const std::string base = "Nuevo material";
+    std::error_code ec;
+    if (!std::filesystem::exists(dir / (base + ".mat"), ec))
+        return base + ".mat";
+    for (int n = 2; ; ++n)
+    {
+        const std::string candidate = base + " " + std::to_string(n) + ".mat";
+        if (!std::filesystem::exists(dir / candidate, ec))
+            return candidate;
+    }
+}
+
 std::vector<AssetImportOutcome> importDroppedFilesInto(
     const std::vector<DroppedFile>& dropped,
     float rectX, float rectY, float rectW, float rectH,
@@ -607,6 +622,30 @@ TextureImportApplyResult applyTextureImportSettings(GameObject* sceneRoot,
             return !field.empty() && samePath(field, asset);
         };
         if (!go->hasMesh() || !tocaAlgunMaterial(go, coincide)) return;
+        rebuild(*go);
+        ++r.refreshed;
+    });
+    return r;
+}
+
+MaterialAssetApplyResult applyMaterialAssetSettings(GameObject* sceneRoot, const std::filesystem::path& mat,
+                                                    const MaterialAsset& asset,
+                                                    const std::function<void(GameObject&)>& rebuild)
+{
+    MaterialAssetApplyResult r;
+    if (!saveMaterialAsset(mat, asset, &r.error))
+        return r;                                    // nada reconstruido si no se pudo escribir
+    r.ok = true;
+    if (!sceneRoot || !rebuild) return r;
+
+    sceneRoot->traverse([&](GameObject* go)
+    {
+        if (!go->hasMesh()) return;
+        bool usaEsteMat = false;
+        for (const MaterialOverride& ov : go->materialOverrides)
+            if (!ov.matAsset.empty() && samePath(ov.matAsset, mat)) { usaEsteMat = true; break; }
+        if (!usaEsteMat) return;
+        applyMaterialOverrides(*go);
         rebuild(*go);
         ++r.refreshed;
     });
@@ -1173,7 +1212,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 {"3D", AssetKind::Model3D},        {"Audio", AssetKind::Audio},
                 {"Imagen", AssetKind::Image},      {"Fuente", AssetKind::Font},
                 {"Escena", AssetKind::Scene},      {"Script", AssetKind::Script},
-                {"Shader", AssetKind::Shader},     {"Otros", AssetKind::Other},
+                {"Shader", AssetKind::Shader},     {"Material", AssetKind::Material},
+                {"Otros", AssetKind::Other},
             };
             ImGui::SetNextItemWidth(std::max(80.0f, paneW - 140.0f));
             ImGui::InputTextWithHint("##AssetFilterText", "Buscar por nombre...",
@@ -1230,6 +1270,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             case AssetKind::Scene:   btnColor = ImVec4(0.20f, 0.65f, 0.65f, 1.0f); label = "SCN"; break;
             case AssetKind::Script:  btnColor = ImVec4(0.30f, 0.40f, 0.85f, 1.0f); label = "LUA"; break;
             case AssetKind::Shader:  btnColor = ImVec4(0.80f, 0.35f, 0.10f, 1.0f); label = "SPV"; break;
+            case AssetKind::Material: btnColor = ImVec4(0.75f, 0.55f, 0.20f, 1.0f); label = "MAT"; break;
             default:                 btnColor = ImVec4(0.40f, 0.40f, 0.40f, 1.0f); label = "..."; break;
             }
 
@@ -1427,22 +1468,42 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         if (ImGui::BeginPopupContextWindow("##AssetPaneContext",
                 ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
         {
-            if (ImGui::MenuItem("Create Folder"))
+            if (ImGui::BeginMenu("Create"))
             {
-                const std::filesystem::path parent(m_currentDir);
-                const std::filesystem::path created = parent / uniqueFolderName(parent);
-                std::error_code mkEc;
-                std::filesystem::create_directory(created, mkEc);
-                if (mkEc)
+                if (ImGui::MenuItem("Folder"))
                 {
-                    ctx.pushLog("No se pudo crear la carpeta: " + mkEc.message());
+                    const std::filesystem::path parent(m_currentDir);
+                    const std::filesystem::path created = parent / uniqueFolderName(parent);
+                    std::error_code mkEc;
+                    std::filesystem::create_directory(created, mkEc);
+                    if (mkEc)
+                    {
+                        ctx.pushLog("No se pudo crear la carpeta: " + mkEc.message());
+                    }
+                    else
+                    {
+                        ctx.pushLog("Carpeta creada: " + created.filename().string());
+                        m_scanned = false;
+                        beginAssetRename(created, /*isDir=*/true);
+                    }
                 }
-                else
+                if (ImGui::MenuItem("Material"))
                 {
-                    ctx.pushLog("Carpeta creada: " + created.filename().string());
-                    m_scanned = false;
-                    beginAssetRename(created, /*isDir=*/true);
+                    const std::filesystem::path parent(m_currentDir);
+                    const std::filesystem::path created = parent / uniqueMaterialName(parent);
+                    std::string saveErr;
+                    if (!saveMaterialAsset(created, MaterialAsset{}, &saveErr))
+                    {
+                        ctx.pushLog("No se pudo crear el material: " + saveErr);
+                    }
+                    else
+                    {
+                        ctx.pushLog("Material creado: " + created.filename().string());
+                        m_scanned = false;
+                        beginAssetRename(created, /*isDir=*/false);
+                    }
                 }
+                ImGui::EndMenu();
             }
             ImGui::EndPopup();
         }
