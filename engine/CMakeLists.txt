@@ -40,6 +40,7 @@ add_library(DonTopoCore STATIC
     src/Core/RootMotionApply.cpp
     src/Core/JobSystem.cpp
     src/Core/ImportSettings.cpp
+    src/Core/MaterialAsset.cpp
     src/Core/Scene.cpp
     src/Files/FileManager.cpp
     src/Audio/AudioManager.cpp
