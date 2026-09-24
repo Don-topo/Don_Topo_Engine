@@ -8,9 +8,12 @@
 #include <vector>
 #include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Core/MaterialAsset.h"
+#include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Editor/Thumbnail.h"
+
+namespace IGFD { class FileDialog; }
 
 namespace DonTopo {
 
@@ -218,6 +221,12 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
 // escena para desengancharlas antes de borrar/renombrar en disco.
 class ContentBrowserPanel {
 public:
+    // Fuera de linea a proposito: el destructor necesita el tipo completo de
+    // IGFD::FileDialog (unique_ptr<T> incompleto), y este header solo lo
+    // forward-declara. Mismo patron que PropertiesPanel.
+    ContentBrowserPanel();
+    ~ContentBrowserPanel();
+
     void draw(EditorContext& ctx, GameObject* sceneRoot);
     bool* GetOpenPtr() { return &m_open; }
 
@@ -304,6 +313,15 @@ private:
     AudioImportSettings    m_importAudioEdit;
     std::string            m_importError;
     bool                   m_openImportPopup = false;
+
+    // Edicion de un .mat, disparada por doble clic en el grid.
+    std::filesystem::path m_matAssetTarget;
+    MaterialAsset          m_matAssetEdit;
+    std::string            m_matAssetError;
+    bool                   m_openMatAssetPopup = false;
+    bool                   m_matAssetDlgOpen     = false;
+    DonTopo::MaterialTextureSlot m_matAssetDlgSlot = DonTopo::MaterialTextureSlot::Albedo;
+    std::unique_ptr<IGFD::FileDialog> m_matAssetFileDialog;
 
     // Asset delete — popup modal disparado por right-click > Delete.
     std::vector<std::pair<std::filesystem::path, bool>> m_assetDeleteTargets;

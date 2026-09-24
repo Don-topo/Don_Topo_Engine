@@ -10,6 +10,7 @@
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include <imgui.h>
+#include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
@@ -173,6 +174,12 @@ bool pointInsideRect(float px, float py, float rectX, float rectY, float rectW, 
 } // namespace
 
 namespace DonTopo {
+
+ContentBrowserPanel::ContentBrowserPanel()  = default;
+// Fuera de linea a proposito: el unique_ptr<IGFD::FileDialog> solo necesita el
+// tipo completo AQUI, donde ImGuiFileDialog.h ya esta incluido — mismo patron
+// que PropertiesPanel::~PropertiesPanel().
+ContentBrowserPanel::~ContentBrowserPanel() = default;
 
 std::string assetIconButtonLabel(const char* text, bool hasThumbnail)
 {
@@ -1368,6 +1375,15 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 }
             }
 
+            if (!isDir && ext == ".mat" && ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                m_matAssetTarget = path;
+                m_matAssetEdit   = loadMaterialAsset(path);
+                m_matAssetError.clear();
+                m_openMatAssetPopup = true;
+            }
+
             // Ficheros y CARPETAS se arrastran con payloads DISTINTOS a
             // proposito: las 14 zonas de drop que ya existen esperan un fichero
             // de una extension concreta, y con un tipo aparte ninguna acepta una
@@ -1756,6 +1772,117 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
+        }
+
+        if (m_openMatAssetPopup)
+        {
+            if (!m_matAssetFileDialog) m_matAssetFileDialog = std::make_unique<IGFD::FileDialog>();
+            ImGui::OpenPopup("Material");
+            m_openMatAssetPopup = false;
+        }
+        if (ImGui::BeginPopupModal("Material", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("%s", m_matAssetTarget.filename().string().c_str());
+            ImGui::Separator();
+
+            struct MatSlot { const char* nombre; DonTopo::MaterialTextureSlot slot; std::string* dest; };
+            const MatSlot slots[3] = {
+                { "Albedo",             DonTopo::MaterialTextureSlot::Albedo, &m_matAssetEdit.albedo },
+                { "Normal Map",         DonTopo::MaterialTextureSlot::Normal, &m_matAssetEdit.normal },
+                { "Metallic/Roughness", DonTopo::MaterialTextureSlot::Orm,    &m_matAssetEdit.orm    },
+            };
+            for (const MatSlot& s : slots)
+            {
+                ImGui::PushID(s.nombre);
+                ImGui::Text("%s: %s", s.nombre,
+                            s.dest->empty() ? "Heredar del modelo"
+                                            : std::filesystem::path(*s.dest).filename().string().c_str());
+                if (ImGui::Button("Browse..."))
+                {
+                    m_matAssetDlgSlot = s.slot;
+                    m_matAssetDlgOpen = true;
+                    IGFD::FileDialogConfig cfg;
+                    cfg.path = "assets";
+                    m_matAssetFileDialog->OpenDialog("PickMatTextureDlg", "Choose image",
+                                                     ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Clear")) s.dest->clear();
+                ImGui::BeginChild((std::string("##MatDrop") + s.nombre).c_str(), ImVec2(0, 30), true);
+                ImGui::TextDisabled("Drop image here");
+                if (ImGui::BeginDragDropTarget())
+                {
+                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                        *s.dest = std::string(static_cast<const char*>(payload->Data));
+                    ImGui::EndDragDropTarget();
+                }
+                ImGui::EndChild();
+                ImGui::PopID();
+            }
+
+            bool heredaMetallic = m_matAssetEdit.metallic < 0.0f;
+            if (ImGui::Checkbox("Heredar Metallic", &heredaMetallic))
+                m_matAssetEdit.metallic = heredaMetallic ? -1.0f : 0.5f;
+            if (!heredaMetallic)
+                ImGui::SliderFloat("Metallic", &m_matAssetEdit.metallic, 0.0f, 1.0f, "%.2f");
+
+            bool heredaRoughness = m_matAssetEdit.roughness < 0.0f;
+            if (ImGui::Checkbox("Heredar Roughness", &heredaRoughness))
+                m_matAssetEdit.roughness = heredaRoughness ? -1.0f : 0.5f;
+            if (!heredaRoughness)
+                ImGui::SliderFloat("Roughness", &m_matAssetEdit.roughness, 0.0f, 1.0f, "%.2f");
+
+            if (!m_matAssetError.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_matAssetError.c_str());
+            ImGui::Separator();
+
+            const bool matApply  = ImGui::Button("Aplicar");
+            ImGui::SameLine();
+            const bool matCancel = ImGui::Button("Cancelar");
+            if (matApply)
+            {
+                const MaterialAssetApplyResult r = applyMaterialAssetSettings(
+                    sceneRoot, m_matAssetTarget, m_matAssetEdit,
+                    [&ctx](GameObject& go)
+                    {
+                        if (!ctx.renderer) return;
+                        if (const SkinnedMesh* sm = go.getSkinnedMesh(); sm && go.skinnedRenderIndex >= 0)
+                            ctx.renderer->rebuildSkinnedMesh(go.skinnedRenderIndex, *sm);
+                        else if (go.staticRenderIndex >= 0)
+                            ctx.renderer->rebuildStaticMesh(go.staticRenderIndex, *go.getMesh());
+                    });
+                if (r.ok)
+                {
+                    ctx.pushLog("Material aplicado: " + m_matAssetTarget.filename().string() +
+                                " (" + std::to_string(r.refreshed) + " objeto(s) actualizados)");
+                    ImGui::CloseCurrentPopup();
+                }
+                else
+                {
+                    m_matAssetError = r.error;
+                }
+            }
+            else if (matCancel)
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        if (m_matAssetDlgOpen && m_matAssetFileDialog->Display("PickMatTextureDlg"))
+        {
+            if (m_matAssetFileDialog->IsOk())
+            {
+                const std::string picked = m_matAssetFileDialog->GetFilePathName();
+                switch (m_matAssetDlgSlot)
+                {
+                    case DonTopo::MaterialTextureSlot::Albedo: m_matAssetEdit.albedo = picked; break;
+                    case DonTopo::MaterialTextureSlot::Normal: m_matAssetEdit.normal = picked; break;
+                    case DonTopo::MaterialTextureSlot::Orm:    m_matAssetEdit.orm    = picked; break;
+                }
+            }
+            m_matAssetFileDialog->Close();
+            m_matAssetDlgOpen = false;
         }
     }
     ImGui::EndChild();
