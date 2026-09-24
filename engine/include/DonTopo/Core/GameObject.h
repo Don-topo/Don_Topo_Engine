@@ -97,6 +97,13 @@ namespace DonTopo
         float       baseMetallic  = 0.0f;
         float       baseRoughness = 0.0f;
         bool        baseMetallicTaken = false, baseRoughnessTaken = false;
+
+        // Ruta de un .mat (Core/MaterialAsset) del que este slot toma valores
+        // cuando el objeto no trae su propia override para ese campo. "" = sin
+        // material asset. Vive aqui y no en Material por el mismo motivo que
+        // las tres texturas: Material no distingue "esto lo puso el modelo" de
+        // "esto lo puso el usuario", y sin esa distincion no hay Clear posible.
+        std::string matAsset;
     };
 
     class GameObject

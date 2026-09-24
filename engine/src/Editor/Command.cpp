@@ -741,6 +741,48 @@ void MaterialTextureCommand::apply(const std::string& path)
         m_renderer->rebuildStaticMesh(go->staticRenderIndex, *go->getMesh());
 }
 
+void setMaterialAssetOverride(GameObject& go, int materialIndex, const std::string& matAssetPath)
+{
+    MaterialOverride* ov = nullptr;
+    for (auto& candidato : go.materialOverrides)
+        if (candidato.index == materialIndex) { ov = &candidato; break; }
+    if (!ov)
+    {
+        MaterialOverride nuevo;
+        nuevo.index = materialIndex;
+        go.materialOverrides.push_back(nuevo);
+        ov = &go.materialOverrides.back();
+    }
+    ov->matAsset = matAssetPath;
+    applyMaterialOverrides(go);
+}
+
+MaterialAssetCommand::MaterialAssetCommand(Scene& scene, EditorRenderer* renderer, std::string label,
+                                           uint64_t id, int materialIndex,
+                                           std::string before, std::string after)
+    : m_scene(scene), m_renderer(renderer), m_label(std::move(label)), m_id(id),
+      m_materialIndex(materialIndex), m_before(std::move(before)), m_after(std::move(after)) {}
+
+void MaterialAssetCommand::execute() { apply(m_after); }
+void MaterialAssetCommand::undo()    { apply(m_before); }
+
+void MaterialAssetCommand::apply(const std::string& matAssetPath)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go || !go->hasMesh()) return;
+
+    const std::vector<const Material*> mats = materialsOfMesh(*go);
+    if (m_materialIndex < 0 || m_materialIndex >= (int)mats.size()) return;
+
+    setMaterialAssetOverride(*go, m_materialIndex, matAssetPath);
+
+    if (!m_renderer) return;
+    if (const SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
+        m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
+    else if (go->staticRenderIndex >= 0)
+        m_renderer->rebuildStaticMesh(go->staticRenderIndex, *go->getMesh());
+}
+
 void setMaterialFactorOverride(GameObject& go, int materialIndex,
                                 MaterialFactorSlot slot, float value)
 {

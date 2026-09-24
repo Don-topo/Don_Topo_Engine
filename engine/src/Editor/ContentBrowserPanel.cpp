@@ -10,6 +10,7 @@
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include <imgui.h>
+#include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
@@ -174,6 +175,12 @@ bool pointInsideRect(float px, float py, float rectX, float rectY, float rectW, 
 
 namespace DonTopo {
 
+ContentBrowserPanel::ContentBrowserPanel()  = default;
+// Fuera de linea a proposito: el unique_ptr<IGFD::FileDialog> solo necesita el
+// tipo completo AQUI, donde ImGuiFileDialog.h ya esta incluido — mismo patron
+// que PropertiesPanel::~PropertiesPanel().
+ContentBrowserPanel::~ContentBrowserPanel() = default;
+
 std::string assetIconButtonLabel(const char* text, bool hasThumbnail)
 {
     // "###" fija el id: ImGui hashea la etiqueta entera, y sin esto el boton
@@ -226,7 +233,27 @@ AssetKind classifyAsset(const std::string& ext, bool isDir)
     if (e == ".json")                                                         return AssetKind::Scene;
     if (e == ".lua")                                                          return AssetKind::Script;
     if (e == ".spv")                                                          return AssetKind::Shader;
+    if (e == ".mat")                                                          return AssetKind::Material;
     return AssetKind::Other;
+}
+
+bool isAssetDraggable(const std::string& ext, bool isDir, bool inMultiSelection)
+{
+    if (isDir || inMultiSelection || isImportableExtension(ext)) return true;
+    return classifyAsset(ext, false) == AssetKind::Material;
+}
+
+std::optional<std::filesystem::path> acceptOrImportMatTexture(const ProjectContext* project,
+                                                               const std::filesystem::path& path)
+{
+    if (!project || !project->valid() || project->contains(path))
+        return path;
+    const std::string ext = path.extension().string();
+    if (!isImportableExtension(ext)) return std::nullopt;
+    const std::filesystem::path destDir = importedAssetDestDir(project->root(), ext);
+    const AssetImportOutcome outcome = importExternalAsset(path, destDir);
+    if (outcome.result != AssetImportResult::Copied) return std::nullopt;
+    return outcome.destPath;
 }
 
 bool assetMatchesFilter(const std::string& name, AssetKind kind,
@@ -375,10 +402,43 @@ MoveOutcome moveAsset(const std::filesystem::path& src, const std::filesystem::p
     if (!isDir && importSidecarConflict(src, dest))
         return { MoveResult::RejectedNameConflict, {}, "" };
 
+    // Las rutas de textura de un .mat se guardan RELATIVAS A SU PROPIA
+    // CARPETA (MaterialAsset.cpp): mover el fichero (o una carpeta que
+    // contenga alguno) cambia esa carpeta, y sin reescribirlas quedarían
+    // resueltas contra la carpeta nueva en vez de la vieja. Se lee el
+    // contenido (ya resuelto a absoluto en memoria) ANTES de mover, mientras
+    // la ruta relativa todavía resuelve contra la carpeta correcta.
+    std::vector<std::pair<std::filesystem::path, MaterialAsset>> matContents;
+    if (!isDir)
+    {
+        if (lowerAscii(src.extension().string()) == ".mat")
+            matContents.push_back({ dest, loadMaterialAsset(src) });
+    }
+    else
+    {
+        std::error_code walkEc;
+        for (auto it = std::filesystem::recursive_directory_iterator(src, walkEc);
+             !walkEc && it != std::filesystem::recursive_directory_iterator(); it.increment(walkEc))
+        {
+            if (walkEc || !it->is_regular_file(walkEc)) continue;
+            if (lowerAscii(it->path().extension().string()) != ".mat") continue;
+            std::error_code relEc;
+            const std::filesystem::path rel = std::filesystem::relative(it->path(), src, relEc);
+            if (relEc) continue;
+            matContents.push_back({ dest / rel, loadMaterialAsset(it->path()) });
+        }
+    }
+
     ec.clear();
     std::filesystem::rename(src, dest, ec);
     if (ec)
         return { MoveResult::RejectedFailed, {}, ec.message() };
+
+    // saveMaterialAsset reescribe cada ruta relativa a la carpeta NUEVA del
+    // .mat, con el mismo valor absoluto de antes: la textura sigue
+    // encontrándose aunque el .mat haya cambiado de sitio.
+    for (const auto& [matDest, asset] : matContents)
+        saveMaterialAsset(matDest, asset);
 
     if (!isDir)
     {
@@ -465,6 +525,20 @@ std::string uniqueFolderName(const std::filesystem::path& dir)
     for (int n = 2; ; ++n)
     {
         const std::string candidate = base + " " + std::to_string(n);
+        if (!std::filesystem::exists(dir / candidate, ec))
+            return candidate;
+    }
+}
+
+std::string uniqueMaterialName(const std::filesystem::path& dir)
+{
+    const std::string base = "Nuevo material";
+    std::error_code ec;
+    if (!std::filesystem::exists(dir / (base + ".mat"), ec))
+        return base + ".mat";
+    for (int n = 2; ; ++n)
+    {
+        const std::string candidate = base + " " + std::to_string(n) + ".mat";
         if (!std::filesystem::exists(dir / candidate, ec))
             return candidate;
     }
@@ -574,6 +648,7 @@ void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
                 updateField(ov.baseAlbedo);
                 updateField(ov.baseNormal);
                 updateField(ov.baseOrm);
+                updateField(ov.matAsset);
             }
         }
         if (go->hasAudioClip())
@@ -607,6 +682,30 @@ TextureImportApplyResult applyTextureImportSettings(GameObject* sceneRoot,
             return !field.empty() && samePath(field, asset);
         };
         if (!go->hasMesh() || !tocaAlgunMaterial(go, coincide)) return;
+        rebuild(*go);
+        ++r.refreshed;
+    });
+    return r;
+}
+
+MaterialAssetApplyResult applyMaterialAssetSettings(GameObject* sceneRoot, const std::filesystem::path& mat,
+                                                    const MaterialAsset& asset,
+                                                    const std::function<void(GameObject&)>& rebuild)
+{
+    MaterialAssetApplyResult r;
+    if (!saveMaterialAsset(mat, asset, &r.error))
+        return r;                                    // nada reconstruido si no se pudo escribir
+    r.ok = true;
+    if (!sceneRoot || !rebuild) return r;
+
+    sceneRoot->traverse([&](GameObject* go)
+    {
+        if (!go->hasMesh()) return;
+        bool usaEsteMat = false;
+        for (const MaterialOverride& ov : go->materialOverrides)
+            if (!ov.matAsset.empty() && samePath(ov.matAsset, mat)) { usaEsteMat = true; break; }
+        if (!usaEsteMat) return;
+        applyMaterialOverrides(*go);
         rebuild(*go);
         ++r.refreshed;
     });
@@ -654,6 +753,8 @@ int countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& pat
             if (matches(mat->texturePath) || matches(mat->normalMapPath) ||
                 matches(mat->metallicRoughnessPath))
                 textureMatches = true;
+        for (const MaterialOverride& ov : go->materialOverrides)
+            if (matches(ov.matAsset)) textureMatches = true;
 
         bool meshMatches = go->hasMesh() &&
             (matches(go->getMesh()->sourcePath) || textureMatches);
@@ -751,6 +852,15 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                 // ya no está, y el flag *Taken se deja EN ALTO a propósito, que
                 // es lo que hace que un Clear posterior devuelva el slot a
                 // vacío en vez de resucitar la ruta muerta.
+                // A diferencia de albedo/normal/orm, que quedan vacíos y el
+                // material solo vuelve al baseline en la SIGUIENTE
+                // reaplicación (cualquier otra edición), matAsset resuelto vía
+                // applyMaterialOverrides ya escribió el valor del .mat en el
+                // Material: si se deja tal cual, el objeto se ve (y se exporta,
+                // hasta el siguiente Save/Load) con la última textura del .mat
+                // borrado. Por eso aquí SÍ se reaplica y reconstruye de
+                // inmediato, en vez de esperar a la próxima edición.
+                bool matAssetTaken = false;
                 for (MaterialOverride& ov : go->materialOverrides)
                 {
                     if (matches(ov.albedo)) ov.albedo.clear();
@@ -759,6 +869,18 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                     if (matches(ov.baseAlbedo)) ov.baseAlbedo.clear();
                     if (matches(ov.baseNormal)) ov.baseNormal.clear();
                     if (matches(ov.baseOrm))    ov.baseOrm.clear();
+                    if (matches(ov.matAsset))   { ov.matAsset.clear(); matAssetTaken = true; }
+                }
+                if (matAssetTaken)
+                {
+                    applyMaterialOverrides(*go);
+                    if (ctx.renderer)
+                    {
+                        if (const SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
+                            ctx.renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
+                        else if (go->staticRenderIndex >= 0)
+                            ctx.renderer->rebuildStaticMesh(go->staticRenderIndex, *go->getMesh());
+                    }
                 }
             }
         }
@@ -1173,7 +1295,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 {"3D", AssetKind::Model3D},        {"Audio", AssetKind::Audio},
                 {"Imagen", AssetKind::Image},      {"Fuente", AssetKind::Font},
                 {"Escena", AssetKind::Scene},      {"Script", AssetKind::Script},
-                {"Shader", AssetKind::Shader},     {"Otros", AssetKind::Other},
+                {"Shader", AssetKind::Shader},     {"Material", AssetKind::Material},
+                {"Otros", AssetKind::Other},
             };
             ImGui::SetNextItemWidth(std::max(80.0f, paneW - 140.0f));
             ImGui::InputTextWithHint("##AssetFilterText", "Buscar por nombre...",
@@ -1230,6 +1353,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             case AssetKind::Scene:   btnColor = ImVec4(0.20f, 0.65f, 0.65f, 1.0f); label = "SCN"; break;
             case AssetKind::Script:  btnColor = ImVec4(0.30f, 0.40f, 0.85f, 1.0f); label = "LUA"; break;
             case AssetKind::Shader:  btnColor = ImVec4(0.80f, 0.35f, 0.10f, 1.0f); label = "SPV"; break;
+            case AssetKind::Material: btnColor = ImVec4(0.75f, 0.55f, 0.20f, 1.0f); label = "MAT"; break;
             default:                 btnColor = ImVec4(0.40f, 0.40f, 0.40f, 1.0f); label = "..."; break;
             }
 
@@ -1327,6 +1451,15 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 }
             }
 
+            if (!isDir && ext == ".mat" && ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                m_matAssetTarget = path;
+                m_matAssetEdit   = loadMaterialAsset(path);
+                m_matAssetError.clear();
+                m_openMatAssetPopup = true;
+            }
+
             // Ficheros y CARPETAS se arrastran con payloads DISTINTOS a
             // proposito: las 14 zonas de drop que ya existen esperan un fichero
             // de una extension concreta, y con un tipo aparte ninguna acepta una
@@ -1335,7 +1468,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             // un payload propio aunque alguno no sea "arrastrable" suelto: mover
             // no depende de qué zonas de drop sepan aceptar el tipo.
             const bool inMultiSelection = m_selection.items.size() > 1 && m_selection.contains(path);
-            const bool arrastrable = isDir || isImportableExtension(ext) || inMultiSelection;
+            const bool arrastrable = isAssetDraggable(ext, isDir, inMultiSelection);
             if (arrastrable && ImGui::BeginDragDropSource())
             {
                 // Arrastrar algo que no estaba seleccionado lo convierte en la
@@ -1427,22 +1560,42 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         if (ImGui::BeginPopupContextWindow("##AssetPaneContext",
                 ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
         {
-            if (ImGui::MenuItem("Create Folder"))
+            if (ImGui::BeginMenu("Create"))
             {
-                const std::filesystem::path parent(m_currentDir);
-                const std::filesystem::path created = parent / uniqueFolderName(parent);
-                std::error_code mkEc;
-                std::filesystem::create_directory(created, mkEc);
-                if (mkEc)
+                if (ImGui::MenuItem("Folder"))
                 {
-                    ctx.pushLog("No se pudo crear la carpeta: " + mkEc.message());
+                    const std::filesystem::path parent(m_currentDir);
+                    const std::filesystem::path created = parent / uniqueFolderName(parent);
+                    std::error_code mkEc;
+                    std::filesystem::create_directory(created, mkEc);
+                    if (mkEc)
+                    {
+                        ctx.pushLog("No se pudo crear la carpeta: " + mkEc.message());
+                    }
+                    else
+                    {
+                        ctx.pushLog("Carpeta creada: " + created.filename().string());
+                        m_scanned = false;
+                        beginAssetRename(created, /*isDir=*/true);
+                    }
                 }
-                else
+                if (ImGui::MenuItem("Material"))
                 {
-                    ctx.pushLog("Carpeta creada: " + created.filename().string());
-                    m_scanned = false;
-                    beginAssetRename(created, /*isDir=*/true);
+                    const std::filesystem::path parent(m_currentDir);
+                    const std::filesystem::path created = parent / uniqueMaterialName(parent);
+                    std::string saveErr;
+                    if (!saveMaterialAsset(created, MaterialAsset{}, &saveErr))
+                    {
+                        ctx.pushLog("No se pudo crear el material: " + saveErr);
+                    }
+                    else
+                    {
+                        ctx.pushLog("Material creado: " + created.filename().string());
+                        m_scanned = false;
+                        beginAssetRename(created, /*isDir=*/false);
+                    }
                 }
+                ImGui::EndMenu();
             }
             ImGui::EndPopup();
         }
@@ -1695,6 +1848,139 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
+        }
+
+        if (m_openMatAssetPopup)
+        {
+            if (!m_matAssetFileDialog) m_matAssetFileDialog = std::make_unique<IGFD::FileDialog>();
+            ImGui::OpenPopup("Material");
+            m_openMatAssetPopup = false;
+        }
+        if (ImGui::BeginPopupModal("Material", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("%s", m_matAssetTarget.filename().string().c_str());
+            ImGui::Separator();
+
+            struct MatSlot { const char* nombre; DonTopo::MaterialTextureSlot slot; std::string* dest; };
+            const MatSlot slots[3] = {
+                { "Albedo",             DonTopo::MaterialTextureSlot::Albedo, &m_matAssetEdit.albedo },
+                { "Normal Map",         DonTopo::MaterialTextureSlot::Normal, &m_matAssetEdit.normal },
+                { "Metallic/Roughness", DonTopo::MaterialTextureSlot::Orm,    &m_matAssetEdit.orm    },
+            };
+            for (const MatSlot& s : slots)
+            {
+                ImGui::PushID(s.nombre);
+                ImGui::Text("%s: %s", s.nombre,
+                            s.dest->empty() ? "Heredar del modelo"
+                                            : std::filesystem::path(*s.dest).filename().string().c_str());
+                if (ImGui::Button("Browse..."))
+                {
+                    m_matAssetDlgSlot = s.slot;
+                    m_matAssetDlgOpen = true;
+                    IGFD::FileDialogConfig cfg;
+                    cfg.path  = "assets";
+                    // Modal: sin esto, el diálogo se dibuja detrás del modal
+                    // "Material" (que ya está abierto) y ImGui bloquea el
+                    // input a cualquier ventana que no forme parte de la pila
+                    // de modales — el diálogo saldría visible pero no
+                    // clicable. Ver ImGuiFileDialogFlags_Modal.
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    m_matAssetFileDialog->OpenDialog("PickMatTextureDlg", "Choose image",
+                                                     ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Clear")) s.dest->clear();
+                ImGui::BeginChild((std::string("##MatDrop") + s.nombre).c_str(), ImVec2(0, 30), true);
+                ImGui::TextDisabled("Drop image here");
+                if (ImGui::BeginDragDropTarget())
+                {
+                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                    {
+                        // Mismo veto que el resto del editor: el drop del
+                        // grid solo trae rutas YA del proyecto, pero nada
+                        // impide soltar un .fbx o un .wav aquí sin este
+                        // filtro (hallazgo del reviewer final).
+                        const std::string dropped = static_cast<const char*>(payload->Data);
+                        if (classifyAsset(std::filesystem::path(dropped).extension().string(), false)
+                            == AssetKind::Image)
+                            *s.dest = dropped;
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+                ImGui::EndChild();
+                ImGui::PopID();
+            }
+
+            bool heredaMetallic = m_matAssetEdit.metallic < 0.0f;
+            if (ImGui::Checkbox("Heredar Metallic", &heredaMetallic))
+                m_matAssetEdit.metallic = heredaMetallic ? -1.0f : 0.5f;
+            if (!heredaMetallic)
+                ImGui::SliderFloat("Metallic", &m_matAssetEdit.metallic, 0.0f, 1.0f, "%.2f");
+
+            bool heredaRoughness = m_matAssetEdit.roughness < 0.0f;
+            if (ImGui::Checkbox("Heredar Roughness", &heredaRoughness))
+                m_matAssetEdit.roughness = heredaRoughness ? -1.0f : 0.5f;
+            if (!heredaRoughness)
+                ImGui::SliderFloat("Roughness", &m_matAssetEdit.roughness, 0.0f, 1.0f, "%.2f");
+
+            if (!m_matAssetError.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_matAssetError.c_str());
+            ImGui::Separator();
+
+            const bool matApply  = ImGui::Button("Aplicar");
+            ImGui::SameLine();
+            const bool matCancel = ImGui::Button("Cancelar");
+            if (matApply)
+            {
+                const MaterialAssetApplyResult r = applyMaterialAssetSettings(
+                    sceneRoot, m_matAssetTarget, m_matAssetEdit,
+                    [&ctx](GameObject& go)
+                    {
+                        if (!ctx.renderer) return;
+                        if (const SkinnedMesh* sm = go.getSkinnedMesh(); sm && go.skinnedRenderIndex >= 0)
+                            ctx.renderer->rebuildSkinnedMesh(go.skinnedRenderIndex, *sm);
+                        else if (go.staticRenderIndex >= 0)
+                            ctx.renderer->rebuildStaticMesh(go.staticRenderIndex, *go.getMesh());
+                    });
+                if (r.ok)
+                {
+                    ctx.pushLog("Material aplicado: " + m_matAssetTarget.filename().string() +
+                                " (" + std::to_string(r.refreshed) + " objeto(s) actualizados)");
+                    ImGui::CloseCurrentPopup();
+                }
+                else
+                {
+                    m_matAssetError = r.error;
+                }
+            }
+            else if (matCancel)
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        if (m_matAssetDlgOpen && m_matAssetFileDialog->Display("PickMatTextureDlg"))
+        {
+            if (m_matAssetFileDialog->IsOk())
+            {
+                // Mismo veto que los 18 diálogos de Properties: una ruta de
+                // fuera del proyecto se importa (o se rechaza si la
+                // extensión no es de imagen), nunca se guarda absoluta tal
+                // cual (hallazgo del reviewer final).
+                if (const auto picked = acceptOrImportMatTexture(
+                        ctx.project, m_matAssetFileDialog->GetFilePathName()))
+                {
+                    switch (m_matAssetDlgSlot)
+                    {
+                        case DonTopo::MaterialTextureSlot::Albedo: m_matAssetEdit.albedo = picked->string(); break;
+                        case DonTopo::MaterialTextureSlot::Normal: m_matAssetEdit.normal = picked->string(); break;
+                        case DonTopo::MaterialTextureSlot::Orm:    m_matAssetEdit.orm    = picked->string(); break;
+                    }
+                }
+            }
+            m_matAssetFileDialog->Close();
+            m_matAssetDlgOpen = false;
         }
     }
     ImGui::EndChild();

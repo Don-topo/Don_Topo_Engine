@@ -10,6 +10,7 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
@@ -339,6 +340,38 @@ static void test_rewrite_makes_paths_relative(const fs::path& root)
     // Ningún path absoluto residual (en Windows: sin ':' de unidad).
     CHECK(node["mesh"]["sourcePath"].get<std::string>().find(':') == std::string::npos);
     CHECK(node["audioClip"]["path"].get<std::string>().find(':') == std::string::npos);
+}
+
+// Review Focus (exportador): el .mat viaja con la escena, y matAsset se
+// reescribe a su ruta dentro del paquete.
+static void test_mat_asset_is_collected_and_rewritten(const fs::path& root)
+{
+    const fs::path mat = root / "assets" / "rojo.mat";
+    std::string err;
+    CHECK(saveMaterialAsset(mat, MaterialAsset{}, &err));
+
+    Scene scene;
+    scene.setAssetRoot(root.string());
+    auto* go = scene.addGameObject("prop");
+    go->setMesh(makeMesh(root / "assets" / "hero.fbx"));
+    MaterialOverride ov; ov.index = 0; ov.matAsset = mat.string();
+    go->materialOverrides.push_back(ov);
+
+    std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    std::vector<std::string> pkg;
+    for (const ExportAsset& a : assets) pkg.push_back(a.packagePath);
+    CHECK(std::find(pkg.begin(), pkg.end(), "assets/rojo.mat") != pkg.end());
+
+    std::map<std::string, std::string> sourceToPackage;
+    for (const ExportAsset& a : assets)
+        sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
+
+    nlohmann::json j = scene.toJson();
+    CHECK(j["root"]["children"][0]["mesh"]["materials"][0]["matAsset"].get<std::string>() == "assets/rojo.mat");
+
+    const int rewritten = rewriteScenePaths(j, sourceToPackage);
+    CHECK(rewritten >= 1);
+    CHECK(j["root"]["children"][0]["mesh"]["materials"][0]["matAsset"].get<std::string>() == "assets/rojo.mat");
 }
 
 // Un path que no está en el mapa se deja intacto, no se borra ni se vacía.
@@ -1135,6 +1168,7 @@ int main()
     test_external_assets(root);
     test_missing_asset_flagged(root);
     test_rewrite_makes_paths_relative(root);
+    test_mat_asset_is_collected_and_rewritten(root);
     test_rewrite_leaves_unknown_paths(root);
     test_rewrite_materials_override_outside_root(root);
     test_package_contents(root);

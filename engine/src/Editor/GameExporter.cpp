@@ -277,6 +277,8 @@ std::vector<ExportAsset> collectSceneAssets(
                 addWithSidecar(m->normalMapPath);
                 addWithSidecar(m->metallicRoughnessPath);
             }
+            for (const MaterialOverride& ov : go->materialOverrides)
+                if (!ov.matAsset.empty()) add(ov.matAsset);   // el .mat no lleva sidecar propio
         }
 
         if (go->hasAudioClip())
@@ -393,6 +395,7 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
                 n += rewriteField(mat, "albedo", sourceToPackage);
                 n += rewriteField(mat, "normal", sourceToPackage);
                 n += rewriteField(mat, "orm", sourceToPackage);
+                n += rewriteField(mat, "matAsset", sourceToPackage);
             }
     }
     if (node.contains("audioClip") && node["audioClip"].is_object())

@@ -285,6 +285,14 @@ bool hasOverride(const DonTopo::GameObject& go, int materialIndex, DonTopo::Mate
     return !currentOverride(go, materialIndex, slot).empty();
 }
 
+// El .mat vinculado a ese slot, o vacio si no hay ninguno.
+std::string currentMaterialAsset(const DonTopo::GameObject& go, int materialIndex)
+{
+    for (const DonTopo::MaterialOverride& ov : go.materialOverrides)
+        if (ov.index == materialIndex) return ov.matAsset;
+    return {};
+}
+
 // El factor del OVERRIDE, CRUDO (el centinela -1.0f si no hay ninguno para
 // ese slot), simétrico a currentOverride() con las texturas -- y por el
 // mismo motivo: mat.metallic/mat.roughness son el valor YA APLICADO (FBX u
@@ -314,6 +322,7 @@ namespace DonTopo {
 PropertiesPanel::PropertiesPanel()
     : m_meshFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_textureFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_matAssetFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_audioFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_fontFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_uiAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
@@ -8121,6 +8130,28 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
             ImGui::PopID();
         }
 
+        {
+            const std::string matAssetActual = currentMaterialAsset(*ctx.selected, m);
+            ImGui::Text("Material asset: %s", matAssetActual.empty() ? "None"
+                        : std::filesystem::path(matAssetActual).filename().string().c_str());
+            drawAssetDropBox(
+                ctx, "MatAsset", "Drop .mat here",
+                [this, ownerId, m]() {
+                    m_matAssetDlgOwner    = ownerId;
+                    m_matAssetDlgMaterial = m;
+                    m_matAssetDlgOpen     = true;
+                    IGFD::FileDialogConfig cfg;
+                    cfg.path = "assets";
+                    m_matAssetFileDialog->OpenDialog("PickMatAssetDlg", "Choose material", ".mat", cfg);
+                },
+                [this, &ctx, ownerId, m](const std::string& path) {
+                    assignMaterialAsset(ctx, ownerId, m, path);
+                });
+            ImGui::BeginDisabled(ctx.editingLocked || matAssetActual.empty());
+            if (ImGui::Button("Clear##MatAsset")) assignMaterialAsset(ctx, ownerId, m, "");
+            ImGui::EndDisabled();
+        }
+
         // Metallic/Roughness del material: dos sliders, no una textura más,
         // así que fuera del bucle kSlots de arriba pero dentro del mismo
         // PushID(m) — sin él, "Metallic"/"Roughness" del material 0 y el 1
@@ -8361,6 +8392,43 @@ void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId
                 + go->name + "'");
 }
 
+void PropertiesPanel::assignMaterialAsset(EditorContext& ctx, uint64_t ownerId, int materialIndex,
+                                          const std::string& path)
+{
+    if (!ctx.scene) return;
+    GameObject* go = ctx.scene->findById(ownerId);
+    if (!go) { ctx.logModule("Mesh", "No se pudo vincular el material: el objeto ya no existe"); return; }
+    if (!go->hasMesh() || ctx.editingLocked) return;
+
+    const std::vector<const Material*> mats = materialsOfMesh(*go);
+    if (materialIndex < 0 || materialIndex >= (int)mats.size())
+    {
+        ctx.logModule("Mesh", "No se pudo vincular el material: el material ya no existe en '" + go->name + "'");
+        return;
+    }
+    if (!path.empty())
+    {
+        std::string ext = std::filesystem::path(path).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext != ".mat")
+        {
+            m_textureLoadError = "Formato no soportado: " + ext;
+            return;
+        }
+    }
+    const std::string antes = currentMaterialAsset(*go, materialIndex);
+    if (antes == path) return;
+    m_textureLoadError.clear();
+
+    auto cmd = std::make_unique<MaterialAssetCommand>(
+        *ctx.scene, ctx.renderer,
+        (path.empty() ? "Desvincular material de '" : "Material de '") + go->name + "'",
+        go->id, materialIndex, antes, path);
+    cmd->execute();
+    if (ctx.undo) ctx.undo->push(std::move(cmd));
+    ctx.pushLog((path.empty() ? "Material desvinculado de '" : "Material vinculado a '") + go->name + "'");
+}
+
 void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
 {
     // Se ejecuta cada frame independientemente de ctx.selected/hasMesh(): si no
@@ -8393,6 +8461,17 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
         }
         m_textureFileDialog->Close();
         m_textureDlgOpen = false;
+    }
+
+    // Mismo drenado para el diálogo de "Material asset": instancia propia
+    // (m_matAssetFileDialog), mismo motivo que las de arriba.
+    if (m_matAssetDlgOpen && m_matAssetFileDialog->Display("PickMatAssetDlg"))
+    {
+        if (m_matAssetFileDialog->IsOk())
+            assignMaterialAsset(ctx, m_matAssetDlgOwner, m_matAssetDlgMaterial,
+                                m_matAssetFileDialog->GetFilePathName());
+        m_matAssetFileDialog->Close();
+        m_matAssetDlgOpen = false;
     }
 }
 

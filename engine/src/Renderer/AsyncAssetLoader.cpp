@@ -4,6 +4,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/MaterialAsset.h"
 
 
 #include <algorithm>
@@ -49,11 +50,15 @@ namespace DonTopo
         for (const MaterialOverride& ov : overrides)
         {
             if (ov.index != 0) continue;
-            if (!ov.albedo.empty())
+            // El .mat cuenta igual que una override propia: si aporta esa
+            // textura, la decodificada del FBX ya no es la que se va a usar.
+            MaterialAsset matAsset;
+            if (!ov.matAsset.empty()) matAsset = loadMaterialAsset(ov.matAsset);
+            if (!ov.albedo.empty() || !matAsset.albedo.empty())
                 std::erase_if(images, [](const DecodedImage& d) { return d.slot == DecodedImage::Albedo; });
-            if (!ov.normal.empty())
+            if (!ov.normal.empty() || !matAsset.normal.empty())
                 std::erase_if(images, [](const DecodedImage& d) { return d.slot == DecodedImage::Normal; });
-            if (!ov.orm.empty())
+            if (!ov.orm.empty() || !matAsset.orm.empty())
                 std::erase_if(images, [](const DecodedImage& d) { return d.slot == DecodedImage::ORM; });
         }
     }

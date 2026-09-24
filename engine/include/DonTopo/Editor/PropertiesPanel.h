@@ -141,6 +141,11 @@ private:
     // por id, mismo patrón que setButtonAssetPath.
     void assignMaterialTexture(EditorContext& ctx, uint64_t ownerId, int materialIndex,
                                 MaterialTextureSlot slot, const std::string& path);
+    // Vincula (o desvincula, con path vacio) un .mat a un slot de material.
+    // Mismo patron que assignMaterialTexture: resuelve por id, valida indice y
+    // extension, y apila un MaterialAssetCommand.
+    void assignMaterialAsset(EditorContext& ctx, uint64_t ownerId, int materialIndex,
+                             const std::string& path);
     // Screen Space Reflections del objeto. No es un componente y no pasa por
     // "Add": son dos campos del GameObject (como el transform), así que la
     // sección aparece sobre cualquier objeto con malla.
@@ -594,6 +599,13 @@ private:
     uint64_t            m_textureDlgOwner    = 0;
     int                 m_textureDlgMaterial = 0;
     MaterialTextureSlot m_textureDlgSlot     = MaterialTextureSlot::Albedo;
+
+    // Instancia propia de ImGuiFileDialog para vincular un .mat desde la fila
+    // "Material asset" de la seccion Material. Mismo patron que m_textureFileDialog.
+    bool m_matAssetDlgOpen = false;
+    std::unique_ptr<IGFD::FileDialog> m_matAssetFileDialog;
+    uint64_t m_matAssetDlgOwner    = 0;
+    int      m_matAssetDlgMaterial = 0;
 
     // Snapshot al empezar el drag de los sliders Metallic/Roughness de la
     // sección Material — mismo patrón que m_audioDragActive/m_ssrDragActive,

@@ -174,11 +174,11 @@ nuevos, organizarlos, reutilizarlos), no por paridad con Unity per se.
       `.meta` junto al asset? ¿entrada en `project.json`?). Es una decisión
       de formato de datos, no de UI — necesita su propia spec de Core antes
       de tocar el panel. (U8)
-- [ ] **Asset de Material independiente** (`.mat` reutilizable, con su propio
-      "Create > Material"): hoy Material vive solo embebido en Mesh/GameObject
-      (`materialsOf`/`editMaterialsOf`, `ContentBrowserPanel.cpp:78-103`),
-      sin serialización propia fuera de una escena. Confirmar primero si el
-      proyecto quiere este concepto en el Core — no es una carencia del
-      panel, es una capacidad que el Core no tiene todavía, y por la regla de
-      "no ocultar lo que el Core soporta" tampoco aplica al revés: no se le
-      puede pedir a la UI que ofrezca lo que el Core no tiene.
+- [x] **Asset de Material independiente** — CERRADO: sidecar `.mat`
+      (`MaterialAsset`/`loadMaterialAsset`/`saveMaterialAsset`, Core) con
+      referencia viva por slot (override del objeto > `.mat` > modelo),
+      "Create > Material" en el Content Browser, edición en un modal propio
+      (doble clic) que reconstruye a todos los objetos que lo usan,
+      `MaterialAssetCommand` en Properties, ciclo de vida por ruta
+      (renombrar/mover/borrar) y `.mat` incluido en el exportador. Spec
+      `docs/superpowers/specs/2026-09-24-material-asset-design.md`.

@@ -789,6 +789,32 @@ private:
     std::string         m_after;
 };
 
+// Escribe la ruta de un .mat en el override del material `materialIndex` y lo
+// aplica al Material. Simetrico a setMaterialTextureOverride.
+void setMaterialAssetOverride(GameObject& go, int materialIndex, const std::string& matAssetPath);
+
+// Cambio del .mat vinculado a UN material, por el stack de undo. Mismo patron
+// que MaterialTextureCommand: resuelve por id, renderer opcional.
+class MaterialAssetCommand : public ICommand {
+public:
+    MaterialAssetCommand(Scene& scene, EditorRenderer* renderer, std::string label,
+                         uint64_t id, int materialIndex, std::string before, std::string after);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(const std::string& matAssetPath);
+
+    Scene&          m_scene;
+    EditorRenderer* m_renderer;
+    std::string     m_label;
+    uint64_t        m_id;
+    int             m_materialIndex;
+    std::string     m_before;
+    std::string     m_after;
+};
+
 enum class MaterialFactorSlot { Metallic, Roughness };
 
 // Escribe UN factor PBR (metallic o roughness) en el override del material

@@ -1204,11 +1204,12 @@ namespace
                 // Se deja escrito aqui porque comprobarlo cuesta las dos
                 // derivaciones enteras cada vez que alguien lee este bloque.
                 if (ov.albedo.empty() && ov.normal.empty() && ov.orm.empty()
-                    && ov.metallic < 0.0f && ov.roughness < 0.0f) continue;
+                    && ov.metallic < 0.0f && ov.roughness < 0.0f && ov.matAsset.empty()) continue;
                 nlohmann::json entry = { {"index", ov.index} };
                 if (!ov.albedo.empty()) entry["albedo"] = toStoredPath(ov.albedo, assetRoot);
                 if (!ov.normal.empty()) entry["normal"] = toStoredPath(ov.normal, assetRoot);
                 if (!ov.orm.empty())    entry["orm"]    = toStoredPath(ov.orm,    assetRoot);
+                if (!ov.matAsset.empty()) entry["matAsset"] = toStoredPath(ov.matAsset, assetRoot);
                 // Ausente = no tocado, y el valor efectivo sale del modelo al
                 // recargar (mismo criterio que las tres texturas de arriba).
                 if (ov.metallic  >= 0.0f) entry["metallic"]  = ov.metallic;
@@ -2376,9 +2377,10 @@ namespace
                         }
                         MaterialOverride ov;
                         ov.index  = entry["index"].get<int>();
-                        ov.albedo = fromStoredPath(entry.value("albedo", ""), assetRoot);
-                        ov.normal = fromStoredPath(entry.value("normal", ""), assetRoot);
-                        ov.orm    = fromStoredPath(entry.value("orm",    ""), assetRoot);
+                        ov.albedo   = fromStoredPath(entry.value("albedo", ""), assetRoot);
+                        ov.normal   = fromStoredPath(entry.value("normal", ""), assetRoot);
+                        ov.orm      = fromStoredPath(entry.value("orm",    ""), assetRoot);
+                        ov.matAsset = fromStoredPath(entry.value("matAsset", ""), assetRoot);
                         // Ausente = -1.0f (el centinela de "sin override"; ver
                         // MaterialOverride en GameObject.h), mismo criterio que
                         // "ausente = string vacío" de las tres rutas de arriba.

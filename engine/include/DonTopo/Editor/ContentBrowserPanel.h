@@ -7,9 +7,13 @@
 #include <system_error>
 #include <vector>
 #include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Core/MaterialAsset.h"
+#include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Editor/Thumbnail.h"
+
+namespace IGFD { class FileDialog; }
 
 namespace DonTopo {
 
@@ -40,7 +44,7 @@ std::vector<AssetImportOutcome> importDroppedFilesInto(
 
 // Tipo de un asset para el Content Browser: lo comparten el icono del grid y el
 // filtro por tipo, para que no puedan discrepar.
-enum class AssetKind { Folder, Model3D, Audio, Image, Font, Scene, Script, Shader, Other };
+enum class AssetKind { Folder, Model3D, Audio, Image, Font, Scene, Script, Shader, Material, Other };
 
 // ext con el punto y en cualquier combinación de mayúsculas ("" si no tiene). Una
 // carpeta es siempre Folder, aunque se llame "a.png".
@@ -52,6 +56,26 @@ AssetKind classifyAsset(const std::string& ext, bool isDir);
 // carpetas quedan fuera salvo que el tipo sea Folder.
 bool assetMatchesFilter(const std::string& name, AssetKind kind,
                         const std::string& text, std::optional<AssetKind> kindFilter);
+
+// true si el grid debe iniciar un drag para este asset: carpetas, lo que ya
+// admite importación de fuera del proyecto (isImportableExtension), un .mat
+// (asset del proyecto, nunca se importa de fuera, así que isImportableExtension
+// no lo cubre) o cualquiera que forme parte de una selección múltiple (mover
+// no depende de qué zonas de drop sepan aceptar el tipo). Declarada aquí para
+// que el test headless pueda enlazarla sin instanciar ImGui.
+bool isAssetDraggable(const std::string& ext, bool isDir, bool inMultiSelection);
+
+// Hallazgo del reviewer final: el Browse de textura del modal de edición de
+// un .mat aceptaba cualquier ruta absoluta de fuera del proyecto tal cual (a
+// diferencia del drop, que solo puede soltar un DT_ASSET_PATH ya dentro de
+// él). Ese path absoluto sobrevive en el .mat guardado y en el juego
+// exportado deja de existir en otra máquina. `path` de fuera del proyecto se
+// importa a assets/Imported/Textures (mismo destino que el resto del editor);
+// nullopt si la extensión no es de imagen o la copia falla. Sin `project`
+// (tests headless) se acepta tal cual, como el resto del editor sin proyecto
+// abierto.
+std::optional<std::filesystem::path> acceptOrImportMatTexture(const ProjectContext* project,
+                                                               const std::filesystem::path& path);
 
 // Ficheros y carpetas visibles de UNA carpeta (no recursivo), ordenados por path.
 // Las carpetas ocultas y de build quedan fuera con el mismo predicado que el
@@ -138,6 +162,20 @@ TextureImportApplyResult applyTextureImportSettings(GameObject* sceneRoot,
                                                     const TextureImportSettings& settings,
                                                     const std::function<void(GameObject&)>& rebuild);
 
+struct MaterialAssetApplyResult {
+    bool        ok = false;
+    std::string error;
+    int         refreshed = 0;
+};
+// Escribe el .mat y reconstruye (rebuild) cada objeto de la escena que lo
+// referencie desde cualquier slot. Sin escritura, no reconstruye nada.
+MaterialAssetApplyResult applyMaterialAssetSettings(GameObject* sceneRoot, const std::filesystem::path& mat,
+                                                    const MaterialAsset& asset,
+                                                    const std::function<void(GameObject&)>& rebuild);
+// Nombre libre para un material nuevo dentro de dir, mismo patron que
+// uniqueFolderName: "Nuevo material.mat", "Nuevo material 2.mat"...
+std::string uniqueMaterialName(const std::filesystem::path& dir);
+
 // Que ajustes de importacion ofrece un asset. El menu contextual y el modal se
 // deciden por esto, no por comprobaciones sueltas: un tipo nuevo (modelos) se
 // anade aqui.
@@ -203,6 +241,12 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
 // escena para desengancharlas antes de borrar/renombrar en disco.
 class ContentBrowserPanel {
 public:
+    // Fuera de linea a proposito: el destructor necesita el tipo completo de
+    // IGFD::FileDialog (unique_ptr<T> incompleto), y este header solo lo
+    // forward-declara. Mismo patron que PropertiesPanel.
+    ContentBrowserPanel();
+    ~ContentBrowserPanel();
+
     void draw(EditorContext& ctx, GameObject* sceneRoot);
     bool* GetOpenPtr() { return &m_open; }
 
@@ -289,6 +333,15 @@ private:
     AudioImportSettings    m_importAudioEdit;
     std::string            m_importError;
     bool                   m_openImportPopup = false;
+
+    // Edicion de un .mat, disparada por doble clic en el grid.
+    std::filesystem::path m_matAssetTarget;
+    MaterialAsset          m_matAssetEdit;
+    std::string            m_matAssetError;
+    bool                   m_openMatAssetPopup = false;
+    bool                   m_matAssetDlgOpen     = false;
+    DonTopo::MaterialTextureSlot m_matAssetDlgSlot = DonTopo::MaterialTextureSlot::Albedo;
+    std::unique_ptr<IGFD::FileDialog> m_matAssetFileDialog;
 
     // Asset delete — popup modal disparado por right-click > Delete.
     std::vector<std::pair<std::filesystem::path, bool>> m_assetDeleteTargets;
