@@ -1127,6 +1127,34 @@ static void test_apply_material_asset_writes_and_refreshes_all_users()
     CHECK(c->getMesh()->material.roughness == 0.5f);   // el defecto de Material, sin tocar
 }
 
+// Reporte del usuario: "al abrir el material no guarda lo anadido, por
+// ejemplo el albedo". Mismo camino EXACTO que Aplicar en el modal: guardar
+// via applyMaterialAssetSettings y releer via loadMaterialAsset (lo que hace
+// el doble clic al reabrir), con una textura ABSOLUTA como la que deja
+// acceptOrImportMatTexture/un drag del grid.
+static void test_apply_material_asset_albedo_survives_reopen()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_apply_mat_albedo";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+    const fs::path mat = base / "x.mat";
+    const fs::path tex = base / "rojo.png";
+    std::ofstream(tex) << "x";
+    std::string err;
+    CHECK(saveMaterialAsset(mat, MaterialAsset{}, &err));
+
+    MaterialAsset edit = loadMaterialAsset(mat);   // lo que hace el doble clic al abrir
+    edit.albedo = tex.string();                    // lo que deja Browse/drop en el modal
+
+    const MaterialAssetApplyResult r = applyMaterialAssetSettings(nullptr, mat, edit, nullptr);
+    CHECK(r.ok);
+    CHECK(r.error.empty());
+
+    const MaterialAsset reopened = loadMaterialAsset(mat);   // reabrir el .mat
+    CHECK(fs::equivalent(reopened.albedo, tex, ec));
+}
+
 // Review Focus (escritura): un fallo de escritura no reconstruye nada.
 static void test_apply_material_asset_write_failure_rebuilds_nothing()
 {
@@ -1154,6 +1182,7 @@ int main()
     test_accept_or_import_mat_texture_without_project_passes_through();
     test_unique_material_name();
     test_apply_material_asset_writes_and_refreshes_all_users();
+    test_apply_material_asset_albedo_survives_reopen();
     test_apply_material_asset_write_failure_rebuilds_nothing();
     test_apply_audio_writes_sidecar_and_refreshes_once();
     test_apply_audio_write_failure_does_not_refresh();

@@ -1878,15 +1878,22 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     m_matAssetDlgSlot = s.slot;
                     m_matAssetDlgOpen = true;
                     IGFD::FileDialogConfig cfg;
-                    cfg.path  = "assets";
-                    // Modal: sin esto, el diálogo se dibuja detrás del modal
-                    // "Material" (que ya está abierto) y ImGui bloquea el
-                    // input a cualquier ventana que no forme parte de la pila
-                    // de modales — el diálogo saldría visible pero no
-                    // clicable. Ver ImGuiFileDialogFlags_Modal.
-                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    cfg.path = "assets";
                     m_matAssetFileDialog->OpenDialog("PickMatTextureDlg", "Choose image",
                                                      ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+                    // Cierra "Material" mientras el diálogo de fichero está
+                    // abierto, y se reabre solo al drenarlo (ver más abajo):
+                    // dos ImGuiFileDialogFlags_Modal activos a la vez (uno
+                    // anidado dentro del otro) no tiene precedente en este
+                    // codebase — los otros 18+ diálogos de asset del editor
+                    // son deliberadamente no-modales — y un intento anterior
+                    // con el diálogo anidado como modal dejaba el Aplicar
+                    // guardando un valor vacío/viejo (visto en verificación
+                    // manual). Este es el MISMO patrón secuencial que ya usa
+                    // drawExportDialog: un popup a la vez, m_matAssetTarget/
+                    // m_matAssetEdit sobreviven en memoria porque son
+                    // miembros del panel, no estado del popup.
+                    ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Clear")) s.dest->clear();
@@ -1981,6 +1988,11 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             }
             m_matAssetFileDialog->Close();
             m_matAssetDlgOpen = false;
+            // Reabre "Material": el Browse lo cerró para dejar sitio a este
+            // diálogo (ver el comentario junto a CloseCurrentPopup, arriba).
+            // m_matAssetTarget y m_matAssetEdit (con el picked de encima ya
+            // aplicado) siguen intactos porque son miembros del panel.
+            m_openMatAssetPopup = true;
         }
     }
     ImGui::EndChild();
