@@ -152,6 +152,9 @@ void AudioManager::shutdown()
     m_soundRefs.clear(); m_soundKeys.clear(); m_freeSlots.clear();
     m_soundByKey.clear(); m_pinnedSounds.clear();
     m_soundLastPos.clear(); m_soundHasLastPos.clear();
+    // Paralelos a m_sounds: si se quedaran, tras un init() posterior el id 0 nuevo
+    // heredaria los ajustes del sonido viejo (y push_back los desalinearia).
+    m_soundImport.clear(); m_soundVolume.clear();
     // Los DSP ANTES que los grupos de los que cuelgan: liberar el grupo primero
     // dejaria los DSP colgando de algo que ya no existe. Son recursos nativos,
     // no punteros sueltos.
@@ -415,6 +418,39 @@ static FMOD::Channel* liveChannel(void* raw, void* expectedSound)
 #endif
 
 #ifdef DT_FMOD_ENABLED
+// Mezcla a mono la voz de un sonido marcado forceMono: cada una de las dos
+// salidas frontales recibe la suma de TODAS las entradas a 1/N (el pico no pasa
+// de 1 aunque las entradas vayan en fase); el resto de salidas (surround, LFE)
+// queda en silencio. Solo sonidos 2D: en 3D el panner espacial de FMOD manda
+// sobre la matriz y un emisor 3D con spread 0 ya suena como un punto. Un clip
+// de un canal, o cualquier fallo al leer la matriz, deja la voz como esta.
+// Dimensiones de la matriz de mezcla de una voz de `snd`: entradas = canales del
+// sonido, salidas = canales de la salida del sistema. NO se le preguntan al canal:
+// getMixMatrix(nullptr, ...) devuelve OK con 0 y 0 en una voz recien creada que
+// aun no tiene matriz propia.
+static bool mixMatrixDims(FMOD::System* sys, FMOD::Sound* snd, int& out, int& in)
+{
+    FMOD_SPEAKERMODE speakerMode = FMOD_SPEAKERMODE_DEFAULT;
+    if (sys->getSoftwareFormat(nullptr, &speakerMode, nullptr) != FMOD_OK) return false;
+    if (sys->getSpeakerModeChannels(speakerMode, &out) != FMOD_OK) return false;
+    if (snd->getFormat(nullptr, nullptr, &in, nullptr) != FMOD_OK) return false;
+    return true;
+}
+
+static void applyForceMono(FMOD::System* sys, FMOD::Channel* ch, FMOD::Sound* snd)
+{
+    FMOD_MODE mode = 0;
+    if (snd->getMode(&mode) != FMOD_OK || (mode & FMOD_3D)) return;
+    int out = 0, in = 0;
+    if (!mixMatrixDims(sys, snd, out, in) || in < 2 || out < 1) return;
+    std::vector<float> m(static_cast<size_t>(out) * in, 0.0f);
+    const float g = 1.0f / static_cast<float>(in);
+    for (int row = 0; row < std::min(out, 2); ++row)
+        for (int col = 0; col < in; ++col)
+            m[static_cast<size_t>(row) * in + col] = g;
+    ch->setMixMatrix(m.data(), out, in, in);
+}
+
 float AudioManager::voiceVolume(int id, float volume) const
 {
     if (id < 0 || id >= static_cast<int>(m_soundImport.size())) return volume;
@@ -477,6 +513,28 @@ void AudioManager::refreshImportSettings(const std::string& path)
     }
 #else
     (void)path;
+#endif
+}
+
+bool AudioManager::isVoiceForcedMono(int id) const
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return false;
+    FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]);
+    int out = 0, in = 0;
+    if (!ch || !mixMatrixDims(SYS, reinterpret_cast<FMOD::Sound*>(m_sounds[id]), out, in) ||
+        in < 2 || out < 1) return false;
+    std::vector<float> m(static_cast<size_t>(out) * in, 0.0f);
+    if (ch->getMixMatrix(m.data(), &out, &in, in) != FMOD_OK) return false;
+    const float g = 1.0f / static_cast<float>(in);
+    for (int row = 0; row < std::min(out, 2); ++row)
+        for (int col = 0; col < in; ++col)
+            if (std::fabs(m[static_cast<size_t>(row) * in + col] - g) > 1e-4f) return false;
+    return true;
+#else
+    (void)id;
+    return false;
 #endif
 }
 
@@ -552,6 +610,7 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
     m_soundVolume[id] = volume;
     ch->setVolume(voiceVolume(id, volume));
     ch->setPitch(pitch);
+    if (m_soundImport[id].forceMono) applyForceMono(SYS, ch, snd);
 
     FMOD_MODE mode = 0; snd->getMode(&mode);
     if (mode & FMOD_3D) {
@@ -740,6 +799,7 @@ void AudioManager::playSoundOneShot(int id, const glm::vec3& worldPos, float vol
     // voz no se puede alcanzar despues.
     ch->setVolume(voiceVolume(id, volume));
     ch->setPitch(pitch);
+    if (m_soundImport[id].forceMono) applyForceMono(SYS, ch, snd);
 
     FMOD_MODE mode = 0; snd->getMode(&mode);
     if (mode & FMOD_3D) {

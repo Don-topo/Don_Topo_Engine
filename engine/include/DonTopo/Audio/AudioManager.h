@@ -192,6 +192,12 @@ public:
     // suite en verde.
     float getChannelVolume(int soundId) const;
 
+    // ¿La voz viva de soundId lleva la matriz de mono (cada entrada a 1/N en las
+    // dos salidas frontales)? Existe para que forzar a mono sea observable desde
+    // un test: quitar la llamada a applyForceMono dejaba la feature entera sin
+    // efecto y la suite en verde.
+    bool isVoiceForcedMono(int soundId) const;
+
     // Atenuación 3D del sonido: por debajo de minDistance suena a volumen
     // pleno, y de ahí a maxDistance va cayendo. Se escribe en el FMOD::Sound
     // (vale pa las reproducciones futuras) Y en el canal vivo si lo hay, con la

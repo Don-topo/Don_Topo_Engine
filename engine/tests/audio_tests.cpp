@@ -1921,6 +1921,91 @@ static void test_import_recycled_slot_does_not_inherit(AudioManager& am)
     am.unloadSound(idB);
 }
 
+// Sin FMOD el getter es neutro.
+static void test_mono_getter_is_neutral_without_a_voice(AudioManager& am)
+{
+    CHECK(!am.isVoiceForcedMono(-1));
+    CHECK(!am.isVoiceForcedMono(123456));
+}
+
+static void test_import_force_mono_on_a_2d_stereo_voice(AudioManager& am)
+{
+    if (!am.available()) { std::printf("SKIP test_import_force_mono_on_a_2d_stereo_voice (FMOD no disponible)\n"); return; }
+    const auto d = audioTestDir("dt_audio_import_mono");
+    const std::string stereoMono = (d / "m.wav").string();   // estereo CON forceMono
+    const std::string stereoPlain = (d / "p.wav").string();  // estereo sin sidecar
+    const std::string oneCh = (d / "one.wav").string();      // un canal CON forceMono
+    const std::string stereo3d = (d / "s3d.wav").string();   // estereo CON forceMono, cargado 3D
+    writeWav(stereoMono, 2, 3.0);
+    writeWav(stereoPlain, 2, 3.0);
+    writeWav(oneCh, 1, 3.0);
+    writeWav(stereo3d, 2, 3.0);
+    setGain(stereoMono, 0.0f, /*mono=*/true);
+    setGain(oneCh, 0.0f, true);
+    setGain(stereo3d, 0.0f, true);
+
+    const int m  = am.loadSound(stereoMono, false, true);
+    const int p  = am.loadSound(stereoPlain, false, true);
+    const int o  = am.loadSound(oneCh, false, true);
+    const int s3 = am.loadSound(stereo3d, true, true);
+    if (m < 0 || p < 0 || o < 0 || s3 < 0) { CHECK(false); return; }
+    if (!waitReady(am, m) || !waitReady(am, p) || !waitReady(am, o) || !waitReady(am, s3)) { CHECK(false); return; }
+    CHECK(am.getSoundImportSettings(m).forceMono);
+
+    am.playSound(m, {}, 1.0f);
+    am.playSound(p, {}, 1.0f);
+    am.playSound(o, {}, 1.0f);
+    am.playSound(s3, {}, 1.0f);
+    CHECK(am.isVoiceForcedMono(m));            // estereo 2D con el ajuste: mezclada a mono
+    CHECK(!am.isVoiceForcedMono(p));           // sin ajuste: matriz de fabrica
+    CHECK(!am.isVoiceForcedMono(o));           // Review Focus 6: un canal, no-op sin crash
+    CHECK(!am.isVoiceForcedMono(s3));          // Review Focus 6: 3D, no se toca
+    CHECK(am.isSoundPlaying(o));               // y sigue sonando
+
+    // Otra reproduccion de la misma voz conserva el mono (se aplica en cada arranque).
+    am.stopSound(m);
+    am.playSound(m, {}, 1.0f);
+    CHECK(am.isVoiceForcedMono(m));
+
+    am.stopSound(m); am.stopSound(p); am.stopSound(o); am.stopSound(s3);
+    am.unloadSound(m); am.unloadSound(p); am.unloadSound(o); am.unloadSound(s3);
+}
+
+// shutdown() vacia los vectores por sonido; los de ajustes de importacion tienen
+// que vaciarse con ellos. Si no, tras shutdown()+init() el sonido nuevo vuelve a
+// ser el id 0 pero m_soundImport conserva las entradas viejas y sus ajustes.
+static void test_import_settings_do_not_survive_shutdown_and_init(AudioManager& am)
+{
+    if (!am.available()) { std::printf("SKIP test_import_settings_do_not_survive_shutdown_and_init (FMOD no disponible)\n"); return; }
+    const auto d = audioTestDir("dt_audio_import_shutdown");
+    const std::string a = (d / "a.wav").string();
+    const std::string b = (d / "b.wav").string();
+    writeWav(a, 2, 3.0);
+    writeWav(b, 2, 3.0);
+    setGain(a, 9.0f, true);
+
+    am.shutdown();
+    CHECK(am.init());
+    if (!am.available()) return;
+
+    const int idA = am.loadSound(a, false, true);
+    if (idA < 0 || !waitReady(am, idA)) { CHECK(false); return; }
+    CHECK(am.getSoundImportSettings(idA).gainDb == 9.0f);
+    am.unloadSound(idA);
+
+    am.shutdown();                                        // vuelve a vaciar todo
+    CHECK(am.init());
+    if (!am.available()) return;
+    const int idB = am.loadSound(b, false, true);         // sin sidecar: id 0 otra vez
+    if (idB < 0 || !waitReady(am, idB)) { CHECK(false); return; }
+    CHECK(idB == idA);
+    CHECK(isDefault(am.getSoundImportSettings(idB)));
+    am.playSound(idB, {}, 0.6f);
+    CHECK(am.getChannelVolume(idB) == 0.6f);
+    am.stopSound(idB);
+    am.unloadSound(idB);
+}
+
 // Politica: la ganancia se multiplica en UN sitio. Si alguien vuelve a escribir
 // ch->setVolume(volume) en un camino de voz, ese camino ignora el sidecar en
 // silencio (los one-shots no se pueden observar desde un test, por eso el grep).
@@ -2000,6 +2085,9 @@ test_output_warning_only_without_output();
     test_import_getters_are_neutral_without_a_sound(am);
     test_import_gain_applies_and_refreshes(am);
     test_import_recycled_slot_does_not_inherit(am);
+    test_mono_getter_is_neutral_without_a_voice(am);
+    test_import_force_mono_on_a_2d_stereo_voice(am);
+    test_import_settings_do_not_survive_shutdown_and_init(am);
     test_policy_gain_is_applied_only_in_voiceVolume();
 
     am.shutdown();
