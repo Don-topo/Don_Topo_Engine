@@ -1066,10 +1066,65 @@ static void test_texture_sidecar_travels_with_the_texture(const fs::path& root)
     fs::remove(plain, ec);
 }
 
+// El sidecar de un clip viaja con el clip, con la misma jerarquia (o
+// assets/_external/N si el clip esta fuera del proyecto: Review Focus 7).
+static void test_audio_sidecar_travels_with_the_clip(const fs::path& root)
+{
+    std::error_code ec;
+    AudioImportSettings s;
+    s.gainDb = -3.0f;
+    std::string err;
+
+    const fs::path inside = root / "assets" / "step.wav";
+    CHECK(saveAudioImportSettings(inside, s, &err));
+    const fs::path plain = root / "assets" / "chars" / "plain.wav";
+    std::ofstream(plain) << "wav";                                   // sin sidecar
+
+    // Un clip fuera del proyecto, con sidecar.
+    const fs::path outside = fs::temp_directory_path(ec) / "dt_exporter_audio_outside" / "voz.wav";
+    fs::create_directories(outside.parent_path(), ec);
+    std::ofstream(outside) << "wav";
+    CHECK(saveAudioImportSettings(outside, s, &err));
+
+    Scene scene;
+    auto* a = scene.addGameObject("con_sidecar");
+    a->setAudioClip(std::make_shared<AudioClipComponent>(nullptr, inside.string(), -1, false, false));
+    auto* b = scene.addGameObject("sin_sidecar");
+    b->setAudioClip(std::make_shared<AudioClipComponent>(nullptr, plain.string(), -1, false, false));
+    auto* c = scene.addGameObject("fuera");
+    c->setAudioClip(std::make_shared<AudioClipComponent>(nullptr, outside.string(), -1, false, false));
+
+    const std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    std::vector<std::string> pkg;
+    for (const ExportAsset& x : assets) pkg.push_back(x.packagePath);
+    auto has = [&](const std::string& p) { return std::find(pkg.begin(), pkg.end(), p) != pkg.end(); };
+
+    CHECK(has("assets/step.wav"));
+    CHECK(has("assets/step.wav.import.json"));
+    CHECK(has("assets/chars/plain.wav"));
+    CHECK(!has("assets/chars/plain.wav.import.json"));
+    // El de fuera: el sidecar cae en la MISMA subcarpeta _external que su clip.
+    std::string outClip, outSide;
+    for (const std::string& p : pkg)
+    {
+        if (p.find("_external") == std::string::npos) continue;
+        if (p.size() > 16 && p.substr(p.size() - 16) == ".wav.import.json") outSide = p;
+        else if (p.size() > 4 && p.substr(p.size() - 4) == ".wav") outClip = p;
+    }
+    CHECK(!outClip.empty() && outSide == outClip + ".import.json");
+    for (const ExportAsset& x : assets)
+        if (x.packagePath.find(".import.json") != std::string::npos) CHECK(x.existsOnDisk);
+
+    fs::remove(importSidecarPath(inside), ec);
+    fs::remove(plain, ec);
+    fs::remove_all(outside.parent_path(), ec);
+}
+
 int main()
 {
     fs::path root = makeProjectFixture();
 
+    test_audio_sidecar_travels_with_the_clip(root);
     test_texture_sidecar_travels_with_the_texture(root);
     test_collects_exactly_referenced(root);
     test_button_assets(root);
