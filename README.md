@@ -766,7 +766,10 @@ dialog by copying them into `assets/Imported/`. Right-clicking a texture opens *
 a colour space (Auto = decided by the material slot, sRGB or Linear) and mipmaps on/off, saved next to
 the image as `<name>.import.json` (only when it differs from the defaults, and it follows the asset when
 you move, rename or delete it, and into the exported game); applying it rebuilds the materials that use
-that texture. It is also the drag source for models, textures and skybox folders. The
+that texture. For audio clips (`.wav/.mp3/.ogg/.flac`) it offers a gain in dB (-30 to +12) added to
+every voice of that file and a Force mono switch for 2D clips; both are saved in the same
+`<name>.import.json`, and a gain change reaches a clip that is already playing. It is also the drag
+source for models, textures and skybox folders. The
 **Log Console** keeps the history of edit actions and the values they wrote. All of it is
 serialised to JSON — the whole tree, with meshes, colliders, audio, scripts, UI components and
 the Animator graph.
