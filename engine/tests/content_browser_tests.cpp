@@ -3,6 +3,7 @@
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
+#include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Core/MaterialAsset.h"
@@ -256,17 +257,36 @@ static void test_rename_leaves_other_mat_asset_untouched()
     CHECK(go->materialOverrides[0].matAsset == "assets/otro.mat");
 }
 
-// Review Focus 5: borrar el .mat en uso vacia matAsset y el objeto vuelve al modelo.
+// Review Focus 5: borrar el .mat en uso vacia matAsset Y el material efectivo
+// vuelve al del modelo (no se queda con la ultima textura que trajo el .mat).
+// Esto exige applyMaterialOverrides + rebuild dentro de detachSceneReferencesForDelete,
+// no solo vaciar el campo: hallazgo del reviewer final, el test anterior solo
+// comprobaba matAsset.empty() y no detectaba que el material en memoria se
+// quedaba con la textura del .mat borrado hasta la siguiente reaplicacion.
 static void test_detach_clears_mat_asset_and_falls_back_to_model()
 {
-    const std::string knownPath = "assets/rojo.mat";
-    auto go = makeMatAssetFixture(knownPath);
-    go->editMesh()->material.texturePath = "assets/rojo.png";   // lo que puso el .mat via applyMaterialOverrides en la app real
+    std::error_code ec;
+    std::filesystem::path d = std::filesystem::temp_directory_path(ec) / "dt_matasset_detach_fallback";
+    std::filesystem::remove_all(d, ec);
+    std::filesystem::create_directories(d, ec);
+    const std::string matPath = (d / "rojo.mat").string();
+
+    MaterialAsset asset; asset.albedo = (d / "rojo.png").string();
+    std::string err;
+    CHECK(saveMaterialAsset(matPath, asset, &err));
+
+    auto go = makeMatAssetFixture(matPath);
+    go->editMesh()->material.texturePath = "assets/model_default.png";   // baseline que trae el FBX
+    applyMaterialOverrides(*go);   // como en la app real: el .mat ya resolvio el slot
+    CHECK(go->getMesh()->material.texturePath == asset.albedo);
+
     GameObject* selected = nullptr;
     bool isPlaying = false;
     EditorContext ctx{selected, isPlaying};
-    detachSceneReferencesForDelete(ctx, go.get(), knownPath, /*isDir=*/false);
+    detachSceneReferencesForDelete(ctx, go.get(), matPath, /*isDir=*/false);
+
     CHECK(go->materialOverrides[0].matAsset.empty());
+    CHECK(go->getMesh()->material.texturePath == "assets/model_default.png");
 }
 
 // El baseline (base*) apuntando al fichero que se acaba de borrar no era un
@@ -690,6 +710,34 @@ static void test_move_asset_carries_sidecar()
     CHECK(!fs::exists(importSidecarPath(base / "A" / "foto.png")));
 }
 
+// Hallazgo del reviewer final: las rutas de textura de un .mat se guardan
+// RELATIVAS A SU PROPIA CARPETA (MaterialAsset.cpp). Mover el .mat sin
+// reescribirlas las deja resueltas contra la carpeta nueva, que no es donde
+// esta la textura.
+static void test_move_asset_rewrites_mat_relative_texture()
+{
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path(ec) / "dt_cb_mat_move";
+    fs::remove_all(base, ec);
+    fs::create_directories(base / "A", ec);
+    fs::create_directories(base / "A" / "Metal", ec);
+    fs::create_directories(base / "B", ec);
+
+    const fs::path texture = base / "A" / "rojo.png";
+    std::ofstream(texture) << "x";
+    MaterialAsset asset; asset.albedo = texture.string();   // absoluta en memoria
+    std::string err;
+    CHECK(saveMaterialAsset(base / "A" / "x.mat", asset, &err));
+
+    // La textura queda FUERA de la carpeta destino: mover el .mat a B tiene
+    // que seguir apuntando a A/rojo.png, no a B/rojo.png.
+    const MoveOutcome m = moveAsset(base / "A" / "x.mat", base / "B");
+    CHECK(m.result == MoveResult::Moved);
+    CHECK(fs::exists(base / "B" / "x.mat"));
+    const MaterialAsset reloaded = loadMaterialAsset(base / "B" / "x.mat");
+    CHECK(fs::equivalent(reloaded.albedo, texture, ec));
+}
+
 // Review Focus 4.
 static void test_move_asset_rejects_when_destination_sidecar_exists()
 {
@@ -966,6 +1014,69 @@ static void test_classify_material_extension()
     CHECK(classifyAsset(".mat", true)  == AssetKind::Folder);   // una carpeta manda
 }
 
+// Hallazgo del reviewer final: el Browse del modal de edicion de un .mat
+// aceptaba una ruta absoluta de fuera del proyecto tal cual; ese .mat viaja
+// con ella y el juego exportado deja de encontrar la textura en otra maquina.
+static void test_accept_or_import_mat_texture_imports_external_path()
+{
+    std::error_code ec;
+    const fs::path projectRoot = fs::temp_directory_path(ec) / "dt_cb_matimport_project";
+    const fs::path outside     = fs::temp_directory_path(ec) / "dt_cb_matimport_outside";
+    fs::remove_all(projectRoot, ec);
+    fs::remove_all(outside, ec);
+    fs::create_directories(projectRoot, ec);
+    fs::create_directories(outside, ec);
+    std::ofstream(outside / "textura.png") << "x";
+
+    ProjectContext project(projectRoot);
+    const auto imported = acceptOrImportMatTexture(&project, outside / "textura.png");
+    CHECK(imported.has_value());
+    if (imported)
+    {
+        CHECK(project.contains(*imported));
+        CHECK(fs::exists(*imported));
+    }
+}
+
+// Una ruta que YA está dentro del proyecto se devuelve tal cual (sin copiar
+// una segunda vez).
+static void test_accept_or_import_mat_texture_leaves_internal_path()
+{
+    std::error_code ec;
+    const fs::path projectRoot = fs::temp_directory_path(ec) / "dt_cb_matimport_internal";
+    fs::remove_all(projectRoot, ec);
+    fs::create_directories(projectRoot / "assets", ec);
+    std::ofstream(projectRoot / "assets" / "textura.png") << "x";
+
+    ProjectContext project(projectRoot);
+    const auto result = acceptOrImportMatTexture(&project, projectRoot / "assets" / "textura.png");
+    CHECK(result.has_value());
+    if (result) CHECK(fs::equivalent(*result, projectRoot / "assets" / "textura.png", ec));
+}
+
+// Sin proyecto (tests headless, o el .mat se edita antes de elegir uno) se
+// acepta tal cual, como el resto del editor sin proyecto abierto.
+static void test_accept_or_import_mat_texture_without_project_passes_through()
+{
+    const fs::path anyPath = "C:/no/existe/x.png";
+    const auto result = acceptOrImportMatTexture(nullptr, anyPath);
+    CHECK(result.has_value());
+    if (result) CHECK(*result == anyPath);
+}
+
+// Hallazgo del reviewer final: un .mat suelto no se podia arrastrar desde el
+// grid (isImportableExtension no lo cubre, porque un .mat nunca se importa
+// de fuera del proyecto), asi que ni "Drop .mat here" en Properties ni mover
+// un .mat a otra carpeta arrastrandolo funcionaban.
+static void test_material_is_draggable()
+{
+    CHECK(isAssetDraggable(".mat", /*isDir=*/false, /*inMultiSelection=*/false));
+    CHECK(isAssetDraggable(".MAT", false, false));
+    CHECK(!isAssetDraggable(".unknownext", false, false));
+    CHECK(isAssetDraggable(".unknownext", false, /*inMultiSelection=*/true));
+    CHECK(isAssetDraggable("", /*isDir=*/true, false));
+}
+
 static void test_unique_material_name()
 {
     std::error_code ec;
@@ -1037,6 +1148,10 @@ static void test_apply_material_asset_write_failure_rebuilds_nothing()
 int main()
 {
     test_classify_material_extension();
+    test_material_is_draggable();
+    test_accept_or_import_mat_texture_imports_external_path();
+    test_accept_or_import_mat_texture_leaves_internal_path();
+    test_accept_or_import_mat_texture_without_project_passes_through();
     test_unique_material_name();
     test_apply_material_asset_writes_and_refreshes_all_users();
     test_apply_material_asset_write_failure_rebuilds_nothing();
@@ -1049,6 +1164,7 @@ int main()
     test_apply_without_renderer_still_writes();
     test_list_hides_import_sidecars();
     test_move_asset_carries_sidecar();
+    test_move_asset_rewrites_mat_relative_texture();
     test_move_asset_rejects_when_destination_sidecar_exists();
     test_rename_asset_file_carries_sidecar_and_rejects_conflict();
     test_rename_asset_file_case_only_is_not_a_sidecar_conflict();

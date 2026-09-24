@@ -33,12 +33,18 @@ static void test_default_is_all_inherit()
     CHECK(!isDefault(m));
 }
 
-static void test_missing_file_is_default_without_warning()
+// Hallazgo del reviewer final: el spec (linea 133) pide aviso para "un .mat
+// inexistente O ilegible", no solo para lo ilegible; sin esto, un .mat
+// borrado fuera del editor cargaba la escena con el modelo y sin explicar
+// por que. El coste en el camino caliente es cero: applyMaterialOverrides
+// llama a loadMaterialAsset sin `warning` (nullptr), asi que esto solo cuesta
+// cuando collectMaterialOverrideWarnings (solo al cargar escena) lo pide.
+static void test_missing_file_is_default_with_warning()
 {
     const fs::path d = makeDir();
     std::string warning = "x";
     CHECK(isDefault(loadMaterialAsset(d / "no_existe.mat", &warning)));
-    CHECK(warning.empty());
+    CHECK(!warning.empty());
 }
 
 static void test_roundtrip_always_writes_the_file()
@@ -149,7 +155,7 @@ static void test_unicode_path_and_missing_folder_error()
 int main()
 {
     test_default_is_all_inherit();
-    test_missing_file_is_default_without_warning();
+    test_missing_file_is_default_with_warning();
     test_roundtrip_always_writes_the_file();
     test_broken_and_wrong_type_are_default_with_warning();
     test_hostile_factor_values_are_clamped_or_inherited();

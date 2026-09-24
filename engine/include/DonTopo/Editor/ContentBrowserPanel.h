@@ -57,6 +57,26 @@ AssetKind classifyAsset(const std::string& ext, bool isDir);
 bool assetMatchesFilter(const std::string& name, AssetKind kind,
                         const std::string& text, std::optional<AssetKind> kindFilter);
 
+// true si el grid debe iniciar un drag para este asset: carpetas, lo que ya
+// admite importación de fuera del proyecto (isImportableExtension), un .mat
+// (asset del proyecto, nunca se importa de fuera, así que isImportableExtension
+// no lo cubre) o cualquiera que forme parte de una selección múltiple (mover
+// no depende de qué zonas de drop sepan aceptar el tipo). Declarada aquí para
+// que el test headless pueda enlazarla sin instanciar ImGui.
+bool isAssetDraggable(const std::string& ext, bool isDir, bool inMultiSelection);
+
+// Hallazgo del reviewer final: el Browse de textura del modal de edición de
+// un .mat aceptaba cualquier ruta absoluta de fuera del proyecto tal cual (a
+// diferencia del drop, que solo puede soltar un DT_ASSET_PATH ya dentro de
+// él). Ese path absoluto sobrevive en el .mat guardado y en el juego
+// exportado deja de existir en otra máquina. `path` de fuera del proyecto se
+// importa a assets/Imported/Textures (mismo destino que el resto del editor);
+// nullopt si la extensión no es de imagen o la copia falla. Sin `project`
+// (tests headless) se acepta tal cual, como el resto del editor sin proyecto
+// abierto.
+std::optional<std::filesystem::path> acceptOrImportMatTexture(const ProjectContext* project,
+                                                               const std::filesystem::path& path);
+
 // Ficheros y carpetas visibles de UNA carpeta (no recursivo), ordenados por path.
 // Las carpetas ocultas y de build quedan fuera con el mismo predicado que el
 // árbol; los ficheros no se filtran. Vacío —sin lanzar— si dir no existe, es un

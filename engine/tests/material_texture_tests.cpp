@@ -1854,6 +1854,48 @@ static std::filesystem::path matAssetTestDir(const char* name)
     return d;
 }
 
+// Hallazgo del reviewer final (spec linea 133): un .mat referenciado que
+// falta en disco tiene que avisar igual que uno roto, no solo lo ilegible —
+// antes de este fix, un .mat borrado fuera del editor cargaba la escena con
+// el modelo y sin ninguna pista de por que.
+static void test_missing_mat_asset_warns()
+{
+    const auto d = matAssetTestDir("dt_matasset_missing_warns");
+    auto go = makeStaticFixture();
+    go->materialOverrides.push_back(MaterialOverride{});
+    go->materialOverrides[0].matAsset = (d / "no_existe.mat").string();
+
+    std::vector<std::string> avisos;
+    collectMaterialOverrideWarnings(*go, avisos);
+    CHECK(avisos.size() == 1);
+    if (avisos.size() == 1)
+        CHECK(avisos[0].find(go->materialOverrides[0].matAsset) != std::string::npos);
+}
+
+// Spec: "aviso unico por ruta". Dos objetos que comparten el mismo .mat roto
+// no duplican el aviso (una escena grande con muchos usuarios del mismo .mat
+// no debe llenar el Log con la misma linea repetida).
+static void test_shared_broken_mat_asset_warns_once()
+{
+    const auto d = matAssetTestDir("dt_matasset_shared_warns_once");
+    const std::string matPath = (d / "no_existe.mat").string();
+
+    auto goA = makeStaticFixture();
+    goA->materialOverrides.push_back(MaterialOverride{});
+    goA->materialOverrides[0].matAsset = matPath;
+
+    auto goB = makeStaticFixture();
+    goB->materialOverrides.push_back(MaterialOverride{});
+    goB->materialOverrides[0].matAsset = matPath;
+
+    std::vector<std::string> avisos;
+    collectMaterialOverrideWarnings(*goA, avisos);
+    collectMaterialOverrideWarnings(*goB, avisos);
+    int matches = 0;
+    for (const std::string& w : avisos) if (w.find(matPath) != std::string::npos) ++matches;
+    CHECK(matches == 1);
+}
+
 // El .mat manda cuando NO hay override del objeto para ese campo.
 static void test_mat_asset_supplies_texture_when_no_override()
 {
@@ -1989,6 +2031,8 @@ int main()
 {
     test_set_material_asset_override_creates_entry_and_applies();
     test_material_asset_command_undo_redo();
+    test_missing_mat_asset_warns();
+    test_shared_broken_mat_asset_warns_once();
     test_mat_asset_supplies_texture_when_no_override();
     test_object_override_wins_over_mat_asset();
     test_mat_asset_with_only_one_field_leaves_the_rest_alone();

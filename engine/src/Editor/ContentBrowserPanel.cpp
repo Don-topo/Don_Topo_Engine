@@ -237,6 +237,25 @@ AssetKind classifyAsset(const std::string& ext, bool isDir)
     return AssetKind::Other;
 }
 
+bool isAssetDraggable(const std::string& ext, bool isDir, bool inMultiSelection)
+{
+    if (isDir || inMultiSelection || isImportableExtension(ext)) return true;
+    return classifyAsset(ext, false) == AssetKind::Material;
+}
+
+std::optional<std::filesystem::path> acceptOrImportMatTexture(const ProjectContext* project,
+                                                               const std::filesystem::path& path)
+{
+    if (!project || !project->valid() || project->contains(path))
+        return path;
+    const std::string ext = path.extension().string();
+    if (!isImportableExtension(ext)) return std::nullopt;
+    const std::filesystem::path destDir = importedAssetDestDir(project->root(), ext);
+    const AssetImportOutcome outcome = importExternalAsset(path, destDir);
+    if (outcome.result != AssetImportResult::Copied) return std::nullopt;
+    return outcome.destPath;
+}
+
 bool assetMatchesFilter(const std::string& name, AssetKind kind,
                         const std::string& text, std::optional<AssetKind> kindFilter)
 {
@@ -383,10 +402,43 @@ MoveOutcome moveAsset(const std::filesystem::path& src, const std::filesystem::p
     if (!isDir && importSidecarConflict(src, dest))
         return { MoveResult::RejectedNameConflict, {}, "" };
 
+    // Las rutas de textura de un .mat se guardan RELATIVAS A SU PROPIA
+    // CARPETA (MaterialAsset.cpp): mover el fichero (o una carpeta que
+    // contenga alguno) cambia esa carpeta, y sin reescribirlas quedarían
+    // resueltas contra la carpeta nueva en vez de la vieja. Se lee el
+    // contenido (ya resuelto a absoluto en memoria) ANTES de mover, mientras
+    // la ruta relativa todavía resuelve contra la carpeta correcta.
+    std::vector<std::pair<std::filesystem::path, MaterialAsset>> matContents;
+    if (!isDir)
+    {
+        if (lowerAscii(src.extension().string()) == ".mat")
+            matContents.push_back({ dest, loadMaterialAsset(src) });
+    }
+    else
+    {
+        std::error_code walkEc;
+        for (auto it = std::filesystem::recursive_directory_iterator(src, walkEc);
+             !walkEc && it != std::filesystem::recursive_directory_iterator(); it.increment(walkEc))
+        {
+            if (walkEc || !it->is_regular_file(walkEc)) continue;
+            if (lowerAscii(it->path().extension().string()) != ".mat") continue;
+            std::error_code relEc;
+            const std::filesystem::path rel = std::filesystem::relative(it->path(), src, relEc);
+            if (relEc) continue;
+            matContents.push_back({ dest / rel, loadMaterialAsset(it->path()) });
+        }
+    }
+
     ec.clear();
     std::filesystem::rename(src, dest, ec);
     if (ec)
         return { MoveResult::RejectedFailed, {}, ec.message() };
+
+    // saveMaterialAsset reescribe cada ruta relativa a la carpeta NUEVA del
+    // .mat, con el mismo valor absoluto de antes: la textura sigue
+    // encontrándose aunque el .mat haya cambiado de sitio.
+    for (const auto& [matDest, asset] : matContents)
+        saveMaterialAsset(matDest, asset);
 
     if (!isDir)
     {
@@ -800,6 +852,15 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                 // ya no está, y el flag *Taken se deja EN ALTO a propósito, que
                 // es lo que hace que un Clear posterior devuelva el slot a
                 // vacío en vez de resucitar la ruta muerta.
+                // A diferencia de albedo/normal/orm, que quedan vacíos y el
+                // material solo vuelve al baseline en la SIGUIENTE
+                // reaplicación (cualquier otra edición), matAsset resuelto vía
+                // applyMaterialOverrides ya escribió el valor del .mat en el
+                // Material: si se deja tal cual, el objeto se ve (y se exporta,
+                // hasta el siguiente Save/Load) con la última textura del .mat
+                // borrado. Por eso aquí SÍ se reaplica y reconstruye de
+                // inmediato, en vez de esperar a la próxima edición.
+                bool matAssetTaken = false;
                 for (MaterialOverride& ov : go->materialOverrides)
                 {
                     if (matches(ov.albedo)) ov.albedo.clear();
@@ -808,7 +869,18 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                     if (matches(ov.baseAlbedo)) ov.baseAlbedo.clear();
                     if (matches(ov.baseNormal)) ov.baseNormal.clear();
                     if (matches(ov.baseOrm))    ov.baseOrm.clear();
-                    if (matches(ov.matAsset))   ov.matAsset.clear();
+                    if (matches(ov.matAsset))   { ov.matAsset.clear(); matAssetTaken = true; }
+                }
+                if (matAssetTaken)
+                {
+                    applyMaterialOverrides(*go);
+                    if (ctx.renderer)
+                    {
+                        if (const SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
+                            ctx.renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
+                        else if (go->staticRenderIndex >= 0)
+                            ctx.renderer->rebuildStaticMesh(go->staticRenderIndex, *go->getMesh());
+                    }
                 }
             }
         }
@@ -1396,7 +1468,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             // un payload propio aunque alguno no sea "arrastrable" suelto: mover
             // no depende de qué zonas de drop sepan aceptar el tipo.
             const bool inMultiSelection = m_selection.items.size() > 1 && m_selection.contains(path);
-            const bool arrastrable = isDir || isImportableExtension(ext) || inMultiSelection;
+            const bool arrastrable = isAssetDraggable(ext, isDir, inMultiSelection);
             if (arrastrable && ImGui::BeginDragDropSource())
             {
                 // Arrastrar algo que no estaba seleccionado lo convierte en la
@@ -1806,7 +1878,13 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     m_matAssetDlgSlot = s.slot;
                     m_matAssetDlgOpen = true;
                     IGFD::FileDialogConfig cfg;
-                    cfg.path = "assets";
+                    cfg.path  = "assets";
+                    // Modal: sin esto, el diálogo se dibuja detrás del modal
+                    // "Material" (que ya está abierto) y ImGui bloquea el
+                    // input a cualquier ventana que no forme parte de la pila
+                    // de modales — el diálogo saldría visible pero no
+                    // clicable. Ver ImGuiFileDialogFlags_Modal.
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
                     m_matAssetFileDialog->OpenDialog("PickMatTextureDlg", "Choose image",
                                                      ".png,.jpg,.jpeg,.bmp,.tga", cfg);
                 }
@@ -1817,7 +1895,16 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 if (ImGui::BeginDragDropTarget())
                 {
                     if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                        *s.dest = std::string(static_cast<const char*>(payload->Data));
+                    {
+                        // Mismo veto que el resto del editor: el drop del
+                        // grid solo trae rutas YA del proyecto, pero nada
+                        // impide soltar un .fbx o un .wav aquí sin este
+                        // filtro (hallazgo del reviewer final).
+                        const std::string dropped = static_cast<const char*>(payload->Data);
+                        if (classifyAsset(std::filesystem::path(dropped).extension().string(), false)
+                            == AssetKind::Image)
+                            *s.dest = dropped;
+                    }
                     ImGui::EndDragDropTarget();
                 }
                 ImGui::EndChild();
@@ -1877,12 +1964,19 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         {
             if (m_matAssetFileDialog->IsOk())
             {
-                const std::string picked = m_matAssetFileDialog->GetFilePathName();
-                switch (m_matAssetDlgSlot)
+                // Mismo veto que los 18 diálogos de Properties: una ruta de
+                // fuera del proyecto se importa (o se rechaza si la
+                // extensión no es de imagen), nunca se guarda absoluta tal
+                // cual (hallazgo del reviewer final).
+                if (const auto picked = acceptOrImportMatTexture(
+                        ctx.project, m_matAssetFileDialog->GetFilePathName()))
                 {
-                    case DonTopo::MaterialTextureSlot::Albedo: m_matAssetEdit.albedo = picked; break;
-                    case DonTopo::MaterialTextureSlot::Normal: m_matAssetEdit.normal = picked; break;
-                    case DonTopo::MaterialTextureSlot::Orm:    m_matAssetEdit.orm    = picked; break;
+                    switch (m_matAssetDlgSlot)
+                    {
+                        case DonTopo::MaterialTextureSlot::Albedo: m_matAssetEdit.albedo = picked->string(); break;
+                        case DonTopo::MaterialTextureSlot::Normal: m_matAssetEdit.normal = picked->string(); break;
+                        case DonTopo::MaterialTextureSlot::Orm:    m_matAssetEdit.orm    = picked->string(); break;
+                    }
                 }
             }
             m_matAssetFileDialog->Close();

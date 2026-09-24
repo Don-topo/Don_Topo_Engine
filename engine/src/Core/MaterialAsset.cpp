@@ -48,7 +48,15 @@ MaterialAsset loadMaterialAsset(const std::filesystem::path& mat, std::string* w
 
     std::error_code ec;
     if (!std::filesystem::is_regular_file(mat, ec) || ec)
-        return out;                                    // ausente: lo normal, sin aviso
+    {
+        // Aunque el spec lo cuenta junto a "ilegible", SÍ se distingue del
+        // resto: applyMaterialOverrides llama a esta función sin `warning`
+        // (nullptr), así que `warn` no hace nada en el camino caliente — el
+        // coste solo existe cuando collectMaterialOverrideWarnings (que solo
+        // corre al cargar la escena) lo pide.
+        warn("material inexistente; se hereda todo del modelo");
+        return out;
+    }
 
     const std::uintmax_t size = std::filesystem::file_size(mat, ec);
     if (ec || size > kMaxMaterialAssetBytes)

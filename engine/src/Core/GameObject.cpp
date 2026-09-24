@@ -159,11 +159,19 @@ namespace DonTopo
         for (const MaterialOverride& ov : go.materialOverrides)
         {
             if (ov.matAsset.empty()) continue;
+            // Aviso unico por ruta (spec): esta funcion se llama una vez POR
+            // OBJETO en el mismo `out` compartido de toda la escena (ver
+            // Scene::fromJson), asi que varios objetos que comparten un .mat
+            // roto repetirian la misma linea sin esto.
+            const std::string marker = "material '" + ov.matAsset + "': ";
+            bool yaAvisado = false;
+            for (const std::string& w : out)
+                if (w.find(marker) != std::string::npos) { yaAvisado = true; break; }
+            if (yaAvisado) continue;
             std::string warning;
             loadMaterialAsset(ov.matAsset, &warning);
             if (!warning.empty())
-                out.push_back("mesh de '" + go.name + "'.materials: material '" +
-                              ov.matAsset + "': " + warning);
+                out.push_back("mesh de '" + go.name + "'.materials: " + marker + warning);
         }
     }
 
