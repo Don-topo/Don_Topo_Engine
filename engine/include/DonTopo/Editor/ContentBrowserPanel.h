@@ -338,7 +338,11 @@ private:
     std::filesystem::path m_matAssetTarget;
     MaterialAsset          m_matAssetEdit;
     std::string            m_matAssetError;
-    bool                   m_openMatAssetPopup = false;
+    // Ventana flotante NO modal (ImGui::Begin, no popup): ver el comentario
+    // junto a su uso en el .cpp — un popup modal bloqueaba el resto del
+    // editor y hacia imposible arrastrar una textura desde el grid hasta
+    // "Drop image here".
+    bool                   m_matAssetWindowOpen = false;
     bool                   m_matAssetDlgOpen     = false;
     DonTopo::MaterialTextureSlot m_matAssetDlgSlot = DonTopo::MaterialTextureSlot::Albedo;
     std::unique_ptr<IGFD::FileDialog> m_matAssetFileDialog;
