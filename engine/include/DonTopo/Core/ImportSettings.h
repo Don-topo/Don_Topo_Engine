@@ -72,6 +72,46 @@ bool saveAudioImportSettings(const std::filesystem::path& asset,
                              const AudioImportSettings& settings,
                              std::string* error = nullptr);
 
+// ── Modelos ──────────────────────────────────────────────────────────────────
+
+// De donde salen las normales de la malla. File = las del fichero (y planas si
+// faltan), que es lo que pasaba antes de que existiera el ajuste; Smooth y Flat
+// las REGENERAN siempre, aunque el fichero las traiga.
+enum class NormalsMode : uint8_t { File, Smooth, Flat };
+
+// Propiedades del FICHERO del modelo, no del objeto: el Transform.scale del
+// GameObject va aparte y se multiplica encima. La escala se hornea en la
+// geometria al importar (FBX en cm frente a m).
+struct ModelImportSettings
+{
+    float       scale            = 1.0f;               // [kModelScaleMin, kModelScaleMax]
+    NormalsMode normals          = NormalsMode::File;
+    bool        calcTangents     = true;
+    bool        flipUVs          = true;
+    bool        importAnimations = true;
+};
+inline constexpr float kModelScaleMin = 0.001f;
+inline constexpr float kModelScaleMax = 1000.0f;
+
+inline bool operator==(const ModelImportSettings& a, const ModelImportSettings& b)
+{
+    return a.scale == b.scale && a.normals == b.normals && a.calcTangents == b.calcTangents &&
+           a.flipUVs == b.flipUVs && a.importAnimations == b.importAnimations;
+}
+inline bool isDefault(const ModelImportSettings& s) { return s == ModelImportSettings{}; }
+
+// NaN o <= 0 -> 1 (una escala 0 colapsaria la malla); el resto se acota a
+// [0.001, 1000] (+inf da 1000).
+float clampModelScale(float scale);
+
+// Misma tolerancia que texturas y audio: nunca lanza.
+ModelImportSettings loadModelImportSettings(const std::filesystem::path& asset,
+                                            std::string* warning = nullptr);
+// Guardar el defecto BORRA el sidecar. La escala se escribe ya acotada.
+bool saveModelImportSettings(const std::filesystem::path& asset,
+                             const ModelImportSettings& settings,
+                             std::string* error = nullptr);
+
 // Dos rutas que nombran el mismo fichero (exista o no). Existentes: equivalent;
 // si no, la forma canonica debil de cada una, y en ultimo caso la lexica.
 bool sameAssetPath(const std::filesystem::path& a, const std::filesystem::path& b);
