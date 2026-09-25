@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 #include <unordered_map>
 #include <stdexcept>
 #include <filesystem>
@@ -667,15 +668,20 @@ namespace DonTopo
                                                            const std::string& raw)
     {
         namespace fs = std::filesystem;
-        const fs::path byName        = modelDir / fs::path(raw).filename();
-        const bool     looksAbsolute = raw.size() > 1 && raw[1] == ':';
-        const fs::path rel           = fs::path(raw).lexically_normal();
-        if (!looksAbsolute && staysInside(rel) && rel != rel.filename())
+        auto exists = [](const fs::path& p) { std::error_code ec; return fs::exists(p, ec) && !ec; };
+        // Assimp pasa la URI de una imagen glTF tal cual, con %20 y compania: se
+        // prueba tambien decodificada.
+        const std::string decoded = percentDecode(raw);
+        for (const std::string& r : { raw, decoded })
         {
-            std::error_code ec;
-            const fs::path sub = modelDir / rel;
-            if (fs::exists(sub, ec) && !ec) return sub;
+            const bool     looksAbsolute = r.size() > 1 && r[1] == ':';
+            const fs::path rel           = fs::path(r).lexically_normal();
+            if (!looksAbsolute && staysInside(rel) && rel != rel.filename() && exists(modelDir / rel))
+                return modelDir / rel;
         }
+        const fs::path byName = modelDir / fs::path(raw).filename();
+        if (decoded != raw && !exists(byName) && exists(modelDir / fs::path(decoded).filename()))
+            return modelDir / fs::path(decoded).filename();
         return byName;
     }
 
@@ -699,6 +705,26 @@ namespace DonTopo
                     while (b < e && std::isspace(static_cast<unsigned char>(line[b]))) ++b;
                     while (e > b && std::isspace(static_cast<unsigned char>(line[e - 1]))) --e;
                     addCompanion(out, line.substr(b, e - b));
+                }
+                // Las texturas que nombra cada .mtl, con su ruta TAL CUAL: el loader
+                // las resuelve respecto a la carpeta del modelo. Las opciones
+                // (-o, -s, -bm...) van delante, el nombre es el ultimo token.
+                const std::vector<std::string> libraries = out;
+                for (const std::string& lib : libraries)
+                {
+                    std::ifstream mtl{ fs::path(path).parent_path() / fs::path(lib) };
+                    while (std::getline(mtl, line))
+                    {
+                        std::istringstream words(line);
+                        std::string key, token, last;
+                        words >> key;
+                        for (char& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        if (key.rfind("map_", 0) != 0 && key != "bump" && key != "norm" &&
+                            key != "disp" && key != "refl")
+                            continue;
+                        while (words >> token) last = token;
+                        addCompanion(out, last);
+                    }
                 }
             }
             else if (ext == ".gltf")

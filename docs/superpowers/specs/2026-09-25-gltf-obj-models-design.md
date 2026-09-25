@@ -39,6 +39,17 @@ Fuera de alcance:
   texturas externas.
 - Exportar a glTF.
 
+Limitaciones conocidas (salieron en la revisión final, 2026-09-25):
+- **Un modelo estático solo carga su primera malla, sin la transformación de su
+  nodo.** `ModelLoader::load` toma `scene->mMeshes[0]` desde antes de esta
+  feature. Con FBX de un solo objeto no se notaba, pero Assimp convierte cada
+  primitive de glTF en una malla: un `.glb` estático con varios materiales o
+  varios nodos enseña solo la primera pieza. Un personaje con huesos no tiene el
+  problema (`loadSkinned` recorre todas). Queda como trabajo aparte.
+- **Un `buffers[].uri` con `%20` no carga**: Assimp abre el `.bin` con la URI
+  sin decodificar. Las **imágenes** con `%20` sí se resuelven (lo hace
+  `resolveModelTexture`).
+
 ## Decisiones
 
 ### 1. Una sola lista de formatos, en Core

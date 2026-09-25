@@ -255,54 +255,84 @@ std::vector<ExportAsset> collectSceneAssets(
     // modelo) lleva su sidecar: el runtime lo busca junto al asset. Es un ExportAsset mas:
     // comparte la carpeta de origen, asi que la numeracion de assets/_external/N y
     // la jerarquia dentro del proyecto salen iguales que las del asset.
-    auto addWithSidecar = [&](const std::string& raw)
+    // El sidecar va JUNTO al sitio real del asset en el paquete (que puede venir
+    // forzado, ver addModel), no donde lo pondria la regla general.
+    auto addWithSidecar = [&](const std::string& raw, const std::string& forcedPackagePath = {})
     {
         if (raw.empty()) return;
-        add(raw);
+        add(raw, forcedPackagePath);
         const fs::path sidecar = importSidecarPath(fs::path(raw));
         std::error_code sec;
-        if (fs::exists(sidecar, sec) && !sec)
-            add(sidecar.string());
+        if (!fs::exists(sidecar, sec) || sec) return;
+        const auto it = seen.find(exportPathKey(raw));
+        if (it == seen.end()) { add(sidecar.string()); return; }
+        add(sidecar.string(), importSidecarPath(fs::path(out[it->second].packagePath)).generic_string());
     };
 
     // Un modelo lleva su sidecar y los ficheros que lee ademas de si mismo (.mtl
-    // de un .obj, .bin e imagenes de un .gltf), colocados RESPECTO a la carpeta
-    // del modelo en el paquete: el runtime los busca en la misma ruta relativa, y
-    // fuera del proyecto otra assets/_external/N romperia esa relacion. Se
-    // añaden antes que las texturas del material para que la dedup conserve
-    // esta colocacion.
+    // y sus texturas, .bin e imagenes de un .gltf), colocados RESPECTO a la
+    // carpeta del modelo en el paquete: el runtime los busca en la misma ruta
+    // relativa, y fuera del proyecto otra assets/_external/N romperia esa
+    // relacion. Todos los modelos se recorren en una primera pasada, antes que
+    // cualquier material, para que la dedup conserve esta colocacion.
     auto addModel = [&](const std::string& raw)
     {
-        if (raw.empty()) return;
+        if (raw.empty() || seen.count(exportPathKey(raw))) return;   // ya estaba, con sus asociados
         addWithSidecar(raw);
         const auto it = seen.find(exportPathKey(raw));
         if (it == seen.end()) return;
         const fs::path modelPkgDir = fs::path(out[it->second].packagePath).parent_path();
         const fs::path modelDir    = fs::path(raw).parent_path();
         for (const std::string& rel : ModelLoader::modelCompanionFiles(raw))
-            add((modelDir / fs::path(rel)).string(), (modelPkgDir / fs::path(rel)).generic_string());
+            addWithSidecar((modelDir / fs::path(rel)).string(), (modelPkgDir / fs::path(rel)).generic_string());
     };
+
+    // Textura de material: si cuelga de la carpeta de su modelo, el runtime la
+    // deriva de ahi (el game.scene no guarda la textura base), asi que se coloca
+    // respecto al modelo en el paquete, como un asociado.
+    auto addMaterialTexture = [&](const std::string& modelPath, const std::string& tex)
+    {
+        if (tex.empty()) return;
+        const auto model = seen.find(exportPathKey(modelPath));
+        if (!modelPath.empty() && model != seen.end())
+        {
+            const fs::path rel = fs::path(tex).lexically_relative(fs::path(modelPath).parent_path());
+            const bool inside = !rel.empty() && !rel.has_root_path() &&
+                                std::none_of(rel.begin(), rel.end(), [](const fs::path& p) { return p == ".."; });
+            if (inside)
+            {
+                const fs::path modelPkgDir = fs::path(out[model->second].packagePath).parent_path();
+                addWithSidecar(tex, (modelPkgDir / rel).generic_string());
+                return;
+            }
+        }
+        addWithSidecar(tex);
+    };
+
+    // Primera pasada: los modelos y lo que leen.
+    scene.traverse([&](GameObject* go)
+    {
+        if (!go->hasMesh()) return;
+        addModel(go->getMesh()->sourcePath);
+        if (const SkinnedMesh* sm = go->getSkinnedMesh())
+            for (const AnimationSource& src : sm->animationSources)
+                addModel(src.path);             // la builtin repite sourcePath; addModel deduplica
+    });
 
     scene.traverse([&](GameObject* go)
     {
         if (go->hasMesh())
         {
             // sourcePath vacío = mesh procedural: su geometría ya viaja
-            // dentro del .scene, no hay fichero que copiar.
-            // Cada FBX lleva SU sidecar de ajustes de modelo (escala, normales...):
-            // ModelLoader lo lee junto al fichero, tambien dentro del paquete.
-            addModel(go->getMesh()->sourcePath);
-
-            if (const SkinnedMesh* sm = go->getSkinnedMesh())
-                for (const AnimationSource& src : sm->animationSources)
-                    addModel(src.path);         // la builtin repite sourcePath; add() deduplica
-
+            // dentro del .scene, no hay fichero que copiar. Los modelos ya
+            // entraron en la primera pasada, con su sidecar y sus asociados.
+            const std::string& modelPath = go->getMesh()->sourcePath;
             for (const Material* m : materialsOf(go))
             {
                 // Los embedded* no aportan path: viajan dentro del FBX.
-                addWithSidecar(m->texturePath);
-                addWithSidecar(m->normalMapPath);
-                addWithSidecar(m->metallicRoughnessPath);
+                addMaterialTexture(modelPath, m->texturePath);
+                addMaterialTexture(modelPath, m->normalMapPath);
+                addMaterialTexture(modelPath, m->metallicRoughnessPath);
             }
             for (const MaterialOverride& ov : go->materialOverrides)
                 if (!ov.matAsset.empty()) add(ov.matAsset);   // el .mat no lleva sidecar propio

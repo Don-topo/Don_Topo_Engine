@@ -69,11 +69,34 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
     }
     // Si el origen traia ajustes de importacion, viajan con la copia. Un fallo
     // aqui no deshace la importacion: el asset ya esta; se avisa en el mensaje.
+    std::string warnings;
     std::string sidecarError;
     if (!copyImportSidecar(source, dest, &sidecarError))
-        return { AssetImportResult::Copied, dest,
-                 "no se pudo copiar el .import.json: " + sidecarError, source };
-    return { AssetImportResult::Copied, dest, "", source };
+        warnings = "no se pudo copiar el .import.json: " + sidecarError;
+
+    // Un modelo lee otros ficheros (.mtl y sus texturas, .bin e imagenes de un
+    // .gltf) en rutas relativas a su carpeta: se copian con la misma ruta, o la
+    // copia del proyecto no carga o sale sin material. Uno que ya existe en el
+    // destino no se pisa (puede ser de otro modelo) y se avisa.
+    if (ModelLoader::isSupportedModelExtension(source.extension().string()))
+    {
+        for (const std::string& rel : ModelLoader::modelCompanionFiles(source.string()))
+        {
+            const std::filesystem::path from = source.parent_path() / std::filesystem::path(rel);
+            const std::filesystem::path to   = dest.parent_path() / std::filesystem::path(rel);
+            std::error_code cec;
+            if (!std::filesystem::is_regular_file(from, cec)) continue;   // referenciado pero ausente: el loader lo dira
+            std::filesystem::create_directories(to.parent_path(), cec);
+            if (!std::filesystem::copy_file(from, to, cec))
+            {
+                if (!warnings.empty()) warnings += "; ";
+                warnings += (cec == std::errc::file_exists ? "ya existia " : "no se pudo copiar ") + rel;
+                continue;
+            }
+            copyImportSidecar(from, to, nullptr);
+        }
+    }
+    return { AssetImportResult::Copied, dest, warnings, source };
 }
 
 std::string describeImportResult(const AssetImportOutcome& outcome)

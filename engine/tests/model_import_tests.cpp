@@ -702,6 +702,39 @@ static void test_gltf_missing_bin_fails_cleanly()
     CHECK(hasDependency(p, dir / "no_esta.bin"));      // vigilado: se regenera cuando aparezca
 }
 
+// Revision final, Critical 1: las texturas que nombra el .mtl tambien son
+// asociados del .obj, con su ruta tal cual (el loader las resuelve respecto a la
+// carpeta del modelo). La opcion antes del nombre (-o, -s...) no cuenta.
+static void test_companions_of_obj_include_the_mtl_textures()
+{
+    const fs::path dir = makeDir("dt_companions_obj_tex");
+    fs::create_directories(dir / "mats");
+    writeText(dir / "m.obj", "mtllib mats/a.mtl\nv 0 0 0\n");
+    writeText(dir / "mats" / "a.mtl", "newmtl x\nmap_Kd -o 0 0 0 tex/c.png\nmap_Bump n.png\nbump n.png\nKd 1 1 1\n");
+    const std::vector<std::string> c = ModelLoader::modelCompanionFiles((dir / "m.obj").string());
+    CHECK(c.size() == 3);
+    if (c.size() == 3) { CHECK(c[0] == "mats/a.mtl"); CHECK(c[1] == "tex/c.png"); CHECK(c[2] == "n.png"); }
+}
+
+// Revision final, Important 2: Assimp NO decodifica %20 en la URI de la imagen;
+// el loader tiene que encontrar "rojo x.tga" igual.
+static void test_gltf_texture_uri_with_spaces_loads()
+{
+    const fs::path dir = makeDir("dt_gltf_spaces");
+    fs::create_directories(dir / "textures");
+    const std::vector<uint8_t> bin = triangleBuffer();
+    std::ofstream(dir / "tri.bin", std::ios::binary).write(reinterpret_cast<const char*>(bin.data()), static_cast<std::streamsize>(bin.size()));
+    writeTga(dir / "textures" / "rojo x.tga", 4, 4, [](int, int) { return Rgba{ 255, 0, 0, 255 }; });
+    writeText(dir / "tri.gltf", triangleGltfJson("tri.bin", "textures/rojo%20x.tga"));
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "textures/rojo%20x.tga"), dir / "textures" / "rojo x.tga"));
+    try
+    {
+        const Mesh m = ModelLoader::load((dir / "tri.gltf").string());
+        CHECK(sameAssetPath(m.material.texturePath, dir / "textures" / "rojo x.tga"));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
 int main()
 {
     test_defaults_match_the_old_flags();
@@ -732,6 +765,8 @@ int main()
     test_gltf_with_external_bin_and_subfolder_texture();
     test_glb_loads();
     test_gltf_missing_bin_fails_cleanly();
+    test_companions_of_obj_include_the_mtl_textures();
+    test_gltf_texture_uri_with_spaces_loads();
 
     if (g_failures == 0) std::printf("ALL MODEL IMPORT TESTS PASSED\n");
     return g_failures == 0 ? 0 : 1;

@@ -1279,6 +1279,74 @@ static void test_obj_travels_with_its_mtl(const fs::path& root)
     fs::remove_all(dir, ec);
 }
 
+static std::string packagePathOf(const std::vector<ExportAsset>& assets, const fs::path& source)
+{
+    const std::string key = exportPathKey(source.string());
+    for (const ExportAsset& a : assets)
+        if (exportPathKey(a.sourcePath) == key) return a.packagePath;
+    return {};
+}
+
+// Revision final, Important 3a: la textura del material que cuelga de la carpeta
+// del modelo se coloca respecto al modelo en el paquete, como un asociado. El
+// runtime la deriva de ahi (el game.scene no guarda la textura base).
+static void test_external_model_texture_in_subfolder_stays_with_the_model(const fs::path& root)
+{
+    std::error_code ec;
+    const fs::path outside = fs::temp_directory_path(ec) / "dt_exporter_fbx_subtex";
+    fs::remove_all(outside, ec);
+    fs::create_directories(outside / "textures", ec);
+    std::ofstream(outside / "prop.fbx") << "fbx";
+    std::ofstream(outside / "textures" / "x.png") << "png";
+    Scene scene;
+    scene.addGameObject("p")->setMesh(makeMesh(outside / "prop.fbx", outside / "textures" / "x.png"));
+    const std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    const std::string base = fs::path(packagePathOf(assets, outside / "prop.fbx")).parent_path().generic_string();
+    CHECK(packagePathOf(assets, outside / "textures" / "x.png") == base + "/textures/x.png");
+    fs::remove_all(outside, ec);
+}
+
+// Revision final, Important 3b: aunque otro objeto recorrido ANTES use la misma
+// textura por su material, la colocacion la decide el modelo que la lee.
+static void test_model_companions_win_over_an_earlier_material_use(const fs::path& root)
+{
+    std::error_code ec;
+    const fs::path a = fs::temp_directory_path(ec) / "dt_exporter_order_a";
+    const fs::path b = fs::temp_directory_path(ec) / "dt_exporter_order_b";
+    fs::remove_all(a, ec);
+    fs::remove_all(b, ec);
+    fs::create_directories(a, ec);
+    std::ofstream(a / "other.fbx") << "fbx";
+    writeGltfWithCompanions(b);                                  // b/textures/rojo x.tga
+    Scene scene;
+    scene.addGameObject("a")->setMesh(makeMesh(a / "other.fbx", b / "textures" / "rojo x.tga"));
+    scene.addGameObject("b")->setMesh(makeMesh(b / "tri.gltf"));
+    const std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    const std::string base = fs::path(packagePathOf(assets, b / "tri.gltf")).parent_path().generic_string();
+    CHECK(packagePathOf(assets, b / "textures" / "rojo x.tga") == base + "/textures/rojo x.tga");
+    fs::remove_all(a, ec);
+    fs::remove_all(b, ec);
+}
+
+// Revision final, Important 3c: el sidecar de un asociado va JUNTO a su asset en
+// el paquete, no donde lo pondria la regla general.
+static void test_companion_sidecar_travels_next_to_it(const fs::path& root)
+{
+    std::error_code ec;
+    const fs::path outside = fs::temp_directory_path(ec) / "dt_exporter_companion_sidecar";
+    fs::remove_all(outside, ec);
+    writeGltfWithCompanions(outside);
+    std::ofstream(importSidecarPath(outside / "textures" / "rojo x.tga")) << "{}";
+    Scene scene;
+    scene.addGameObject("g")->setMesh(makeMesh(outside / "tri.gltf"));
+    const std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    const std::string tex = packagePathOf(assets, outside / "textures" / "rojo x.tga");
+    CHECK(!tex.empty());
+    CHECK(packagePathOf(assets, importSidecarPath(outside / "textures" / "rojo x.tga")) ==
+          importSidecarPath(fs::path(tex)).generic_string());
+    fs::remove_all(outside, ec);
+}
+
 int main()
 {
     fs::path root = makeProjectFixture();
@@ -1289,6 +1357,9 @@ int main()
     test_gltf_inside_the_project_travels_with_its_companions(root);
     test_gltf_outside_the_project_keeps_its_companions_together(root);
     test_obj_travels_with_its_mtl(root);
+    test_external_model_texture_in_subfolder_stays_with_the_model(root);
+    test_model_companions_win_over_an_earlier_material_use(root);
+    test_companion_sidecar_travels_next_to_it(root);
     test_collects_exactly_referenced(root);
     test_button_assets(root);
     test_procedural_mesh_contributes_nothing(root);

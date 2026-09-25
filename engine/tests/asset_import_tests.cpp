@@ -158,6 +158,32 @@ static void test_import_external_copies_sidecar(const fs::path& root)
     CHECK(!fs::exists(importSidecarPath(o2.destPath)));
 }
 
+// Revision final, Critical 1: importar un .gltf separado o un .obj con .mtl copia
+// tambien lo que el modelo lee, en su misma ruta relativa. Sin esto la copia del
+// proyecto no carga (.gltf) o sale sin material ni textura (.obj).
+static void test_import_model_brings_its_companions(const fs::path& root)
+{
+    std::error_code ec;
+    const fs::path src  = root / "companions_src";
+    const fs::path dest = root / "companions_dest";
+    fs::create_directories(src / "textures", ec);
+    std::ofstream(src / "tri.gltf") << R"({"asset":{"version":"2.0"},)"
+        R"("buffers":[{"uri":"tri.bin","byteLength":60}],"images":[{"uri":"textures/x.tga"}]})";
+    std::ofstream(src / "tri.bin") << "bin";
+    std::ofstream(src / "textures" / "x.tga") << "tga";
+    std::ofstream(src / "cube.obj") << "mtllib cube.mtl\nv 0 0 0\n";
+    std::ofstream(src / "cube.mtl") << "newmtl m\nmap_Kd tex.png\n";
+    std::ofstream(src / "tex.png") << "png";
+
+    CHECK(importExternalAsset(src / "tri.gltf", dest).result == AssetImportResult::Copied);
+    CHECK(fs::exists(dest / "tri.bin"));
+    CHECK(fs::exists(dest / "textures" / "x.tga"));
+
+    CHECK(importExternalAsset(src / "cube.obj", dest).result == AssetImportResult::Copied);
+    CHECK(fs::exists(dest / "cube.mtl"));
+    CHECK(fs::exists(dest / "tex.png"));
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -170,6 +196,7 @@ int main()
     test_import_name_conflict_does_not_overwrite(root);
     test_import_empty_dest_dir_is_rejected(root);
     test_import_uncreatable_dest_dir_reports_cause(root);
+    test_import_model_brings_its_companions(root);
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL ASSET IMPORT TESTS PASSED\n");
