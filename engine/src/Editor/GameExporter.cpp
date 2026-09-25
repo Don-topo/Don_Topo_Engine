@@ -244,8 +244,8 @@ std::vector<ExportAsset> collectSceneAssets(
         out.push_back(std::move(a));
     };
 
-    // Un asset con ajustes de importacion (textura de material, clip de audio)
-    // lleva su sidecar: el runtime lo busca junto al asset. Es un ExportAsset mas:
+    // Un asset con ajustes de importacion (textura de material, clip de audio,
+    // modelo) lleva su sidecar: el runtime lo busca junto al asset. Es un ExportAsset mas:
     // comparte la carpeta de origen, asi que la numeracion de assets/_external/N y
     // la jerarquia dentro del proyecto salen iguales que las del asset.
     auto addWithSidecar = [&](const std::string& raw)
@@ -264,11 +264,13 @@ std::vector<ExportAsset> collectSceneAssets(
         {
             // sourcePath vacío = mesh procedural: su geometría ya viaja
             // dentro del .scene, no hay fichero que copiar.
-            add(go->getMesh()->sourcePath);
+            // Cada FBX lleva SU sidecar de ajustes de modelo (escala, normales...):
+            // ModelLoader lo lee junto al fichero, tambien dentro del paquete.
+            addWithSidecar(go->getMesh()->sourcePath);
 
             if (const SkinnedMesh* sm = go->getSkinnedMesh())
                 for (const AnimationSource& src : sm->animationSources)
-                    add(src.path);   // la fuente builtin repite sourcePath; add() deduplica
+                    addWithSidecar(src.path);   // la builtin repite sourcePath; add() deduplica
 
             for (const Material* m : materialsOf(go))
             {
