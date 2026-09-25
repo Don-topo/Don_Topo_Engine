@@ -24,7 +24,7 @@ estado actual de cada hallazgo es este:
 |---|---|---|
 | U1 (import real de ficheros externos) | **CERRADO** | `AssetImport` (copia a `assets/Imported/<Tipo>/`, nunca sobreescribe) y `acceptOrImportAsset` en los 18 diálogos Browse; merge `8e65a5f`. La revisión final encontró que la primera versión dejaba pasar sin copiar justo el caso del Escritorio; corregido en `d7841cb`. |
 | U2 (drop desde el Explorador) | **CERRADO** | `glfwSetDropCallback` en las dos ramas de `sandbox/src/main.cpp` (Vulkan y D3D12); `8e65a5f` |
-| U3 (miniaturas) | **CERRADO solo para texturas** | Atlas compartido de 2048² con casillas de 64², decodificación en el `JobSystem`, subida en lote en Vulkan y D3D12; merge `1f7ad36`. **Modelos y materiales (`.mat`) siguen sin miniatura**: es lo único abierto de esta auditoría. |
+| U3 (miniaturas) | **CERRADO** | Texturas: atlas compartido de 2048² con casillas de 64², decodificación en el `JobSystem`, subida en lote en Vulkan y D3D12; merge `1f7ad36`. Modelos (`.fbx`/`.obj`) y materiales (`.mat`): rasterizado en CPU en el worker (`ModelLoader::loadPreview` + `rasterizeThumbnail`), sin código GPU nuevo; todas las miniaturas se guardan en `.dt-cache/thumbs/` con invalidación por dependencias. Spec `docs/superpowers/specs/2026-09-25-model-material-thumbnails-design.md`. `.gltf`/`.glb` siguen sin miniatura: Assimp está compilado solo con OBJ y FBX. |
 | U4 (breadcrumb / crear carpeta) | **CERRADO** | Breadcrumb `ab3994c`; Create Folder `5561836` |
 | U5 (menú Create) | **CERRADO** | Create > Folder `5561836`; Create > Material `7537f75` (merge `6f4e9b5`), al existir ya el asset `.mat` en el Core |
 | U6 (búsqueda y filtro) | **CERRADO** | Filtro por nombre y por tipo, `5561836` |
@@ -34,7 +34,7 @@ estado actual de cada hallazgo es este:
 
 En la comparación con Unity (§3): las capacidades 1, 3, 4, 5, 7 y 8 pasan a
 **EXISTE** (la 8 con latencia ≤ 0,5 s), la 6 (import settings) también, para
-texturas, audio y modelos, y la 2 a **EXISTE solo para texturas**.
+texturas, audio y modelos, y la 2 también (texturas, modelos y materiales).
 
 Las casillas de la §5 están marcadas según este estado; su texto es el de la
 propuesta original y no describe cómo se hizo.
@@ -165,7 +165,7 @@ nuevos, organizarlos, reutilizarlos), no por paridad con Unity per se.
       Reemplazaría el rescan-por-gesto actual por uno espontáneo. (U9)
       **Descartado**: U9 se cerró con polling de 0,5 s (`56dad33`), ver
       "Estado vigente".
-- [ ] **Miniaturas de modelos y materiales (`.mat`)** — lo que dejó abierto
+- [x] **Miniaturas de modelos y materiales (`.mat`)** — lo que dejó abierto
       la iteración de texturas. (U3)
 
 ### Features grandes (necesitan plan propio, spec/brainstorm previo)

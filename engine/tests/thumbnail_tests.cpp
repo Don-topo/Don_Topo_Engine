@@ -1266,6 +1266,16 @@ static void test_cache_stores_decoded_results_on_disk(const fs::path& dir)
     if (back) CHECK(back->rgba == makeThumbnail(f).rgba);
 }
 
+static void test_wants_thumbnail_kinds()
+{
+    CHECK(wantsThumbnail(AssetKind::Image));
+    CHECK(wantsThumbnail(AssetKind::Model3D));
+    CHECK(wantsThumbnail(AssetKind::Material));
+    for (AssetKind k : { AssetKind::Folder, AssetKind::Audio, AssetKind::Font, AssetKind::Scene,
+                         AssetKind::Script, AssetKind::Shader, AssetKind::Other })
+        CHECK(!wantsThumbnail(k));
+}
+
 int main()
 {
     fs::path dir = makeDir();
@@ -1325,6 +1335,7 @@ int main()
     test_cache_caps_models_in_flight(dir);
     test_cache_disk_hit_skips_the_decoder(dir);
     test_cache_stores_decoded_results_on_disk(dir);
+    test_wants_thumbnail_kinds();
     test_icon_button_id_is_stable_when_thumbnail_appears();
     std::error_code ec;
     fs::remove_all(dir, ec);

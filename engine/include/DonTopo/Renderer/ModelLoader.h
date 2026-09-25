@@ -34,6 +34,11 @@ namespace DonTopo
         float                  roughness = 0.5f;
     };
 
+    // Filtro de caja a kPreviewMaxTexture en el lado mayor, conservando la
+    // proporcion. Lo que ya cabe no se toca. rgba: w*h*4. Vive en
+    // PreviewImage.cpp junto al resto de la decodificacion del preview.
+    PreviewImage downscalePreviewImage(const uint8_t* rgba, int w, int h);
+
     struct ModelPreview
     {
         PreviewStatus                      status = PreviewStatus::Unreadable;

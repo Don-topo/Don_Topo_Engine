@@ -1676,6 +1676,10 @@ static void test_no_uploader_decodes_embedded_on_its_own()
             // las dimensiones con stbi_info antes de decodificar. No hay embebida
             // que elegir, que es lo unico que este test vigila.
             if (e.path().stem() == "Thumbnail") continue;
+            // Lo mismo para las texturas del preview de un modelo (miniaturas):
+            // el loader rellena ruta O embebida, nunca las dos, asi que tampoco
+            // hay nada que elegir. Solo este fichero; ModelLoader.cpp sigue vigilado.
+            if (e.path().stem() == "PreviewImage") continue;
             const std::vector<uint8_t> bytes = leeFichero(e.path().string());
             const std::string texto(bytes.begin(), bytes.end());
             if (texto.find("stbi_load_from_memory") != std::string::npos)
