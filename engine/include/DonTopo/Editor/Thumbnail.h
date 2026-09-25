@@ -1,4 +1,5 @@
 #pragma once
+#include "DonTopo/Core/FileStamp.h"
 #include "DonTopo/Renderer/ThumbnailAtlas.h"
 
 #include <cstdint>
@@ -19,13 +20,22 @@ namespace DonTopo {
 // 16k son 1 GB transitorios en un worker.
 constexpr uint64_t kThumbMaxSourcePixels = 100'000'000;
 
-enum class ThumbnailStatus { Ok, Unreadable, TooLarge };
+enum class ThumbnailStatus { Ok, Unreadable, TooLarge, AnimationOnly };
+
+// Un fichero del que depende una miniatura y su estado al generarla.
+using ThumbnailDependency = FileStamp;
 
 struct ThumbnailResult
 {
-    ThumbnailStatus      status = ThumbnailStatus::Unreadable;
-    std::vector<uint8_t> rgba;   // kThumbCell*kThumbCell*4 si status == Ok; vacio si no
+    ThumbnailStatus                  status = ThumbnailStatus::Unreadable;
+    std::vector<uint8_t>             rgba;   // kThumbCell*kThumbCell*4 si status == Ok; vacio si no
+    // Lo que declara el decodificador, a poder ser SELLADO antes de leer cada
+    // fichero (stampFile). stampDependencies sella lo que llegue sin sellar y
+    // pone el propio asset delante.
+    std::vector<ThumbnailDependency> dependencies;
 };
+
+inline constexpr float kNeutralAlbedo = 0.6f;   // lineal: el gris de un .mat que hereda
 
 // Decodifica path y lo reduce a UNA casilla kThumbCell x kThumbCell RGBA8:
 // conserva la proporcion (filtro de caja ponderado por alfa), no amplia lo que
@@ -38,6 +48,21 @@ ThumbnailResult makeThumbnail(const std::filesystem::path& path);
 // aparte para poder probar que rechazar una imagen enorme cuesta su CABECERA y no
 // leer el fichero entero.
 ThumbnailResult makeThumbnailFromStream(std::istream& in);
+
+// Pone `self` (el asset, sellado ANTES de decodificar) la primera, conserva el
+// sello de las dependencias que el decodificador ya sello y sella las que no.
+// Quita duplicados y el propio asset si el decodificador lo repitio.
+void stampDependencies(ThumbnailResult& r, const ThumbnailDependency& self);
+
+// .fbx/.obj: los que tarda segundos en decodificar (ver el tope de ThumbnailCache).
+bool isModelThumbnailPath(const std::filesystem::path& path);
+
+// Esfera con el albedo, metallic y roughness del .mat; lo heredado, neutro.
+ThumbnailResult makeMaterialThumbnail(const std::filesystem::path& mat);
+
+// Decodificador por extension: imagen -> makeThumbnail; .fbx/.obj -> preview
+// rasterizado; .mat -> esfera. Cualquier otra cosa, Unreadable. Nunca lanza.
+ThumbnailResult makeAssetThumbnail(const std::filesystem::path& path);
 
 // Reparto de las casillas del atlas entre claves (una por miniatura), con
 // desalojo LRU. "Uso" = pedir la casilla en el frame actual (assign/find).
@@ -78,6 +103,8 @@ private:
     uint64_t                               m_frame = 1;
 };
 
+class ThumbnailDiskCache;
+
 // Orquesta las miniaturas: pedidos desde el grid, decodificacion asincrona y
 // subida al atlas. NO conoce GPU ni JobSystem: recibe un Runner (para lanzar
 // trabajo fuera del hilo principal) y un Uploader (para copiar casillas al
@@ -92,12 +119,17 @@ public:
     using Runner   = std::function<bool(std::function<void()>)>;
     // Copia el lote de casillas al atlas. false = no se pudo (todo el lote falla).
     using Uploader = std::function<bool(const ThumbnailTile* tiles, size_t count)>;
-    // Decodifica UNA imagen a casilla. Por defecto makeThumbnail; existe como
+    // Decodifica UN asset a casilla. Por defecto makeAssetThumbnail; existe como
     // parametro para poder probar un decodificador que lanza.
     using Decoder  = std::function<ThumbnailResult(const std::filesystem::path&)>;
 
+    // disk: opcional; el worker la consulta antes de decodificar y guarda lo que
+    // decodifica. maxModelsInFlight: de los maxInFlight, cuantos pueden ser
+    // modelos (isModelThumbnailPath), que tardan segundos.
     ThumbnailCache(Runner run, Uploader upload, uint32_t maxInFlight = 4,
-                   uint32_t slotCapacity = kThumbSlotCount, Decoder decode = {});
+                   uint32_t slotCapacity = kThumbSlotCount, Decoder decode = {},
+                   std::shared_ptr<const ThumbnailDiskCache> disk = {},
+                   uint32_t maxModelsInFlight = 2);
     ThumbnailCache(const ThumbnailCache&)            = delete;
     ThumbnailCache& operator=(const ThumbnailCache&) = delete;
 
@@ -122,26 +154,35 @@ public:
     // generacion anterior se ignora.
     void newGeneration();
 
+    // Estado final de path: Ok si esta en el atlas; el motivo si fallo
+    // (Unreadable, TooLarge, AnimationOnly); nullopt si aun no se sabe.
+    std::optional<ThumbnailStatus> status(const std::filesystem::path& path) const;
+
     // Decodificaciones lanzadas cuyo resultado aun no se ha recogido.
     uint32_t inFlight() const { return m_inFlight; }
+    // De ellas, las de modelos.
+    uint32_t modelsInFlight() const { return m_modelsInFlight; }
 
 private:
     enum class State { Queued, Running, Decoded, Ready, Failed };
 
     struct Entry
     {
-        std::filesystem::path           path;
-        std::filesystem::file_time_type mtime{};
-        uint64_t                        key = 0;
-        State                           state = State::Queued;
-        std::vector<uint8_t>            pixels;            // solo en Decoded
-        uint64_t                        lastRequestFrame = 0;
+        std::filesystem::path            path;
+        std::vector<ThumbnailDependency> deps;              // [0] = el propio asset
+        uint64_t                         key = 0;
+        State                            state = State::Queued;
+        ThumbnailStatus                  status = ThumbnailStatus::Ok;   // motivo si Failed
+        bool                             model = false;     // cuenta para el tope de modelos
+        std::vector<uint8_t>             pixels;            // solo en Decoded
+        uint64_t                         lastRequestFrame = 0;
     };
 
     struct Done
     {
         uint64_t        generation = 0;
         std::string     path;
+        bool            model = false;
         ThumbnailResult result;
     };
 
@@ -153,14 +194,17 @@ private:
         std::vector<Done> done;
     };
 
-    static uint64_t makeKey(const std::filesystem::path& path, std::filesystem::file_time_type mtime);
+    static uint64_t makeKey(const std::filesystem::path& path, int64_t mtime);
     void            startJobs();
 
-    Runner                                 m_run;
-    Uploader                               m_upload;
-    Decoder                                m_decode;
-    uint32_t                               m_maxInFlight;
-    uint32_t                               m_inFlight   = 0;
+    Runner                                    m_run;
+    Uploader                                  m_upload;
+    Decoder                                   m_decode;
+    std::shared_ptr<const ThumbnailDiskCache> m_disk;
+    uint32_t                                  m_maxInFlight;
+    uint32_t                                  m_maxModelsInFlight;
+    uint32_t                                  m_modelsInFlight = 0;
+    uint32_t                                  m_inFlight   = 0;
     uint64_t                               m_frame      = 1;
     uint64_t                               m_generation = 1;
     ThumbnailSlots                         m_slots;

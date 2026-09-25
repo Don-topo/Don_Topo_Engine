@@ -2,6 +2,7 @@
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Editor/ModelReimport.h"
+#include "DonTopo/Editor/ThumbnailDiskCache.h"
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Editor/ProjectContext.h"
@@ -187,6 +188,11 @@ std::string assetIconButtonLabel(const char* text, bool hasThumbnail)
     // "###" fija el id: ImGui hashea la etiqueta entera, y sin esto el boton
     // cambiaria de id (y perderia el click en curso) al llegar la miniatura.
     return std::string(hasThumbnail ? "" : text) + "###icon";
+}
+
+bool wantsThumbnail(AssetKind kind)
+{
+    return kind == AssetKind::Image || kind == AssetKind::Model3D || kind == AssetKind::Material;
 }
 
 std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::path& dir)
@@ -1214,11 +1220,17 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 m_thumbAtlasId = atlasId;
                 EditorRenderer* renderer = ctx.renderer;
                 JobSystem*      jobs     = ctx.jobs;
+                // Junto a la de fuentes, en una carpeta con punto: .gitignore ya
+                // la excluye e isHiddenDir la oculta del propio Content Browser.
+                std::shared_ptr<const ThumbnailDiskCache> disk;
+                if (!m_projectRoot.empty())
+                    disk = std::make_shared<ThumbnailDiskCache>(m_projectRoot / ".dt-cache" / "thumbs");
                 m_thumbs = std::make_unique<ThumbnailCache>(
                     [jobs](std::function<void()> job) { return jobs->submit(std::move(job)) != 0; },
                     [renderer](const ThumbnailTile* tiles, size_t count) {
                         return renderer->uploadUiThumbnails(tiles, count);
-                    });
+                    },
+                    4, kThumbSlotCount, ThumbnailCache::Decoder{}, std::move(disk));
                 m_thumbDir = m_currentDir;
             }
         }
@@ -1373,12 +1385,21 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             }
 
             ImGui::PushID(path.string().c_str());
-            // Solo las imágenes que están a la vista: una carpeta de miles de
-            // texturas no debe lanzar miles de decodificaciones.
+            // Solo lo que está a la vista: una carpeta de miles de assets no debe
+            // lanzar miles de decodificaciones.
             std::optional<UvRect> thumb;
-            if (m_thumbs && kind == AssetKind::Image &&
+            if (m_thumbs && wantsThumbnail(kind) &&
                 ImGui::IsRectVisible(ImVec2(ICON_SIZE, ICON_SIZE)))
+            {
                 thumb = m_thumbs->request(path);
+                // Un FBX sin malla (solo clips) no es un fallo: icono propio.
+                if (!thumb && kind == AssetKind::Model3D &&
+                    m_thumbs->status(path) == ThumbnailStatus::AnimationOnly)
+                {
+                    btnColor = ImVec4(0.10f, 0.40f, 0.60f, 1.0f);
+                    label    = "ANI";
+                }
+            }
             // Seleccionado: borde claro y color más vivo. El borde se apila ANTES
             // que los colores del botón para poder sacarlo el último.
             const bool selected = m_selection.contains(path);

@@ -6,10 +6,13 @@
 #include "DonTopo/Core/ImportSettings.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -343,6 +346,165 @@ static void test_animation_source_uses_its_own_scale()
                   doubled(copy0.value.z, k1->value.z));
 }
 
+// ── Preview para las miniaturas del Content Browser ──────────────────────────
+
+using Rgba = std::array<uint8_t, 4>;
+
+// TGA sin comprimir de 32 bits, origen arriba a la izquierda.
+static void writeTga(const fs::path& p, int w, int h, const std::function<Rgba(int, int)>& pixel)
+{
+    std::ofstream f(p, std::ios::binary);
+    uint8_t hdr[18] = {};
+    hdr[2]  = 2;
+    hdr[12] = static_cast<uint8_t>(w & 0xFF);
+    hdr[13] = static_cast<uint8_t>((w >> 8) & 0xFF);
+    hdr[14] = static_cast<uint8_t>(h & 0xFF);
+    hdr[15] = static_cast<uint8_t>((h >> 8) & 0xFF);
+    hdr[16] = 32;
+    hdr[17] = 0x28;
+    f.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+        {
+            const Rgba c = pixel(x, y);
+            const uint8_t bgra[4] = { c[2], c[1], c[0], c[3] };
+            f.write(reinterpret_cast<const char*>(bgra), 4);
+        }
+}
+
+static size_t previewTriangles(const ModelPreview& p)
+{
+    size_t n = 0;
+    for (const PreviewPart& part : p.parts) n += part.indices.size() / 3;
+    return n;
+}
+
+static bool hasDependency(const ModelPreview& p, const fs::path& dep)
+{
+    for (const FileStamp& d : p.dependencies)
+        if (d.stamped && sameAssetPath(d.path, dep)) return true;   // selladas, no solo nombradas
+    return false;
+}
+
+// El preview pinta lo mismo que el motor: mismo numero de triangulos que loadAuto,
+// en un modelo estatico con textura y en un personaje con varias submallas.
+static void test_preview_matches_the_engine_triangle_count()
+{
+    for (const char* file : { "assets/modelTexture.fbx", "assets/modelAnimation.fbx" })
+    {
+        const std::shared_ptr<Mesh> engine = ModelLoader::loadAuto(file);
+        const ModelPreview preview = ModelLoader::loadPreview(file);
+        CHECK(preview.status == PreviewStatus::Ok);
+        CHECK(engine && !engine->indices.empty());
+        if (!engine) continue;
+        CHECK(previewTriangles(preview) == engine->indices.size() / 3);
+    }
+    // El personaje trae varias submallas: una parte por cada una.
+    const ModelPreview character = ModelLoader::loadPreview("assets/modelAnimation.fbx");
+    CHECK(character.parts.size() > 1);
+
+    // Estatico con DOS mallas (dos grupos de OBJ, sin huesos): load solo pinta la
+    // primera, y el preview tambien. Ningun asset del repo cubre este caso.
+    const fs::path dir = makeDir("dt_model_preview_two_meshes");
+    writeText(dir / "dos.obj",
+              "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 5 0 0\nv 6 0 0\nv 5 1 0\n"
+              "g a\nf 1 2 3\n"
+              "g b\nf 4 5 6\n");
+    const std::shared_ptr<Mesh> twoEngine = ModelLoader::loadAuto((dir / "dos.obj").string());
+    const ModelPreview twoPreview = ModelLoader::loadPreview((dir / "dos.obj").string());
+    CHECK(twoEngine && twoEngine->indices.size() == 3);      // precondicion: el motor pinta una
+    if (twoEngine) CHECK(previewTriangles(twoPreview) == twoEngine->indices.size() / 3);
+}
+
+// La textura embebida se reduce: lado mayor <= 256.
+static void test_preview_texture_is_downscaled()
+{
+    const ModelPreview p = ModelLoader::loadPreview("assets/modelTexture.fbx");
+    bool textured = false;
+    for (const PreviewPart& part : p.parts)
+    {
+        if (part.albedo.rgba.empty()) continue;
+        textured = true;
+        CHECK(std::max(part.albedo.w, part.albedo.h) <= kPreviewMaxTexture);
+        CHECK(part.albedo.rgba.size() == static_cast<size_t>(part.albedo.w) * part.albedo.h * 4);
+    }
+    CHECK(textured);   // precondicion: el fixture trae textura
+}
+
+// Un FBX que solo trae animacion (Mixamo "without skin") no es un fallo.
+static void test_preview_animation_only_file()
+{
+    const ModelPreview p = ModelLoader::loadPreview("assets/animatedCharacter/standing idle 01.fbx");
+    CHECK(p.status == PreviewStatus::AnimationOnly);
+    CHECK(p.parts.empty());
+}
+
+static void test_preview_garbage_and_missing_are_unreadable()
+{
+    const fs::path dir = makeDir("dt_model_preview_garbage");
+    writeText(dir / "basura.fbx", "esto no es un fbx");
+    CHECK(ModelLoader::loadPreview((dir / "basura.fbx").string()).status == PreviewStatus::Unreadable);
+    CHECK(ModelLoader::loadPreview((dir / "no_existe.obj").string()).status == PreviewStatus::Unreadable);
+}
+
+// Textura externa: se lee, se reduce conservando la proporcion y es una dependencia.
+// El sidecar tambien lo es aunque todavia no exista.
+static void test_preview_external_texture_and_sidecar_are_dependencies()
+{
+    const fs::path dir = makeDir("dt_model_preview_external");
+    writeTga(dir / "rojo.tga", 512, 128, [](int, int) { return Rgba{ 255, 0, 0, 255 }; });
+    writeText(dir / "quad.mtl", "newmtl m\nmap_Kd rojo.tga\n");
+    writeText(dir / "quad.obj",
+              "mtllib quad.mtl\nusemtl m\n"
+              "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+              "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+              "f 1/1 2/2 3/3\nf 1/1 3/3 4/4\n");
+    const fs::path obj = dir / "quad.obj";
+    const ModelPreview p = ModelLoader::loadPreview(obj.string());
+    CHECK(p.status == PreviewStatus::Ok);
+    CHECK(p.parts.size() == 1);
+    if (p.parts.size() != 1) return;
+    const PreviewImage& img = p.parts[0].albedo;
+    CHECK(img.w == 256 && img.h == 64);
+    if (!img.rgba.empty()) CHECK(img.rgba[0] == 255 && img.rgba[1] == 0 && img.rgba[2] == 0);
+    CHECK(hasDependency(p, dir / "rojo.tga"));
+    CHECK(hasDependency(p, importSidecarPath(obj)));
+    // Revision final, Important 2: cambiar map_Kd en el .mtl no toca el .obj; sin
+    // esto la miniatura no se regeneraria nunca.
+    CHECK(hasDependency(p, dir / "quad.mtl"));
+}
+
+// El sidecar cambia el aspecto: normals = flat regenera las normales del fichero.
+static void test_preview_respects_the_normals_setting()
+{
+    const fs::path obj = writeObj("dt_model_preview_normals", kFoldedObjWithNormals);
+    auto hasTiltedNormal = [](const ModelPreview& p) {
+        for (const PreviewPart& part : p.parts)
+            for (const glm::vec3& n : part.normals)
+                if (glm::length(n - kFaceNormal2) < 1e-3f) return true;
+        return false;
+    };
+    CHECK(!hasTiltedNormal(ModelLoader::loadPreview(obj.string())));   // las del fichero: todas +Z
+    ModelImportSettings s;
+    s.normals = NormalsMode::Flat;
+    writeSettings(obj, s);
+    CHECK(hasTiltedNormal(ModelLoader::loadPreview(obj.string())));
+}
+
+// Una textura enorme se rechaza por su CABECERA: 65535 x 65535 sin cuerpo.
+static void test_preview_image_rejects_huge_sources()
+{
+    const fs::path dir = makeDir("dt_model_preview_huge");
+    {
+        std::ofstream f(dir / "huge.tga", std::ios::binary);
+        uint8_t hdr[18] = {};
+        hdr[2] = 2; hdr[12] = 0xFF; hdr[13] = 0xFF; hdr[14] = 0xFF; hdr[15] = 0xFF; hdr[16] = 32; hdr[17] = 0x28;
+        f.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
+    }
+    CHECK(ModelLoader::loadPreviewImage(dir / "huge.tga").rgba.empty());
+    CHECK(ModelLoader::loadPreviewImage(dir / "no_existe.png").rgba.empty());
+}
+
 int main()
 {
     test_defaults_match_the_old_flags();
@@ -356,6 +518,13 @@ int main()
     test_skinned_scale_scales_geometry_bones_and_clips();
     test_import_animations_off_leaves_the_builtin_source_empty();
     test_animation_source_uses_its_own_scale();
+    test_preview_matches_the_engine_triangle_count();
+    test_preview_texture_is_downscaled();
+    test_preview_animation_only_file();
+    test_preview_garbage_and_missing_are_unreadable();
+    test_preview_external_texture_and_sidecar_are_dependencies();
+    test_preview_respects_the_normals_setting();
+    test_preview_image_rejects_huge_sources();
 
     if (g_failures == 0) std::printf("ALL MODEL IMPORT TESTS PASSED\n");
     return g_failures == 0 ? 0 : 1;

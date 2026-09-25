@@ -1,7 +1,11 @@
 // Tests headless de las miniaturas del Content Browser (sin GPU ni ImGui).
 // Plain main + CHECK, mismo patron que content_browser_tests.cpp.
+#include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/Thumbnail.h"
+#include "DonTopo/Editor/ThumbnailDiskCache.h"
+#include "DonTopo/Editor/ThumbnailRaster.h"
 
 #include <imgui.h>
 
@@ -14,6 +18,7 @@
 #include <fstream>
 #include <functional>
 #include <istream>
+#include <limits>
 #include <stdexcept>
 #include <streambuf>
 #include <string>
@@ -316,7 +321,9 @@ struct CacheHarness
     ThumbnailCache                      cache;
 
     explicit CacheHarness(uint32_t maxInFlight = 4, uint32_t slotCapacity = kThumbSlotCount,
-                          ThumbnailCache::Decoder decoder = {})
+                          ThumbnailCache::Decoder decoder = {},
+                          std::shared_ptr<const ThumbnailDiskCache> disk = {},
+                          uint32_t maxModelsInFlight = 2)
         : cache(
               [this](std::function<void()> job) {
                   if (!runnerAccepts) return false;
@@ -330,7 +337,7 @@ struct CacheHarness
                   uploads.push_back(std::move(slots));
                   return uploadOk;
               },
-              maxInFlight, slotCapacity, std::move(decoder))
+              maxInFlight, slotCapacity, std::move(decoder), std::move(disk), maxModelsInFlight)
     {}
 
     // Termina todos los jobs encolados (como si los workers acabaran a la vez).
@@ -728,6 +735,590 @@ static void test_icon_button_id_is_stable_when_thumbnail_appears()
     ImGui::DestroyContext(ctx);
 }
 
+// ── rasterizeThumbnail ───────────────────────────────────────────────────────
+
+static PreviewImage solidImage(Rgba c)
+{
+    PreviewImage img;
+    img.w = img.h = 1;
+    img.rgba = { c[0], c[1], c[2], c[3] };
+    return img;
+}
+
+static PreviewPart cubePart()
+{
+    PreviewPart p;
+    const glm::vec3 n[6] = { {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1} };
+    for (const glm::vec3& f : n)
+    {
+        const glm::vec3 u = std::abs(f.y) > 0.5f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+        const glm::vec3 v = glm::cross(f, u);
+        const uint32_t base = static_cast<uint32_t>(p.positions.size());
+        for (const glm::vec2 c : { glm::vec2(-1, -1), glm::vec2(1, -1), glm::vec2(1, 1), glm::vec2(-1, 1) })
+        {
+            p.positions.push_back(f + u * c.x + v * c.y);
+            p.normals.push_back(f);
+            p.uvs.emplace_back(0.5f);
+            p.colors.emplace_back(1.0f);
+        }
+        p.indices.insert(p.indices.end(), { base, base + 1, base + 2, base, base + 2, base + 3 });
+    }
+    return p;
+}
+
+static bool reddish(const Rgba& c) { return c[3] == 255 && c[0] > c[1] + 40 && c[0] > c[2] + 40; }
+
+static void test_raster_sphere_takes_the_albedo_color()
+{
+    PreviewPart s = makePreviewSphere();
+    s.albedo = solidImage({ 255, 0, 0, 255 });
+    const ThumbnailResult r = rasterizeThumbnail({ s });
+    CHECK(r.status == ThumbnailStatus::Ok);
+    if (r.rgba.empty()) return;
+    CHECK(reddish(pixelAt(r, 32, 32)));
+    CHECK(isClear(pixelAt(r, 0, 0)));
+}
+
+static void test_raster_uses_vertex_color_without_texture()
+{
+    PreviewPart s = makePreviewSphere();
+    for (glm::vec3& c : s.colors) c = glm::vec3(0.0f, 1.0f, 0.0f);
+    const ThumbnailResult r = rasterizeThumbnail({ s });
+    CHECK(r.status == ThumbnailStatus::Ok);
+    if (r.rgba.empty()) return;
+    const Rgba c = pixelAt(r, 32, 32);
+    CHECK(c[1] > c[0] + 40 && c[1] > c[2] + 40);
+}
+
+// Encuadre: el cubo ocupa la casilla con margen y no toca el borde.
+static void test_raster_frames_the_bbox_with_a_margin()
+{
+    const ThumbnailResult r = rasterizeThumbnail({ cubePart() });
+    CHECK(r.status == ThumbnailStatus::Ok);
+    if (r.rgba.empty()) return;
+    int minX = 64, maxX = -1, minY = 64, maxY = -1;
+    for (uint32_t y = 0; y < kThumbCell; ++y)
+        for (uint32_t x = 0; x < kThumbCell; ++x)
+            if (pixelAt(r, x, y)[3] > 200)
+            {
+                minX = std::min<int>(minX, x); maxX = std::max<int>(maxX, x);
+                minY = std::min<int>(minY, y); maxY = std::max<int>(maxY, y);
+            }
+    CHECK(minX >= 1 && minY >= 1 && maxX <= 62 && maxY <= 62);    // margen
+    CHECK(std::max(maxX - minX, maxY - minY) >= 52);               // y aun asi llena la casilla
+}
+
+static void test_raster_is_deterministic()
+{
+    PreviewPart s = makePreviewSphere();
+    s.albedo = solidImage({ 10, 200, 90, 255 });
+    CHECK(rasterizeThumbnail({ s }).rgba == rasterizeThumbnail({ s }).rgba);
+}
+
+static void test_raster_metallic_and_roughness_change_the_result()
+{
+    PreviewPart shiny = makePreviewSphere();
+    shiny.metallic = 1.0f; shiny.roughness = 0.2f;
+    PreviewPart matte = makePreviewSphere();
+    matte.metallic = 0.0f; matte.roughness = 0.9f;
+    CHECK(rasterizeThumbnail({ shiny }).rgba != rasterizeThumbnail({ matte }).rgba);
+}
+
+// Las dos caras de un triangulo se pintan igual (la miniatura no hace culling).
+static void test_raster_draws_back_faces()
+{
+    auto tri = [](bool flip) {
+        PreviewPart p;
+        p.positions = { { -1, -1, 0 }, { 1, -1, 0 }, { 0, 1, 0 } };
+        p.normals   = { { 0, 0, 1 }, { 0, 0, 1 }, { 0, 0, 1 } };
+        p.uvs       = { {}, {}, {} };
+        p.colors    = { glm::vec3(1), glm::vec3(1), glm::vec3(1) };
+        p.indices   = flip ? std::vector<uint32_t>{ 0, 2, 1 } : std::vector<uint32_t>{ 0, 1, 2 };
+        return p;
+    };
+    auto covered = [](const ThumbnailResult& r) {
+        int n = 0;
+        for (size_t i = 3; i < r.rgba.size(); i += 4) n += r.rgba[i] == 255;
+        return n;
+    };
+    const ThumbnailResult a = rasterizeThumbnail({ tri(false) });
+    const ThumbnailResult b = rasterizeThumbnail({ tri(true) });
+    CHECK(covered(a) > 100);
+    CHECK(covered(a) == covered(b));
+
+    // Y se ILUMINAN igual: normales hacia atras se invierten, no dejan la cara a oscuras.
+    PreviewPart back = tri(false);
+    for (glm::vec3& n : back.normals) n = -n;
+    CHECK(rasterizeThumbnail({ back }).rgba == a.rgba);
+}
+
+// Review Focus 5: basura -> Unreadable, sin NaN ni crash.
+static void test_raster_degenerate_input_is_unreadable()
+{
+    CHECK(rasterizeThumbnail({}).status == ThumbnailStatus::Unreadable);
+
+    PreviewPart point;
+    point.positions = { { 1, 1, 1 }, { 1, 1, 1 }, { 1, 1, 1 } };
+    point.indices   = { 0, 1, 2 };
+    CHECK(rasterizeThumbnail({ point }).status == ThumbnailStatus::Unreadable);
+
+    PreviewPart nan = point;
+    const float q = std::numeric_limits<float>::quiet_NaN();
+    nan.positions = { { q, 0, 0 }, { 0, q, 0 }, { 0, 0, q } };
+    CHECK(rasterizeThumbnail({ nan }).status == ThumbnailStatus::Unreadable);
+
+    PreviewPart outOfRange = cubePart();
+    outOfRange.indices = { 0, 1, 999 };
+    CHECK(rasterizeThumbnail({ outOfRange }).status == ThumbnailStatus::Unreadable);
+
+    // Un triangulo bueno y uno con NaN: el bueno se pinta y no hay NaN en la salida.
+    PreviewPart mixed = cubePart();
+    mixed.positions.push_back({ q, q, q });
+    const uint32_t bad = static_cast<uint32_t>(mixed.positions.size() - 1);
+    mixed.normals.push_back({ 0, 1, 0 }); mixed.uvs.emplace_back(0.0f); mixed.colors.emplace_back(1.0f);
+    mixed.indices.insert(mixed.indices.end(), { 0, 1, bad });
+    CHECK(rasterizeThumbnail({ mixed }).status == ThumbnailStatus::Ok);
+}
+
+// ── makeAssetThumbnail ───────────────────────────────────────────────────────
+
+static bool hasDep(const ThumbnailResult& r, const fs::path& p)
+{
+    for (const ThumbnailDependency& d : r.dependencies)
+        if (fs::path(d.path).lexically_normal() == p.lexically_normal()) return true;
+    return false;
+}
+
+static void writeMat(const fs::path& p, const MaterialAsset& a)
+{
+    std::string err;
+    CHECK(saveMaterialAsset(p, a, &err));
+}
+
+// Una imagen pasa por el decodificador de siempre: mismos bytes.
+static void test_asset_thumbnail_image_is_unchanged(const fs::path& dir)
+{
+    writeTga(dir / "img_same.tga", 20, 10, [](int x, int) { return x < 10 ? kRed : kBlue; });
+    const ThumbnailResult a = makeAssetThumbnail(dir / "img_same.tga");
+    const ThumbnailResult b = makeThumbnail(dir / "img_same.tga");
+    CHECK(a.status == ThumbnailStatus::Ok);
+    CHECK(a.rgba == b.rgba);
+}
+
+static void test_asset_thumbnail_model_declares_its_dependencies(const fs::path& dir)
+{
+    writeTga(dir / "obj_tex.tga", 4, 4, [](int, int) { return kRed; });
+    std::ofstream(dir / "quad.mtl") << "newmtl m\nmap_Kd obj_tex.tga\n";
+    std::ofstream(dir / "quad.obj") << "mtllib quad.mtl\nusemtl m\n"
+                                       "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+                                       "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+                                       "f 1/1 2/2 3/3\nf 1/1 3/3 4/4\n";
+    const ThumbnailResult r = makeAssetThumbnail(dir / "quad.obj");
+    CHECK(r.status == ThumbnailStatus::Ok);
+    CHECK(hasDep(r, dir / "obj_tex.tga"));
+    CHECK(hasDep(r, importSidecarPath(dir / "quad.obj")));
+}
+
+static void test_asset_thumbnail_animation_only_fbx()
+{
+    const ThumbnailResult r = makeAssetThumbnail("assets/animatedCharacter/standing idle 01.fbx");
+    CHECK(r.status == ThumbnailStatus::AnimationOnly);
+    CHECK(r.rgba.empty());
+}
+
+static void test_material_thumbnail_takes_its_albedo(const fs::path& dir)
+{
+    writeTga(dir / "mat_red.tga", 4, 4, [](int, int) { return kRed; });
+    MaterialAsset a;
+    a.albedo = (dir / "mat_red.tga").string();
+    writeMat(dir / "red.mat", a);
+    const ThumbnailResult r = makeAssetThumbnail(dir / "red.mat");
+    CHECK(r.status == ThumbnailStatus::Ok);
+    if (!r.rgba.empty()) CHECK(reddish(pixelAt(r, 32, 32)));
+    CHECK(hasDep(r, dir / "mat_red.tga"));
+}
+
+// Heredado -> gris neutro. Y los valores LEIDOS del .mat cuentan: se prueban
+// roughness 0.1 frente a 0.9 y metallic 1, ninguno el default.
+static void test_material_thumbnail_inherits_neutral_and_reads_factors(const fs::path& dir)
+{
+    writeMat(dir / "neutral.mat", MaterialAsset{});
+    const ThumbnailResult n = makeAssetThumbnail(dir / "neutral.mat");
+    CHECK(n.status == ThumbnailStatus::Ok);
+    if (!n.rgba.empty())
+    {
+        const Rgba c = pixelAt(n, 32, 32);
+        CHECK(std::abs(int(c[0]) - int(c[1])) <= 2 && std::abs(int(c[1]) - int(c[2])) <= 12);   // gris (el ambiente tinta un poco el azul)
+    }
+
+    MaterialAsset smooth; smooth.roughness = 0.1f;
+    MaterialAsset rough;  rough.roughness  = 0.9f;
+    MaterialAsset metal;  metal.metallic   = 1.0f;
+    writeMat(dir / "smooth.mat", smooth);
+    writeMat(dir / "rough.mat", rough);
+    writeMat(dir / "metal.mat", metal);
+    CHECK(makeAssetThumbnail(dir / "smooth.mat").rgba != makeAssetThumbnail(dir / "rough.mat").rgba);
+    CHECK(makeAssetThumbnail(dir / "metal.mat").rgba != n.rgba);
+}
+
+// Textura que no existe: esfera neutra (es lo que pinta el motor) y la ruta sigue
+// siendo dependencia, para regenerar cuando aparezca.
+static void test_material_thumbnail_missing_texture_is_neutral(const fs::path& dir)
+{
+    MaterialAsset a;
+    a.albedo = (dir / "todavia_no.tga").string();
+    writeMat(dir / "pending.mat", a);
+    writeMat(dir / "neutral2.mat", MaterialAsset{});
+    const ThumbnailResult r = makeAssetThumbnail(dir / "pending.mat");
+    CHECK(r.status == ThumbnailStatus::Ok);
+    CHECK(r.rgba == makeAssetThumbnail(dir / "neutral2.mat").rgba);
+    CHECK(hasDep(r, dir / "todavia_no.tga"));
+}
+
+static void test_stamp_file_and_dependencies(const fs::path& dir)
+{
+    const ThumbnailDependency missing = stampFile(dir / "no_hay.tga");
+    CHECK(!missing.exists && missing.mtime == 0);
+
+    const fs::path f = makeImage(dir, "stamp.tga");
+    const ThumbnailDependency s = stampFile(f);
+    std::error_code ec;
+    CHECK(s.exists && s.mtime == static_cast<int64_t>(fs::last_write_time(f, ec).time_since_epoch().count()));
+
+    ThumbnailResult r;
+    r.dependencies = { { dir / "no_hay.tga" }, { f }, { dir / "no_hay.tga" } };   // con duplicado y con el propio asset
+    stampDependencies(r, s);
+    CHECK(r.dependencies.size() == 2);                       // self delante, sin duplicados
+    if (r.dependencies.size() == 2)
+    {
+        CHECK(r.dependencies[0] == s);
+        CHECK(!r.dependencies[1].exists);
+    }
+}
+
+static void test_is_model_thumbnail_path()
+{
+    CHECK(isModelThumbnailPath("a/b/Hero.FBX"));
+    CHECK(isModelThumbnailPath("x.obj"));
+    CHECK(!isModelThumbnailPath("x.mat"));
+    CHECK(!isModelThumbnailPath("x.png"));
+    CHECK(!isModelThumbnailPath("x.glb"));
+}
+
+// ── ThumbnailDiskCache ───────────────────────────────────────────────────────
+
+static ThumbnailResult stampedResult(const fs::path& asset, std::vector<fs::path> deps = {})
+{
+    ThumbnailResult r;
+    r.status = ThumbnailStatus::Ok;
+    r.rgba.resize(static_cast<size_t>(kThumbCell) * kThumbCell * 4);
+    for (size_t i = 0; i < r.rgba.size(); ++i) r.rgba[i] = static_cast<uint8_t>(i * 7);
+    for (const fs::path& d : deps) r.dependencies.push_back({ d });
+    stampDependencies(r, stampFile(asset));
+    return r;
+}
+
+static void bumpMtime(const fs::path& p)
+{
+    std::error_code ec;
+    fs::last_write_time(p, fs::last_write_time(p, ec) + std::chrono::seconds(10), ec);
+}
+
+static void test_disk_roundtrip(const fs::path& dir)
+{
+    const ThumbnailDiskCache disk(dir / "cache_rt");
+    const fs::path asset = makeImage(dir, "disk_a.tga");
+    const fs::path dep   = makeImage(dir, "disk_a_dep.tga");
+    const ThumbnailResult r = stampedResult(asset, { dep, dir / "disk_a_absent.tga" });
+    CHECK(disk.store(asset, r));
+    const std::optional<ThumbnailResult> back = disk.load(asset);
+    CHECK(back.has_value());
+    if (!back) return;
+    CHECK(back->status == ThumbnailStatus::Ok);
+    CHECK(back->rgba == r.rgba);
+    CHECK(back->dependencies.size() == 3);
+    if (back->dependencies.size() == 3) CHECK(back->dependencies[0] == r.dependencies[0]);
+
+    ThumbnailResult anim;
+    anim.status = ThumbnailStatus::AnimationOnly;
+    stampDependencies(anim, stampFile(dep));
+    CHECK(disk.store(dep, anim));
+    const auto animBack = disk.load(dep);
+    CHECK(animBack && animBack->status == ThumbnailStatus::AnimationOnly && animBack->rgba.empty());
+}
+
+// Review Focus 2: cambia una dependencia (no el asset), o aparece una que no estaba.
+static void test_disk_dependency_change_is_a_miss(const fs::path& dir)
+{
+    const ThumbnailDiskCache disk(dir / "cache_dep");
+    const fs::path asset = makeImage(dir, "disk_b.tga");
+    const fs::path dep   = makeImage(dir, "disk_b_dep.tga");
+    const fs::path later = dir / "disk_b_later.tga";
+    CHECK(disk.store(asset, stampedResult(asset, { dep, later })));
+    CHECK(disk.load(asset).has_value());
+
+    bumpMtime(dep);
+    CHECK(!disk.load(asset).has_value());
+
+    CHECK(disk.store(asset, stampedResult(asset, { dep, later })));
+    makeImage(dir, "disk_b_later.tga");
+    CHECK(!disk.load(asset).has_value());
+
+    CHECK(disk.store(asset, stampedResult(asset, { dep, later })));
+    bumpMtime(asset);
+    CHECK(!disk.load(asset).has_value());
+}
+
+// Review Focus 3: fichero de otra version, truncado o de otra ruta con el mismo nombre.
+static void test_disk_hostile_files_are_a_miss(const fs::path& dir)
+{
+    const ThumbnailDiskCache disk(dir / "cache_bad");
+    const fs::path a = makeImage(dir, "disk_c.tga");
+    const fs::path b = makeImage(dir, "disk_d.tga");
+    auto readAll  = [](const fs::path& p) { std::ifstream f(p, std::ios::binary); return std::string((std::istreambuf_iterator<char>(f)), {}); };
+    auto writeAll = [](const fs::path& p, const std::string& s) { std::ofstream(p, std::ios::binary | std::ios::trunc) << s; };
+
+    CHECK(disk.store(a, stampedResult(a)));
+    const std::string good = readAll(disk.fileFor(a));
+
+    std::string otherVersion = good;
+    otherVersion[4] = static_cast<char>(otherVersion[4] + 1);          // version, tras la magia
+    writeAll(disk.fileFor(a), otherVersion);
+    CHECK(!disk.load(a).has_value());
+
+    writeAll(disk.fileFor(a), good.substr(0, good.size() - 10));
+    CHECK(!disk.load(a).has_value());
+
+    writeAll(disk.fileFor(a), good + "x");                            // bytes de mas
+    CHECK(!disk.load(a).has_value());
+
+    writeAll(disk.fileFor(b), good);                                  // colision de hash simulada
+    CHECK(!disk.load(b).has_value());
+
+    writeAll(disk.fileFor(a), "");
+    CHECK(!disk.load(a).has_value());
+}
+
+static void test_disk_unwritable_dir_does_not_throw(const fs::path& dir)
+{
+    std::ofstream(dir / "soy_un_fichero") << "x";
+    const ThumbnailDiskCache disk(dir / "soy_un_fichero");
+    const fs::path a = makeImage(dir, "disk_e.tga");
+    CHECK(!disk.store(a, stampedResult(a)));
+    CHECK(!disk.load(a).has_value());
+}
+
+static void test_disk_leaves_no_temporaries(const fs::path& dir)
+{
+    const ThumbnailDiskCache disk(dir / "cache_tmp");
+    for (int i = 0; i < 3; ++i)
+    {
+        const fs::path a = makeImage(dir, ("disk_t" + std::to_string(i) + ".tga").c_str());
+        CHECK(disk.store(a, stampedResult(a)));
+        CHECK(disk.store(a, stampedResult(a)));                         // sobrescribe
+    }
+    int files = 0, temps = 0;
+    for (const auto& e : fs::directory_iterator(dir / "cache_tmp"))
+    {
+        ++files;
+        if (e.path().extension() == ".tmp") ++temps;
+    }
+    CHECK(files == 3);
+    CHECK(temps == 0);
+}
+
+// Sin dependencias selladas no se guarda nada: no se sabria cuando invalidar.
+static void test_disk_refuses_unstamped_results(const fs::path& dir)
+{
+    const ThumbnailDiskCache disk(dir / "cache_unstamped");
+    const fs::path a = makeImage(dir, "disk_f.tga");
+    ThumbnailResult r = stampedResult(a);
+    r.dependencies.clear();
+    CHECK(!disk.store(a, r));
+}
+
+// ── ThumbnailCache: dependencias, disco, estado y tope de modelos ────────────
+
+static ThumbnailResult okTile()
+{
+    ThumbnailResult r;
+    r.status = ThumbnailStatus::Ok;
+    r.rgba.assign(static_cast<size_t>(kThumbCell) * kThumbCell * 4, 128);
+    return r;
+}
+
+// Review Focus 2: cambia la textura de la que depende la miniatura, no el asset.
+static void test_cache_dependency_change_regenerates(const fs::path& dir)
+{
+    const fs::path asset = makeImage(dir, "dep_asset.tga");
+    const fs::path dep   = makeImage(dir, "dep_texture.tga");
+    int calls = 0;
+    CacheHarness h(4, kThumbSlotCount, [&](const fs::path&) {
+        ++calls;
+        ThumbnailResult r = okTile();
+        r.dependencies.push_back({ dep });
+        return r;
+    });
+    h.cache.beginFrame();
+    h.cache.request(asset);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(calls == 1);
+
+    h.cache.beginFrame();
+    h.cache.refreshStamps();
+    CHECK(h.cache.request(asset).has_value());          // sin cambios: sigue lista
+
+    bumpMtime(dep);
+    h.cache.beginFrame();
+    h.cache.refreshStamps();
+    CHECK(!h.cache.request(asset).has_value());
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(calls == 2);
+}
+
+// Review Focus 1: el asset cambia mientras se decodifica. El mtime se tomo ANTES,
+// asi que el siguiente refreshStamps lo ve y regenera.
+static void test_cache_change_during_decode_regenerates(const fs::path& dir)
+{
+    const fs::path asset = makeImage(dir, "racy.tga");
+    int calls = 0;
+    CacheHarness h(4, kThumbSlotCount, [&](const fs::path& p) {
+        if (++calls == 1) bumpMtime(p);                  // "reexportado" a mitad de decodificar
+        return okTile();
+    });
+    h.cache.beginFrame();
+    h.cache.request(asset);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    h.cache.beginFrame();
+    h.cache.refreshStamps();
+    CHECK(!h.cache.request(asset).has_value());
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(calls == 2);
+}
+
+static void test_cache_status_reports_animation_only(const fs::path& dir)
+{
+    const fs::path f = makeImage(dir, "anim_only.fbx");     // el contenido da igual: decodificador falso
+    CacheHarness h(4, kThumbSlotCount, [](const fs::path&) {
+        ThumbnailResult r;
+        r.status = ThumbnailStatus::AnimationOnly;
+        return r;
+    });
+    h.cache.beginFrame();
+    CHECK(!h.cache.status(f).has_value());               // pendiente: aun no se sabe
+    h.cache.request(f);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(h.cache.status(f) == ThumbnailStatus::AnimationOnly);
+    h.cache.beginFrame();
+    CHECK(!h.cache.request(f).has_value());
+    h.cache.pump();
+    CHECK(h.pending.empty());                            // no se reintenta
+    CHECK(h.uploads.empty());
+}
+
+// Review Focus 4: 4 modelos y 2 imagenes a la vez -> 2 modelos + 2 imagenes en vuelo.
+static void test_cache_caps_models_in_flight(const fs::path& dir)
+{
+    CacheHarness h(4, kThumbSlotCount, [](const fs::path&) { return okTile(); });
+    h.cache.beginFrame();
+    for (int i = 0; i < 4; ++i) h.cache.request(makeImage(dir, ("m" + std::to_string(i) + ".fbx").c_str()));
+    for (int i = 0; i < 2; ++i) h.cache.request(makeImage(dir, ("i" + std::to_string(i) + ".tga").c_str()));
+    h.cache.pump();
+    CHECK(h.cache.inFlight() == 4);
+    CHECK(h.cache.modelsInFlight() == 2);
+
+    h.runAll();
+    h.cache.pump();                                      // quedan los 2 modelos
+    CHECK(h.cache.modelsInFlight() == 2);
+    h.runAll();
+    h.cache.pump();
+    CHECK(h.tilesUploaded() == 6);
+    CHECK(h.cache.modelsInFlight() == 0);
+}
+
+static void test_cache_disk_hit_skips_the_decoder(const fs::path& dir)
+{
+    auto disk = std::make_shared<ThumbnailDiskCache>(dir / "cache_hit");
+    const fs::path f = makeImage(dir, "hit.tga");
+    ThumbnailResult stored = okTile();
+    stampDependencies(stored, stampFile(f));
+    CHECK(disk->store(f, stored));
+
+    int calls = 0;
+    CacheHarness h(4, kThumbSlotCount, [&](const fs::path&) { ++calls; return okTile(); }, disk);
+    h.cache.beginFrame();
+    h.cache.request(f);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(calls == 0);
+    CHECK(h.tilesUploaded() == 1);
+}
+
+static void test_cache_stores_decoded_results_on_disk(const fs::path& dir)
+{
+    auto disk = std::make_shared<ThumbnailDiskCache>(dir / "cache_store");
+    const fs::path f = makeImage(dir, "store.tga");
+    CacheHarness h(4, kThumbSlotCount, {}, disk);         // decodificador real
+    h.cache.beginFrame();
+    h.cache.request(f);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    const auto back = disk->load(f);
+    CHECK(back.has_value());
+    if (back) CHECK(back->rgba == makeThumbnail(f).rgba);
+}
+
+// Revision final, Important 1: la TEXTURA cambia mientras se decodifica. El
+// decodificador la sello ANTES de leerla; ese sello no puede sustituirse por uno
+// tomado despues, o la miniatura queda vieja para siempre (tambien en disco).
+static void test_cache_dependency_changed_during_decode_regenerates(const fs::path& dir)
+{
+    const fs::path asset = makeImage(dir, "racy_dep_asset.tga");
+    const fs::path dep   = makeImage(dir, "racy_dep_texture.tga");
+    int calls = 0;
+    CacheHarness h(4, kThumbSlotCount, [&](const fs::path&) {
+        ThumbnailResult r = okTile();
+        r.dependencies.push_back(stampFile(dep));          // sellada antes de "leerla"
+        if (++calls == 1) bumpMtime(dep);                  // se guarda a mitad de decodificar
+        return r;
+    });
+    h.cache.beginFrame();
+    h.cache.request(asset);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    h.cache.beginFrame();
+    h.cache.refreshStamps();
+    CHECK(!h.cache.request(asset).has_value());
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(calls == 2);
+}
+
+// Revision final: un fallo por NO PODER ABRIR el asset (bloqueado por otro
+// programa, placeholder de OneDrive) es transitorio: no se guarda en disco, o
+// quedaria Unreadable para siempre aunque el fichero no cambie.
+static void test_cache_does_not_persist_unopenable_assets(const fs::path& dir)
+{
+    auto disk = std::make_shared<ThumbnailDiskCache>(dir / "cache_transient");
+    const fs::path f = makeImage(dir, "vanishing.tga");
+    CacheHarness h(4, kThumbSlotCount, [](const fs::path& p) {
+        std::error_code ec;
+        fs::remove(p, ec);                                 // no se puede abrir durante la decodificacion
+        return ThumbnailResult{};
+    }, disk);
+    h.cache.beginFrame();
+    h.cache.request(f);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(h.cache.status(f) == ThumbnailStatus::Unreadable);
+    CHECK(!fs::exists(disk->fileFor(f)));
+}
+
+static void test_wants_thumbnail_kinds()
+{
+    CHECK(wantsThumbnail(AssetKind::Image));
+    CHECK(wantsThumbnail(AssetKind::Model3D));
+    CHECK(wantsThumbnail(AssetKind::Material));
+    for (AssetKind k : { AssetKind::Folder, AssetKind::Audio, AssetKind::Font, AssetKind::Scene,
+                         AssetKind::Script, AssetKind::Shader, AssetKind::Other })
+        CHECK(!wantsThumbnail(k));
+}
+
 int main()
 {
     fs::path dir = makeDir();
@@ -760,6 +1351,36 @@ int main()
     test_huge_image_does_not_read_the_whole_file();
     test_cache_throwing_decoder_does_not_leak_in_flight(dir);
     test_cache_rejected_job_does_not_leak_in_flight(dir);
+    test_raster_sphere_takes_the_albedo_color();
+    test_raster_uses_vertex_color_without_texture();
+    test_raster_frames_the_bbox_with_a_margin();
+    test_raster_is_deterministic();
+    test_raster_metallic_and_roughness_change_the_result();
+    test_raster_draws_back_faces();
+    test_raster_degenerate_input_is_unreadable();
+    test_asset_thumbnail_image_is_unchanged(dir);
+    test_asset_thumbnail_model_declares_its_dependencies(dir);
+    test_asset_thumbnail_animation_only_fbx();
+    test_material_thumbnail_takes_its_albedo(dir);
+    test_material_thumbnail_inherits_neutral_and_reads_factors(dir);
+    test_material_thumbnail_missing_texture_is_neutral(dir);
+    test_stamp_file_and_dependencies(dir);
+    test_is_model_thumbnail_path();
+    test_disk_roundtrip(dir);
+    test_disk_dependency_change_is_a_miss(dir);
+    test_disk_hostile_files_are_a_miss(dir);
+    test_disk_unwritable_dir_does_not_throw(dir);
+    test_disk_leaves_no_temporaries(dir);
+    test_disk_refuses_unstamped_results(dir);
+    test_cache_dependency_change_regenerates(dir);
+    test_cache_change_during_decode_regenerates(dir);
+    test_cache_status_reports_animation_only(dir);
+    test_cache_caps_models_in_flight(dir);
+    test_cache_disk_hit_skips_the_decoder(dir);
+    test_cache_stores_decoded_results_on_disk(dir);
+    test_cache_dependency_changed_during_decode_regenerates(dir);
+    test_cache_does_not_persist_unopenable_assets(dir);
+    test_wants_thumbnail_kinds();
     test_icon_button_id_is_stable_when_thumbnail_appears();
     std::error_code ec;
     fs::remove_all(dir, ec);

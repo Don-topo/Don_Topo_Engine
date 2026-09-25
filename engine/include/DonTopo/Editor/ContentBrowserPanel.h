@@ -50,6 +50,9 @@ enum class AssetKind { Folder, Model3D, Audio, Image, Font, Scene, Script, Shade
 // carpeta es siempre Folder, aunque se llame "a.png".
 AssetKind classifyAsset(const std::string& ext, bool isDir);
 
+// Los tipos del grid que tienen miniatura: imagenes, modelos y materiales.
+bool wantsThumbnail(AssetKind kind);
+
 // true si el asset pasa el filtro del grid: texto = subcadena sin distinguir
 // mayúsculas (vacío deja pasar todo) y kindFilter = igualdad exacta de tipo
 // (nullopt = todos). Ambos se combinan con AND, así que con un tipo elegido las

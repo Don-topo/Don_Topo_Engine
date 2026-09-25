@@ -1,8 +1,13 @@
 #include "DonTopo/Editor/Thumbnail.h"
+#include "DonTopo/Core/MaterialAsset.h"
+#include "DonTopo/Editor/ThumbnailDiskCache.h"
+#include "DonTopo/Editor/ThumbnailRaster.h"
+#include "DonTopo/Renderer/ModelLoader.h"
 
 #include <stb_image.h>
 
 #include <algorithm>
+#include <cctype>
 #include <climits>
 #include <cmath>
 #include <fstream>
@@ -79,6 +84,86 @@ ThumbnailResult makeThumbnailFromStream(std::istream& in)
     {
         return ThumbnailResult{};
     }
+}
+
+void stampDependencies(ThumbnailResult& r, const ThumbnailDependency& self)
+{
+    std::vector<ThumbnailDependency> out{ self };
+    for (const ThumbnailDependency& d : r.dependencies)
+    {
+        const std::filesystem::path p = d.path.lexically_normal();
+        const bool seen = std::any_of(out.begin(), out.end(), [&](const ThumbnailDependency& o) {
+            return o.path.lexically_normal() == p;
+        });
+        // Un sello tomado ANTES de leer vale mas que uno de ahora: si la textura
+        // cambio mientras se decodificaba, el de ahora ocultaria el cambio.
+        if (!seen) out.push_back(d.stamped ? d : stampFile(d.path));
+    }
+    r.dependencies = std::move(out);
+}
+
+namespace {
+
+std::string lowerExt(const std::filesystem::path& p)
+{
+    std::string e = p.extension().string();
+    for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return e;
+}
+
+bool isImageExt(const std::string& e)
+{
+    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".tga" || e == ".bmp";
+}
+
+ThumbnailResult makeModelThumbnail(const std::filesystem::path& path)
+{
+    const ModelPreview preview = ModelLoader::loadPreview(path.string());
+    ThumbnailResult r;
+    if (preview.status == PreviewStatus::AnimationOnly) r.status = ThumbnailStatus::AnimationOnly;
+    else if (preview.status == PreviewStatus::Ok)       r = rasterizeThumbnail(preview.parts);
+    r.dependencies = preview.dependencies;   // ya selladas antes de leer cada una
+    return r;
+}
+
+} // namespace
+
+bool isModelThumbnailPath(const std::filesystem::path& path)
+{
+    const std::string e = lowerExt(path);
+    return e == ".fbx" || e == ".obj";
+}
+
+ThumbnailResult makeMaterialThumbnail(const std::filesystem::path& mat)
+{
+    const MaterialAsset a = loadMaterialAsset(mat);     // nunca lanza; roto -> hereda
+    PreviewPart sphere = makePreviewSphere();
+    std::vector<ThumbnailDependency> deps;
+    if (!a.albedo.empty())
+    {
+        deps.push_back(stampFile(a.albedo));                  // antes de leerla
+        sphere.albedo = ModelLoader::loadPreviewImage(a.albedo);
+    }
+    if (sphere.albedo.rgba.empty())
+        std::fill(sphere.colors.begin(), sphere.colors.end(), glm::vec3(kNeutralAlbedo));
+    sphere.metallic  = a.metallic  < 0.0f ? 0.0f : a.metallic;
+    sphere.roughness = a.roughness < 0.0f ? 0.5f : a.roughness;
+    ThumbnailResult r = rasterizeThumbnail({ sphere });
+    r.dependencies = std::move(deps);
+    return r;
+}
+
+ThumbnailResult makeAssetThumbnail(const std::filesystem::path& path)
+{
+    try
+    {
+        const std::string e = lowerExt(path);
+        if (isImageExt(e))              return makeThumbnail(path);
+        if (isModelThumbnailPath(path)) return makeModelThumbnail(path);
+        if (e == ".mat")                return makeMaterialThumbnail(path);
+    }
+    catch (...) {}
+    return ThumbnailResult{};
 }
 
 namespace {
@@ -192,11 +277,15 @@ void ThumbnailSlots::release(uint64_t key)
 }
 
 ThumbnailCache::ThumbnailCache(Runner run, Uploader upload, uint32_t maxInFlight,
-                               uint32_t slotCapacity, Decoder decode)
+                               uint32_t slotCapacity, Decoder decode,
+                               std::shared_ptr<const ThumbnailDiskCache> disk,
+                               uint32_t maxModelsInFlight)
     : m_run(std::move(run))
     , m_upload(std::move(upload))
-    , m_decode(decode ? std::move(decode) : Decoder(makeThumbnail))
+    , m_decode(decode ? std::move(decode) : Decoder(makeAssetThumbnail))
+    , m_disk(std::move(disk))
     , m_maxInFlight(maxInFlight)
+    , m_maxModelsInFlight(maxModelsInFlight)
     , m_slots(slotCapacity)
 {}
 
@@ -206,12 +295,12 @@ void ThumbnailCache::beginFrame()
     m_slots.beginFrame();
 }
 
-uint64_t ThumbnailCache::makeKey(const std::filesystem::path& path,
-                                 std::filesystem::file_time_type mtime)
+uint64_t ThumbnailCache::makeKey(const std::filesystem::path& path, int64_t mtime)
 {
-    // Ruta + mtime: cambiar el contenido con el mismo nombre cambia la clave.
+    // Ruta + mtime del asset. Un cambio de dependencia no necesita otra clave:
+    // refreshStamps libera la casilla antes de que la entrada se vuelva a pedir.
     const uint64_t h = std::hash<std::string>{}(path.string());
-    const uint64_t t = static_cast<uint64_t>(mtime.time_since_epoch().count());
+    const uint64_t t = static_cast<uint64_t>(mtime);
     return h ^ (t + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2));
 }
 
@@ -223,10 +312,14 @@ std::optional<UvRect> ThumbnailCache::request(const std::filesystem::path& path)
     {
         Entry e;
         e.path = path;
-        std::error_code ec;
-        e.mtime            = std::filesystem::last_write_time(path, ec);
-        e.key              = makeKey(path, e.mtime);
-        e.state            = ec ? State::Failed : State::Queued;
+        // Sellado AQUI, antes de decodificar: si el fichero cambia mientras el
+        // worker lo lee, el siguiente refreshStamps lo ve (Review Focus 1).
+        const ThumbnailDependency self = stampFile(path);
+        e.deps             = { self };
+        e.key              = makeKey(path, self.mtime);
+        e.model            = isModelThumbnailPath(path);
+        e.state            = self.exists ? State::Queued : State::Failed;
+        e.status           = self.exists ? ThumbnailStatus::Ok : ThumbnailStatus::Unreadable;
         e.lastRequestFrame = m_frame;
         const bool queue   = (e.state == State::Queued);
         m_entries.emplace(id, std::move(e));
@@ -259,10 +352,13 @@ void ThumbnailCache::pump(int maxUploads)
     for (Done& d : done)
     {
         if (m_inFlight > 0) --m_inFlight;                    // el hueco se libera siempre
+        if (d.model && m_modelsInFlight > 0) --m_modelsInFlight;
         if (d.generation != m_generation) continue;          // carpeta anterior: se ignora
         const auto it = m_entries.find(d.path);
         if (it == m_entries.end() || it->second.state != State::Running) continue;
         Entry& e = it->second;
+        if (!d.result.dependencies.empty()) e.deps = std::move(d.result.dependencies);
+        e.status = d.result.status;
         if (d.result.status != ThumbnailStatus::Ok)
         {
             e.state = State::Failed;
@@ -296,7 +392,8 @@ void ThumbnailCache::pump(int maxUploads)
             }
             else
             {
-                e->state = State::Failed;
+                e->state  = State::Failed;
+                e->status = ThumbnailStatus::Unreadable;
                 m_slots.release(e->key);
             }
             e->pixels.clear();
@@ -311,26 +408,62 @@ void ThumbnailCache::pump(int maxUploads)
 void ThumbnailCache::startJobs()
 {
     if (!m_run) return;
-    while (m_inFlight < m_maxInFlight && !m_queue.empty())
+    for (auto q = m_queue.begin(); q != m_queue.end() && m_inFlight < m_maxInFlight;)
     {
-        const std::string id = m_queue.front();
-        m_queue.pop_front();
-        const auto it = m_entries.find(id);
-        if (it == m_entries.end() || it->second.state != State::Queued) continue;
+        const auto it = m_entries.find(*q);
+        if (it == m_entries.end() || it->second.state != State::Queued)
+        {
+            q = m_queue.erase(q);
+            continue;
+        }
+        Entry& e = it->second;
+        // Un FBX puede tardar segundos: como mucho m_maxModelsInFlight a la vez, y
+        // los que esperan no bloquean a las imagenes que vienen detras en la cola.
+        if (e.model && m_modelsInFlight >= m_maxModelsInFlight)
+        {
+            ++q;
+            continue;
+        }
+        const std::string id = *q;
+        q = m_queue.erase(q);
 
-        it->second.state = State::Running;
+        e.state = State::Running;
         ++m_inFlight;
-        const std::shared_ptr<Shared>     shared = m_shared;
-        const uint64_t                    gen    = m_generation;
-        const std::filesystem::path       path   = it->second.path;
-        const Decoder decode = m_decode;
-        const bool accepted = m_run([shared, gen, id, path, decode]() {
+        if (e.model) ++m_modelsInFlight;
+        const std::shared_ptr<Shared>                   shared = m_shared;
+        const std::shared_ptr<const ThumbnailDiskCache> disk   = m_disk;
+        const uint64_t                                  gen    = m_generation;
+        const std::filesystem::path                     path   = e.path;
+        const ThumbnailDependency                       self   = e.deps.front();
+        const bool                                      model  = e.model;
+        const Decoder                                   decode = m_decode;
+        const bool accepted = m_run([shared, disk, gen, id, path, self, model, decode]() {
             Done d;
             d.generation = gen;
             d.path       = id;
-            // Un Done SIEMPRE llega: si el decodificador lanza, el hueco en vuelo
-            // se recogeria nunca y tras maxInFlight fallos no habria mas miniaturas.
-            try { d.result = decode(path); }
+            d.model      = model;
+            // Un Done SIEMPRE llega: si algo lanza, el hueco en vuelo se
+            // recogeria nunca y tras maxInFlight fallos no habria mas miniaturas.
+            try
+            {
+                std::optional<ThumbnailResult> hit;
+                if (disk) hit = disk->load(path);
+                if (hit)
+                {
+                    d.result = std::move(*hit);
+                }
+                else
+                {
+                    d.result = decode(path);
+                    stampDependencies(d.result, self);
+                    // No poder ABRIR el asset (bloqueado por otro programa,
+                    // placeholder de OneDrive) es transitorio: guardarlo lo dejaria
+                    // Unreadable para siempre, porque su mtime no va a cambiar.
+                    const bool transient = d.result.status == ThumbnailStatus::Unreadable &&
+                                           !std::ifstream(path, std::ios::binary);
+                    if (disk && !transient) disk->store(path, d.result);
+                }
+            }
             catch (...) { d.result = ThumbnailResult{}; }
             std::lock_guard<std::mutex> lock(shared->mutex);
             shared->done.push_back(std::move(d));
@@ -339,9 +472,20 @@ void ThumbnailCache::startJobs()
         {
             // El pool no lo ejecutara jamas (parado): sin esto el hueco no se devuelve.
             --m_inFlight;
-            it->second.state = State::Failed;
+            if (model) --m_modelsInFlight;
+            e.state  = State::Failed;
+            e.status = ThumbnailStatus::Unreadable;
         }
     }
+}
+
+std::optional<ThumbnailStatus> ThumbnailCache::status(const std::filesystem::path& path) const
+{
+    const auto it = m_entries.find(path.string());
+    if (it == m_entries.end()) return std::nullopt;
+    if (it->second.state == State::Ready)  return ThumbnailStatus::Ok;
+    if (it->second.state == State::Failed) return it->second.status;
+    return std::nullopt;
 }
 
 void ThumbnailCache::refreshStamps()
@@ -357,9 +501,10 @@ void ThumbnailCache::refreshStamps()
             ++it;
             continue;
         }
-        std::error_code ec;
-        const auto now = std::filesystem::last_write_time(e.path, ec);
-        if (ec || now == e.mtime)
+        const bool changed = std::any_of(e.deps.begin(), e.deps.end(), [](const ThumbnailDependency& d) {
+            return !(stampFile(d.path) == d);
+        });
+        if (!changed)
         {
             ++it;
             continue;

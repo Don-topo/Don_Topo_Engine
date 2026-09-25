@@ -5,7 +5,11 @@
 #include <assimp/postprocess.h>
 #include <assimp/config.h>
 #include "DonTopo/Core/ImportSettings.h"
+#include <cctype>
+#include <cstdint>
 #include <cstdio>
+#include <fstream>
+#include <unordered_map>
 #include <stdexcept>
 #include <filesystem>
 #include <string>
@@ -595,5 +599,134 @@ namespace DonTopo
         if (hasBones(path))
             return std::make_shared<SkinnedMesh>(loadSkinned(path));  // convierte solo a shared_ptr<Mesh>
         return std::make_shared<Mesh>(load(path));
+    }
+
+    // Un .obj lee sus materiales de los .mtl de sus lineas mtllib, y cambiar map_Kd
+    // ahi no toca el .obj: cada .mtl es dependencia de la miniatura. Se sellan
+    // antes de que Assimp los lea.
+    static void stampObjMaterialLibraries(const std::string& path, std::vector<FileStamp>& deps)
+    {
+        namespace fs = std::filesystem;
+        std::string ext = fs::path(path).extension().string();
+        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (ext != ".obj") return;
+        std::ifstream in{ fs::path(path) };
+        std::string line;
+        while (std::getline(in, line))
+        {
+            if (line.rfind("mtllib", 0) != 0 || line.size() < 7 ||
+                !std::isspace(static_cast<unsigned char>(line[6])))
+                continue;
+            size_t b = 7, e = line.size();
+            while (b < e && std::isspace(static_cast<unsigned char>(line[b]))) ++b;
+            while (e > b && std::isspace(static_cast<unsigned char>(line[e - 1]))) --e;
+            if (b < e) deps.push_back(stampFile(fs::path(path).parent_path() / line.substr(b, e - b)));
+        }
+    }
+
+    ModelPreview ModelLoader::loadPreview(const std::string& path)
+    {
+        namespace fs = std::filesystem;
+        ModelPreview out;
+        try
+        {
+            // El sidecar es dependencia exista o no: crearlo tambien cambia el
+            // aspecto. Todo se sella ANTES de leerlo (ver FileStamp).
+            out.dependencies.push_back(stampFile(importSidecarPath(path)));
+            stampObjMaterialLibraries(path, out.dependencies);
+
+            const ModelImportSettings settings = readModelSettings(path);
+            Assimp::Importer importer;
+            configureImporter(importer, settings);
+            // Sin tangentes: la miniatura no usa normal map.
+            const aiScene* scene = importer.ReadFile(path, assimpFlags(settings) & ~aiProcess_CalcTangentSpace);
+            if (!scene || !scene->mRootNode) return out;
+            if (scene->mNumMeshes == 0)
+            {
+                // Assimp marca INCOMPLETE un fichero sin mallas: con clips es un
+                // FBX de solo animacion, no uno roto.
+                if (scene->mNumAnimations > 0) out.status = PreviewStatus::AnimationOnly;
+                return out;
+            }
+            if (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) return out;
+
+            bool skinned = false;
+            for (uint32_t m = 0; m < scene->mNumMeshes; ++m)
+                skinned = skinned || scene->mMeshes[m]->mNumBones > 0;
+            const uint32_t meshCount = skinned ? scene->mNumMeshes : 1;
+
+            const fs::path modelDir = fs::path(path).parent_path();
+            std::unordered_map<uint32_t, PreviewImage> albedoByMaterial;
+            auto albedoOf = [&](uint32_t matIndex) -> const PreviewImage& {
+                auto it = albedoByMaterial.find(matIndex);
+                if (it != albedoByMaterial.end()) return it->second;
+                PreviewImage img;
+                aiString texPath;
+                if (matIndex < scene->mNumMaterials &&
+                    scene->mMaterials[matIndex]->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS)
+                {
+                    const aiTexture* emb = scene->GetEmbeddedTexture(texPath.C_Str());
+                    if (emb && emb->mHeight == 0)
+                    {
+                        img = decodePreviewImage(reinterpret_cast<const uint8_t*>(emb->pcData), emb->mWidth);
+                    }
+                    else if (emb)
+                    {
+                        if (static_cast<uint64_t>(emb->mWidth) * emb->mHeight <= kPreviewMaxSourcePixels)
+                        {
+                            std::vector<uint8_t> raw(static_cast<size_t>(emb->mWidth) * emb->mHeight * 4);
+                            for (size_t k = 0; k < static_cast<size_t>(emb->mWidth) * emb->mHeight; ++k)
+                            {
+                                raw[k * 4 + 0] = emb->pcData[k].r;
+                                raw[k * 4 + 1] = emb->pcData[k].g;
+                                raw[k * 4 + 2] = emb->pcData[k].b;
+                                raw[k * 4 + 3] = emb->pcData[k].a;
+                            }
+                            img = downscalePreviewImage(raw.data(), static_cast<int>(emb->mWidth), static_cast<int>(emb->mHeight));
+                        }
+                    }
+                    else
+                    {
+                        // Misma resolucion que load/loadSkinned: el nombre, junto al modelo.
+                        const fs::path ext = modelDir / fs::path(texPath.C_Str()).filename();
+                        out.dependencies.push_back(stampFile(ext));    // antes de leerla
+                        img = loadPreviewImage(ext);
+                    }
+                }
+                return albedoByMaterial.emplace(matIndex, std::move(img)).first->second;
+            };
+
+            for (uint32_t m = 0; m < meshCount; ++m)
+            {
+                const aiMesh* ai = scene->mMeshes[m];
+                PreviewPart part;
+                part.positions.reserve(ai->mNumVertices);
+                for (uint32_t i = 0; i < ai->mNumVertices; ++i)
+                {
+                    part.positions.emplace_back(ai->mVertices[i].x * settings.scale,
+                                                ai->mVertices[i].y * settings.scale,
+                                                ai->mVertices[i].z * settings.scale);
+                    part.normals.push_back(ai->mNormals
+                        ? glm::vec3(ai->mNormals[i].x, ai->mNormals[i].y, ai->mNormals[i].z)
+                        : glm::vec3(0.0f, 1.0f, 0.0f));
+                    part.uvs.push_back(ai->mTextureCoords[0]
+                        ? glm::vec2(ai->mTextureCoords[0][i].x, ai->mTextureCoords[0][i].y)
+                        : glm::vec2(0.0f));
+                    part.colors.emplace_back(1.0f);
+                }
+                for (uint32_t f = 0; f < ai->mNumFaces; ++f)
+                    if (ai->mFaces[f].mNumIndices == 3)
+                        for (uint32_t j = 0; j < 3; ++j) part.indices.push_back(ai->mFaces[f].mIndices[j]);
+                part.albedo = albedoOf(ai->mMaterialIndex);
+                out.parts.push_back(std::move(part));
+            }
+            out.status = PreviewStatus::Ok;
+        }
+        catch (...)
+        {
+            out.status = PreviewStatus::Unreadable;
+            out.parts.clear();
+        }
+        return out;
     }
 }

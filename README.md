@@ -760,7 +760,9 @@ create, delete, rename and drag-drop to reorder, plus a basic-shapes menu (Cube,
 Capsule) and right-click shortcuts such as **Create Camera**. The **Content Browser** browses the project as a folder
 tree with a breadcrumb, filters by name and by asset type, creates folders, renames, moves (by
 dragging onto a folder, with scene references rewritten) and deletes assets — one or several at
-once with Ctrl/Shift selection — shows real thumbnails for textures, follows changes made on disk
+once with Ctrl/Shift selection — shows real thumbnails for textures, 3D models and materials
+(rendered on the CPU in a worker and cached in `.dt-cache/thumbs/`; animation-only FBX files get an
+`ANI` icon), follows changes made on disk
 outside the editor, and imports files dropped from the OS file explorer or picked in a Browse
 dialog by copying them into `assets/Imported/`. Right-clicking a texture opens **Import Settings...**:
 a colour space (Auto = decided by the material slot, sRGB or Linear) and mipmaps on/off, saved next to
