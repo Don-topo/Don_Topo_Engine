@@ -1353,6 +1353,78 @@ static void test_reimport_skinned_keeps_the_animation_config_and_rebinds()
     CHECK(go->getAnimator()->states()[0].clipIndex >= 0);              // rebindClips lo resolvio
 }
 
+// Hallazgo del reviewer final: un FBX usado solo como fuente de animacion externa
+// (el flujo Mixamo que documenta el README) tambien es "usado" por el personaje.
+// Sin esto, poner la escala en el FBX de animacion decia "0 objetos" y el
+// personaje se quedaba con las traslaciones de raiz a otra escala.
+static const BoneKeyframe* firstPosKeyOfClip(const SkinnedMesh& m, const std::string& clipName)
+{
+    for (const AnimationClip& c : m.animationClips)
+    {
+        if (c.name != clipName) continue;
+        for (const BoneChannel& ch : c.channels)
+            if (!ch.posKeys.empty()) return &ch.posKeys[0];
+    }
+    return nullptr;
+}
+
+static void test_reimport_also_reloads_characters_that_use_the_fbx_as_animation_source()
+{
+    std::error_code ec;
+    const fs::path d = fs::temp_directory_path(ec) / "dt_cb_reimport_animsource";
+    fs::remove_all(d, ec);
+    fs::create_directories(d, ec);
+    const fs::path character = d / "char.fbx";
+    const fs::path anim      = d / "anim.fbx";
+    fs::copy_file("assets/modelAnimation.fbx", character, fs::copy_options::overwrite_existing, ec);
+    CHECK(!ec);
+    fs::copy_file("assets/modelAnimation.fbx", anim, fs::copy_options::overwrite_existing, ec);
+    CHECK(!ec);
+
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(character.string()));
+    std::vector<std::string> w;
+    CHECK(addAnimationSource(*mesh, anim.string(), w));
+    CHECK(mesh->animationSources.size() == 2u);
+    if (mesh->animationSources.size() != 2u) return;
+    const std::string externalClip = mesh->animationSources[1].clipNames[0];
+    const BoneKeyframe* antes = firstPosKeyOfClip(*mesh, externalClip);
+    CHECK(antes != nullptr);
+    if (!antes) return;
+    const glm::vec3 keyAntes = antes->value;
+    float extentAntes = 0.0f;
+    for (const SkinnedVertex& v : mesh->skinnedVertices) extentAntes = std::max(extentAntes, std::abs(v.position.x));
+
+    GameObject root("root");
+    GameObject* go = root.addChild("Personaje");
+    go->setMesh(mesh);
+
+    // Escala SOLO en el fichero de animacion.
+    ModelImportSettings s;
+    s.scale = 2.0f;
+    std::string err;
+    CHECK(saveModelImportSettings(anim, s, &err));
+
+    const ModelReimportResult r = reimportModelUsers(&root, anim, nullptr);
+    CHECK(r.reimported == 1);
+
+    const SkinnedMesh* nuevo = go->getSkinnedMesh();
+    CHECK(nuevo != nullptr);
+    if (!nuevo) return;
+    const BoneKeyframe* despues = firstPosKeyOfClip(*nuevo, externalClip);
+    CHECK(despues != nullptr);
+    if (despues)
+        CHECK(std::abs(despues->value.y - 2.0f * keyAntes.y) <= 1e-3f * std::max(1.0f, std::abs(keyAntes.y)) &&
+              std::abs(despues->value.z - 2.0f * keyAntes.z) <= 1e-3f * std::max(1.0f, std::abs(keyAntes.z)));
+    // La malla del personaje NO cambia: su propio sidecar no existe.
+    float extentDespues = 0.0f;
+    for (const SkinnedVertex& v : nuevo->skinnedVertices) extentDespues = std::max(extentDespues, std::abs(v.position.x));
+    CHECK(extentDespues == extentAntes);
+
+    // Un FBX que no usa nadie sigue sin tocar nada.
+    const ModelReimportResult otro = reimportModelUsers(&root, d / "otro.fbx", nullptr);
+    CHECK(otro.reimported == 0 && otro.skipped == 0);
+}
+
 // ── applyModelImportSettings ─────────────────────────────────────────────────
 
 static void test_apply_model_writes_sidecar_and_reimports_once()
@@ -1418,6 +1490,7 @@ static void test_apply_model_without_reimport_only_writes()
 
 int main()
 {
+    test_reimport_also_reloads_characters_that_use_the_fbx_as_animation_source();
     test_apply_model_writes_sidecar_and_reimports_once();
     test_apply_model_write_failure_does_not_reimport();
     test_apply_model_without_reimport_only_writes();

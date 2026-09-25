@@ -25,8 +25,17 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
     {
         if (!go->hasMesh()) return;
         const std::string& sp = go->getMesh()->sourcePath;
-        if (sp.empty() || !sameAssetPath(sp, fbx)) return;
-        groups[sp].push_back(go);
+        if (sp.empty()) return;
+        // Usuario del FBX: su malla viene de el, O es un personaje que lo usa como
+        // fuente de animacion externa (el flujo Mixamo: sus clips se releen con el
+        // sidecar de ESE fichero). En el segundo caso se recarga el personaje
+        // entero desde su propio sourcePath; las fuentes se releen en la receta.
+        bool usa = sameAssetPath(sp, fbx);
+        if (!usa)
+            if (const SkinnedMesh* sk = go->getSkinnedMesh())
+                for (const AnimationSource& src : sk->animationSources)
+                    if (!src.builtin && sameAssetPath(src.path, fbx)) { usa = true; break; }
+        if (usa) groups[sp].push_back(go);
     });
 
     bool anyRegistered = false;

@@ -16,8 +16,8 @@ struct ModelReimportResult {
 
 // Vuelve a importar `fbx` (con los ajustes que su sidecar tenga ahora: el
 // ModelLoader los lee solo) y sustituye la malla de CADA objeto de la escena que
-// venga de ese fichero, conservando transform, hijos, colliders, overrides de
-// material y Animator.
+// venga de ese fichero -o que lo use como fuente de animacion externa-,
+// conservando transform, hijos, colliders, overrides de material y Animator.
 //
 // Una carga por sourcePath distinto: compartida entre los estaticos, una copia por
 // objeto en los skinned (a esa copia se le reaplica la config de fuentes de
