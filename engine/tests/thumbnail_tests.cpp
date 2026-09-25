@@ -2,6 +2,7 @@
 // Plain main + CHECK, mismo patron que content_browser_tests.cpp.
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/Thumbnail.h"
+#include "DonTopo/Editor/ThumbnailRaster.h"
 
 #include <imgui.h>
 
@@ -14,6 +15,7 @@
 #include <fstream>
 #include <functional>
 #include <istream>
+#include <limits>
 #include <stdexcept>
 #include <streambuf>
 #include <string>
@@ -728,6 +730,151 @@ static void test_icon_button_id_is_stable_when_thumbnail_appears()
     ImGui::DestroyContext(ctx);
 }
 
+// ── rasterizeThumbnail ───────────────────────────────────────────────────────
+
+static PreviewImage solidImage(Rgba c)
+{
+    PreviewImage img;
+    img.w = img.h = 1;
+    img.rgba = { c[0], c[1], c[2], c[3] };
+    return img;
+}
+
+static PreviewPart cubePart()
+{
+    PreviewPart p;
+    const glm::vec3 n[6] = { {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1} };
+    for (const glm::vec3& f : n)
+    {
+        const glm::vec3 u = std::abs(f.y) > 0.5f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+        const glm::vec3 v = glm::cross(f, u);
+        const uint32_t base = static_cast<uint32_t>(p.positions.size());
+        for (const glm::vec2 c : { glm::vec2(-1, -1), glm::vec2(1, -1), glm::vec2(1, 1), glm::vec2(-1, 1) })
+        {
+            p.positions.push_back(f + u * c.x + v * c.y);
+            p.normals.push_back(f);
+            p.uvs.emplace_back(0.5f);
+            p.colors.emplace_back(1.0f);
+        }
+        p.indices.insert(p.indices.end(), { base, base + 1, base + 2, base, base + 2, base + 3 });
+    }
+    return p;
+}
+
+static bool reddish(const Rgba& c) { return c[3] == 255 && c[0] > c[1] + 40 && c[0] > c[2] + 40; }
+
+static void test_raster_sphere_takes_the_albedo_color()
+{
+    PreviewPart s = makePreviewSphere();
+    s.albedo = solidImage({ 255, 0, 0, 255 });
+    const ThumbnailResult r = rasterizeThumbnail({ s });
+    CHECK(r.status == ThumbnailStatus::Ok);
+    if (r.rgba.empty()) return;
+    CHECK(reddish(pixelAt(r, 32, 32)));
+    CHECK(isClear(pixelAt(r, 0, 0)));
+}
+
+static void test_raster_uses_vertex_color_without_texture()
+{
+    PreviewPart s = makePreviewSphere();
+    for (glm::vec3& c : s.colors) c = glm::vec3(0.0f, 1.0f, 0.0f);
+    const ThumbnailResult r = rasterizeThumbnail({ s });
+    CHECK(r.status == ThumbnailStatus::Ok);
+    if (r.rgba.empty()) return;
+    const Rgba c = pixelAt(r, 32, 32);
+    CHECK(c[1] > c[0] + 40 && c[1] > c[2] + 40);
+}
+
+// Encuadre: el cubo ocupa la casilla con margen y no toca el borde.
+static void test_raster_frames_the_bbox_with_a_margin()
+{
+    const ThumbnailResult r = rasterizeThumbnail({ cubePart() });
+    CHECK(r.status == ThumbnailStatus::Ok);
+    if (r.rgba.empty()) return;
+    int minX = 64, maxX = -1, minY = 64, maxY = -1;
+    for (uint32_t y = 0; y < kThumbCell; ++y)
+        for (uint32_t x = 0; x < kThumbCell; ++x)
+            if (pixelAt(r, x, y)[3] > 200)
+            {
+                minX = std::min<int>(minX, x); maxX = std::max<int>(maxX, x);
+                minY = std::min<int>(minY, y); maxY = std::max<int>(maxY, y);
+            }
+    CHECK(minX >= 1 && minY >= 1 && maxX <= 62 && maxY <= 62);    // margen
+    CHECK(std::max(maxX - minX, maxY - minY) >= 52);               // y aun asi llena la casilla
+}
+
+static void test_raster_is_deterministic()
+{
+    PreviewPart s = makePreviewSphere();
+    s.albedo = solidImage({ 10, 200, 90, 255 });
+    CHECK(rasterizeThumbnail({ s }).rgba == rasterizeThumbnail({ s }).rgba);
+}
+
+static void test_raster_metallic_and_roughness_change_the_result()
+{
+    PreviewPart shiny = makePreviewSphere();
+    shiny.metallic = 1.0f; shiny.roughness = 0.2f;
+    PreviewPart matte = makePreviewSphere();
+    matte.metallic = 0.0f; matte.roughness = 0.9f;
+    CHECK(rasterizeThumbnail({ shiny }).rgba != rasterizeThumbnail({ matte }).rgba);
+}
+
+// Las dos caras de un triangulo se pintan igual (la miniatura no hace culling).
+static void test_raster_draws_back_faces()
+{
+    auto tri = [](bool flip) {
+        PreviewPart p;
+        p.positions = { { -1, -1, 0 }, { 1, -1, 0 }, { 0, 1, 0 } };
+        p.normals   = { { 0, 0, 1 }, { 0, 0, 1 }, { 0, 0, 1 } };
+        p.uvs       = { {}, {}, {} };
+        p.colors    = { glm::vec3(1), glm::vec3(1), glm::vec3(1) };
+        p.indices   = flip ? std::vector<uint32_t>{ 0, 2, 1 } : std::vector<uint32_t>{ 0, 1, 2 };
+        return p;
+    };
+    auto covered = [](const ThumbnailResult& r) {
+        int n = 0;
+        for (size_t i = 3; i < r.rgba.size(); i += 4) n += r.rgba[i] == 255;
+        return n;
+    };
+    const ThumbnailResult a = rasterizeThumbnail({ tri(false) });
+    const ThumbnailResult b = rasterizeThumbnail({ tri(true) });
+    CHECK(covered(a) > 100);
+    CHECK(covered(a) == covered(b));
+
+    // Y se ILUMINAN igual: normales hacia atras se invierten, no dejan la cara a oscuras.
+    PreviewPart back = tri(false);
+    for (glm::vec3& n : back.normals) n = -n;
+    CHECK(rasterizeThumbnail({ back }).rgba == a.rgba);
+}
+
+// Review Focus 5: basura -> Unreadable, sin NaN ni crash.
+static void test_raster_degenerate_input_is_unreadable()
+{
+    CHECK(rasterizeThumbnail({}).status == ThumbnailStatus::Unreadable);
+
+    PreviewPart point;
+    point.positions = { { 1, 1, 1 }, { 1, 1, 1 }, { 1, 1, 1 } };
+    point.indices   = { 0, 1, 2 };
+    CHECK(rasterizeThumbnail({ point }).status == ThumbnailStatus::Unreadable);
+
+    PreviewPart nan = point;
+    const float q = std::numeric_limits<float>::quiet_NaN();
+    nan.positions = { { q, 0, 0 }, { 0, q, 0 }, { 0, 0, q } };
+    CHECK(rasterizeThumbnail({ nan }).status == ThumbnailStatus::Unreadable);
+
+    PreviewPart outOfRange = cubePart();
+    outOfRange.indices = { 0, 1, 999 };
+    CHECK(rasterizeThumbnail({ outOfRange }).status == ThumbnailStatus::Unreadable);
+
+    // Un triangulo bueno y uno con NaN: el bueno se pinta y no hay NaN en la salida.
+    PreviewPart mixed = cubePart();
+    mixed.positions.push_back({ q, q, q });
+    const uint32_t bad = static_cast<uint32_t>(mixed.positions.size() - 1);
+    mixed.normals.push_back({ 0, 1, 0 }); mixed.uvs.emplace_back(0.0f); mixed.colors.emplace_back(1.0f);
+    mixed.indices.insert(mixed.indices.end(), { 0, 1, bad });
+    CHECK(rasterizeThumbnail({ mixed }).status == ThumbnailStatus::Ok);
+}
+
 int main()
 {
     fs::path dir = makeDir();
@@ -760,6 +907,13 @@ int main()
     test_huge_image_does_not_read_the_whole_file();
     test_cache_throwing_decoder_does_not_leak_in_flight(dir);
     test_cache_rejected_job_does_not_leak_in_flight(dir);
+    test_raster_sphere_takes_the_albedo_color();
+    test_raster_uses_vertex_color_without_texture();
+    test_raster_frames_the_bbox_with_a_margin();
+    test_raster_is_deterministic();
+    test_raster_metallic_and_roughness_change_the_result();
+    test_raster_draws_back_faces();
+    test_raster_degenerate_input_is_unreadable();
     test_icon_button_id_is_stable_when_thumbnail_appears();
     std::error_code ec;
     fs::remove_all(dir, ec);
