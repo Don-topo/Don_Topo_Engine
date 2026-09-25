@@ -222,4 +222,36 @@ namespace DonTopo
             source.clipNames[i] = savedNames[i];
         }
     }
+
+    std::vector<AnimationSourceConfig> animationSourceConfigOf(const SkinnedMesh& mesh)
+    {
+        std::vector<AnimationSourceConfig> out;
+        out.reserve(mesh.animationSources.size());
+        for (const AnimationSource& s : mesh.animationSources)
+            out.push_back({ s.path, s.builtin, s.clipNames });
+        return out;
+    }
+
+    void applyAnimationSourceConfig(SkinnedMesh& mesh,
+                                    const std::vector<AnimationSourceConfig>& sources,
+                                    std::vector<std::string>& warnings)
+    {
+        for (const AnimationSourceConfig& src : sources)
+        {
+            if (src.builtin)
+            {
+                // Hasta el menor de los dos tamanos: un FBX reexportado con mas o
+                // menos clips no debe romper la carga.
+                if (mesh.animationSources.empty()) continue;
+                applyClipNamesPositionally(mesh, mesh.animationSources[0], src.clipNames, warnings);
+                continue;
+            }
+
+            std::vector<std::string> sourceWarnings;
+            const std::vector<std::string> names = src.clipNames;
+            if (!addAnimationSource(mesh, src.path, sourceWarnings, &names))
+                for (const std::string& w : sourceWarnings)
+                    warnings.push_back(w);
+        }
+    }
 }

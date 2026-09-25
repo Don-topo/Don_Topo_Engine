@@ -17,6 +17,17 @@ namespace {
 // megas, o un JSON anidado a 100000 niveles, no llegue nunca al parser.
 constexpr std::uintmax_t kMaxSidecarBytes = 64 * 1024;
 
+const char* normalsModeName(NormalsMode m)
+{
+    switch (m)
+    {
+        case NormalsMode::Smooth: return "smooth";
+        case NormalsMode::Flat:   return "flat";
+        case NormalsMode::File:   break;
+    }
+    return "file";
+}
+
 const char* colorSpaceName(ColorSpaceOverride c)
 {
     switch (c)
@@ -250,6 +261,84 @@ bool saveAudioImportSettings(const std::filesystem::path& asset, const AudioImpo
     j["type"]      = "audio";
     j["gainDb"]    = s.gainDb;
     j["forceMono"] = s.forceMono;
+    return writeSidecar(asset, j, error);
+}
+
+float clampModelScale(float scale)
+{
+    if (std::isnan(scale) || scale <= 0.0f) return 1.0f;
+    return std::clamp(scale, kModelScaleMin, kModelScaleMax);
+}
+
+ModelImportSettings loadModelImportSettings(const std::filesystem::path& asset, std::string* warning)
+{
+    ModelImportSettings out;
+    const std::optional<nlohmann::json> j = readSidecar(asset, "model", warning);
+    if (!j) return out;
+
+    std::string problems;
+    if (const auto it = j->find("scale"); it != j->end())
+    {
+        if (it->is_number())
+        {
+            // En double y con literales: kModelScaleMin (float) como double no es
+            // 0.001 exacto, y un 0.001 escrito a mano saldria "fuera de rango".
+            const double v = it->get<double>();
+            if (std::isnan(v) || v <= 0.0)
+                problems += "scale no es positivo (se usa 1). ";
+            else if (v > 1000.0)
+            {
+                out.scale = kModelScaleMax;
+                problems += "scale fuera de rango (acotado). ";
+            }
+            else if (v < 0.001)
+            {
+                out.scale = kModelScaleMin;
+                problems += "scale fuera de rango (acotado). ";
+            }
+            else out.scale = static_cast<float>(v);
+        }
+        else problems += "scale no es numerico (se usa 1). ";
+    }
+    if (const auto it = j->find("normals"); it != j->end())
+    {
+        const std::string v = it->is_string() ? it->get<std::string>() : std::string();
+        if      (v == "file")   out.normals = NormalsMode::File;
+        else if (v == "smooth") out.normals = NormalsMode::Smooth;
+        else if (v == "flat")   out.normals = NormalsMode::Flat;
+        else problems += "normals desconocido (se usa file). ";
+    }
+    auto readBool = [&](const char* key, bool& dst)
+    {
+        const auto it = j->find(key);
+        if (it == j->end()) return;
+        if (it->is_boolean()) dst = it->get<bool>();
+        else problems += std::string(key) + " no es booleano (se usa el defecto). ";
+    };
+    readBool("calcTangents",     out.calcTangents);
+    readBool("flipUVs",          out.flipUVs);
+    readBool("importAnimations", out.importAnimations);
+
+    if (!problems.empty() && warning) *warning = problems;
+    return out;
+}
+
+bool saveModelImportSettings(const std::filesystem::path& asset, const ModelImportSettings& settings,
+                             std::string* error)
+{
+    ModelImportSettings s = settings;
+    s.scale = clampModelScale(s.scale);
+    if (isDefault(s))
+        return removeSidecar(asset, error);
+
+    nlohmann::json j;
+    j["version"]          = 1;
+    j["type"]             = "model";
+    j["scale"]            = s.scale;
+    j["normals"]          = normalsModeName(s.normals);
+    j["calcTangents"]     = s.calcTangents;
+    j["flipUVs"]          = s.flipUVs;
+    j["importAnimations"] = s.importAnimations;
     return writeSidecar(asset, j, error);
 }
 

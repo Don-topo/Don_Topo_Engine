@@ -331,8 +331,140 @@ static void test_same_asset_path()
     CHECK(!sameAssetPath("", d / "a.wav"));
 }
 
+// ── Modelos ──────────────────────────────────────────────────────────────────
+
+static void test_model_missing_is_default_without_warning()
+{
+    const fs::path d = makeDir();
+    std::string warning = "x";
+    CHECK(isDefault(loadModelImportSettings(d / "nave.fbx", &warning)));
+    CHECK(warning.empty());
+}
+
+static void test_model_roundtrip_and_default_removes_sidecar()
+{
+    const fs::path d = makeDir();
+    const fs::path asset = d / "nave.fbx";
+    ModelImportSettings in;
+    in.scale            = 0.01f;
+    in.normals          = NormalsMode::Smooth;
+    in.calcTangents     = false;
+    in.flipUVs          = false;
+    in.importAnimations = false;
+    std::string err;
+    CHECK(saveModelImportSettings(asset, in, &err));
+    CHECK(fs::exists(importSidecarPath(asset)));
+    CHECK(loadModelImportSettings(asset) == in);
+
+    // Guardar el defecto borra el sidecar; con el fichero ya ausente tampoco es error.
+    CHECK(saveModelImportSettings(asset, ModelImportSettings{}, &err));
+    CHECK(!fs::exists(importSidecarPath(asset)));
+    CHECK(saveModelImportSettings(asset, ModelImportSettings{}, &err));
+}
+
+// Review Focus 1.
+static void test_model_scale_hostile_values()
+{
+    const fs::path d = makeDir();
+    struct Case { const char* name; const char* json; float want; bool warns; };
+    const Case cases[] = {
+        { "cero.fbx",   R"({"version":1,"type":"model","scale":0})",       1.0f,    true  },
+        { "neg.fbx",    R"({"version":1,"type":"model","scale":-3})",      1.0f,    true  },
+        { "enorme.fbx", R"({"version":1,"type":"model","scale":1e30})",    1000.0f, true  },
+        { "minusc.fbx", R"({"version":1,"type":"model","scale":0.00001})", 0.001f,  true  },
+        { "texto.fbx",  R"({"version":1,"type":"model","scale":"2"})",     1.0f,    true  },
+        { "borde.fbx",  R"({"version":1,"type":"model","scale":0.001})",   0.001f,  false },
+        { "bien.fbx",   R"({"version":1,"type":"model","scale":2.5})",     2.5f,    false },
+    };
+    for (const Case& c : cases)
+    {
+        writeText(importSidecarPath(d / c.name), c.json);
+        std::string warning;
+        const ModelImportSettings s = loadModelImportSettings(d / c.name, &warning);
+        CHECK(s.scale == c.want);
+        CHECK(warning.empty() == !c.warns);
+    }
+
+    // Guardar un NaN: se acota a 1 y, al ser el defecto, no deja sidecar.
+    ModelImportSettings nan;
+    nan.scale = std::numeric_limits<float>::quiet_NaN();
+    std::string err;
+    CHECK(saveModelImportSettings(d / "nan.fbx", nan, &err));
+    CHECK(!fs::exists(importSidecarPath(d / "nan.fbx")));
+
+    // Y una escala fuera de rango se guarda ya acotada.
+    ModelImportSettings big;
+    big.scale = 1e9f;
+    CHECK(saveModelImportSettings(d / "big.fbx", big, &err));
+    CHECK(loadModelImportSettings(d / "big.fbx").scale == kModelScaleMax);
+}
+
+static void test_model_unknown_normals_keeps_the_other_fields()
+{
+    const fs::path d = makeDir();
+    writeText(importSidecarPath(d / "a.fbx"),
+              R"({"version":1,"type":"model","normals":"raro","scale":2,"flipUVs":false})");
+    std::string w;
+    const ModelImportSettings s = loadModelImportSettings(d / "a.fbx", &w);
+    CHECK(s.normals == NormalsMode::File);       // desconocido -> file
+    CHECK(s.scale == 2.0f);                       // los demas campos sobreviven
+    CHECK(!s.flipUVs);
+    CHECK(!w.empty());
+
+    writeText(importSidecarPath(d / "b.fbx"),
+              R"({"version":1,"type":"model","calcTangents":"si","importAnimations":false})");
+    w.clear();
+    const ModelImportSettings t = loadModelImportSettings(d / "b.fbx", &w);
+    CHECK(t.calcTangents);                        // tipo equivocado -> su defecto (true)
+    CHECK(!t.importAnimations);
+    CHECK(!w.empty());
+}
+
+static void test_model_broken_and_huge_are_default()
+{
+    const fs::path d = makeDir();
+    writeText(importSidecarPath(d / "roto.fbx"), "{ esto no es json");
+    std::string w;
+    CHECK(isDefault(loadModelImportSettings(d / "roto.fbx", &w)));
+    CHECK(!w.empty());
+
+    writeText(importSidecarPath(d / "grande.fbx"), std::string(5 * 1024 * 1024, 'x'));
+    w.clear();
+    CHECK(isDefault(loadModelImportSettings(d / "grande.fbx", &w)));
+    CHECK(!w.empty());
+}
+
+static void test_model_type_crossing()
+{
+    const fs::path d = makeDir();
+    const fs::path asset = d / "x.fbx";
+    TextureImportSettings tex;
+    tex.mipmaps = true;
+    std::string err;
+    CHECK(saveTextureImportSettings(asset, tex, &err));
+    std::string w;
+    CHECK(isDefault(loadModelImportSettings(asset, &w)));     // texture leido como model
+    CHECK(!w.empty());
+
+    ModelImportSettings m;
+    m.scale = 2.0f;
+    CHECK(saveModelImportSettings(asset, m, &err));
+    w.clear();
+    CHECK(isDefault(loadTextureImportSettings(asset, &w)));   // model leido como texture
+    CHECK(!w.empty());
+    w.clear();
+    CHECK(isDefault(loadAudioImportSettings(asset, &w)));     // ... y como audio
+    CHECK(!w.empty());
+}
+
 int main()
 {
+    test_model_missing_is_default_without_warning();
+    test_model_roundtrip_and_default_removes_sidecar();
+    test_model_scale_hostile_values();
+    test_model_unknown_normals_keeps_the_other_fields();
+    test_model_broken_and_huge_are_default();
+    test_model_type_crossing();
     test_audio_gain_math();
     test_audio_roundtrip_and_default_removes_sidecar();
     test_audio_missing_and_broken_are_default();

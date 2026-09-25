@@ -1153,12 +1153,64 @@ static void test_audio_sidecar_travels_with_the_clip(const fs::path& root)
     fs::remove_all(outside.parent_path(), ec);
 }
 
+// Review Focus 6: el sidecar de un modelo viaja con el FBX, y el de cada fuente de
+// animacion externa con SU fichero (cada FBX usa su propio sidecar).
+static void test_model_sidecar_travels_with_the_fbx_and_its_animation_sources(const fs::path& root)
+{
+    std::error_code ec;
+    // Nombres propios: hero.fbx y compania son del fixture y otros tests los usan.
+    const fs::path hero = root / "assets" / "dt_modelo_hero.fbx";
+    const fs::path run  = root / "assets" / "dt_modelo_run.fbx";
+    const fs::path idle = root / "assets" / "dt_modelo_idle.fbx";   // sin sidecar
+    const fs::path prop = root / "assets" / "dt_modelo_prop.fbx";   // estatico, sin sidecar
+    for (const fs::path& p : { hero, run, idle, prop })
+        std::ofstream(p) << "fbx";
+
+    ModelImportSettings s;
+    s.scale = 0.01f;
+    std::string err;
+    CHECK(saveModelImportSettings(hero, s, &err));
+    CHECK(saveModelImportSettings(run,  s, &err));
+
+    Scene scene;
+    auto* personaje = scene.addGameObject("personaje");
+    auto skinned = std::make_shared<SkinnedMesh>();
+    skinned->sourcePath = hero.string();
+    skinned->animationSources.push_back({ hero.string(), true,  {} });
+    skinned->animationSources.push_back({ run.string(),  false, {} });
+    skinned->animationSources.push_back({ idle.string(), false, {} });
+    personaje->setMesh(skinned);
+    scene.addGameObject("prop")->setMesh(makeMesh(prop));
+
+    const std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    std::vector<std::string> pkg;
+    for (const ExportAsset& a : assets) pkg.push_back(a.packagePath);
+    auto has = [&](const std::string& p) { return std::find(pkg.begin(), pkg.end(), p) != pkg.end(); };
+
+    CHECK(has("assets/dt_modelo_hero.fbx"));
+    CHECK(has("assets/dt_modelo_hero.fbx.import.json"));
+    CHECK(has("assets/dt_modelo_run.fbx.import.json"));
+    CHECK(has("assets/dt_modelo_idle.fbx"));
+    CHECK(!has("assets/dt_modelo_idle.fbx.import.json"));
+    CHECK(has("assets/dt_modelo_prop.fbx"));
+    CHECK(!has("assets/dt_modelo_prop.fbx.import.json"));
+    for (const ExportAsset& a : assets)
+        if (a.packagePath.find(".import.json") != std::string::npos) CHECK(a.existsOnDisk);
+
+    for (const fs::path& p : { hero, run, idle, prop })
+    {
+        fs::remove(importSidecarPath(p), ec);
+        fs::remove(p, ec);
+    }
+}
+
 int main()
 {
     fs::path root = makeProjectFixture();
 
     test_audio_sidecar_travels_with_the_clip(root);
     test_texture_sidecar_travels_with_the_texture(root);
+    test_model_sidecar_travels_with_the_fbx_and_its_animation_sources(root);
     test_collects_exactly_referenced(root);
     test_button_assets(root);
     test_procedural_mesh_contributes_nothing(root);

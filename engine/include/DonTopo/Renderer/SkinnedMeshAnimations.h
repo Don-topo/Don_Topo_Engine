@@ -95,4 +95,29 @@ namespace DonTopo
     void applyClipNamesPositionally(SkinnedMesh& mesh, AnimationSource& source,
                                     const std::vector<std::string>& savedNames,
                                     std::vector<std::string>& warnings);
+
+    // Configuracion de UNA fuente de animacion de una malla skinned, tal y como la
+    // guarda la escena. Es lo que hay que recordar de la malla vieja para
+    // reconstruirla sobre una recien cargada (reimport de un modelo) y lo que
+    // Scene::fromJson lee de su JSON: una sola forma de aplicarla.
+    struct AnimationSourceConfig
+    {
+        std::string              path;
+        bool                     builtin = false;
+        std::vector<std::string> clipNames;   // nombres finales, en orden
+    };
+
+    // Las fuentes de mesh, en el mismo orden.
+    std::vector<AnimationSourceConfig> animationSourceConfigOf(const SkinnedMesh& mesh);
+
+    // Reaplica `sources` sobre una malla recien cargada por loadSkinned: la fuente
+    // BUILTIN ya existe y solo recupera los NOMBRES (posicionalmente, de una
+    // vez: encadenar renameClip colisiona consigo mismo ante un swap de dos
+    // nombres); las externas se reanaden con esos nombres. Una fuente externa que
+    // ya no carga (movida, borrada, otro rig) se AVISA y se sigue: perder la
+    // escena entera por eso seria mucho peor, y los estados que usaran sus clips
+    // los marca bindClips como huerfanos. Nunca lanza.
+    void applyAnimationSourceConfig(SkinnedMesh& mesh,
+                                    const std::vector<AnimationSourceConfig>& sources,
+                                    std::vector<std::string>& warnings);
 }
