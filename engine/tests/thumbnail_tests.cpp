@@ -1002,7 +1002,9 @@ static void test_is_model_thumbnail_path()
     CHECK(isModelThumbnailPath("x.obj"));
     CHECK(!isModelThumbnailPath("x.mat"));
     CHECK(!isModelThumbnailPath("x.png"));
-    CHECK(!isModelThumbnailPath("x.glb"));
+    CHECK(isModelThumbnailPath("x.glb"));
+    CHECK(isModelThumbnailPath("x.GLTF"));
+    CHECK(!isModelThumbnailPath("x.dae"));
 }
 
 // ── ThumbnailDiskCache ───────────────────────────────────────────────────────

@@ -385,9 +385,8 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, uint64_t ownerId,
     if (owner->hasMesh() || owner->pendingMeshJob != 0)
         return;
 
-    std::string ext = std::filesystem::path(path).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    if (ext != ".fbx")
+    const std::string ext = std::filesystem::path(path).extension().string();
+    if (!ModelLoader::isSupportedModelExtension(ext))
     {
         m_meshLoadError = "Formato no soportado: " + ext;
         return;
@@ -8007,7 +8006,7 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
                     ImGuiFileDialogFlags_DisablePlaceMode;
         // Key sin prefijo "##": Display() construye el nombre interno de la
         // ventana como título+"##"+key; con key="##AddMeshDlg" el resultado
-        // llevaba 4 almohadillas seguidas ("Choose FBX####AddMeshDlg"), y
+        // llevaba 4 almohadillas seguidas ("Choose Model####AddMeshDlg"), y
         // ImGui trata "###" como separador especial de ID (todo lo posterior
         // determina el ID, ignorando el resto) — se calculaba distinto en
         // window->ID que en el ID guardado en settings al persistir el
@@ -8015,12 +8014,12 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
         // "Assertion failed: settings->ID == window->ID" al redimensionar
         // (momento en que se fuerza el guardado). El ejemplo oficial de IGFD
         // usa keys planas (sin "##"), como aquí.
-        m_meshFileDialog->OpenDialog("AddMeshDlg", "Choose FBX", ".fbx", cfg);
+        m_meshFileDialog->OpenDialog("AddMeshDlg", "Choose Model", ModelLoader::supportedModelFilter(), cfg);
     }
     ImGui::EndDisabled();
 
     ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
-    ImGui::TextDisabled("Drop .fbx here");
+    ImGui::TextDisabled("Drop a model here");
     // Veto de edición mientras el modal de carga está activo: no se aceptan
     // drops nuevos hasta que Load Scene termine (o se cancele).
     if (!ctx.editingLocked && ImGui::BeginDragDropTarget())

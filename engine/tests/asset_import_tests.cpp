@@ -34,6 +34,8 @@ static void test_is_importable_extension()
     CHECK(!isImportableExtension(".txt"));
     CHECK(!isImportableExtension(".spv"));
     CHECK(!isImportableExtension(""));
+    for (const char* e : { ".obj", ".gltf", ".GLB" })
+        CHECK(isImportableExtension(e));
 }
 
 static void test_imported_asset_dest_dir()
@@ -44,6 +46,8 @@ static void test_imported_asset_dest_dir()
     CHECK(importedAssetDestDir(root, ".png") == root / "assets" / "Imported" / "Textures");
     CHECK(importedAssetDestDir(root, ".ttf") == root / "assets" / "Imported" / "Fonts");
     CHECK(importedAssetDestDir(root, ".xyz").empty());
+    for (const char* e : { ".obj", ".gltf", ".glb" })
+        CHECK(importedAssetDestDir(root, e) == root / "assets" / "Imported" / "Meshes");
 }
 
 static void test_import_copies_file(const fs::path& root)

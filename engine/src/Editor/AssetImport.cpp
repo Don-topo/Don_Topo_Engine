@@ -1,5 +1,6 @@
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Renderer/ModelLoader.h"
 
 #include <algorithm>
 #include <cctype>
@@ -20,11 +21,10 @@ std::string toLower(std::string s)
 bool isImportableExtension(const std::string& ext)
 {
     static const std::set<std::string> kImportable = {
-        ".fbx",
         ".wav", ".mp3", ".ogg", ".flac",
         ".png", ".jpg", ".jpeg", ".bmp", ".tga",
         ".ttf", ".otf", ".ttc"};
-    return kImportable.count(toLower(ext)) != 0;
+    return ModelLoader::isSupportedModelExtension(ext) || kImportable.count(toLower(ext)) != 0;
 }
 
 std::filesystem::path importedAssetDestDir(const std::filesystem::path& projectRoot,
@@ -36,7 +36,7 @@ std::filesystem::path importedAssetDestDir(const std::filesystem::path& projectR
 
     const std::string lower = toLower(ext);
     const std::filesystem::path imported = projectRoot / "assets" / "Imported";
-    if (lower == ".fbx")     return imported / "Meshes";
+    if (ModelLoader::isSupportedModelExtension(lower)) return imported / "Meshes";
     if (kAudio.count(lower)) return imported / "Audio";
     if (kImage.count(lower)) return imported / "Textures";
     if (kFont.count(lower))  return imported / "Fonts";
