@@ -3,6 +3,9 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <assimp/config.h>
+#include "DonTopo/Core/ImportSettings.h"
+#include <cstdio>
 #include <stdexcept>
 #include <filesystem>
 #include <string>
@@ -21,6 +24,57 @@ namespace DonTopo
             m.a3, m.b3, m.c3, m.d3,
             m.a4, m.b4, m.c4, m.d4
         );
+    }
+
+    // Ajustes de importacion del fichero (<fbx>.import.json). Nunca lanza: un
+    // sidecar roto da el defecto y un aviso por stderr (el Log Console no llega a
+    // este nivel; mismo canal que [AudioImport]).
+    static ModelImportSettings readModelSettings(const std::string& path)
+    {
+        std::string warning;
+        const ModelImportSettings s = loadModelImportSettings(path, &warning);
+        if (!warning.empty())
+            std::fprintf(stderr, "[ModelImport] %s: %s\n",
+                         std::filesystem::path(path).filename().string().c_str(), warning.c_str());
+        return s;
+    }
+
+    // Sin sidecar: exactamente Triangulate | FlipUVs | GenNormals | CalcTangentSpace,
+    // que era lo fijo antes de que existieran los ajustes.
+    static unsigned int assimpFlags(const ModelImportSettings& s)
+    {
+        unsigned int f = aiProcess_Triangulate;
+        if (s.flipUVs)      f |= aiProcess_FlipUVs;
+        if (s.calcTangents) f |= aiProcess_CalcTangentSpace;
+        switch (s.normals)
+        {
+            case NormalsMode::File:   f |= aiProcess_GenNormals; break;          // solo si faltan
+            case NormalsMode::Smooth: f |= aiProcess_RemoveComponent | aiProcess_GenSmoothNormals; break;
+            case NormalsMode::Flat:   f |= aiProcess_RemoveComponent | aiProcess_GenNormals; break;
+        }
+        // La escala NO va por aiProcess_GlobalScale: el importador FBX suma su
+        // propio factor de unidades (UnitScaleFactor * 0.01, cm -> m) y "escala 2"
+        // daba x0.02 en un FBX. Se aplica a mano tras la carga, en las unidades
+        // del propio fichero (ver scaleClipTranslations y los tres sitios de abajo).
+        return f;
+    }
+
+    static void configureImporter(Assimp::Importer& importer, const ModelImportSettings& s)
+    {
+        // Smooth y Flat descartan las normales del fichero ANTES de generarlas.
+        if (s.normals != NormalsMode::File)
+            importer.SetPropertyInteger(AI_CONFIG_PP_RVC_FLAGS, aiComponent_NORMALS);
+    }
+
+    // Claves de traslacion de un clip x scale. Solo las de posicion: rotaciones y
+    // escalas de hueso no dependen de las unidades. x1.0f es exacto, asi que sin
+    // ajuste el clip queda bit a bit igual.
+    static void scaleClipTranslations(AnimationClip& clip, float scale)
+    {
+        if (scale == 1.0f) return;
+        for (BoneChannel& ch : clip.channels)
+            for (BoneKeyframe& k : ch.posKeys)
+                k.value *= scale;
     }
 
     // Convierte una aiAnimation a AnimationClip resolviendo cada canal contra
@@ -81,8 +135,10 @@ namespace DonTopo
 
     Mesh ModelLoader::load(const std::string &path)
     {
+        const ModelImportSettings settings = readModelSettings(path);
         Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenNormals | aiProcess_CalcTangentSpace );
+        configureImporter(importer, settings);
+        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
 
         if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
         {
@@ -98,7 +154,9 @@ namespace DonTopo
         for(uint32_t i = 0; i < ai->mNumVertices; i++)
         {
             Vertex v{};
-            v.pos   = { ai->mVertices[i].x, ai->mVertices[i].y, ai->mVertices[i].z};
+            v.pos   = { ai->mVertices[i].x * settings.scale,
+                        ai->mVertices[i].y * settings.scale,
+                        ai->mVertices[i].z * settings.scale };
             v.color = { 1.0f, 1.0f, 1.0f };
             if(ai->mTextureCoords[0])
             {
@@ -171,11 +229,10 @@ namespace DonTopo
 
     SkinnedMesh ModelLoader::loadSkinned(const std::string& path)
     {
+        const ModelImportSettings settings = readModelSettings(path);
         Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(path,
-        aiProcess_Triangulate | aiProcess_FlipUVs |
-        aiProcess_GenNormals  | aiProcess_CalcTangentSpace /*|
-        aiProcess_LimitBoneWeights*/);
+        configureImporter(importer, settings);
+        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
 
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
         {
@@ -242,7 +299,9 @@ namespace DonTopo
             for (uint32_t i = 0; i < numVerts; i++)
             {
                 SkinnedVertex v{};
-                v.position = { aim->mVertices[i].x, aim->mVertices[i].y, aim->mVertices[i].z, 1.0f };
+                v.position = { aim->mVertices[i].x * settings.scale,
+                               aim->mVertices[i].y * settings.scale,
+                               aim->mVertices[i].z * settings.scale, 1.0f };
                 v.normal   = { aim->mNormals[i].x,  aim->mNormals[i].y,  aim->mNormals[i].z,  0.0f };
                 v.tangent  = aim->mTangents
                     ? glm::vec4{ aim->mTangents[i].x, aim->mTangents[i].y, aim->mTangents[i].z, 0.0f }
@@ -326,6 +385,11 @@ namespace DonTopo
             const std::string& name = boneNamesOld[oldIdx];
             skel.names[newIdx]          = name;
             skel.inverseBindPose[newIdx] = invBindOld[oldIdx];
+            // Escalar el modelo x s escala la TRASLACION del offset del hueso x s
+            // (la rotacion no cambia); el bindLocal de GPU se deriva de esto.
+            skel.inverseBindPose[newIdx][3].x *= settings.scale;
+            skel.inverseBindPose[newIdx][3].y *= settings.scale;
+            skel.inverseBindPose[newIdx][3].z *= settings.scale;
             skel.boneMap[name]           = newIdx;
 
             const std::string& pName = boneParentName.count(name) ? boneParentName[name] : "";
@@ -340,7 +404,9 @@ namespace DonTopo
                     v.boneIndices[s] = remap[v.boneIndices[s]];
 
         // --- Animaciones: todas las del fichero ---
-        for (uint32_t a = 0; a < scene->mNumAnimations; a++)
+        // importAnimations = false: sin clips, pero la fuente builtin de abajo se
+        // registra igual (la UI necesita una fila que represente al modelo).
+        for (uint32_t a = 0; settings.importAnimations && a < scene->mNumAnimations; a++)
         {
             int mapped = 0, total = 0;
             AnimationClip clip = clipFromAssimp(scene->mAnimations[a], skel, mapped, total, nullptr);
@@ -354,6 +420,7 @@ namespace DonTopo
             // Animator resuelve los clips por nombre, así que dos clips
             // homónimos harían que el segundo fuera inalcanzable.
             clip.name = uniqueClipName(smesh.animationClips, clip.name);
+            scaleClipTranslations(clip, settings.scale);
             smesh.animationClips.push_back(std::move(clip));
         }
 
@@ -436,6 +503,10 @@ namespace DonTopo
     {
         LoadedClips out;
 
+        // Cada FBX usa SU sidecar: las claves de traslacion de este fichero tienen
+        // que estar en las unidades del esqueleto al que se mapean, asi que la
+        // escala se aplica aqui tambien. El resto de ajustes no le afectan.
+        const ModelImportSettings settings = readModelSettings(path);
         Assimp::Importer importer;
         // Flags mínimos: aquí no se construye geometría, así que triangulate,
         // normales y tangentes serían trabajo tirado. Assimp lee las
@@ -473,6 +544,8 @@ namespace DonTopo
                                        "' no anima nada (una sola key por canal), descartado");
                 continue;
             }
+            // Despues de decidir si anima: esa decision no depende de la escala.
+            scaleClipTranslations(clip, settings.scale);
             out.clips.push_back(std::move(clip));
         }
 
