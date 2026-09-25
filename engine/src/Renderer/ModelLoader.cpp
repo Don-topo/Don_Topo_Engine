@@ -140,22 +140,14 @@ namespace DonTopo
         return clip;
     }
 
-    Mesh ModelLoader::load(const std::string &path)
+    // Una aiMesh a Mesh con su material. Es el cuerpo que tenia load(path),
+    // movido tal cual; `ai` sustituye a scene->mMeshes[0].
+    static Mesh meshFromAssimp(const aiScene* scene, const aiMesh* ai,
+                               const ModelImportSettings& settings, const std::string& path)
     {
-        const ModelImportSettings settings = readModelSettings(path);
-        Assimp::Importer importer;
-        configureImporter(importer, settings);
-        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
-
-        if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
-        {
-            throw std::runtime_error("Assimp: " + std::string(importer.GetErrorString()));
-        }
-
         Mesh mesh;
         mesh.name = std::filesystem::path(path).stem().string();
         mesh.sourcePath = path;
-        aiMesh* ai = scene->mMeshes[0];
 
         mesh.vertices.reserve(ai->mNumVertices);
         for(uint32_t i = 0; i < ai->mNumVertices; i++)
@@ -218,7 +210,7 @@ namespace DonTopo
                 }
                 else
                 {
-                    outPath = resolveModelTexture(modelDir, raw).string();
+                    outPath = ModelLoader::resolveModelTexture(modelDir, raw).string();
                 }
             };
 
@@ -232,6 +224,83 @@ namespace DonTopo
         }
 
         return mesh;
+    }
+
+    static bool hasTriangles(const aiMesh* m)
+    {
+        for (uint32_t f = 0; f < m->mNumFaces; ++f)
+            if (m->mFaces[f].mNumIndices == 3) return true;
+        return false;
+    }
+
+    // Apariciones de cada malla en los nodos, en profundidad. La raiz NO aporta
+    // su transformacion (en FBX lleva unidades y ejes); sus mallas, si tiene,
+    // van con identidad.
+    static std::vector<ModelPiece> collectPieces(const aiScene* scene, float scale)
+    {
+        std::vector<ModelPiece> out;
+        std::function<void(const aiNode*, const glm::mat4&)> walk = [&](const aiNode* node, const glm::mat4& m)
+        {
+            for (uint32_t k = 0; k < node->mNumMeshes; ++k)
+            {
+                const uint32_t idx = node->mMeshes[k];
+                if (idx >= scene->mNumMeshes || !hasTriangles(scene->mMeshes[idx])) continue;
+                ModelPiece p;
+                p.piece = static_cast<int>(idx);
+                p.name  = node->mName.length > 0 ? node->mName.C_Str() : scene->mMeshes[idx]->mName.C_Str();
+                p.transform = m;
+                p.transform[3].x *= scale;
+                p.transform[3].y *= scale;
+                p.transform[3].z *= scale;
+                out.push_back(std::move(p));
+            }
+            for (uint32_t c = 0; c < node->mNumChildren; ++c)
+                walk(node->mChildren[c], m * aiToGlm(node->mChildren[c]->mTransformation));
+        };
+        if (!scene->mRootNode) return out;
+        // La raiz se recorre con identidad; cada hijo entra con SU transformacion.
+        walk(scene->mRootNode, glm::mat4(1.0f));
+        return out;
+    }
+
+    Mesh ModelLoader::load(const std::string &path)
+    {
+        return load(path, 0);
+    }
+
+    Mesh ModelLoader::load(const std::string& path, int piece)
+    {
+        const ModelImportSettings settings = readModelSettings(path);
+        Assimp::Importer importer;
+        configureImporter(importer, settings);
+        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
+        if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
+            throw std::runtime_error("Assimp: " + std::string(importer.GetErrorString()));
+        if (piece < 0 || static_cast<uint32_t>(piece) >= scene->mNumMeshes)
+            throw std::runtime_error("'" + path + "' no tiene la pieza " + std::to_string(piece) +
+                                     " (tiene " + std::to_string(scene->mNumMeshes) + ")");
+        Mesh mesh = meshFromAssimp(scene, scene->mMeshes[piece], settings, path);
+        mesh.piece = piece;
+        return mesh;
+    }
+
+    StaticModel ModelLoader::loadStatic(const std::string& path)
+    {
+        const ModelImportSettings settings = readModelSettings(path);
+        Assimp::Importer importer;
+        configureImporter(importer, settings);
+        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
+        if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
+            throw std::runtime_error("Assimp: " + std::string(importer.GetErrorString()));
+        StaticModel out;
+        out.meshes.reserve(scene->mNumMeshes);
+        for (uint32_t i = 0; i < scene->mNumMeshes; ++i)
+        {
+            out.meshes.push_back(meshFromAssimp(scene, scene->mMeshes[i], settings, path));
+            out.meshes.back().piece = static_cast<int>(i);
+        }
+        out.pieces = collectPieces(scene, settings.scale);
+        return out;
     }
 
     SkinnedMesh ModelLoader::loadSkinned(const std::string& path)
