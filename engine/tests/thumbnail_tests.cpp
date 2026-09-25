@@ -321,7 +321,9 @@ struct CacheHarness
     ThumbnailCache                      cache;
 
     explicit CacheHarness(uint32_t maxInFlight = 4, uint32_t slotCapacity = kThumbSlotCount,
-                          ThumbnailCache::Decoder decoder = {})
+                          ThumbnailCache::Decoder decoder = {},
+                          std::shared_ptr<const ThumbnailDiskCache> disk = {},
+                          uint32_t maxModelsInFlight = 2)
         : cache(
               [this](std::function<void()> job) {
                   if (!runnerAccepts) return false;
@@ -335,7 +337,7 @@ struct CacheHarness
                   uploads.push_back(std::move(slots));
                   return uploadOk;
               },
-              maxInFlight, slotCapacity, std::move(decoder))
+              maxInFlight, slotCapacity, std::move(decoder), std::move(disk), maxModelsInFlight)
     {}
 
     // Termina todos los jobs encolados (como si los workers acabaran a la vez).
@@ -1135,6 +1137,135 @@ static void test_disk_refuses_unstamped_results(const fs::path& dir)
     CHECK(!disk.store(a, r));
 }
 
+// ── ThumbnailCache: dependencias, disco, estado y tope de modelos ────────────
+
+static ThumbnailResult okTile()
+{
+    ThumbnailResult r;
+    r.status = ThumbnailStatus::Ok;
+    r.rgba.assign(static_cast<size_t>(kThumbCell) * kThumbCell * 4, 128);
+    return r;
+}
+
+// Review Focus 2: cambia la textura de la que depende la miniatura, no el asset.
+static void test_cache_dependency_change_regenerates(const fs::path& dir)
+{
+    const fs::path asset = makeImage(dir, "dep_asset.tga");
+    const fs::path dep   = makeImage(dir, "dep_texture.tga");
+    int calls = 0;
+    CacheHarness h(4, kThumbSlotCount, [&](const fs::path&) {
+        ++calls;
+        ThumbnailResult r = okTile();
+        r.dependencies.push_back({ dep });
+        return r;
+    });
+    h.cache.beginFrame();
+    h.cache.request(asset);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(calls == 1);
+
+    h.cache.beginFrame();
+    h.cache.refreshStamps();
+    CHECK(h.cache.request(asset).has_value());          // sin cambios: sigue lista
+
+    bumpMtime(dep);
+    h.cache.beginFrame();
+    h.cache.refreshStamps();
+    CHECK(!h.cache.request(asset).has_value());
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(calls == 2);
+}
+
+// Review Focus 1: el asset cambia mientras se decodifica. El mtime se tomo ANTES,
+// asi que el siguiente refreshStamps lo ve y regenera.
+static void test_cache_change_during_decode_regenerates(const fs::path& dir)
+{
+    const fs::path asset = makeImage(dir, "racy.tga");
+    int calls = 0;
+    CacheHarness h(4, kThumbSlotCount, [&](const fs::path& p) {
+        if (++calls == 1) bumpMtime(p);                  // "reexportado" a mitad de decodificar
+        return okTile();
+    });
+    h.cache.beginFrame();
+    h.cache.request(asset);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    h.cache.beginFrame();
+    h.cache.refreshStamps();
+    CHECK(!h.cache.request(asset).has_value());
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(calls == 2);
+}
+
+static void test_cache_status_reports_animation_only(const fs::path& dir)
+{
+    const fs::path f = makeImage(dir, "anim_only.fbx");     // el contenido da igual: decodificador falso
+    CacheHarness h(4, kThumbSlotCount, [](const fs::path&) {
+        ThumbnailResult r;
+        r.status = ThumbnailStatus::AnimationOnly;
+        return r;
+    });
+    h.cache.beginFrame();
+    CHECK(!h.cache.status(f).has_value());               // pendiente: aun no se sabe
+    h.cache.request(f);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(h.cache.status(f) == ThumbnailStatus::AnimationOnly);
+    h.cache.beginFrame();
+    CHECK(!h.cache.request(f).has_value());
+    h.cache.pump();
+    CHECK(h.pending.empty());                            // no se reintenta
+    CHECK(h.uploads.empty());
+}
+
+// Review Focus 4: 4 modelos y 2 imagenes a la vez -> 2 modelos + 2 imagenes en vuelo.
+static void test_cache_caps_models_in_flight(const fs::path& dir)
+{
+    CacheHarness h(4, kThumbSlotCount, [](const fs::path&) { return okTile(); });
+    h.cache.beginFrame();
+    for (int i = 0; i < 4; ++i) h.cache.request(makeImage(dir, ("m" + std::to_string(i) + ".fbx").c_str()));
+    for (int i = 0; i < 2; ++i) h.cache.request(makeImage(dir, ("i" + std::to_string(i) + ".tga").c_str()));
+    h.cache.pump();
+    CHECK(h.cache.inFlight() == 4);
+    CHECK(h.cache.modelsInFlight() == 2);
+
+    h.runAll();
+    h.cache.pump();                                      // quedan los 2 modelos
+    CHECK(h.cache.modelsInFlight() == 2);
+    h.runAll();
+    h.cache.pump();
+    CHECK(h.tilesUploaded() == 6);
+    CHECK(h.cache.modelsInFlight() == 0);
+}
+
+static void test_cache_disk_hit_skips_the_decoder(const fs::path& dir)
+{
+    auto disk = std::make_shared<ThumbnailDiskCache>(dir / "cache_hit");
+    const fs::path f = makeImage(dir, "hit.tga");
+    ThumbnailResult stored = okTile();
+    stampDependencies(stored, stampFile(f));
+    CHECK(disk->store(f, stored));
+
+    int calls = 0;
+    CacheHarness h(4, kThumbSlotCount, [&](const fs::path&) { ++calls; return okTile(); }, disk);
+    h.cache.beginFrame();
+    h.cache.request(f);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(calls == 0);
+    CHECK(h.tilesUploaded() == 1);
+}
+
+static void test_cache_stores_decoded_results_on_disk(const fs::path& dir)
+{
+    auto disk = std::make_shared<ThumbnailDiskCache>(dir / "cache_store");
+    const fs::path f = makeImage(dir, "store.tga");
+    CacheHarness h(4, kThumbSlotCount, {}, disk);         // decodificador real
+    h.cache.beginFrame();
+    h.cache.request(f);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    const auto back = disk->load(f);
+    CHECK(back.has_value());
+    if (back) CHECK(back->rgba == makeThumbnail(f).rgba);
+}
+
 int main()
 {
     fs::path dir = makeDir();
@@ -1188,6 +1319,12 @@ int main()
     test_disk_unwritable_dir_does_not_throw(dir);
     test_disk_leaves_no_temporaries(dir);
     test_disk_refuses_unstamped_results(dir);
+    test_cache_dependency_change_regenerates(dir);
+    test_cache_change_during_decode_regenerates(dir);
+    test_cache_status_reports_animation_only(dir);
+    test_cache_caps_models_in_flight(dir);
+    test_cache_disk_hit_skips_the_decoder(dir);
+    test_cache_stores_decoded_results_on_disk(dir);
     test_icon_button_id_is_stable_when_thumbnail_appears();
     std::error_code ec;
     fs::remove_all(dir, ec);
