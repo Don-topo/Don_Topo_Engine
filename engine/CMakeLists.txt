@@ -156,6 +156,7 @@ add_library(DonTopoEditor STATIC
     src/Editor/AssetImport.cpp
     src/Editor/Thumbnail.cpp
     src/Editor/ThumbnailRaster.cpp
+    src/Editor/ThumbnailDiskCache.cpp
     src/Editor/AnimatorPanel.cpp
     src/Editor/AnimatorGraphUndo.cpp
     src/Editor/SpriteEditorPanel.cpp

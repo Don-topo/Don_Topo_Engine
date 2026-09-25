@@ -4,6 +4,7 @@
 #include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/Thumbnail.h"
+#include "DonTopo/Editor/ThumbnailDiskCache.h"
 #include "DonTopo/Editor/ThumbnailRaster.h"
 
 #include <imgui.h>
@@ -1002,6 +1003,138 @@ static void test_is_model_thumbnail_path()
     CHECK(!isModelThumbnailPath("x.glb"));
 }
 
+// ── ThumbnailDiskCache ───────────────────────────────────────────────────────
+
+static ThumbnailResult stampedResult(const fs::path& asset, std::vector<fs::path> deps = {})
+{
+    ThumbnailResult r;
+    r.status = ThumbnailStatus::Ok;
+    r.rgba.resize(static_cast<size_t>(kThumbCell) * kThumbCell * 4);
+    for (size_t i = 0; i < r.rgba.size(); ++i) r.rgba[i] = static_cast<uint8_t>(i * 7);
+    for (const fs::path& d : deps) r.dependencies.push_back({ d });
+    stampDependencies(r, stampFile(asset));
+    return r;
+}
+
+static void bumpMtime(const fs::path& p)
+{
+    std::error_code ec;
+    fs::last_write_time(p, fs::last_write_time(p, ec) + std::chrono::seconds(10), ec);
+}
+
+static void test_disk_roundtrip(const fs::path& dir)
+{
+    const ThumbnailDiskCache disk(dir / "cache_rt");
+    const fs::path asset = makeImage(dir, "disk_a.tga");
+    const fs::path dep   = makeImage(dir, "disk_a_dep.tga");
+    const ThumbnailResult r = stampedResult(asset, { dep, dir / "disk_a_absent.tga" });
+    CHECK(disk.store(asset, r));
+    const std::optional<ThumbnailResult> back = disk.load(asset);
+    CHECK(back.has_value());
+    if (!back) return;
+    CHECK(back->status == ThumbnailStatus::Ok);
+    CHECK(back->rgba == r.rgba);
+    CHECK(back->dependencies.size() == 3);
+    if (back->dependencies.size() == 3) CHECK(back->dependencies[0] == r.dependencies[0]);
+
+    ThumbnailResult anim;
+    anim.status = ThumbnailStatus::AnimationOnly;
+    stampDependencies(anim, stampFile(dep));
+    CHECK(disk.store(dep, anim));
+    const auto animBack = disk.load(dep);
+    CHECK(animBack && animBack->status == ThumbnailStatus::AnimationOnly && animBack->rgba.empty());
+}
+
+// Review Focus 2: cambia una dependencia (no el asset), o aparece una que no estaba.
+static void test_disk_dependency_change_is_a_miss(const fs::path& dir)
+{
+    const ThumbnailDiskCache disk(dir / "cache_dep");
+    const fs::path asset = makeImage(dir, "disk_b.tga");
+    const fs::path dep   = makeImage(dir, "disk_b_dep.tga");
+    const fs::path later = dir / "disk_b_later.tga";
+    CHECK(disk.store(asset, stampedResult(asset, { dep, later })));
+    CHECK(disk.load(asset).has_value());
+
+    bumpMtime(dep);
+    CHECK(!disk.load(asset).has_value());
+
+    CHECK(disk.store(asset, stampedResult(asset, { dep, later })));
+    makeImage(dir, "disk_b_later.tga");
+    CHECK(!disk.load(asset).has_value());
+
+    CHECK(disk.store(asset, stampedResult(asset, { dep, later })));
+    bumpMtime(asset);
+    CHECK(!disk.load(asset).has_value());
+}
+
+// Review Focus 3: fichero de otra version, truncado o de otra ruta con el mismo nombre.
+static void test_disk_hostile_files_are_a_miss(const fs::path& dir)
+{
+    const ThumbnailDiskCache disk(dir / "cache_bad");
+    const fs::path a = makeImage(dir, "disk_c.tga");
+    const fs::path b = makeImage(dir, "disk_d.tga");
+    auto readAll  = [](const fs::path& p) { std::ifstream f(p, std::ios::binary); return std::string((std::istreambuf_iterator<char>(f)), {}); };
+    auto writeAll = [](const fs::path& p, const std::string& s) { std::ofstream(p, std::ios::binary | std::ios::trunc) << s; };
+
+    CHECK(disk.store(a, stampedResult(a)));
+    const std::string good = readAll(disk.fileFor(a));
+
+    std::string otherVersion = good;
+    otherVersion[4] = static_cast<char>(otherVersion[4] + 1);          // version, tras la magia
+    writeAll(disk.fileFor(a), otherVersion);
+    CHECK(!disk.load(a).has_value());
+
+    writeAll(disk.fileFor(a), good.substr(0, good.size() - 10));
+    CHECK(!disk.load(a).has_value());
+
+    writeAll(disk.fileFor(a), good + "x");                            // bytes de mas
+    CHECK(!disk.load(a).has_value());
+
+    writeAll(disk.fileFor(b), good);                                  // colision de hash simulada
+    CHECK(!disk.load(b).has_value());
+
+    writeAll(disk.fileFor(a), "");
+    CHECK(!disk.load(a).has_value());
+}
+
+static void test_disk_unwritable_dir_does_not_throw(const fs::path& dir)
+{
+    std::ofstream(dir / "soy_un_fichero") << "x";
+    const ThumbnailDiskCache disk(dir / "soy_un_fichero");
+    const fs::path a = makeImage(dir, "disk_e.tga");
+    CHECK(!disk.store(a, stampedResult(a)));
+    CHECK(!disk.load(a).has_value());
+}
+
+static void test_disk_leaves_no_temporaries(const fs::path& dir)
+{
+    const ThumbnailDiskCache disk(dir / "cache_tmp");
+    for (int i = 0; i < 3; ++i)
+    {
+        const fs::path a = makeImage(dir, ("disk_t" + std::to_string(i) + ".tga").c_str());
+        CHECK(disk.store(a, stampedResult(a)));
+        CHECK(disk.store(a, stampedResult(a)));                         // sobrescribe
+    }
+    int files = 0, temps = 0;
+    for (const auto& e : fs::directory_iterator(dir / "cache_tmp"))
+    {
+        ++files;
+        if (e.path().extension() == ".tmp") ++temps;
+    }
+    CHECK(files == 3);
+    CHECK(temps == 0);
+}
+
+// Sin dependencias selladas no se guarda nada: no se sabria cuando invalidar.
+static void test_disk_refuses_unstamped_results(const fs::path& dir)
+{
+    const ThumbnailDiskCache disk(dir / "cache_unstamped");
+    const fs::path a = makeImage(dir, "disk_f.tga");
+    ThumbnailResult r = stampedResult(a);
+    r.dependencies.clear();
+    CHECK(!disk.store(a, r));
+}
+
 int main()
 {
     fs::path dir = makeDir();
@@ -1049,6 +1182,12 @@ int main()
     test_material_thumbnail_missing_texture_is_neutral(dir);
     test_stamp_file_and_dependencies(dir);
     test_is_model_thumbnail_path();
+    test_disk_roundtrip(dir);
+    test_disk_dependency_change_is_a_miss(dir);
+    test_disk_hostile_files_are_a_miss(dir);
+    test_disk_unwritable_dir_does_not_throw(dir);
+    test_disk_leaves_no_temporaries(dir);
+    test_disk_refuses_unstamped_results(dir);
     test_icon_button_id_is_stable_when_thumbnail_appears();
     std::error_code ec;
     fs::remove_all(dir, ec);
