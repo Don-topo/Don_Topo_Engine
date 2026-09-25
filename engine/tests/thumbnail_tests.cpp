@@ -1,5 +1,7 @@
 // Tests headless de las miniaturas del Content Browser (sin GPU ni ImGui).
 // Plain main + CHECK, mismo patron que content_browser_tests.cpp.
+#include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/Thumbnail.h"
 #include "DonTopo/Editor/ThumbnailRaster.h"
@@ -875,6 +877,131 @@ static void test_raster_degenerate_input_is_unreadable()
     CHECK(rasterizeThumbnail({ mixed }).status == ThumbnailStatus::Ok);
 }
 
+// ── makeAssetThumbnail ───────────────────────────────────────────────────────
+
+static bool hasDep(const ThumbnailResult& r, const fs::path& p)
+{
+    for (const ThumbnailDependency& d : r.dependencies)
+        if (fs::path(d.path).lexically_normal() == p.lexically_normal()) return true;
+    return false;
+}
+
+static void writeMat(const fs::path& p, const MaterialAsset& a)
+{
+    std::string err;
+    CHECK(saveMaterialAsset(p, a, &err));
+}
+
+// Una imagen pasa por el decodificador de siempre: mismos bytes.
+static void test_asset_thumbnail_image_is_unchanged(const fs::path& dir)
+{
+    writeTga(dir / "img_same.tga", 20, 10, [](int x, int) { return x < 10 ? kRed : kBlue; });
+    const ThumbnailResult a = makeAssetThumbnail(dir / "img_same.tga");
+    const ThumbnailResult b = makeThumbnail(dir / "img_same.tga");
+    CHECK(a.status == ThumbnailStatus::Ok);
+    CHECK(a.rgba == b.rgba);
+}
+
+static void test_asset_thumbnail_model_declares_its_dependencies(const fs::path& dir)
+{
+    writeTga(dir / "obj_tex.tga", 4, 4, [](int, int) { return kRed; });
+    std::ofstream(dir / "quad.mtl") << "newmtl m\nmap_Kd obj_tex.tga\n";
+    std::ofstream(dir / "quad.obj") << "mtllib quad.mtl\nusemtl m\n"
+                                       "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+                                       "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+                                       "f 1/1 2/2 3/3\nf 1/1 3/3 4/4\n";
+    const ThumbnailResult r = makeAssetThumbnail(dir / "quad.obj");
+    CHECK(r.status == ThumbnailStatus::Ok);
+    CHECK(hasDep(r, dir / "obj_tex.tga"));
+    CHECK(hasDep(r, importSidecarPath(dir / "quad.obj")));
+}
+
+static void test_asset_thumbnail_animation_only_fbx()
+{
+    const ThumbnailResult r = makeAssetThumbnail("assets/animatedCharacter/standing idle 01.fbx");
+    CHECK(r.status == ThumbnailStatus::AnimationOnly);
+    CHECK(r.rgba.empty());
+}
+
+static void test_material_thumbnail_takes_its_albedo(const fs::path& dir)
+{
+    writeTga(dir / "mat_red.tga", 4, 4, [](int, int) { return kRed; });
+    MaterialAsset a;
+    a.albedo = (dir / "mat_red.tga").string();
+    writeMat(dir / "red.mat", a);
+    const ThumbnailResult r = makeAssetThumbnail(dir / "red.mat");
+    CHECK(r.status == ThumbnailStatus::Ok);
+    if (!r.rgba.empty()) CHECK(reddish(pixelAt(r, 32, 32)));
+    CHECK(hasDep(r, dir / "mat_red.tga"));
+}
+
+// Heredado -> gris neutro. Y los valores LEIDOS del .mat cuentan: se prueban
+// roughness 0.1 frente a 0.9 y metallic 1, ninguno el default.
+static void test_material_thumbnail_inherits_neutral_and_reads_factors(const fs::path& dir)
+{
+    writeMat(dir / "neutral.mat", MaterialAsset{});
+    const ThumbnailResult n = makeAssetThumbnail(dir / "neutral.mat");
+    CHECK(n.status == ThumbnailStatus::Ok);
+    if (!n.rgba.empty())
+    {
+        const Rgba c = pixelAt(n, 32, 32);
+        CHECK(std::abs(int(c[0]) - int(c[1])) <= 2 && std::abs(int(c[1]) - int(c[2])) <= 12);   // gris (el ambiente tinta un poco el azul)
+    }
+
+    MaterialAsset smooth; smooth.roughness = 0.1f;
+    MaterialAsset rough;  rough.roughness  = 0.9f;
+    MaterialAsset metal;  metal.metallic   = 1.0f;
+    writeMat(dir / "smooth.mat", smooth);
+    writeMat(dir / "rough.mat", rough);
+    writeMat(dir / "metal.mat", metal);
+    CHECK(makeAssetThumbnail(dir / "smooth.mat").rgba != makeAssetThumbnail(dir / "rough.mat").rgba);
+    CHECK(makeAssetThumbnail(dir / "metal.mat").rgba != n.rgba);
+}
+
+// Textura que no existe: esfera neutra (es lo que pinta el motor) y la ruta sigue
+// siendo dependencia, para regenerar cuando aparezca.
+static void test_material_thumbnail_missing_texture_is_neutral(const fs::path& dir)
+{
+    MaterialAsset a;
+    a.albedo = (dir / "todavia_no.tga").string();
+    writeMat(dir / "pending.mat", a);
+    writeMat(dir / "neutral2.mat", MaterialAsset{});
+    const ThumbnailResult r = makeAssetThumbnail(dir / "pending.mat");
+    CHECK(r.status == ThumbnailStatus::Ok);
+    CHECK(r.rgba == makeAssetThumbnail(dir / "neutral2.mat").rgba);
+    CHECK(hasDep(r, dir / "todavia_no.tga"));
+}
+
+static void test_stamp_file_and_dependencies(const fs::path& dir)
+{
+    const ThumbnailDependency missing = stampFile(dir / "no_hay.tga");
+    CHECK(!missing.exists && missing.mtime == 0);
+
+    const fs::path f = makeImage(dir, "stamp.tga");
+    const ThumbnailDependency s = stampFile(f);
+    std::error_code ec;
+    CHECK(s.exists && s.mtime == static_cast<int64_t>(fs::last_write_time(f, ec).time_since_epoch().count()));
+
+    ThumbnailResult r;
+    r.dependencies = { { dir / "no_hay.tga" }, { f }, { dir / "no_hay.tga" } };   // con duplicado y con el propio asset
+    stampDependencies(r, s);
+    CHECK(r.dependencies.size() == 2);                       // self delante, sin duplicados
+    if (r.dependencies.size() == 2)
+    {
+        CHECK(r.dependencies[0] == s);
+        CHECK(!r.dependencies[1].exists);
+    }
+}
+
+static void test_is_model_thumbnail_path()
+{
+    CHECK(isModelThumbnailPath("a/b/Hero.FBX"));
+    CHECK(isModelThumbnailPath("x.obj"));
+    CHECK(!isModelThumbnailPath("x.mat"));
+    CHECK(!isModelThumbnailPath("x.png"));
+    CHECK(!isModelThumbnailPath("x.glb"));
+}
+
 int main()
 {
     fs::path dir = makeDir();
@@ -914,6 +1041,14 @@ int main()
     test_raster_metallic_and_roughness_change_the_result();
     test_raster_draws_back_faces();
     test_raster_degenerate_input_is_unreadable();
+    test_asset_thumbnail_image_is_unchanged(dir);
+    test_asset_thumbnail_model_declares_its_dependencies(dir);
+    test_asset_thumbnail_animation_only_fbx();
+    test_material_thumbnail_takes_its_albedo(dir);
+    test_material_thumbnail_inherits_neutral_and_reads_factors(dir);
+    test_material_thumbnail_missing_texture_is_neutral(dir);
+    test_stamp_file_and_dependencies(dir);
+    test_is_model_thumbnail_path();
     test_icon_button_id_is_stable_when_thumbnail_appears();
     std::error_code ec;
     fs::remove_all(dir, ec);

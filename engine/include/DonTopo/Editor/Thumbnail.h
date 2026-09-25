@@ -19,13 +19,27 @@ namespace DonTopo {
 // 16k son 1 GB transitorios en un worker.
 constexpr uint64_t kThumbMaxSourcePixels = 100'000'000;
 
-enum class ThumbnailStatus { Ok, Unreadable, TooLarge };
+enum class ThumbnailStatus { Ok, Unreadable, TooLarge, AnimationOnly };
+
+// Un fichero del que depende una miniatura y su estado al generarla.
+struct ThumbnailDependency
+{
+    std::filesystem::path path;
+    bool                  exists = false;
+    int64_t               mtime  = 0;    // file_time_type::time_since_epoch().count(); 0 si no existe
+};
+bool operator==(const ThumbnailDependency& a, const ThumbnailDependency& b);   // path, exists y mtime
 
 struct ThumbnailResult
 {
-    ThumbnailStatus      status = ThumbnailStatus::Unreadable;
-    std::vector<uint8_t> rgba;   // kThumbCell*kThumbCell*4 si status == Ok; vacio si no
+    ThumbnailStatus                  status = ThumbnailStatus::Unreadable;
+    std::vector<uint8_t>             rgba;   // kThumbCell*kThumbCell*4 si status == Ok; vacio si no
+    // Lo que declara el decodificador: SOLO las rutas (exists/mtime sin rellenar).
+    // stampDependencies las sella y pone el propio asset delante.
+    std::vector<ThumbnailDependency> dependencies;
 };
+
+inline constexpr float kNeutralAlbedo = 0.6f;   // lineal: el gris de un .mat que hereda
 
 // Decodifica path y lo reduce a UNA casilla kThumbCell x kThumbCell RGBA8:
 // conserva la proporcion (filtro de caja ponderado por alfa), no amplia lo que
@@ -38,6 +52,24 @@ ThumbnailResult makeThumbnail(const std::filesystem::path& path);
 // aparte para poder probar que rechazar una imagen enorme cuesta su CABECERA y no
 // leer el fichero entero.
 ThumbnailResult makeThumbnailFromStream(std::istream& in);
+
+// Estado de un fichero AHORA. Nunca lanza: si no se puede leer, exists = false.
+ThumbnailDependency stampFile(const std::filesystem::path& path);
+
+// Sella las dependencias declaradas por el decodificador y pone `self` (el
+// asset, sellado ANTES de decodificar) la primera. Quita duplicados y el propio
+// asset si el decodificador lo repitio.
+void stampDependencies(ThumbnailResult& r, const ThumbnailDependency& self);
+
+// .fbx/.obj: los que tarda segundos en decodificar (ver el tope de ThumbnailCache).
+bool isModelThumbnailPath(const std::filesystem::path& path);
+
+// Esfera con el albedo, metallic y roughness del .mat; lo heredado, neutro.
+ThumbnailResult makeMaterialThumbnail(const std::filesystem::path& mat);
+
+// Decodificador por extension: imagen -> makeThumbnail; .fbx/.obj -> preview
+// rasterizado; .mat -> esfera. Cualquier otra cosa, Unreadable. Nunca lanza.
+ThumbnailResult makeAssetThumbnail(const std::filesystem::path& path);
 
 // Reparto de las casillas del atlas entre claves (una por miniatura), con
 // desalojo LRU. "Uso" = pedir la casilla en el frame actual (assign/find).

@@ -1,8 +1,12 @@
 #include "DonTopo/Editor/Thumbnail.h"
+#include "DonTopo/Core/MaterialAsset.h"
+#include "DonTopo/Editor/ThumbnailRaster.h"
+#include "DonTopo/Renderer/ModelLoader.h"
 
 #include <stb_image.h>
 
 #include <algorithm>
+#include <cctype>
 #include <climits>
 #include <cmath>
 #include <fstream>
@@ -79,6 +83,103 @@ ThumbnailResult makeThumbnailFromStream(std::istream& in)
     {
         return ThumbnailResult{};
     }
+}
+
+bool operator==(const ThumbnailDependency& a, const ThumbnailDependency& b)
+{
+    return a.exists == b.exists && a.mtime == b.mtime && a.path == b.path;
+}
+
+ThumbnailDependency stampFile(const std::filesystem::path& path)
+{
+    ThumbnailDependency d;
+    d.path = path;
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(path, ec);
+    if (!ec)
+    {
+        d.exists = true;
+        d.mtime  = static_cast<int64_t>(t.time_since_epoch().count());
+    }
+    return d;
+}
+
+void stampDependencies(ThumbnailResult& r, const ThumbnailDependency& self)
+{
+    std::vector<ThumbnailDependency> out{ self };
+    for (const ThumbnailDependency& d : r.dependencies)
+    {
+        const std::filesystem::path p = d.path.lexically_normal();
+        const bool seen = std::any_of(out.begin(), out.end(), [&](const ThumbnailDependency& o) {
+            return o.path.lexically_normal() == p;
+        });
+        if (!seen) out.push_back(stampFile(d.path));
+    }
+    r.dependencies = std::move(out);
+}
+
+namespace {
+
+std::string lowerExt(const std::filesystem::path& p)
+{
+    std::string e = p.extension().string();
+    for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return e;
+}
+
+bool isImageExt(const std::string& e)
+{
+    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".tga" || e == ".bmp";
+}
+
+ThumbnailResult makeModelThumbnail(const std::filesystem::path& path)
+{
+    const ModelPreview preview = ModelLoader::loadPreview(path.string());
+    ThumbnailResult r;
+    if (preview.status == PreviewStatus::AnimationOnly) r.status = ThumbnailStatus::AnimationOnly;
+    else if (preview.status == PreviewStatus::Ok)       r = rasterizeThumbnail(preview.parts);
+    for (const std::filesystem::path& d : preview.dependencies) r.dependencies.push_back({ d });
+    return r;
+}
+
+} // namespace
+
+bool isModelThumbnailPath(const std::filesystem::path& path)
+{
+    const std::string e = lowerExt(path);
+    return e == ".fbx" || e == ".obj";
+}
+
+ThumbnailResult makeMaterialThumbnail(const std::filesystem::path& mat)
+{
+    const MaterialAsset a = loadMaterialAsset(mat);     // nunca lanza; roto -> hereda
+    PreviewPart sphere = makePreviewSphere();
+    std::vector<ThumbnailDependency> deps;
+    if (!a.albedo.empty())
+    {
+        deps.push_back({ std::filesystem::path(a.albedo) });
+        sphere.albedo = ModelLoader::loadPreviewImage(a.albedo);
+    }
+    if (sphere.albedo.rgba.empty())
+        std::fill(sphere.colors.begin(), sphere.colors.end(), glm::vec3(kNeutralAlbedo));
+    sphere.metallic  = a.metallic  < 0.0f ? 0.0f : a.metallic;
+    sphere.roughness = a.roughness < 0.0f ? 0.5f : a.roughness;
+    ThumbnailResult r = rasterizeThumbnail({ sphere });
+    r.dependencies = std::move(deps);
+    return r;
+}
+
+ThumbnailResult makeAssetThumbnail(const std::filesystem::path& path)
+{
+    try
+    {
+        const std::string e = lowerExt(path);
+        if (isImageExt(e))              return makeThumbnail(path);
+        if (isModelThumbnailPath(path)) return makeModelThumbnail(path);
+        if (e == ".mat")                return makeMaterialThumbnail(path);
+    }
+    catch (...) {}
+    return ThumbnailResult{};
 }
 
 namespace {
