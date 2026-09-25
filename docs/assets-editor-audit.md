@@ -169,11 +169,13 @@ nuevos, organizarlos, reutilizarlos), no por paridad con Unity per se.
       probablemente un callback OS-level nuevo (`glfwSetDropCallback` o
       equivalente) que hoy no existe en ningún sitio del repo. Ver riesgo de
       alcance en §4. (U1, U2)
-- [ ] **Panel de "import settings" por asset**: requiere que el Core defina
-      primero qué es un ajuste de import persistente y dónde vive (¿sidecar
-      `.meta` junto al asset? ¿entrada en `project.json`?). Es una decisión
-      de formato de datos, no de UI — necesita su propia spec de Core antes
-      de tocar el panel. (U8)
+- [x] **Panel de "import settings" por asset** — CERRADO: sidecar
+      `<asset>.import.json` con `type` (texturas, audio y modelos), editable
+      desde "Import Settings…" del Content Browser; el `ModelLoader` lee el
+      sidecar del modelo él mismo y Aplicar recarga en vivo todos los objetos
+      que lo usan. Specs `2026-09-24-texture-import-settings-design.md`,
+      `2026-09-24-audio-import-settings-design.md` y
+      `2026-09-25-model-import-settings-design.md`. (U8)
 - [x] **Asset de Material independiente** — CERRADO: sidecar `.mat`
       (`MaterialAsset`/`loadMaterialAsset`/`saveMaterialAsset`, Core) con
       referencia viva por slot (override del objeto > `.mat` > modelo),
