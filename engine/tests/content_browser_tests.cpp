@@ -10,7 +10,12 @@
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Editor/ModelReimport.h"
+#include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -1173,8 +1178,186 @@ static void test_apply_material_asset_write_failure_rebuilds_nothing()
     CHECK(calls == 0);
 }
 
+// ── reimportModelUsers ───────────────────────────────────────────────────────
+
+static fs::path writeTriangleObj(const char* dirName)
+{
+    std::error_code ec;
+    const fs::path d = fs::temp_directory_path(ec) / dirName;
+    fs::remove_all(d, ec);
+    fs::create_directories(d, ec);
+    const fs::path obj = d / "tri.obj";
+    std::ofstream(obj) << "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nf 1/1 2/2 3/3\n";
+    return obj;
+}
+
+static float maxAbsX(const Mesh& m)
+{
+    float r = 0.0f;
+    for (const Vertex& v : m.vertices) r = std::max(r, std::abs(v.pos.x));
+    return r;
+}
+
+// Los objetos de ese FBX se recargan con los ajustes nuevos; los demas ni se tocan.
+static void test_reimport_replaces_the_meshes_of_that_fbx_only()
+{
+    const fs::path obj = writeTriangleObj("dt_cb_reimport_static");
+    GameObject root("root");
+    GameObject* a = root.addChild("A");
+    GameObject* b = root.addChild("B");
+    GameObject* c = root.addChild("C");   // procedural: sin sourcePath
+    a->setMesh(ModelLoader::loadAuto(obj.string()));
+    b->setMesh(ModelLoader::loadAuto(obj.string()));
+    c->setMesh(std::make_shared<Mesh>());
+    CHECK(maxAbsX(*a->getMesh()) == 1.0f);
+
+    // Un override de textura del objeto A: tiene que sobrevivir al reimport.
+    MaterialOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/x.png";
+    a->materialOverrides = { ov };
+
+    ModelImportSettings s;
+    s.scale = 2.0f;
+    std::string err;
+    CHECK(saveModelImportSettings(obj, s, &err));
+
+    const ModelReimportResult r = reimportModelUsers(&root, obj, nullptr);
+    CHECK(r.reimported == 2);
+    CHECK(r.skipped == 0);
+    CHECK(r.warnings.empty());
+    CHECK(maxAbsX(*a->getMesh()) == 2.0f);
+    CHECK(maxAbsX(*b->getMesh()) == 2.0f);
+    CHECK(c->getMesh()->sourcePath.empty());                          // no era de ese FBX
+    CHECK(a->getMesh()->sourcePath == obj.string());
+    CHECK(a->materialOverrides[0].albedo == "assets/x.png");
+    CHECK(a->getMesh()->material.texturePath == "assets/x.png");      // reaplicado sobre la malla nueva
+}
+
+// Review Focus 2: el FBX ya no carga -> los objetos se quedan como estaban.
+static void test_reimport_of_an_unloadable_fbx_leaves_the_objects_intact()
+{
+    const fs::path obj = writeTriangleObj("dt_cb_reimport_missing");
+    GameObject root("root");
+    GameObject* a = root.addChild("A");
+    a->setMesh(ModelLoader::loadAuto(obj.string()));
+    const Mesh* antes = a->getMesh().get();
+
+    std::error_code ec;
+    fs::remove(obj, ec);                                               // el fichero desaparece
+
+    const ModelReimportResult r = reimportModelUsers(&root, obj, nullptr);
+    CHECK(r.reimported == 0);
+    CHECK(r.skipped == 1);
+    CHECK(r.warnings.size() == 1);
+    CHECK(a->hasMesh());
+    CHECK(a->getMesh().get() == antes);
+    CHECK(maxAbsX(*a->getMesh()) == 1.0f);
+}
+
+// Sin usuarios no hay nada que hacer ni que avisar.
+static void test_reimport_without_users_is_a_noop()
+{
+    const fs::path obj = writeTriangleObj("dt_cb_reimport_nousers");
+    GameObject root("root");
+    root.addChild("A")->setMesh(std::make_shared<Mesh>());
+    const ModelReimportResult r = reimportModelUsers(&root, obj, nullptr);
+    CHECK(r.reimported == 0 && r.skipped == 0 && r.warnings.empty());
+    const ModelReimportResult r2 = reimportModelUsers(nullptr, obj, nullptr);
+    CHECK(r2.reimported == 0 && r2.skipped == 0);
+}
+
+// Defensivo: un objeto con malla y a la vez con una carga asincrona en vuelo no
+// se toca (mismo criterio que MeshComponentCommand::put).
+static void test_reimport_skips_an_object_with_a_pending_load()
+{
+    const fs::path obj = writeTriangleObj("dt_cb_reimport_pending");
+    GameObject root("root");
+    GameObject* a = root.addChild("A");
+    a->setMesh(ModelLoader::loadAuto(obj.string()));
+    a->pendingMeshJob = 7;
+
+    ModelImportSettings s;
+    s.scale = 2.0f;
+    std::string err;
+    CHECK(saveModelImportSettings(obj, s, &err));
+
+    const ModelReimportResult r = reimportModelUsers(&root, obj, nullptr);
+    CHECK(r.reimported == 0);
+    CHECK(r.skipped == 1);
+    CHECK(r.warnings.size() == 1);
+    CHECK(maxAbsX(*a->getMesh()) == 1.0f);
+}
+
+// Review Focus 3: un personaje con clip renombrado, fuente externa y Animator.
+static void test_reimport_skinned_keeps_the_animation_config_and_rebinds()
+{
+    std::error_code ec;
+    const fs::path d = fs::temp_directory_path(ec) / "dt_cb_reimport_skinned";
+    fs::remove_all(d, ec);
+    fs::create_directories(d, ec);
+    const fs::path fbx = d / "char.fbx";
+    fs::copy_file("assets/modelAnimation.fbx", fbx, fs::copy_options::overwrite_existing, ec);
+    CHECK(!ec);
+
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(fbx.string()));
+    std::vector<std::string> w;
+    CHECK(addAnimationSource(*mesh, fbx.string(), w));
+    CHECK(mesh->animationSources.size() == 2u);
+    if (mesh->animationSources.size() != 2u) return;
+    CHECK(renameClip(*mesh, mesh->animationSources[0].clipNames[0], "CaminarRenombrado"));
+    CHECK(renameClip(*mesh, mesh->animationSources[1].clipNames[0], "SaltoRenombrado"));
+    const float extentAntes = [&] {
+        float r = 0.0f;
+        for (const SkinnedVertex& v : mesh->skinnedVertices) r = std::max(r, std::abs(v.position.x));
+        return r;
+    }();
+
+    GameObject root("root");
+    GameObject* go = root.addChild("Personaje");
+    go->setMesh(mesh);
+    auto anim = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State st;
+    st.name = "Salto"; st.clipName = "SaltoRenombrado";
+    anim->addState(st);
+    go->setAnimator(anim);
+
+    ModelImportSettings s;
+    s.scale = 2.0f;
+    std::string err;
+    CHECK(saveModelImportSettings(fbx, s, &err));
+
+    const ModelReimportResult r = reimportModelUsers(&root, fbx, nullptr);
+    CHECK(r.reimported == 1);
+    CHECK(r.skipped == 0);
+
+    const SkinnedMesh* nuevo = go->getSkinnedMesh();
+    CHECK(nuevo != nullptr);
+    if (!nuevo) return;
+    CHECK(nuevo != mesh.get());                                        // malla nueva, no la vieja
+    float extentDespues = 0.0f;
+    for (const SkinnedVertex& v : nuevo->skinnedVertices)
+        extentDespues = std::max(extentDespues, std::abs(v.position.x));
+    CHECK(std::abs(extentDespues - 2.0f * extentAntes) <= 1e-3f * std::max(1.0f, extentAntes));
+
+    CHECK(nuevo->animationSources.size() == 2u);
+    if (nuevo->animationSources.size() == 2u)
+    {
+        CHECK(nuevo->animationSources[0].builtin);
+        CHECK(nuevo->animationSources[0].clipNames[0] == "CaminarRenombrado");
+        CHECK(!nuevo->animationSources[1].builtin);
+        CHECK(nuevo->animationSources[1].clipNames[0] == "SaltoRenombrado");
+    }
+    CHECK(go->getAnimator()->states()[0].clipIndex >= 0);              // rebindClips lo resolvio
+}
+
 int main()
 {
+    test_reimport_replaces_the_meshes_of_that_fbx_only();
+    test_reimport_of_an_unloadable_fbx_leaves_the_objects_intact();
+    test_reimport_without_users_is_a_noop();
+    test_reimport_skips_an_object_with_a_pending_load();
+    test_reimport_skinned_keeps_the_animation_config_and_rebinds();
     test_classify_material_extension();
     test_material_is_draggable();
     test_accept_or_import_mat_texture_imports_external_path();

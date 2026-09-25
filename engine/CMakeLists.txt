@@ -164,6 +164,7 @@ add_library(DonTopoEditor STATIC
     src/Editor/DeferredSlider.cpp
     src/Editor/InputActionsPanel.cpp
     src/Editor/Command.cpp
+    src/Editor/ModelReimport.cpp
     src/Editor/UndoManager.cpp
     src/Editor/ScriptEditorPanel.cpp
     src/Editor/GameExporter.cpp
