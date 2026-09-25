@@ -1204,6 +1204,81 @@ static void test_model_sidecar_travels_with_the_fbx_and_its_animation_sources(co
     }
 }
 
+static std::vector<std::string> packagePaths(const std::vector<ExportAsset>& assets)
+{
+    std::vector<std::string> pkg;
+    for (const ExportAsset& a : assets) pkg.push_back(a.packagePath);
+    return pkg;
+}
+
+static bool contains(const std::vector<std::string>& v, const std::string& s)
+{
+    return std::find(v.begin(), v.end(), s) != v.end();
+}
+
+static void writeGltfWithCompanions(const fs::path& dir)
+{
+    std::error_code ec;
+    fs::create_directories(dir / "textures", ec);
+    std::ofstream(dir / "tri.gltf") << R"({"asset":{"version":"2.0"},)"
+        R"("buffers":[{"uri":"tri.bin","byteLength":60}],"images":[{"uri":"textures/rojo%20x.tga"}]})";
+    std::ofstream(dir / "tri.bin") << "bin";
+    std::ofstream(dir / "textures" / "rojo x.tga") << "tga";
+}
+
+// Dentro del proyecto: la jerarquia se conserva y el .bin y la textura viajan.
+static void test_gltf_inside_the_project_travels_with_its_companions(const fs::path& root)
+{
+    const fs::path dir = root / "assets" / "gl";
+    writeGltfWithCompanions(dir);
+    Scene scene;
+    scene.addGameObject("g")->setMesh(makeMesh(dir / "tri.gltf", dir / "textures" / "rojo x.tga"));
+    const std::vector<std::string> pkg = packagePaths(collectSceneAssets(scene, root, {}));
+    CHECK(contains(pkg, "assets/gl/tri.gltf"));
+    CHECK(contains(pkg, "assets/gl/tri.bin"));
+    CHECK(contains(pkg, "assets/gl/textures/rojo x.tga"));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+// Review Focus 4: fuera del proyecto, el .bin y la textura de la subcarpeta quedan
+// en la MISMA assets/_external/N que el .gltf, con su subcarpeta.
+static void test_gltf_outside_the_project_keeps_its_companions_together(const fs::path& root)
+{
+    std::error_code ec;
+    const fs::path outside = fs::temp_directory_path(ec) / "dt_exporter_gltf_outside";
+    fs::remove_all(outside, ec);
+    writeGltfWithCompanions(outside);
+    Scene scene;
+    scene.addGameObject("g")->setMesh(makeMesh(outside / "tri.gltf", outside / "textures" / "rojo x.tga"));
+    const std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    std::string gltfPkg;
+    for (const ExportAsset& a : assets)
+        if (exportPathKey(a.sourcePath) == exportPathKey((outside / "tri.gltf").string())) gltfPkg = a.packagePath;
+    CHECK(!gltfPkg.empty());
+    const std::string base = fs::path(gltfPkg).parent_path().generic_string();
+    const std::vector<std::string> pkg = packagePaths(assets);
+    CHECK(contains(pkg, base + "/tri.bin"));
+    CHECK(contains(pkg, base + "/textures/rojo x.tga"));
+    CHECK(assets.size() == 3);                                  // la textura del material no se duplica
+    fs::remove_all(outside, ec);
+}
+
+static void test_obj_travels_with_its_mtl(const fs::path& root)
+{
+    const fs::path dir = root / "assets" / "o";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    std::ofstream(dir / "cube.obj") << "mtllib cube.mtl\nv 0 0 0\n";
+    std::ofstream(dir / "cube.mtl") << "newmtl m\n";
+    Scene scene;
+    scene.addGameObject("o")->setMesh(makeMesh(dir / "cube.obj"));
+    const std::vector<std::string> pkg = packagePaths(collectSceneAssets(scene, root, {}));
+    CHECK(contains(pkg, "assets/o/cube.obj"));
+    CHECK(contains(pkg, "assets/o/cube.mtl"));
+    fs::remove_all(dir, ec);
+}
+
 int main()
 {
     fs::path root = makeProjectFixture();
@@ -1211,6 +1286,9 @@ int main()
     test_audio_sidecar_travels_with_the_clip(root);
     test_texture_sidecar_travels_with_the_texture(root);
     test_model_sidecar_travels_with_the_fbx_and_its_animation_sources(root);
+    test_gltf_inside_the_project_travels_with_its_companions(root);
+    test_gltf_outside_the_project_keeps_its_companions_together(root);
+    test_obj_travels_with_its_mtl(root);
     test_collects_exactly_referenced(root);
     test_button_assets(root);
     test_procedural_mesh_contributes_nothing(root);

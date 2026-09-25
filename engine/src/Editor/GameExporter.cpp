@@ -3,6 +3,7 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
@@ -212,7 +213,9 @@ std::vector<ExportAsset> collectSceneAssets(
         return "assets/_external/" + std::to_string(it->second) + "/" + abs.filename().string();
     };
 
-    auto add = [&](const std::string& raw)
+    // forcedPackagePath: la ruta del paquete ya decidida (un fichero asociado de
+    // un modelo, ver addModel). Vacia = la regla de siempre.
+    auto add = [&](const std::string& raw, const std::string& forcedPackagePath = {})
     {
         if (raw.empty()) return;
         const std::string key = exportPathKey(raw);
@@ -222,8 +225,12 @@ std::vector<ExportAsset> collectSceneAssets(
         fs::path abs = fs::weakly_canonical(fs::path(raw), ec);
         if (ec) abs = fs::path(raw);
 
-        std::string packagePath;
-        if (keyUnderDir(key, rootKey))
+        std::string packagePath = forcedPackagePath;
+        if (!packagePath.empty())
+        {
+            // Asociado de un modelo: su sitio lo fija el modelo.
+        }
+        else if (keyUnderDir(key, rootKey))
         {
             // Dentro del proyecto: se conserva la jerarquía tal cual. Es lo
             // que hace que las texturas se reencuentren solas en el runtime:
@@ -258,6 +265,24 @@ std::vector<ExportAsset> collectSceneAssets(
             add(sidecar.string());
     };
 
+    // Un modelo lleva su sidecar y los ficheros que lee ademas de si mismo (.mtl
+    // de un .obj, .bin e imagenes de un .gltf), colocados RESPECTO a la carpeta
+    // del modelo en el paquete: el runtime los busca en la misma ruta relativa, y
+    // fuera del proyecto otra assets/_external/N romperia esa relacion. Se
+    // añaden antes que las texturas del material para que la dedup conserve
+    // esta colocacion.
+    auto addModel = [&](const std::string& raw)
+    {
+        if (raw.empty()) return;
+        addWithSidecar(raw);
+        const auto it = seen.find(exportPathKey(raw));
+        if (it == seen.end()) return;
+        const fs::path modelPkgDir = fs::path(out[it->second].packagePath).parent_path();
+        const fs::path modelDir    = fs::path(raw).parent_path();
+        for (const std::string& rel : ModelLoader::modelCompanionFiles(raw))
+            add((modelDir / fs::path(rel)).string(), (modelPkgDir / fs::path(rel)).generic_string());
+    };
+
     scene.traverse([&](GameObject* go)
     {
         if (go->hasMesh())
@@ -266,11 +291,11 @@ std::vector<ExportAsset> collectSceneAssets(
             // dentro del .scene, no hay fichero que copiar.
             // Cada FBX lleva SU sidecar de ajustes de modelo (escala, normales...):
             // ModelLoader lo lee junto al fichero, tambien dentro del paquete.
-            addWithSidecar(go->getMesh()->sourcePath);
+            addModel(go->getMesh()->sourcePath);
 
             if (const SkinnedMesh* sm = go->getSkinnedMesh())
                 for (const AnimationSource& src : sm->animationSources)
-                    addWithSidecar(src.path);   // la builtin repite sourcePath; add() deduplica
+                    addModel(src.path);         // la builtin repite sourcePath; add() deduplica
 
             for (const Material* m : materialsOf(go))
             {
