@@ -14,7 +14,7 @@ Documentación previa revisada: `docs/superpowers/plans/2026-07-16-content-brows
 CERRADO y en main) y `docs/superpowers/plans/2026-07-14-editor-panel-split.md`
 (extrajo `ContentBrowserPanel` de `EditorUI`, ya CERRADO y en main).
 
-## Estado vigente (2026-09-23)
+## Estado vigente (2026-09-25)
 
 Las tablas de las secciones 2 y 3 son el **diagnóstico original**: su evidencia
 `file:line` describe el código tal y como estaba al medir, y no se ha reescrito. El
@@ -24,17 +24,20 @@ estado actual de cada hallazgo es este:
 |---|---|---|
 | U1 (import real de ficheros externos) | **CERRADO** | `AssetImport` (copia a `assets/Imported/<Tipo>/`, nunca sobreescribe) y `acceptOrImportAsset` en los 18 diálogos Browse; merge `8e65a5f`. La revisión final encontró que la primera versión dejaba pasar sin copiar justo el caso del Escritorio; corregido en `d7841cb`. |
 | U2 (drop desde el Explorador) | **CERRADO** | `glfwSetDropCallback` en las dos ramas de `sandbox/src/main.cpp` (Vulkan y D3D12); `8e65a5f` |
-| U3 (miniaturas) | **CERRADO solo para texturas** | Atlas compartido de 2048² con casillas de 64², decodificación en el `JobSystem`, subida en lote en Vulkan y D3D12. Modelos y materiales siguen sin miniatura. |
+| U3 (miniaturas) | **CERRADO solo para texturas** | Atlas compartido de 2048² con casillas de 64², decodificación en el `JobSystem`, subida en lote en Vulkan y D3D12; merge `1f7ad36`. **Modelos y materiales (`.mat`) siguen sin miniatura**: es lo único abierto de esta auditoría. |
 | U4 (breadcrumb / crear carpeta) | **CERRADO** | Breadcrumb `ab3994c`; Create Folder `5561836` |
-| U5 (menú Create) | **CERRADO solo para carpeta** | No hay más tipos creables porque el Core no tiene asset de Material ni de otro tipo |
+| U5 (menú Create) | **CERRADO** | Create > Folder `5561836`; Create > Material `7537f75` (merge `6f4e9b5`), al existir ya el asset `.mat` en el Core |
 | U6 (búsqueda y filtro) | **CERRADO** | Filtro por nombre y por tipo, `5561836` |
 | U7 (multiselección) | **CERRADO** | Ctrl/Shift+clic, arrastre y borrado de varios, `338de1d`; mover arrastrando a una carpeta, `d4eb633` |
-| U8 (import settings por asset) | **CERRADO para texturas de material y clips de audio** | Sidecar `<asset>.import.json` con `type` `texture` (espacio de color auto/sRGB/lineal y mipmaps; Vulkan y D3D12) o `audio` (ganancia en dB [-30, +12] y forzar a mono en clips 2D); modal "Import Settings..." en el menú contextual; viaja con el asset y con el export. **Los modelos siguen abiertos** (escala, normales, importar animaciones). Specs `docs/superpowers/specs/2026-09-24-texture-import-settings-design.md` y `2026-09-24-audio-import-settings-design.md` |
+| U8 (import settings por asset) | **CERRADO** | Sidecar `<asset>.import.json` con `type` `texture` (espacio de color auto/sRGB/lineal y mipmaps; Vulkan y D3D12) o `audio` (ganancia en dB [-30, +12] y forzar a mono en clips 2D); modal "Import Settings..." en el menú contextual; viaja con el asset y con el export. Modelos con `type` `model` (escala, normales, tangentes, UVs, importar animaciones): el `ModelLoader` lee el sidecar y Aplicar recarga en vivo todos los objetos que lo usan, también los personajes que lo usan como fuente de animación; merge `d6291fb`. Specs `docs/superpowers/specs/2026-09-24-texture-import-settings-design.md`, `2026-09-24-audio-import-settings-design.md` y `2026-09-25-model-import-settings-design.md` |
 | U9 (refresco ante cambios externos) | **CERRADO por polling** | Relectura de la carpeta actual cada 0,5 s, `56dad33`. No se hizo un watcher nativo a propósito: el repo ya usa polling de `last_write_time` para el hot reload de Lua y el árbol ya reescanea cada frame |
 
 En la comparación con Unity (§3): las capacidades 1, 3, 4, 5, 7 y 8 pasan a
-**EXISTE** (la 8 con latencia ≤ 0,5 s), la 2 a **EXISTE solo para texturas**, y la 6
-(import settings) a **EXISTE para texturas de material y audio** (modelos, sin hacer).
+**EXISTE** (la 8 con latencia ≤ 0,5 s), la 6 (import settings) también, para
+texturas, audio y modelos, y la 2 a **EXISTE solo para texturas**.
+
+Las casillas de la §5 están marcadas según este estado; su texto es el de la
+propuesta original y no describe cómo se hizo.
 
 ## 0. Qué ya estaba decidido y no se re-litiga aquí
 
@@ -123,32 +126,32 @@ nuevos, organizarlos, reutilizarlos), no por paridad con Unity per se.
 
 ### Quick wins (1 fichero, `ContentBrowserPanel.cpp`, bajo riesgo)
 
-- [ ] **Menú "Create > Folder"** en `BeginPopupContextWindow` sobre el área
+- [x] **Menú "Create > Folder"** en `BeginPopupContextWindow` sobre el área
       vacía del grid — `std::filesystem::create_directory` + refresco
       (`m_scanned=false`). Mismo patrón que `ScenePanel.cpp:137`. (U5, U4)
-- [ ] **Filtro de texto** (`ImGuiTextFilter`) sobre `m_assets` antes de
+- [x] **Filtro de texto** (`ImGuiTextFilter`) sobre `m_assets` antes de
       pintar el grid, por nombre. (U6)
-- [ ] **Filtro por tipo** (dropdown: Todos / 3D / Audio / Imagen / Script)
+- [x] **Filtro por tipo** (dropdown: Todos / 3D / Audio / Imagen / Script)
       reutilizando la misma clasificación de extensión que ya calcula el
       color/etiqueta del icono (`ContentBrowserPanel.cpp:600-614}`). (U6)
-- [ ] **Breadcrumb** encima del grid, construido a partir de
+- [x] **Breadcrumb** encima del grid, construido a partir de
       `std::filesystem::relative(m_currentDir, m_projectRoot)`, con cada
       segmento clicable para saltar `m_currentDir` sin pasar por el árbol.
       (U4)
-- [ ] **Selección múltiple** (Ctrl/Shift-click) sobre `m_assets`, aunque solo
+- [x] **Selección múltiple** (Ctrl/Shift-click) sobre `m_assets`, aunque solo
       sea para habilitar un "Delete" agrupado — no requiere cambiar el
       formato del payload de drag&drop de un solo asset. (U7)
 
 ### Features medianas (varios métodos del mismo fichero, o +1 fichero pequeño)
 
-- [ ] **Drag&drop desde el árbol al grid** (mover un asset entre carpetas
+- [x] **Drag&drop desde el árbol al grid** (mover un asset entre carpetas
       arrastrándolo) — el `DragDropSource` del grid ya existe
       (`ContentBrowserPanel.cpp:672-679`); falta un `DragDropTarget` en cada
       nodo de `drawFolderTree` que acepte `DT_ASSET_PATH`/`DT_ASSET_DIR` y
       haga `std::filesystem::rename` + reutilice
       `updateSceneReferencesForRename` (ya existe, la usa el rename por
       nombre). (U4)
-- [ ] **Miniaturas reales para texturas** (`.png`/`.jpg`/`.tga`): decodificar
+- [x] **Miniaturas reales para texturas** (`.png`/`.jpg`/`.tga`): decodificar
       con la misma ruta de carga que ya usa el material (`stb_image`, ya es
       dependencia existente — no añade una nueva), a una textura pequeña de
       preview, cacheada por path+mtime para no releer cada frame. Empezar
@@ -160,10 +163,14 @@ nuevos, organizarlos, reutilizarlos), no por paridad con Unity per se.
       memoria `linux_port_status`— sería `inotify`) sobre `m_projectRoot`,
       marcando `m_scanned=false` cuando dispare, sin librería de terceros.
       Reemplazaría el rescan-por-gesto actual por uno espontáneo. (U9)
+      **Descartado**: U9 se cerró con polling de 0,5 s (`56dad33`), ver
+      "Estado vigente".
+- [ ] **Miniaturas de modelos y materiales (`.mat`)** — lo que dejó abierto
+      la iteración de texturas. (U3)
 
 ### Features grandes (necesitan plan propio, spec/brainstorm previo)
 
-- [ ] **Importación real de ficheros externos** (drag&drop desde Explorer +
+- [x] **Importación real de ficheros externos** (drag&drop desde Explorer +
       "copiar al proyecto" desde el diálogo Browse en vez de rechazar):
       toca `canAcceptAsset`, el punto de entrada del `AsyncAssetLoader`, y
       probablemente un callback OS-level nuevo (`glfwSetDropCallback` o
