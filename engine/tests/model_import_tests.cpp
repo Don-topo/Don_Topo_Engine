@@ -572,6 +572,136 @@ static void test_companions_of_other_formats_are_empty()
     CHECK(ModelLoader::modelCompanionFiles((dir / "no_existe.obj").string()).empty());
 }
 
+// ── glTF ─────────────────────────────────────────────────────────────────────
+
+static std::string base64(const std::vector<uint8_t>& in)
+{
+    static const char* T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    for (size_t i = 0; i < in.size(); i += 3)
+    {
+        uint32_t n = static_cast<uint32_t>(in[i]) << 16;
+        if (i + 1 < in.size()) n |= static_cast<uint32_t>(in[i + 1]) << 8;
+        if (i + 2 < in.size()) n |= in[i + 2];
+        out += T[(n >> 18) & 63];
+        out += T[(n >> 12) & 63];
+        out += i + 1 < in.size() ? T[(n >> 6) & 63] : '=';
+        out += i + 2 < in.size() ? T[n & 63] : '=';
+    }
+    return out;
+}
+
+// Un triangulo: 3 posiciones (36 bytes) + 3 UV (24 bytes) = 60 bytes.
+static std::vector<uint8_t> triangleBuffer()
+{
+    const float data[15] = { 0, 0, 0,  1, 0, 0,  0, 1, 0,   0, 0,  1, 0,  0, 1 };
+    std::vector<uint8_t> b(sizeof(data));
+    std::memcpy(b.data(), data, sizeof(data));
+    return b;
+}
+
+// bufferUri vacio = sin "uri" (el buffer va en el chunk BIN de un .glb).
+static std::string triangleGltfJson(const std::string& bufferUri, const std::string& imageUri)
+{
+    std::string j = R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
+                    R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1})";
+    if (!imageUri.empty()) j += R"(,"material":0)";
+    j += R"(}]}],)";
+    if (!imageUri.empty())
+        j += R"("materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],)"
+             R"("textures":[{"source":0}],"images":[{"uri":")" + imageUri + R"("}],)";
+    j += R"("buffers":[{)";
+    if (!bufferUri.empty()) j += R"("uri":")" + bufferUri + R"(",)";
+    j += R"("byteLength":60}],)"
+         R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24}],)"
+         R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},)"
+         R"({"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}]})";
+    return j;
+}
+
+static void writeGlb(const fs::path& p)
+{
+    std::string json = triangleGltfJson("", "");
+    while (json.size() % 4) json += ' ';
+    const std::vector<uint8_t> bin = triangleBuffer();          // 60: ya multiplo de 4
+    std::ofstream f(p, std::ios::binary);
+    auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+    u32(0x46546C67); u32(2); u32(static_cast<uint32_t>(12 + 8 + json.size() + 8 + bin.size()));
+    u32(static_cast<uint32_t>(json.size())); u32(0x4E4F534A); f.write(json.data(), static_cast<std::streamsize>(json.size()));
+    u32(static_cast<uint32_t>(bin.size()));  u32(0x004E4942); f.write(reinterpret_cast<const char*>(bin.data()), static_cast<std::streamsize>(bin.size()));
+}
+
+static bool hasUvX1(const Mesh& m)
+{
+    for (const Vertex& v : m.vertices) if (std::abs(v.uv.x - 1.0f) < 1e-4f) return true;
+    return false;
+}
+
+static void test_gltf_with_embedded_buffer_loads()
+{
+    const fs::path dir = makeDir("dt_gltf_embedded");
+    writeText(dir / "tri.gltf", triangleGltfJson("data:application/octet-stream;base64," + base64(triangleBuffer()), ""));
+    try
+    {
+        const Mesh m = ModelLoader::load((dir / "tri.gltf").string());
+        CHECK(m.indices.size() == 3);
+        CHECK(hasUvX1(m));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
+// Buffer externo y textura en subcarpeta: la textura se resuelve a textures/.
+static void test_gltf_with_external_bin_and_subfolder_texture()
+{
+    const fs::path dir = makeDir("dt_gltf_external");
+    fs::create_directories(dir / "textures");
+    const std::vector<uint8_t> bin = triangleBuffer();
+    std::ofstream(dir / "tri.bin", std::ios::binary).write(reinterpret_cast<const char*>(bin.data()), static_cast<std::streamsize>(bin.size()));
+    writeTga(dir / "textures" / "rojo.tga", 4, 4, [](int, int) { return Rgba{ 255, 0, 0, 255 }; });
+    writeText(dir / "tri.gltf", triangleGltfJson("tri.bin", "textures/rojo.tga"));
+    try
+    {
+        const Mesh m = ModelLoader::load((dir / "tri.gltf").string());
+        CHECK(m.indices.size() == 3);
+        CHECK(!m.material.texturePath.empty());
+        if (!m.material.texturePath.empty())
+            CHECK(sameAssetPath(m.material.texturePath, dir / "textures" / "rojo.tga"));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+
+    const ModelPreview p = ModelLoader::loadPreview((dir / "tri.gltf").string());
+    CHECK(p.status == PreviewStatus::Ok);
+    CHECK(hasDependency(p, dir / "tri.bin"));
+    CHECK(hasDependency(p, dir / "textures" / "rojo.tga"));
+    CHECK(p.parts.size() == 1 && !p.parts[0].albedo.rgba.empty());
+}
+
+static void test_glb_loads()
+{
+    const fs::path dir = makeDir("dt_glb");
+    writeGlb(dir / "tri.glb");
+    try
+    {
+        const std::shared_ptr<Mesh> m = ModelLoader::loadAuto((dir / "tri.glb").string());
+        CHECK(m && m->indices.size() == 3);
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
+// Review Focus 1: sin su .bin, error limpio (no crash) y preview Unreadable.
+static void test_gltf_missing_bin_fails_cleanly()
+{
+    const fs::path dir = makeDir("dt_gltf_missing_bin");
+    writeText(dir / "tri.gltf", triangleGltfJson("no_esta.bin", ""));
+    bool threw = false;
+    try { (void)ModelLoader::load((dir / "tri.gltf").string()); }
+    catch (const std::runtime_error&) { threw = true; }
+    CHECK(threw);
+    const ModelPreview p = ModelLoader::loadPreview((dir / "tri.gltf").string());
+    CHECK(p.status == PreviewStatus::Unreadable);
+    CHECK(hasDependency(p, dir / "no_esta.bin"));      // vigilado: se regenera cuando aparezca
+}
+
 int main()
 {
     test_defaults_match_the_old_flags();
@@ -598,6 +728,10 @@ int main()
     test_companions_of_obj();
     test_companions_of_gltf();
     test_companions_of_other_formats_are_empty();
+    test_gltf_with_embedded_buffer_loads();
+    test_gltf_with_external_bin_and_subfolder_texture();
+    test_glb_loads();
+    test_gltf_missing_bin_fails_cleanly();
 
     if (g_failures == 0) std::printf("ALL MODEL IMPORT TESTS PASSED\n");
     return g_failures == 0 ? 0 : 1;

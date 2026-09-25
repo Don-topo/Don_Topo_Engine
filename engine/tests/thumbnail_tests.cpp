@@ -1309,6 +1309,15 @@ static void test_cache_does_not_persist_unopenable_assets(const fs::path& dir)
     CHECK(!fs::exists(disk->fileFor(f)));
 }
 
+// Un .gltf declara su .bin: reexportar el buffer regenera la miniatura.
+static void test_thumbnail_gltf_declares_its_bin(const fs::path& dir)
+{
+    std::ofstream(dir / "tri.bin", std::ios::binary) << std::string(60, '\0');
+    std::ofstream(dir / "tri.gltf") << R"({"asset":{"version":"2.0"},"buffers":[{"uri":"tri.bin","byteLength":60}]})";
+    const ThumbnailResult r = makeAssetThumbnail(dir / "tri.gltf");
+    CHECK(hasDep(r, dir / "tri.bin"));
+}
+
 static void test_wants_thumbnail_kinds()
 {
     CHECK(wantsThumbnail(AssetKind::Image));
@@ -1380,6 +1389,7 @@ int main()
     test_cache_stores_decoded_results_on_disk(dir);
     test_cache_dependency_changed_during_decode_regenerates(dir);
     test_cache_does_not_persist_unopenable_assets(dir);
+    test_thumbnail_gltf_declares_its_bin(dir);
     test_wants_thumbnail_kinds();
     test_icon_button_id_is_stable_when_thumbnail_appears();
     std::error_code ec;

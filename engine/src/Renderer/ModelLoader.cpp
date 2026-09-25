@@ -217,7 +217,7 @@ namespace DonTopo
                 }
                 else
                 {
-                    outPath = (modelDir / fs::path(raw).filename()).string();
+                    outPath = resolveModelTexture(modelDir, raw).string();
                 }
             };
 
@@ -472,7 +472,7 @@ namespace DonTopo
                         }
                     }
                 }
-                else outPath = (modelDir / fs::path(raw).filename()).string();
+                else outPath = resolveModelTexture(modelDir, raw).string();
             };
 
             std::unordered_map<uint32_t, uint32_t> matRemap;
@@ -720,29 +720,6 @@ namespace DonTopo
         return out;
     }
 
-    // Un .obj lee sus materiales de los .mtl de sus lineas mtllib, y cambiar map_Kd
-    // ahi no toca el .obj: cada .mtl es dependencia de la miniatura. Se sellan
-    // antes de que Assimp los lea.
-    static void stampObjMaterialLibraries(const std::string& path, std::vector<FileStamp>& deps)
-    {
-        namespace fs = std::filesystem;
-        std::string ext = fs::path(path).extension().string();
-        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (ext != ".obj") return;
-        std::ifstream in{ fs::path(path) };
-        std::string line;
-        while (std::getline(in, line))
-        {
-            if (line.rfind("mtllib", 0) != 0 || line.size() < 7 ||
-                !std::isspace(static_cast<unsigned char>(line[6])))
-                continue;
-            size_t b = 7, e = line.size();
-            while (b < e && std::isspace(static_cast<unsigned char>(line[b]))) ++b;
-            while (e > b && std::isspace(static_cast<unsigned char>(line[e - 1]))) --e;
-            if (b < e) deps.push_back(stampFile(fs::path(path).parent_path() / line.substr(b, e - b)));
-        }
-    }
-
     ModelPreview ModelLoader::loadPreview(const std::string& path)
     {
         namespace fs = std::filesystem;
@@ -752,7 +729,10 @@ namespace DonTopo
             // El sidecar es dependencia exista o no: crearlo tambien cambia el
             // aspecto. Todo se sella ANTES de leerlo (ver FileStamp).
             out.dependencies.push_back(stampFile(importSidecarPath(path)));
-            stampObjMaterialLibraries(path, out.dependencies);
+            // Lo que el modelo lee ademas de si mismo (.mtl, .bin, texturas de un
+            // .gltf), sellado ANTES de que Assimp lo lea.
+            for (const std::string& rel : modelCompanionFiles(path))
+                out.dependencies.push_back(stampFile(fs::path(path).parent_path() / fs::path(rel)));
 
             const ModelImportSettings settings = readModelSettings(path);
             Assimp::Importer importer;
@@ -807,7 +787,7 @@ namespace DonTopo
                     else
                     {
                         // Misma resolucion que load/loadSkinned: el nombre, junto al modelo.
-                        const fs::path ext = modelDir / fs::path(texPath.C_Str()).filename();
+                        const fs::path ext = resolveModelTexture(modelDir, texPath.C_Str());
                         out.dependencies.push_back(stampFile(ext));    // antes de leerla
                         img = loadPreviewImage(ext);
                     }
