@@ -179,7 +179,7 @@ std::string uniqueMaterialName(const std::filesystem::path& dir);
 // Que ajustes de importacion ofrece un asset. El menu contextual y el modal se
 // deciden por esto, no por comprobaciones sueltas: un tipo nuevo (modelos) se
 // anade aqui.
-enum class ImportSettingsKind { None, Texture, Audio };
+enum class ImportSettingsKind { None, Texture, Audio, Model };
 ImportSettingsKind importSettingsKindFor(const std::string& ext, bool isDir);
 
 struct AudioImportApplyResult {
@@ -194,6 +194,20 @@ struct AudioImportApplyResult {
 AudioImportApplyResult applyAudioImportSettings(const std::filesystem::path& asset,
                                                 const AudioImportSettings& settings,
                                                 const std::function<void(const std::string&)>& refresh);
+
+struct ModelImportApplyResult {
+    bool        ok = false;
+    std::string error;       // causa si !ok (el modal la muestra y no se cierra)
+    int         refreshed = 0;   // objetos que reimport dice haber recargado
+};
+// Escribe el sidecar del modelo (el defecto lo borra) y, SOLO si se pudo, llama a
+// `reimport(asset)` una vez: en el panel recarga en vivo los objetos de la escena
+// que usan ese FBX (reimportModelUsers) y devuelve cuantos. Sin `reimport` solo se
+// escribe. Un fallo de escritura no recarga nada.
+ModelImportApplyResult applyModelImportSettings(
+    const std::filesystem::path& asset,
+    const ModelImportSettings& settings,
+    const std::function<int(const std::filesystem::path&)>& reimport);
 
 // Borra un fichero (con su .import.json) o una carpeta entera. El error del
 // sistema, si lo hay; vacio = borrado.
@@ -331,6 +345,7 @@ private:
     TextureImportSettings  m_importEdit;
     ImportSettingsKind     m_importKind = ImportSettingsKind::None;
     AudioImportSettings    m_importAudioEdit;
+    ModelImportSettings    m_importModelEdit;
     std::string            m_importError;
     bool                   m_openImportPopup = false;
 

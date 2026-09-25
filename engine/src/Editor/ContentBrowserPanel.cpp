@@ -1,6 +1,7 @@
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/AssetImport.h"
+#include "DonTopo/Editor/ModelReimport.h"
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Editor/ProjectContext.h"
@@ -717,9 +718,10 @@ ImportSettingsKind importSettingsKindFor(const std::string& ext, bool isDir)
     if (isDir) return ImportSettingsKind::None;
     switch (classifyAsset(ext, false))
     {
-        case AssetKind::Image: return ImportSettingsKind::Texture;
-        case AssetKind::Audio: return ImportSettingsKind::Audio;
-        default:               return ImportSettingsKind::None;
+        case AssetKind::Image:   return ImportSettingsKind::Texture;
+        case AssetKind::Audio:   return ImportSettingsKind::Audio;
+        case AssetKind::Model3D: return ImportSettingsKind::Model;
+        default:                 return ImportSettingsKind::None;
     }
 }
 
@@ -732,6 +734,19 @@ AudioImportApplyResult applyAudioImportSettings(const std::filesystem::path& ass
         return r;                                    // nada refrescado si no se pudo escribir
     r.ok = true;
     if (refresh) refresh(asset.string());
+    return r;
+}
+
+ModelImportApplyResult applyModelImportSettings(
+    const std::filesystem::path& asset,
+    const ModelImportSettings& settings,
+    const std::function<int(const std::filesystem::path&)>& reimport)
+{
+    ModelImportApplyResult r;
+    if (!saveModelImportSettings(asset, settings, &r.error))
+        return r;                                    // nada recargado si no se pudo escribir
+    r.ok = true;
+    if (reimport) r.refreshed = reimport(asset);
     return r;
 }
 
@@ -1504,7 +1519,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 // Renombrar es de uno en uno.
                 if (ImGui::MenuItem("Rename", nullptr, false, selCount <= 1))
                     beginAssetRename(path, isDir);
-                // Ajustes de importacion: solo de UN asset con ajustes (textura o audio).
+                // Ajustes de importacion: solo de UN asset con ajustes (textura, audio o modelo).
                 const ImportSettingsKind importKind = importSettingsKindFor(path.extension().string(), isDir);
                 if (selCount <= 1 && importKind != ImportSettingsKind::None &&
                     ImGui::MenuItem("Import Settings..."))
@@ -1513,6 +1528,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     m_importKind   = importKind;
                     if (importKind == ImportSettingsKind::Audio)
                         m_importAudioEdit = loadAudioImportSettings(path);
+                    else if (importKind == ImportSettingsKind::Model)
+                        m_importModelEdit = loadModelImportSettings(path);
                     else
                         m_importEdit = loadTextureImportSettings(path);
                     m_importError.clear();
@@ -1764,9 +1781,10 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             ImGui::EndPopup();
         }
 
-        // Ajustes de importacion de UNA textura (menu contextual). Aplicar escribe
-        // el sidecar y reconstruye los materiales que usan la textura; si no se
-        // puede escribir, el modal se queda abierto con el error.
+        // Ajustes de importacion de UN asset (textura, audio o modelo; menu
+        // contextual). Aplicar escribe el sidecar y refresca a los usuarios del
+        // asset (materiales, voces o mallas); si no se puede escribir, el modal se
+        // queda abierto con el error.
         if (m_openImportPopup)
         {
             ImGui::OpenPopup("Import Settings");
@@ -1786,6 +1804,20 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 ImGui::Checkbox("Force mono", &m_importAudioEdit.forceMono);
                 ImGui::TextDisabled("La ganancia se suma al volumen del componente.");
                 ImGui::TextDisabled("Mono: solo clips 2D y desde la proxima reproduccion.");
+            }
+            else if (m_importKind == ImportSettingsKind::Model)
+            {
+                ImGui::DragFloat("Scale", &m_importModelEdit.scale, 0.01f,
+                                 kModelScaleMin, kModelScaleMax, "%.4f");
+                int normals = static_cast<int>(m_importModelEdit.normals);
+                if (ImGui::Combo("Normals", &normals,
+                                 "Del fichero (planas si faltan)\0Suaves (regenera)\0Planas (regenera)\0"))
+                    m_importModelEdit.normals = static_cast<NormalsMode>(normals);
+                ImGui::Checkbox("Recalcular tangentes", &m_importModelEdit.calcTangents);
+                ImGui::Checkbox("Voltear UVs", &m_importModelEdit.flipUVs);
+                ImGui::Checkbox("Importar animaciones", &m_importModelEdit.importAnimations);
+                ImGui::TextDisabled("Se aplica a todos los objetos que usan este modelo.");
+                ImGui::TextDisabled("Los colliders no se re-dimensionan.");
             }
             else
             {
@@ -1812,6 +1844,27 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 if (r.ok)
                 {
                     ctx.pushLog("Import settings aplicados: " + m_importTarget.filename().string());
+                    ImGui::CloseCurrentPopup();
+                }
+                else
+                {
+                    m_importError = r.error;   // el modal NO se cierra
+                }
+            }
+            else if (apply && m_importKind == ImportSettingsKind::Model)
+            {
+                const ModelImportApplyResult r = applyModelImportSettings(
+                    m_importTarget, m_importModelEdit,
+                    [&](const std::filesystem::path& p)
+                    {
+                        const ModelReimportResult mr = reimportModelUsers(sceneRoot, p, ctx.renderer);
+                        for (const std::string& w : mr.warnings) ctx.pushLog(w);
+                        return mr.reimported;
+                    });
+                if (r.ok)
+                {
+                    ctx.pushLog("Import settings aplicados: " + m_importTarget.filename().string() +
+                                " (" + std::to_string(r.refreshed) + " objeto(s) recargados)");
                     ImGui::CloseCurrentPopup();
                 }
                 else

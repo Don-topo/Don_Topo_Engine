@@ -1007,7 +1007,9 @@ static void test_import_settings_menu_kind()
     CHECK(importSettingsKindFor(".mp3", false)  == ImportSettingsKind::Audio);
     CHECK(importSettingsKindFor(".ogg", false)  == ImportSettingsKind::Audio);
     CHECK(importSettingsKindFor(".flac", false) == ImportSettingsKind::Audio);
-    CHECK(importSettingsKindFor(".fbx", false)  == ImportSettingsKind::None);   // modelos: siguiente spec
+    CHECK(importSettingsKindFor(".fbx", false)  == ImportSettingsKind::Model);
+    CHECK(importSettingsKindFor(".GLB", false)  == ImportSettingsKind::Model);   // cualquier modelo 3D
+    CHECK(importSettingsKindFor(".fbx", true)   == ImportSettingsKind::None);    // una carpeta
     CHECK(importSettingsKindFor(".lua", false)  == ImportSettingsKind::None);
     CHECK(importSettingsKindFor(".wav", true)   == ImportSettingsKind::None);   // una carpeta
 }
@@ -1351,8 +1353,74 @@ static void test_reimport_skinned_keeps_the_animation_config_and_rebinds()
     CHECK(go->getAnimator()->states()[0].clipIndex >= 0);              // rebindClips lo resolvio
 }
 
+// ── applyModelImportSettings ─────────────────────────────────────────────────
+
+static void test_apply_model_writes_sidecar_and_reimports_once()
+{
+    std::error_code ec;
+    const fs::path d = fs::temp_directory_path(ec) / "dt_cb_apply_model";
+    fs::remove_all(d, ec);
+    fs::create_directories(d, ec);
+    const fs::path fbx = d / "nave.fbx";
+    std::ofstream(fbx) << "fbx";
+
+    ModelImportSettings s;
+    s.scale = 0.5f;
+    int calls = 0;
+    fs::path seen;
+    const ModelImportApplyResult r = applyModelImportSettings(
+        fbx, s, [&](const fs::path& p) { ++calls; seen = p; return 3; });
+    CHECK(r.ok);
+    CHECK(r.error.empty());
+    CHECK(r.refreshed == 3);
+    CHECK(calls == 1);
+    CHECK(seen == fbx);
+    CHECK(loadModelImportSettings(fbx) == s);
+}
+
+// Un fallo de escritura no recarga nada y el modal muestra el error.
+static void test_apply_model_write_failure_does_not_reimport()
+{
+    std::error_code ec;
+    const fs::path d = fs::temp_directory_path(ec) / "dt_cb_apply_model_fail";
+    fs::remove_all(d, ec);
+    fs::create_directories(d, ec);
+    const fs::path fbx = d / "carpeta_que_no_existe" / "nave.fbx";
+
+    ModelImportSettings s;
+    s.scale = 0.5f;
+    int calls = 0;
+    const ModelImportApplyResult r = applyModelImportSettings(
+        fbx, s, [&](const fs::path&) { ++calls; return 1; });
+    CHECK(!r.ok);
+    CHECK(!r.error.empty());
+    CHECK(calls == 0);
+    CHECK(r.refreshed == 0);
+}
+
+// Sin reimport (tests, o sin escena) solo se escribe.
+static void test_apply_model_without_reimport_only_writes()
+{
+    std::error_code ec;
+    const fs::path d = fs::temp_directory_path(ec) / "dt_cb_apply_model_plain";
+    fs::remove_all(d, ec);
+    fs::create_directories(d, ec);
+    const fs::path fbx = d / "nave.fbx";
+    std::ofstream(fbx) << "fbx";
+
+    ModelImportSettings s;
+    s.flipUVs = false;
+    const ModelImportApplyResult r = applyModelImportSettings(fbx, s, nullptr);
+    CHECK(r.ok);
+    CHECK(r.refreshed == 0);
+    CHECK(loadModelImportSettings(fbx) == s);
+}
+
 int main()
 {
+    test_apply_model_writes_sidecar_and_reimports_once();
+    test_apply_model_write_failure_does_not_reimport();
+    test_apply_model_without_reimport_only_writes();
     test_reimport_replaces_the_meshes_of_that_fbx_only();
     test_reimport_of_an_unloadable_fbx_leaves_the_objects_intact();
     test_reimport_without_users_is_a_noop();
