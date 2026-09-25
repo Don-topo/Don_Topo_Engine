@@ -2190,10 +2190,12 @@ namespace
                     // debe romper la carga. Una malla compartida ya las trae.
                     if (!compartida && j["mesh"].contains("animationSources"))
                     {
+                        std::vector<DonTopo::AnimationSourceConfig> fuentes;
                         for (const auto& sj : j["mesh"]["animationSources"])
                         {
-                            const std::string path = sj.value("path", std::string());
-                            const bool builtin     = sj.value("builtin", false);
+                            DonTopo::AnimationSourceConfig cfg;
+                            cfg.path    = sj.value("path", std::string());
+                            cfg.builtin = sj.value("builtin", false);
                             // Los nombres se aplican POSICIONALMENTE, así que
                             // una lista a medias no es "casi bien": corre todos
                             // los nombres siguientes un puesto y renombra los
@@ -2201,7 +2203,6 @@ namespace
                             // ninguna — mismo criterio que jsonToMat4 con la
                             // matriz. Antes, un solo elemento que no fuera
                             // string lanzaba y se perdía la escena entera.
-                            std::vector<std::string> names;
                             if (sj.contains("clips"))
                             {
                                 const nlohmann::json& cj = sj["clips"];
@@ -2209,44 +2210,28 @@ namespace
                                 for (size_t ci = 0; clipsOk && ci < cj.size(); ++ci)
                                     clipsOk = cj[ci].is_string();
                                 if (clipsOk)
-                                    names = cj.get<std::vector<std::string>>();
+                                    cfg.clipNames = cj.get<std::vector<std::string>>();
                                 else if (warnings)
                                     warnings->push_back("mesh de '" + node->name +
                                                          "'.animationSources.clips: lista corrupta en la "
                                                          "escena, se ignoran los nombres guardados de esa fuente");
                             }
 
-                            if (builtin)
-                            {
-                                if (mesh->animationSources.empty()) continue;
-                                auto& b = mesh->animationSources[0];
-                                std::vector<std::string> renameWarnings;
-                                DonTopo::applyClipNamesPositionally(*mesh, b, names, renameWarnings);
-                                // Al warnings del parámetro, igual que el resto
-                                // de esta función: printf no llega al Log
-                                // Console en un build sin consola.
-                                if (warnings)
-                                    for (const auto& w : renameWarnings)
-                                        warnings->push_back(w);
-                                continue;
-                            }
-
-                            std::vector<std::string> sourceWarnings;
-                            if (!DonTopo::addAnimationSource(*mesh, path, sourceWarnings, &names))
-                            {
-                                // Fichero movido, borrado o de otro rig: se
-                                // avisa y se sigue. Los estados que usaran sus
-                                // clips quedan huérfanos, y bindClips ya lo
-                                // reporta — perder la escena entera por esto
-                                // sería mucho peor. Al warnings del parámetro
-                                // (Scene::lastWarnings(), lo que lee el Log
-                                // Console), no a stdout: en un build sin
-                                // consola un printf es invisible.
-                                if (warnings)
-                                    for (const auto& w : sourceWarnings)
-                                        warnings->push_back(w);
-                            }
+                            fuentes.push_back(std::move(cfg));
                         }
+
+                        // Fichero movido, borrado o de otro rig: se avisa y se
+                        // sigue (ver applyAnimationSourceConfig). Al warnings del
+                        // parámetro (Scene::lastWarnings(), lo que lee el Log
+                        // Console), no a stdout: en un build sin consola un
+                        // printf es invisible. Primero salen los avisos de
+                        // parseo y luego los de aplicar; ningún test fija el
+                        // orden.
+                        std::vector<std::string> aplicaAvisos;
+                        DonTopo::applyAnimationSourceConfig(*mesh, fuentes, aplicaAvisos);
+                        if (warnings)
+                            for (const std::string& w : aplicaAvisos)
+                                warnings->push_back(w);
                     }
 
                     if (compartida) node->setMesh(compartida);

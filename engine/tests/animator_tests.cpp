@@ -758,6 +758,76 @@ static void test_missing_animation_source_does_not_break_load(PhysicsManager& pm
     CHECK(!lm->animationClips.empty());
 }
 
+// Task 3 del plan de import settings de modelos: la configuracion de fuentes de una
+// malla (renames de la builtin, fuentes externas con sus nombres) se captura y se
+// reaplica sobre una malla recien cargada — lo que hace el reimport de un modelo.
+static void test_animation_source_config_roundtrip()
+{
+    auto viejo = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    std::vector<std::string> w;
+    CHECK(addAnimationSource(*viejo, "assets/modelAnimation.fbx", w));
+    CHECK(viejo->animationSources.size() == 2u);
+    if (viejo->animationSources.size() != 2u) return;
+    const std::string builtinName  = viejo->animationSources[0].clipNames[0];
+    const std::string importedName = viejo->animationSources[1].clipNames[0];
+    CHECK(renameClip(*viejo, builtinName, "CaminarRenombrado"));
+    CHECK(renameClip(*viejo, importedName, "SaltoRenombrado"));
+
+    const std::vector<AnimationSourceConfig> cfg = animationSourceConfigOf(*viejo);
+    CHECK(cfg.size() == 2u);
+    if (cfg.size() != 2u) return;
+    CHECK(cfg[0].builtin && cfg[0].clipNames[0] == "CaminarRenombrado");
+    CHECK(!cfg[1].builtin && cfg[1].path == "assets/modelAnimation.fbx" &&
+          cfg[1].clipNames[0] == "SaltoRenombrado");
+
+    SkinnedMesh nuevo = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    std::vector<std::string> avisos;
+    applyAnimationSourceConfig(nuevo, cfg, avisos);
+    CHECK(avisos.empty());
+    CHECK(nuevo.animationSources.size() == 2u);
+    if (nuevo.animationSources.size() == 2u)
+    {
+        CHECK(nuevo.animationSources[0].builtin);
+        CHECK(nuevo.animationSources[0].clipNames[0] == "CaminarRenombrado");
+        CHECK(!nuevo.animationSources[1].builtin);
+        CHECK(nuevo.animationSources[1].clipNames[0] == "SaltoRenombrado");
+    }
+    bool encontrado = false;
+    for (const auto& c : nuevo.animationClips)
+        if (c.name == "SaltoRenombrado") encontrado = true;
+    CHECK(encontrado);
+}
+
+// Una fuente externa cuyo fichero ya no esta: se avisa y se sigue, sin tocar la malla.
+static void test_animation_source_config_missing_source_warns_and_continues()
+{
+    SkinnedMesh nuevo = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    const size_t clipsAntes = nuevo.animationClips.size();
+
+    std::vector<AnimationSourceConfig> cfg(1);
+    cfg[0].path      = "assets/no_existe.fbx";
+    cfg[0].builtin   = false;
+    cfg[0].clipNames = { "Fantasma" };
+
+    std::vector<std::string> avisos;
+    applyAnimationSourceConfig(nuevo, cfg, avisos);
+    CHECK(!avisos.empty());
+    CHECK(nuevo.animationSources.size() == 1u);
+    CHECK(nuevo.animationClips.size() == clipsAntes);
+}
+
+// Sin builtin (malla sin fuentes): la entrada builtin se ignora sin lanzar.
+static void test_animation_source_config_builtin_on_empty_mesh_is_ignored()
+{
+    SkinnedMesh vacia;
+    std::vector<AnimationSourceConfig> cfg(1);
+    cfg[0].builtin   = true;
+    cfg[0].clipNames = { "X" };
+    std::vector<std::string> avisos;
+    applyAnimationSourceConfig(vacia, cfg, avisos);
+    CHECK(vacia.animationSources.empty());
+}
+
 // Fix de review (finding 2, task-6): el aviso de una fuente que no carga
 // H8 de docs/core-audit.md. Un grafo de animator guardado puede traer indices
 // que ya no existen -el FBX se reexporto con menos clips y alguien borro
@@ -9558,6 +9628,9 @@ int main()
     test_state_without_lock_root_motion_field_loads(pm, am);
     test_animation_sources_survive_scene_round_trip(pm, am);
     test_missing_animation_source_does_not_break_load(pm, am);
+    test_animation_source_config_roundtrip();
+    test_animation_source_config_missing_source_warns_and_continues();
+    test_animation_source_config_builtin_on_empty_mesh_is_ignored();
     test_missing_animation_source_warns_through_scene(pm, am);
     test_animator_out_of_range_entry_state_warns(pm, am);
     test_animator_out_of_range_transition_is_dropped(pm, am);
