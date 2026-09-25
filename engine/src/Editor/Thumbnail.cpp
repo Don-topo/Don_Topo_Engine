@@ -130,8 +130,7 @@ ThumbnailResult makeModelThumbnail(const std::filesystem::path& path)
 
 bool isModelThumbnailPath(const std::filesystem::path& path)
 {
-    const std::string e = lowerExt(path);
-    return e == ".fbx" || e == ".obj";
+    return ModelLoader::isSupportedModelExtension(path.extension().string());
 }
 
 ThumbnailResult makeMaterialThumbnail(const std::filesystem::path& mat)

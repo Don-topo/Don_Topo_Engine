@@ -103,13 +103,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
-# Assimp — importación de modelos 3D (FBX, OBJ, glTF...)
+# Assimp — importación de modelos 3D (FBX, OBJ, glTF/GLB)
 set(ASSIMP_BUILD_TESTS               OFF CACHE BOOL "" FORCE)
 set(ASSIMP_INSTALL                   OFF CACHE BOOL "" FORCE)
 set(ASSIMP_NO_EXPORT                 ON  CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_FBX_IMPORTER        ON  CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_OBJ_IMPORTER        ON  CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_GLTF_IMPORTER       ON  CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     assimp

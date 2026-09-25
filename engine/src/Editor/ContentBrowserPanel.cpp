@@ -3,6 +3,7 @@
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Editor/ModelReimport.h"
 #include "DonTopo/Editor/ThumbnailDiskCache.h"
+#include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Editor/ProjectContext.h"
@@ -233,7 +234,7 @@ AssetKind classifyAsset(const std::string& ext, bool isDir)
 {
     if (isDir) return AssetKind::Folder;
     const std::string e = lowerAscii(ext);
-    if (e == ".fbx" || e == ".obj" || e == ".gltf" || e == ".glb")            return AssetKind::Model3D;
+    if (ModelLoader::isSupportedModelExtension(e))                           return AssetKind::Model3D;
     if (e == ".mp3" || e == ".wav" || e == ".ogg" || e == ".flac")            return AssetKind::Audio;
     if (e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".tga" || e == ".bmp") return AssetKind::Image;
     if (e == ".ttf" || e == ".otf" || e == ".ttc")                            return AssetKind::Font;

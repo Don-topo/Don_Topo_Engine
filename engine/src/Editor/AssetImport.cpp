@@ -1,5 +1,6 @@
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Renderer/ModelLoader.h"
 
 #include <algorithm>
 #include <cctype>
@@ -20,11 +21,10 @@ std::string toLower(std::string s)
 bool isImportableExtension(const std::string& ext)
 {
     static const std::set<std::string> kImportable = {
-        ".fbx",
         ".wav", ".mp3", ".ogg", ".flac",
         ".png", ".jpg", ".jpeg", ".bmp", ".tga",
         ".ttf", ".otf", ".ttc"};
-    return kImportable.count(toLower(ext)) != 0;
+    return ModelLoader::isSupportedModelExtension(ext) || kImportable.count(toLower(ext)) != 0;
 }
 
 std::filesystem::path importedAssetDestDir(const std::filesystem::path& projectRoot,
@@ -36,7 +36,7 @@ std::filesystem::path importedAssetDestDir(const std::filesystem::path& projectR
 
     const std::string lower = toLower(ext);
     const std::filesystem::path imported = projectRoot / "assets" / "Imported";
-    if (lower == ".fbx")     return imported / "Meshes";
+    if (ModelLoader::isSupportedModelExtension(lower)) return imported / "Meshes";
     if (kAudio.count(lower)) return imported / "Audio";
     if (kImage.count(lower)) return imported / "Textures";
     if (kFont.count(lower))  return imported / "Fonts";
@@ -69,11 +69,34 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
     }
     // Si el origen traia ajustes de importacion, viajan con la copia. Un fallo
     // aqui no deshace la importacion: el asset ya esta; se avisa en el mensaje.
+    std::string warnings;
     std::string sidecarError;
     if (!copyImportSidecar(source, dest, &sidecarError))
-        return { AssetImportResult::Copied, dest,
-                 "no se pudo copiar el .import.json: " + sidecarError, source };
-    return { AssetImportResult::Copied, dest, "", source };
+        warnings = "no se pudo copiar el .import.json: " + sidecarError;
+
+    // Un modelo lee otros ficheros (.mtl y sus texturas, .bin e imagenes de un
+    // .gltf) en rutas relativas a su carpeta: se copian con la misma ruta, o la
+    // copia del proyecto no carga o sale sin material. Uno que ya existe en el
+    // destino no se pisa (puede ser de otro modelo) y se avisa.
+    if (ModelLoader::isSupportedModelExtension(source.extension().string()))
+    {
+        for (const std::string& rel : ModelLoader::modelCompanionFiles(source.string()))
+        {
+            const std::filesystem::path from = source.parent_path() / std::filesystem::path(rel);
+            const std::filesystem::path to   = dest.parent_path() / std::filesystem::path(rel);
+            std::error_code cec;
+            if (!std::filesystem::is_regular_file(from, cec)) continue;   // referenciado pero ausente: el loader lo dira
+            std::filesystem::create_directories(to.parent_path(), cec);
+            if (!std::filesystem::copy_file(from, to, cec))
+            {
+                if (!warnings.empty()) warnings += "; ";
+                warnings += (cec == std::errc::file_exists ? "ya existia " : "no se pudo copiar ") + rel;
+                continue;
+            }
+            copyImportSidecar(from, to, nullptr);
+        }
+    }
+    return { AssetImportResult::Copied, dest, warnings, source };
 }
 
 std::string describeImportResult(const AssetImportOutcome& outcome)

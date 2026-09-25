@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -505,6 +506,235 @@ static void test_preview_image_rejects_huge_sources()
     CHECK(ModelLoader::loadPreviewImage(dir / "no_existe.png").rgba.empty());
 }
 
+// ── Formatos, texturas en subcarpeta y ficheros asociados ────────────────────
+
+static void test_supported_model_extensions()
+{
+    for (const char* e : { ".fbx", ".FBX", ".obj", ".gltf", ".GLB", ".glb" })
+        CHECK(ModelLoader::isSupportedModelExtension(e));
+    for (const char* e : { ".dae", ".blend", ".png", "", "fbx" })
+        CHECK(!ModelLoader::isSupportedModelExtension(e));
+    const std::string filter = ModelLoader::supportedModelFilter();
+    for (const char* e : { ".fbx", ".obj", ".gltf", ".glb" })
+        CHECK(filter.find(e) != std::string::npos);
+}
+
+static void test_resolve_texture_prefers_the_subfolder()
+{
+    const fs::path dir = makeDir("dt_resolve_sub");
+    fs::create_directories(dir / "textures");
+    writeText(dir / "textures" / "x.tga", "sub");
+    writeText(dir / "x.tga", "root");                         // homonima junto al modelo
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "textures/x.tga"), dir / "textures" / "x.tga"));
+}
+
+// Review Focus 3: lo de siempre (nombre suelto) sigue funcionando.
+static void test_resolve_texture_falls_back_to_the_bare_name()
+{
+    const fs::path dir = makeDir("dt_resolve_bare");
+    writeText(dir / "x.tga", "root");
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "textures/x.tga"), dir / "x.tga"));
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "x.tga"), dir / "x.tga"));
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "../fuera/x.tga"), dir / "x.tga"));
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "C:/artista/x.tga"), dir / "x.tga"));
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "/home/artista/x.tga"), dir / "x.tga"));
+}
+
+static void test_companions_of_obj()
+{
+    const fs::path dir = makeDir("dt_companions_obj");
+    writeText(dir / "m.obj", "mtllib a.mtl\n# comentario\nmtllib   sub/b.mtl  \r\nmtllib a.mtl\nv 0 0 0\n");
+    const std::vector<std::string> c = ModelLoader::modelCompanionFiles((dir / "m.obj").string());
+    CHECK(c.size() == 2);
+    if (c.size() == 2) { CHECK(c[0] == "a.mtl"); CHECK(c[1] == "sub/b.mtl"); }
+}
+
+// Review Focus 5: %20 se decodifica; data:, absolutas y .. se ignoran.
+static void test_companions_of_gltf()
+{
+    const fs::path dir = makeDir("dt_companions_gltf");
+    writeText(dir / "m.gltf", R"({"asset":{"version":"2.0"},
+        "buffers":[{"uri":"tri.bin","byteLength":4},{"uri":"data:application/octet-stream;base64,AAAA","byteLength":3}],
+        "images":[{"uri":"textures/rojo%20x.tga"},{"uri":"../fuera.png"},{"uri":"/abs.png"},{"uri":"C:/abs.png"},{"uri":"tri.bin"}]})");
+    const std::vector<std::string> c = ModelLoader::modelCompanionFiles((dir / "m.gltf").string());
+    CHECK(c.size() == 2);
+    if (c.size() == 2) { CHECK(c[0] == "tri.bin"); CHECK(c[1] == "textures/rojo x.tga"); }
+}
+
+static void test_companions_of_other_formats_are_empty()
+{
+    const fs::path dir = makeDir("dt_companions_other");
+    writeText(dir / "m.glb", "glTF");
+    writeText(dir / "roto.gltf", "{ esto no es json");
+    CHECK(ModelLoader::modelCompanionFiles((dir / "m.glb").string()).empty());
+    CHECK(ModelLoader::modelCompanionFiles("assets/modelTexture.fbx").empty());
+    CHECK(ModelLoader::modelCompanionFiles((dir / "roto.gltf").string()).empty());
+    CHECK(ModelLoader::modelCompanionFiles((dir / "no_existe.obj").string()).empty());
+}
+
+// ── glTF ─────────────────────────────────────────────────────────────────────
+
+static std::string base64(const std::vector<uint8_t>& in)
+{
+    static const char* T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    for (size_t i = 0; i < in.size(); i += 3)
+    {
+        uint32_t n = static_cast<uint32_t>(in[i]) << 16;
+        if (i + 1 < in.size()) n |= static_cast<uint32_t>(in[i + 1]) << 8;
+        if (i + 2 < in.size()) n |= in[i + 2];
+        out += T[(n >> 18) & 63];
+        out += T[(n >> 12) & 63];
+        out += i + 1 < in.size() ? T[(n >> 6) & 63] : '=';
+        out += i + 2 < in.size() ? T[n & 63] : '=';
+    }
+    return out;
+}
+
+// Un triangulo: 3 posiciones (36 bytes) + 3 UV (24 bytes) = 60 bytes.
+static std::vector<uint8_t> triangleBuffer()
+{
+    const float data[15] = { 0, 0, 0,  1, 0, 0,  0, 1, 0,   0, 0,  1, 0,  0, 1 };
+    std::vector<uint8_t> b(sizeof(data));
+    std::memcpy(b.data(), data, sizeof(data));
+    return b;
+}
+
+// bufferUri vacio = sin "uri" (el buffer va en el chunk BIN de un .glb).
+static std::string triangleGltfJson(const std::string& bufferUri, const std::string& imageUri)
+{
+    std::string j = R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
+                    R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1})";
+    if (!imageUri.empty()) j += R"(,"material":0)";
+    j += R"(}]}],)";
+    if (!imageUri.empty())
+        j += R"("materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],)"
+             R"("textures":[{"source":0}],"images":[{"uri":")" + imageUri + R"("}],)";
+    j += R"("buffers":[{)";
+    if (!bufferUri.empty()) j += R"("uri":")" + bufferUri + R"(",)";
+    j += R"("byteLength":60}],)"
+         R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24}],)"
+         R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},)"
+         R"({"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}]})";
+    return j;
+}
+
+static void writeGlb(const fs::path& p)
+{
+    std::string json = triangleGltfJson("", "");
+    while (json.size() % 4) json += ' ';
+    const std::vector<uint8_t> bin = triangleBuffer();          // 60: ya multiplo de 4
+    std::ofstream f(p, std::ios::binary);
+    auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+    u32(0x46546C67); u32(2); u32(static_cast<uint32_t>(12 + 8 + json.size() + 8 + bin.size()));
+    u32(static_cast<uint32_t>(json.size())); u32(0x4E4F534A); f.write(json.data(), static_cast<std::streamsize>(json.size()));
+    u32(static_cast<uint32_t>(bin.size()));  u32(0x004E4942); f.write(reinterpret_cast<const char*>(bin.data()), static_cast<std::streamsize>(bin.size()));
+}
+
+static bool hasUvX1(const Mesh& m)
+{
+    for (const Vertex& v : m.vertices) if (std::abs(v.uv.x - 1.0f) < 1e-4f) return true;
+    return false;
+}
+
+static void test_gltf_with_embedded_buffer_loads()
+{
+    const fs::path dir = makeDir("dt_gltf_embedded");
+    writeText(dir / "tri.gltf", triangleGltfJson("data:application/octet-stream;base64," + base64(triangleBuffer()), ""));
+    try
+    {
+        const Mesh m = ModelLoader::load((dir / "tri.gltf").string());
+        CHECK(m.indices.size() == 3);
+        CHECK(hasUvX1(m));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
+// Buffer externo y textura en subcarpeta: la textura se resuelve a textures/.
+static void test_gltf_with_external_bin_and_subfolder_texture()
+{
+    const fs::path dir = makeDir("dt_gltf_external");
+    fs::create_directories(dir / "textures");
+    const std::vector<uint8_t> bin = triangleBuffer();
+    std::ofstream(dir / "tri.bin", std::ios::binary).write(reinterpret_cast<const char*>(bin.data()), static_cast<std::streamsize>(bin.size()));
+    writeTga(dir / "textures" / "rojo.tga", 4, 4, [](int, int) { return Rgba{ 255, 0, 0, 255 }; });
+    writeText(dir / "tri.gltf", triangleGltfJson("tri.bin", "textures/rojo.tga"));
+    try
+    {
+        const Mesh m = ModelLoader::load((dir / "tri.gltf").string());
+        CHECK(m.indices.size() == 3);
+        CHECK(!m.material.texturePath.empty());
+        if (!m.material.texturePath.empty())
+            CHECK(sameAssetPath(m.material.texturePath, dir / "textures" / "rojo.tga"));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+
+    const ModelPreview p = ModelLoader::loadPreview((dir / "tri.gltf").string());
+    CHECK(p.status == PreviewStatus::Ok);
+    CHECK(hasDependency(p, dir / "tri.bin"));
+    CHECK(hasDependency(p, dir / "textures" / "rojo.tga"));
+    CHECK(p.parts.size() == 1 && !p.parts[0].albedo.rgba.empty());
+}
+
+static void test_glb_loads()
+{
+    const fs::path dir = makeDir("dt_glb");
+    writeGlb(dir / "tri.glb");
+    try
+    {
+        const std::shared_ptr<Mesh> m = ModelLoader::loadAuto((dir / "tri.glb").string());
+        CHECK(m && m->indices.size() == 3);
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
+// Review Focus 1: sin su .bin, error limpio (no crash) y preview Unreadable.
+static void test_gltf_missing_bin_fails_cleanly()
+{
+    const fs::path dir = makeDir("dt_gltf_missing_bin");
+    writeText(dir / "tri.gltf", triangleGltfJson("no_esta.bin", ""));
+    bool threw = false;
+    try { (void)ModelLoader::load((dir / "tri.gltf").string()); }
+    catch (const std::runtime_error&) { threw = true; }
+    CHECK(threw);
+    const ModelPreview p = ModelLoader::loadPreview((dir / "tri.gltf").string());
+    CHECK(p.status == PreviewStatus::Unreadable);
+    CHECK(hasDependency(p, dir / "no_esta.bin"));      // vigilado: se regenera cuando aparezca
+}
+
+// Revision final, Critical 1: las texturas que nombra el .mtl tambien son
+// asociados del .obj, con su ruta tal cual (el loader las resuelve respecto a la
+// carpeta del modelo). La opcion antes del nombre (-o, -s...) no cuenta.
+static void test_companions_of_obj_include_the_mtl_textures()
+{
+    const fs::path dir = makeDir("dt_companions_obj_tex");
+    fs::create_directories(dir / "mats");
+    writeText(dir / "m.obj", "mtllib mats/a.mtl\nv 0 0 0\n");
+    writeText(dir / "mats" / "a.mtl", "newmtl x\nmap_Kd -o 0 0 0 tex/c.png\nmap_Bump n.png\nbump n.png\nKd 1 1 1\n");
+    const std::vector<std::string> c = ModelLoader::modelCompanionFiles((dir / "m.obj").string());
+    CHECK(c.size() == 3);
+    if (c.size() == 3) { CHECK(c[0] == "mats/a.mtl"); CHECK(c[1] == "tex/c.png"); CHECK(c[2] == "n.png"); }
+}
+
+// Revision final, Important 2: Assimp NO decodifica %20 en la URI de la imagen;
+// el loader tiene que encontrar "rojo x.tga" igual.
+static void test_gltf_texture_uri_with_spaces_loads()
+{
+    const fs::path dir = makeDir("dt_gltf_spaces");
+    fs::create_directories(dir / "textures");
+    const std::vector<uint8_t> bin = triangleBuffer();
+    std::ofstream(dir / "tri.bin", std::ios::binary).write(reinterpret_cast<const char*>(bin.data()), static_cast<std::streamsize>(bin.size()));
+    writeTga(dir / "textures" / "rojo x.tga", 4, 4, [](int, int) { return Rgba{ 255, 0, 0, 255 }; });
+    writeText(dir / "tri.gltf", triangleGltfJson("tri.bin", "textures/rojo%20x.tga"));
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "textures/rojo%20x.tga"), dir / "textures" / "rojo x.tga"));
+    try
+    {
+        const Mesh m = ModelLoader::load((dir / "tri.gltf").string());
+        CHECK(sameAssetPath(m.material.texturePath, dir / "textures" / "rojo x.tga"));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
 int main()
 {
     test_defaults_match_the_old_flags();
@@ -525,6 +755,18 @@ int main()
     test_preview_external_texture_and_sidecar_are_dependencies();
     test_preview_respects_the_normals_setting();
     test_preview_image_rejects_huge_sources();
+    test_supported_model_extensions();
+    test_resolve_texture_prefers_the_subfolder();
+    test_resolve_texture_falls_back_to_the_bare_name();
+    test_companions_of_obj();
+    test_companions_of_gltf();
+    test_companions_of_other_formats_are_empty();
+    test_gltf_with_embedded_buffer_loads();
+    test_gltf_with_external_bin_and_subfolder_texture();
+    test_glb_loads();
+    test_gltf_missing_bin_fails_cleanly();
+    test_companions_of_obj_include_the_mtl_textures();
+    test_gltf_texture_uri_with_spaces_loads();
 
     if (g_failures == 0) std::printf("ALL MODEL IMPORT TESTS PASSED\n");
     return g_failures == 0 ? 0 : 1;

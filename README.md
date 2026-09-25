@@ -64,7 +64,7 @@ One line each; the detail lives in the section each row points at.
 | [Audio](#audio) | FMOD 3D spatial clips and one Audio Listener per scene |
 | [Game UI](#game-ui) | Fourteen data-only UI components, on screen-space and world-space canvases |
 | [Lua scripting](#lua-scripting) | `ScriptComponent` with a Unity-style lifecycle, hot reload and auto-generated property UI |
-| Model loading | FBX / OBJ, embedded textures supported |
+| Model loading | FBX, OBJ, glTF / GLB (no Draco), embedded textures and textures in subfolders |
 
 ## Tech Stack
 
@@ -770,8 +770,8 @@ the image as `<name>.import.json` (only when it differs from the defaults, and i
 you move, rename or delete it, and into the exported game); applying it rebuilds the materials that use
 that texture. For audio clips (`.wav/.mp3/.ogg/.flac`) it offers a gain in dB (-30 to +12) added to
 every voice of that file and a Force mono switch for 2D clips; both are saved in the same
-`<name>.import.json`, and a gain change reaches a clip that is already playing. For models (`.fbx` and
-other 3D formats) it offers a uniform scale, the normals mode (from the file, smooth or flat),
+`<name>.import.json`, and a gain change reaches a clip that is already playing. For models (`.fbx`,
+`.obj`, `.gltf` and `.glb`) it offers a uniform scale, the normals mode (from the file, smooth or flat),
 recalculating tangents, flipping UVs and importing the embedded animations, again in the same sidecar;
 applying it reloads every object in the scene that uses that model, keeping its transform, material
 overrides and Animator (it is not undoable). Each FBX uses its own settings, so a character and its

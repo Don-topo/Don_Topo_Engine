@@ -413,6 +413,9 @@ static void test_classify_asset()
 {
     CHECK(classifyAsset(".fbx",  false) == AssetKind::Model3D);
     CHECK(classifyAsset(".GLB",  false) == AssetKind::Model3D);
+    CHECK(classifyAsset(".obj",  false) == AssetKind::Model3D);
+    CHECK(classifyAsset(".gltf", false) == AssetKind::Model3D);
+    CHECK(classifyAsset(".dae",  false) == AssetKind::Other);    // no compilado: no se promete
     CHECK(classifyAsset(".wav",  false) == AssetKind::Audio);
     CHECK(classifyAsset(".png",  false) == AssetKind::Image);
     CHECK(classifyAsset(".bmp",  false) == AssetKind::Image);

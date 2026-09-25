@@ -3,6 +3,7 @@
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Editor/Command.h"
+#include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/Blend2D.h"
@@ -1877,9 +1878,8 @@ void AnimatorPanel::importAnimationSource(EditorContext& ctx, GameObject* go, co
     const SkinnedMesh* mesh = go->getSkinnedMesh();
     if (!mesh) return;
 
-    std::string ext = std::filesystem::path(path).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    if (ext != ".fbx")
+    const std::string ext = std::filesystem::path(path).extension().string();
+    if (!ModelLoader::isSupportedModelExtension(ext))
     {
         m_animSrcError = "Formato no soportado: " + ext;
         return;
@@ -2084,7 +2084,7 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
                     ImGuiFileDialogFlags_HideColumnDate |
                     ImGuiFileDialogFlags_DisableThumbnailMode |
                     ImGuiFileDialogFlags_DisablePlaceMode;
-        m_animSrcDialog->OpenDialog("AddAnimSrcDlg", "Choose Animation FBX", ".fbx", cfg);
+        m_animSrcDialog->OpenDialog("AddAnimSrcDlg", "Choose Animation Source", ModelLoader::supportedModelFilter(), cfg);
         m_animSrcDlgOpen = true;
         // Se captura el id AHORA, al abrir, no ctx.selected al drenar: el
         // diálogo no es modal, así que el usuario puede cambiar de selección
@@ -2098,9 +2098,9 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
     // ContentBrowserPanel::BeginDragDropSource), no "CONTENT_BROWSER_ITEM" —
     // mismo id y mismo patrón (payload->Data es char* terminado en '\0',
     // tamaño = fullPath.size()+1) que usa PropertiesPanel::drawMeshSection
-    // para su propio drop target de .fbx.
+    // para su propio drop target de modelos.
     ImGui::SameLine();
-    ImGui::TextDisabled("(o arrastra un .fbx aquí)");
+    ImGui::TextDisabled("(o arrastra un modelo aquí)");
     if (ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
