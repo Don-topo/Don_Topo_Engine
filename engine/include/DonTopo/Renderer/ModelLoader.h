@@ -1,6 +1,7 @@
 #pragma once
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Core/FileStamp.h"
 #include <glm/glm.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -43,7 +44,8 @@ namespace DonTopo
     {
         PreviewStatus                      status = PreviewStatus::Unreadable;
         std::vector<PreviewPart>           parts;
-        std::vector<std::filesystem::path> dependencies;   // sidecar + texturas externas
+        // Sidecar, .mtl de un .obj y texturas externas, cada uno sellado ANTES de leerlo.
+        std::vector<FileStamp>             dependencies;
     };
 
     // Resultado de importar SOLO las animaciones de un fichero. warnings lleva

@@ -86,25 +86,6 @@ ThumbnailResult makeThumbnailFromStream(std::istream& in)
     }
 }
 
-bool operator==(const ThumbnailDependency& a, const ThumbnailDependency& b)
-{
-    return a.exists == b.exists && a.mtime == b.mtime && a.path == b.path;
-}
-
-ThumbnailDependency stampFile(const std::filesystem::path& path)
-{
-    ThumbnailDependency d;
-    d.path = path;
-    std::error_code ec;
-    const auto t = std::filesystem::last_write_time(path, ec);
-    if (!ec)
-    {
-        d.exists = true;
-        d.mtime  = static_cast<int64_t>(t.time_since_epoch().count());
-    }
-    return d;
-}
-
 void stampDependencies(ThumbnailResult& r, const ThumbnailDependency& self)
 {
     std::vector<ThumbnailDependency> out{ self };
@@ -114,7 +95,9 @@ void stampDependencies(ThumbnailResult& r, const ThumbnailDependency& self)
         const bool seen = std::any_of(out.begin(), out.end(), [&](const ThumbnailDependency& o) {
             return o.path.lexically_normal() == p;
         });
-        if (!seen) out.push_back(stampFile(d.path));
+        // Un sello tomado ANTES de leer vale mas que uno de ahora: si la textura
+        // cambio mientras se decodificaba, el de ahora ocultaria el cambio.
+        if (!seen) out.push_back(d.stamped ? d : stampFile(d.path));
     }
     r.dependencies = std::move(out);
 }
@@ -139,7 +122,7 @@ ThumbnailResult makeModelThumbnail(const std::filesystem::path& path)
     ThumbnailResult r;
     if (preview.status == PreviewStatus::AnimationOnly) r.status = ThumbnailStatus::AnimationOnly;
     else if (preview.status == PreviewStatus::Ok)       r = rasterizeThumbnail(preview.parts);
-    for (const std::filesystem::path& d : preview.dependencies) r.dependencies.push_back({ d });
+    r.dependencies = preview.dependencies;   // ya selladas antes de leer cada una
     return r;
 }
 
@@ -158,7 +141,7 @@ ThumbnailResult makeMaterialThumbnail(const std::filesystem::path& mat)
     std::vector<ThumbnailDependency> deps;
     if (!a.albedo.empty())
     {
-        deps.push_back({ std::filesystem::path(a.albedo) });
+        deps.push_back(stampFile(a.albedo));                  // antes de leerla
         sphere.albedo = ModelLoader::loadPreviewImage(a.albedo);
     }
     if (sphere.albedo.rgba.empty())
@@ -473,7 +456,12 @@ void ThumbnailCache::startJobs()
                 {
                     d.result = decode(path);
                     stampDependencies(d.result, self);
-                    if (disk) disk->store(path, d.result);
+                    // No poder ABRIR el asset (bloqueado por otro programa,
+                    // placeholder de OneDrive) es transitorio: guardarlo lo dejaria
+                    // Unreadable para siempre, porque su mtime no va a cambiar.
+                    const bool transient = d.result.status == ThumbnailStatus::Unreadable &&
+                                           !std::ifstream(path, std::ios::binary);
+                    if (disk && !transient) disk->store(path, d.result);
                 }
             }
             catch (...) { d.result = ThumbnailResult{}; }

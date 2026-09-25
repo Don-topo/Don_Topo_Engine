@@ -5,8 +5,10 @@
 #include <assimp/postprocess.h>
 #include <assimp/config.h>
 #include "DonTopo/Core/ImportSettings.h"
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <unordered_map>
 #include <stdexcept>
 #include <filesystem>
@@ -599,14 +601,39 @@ namespace DonTopo
         return std::make_shared<Mesh>(load(path));
     }
 
+    // Un .obj lee sus materiales de los .mtl de sus lineas mtllib, y cambiar map_Kd
+    // ahi no toca el .obj: cada .mtl es dependencia de la miniatura. Se sellan
+    // antes de que Assimp los lea.
+    static void stampObjMaterialLibraries(const std::string& path, std::vector<FileStamp>& deps)
+    {
+        namespace fs = std::filesystem;
+        std::string ext = fs::path(path).extension().string();
+        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (ext != ".obj") return;
+        std::ifstream in{ fs::path(path) };
+        std::string line;
+        while (std::getline(in, line))
+        {
+            if (line.rfind("mtllib", 0) != 0 || line.size() < 7 ||
+                !std::isspace(static_cast<unsigned char>(line[6])))
+                continue;
+            size_t b = 7, e = line.size();
+            while (b < e && std::isspace(static_cast<unsigned char>(line[b]))) ++b;
+            while (e > b && std::isspace(static_cast<unsigned char>(line[e - 1]))) --e;
+            if (b < e) deps.push_back(stampFile(fs::path(path).parent_path() / line.substr(b, e - b)));
+        }
+    }
+
     ModelPreview ModelLoader::loadPreview(const std::string& path)
     {
         namespace fs = std::filesystem;
         ModelPreview out;
         try
         {
-            // El sidecar es dependencia exista o no: crearlo tambien cambia el aspecto.
-            out.dependencies.push_back(importSidecarPath(path));
+            // El sidecar es dependencia exista o no: crearlo tambien cambia el
+            // aspecto. Todo se sella ANTES de leerlo (ver FileStamp).
+            out.dependencies.push_back(stampFile(importSidecarPath(path)));
+            stampObjMaterialLibraries(path, out.dependencies);
 
             const ModelImportSettings settings = readModelSettings(path);
             Assimp::Importer importer;
@@ -662,7 +689,7 @@ namespace DonTopo
                     {
                         // Misma resolucion que load/loadSkinned: el nombre, junto al modelo.
                         const fs::path ext = modelDir / fs::path(texPath.C_Str()).filename();
-                        out.dependencies.push_back(ext);
+                        out.dependencies.push_back(stampFile(ext));    // antes de leerla
                         img = loadPreviewImage(ext);
                     }
                 }

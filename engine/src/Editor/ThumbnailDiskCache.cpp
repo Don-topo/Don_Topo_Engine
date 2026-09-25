@@ -112,7 +112,7 @@ std::optional<ThumbnailResult> ThumbnailDiskCache::load(const fs::path& asset) c
             uint32_t    exists = 0;
             int64_t     mtime  = 0;
             if (!r.str(path, kMaxPath) || !r.u32(exists) || !r.i64(mtime)) return std::nullopt;
-            ThumbnailDependency stored{ fromUtf8(path), exists != 0, mtime };
+            ThumbnailDependency stored{ fromUtf8(path), exists != 0, mtime, true };
             if (!(stampFile(stored.path) == stored)) return std::nullopt;                // cambio algo
             out.dependencies.push_back(std::move(stored));
         }

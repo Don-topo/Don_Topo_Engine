@@ -10,7 +10,8 @@ namespace DonTopo {
 
 // Subir SIEMPRE que cambie el aspecto de las miniaturas (rasterizador, luces,
 // encuadre, reduccion de texturas): una cache vieja no sabe que esta obsoleta.
-inline constexpr uint32_t kThumbDiskVersion = 1;
+// 2: los .obj declaran sus .mtl como dependencia (las entradas de la 1 no los tienen).
+inline constexpr uint32_t kThumbDiskVersion = 2;
 
 // Miniaturas ya generadas, una por fichero en <proyecto>/.dt-cache/thumbs/, con
 // la lista de dependencias y sus mtime. Se usa desde los workers: todo const y

@@ -1,4 +1,5 @@
 #pragma once
+#include "DonTopo/Core/FileStamp.h"
 #include "DonTopo/Renderer/ThumbnailAtlas.h"
 
 #include <cstdint>
@@ -22,20 +23,15 @@ constexpr uint64_t kThumbMaxSourcePixels = 100'000'000;
 enum class ThumbnailStatus { Ok, Unreadable, TooLarge, AnimationOnly };
 
 // Un fichero del que depende una miniatura y su estado al generarla.
-struct ThumbnailDependency
-{
-    std::filesystem::path path;
-    bool                  exists = false;
-    int64_t               mtime  = 0;    // file_time_type::time_since_epoch().count(); 0 si no existe
-};
-bool operator==(const ThumbnailDependency& a, const ThumbnailDependency& b);   // path, exists y mtime
+using ThumbnailDependency = FileStamp;
 
 struct ThumbnailResult
 {
     ThumbnailStatus                  status = ThumbnailStatus::Unreadable;
     std::vector<uint8_t>             rgba;   // kThumbCell*kThumbCell*4 si status == Ok; vacio si no
-    // Lo que declara el decodificador: SOLO las rutas (exists/mtime sin rellenar).
-    // stampDependencies las sella y pone el propio asset delante.
+    // Lo que declara el decodificador, a poder ser SELLADO antes de leer cada
+    // fichero (stampFile). stampDependencies sella lo que llegue sin sellar y
+    // pone el propio asset delante.
     std::vector<ThumbnailDependency> dependencies;
 };
 
@@ -53,12 +49,9 @@ ThumbnailResult makeThumbnail(const std::filesystem::path& path);
 // leer el fichero entero.
 ThumbnailResult makeThumbnailFromStream(std::istream& in);
 
-// Estado de un fichero AHORA. Nunca lanza: si no se puede leer, exists = false.
-ThumbnailDependency stampFile(const std::filesystem::path& path);
-
-// Sella las dependencias declaradas por el decodificador y pone `self` (el
-// asset, sellado ANTES de decodificar) la primera. Quita duplicados y el propio
-// asset si el decodificador lo repitio.
+// Pone `self` (el asset, sellado ANTES de decodificar) la primera, conserva el
+// sello de las dependencias que el decodificador ya sello y sella las que no.
+// Quita duplicados y el propio asset si el decodificador lo repitio.
 void stampDependencies(ThumbnailResult& r, const ThumbnailDependency& self);
 
 // .fbx/.obj: los que tarda segundos en decodificar (ver el tope de ThumbnailCache).

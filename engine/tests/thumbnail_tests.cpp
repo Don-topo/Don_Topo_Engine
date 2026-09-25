@@ -1266,6 +1266,49 @@ static void test_cache_stores_decoded_results_on_disk(const fs::path& dir)
     if (back) CHECK(back->rgba == makeThumbnail(f).rgba);
 }
 
+// Revision final, Important 1: la TEXTURA cambia mientras se decodifica. El
+// decodificador la sello ANTES de leerla; ese sello no puede sustituirse por uno
+// tomado despues, o la miniatura queda vieja para siempre (tambien en disco).
+static void test_cache_dependency_changed_during_decode_regenerates(const fs::path& dir)
+{
+    const fs::path asset = makeImage(dir, "racy_dep_asset.tga");
+    const fs::path dep   = makeImage(dir, "racy_dep_texture.tga");
+    int calls = 0;
+    CacheHarness h(4, kThumbSlotCount, [&](const fs::path&) {
+        ThumbnailResult r = okTile();
+        r.dependencies.push_back(stampFile(dep));          // sellada antes de "leerla"
+        if (++calls == 1) bumpMtime(dep);                  // se guarda a mitad de decodificar
+        return r;
+    });
+    h.cache.beginFrame();
+    h.cache.request(asset);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    h.cache.beginFrame();
+    h.cache.refreshStamps();
+    CHECK(!h.cache.request(asset).has_value());
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(calls == 2);
+}
+
+// Revision final: un fallo por NO PODER ABRIR el asset (bloqueado por otro
+// programa, placeholder de OneDrive) es transitorio: no se guarda en disco, o
+// quedaria Unreadable para siempre aunque el fichero no cambie.
+static void test_cache_does_not_persist_unopenable_assets(const fs::path& dir)
+{
+    auto disk = std::make_shared<ThumbnailDiskCache>(dir / "cache_transient");
+    const fs::path f = makeImage(dir, "vanishing.tga");
+    CacheHarness h(4, kThumbSlotCount, [](const fs::path& p) {
+        std::error_code ec;
+        fs::remove(p, ec);                                 // no se puede abrir durante la decodificacion
+        return ThumbnailResult{};
+    }, disk);
+    h.cache.beginFrame();
+    h.cache.request(f);
+    h.cache.pump(); h.runAll(); h.cache.pump();
+    CHECK(h.cache.status(f) == ThumbnailStatus::Unreadable);
+    CHECK(!fs::exists(disk->fileFor(f)));
+}
+
 static void test_wants_thumbnail_kinds()
 {
     CHECK(wantsThumbnail(AssetKind::Image));
@@ -1335,6 +1378,8 @@ int main()
     test_cache_caps_models_in_flight(dir);
     test_cache_disk_hit_skips_the_decoder(dir);
     test_cache_stores_decoded_results_on_disk(dir);
+    test_cache_dependency_changed_during_decode_regenerates(dir);
+    test_cache_does_not_persist_unopenable_assets(dir);
     test_wants_thumbnail_kinds();
     test_icon_button_id_is_stable_when_thumbnail_appears();
     std::error_code ec;

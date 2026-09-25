@@ -381,8 +381,8 @@ static size_t previewTriangles(const ModelPreview& p)
 
 static bool hasDependency(const ModelPreview& p, const fs::path& dep)
 {
-    for (const fs::path& d : p.dependencies)
-        if (sameAssetPath(d, dep)) return true;
+    for (const FileStamp& d : p.dependencies)
+        if (d.stamped && sameAssetPath(d.path, dep)) return true;   // selladas, no solo nombradas
     return false;
 }
 
@@ -469,6 +469,9 @@ static void test_preview_external_texture_and_sidecar_are_dependencies()
     if (!img.rgba.empty()) CHECK(img.rgba[0] == 255 && img.rgba[1] == 0 && img.rgba[2] == 0);
     CHECK(hasDependency(p, dir / "rojo.tga"));
     CHECK(hasDependency(p, importSidecarPath(obj)));
+    // Revision final, Important 2: cambiar map_Kd en el .mtl no toca el .obj; sin
+    // esto la miniatura no se regeneraria nunca.
+    CHECK(hasDependency(p, dir / "quad.mtl"));
 }
 
 // El sidecar cambia el aspecto: normals = flat regenera las normales del fichero.
