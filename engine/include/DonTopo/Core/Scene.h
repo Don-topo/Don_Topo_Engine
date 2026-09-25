@@ -33,6 +33,12 @@ namespace DonTopo
     // (clon, undo de Delete); si no, hace copia profunda y configura.
     using PreloadedMeshCache = std::unordered_map<std::string, std::shared_ptr<const Mesh>>;
 
+    // Clave de PreloadedMeshCache: el sourcePath para la pieza 0 (las caches de
+    // antes siguen valiendo) y "<sourcePath>#piece=<n>" para las demas. Sin la pieza
+    // en la clave, el undo de Delete de un modelo de varias piezas daria la misma
+    // malla a todos sus hijos.
+    std::string meshCacheKey(const std::string& sourcePath, int piece);
+
     struct SkinnedMesh;
     // true si las fuentes de animación de la malla (ruta, builtin y nombres de
     // clip, en orden) son exactamente las del bloque "animationSources" del

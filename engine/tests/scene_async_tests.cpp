@@ -382,6 +382,81 @@ void testClonNoHeredaIndicesDeRender()
     CHECK(original->skinnedRenderIndex == 3, "el original conserva su indice skinned");
 }
 
+void testPieceCacheKeys()
+{
+    CHECK(DonTopo::meshCacheKey("a/b.fbx", 0) == "a/b.fbx", "la pieza 0 conserva la clave de siempre");
+    CHECK(DonTopo::meshCacheKey("a/b.fbx", 2) == "a/b.fbx#piece=2", "las demas llevan la pieza");
+}
+
+std::shared_ptr<DonTopo::Mesh> fakePiece(const std::string& src, int piece, const char* name)
+{
+    auto m = std::make_shared<DonTopo::Mesh>();
+    m->sourcePath = src;
+    m->piece      = piece;
+    m->name       = name;
+    DonTopo::Vertex v{};
+    v.pos = glm::vec3(static_cast<float>(piece), 0.0f, 0.0f);
+    m->vertices.push_back(v);
+    return m;
+}
+
+// Review Focus 4: "piece" va y vuelve; la pieza 0 no escribe el campo; un nodo
+// con "piece" se sirve de la entrada de SU pieza en la cache.
+void testPieceRoundTripsThroughJson()
+{
+    const std::string src = "assets/__no_existe__.gltf";
+    DonTopo::Scene scene;
+    auto* p0 = scene.addGameObject("p0");
+    auto* p1 = scene.addGameObject("p1");
+    p0->setMesh(fakePiece(src, 0, "malla0"));
+    p1->setMesh(fakePiece(src, 1, "malla1"));
+    const nlohmann::json j = scene.toJson();
+    const auto& kids = j["root"]["children"];
+    CHECK(kids.size() == 2, "dos hijos serializados");
+    if (kids.size() != 2) return;
+    CHECK(!kids[0]["mesh"].contains("piece"), "la pieza 0 no escribe el campo");
+    CHECK(kids[1]["mesh"].value("piece", -1) == 1, "la pieza 1 se guarda");
+
+    DonTopo::PreloadedMeshCache cache;
+    cache[DonTopo::meshCacheKey(src, 0)] = fakePiece(src, 0, "cache0");
+    cache[DonTopo::meshCacheKey(src, 1)] = fakePiece(src, 1, "cache1");
+    DonTopo::Scene back;
+    CHECK(back.fromJson(j, physics(), audio(), nullptr, &cache), "recarga con cache");
+    DonTopo::GameObject* b0 = nullptr;
+    DonTopo::GameObject* b1 = nullptr;
+    back.traverse([&](DonTopo::GameObject* go) { if (go->name == "p0") b0 = go; if (go->name == "p1") b1 = go; });
+    CHECK(b0 && b0->hasMesh() && b0->getMesh()->name == "cache0", "p0 recibe la pieza 0");
+    CHECK(b1 && b1->hasMesh() && b1->getMesh()->name == "cache1" && b1->getMesh()->piece == 1,
+          "p1 recibe la pieza 1 y la conserva");
+}
+
+// Review Focus 1: lo que hace el undo de Delete (collectMeshes + subtreeToJson +
+// insertFromJson con esa cache) devuelve a cada hijo SU malla.
+void testDeleteUndoKeepsEachPiece()
+{
+    const std::string src = "assets/__no_existe__.gltf";
+    DonTopo::Scene scene;
+    auto* casa = scene.addGameObject("Casa");
+    auto* paredes = scene.addGameObject("Paredes", casa);
+    auto* tejado  = scene.addGameObject("Tejado", casa);
+    paredes->setMesh(fakePiece(src, 0, "paredes"));
+    tejado->setMesh(fakePiece(src, 1, "tejado"));
+
+    const DonTopo::PreloadedMeshCache cache = DonTopo::Scene::collectMeshes(casa);
+    const nlohmann::json snap = scene.subtreeToJson(casa);
+    scene.removeGameObject(casa);
+    DonTopo::GameObject* back = scene.insertFromJson(snap, nullptr, 0, physics(), audio(), &cache);
+    CHECK(back && back->children.size() == 2, "Casa vuelve con sus dos hijos");
+    if (!back || back->children.size() != 2) return;
+    for (const auto& child : back->children)
+    {
+        CHECK(child->hasMesh(), "cada hijo recupera malla");
+        if (!child->hasMesh()) continue;
+        const std::string esperado = child->name == "Paredes" ? "paredes" : "tejado";
+        CHECK(child->getMesh()->name == esperado, "cada hijo recupera SU malla, no la de su hermano");
+    }
+}
+
 } // namespace
 
 int main()
@@ -400,6 +475,9 @@ int main()
     testAsyncCreatesNodesImmediately(loader);
     testDeletedTargetIsDiscarded(loader);
     testPreloadedCacheConsulted();
+    testPieceCacheKeys();
+    testPieceRoundTripsThroughJson();
+    testDeleteUndoKeepsEachPiece();
     testClonNoHeredaIndicesDeRender();
 
     jobSystem.shutdown();

@@ -1145,6 +1145,9 @@ namespace
             // carga cae al default true, que es como se veían.
             nlohmann::json meshJson = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name}, {"skinned", node.isSkinned()},
                                         {"visible", node.meshVisible} };
+            // La pieza 0 no escribe el campo: las escenas de antes (sin
+            // "piece") quedan idénticas byte a byte.
+            if (mesh->piece != 0) meshJson["piece"] = mesh->piece;
             if (mesh->sourcePath.empty())
             {
                 // Procedural (Cube/Sphere/Plane/Capsule): no hay fichero de
@@ -2070,6 +2073,11 @@ namespace
             std::string sourcePath = j["mesh"].value("sourcePath", "");
             std::string meshName   = j["mesh"].value("name", "");
             node->meshVisible      = j["mesh"].value("visible", true);
+            // Que pieza del fichero (Mesh::piece). Ausente o invalida = 0, que es
+            // lo que cargaban las escenas de antes.
+            int piece = 0;
+            if (const auto it = j["mesh"].find("piece"); it != j["mesh"].end() && it->is_number_integer())
+                piece = std::max(0, it->get<int>());
             // El flag "skinned" se sigue GUARDANDO (dato informativo, y no
             // rompe ficheros viejos) pero ya no se lee: manda el fichero, en
             // carga igual que en import. Si no fuera así, las escenas guardadas
@@ -2250,7 +2258,7 @@ namespace
                     std::shared_ptr<const DonTopo::Mesh> cached;
                     if (preloaded)
                     {
-                        auto it = preloaded->find(sourcePath);
+                        auto it = preloaded->find(DonTopo::meshCacheKey(sourcePath, piece));
                         if (it != preloaded->end() && it->second)
                             cached = it->second;
                     }
@@ -2265,11 +2273,13 @@ namespace
                         // la petición. El pump lo resolverá por id — nunca por
                         // puntero, que sería dangling si el usuario lo borra
                         // mientras carga.
+                        // TODO(Task 3): pasar piece cuando requestMesh acepte
+                        // un tercer argumento.
                         node->pendingMeshJob = loader->requestMesh(sourcePath, node->id);
                     }
                     else
                     {
-                        auto mesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load(sourcePath));
+                        auto mesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load(sourcePath, piece));
                         node->setMesh(std::move(mesh));
                     }
                 }
@@ -3490,10 +3500,16 @@ namespace DonTopo
         // mallas colgando, y sembrar únicamente src dejaba a los hijos yendo a
         // disco igual. Vale para las dos cachés, que se llenan en la misma
         // pasada.
+        // Por el sourcePath REAL de la malla (m->sourcePath), no por la clave
+        // de mallas: desde que collectMeshes indexa por meshCacheKey (pieza
+        // incluida), la clave de una pieza != 0 lleva "#piece=N" y ya no
+        // coincide con el sourcePath a secas que busca hasBonesCache más
+        // abajo — sin esto, cada pieza != 0 de un modelo estático clonado
+        // volvía a sondear el fichero con Assimp en vez de usar la cache.
         std::unordered_map<std::string, bool> cache;
         const PreloadedMeshCache mallas = collectMeshes(src);
         for (const auto& [ruta, m] : mallas)
-            cache[ruta] = dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr;
+            cache[m->sourcePath] = dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr;
         try
         {
             // Raíz vacía, pareja de la de arriba: j se serializó con raíz vacía
@@ -3825,6 +3841,11 @@ namespace DonTopo
         return true;
     }
 
+    std::string meshCacheKey(const std::string& sourcePath, int piece)
+    {
+        return piece == 0 ? sourcePath : sourcePath + "#piece=" + std::to_string(piece);
+    }
+
     PreloadedMeshCache Scene::collectMeshes(GameObject* root)
     {
         PreloadedMeshCache out;
@@ -3833,7 +3854,7 @@ namespace DonTopo
             if (!n->hasMesh()) return;
             const std::string& ruta = n->getMesh()->sourcePath;
             if (ruta.empty()) return;   // procedural: no hay fichero que evitar
-            out[ruta] = n->getMesh();
+            out[meshCacheKey(ruta, n->getMesh()->piece)] = n->getMesh();
         });
         return out;
     }
