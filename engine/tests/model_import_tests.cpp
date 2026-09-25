@@ -819,6 +819,44 @@ static void test_sidecar_scale_moves_the_pieces_too()
     if (!m.meshes.empty()) CHECK(hasVertex(m.meshes[0], { 2, 0, 0 }));
 }
 
+// Review de la Task 1: hasTriangles nunca se ejercitaba en su rama false. Una
+// malla sin ningun triangulo (primitivo LINES) no debe generar pieza, aunque
+// SI aparezca en meshes (loadStatic construye una Mesh por cada malla del
+// fichero, con triangulos o sin ellos).
+static void test_lineless_mesh_produces_no_piece()
+{
+    const fs::path dir = makeDir("dt_pieces_no_triangles");
+    dt_fixture::writeMixedTriangleAndLineGltf(dir / "mix.gltf");
+    try
+    {
+        const StaticModel m = ModelLoader::loadStatic((dir / "mix.gltf").string());
+        CHECK(m.meshes.size() == 2);
+        CHECK(m.pieces.size() == 1);
+        if (m.pieces.size() == 1) CHECK(m.pieces[0].name == "T");
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
+// Review de la Task 1: con la raiz en identidad, un solo nivel de nodos no
+// distingue "padre * hijo" de "hijo * padre". Con dos niveles reales (A
+// trasladado, B escalado, colgando de A) la traslacion resultante SOLO
+// coincide con A*B si la composicion es la correcta.
+static void test_nested_node_transform_composes_parent_then_child()
+{
+    const fs::path dir = makeDir("dt_pieces_nested");
+    dt_fixture::writeNestedNodeGltf(dir / "nested.gltf");
+    try
+    {
+        const StaticModel m = ModelLoader::loadStatic((dir / "nested.gltf").string());
+        CHECK(m.pieces.size() == 1);
+        if (m.pieces.size() != 1) return;
+        const glm::mat4 expected = glm::translate(glm::mat4(1.0f), glm::vec3(5, 0, 0)) *
+                                    glm::scale(glm::mat4(1.0f), glm::vec3(2.0f));
+        CHECK(nearMat(m.pieces[0].transform, expected));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
 int main()
 {
     test_defaults_match_the_old_flags();
@@ -855,6 +893,8 @@ int main()
     test_load_piece_gives_that_mesh();
     test_single_mesh_file_is_one_piece();
     test_sidecar_scale_moves_the_pieces_too();
+    test_lineless_mesh_produces_no_piece();
+    test_nested_node_transform_composes_parent_then_child();
 
     if (g_failures == 0) std::printf("ALL MODEL IMPORT TESTS PASSED\n");
     return g_failures == 0 ? 0 : 1;
