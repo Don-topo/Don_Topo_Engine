@@ -5,6 +5,8 @@
 #include <assimp/postprocess.h>
 #include <assimp/config.h>
 #include "DonTopo/Core/ImportSettings.h"
+#include <nlohmann/json.hpp>
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -599,6 +601,123 @@ namespace DonTopo
         if (hasBones(path))
             return std::make_shared<SkinnedMesh>(loadSkinned(path));  // convierte solo a shared_ptr<Mesh>
         return std::make_shared<Mesh>(load(path));
+    }
+
+    namespace
+    {
+        std::string lowerExtOf(const std::filesystem::path& p)
+        {
+            std::string e = p.extension().string();
+            for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return e;
+        }
+
+        // Relativa, sin raiz y sin componentes "..": se queda dentro de la carpeta.
+        bool staysInside(const std::filesystem::path& rel)
+        {
+            if (rel.empty() || rel.has_root_path()) return false;
+            for (const auto& part : rel)
+                if (part == "..") return false;
+            return true;
+        }
+
+        std::string percentDecode(const std::string& s)
+        {
+            std::string out;
+            for (size_t i = 0; i < s.size(); ++i)
+            {
+                if (s[i] == '%' && i + 2 < s.size() &&
+                    std::isxdigit(static_cast<unsigned char>(s[i + 1])) &&
+                    std::isxdigit(static_cast<unsigned char>(s[i + 2])))
+                {
+                    out += static_cast<char>(std::stoi(s.substr(i + 1, 2), nullptr, 16));
+                    i += 2;
+                }
+                else out += s[i];
+            }
+            return out;
+        }
+
+        void addCompanion(std::vector<std::string>& out, const std::string& raw)
+        {
+            if (raw.empty() || raw.rfind("data:", 0) == 0) return;
+            // "C:/x" no tiene raiz en Linux ni "/x" nombre de unidad en Windows:
+            // se rechazan las dos formas en cualquier plataforma.
+            if (raw.size() > 1 && raw[1] == ':') return;
+            const std::filesystem::path rel = std::filesystem::path(raw).lexically_normal();
+            if (!staysInside(rel)) return;
+            const std::string s = rel.generic_string();
+            if (std::find(out.begin(), out.end(), s) == out.end()) out.push_back(s);
+        }
+    }
+
+    bool ModelLoader::isSupportedModelExtension(const std::string& ext)
+    {
+        std::string e = ext;
+        for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return e == ".fbx" || e == ".obj" || e == ".gltf" || e == ".glb";
+    }
+
+    const char* ModelLoader::supportedModelFilter()
+    {
+        return "Models{.fbx,.obj,.gltf,.glb}";
+    }
+
+    std::filesystem::path ModelLoader::resolveModelTexture(const std::filesystem::path& modelDir,
+                                                           const std::string& raw)
+    {
+        namespace fs = std::filesystem;
+        const fs::path byName        = modelDir / fs::path(raw).filename();
+        const bool     looksAbsolute = raw.size() > 1 && raw[1] == ':';
+        const fs::path rel           = fs::path(raw).lexically_normal();
+        if (!looksAbsolute && staysInside(rel) && rel != rel.filename())
+        {
+            std::error_code ec;
+            const fs::path sub = modelDir / rel;
+            if (fs::exists(sub, ec) && !ec) return sub;
+        }
+        return byName;
+    }
+
+    std::vector<std::string> ModelLoader::modelCompanionFiles(const std::string& path)
+    {
+        namespace fs = std::filesystem;
+        std::vector<std::string> out;
+        try
+        {
+            const std::string ext = lowerExtOf(path);
+            if (ext == ".obj")
+            {
+                std::ifstream in{ fs::path(path) };
+                std::string line;
+                while (std::getline(in, line))
+                {
+                    if (line.rfind("mtllib", 0) != 0 || line.size() < 7 ||
+                        !std::isspace(static_cast<unsigned char>(line[6])))
+                        continue;
+                    size_t b = 7, e = line.size();
+                    while (b < e && std::isspace(static_cast<unsigned char>(line[b]))) ++b;
+                    while (e > b && std::isspace(static_cast<unsigned char>(line[e - 1]))) --e;
+                    addCompanion(out, line.substr(b, e - b));
+                }
+            }
+            else if (ext == ".gltf")
+            {
+                std::ifstream in{ fs::path(path) };
+                const nlohmann::json j = nlohmann::json::parse(in, nullptr, /*allow_exceptions*/ false);
+                if (!j.is_object()) return {};
+                for (const char* key : { "buffers", "images" })
+                {
+                    const auto it = j.find(key);
+                    if (it == j.end() || !it->is_array()) continue;
+                    for (const auto& item : *it)
+                        if (item.is_object() && item.contains("uri") && item["uri"].is_string())
+                            addCompanion(out, percentDecode(item["uri"].get<std::string>()));
+                }
+            }
+        }
+        catch (...) { return {}; }
+        return out;
     }
 
     // Un .obj lee sus materiales de los .mtl de sus lineas mtllib, y cambiar map_Kd

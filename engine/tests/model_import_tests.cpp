@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -505,6 +506,72 @@ static void test_preview_image_rejects_huge_sources()
     CHECK(ModelLoader::loadPreviewImage(dir / "no_existe.png").rgba.empty());
 }
 
+// ── Formatos, texturas en subcarpeta y ficheros asociados ────────────────────
+
+static void test_supported_model_extensions()
+{
+    for (const char* e : { ".fbx", ".FBX", ".obj", ".gltf", ".GLB", ".glb" })
+        CHECK(ModelLoader::isSupportedModelExtension(e));
+    for (const char* e : { ".dae", ".blend", ".png", "", "fbx" })
+        CHECK(!ModelLoader::isSupportedModelExtension(e));
+    const std::string filter = ModelLoader::supportedModelFilter();
+    for (const char* e : { ".fbx", ".obj", ".gltf", ".glb" })
+        CHECK(filter.find(e) != std::string::npos);
+}
+
+static void test_resolve_texture_prefers_the_subfolder()
+{
+    const fs::path dir = makeDir("dt_resolve_sub");
+    fs::create_directories(dir / "textures");
+    writeText(dir / "textures" / "x.tga", "sub");
+    writeText(dir / "x.tga", "root");                         // homonima junto al modelo
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "textures/x.tga"), dir / "textures" / "x.tga"));
+}
+
+// Review Focus 3: lo de siempre (nombre suelto) sigue funcionando.
+static void test_resolve_texture_falls_back_to_the_bare_name()
+{
+    const fs::path dir = makeDir("dt_resolve_bare");
+    writeText(dir / "x.tga", "root");
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "textures/x.tga"), dir / "x.tga"));
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "x.tga"), dir / "x.tga"));
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "../fuera/x.tga"), dir / "x.tga"));
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "C:/artista/x.tga"), dir / "x.tga"));
+    CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "/home/artista/x.tga"), dir / "x.tga"));
+}
+
+static void test_companions_of_obj()
+{
+    const fs::path dir = makeDir("dt_companions_obj");
+    writeText(dir / "m.obj", "mtllib a.mtl\n# comentario\nmtllib   sub/b.mtl  \r\nmtllib a.mtl\nv 0 0 0\n");
+    const std::vector<std::string> c = ModelLoader::modelCompanionFiles((dir / "m.obj").string());
+    CHECK(c.size() == 2);
+    if (c.size() == 2) { CHECK(c[0] == "a.mtl"); CHECK(c[1] == "sub/b.mtl"); }
+}
+
+// Review Focus 5: %20 se decodifica; data:, absolutas y .. se ignoran.
+static void test_companions_of_gltf()
+{
+    const fs::path dir = makeDir("dt_companions_gltf");
+    writeText(dir / "m.gltf", R"({"asset":{"version":"2.0"},
+        "buffers":[{"uri":"tri.bin","byteLength":4},{"uri":"data:application/octet-stream;base64,AAAA","byteLength":3}],
+        "images":[{"uri":"textures/rojo%20x.tga"},{"uri":"../fuera.png"},{"uri":"/abs.png"},{"uri":"C:/abs.png"},{"uri":"tri.bin"}]})");
+    const std::vector<std::string> c = ModelLoader::modelCompanionFiles((dir / "m.gltf").string());
+    CHECK(c.size() == 2);
+    if (c.size() == 2) { CHECK(c[0] == "tri.bin"); CHECK(c[1] == "textures/rojo x.tga"); }
+}
+
+static void test_companions_of_other_formats_are_empty()
+{
+    const fs::path dir = makeDir("dt_companions_other");
+    writeText(dir / "m.glb", "glTF");
+    writeText(dir / "roto.gltf", "{ esto no es json");
+    CHECK(ModelLoader::modelCompanionFiles((dir / "m.glb").string()).empty());
+    CHECK(ModelLoader::modelCompanionFiles("assets/modelTexture.fbx").empty());
+    CHECK(ModelLoader::modelCompanionFiles((dir / "roto.gltf").string()).empty());
+    CHECK(ModelLoader::modelCompanionFiles((dir / "no_existe.obj").string()).empty());
+}
+
 int main()
 {
     test_defaults_match_the_old_flags();
@@ -525,6 +592,12 @@ int main()
     test_preview_external_texture_and_sidecar_are_dependencies();
     test_preview_respects_the_normals_setting();
     test_preview_image_rejects_huge_sources();
+    test_supported_model_extensions();
+    test_resolve_texture_prefers_the_subfolder();
+    test_resolve_texture_falls_back_to_the_bare_name();
+    test_companions_of_obj();
+    test_companions_of_gltf();
+    test_companions_of_other_formats_are_empty();
 
     if (g_failures == 0) std::printf("ALL MODEL IMPORT TESTS PASSED\n");
     return g_failures == 0 ? 0 : 1;

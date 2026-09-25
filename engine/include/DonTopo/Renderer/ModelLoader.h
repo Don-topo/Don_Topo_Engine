@@ -101,5 +101,26 @@ namespace DonTopo
             // kPreviewMaxSourcePixels (se mira la cabecera antes de decodificar).
             static PreviewImage loadPreviewImage(const std::filesystem::path& path);
             static PreviewImage decodePreviewImage(const uint8_t* bytes, size_t size);
+
+            // Formatos de modelo que Assimp tiene compilados. La UNICA lista: el
+            // editor entero pregunta aqui (clasificar, Add Mesh, importar,
+            // miniaturas, Animator). Sin distinguir mayusculas; ext con el punto.
+            static bool isSupportedModelExtension(const std::string& ext);
+            // Filtro para ImGuiFileDialog con los mismos formatos.
+            static const char* supportedModelFilter();
+
+            // Ruta de una textura externa referenciada por el modelo: primero la
+            // ruta relativa TAL CUAL respecto a modelDir (textures/x.png); si no
+            // existe, el nombre suelto junto al modelo, que es lo de siempre. Una
+            // ruta absoluta o que salga de la carpeta (..) solo prueba el nombre.
+            static std::filesystem::path resolveModelTexture(const std::filesystem::path& modelDir,
+                                                             const std::string& raw);
+
+            // Ficheros que el modelo lee ademas de si mismo, en rutas RELATIVAS a
+            // su carpeta (separador /), sin duplicados: los mtllib de un .obj y
+            // los buffers[].uri e images[].uri externos de un .gltf (decodificados
+            // de %XX; data:, absolutas y con .. fuera). .glb y .fbx: ninguno.
+            // Nunca lanza: un fichero ilegible devuelve vacio.
+            static std::vector<std::string> modelCompanionFiles(const std::string& path);
     };
 }
