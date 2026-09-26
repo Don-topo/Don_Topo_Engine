@@ -13,13 +13,16 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/Mesh.h"
+#include "gltf_fixtures.h"
 
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
 #include <cassert>
 #include <cstdio>
+#include <filesystem>
 #include <memory>
+#include <string>
 
 namespace {
 
@@ -457,6 +460,55 @@ void testDeleteUndoKeepsEachPiece()
     }
 }
 
+// Review final: Stop de Play recarga la escena sin loader ni cache y la rama
+// estatica sincrona hacia un ReadFile de Assimp POR NODO (60 piezas = 60
+// lecturas del mismo fichero). Ahora hay una cache de StaticModel por
+// sourcePath con la vida de la llamada a fromJson: cada nodo recibe SU pieza y
+// los que piden la misma pieza comparten la malla (prueba de que salio de la
+// cache y no de otra lectura). Una pieza fuera de rango sigue siendo el mismo
+// aviso de carga fallida que cuando ModelLoader::load lanzaba.
+void testSyncStaticPiecesShareOneLoad()
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "dt_scene_sync_pieces";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const fs::path gltf = dir / "casa.gltf";
+    dt_fixture::writeThreePieceGltf(gltf);
+
+    nlohmann::json j = nlohmann::json::parse(R"({ "version": 1, "root": { "name": "root", "children": [
+        { "name": "a0", "children": [], "mesh": { "sourcePath": "" } },
+        { "name": "b1", "children": [], "mesh": { "sourcePath": "", "piece": 1 } },
+        { "name": "c0", "children": [], "mesh": { "sourcePath": "", "piece": 0 } },
+        { "name": "x9", "children": [], "mesh": { "sourcePath": "", "piece": 9 } } ] } })");
+    for (auto& c : j["root"]["children"]) c["mesh"]["sourcePath"] = gltf.string();
+
+    DonTopo::Scene scene;
+    CHECK(scene.fromJson(j, physics(), audio(), nullptr, nullptr), "carga sincrona de las piezas");
+    DonTopo::GameObject* a0 = nullptr; DonTopo::GameObject* b1 = nullptr;
+    DonTopo::GameObject* c0 = nullptr; DonTopo::GameObject* x9 = nullptr;
+    scene.traverse([&](DonTopo::GameObject* go) {
+        if (go->name == "a0") a0 = go; if (go->name == "b1") b1 = go;
+        if (go->name == "c0") c0 = go; if (go->name == "x9") x9 = go; });
+    CHECK(a0 && a0->hasMesh() && a0->getMesh()->piece == 0, "a0 recibe la pieza 0");
+    CHECK(b1 && b1->hasMesh() && b1->getMesh()->piece == 1, "b1 recibe la pieza 1");
+    CHECK(c0 && c0->hasMesh() && c0->getMesh()->piece == 0, "c0 recibe la pieza 0");
+    // triB (pieza 1) esta en el plano YZ: ningun vertice con x != 0.
+    if (b1 && b1->hasMesh())
+    {
+        bool yz = !b1->getMesh()->vertices.empty();
+        for (const auto& v : b1->getMesh()->vertices) yz = yz && v.pos.x == 0.0f;
+        CHECK(yz, "la malla de b1 es la de la pieza 1, no la 0");
+    }
+    CHECK(a0 && c0 && a0->hasMesh() && c0->hasMesh() && a0->getMesh() == c0->getMesh(),
+          "la misma pieza sale de UNA carga del fichero, compartida");
+    CHECK(x9 && !x9->hasMesh(), "una pieza que no existe deja el nodo sin malla");
+    bool aviso = false;
+    for (const std::string& w : scene.lastWarnings()) aviso = aviso || w.find("pieza 9") != std::string::npos;
+    CHECK(aviso, "y avisa como cuando ModelLoader::load lanzaba");
+}
+
 } // namespace
 
 int main()
@@ -479,6 +531,7 @@ int main()
     testPieceRoundTripsThroughJson();
     testDeleteUndoKeepsEachPiece();
     testClonNoHeredaIndicesDeRender();
+    testSyncStaticPiecesShareOneLoad();
 
     jobSystem.shutdown();
 
