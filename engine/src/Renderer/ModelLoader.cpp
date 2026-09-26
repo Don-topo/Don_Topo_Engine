@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -140,22 +141,14 @@ namespace DonTopo
         return clip;
     }
 
-    Mesh ModelLoader::load(const std::string &path)
+    // Una aiMesh a Mesh con su material. Es el cuerpo que tenia load(path),
+    // movido tal cual; `ai` sustituye a scene->mMeshes[0].
+    static Mesh meshFromAssimp(const aiScene* scene, const aiMesh* ai,
+                               const ModelImportSettings& settings, const std::string& path)
     {
-        const ModelImportSettings settings = readModelSettings(path);
-        Assimp::Importer importer;
-        configureImporter(importer, settings);
-        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
-
-        if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
-        {
-            throw std::runtime_error("Assimp: " + std::string(importer.GetErrorString()));
-        }
-
         Mesh mesh;
         mesh.name = std::filesystem::path(path).stem().string();
         mesh.sourcePath = path;
-        aiMesh* ai = scene->mMeshes[0];
 
         mesh.vertices.reserve(ai->mNumVertices);
         for(uint32_t i = 0; i < ai->mNumVertices; i++)
@@ -218,7 +211,7 @@ namespace DonTopo
                 }
                 else
                 {
-                    outPath = resolveModelTexture(modelDir, raw).string();
+                    outPath = ModelLoader::resolveModelTexture(modelDir, raw).string();
                 }
             };
 
@@ -232,6 +225,95 @@ namespace DonTopo
         }
 
         return mesh;
+    }
+
+    static bool hasTriangles(const aiMesh* m)
+    {
+        for (uint32_t f = 0; f < m->mNumFaces; ++f)
+            if (m->mFaces[f].mNumIndices == 3) return true;
+        return false;
+    }
+
+    // glTF/GLB por extension (sin distinguir mayusculas).
+    static bool isGltfPath(const std::string& path)
+    {
+        std::string ext = std::filesystem::path(path).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return ext == ".gltf" || ext == ".glb";
+    }
+
+    // Apariciones de cada malla en los nodos, en profundidad. La raiz aporta su
+    // transformacion SOLO en glTF/GLB (`applyRoot`): con un unico nodo de primer
+    // nivel Assimp no crea raiz sintetica y ese nodo ES mRootNode, con la
+    // correccion de ejes/unidades del autor; con varios, la raiz es sintetica e
+    // identidad. En FBX se descarta (lleva la conversion de unidades del
+    // importador) y sus mallas, si tiene, van con identidad. En OBJ es identidad.
+    static std::vector<ModelPiece> collectPieces(const aiScene* scene, float scale, bool applyRoot)
+    {
+        std::vector<ModelPiece> out;
+        std::function<void(const aiNode*, const glm::mat4&)> walk = [&](const aiNode* node, const glm::mat4& m)
+        {
+            for (uint32_t k = 0; k < node->mNumMeshes; ++k)
+            {
+                const uint32_t idx = node->mMeshes[k];
+                if (idx >= scene->mNumMeshes || !hasTriangles(scene->mMeshes[idx])) continue;
+                ModelPiece p;
+                p.piece = static_cast<int>(idx);
+                p.name  = node->mName.length > 0 ? node->mName.C_Str() : scene->mMeshes[idx]->mName.C_Str();
+                p.transform = m;
+                p.transform[3].x *= scale;
+                p.transform[3].y *= scale;
+                p.transform[3].z *= scale;
+                out.push_back(std::move(p));
+            }
+            for (uint32_t c = 0; c < node->mNumChildren; ++c)
+                walk(node->mChildren[c], m * aiToGlm(node->mChildren[c]->mTransformation));
+        };
+        if (!scene->mRootNode) return out;
+        // Cada hijo entra con SU transformacion; la raiz, solo si applyRoot.
+        walk(scene->mRootNode, applyRoot ? aiToGlm(scene->mRootNode->mTransformation) : glm::mat4(1.0f));
+        return out;
+    }
+
+    Mesh ModelLoader::load(const std::string &path)
+    {
+        return load(path, 0);
+    }
+
+    Mesh ModelLoader::load(const std::string& path, int piece)
+    {
+        const ModelImportSettings settings = readModelSettings(path);
+        Assimp::Importer importer;
+        configureImporter(importer, settings);
+        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
+        if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
+            throw std::runtime_error("Assimp: " + std::string(importer.GetErrorString()));
+        if (piece < 0 || static_cast<uint32_t>(piece) >= scene->mNumMeshes)
+            throw std::runtime_error("'" + path + "' no tiene la pieza " + std::to_string(piece) +
+                                     " (tiene " + std::to_string(scene->mNumMeshes) + ")");
+        Mesh mesh = meshFromAssimp(scene, scene->mMeshes[piece], settings, path);
+        mesh.piece = piece;
+        return mesh;
+    }
+
+    StaticModel ModelLoader::loadStatic(const std::string& path)
+    {
+        const ModelImportSettings settings = readModelSettings(path);
+        Assimp::Importer importer;
+        configureImporter(importer, settings);
+        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
+        if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
+            throw std::runtime_error("Assimp: " + std::string(importer.GetErrorString()));
+        StaticModel out;
+        out.meshes.reserve(scene->mNumMeshes);
+        for (uint32_t i = 0; i < scene->mNumMeshes; ++i)
+        {
+            out.meshes.push_back(meshFromAssimp(scene, scene->mMeshes[i], settings, path));
+            out.meshes.back().piece = static_cast<int>(i);
+        }
+        out.pieces = collectPieces(scene, settings.scale, isGltfPath(path));
+        return out;
     }
 
     SkinnedMesh ModelLoader::loadSkinned(const std::string& path)
@@ -778,7 +860,35 @@ namespace DonTopo
             bool skinned = false;
             for (uint32_t m = 0; m < scene->mNumMeshes; ++m)
                 skinned = skinned || scene->mMeshes[m]->mNumBones > 0;
-            const uint32_t meshCount = skinned ? scene->mNumMeshes : 1;
+
+            // Con huesos, todas las submallas en bind pose (como loadSkinned). Sin
+            // huesos y con MAS de una aparicion en los nodos, una parte POR
+            // aparicion con su transform (igual que StaticModel::pieces via
+            // collectPieces): la miniatura deja de fingir que el modelo es una
+            // unica malla cuando no lo es. Con una aparicion o ninguna, lo de
+            // siempre -- malla 0 sin transformar -- que es lo que de verdad pinta
+            // un objeto sin repartir en hijos (loadAuto).
+            struct Appearance { uint32_t meshIndex; glm::mat4 transform; };
+            std::vector<Appearance> appearances;
+            if (skinned)
+            {
+                for (uint32_t m = 0; m < scene->mNumMeshes; ++m)
+                    appearances.push_back({ m, glm::mat4(1.0f) });
+            }
+            else
+            {
+                const std::vector<ModelPiece> pieces = collectPieces(scene, settings.scale, isGltfPath(path));
+                if (pieces.size() > 1)
+                {
+                    for (const ModelPiece& piece : pieces)
+                        if (piece.piece >= 0 && static_cast<uint32_t>(piece.piece) < scene->mNumMeshes)
+                            appearances.push_back({ static_cast<uint32_t>(piece.piece), piece.transform });
+                }
+                else if (scene->mNumMeshes > 0)
+                {
+                    appearances.push_back({ 0, glm::mat4(1.0f) });
+                }
+            }
 
             const fs::path modelDir = fs::path(path).parent_path();
             std::unordered_map<uint32_t, PreviewImage> albedoByMaterial;
@@ -821,19 +931,30 @@ namespace DonTopo
                 return albedoByMaterial.emplace(matIndex, std::move(img)).first->second;
             };
 
-            for (uint32_t m = 0; m < meshCount; ++m)
+            for (const Appearance& app : appearances)
             {
-                const aiMesh* ai = scene->mMeshes[m];
+                const aiMesh* ai = scene->mMeshes[app.meshIndex];
+                // Identidad para el caso de siempre: mat3(1) invertida y traspuesta
+                // sigue siendo la identidad, así que la normal no cambia.
+                const glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(app.transform)));
                 PreviewPart part;
                 part.positions.reserve(ai->mNumVertices);
                 for (uint32_t i = 0; i < ai->mNumVertices; ++i)
                 {
-                    part.positions.emplace_back(ai->mVertices[i].x * settings.scale,
-                                                ai->mVertices[i].y * settings.scale,
-                                                ai->mVertices[i].z * settings.scale);
-                    part.normals.push_back(ai->mNormals
+                    const glm::vec3 pos(ai->mVertices[i].x * settings.scale,
+                                        ai->mVertices[i].y * settings.scale,
+                                        ai->mVertices[i].z * settings.scale);
+                    part.positions.push_back(glm::vec3(app.transform * glm::vec4(pos, 1.0f)));
+                    const glm::vec3 n = ai->mNormals
                         ? glm::vec3(ai->mNormals[i].x, ai->mNormals[i].y, ai->mNormals[i].z)
-                        : glm::vec3(0.0f, 1.0f, 0.0f));
+                        : glm::vec3(0.0f, 1.0f, 0.0f);
+                    const glm::vec3 tn = normalMat * n;
+                    const float len = glm::length(tn);
+                    // Un eje (casi) aplastado da inf en la matriz normal, o una
+                    // longitud que desborda a inf con componentes finitas:
+                    // `len > 1e-8f` deja pasar el inf y tn / inf es NaN o el
+                    // vector cero. Entonces, la normal del fichero sin tocar.
+                    part.normals.push_back(std::isfinite(len) && len > 1e-8f ? tn / len : n);
                     part.uvs.push_back(ai->mTextureCoords[0]
                         ? glm::vec2(ai->mTextureCoords[0][i].x, ai->mTextureCoords[0][i].y)
                         : glm::vec2(0.0f));

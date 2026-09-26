@@ -28,6 +28,8 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #define GLM_ENABLE_EXPERIMENTAL
@@ -1145,6 +1147,9 @@ namespace
             // carga cae al default true, que es como se veían.
             nlohmann::json meshJson = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name}, {"skinned", node.isSkinned()},
                                         {"visible", node.meshVisible} };
+            // La pieza 0 no escribe el campo: las escenas de antes (sin
+            // "piece") quedan idénticas byte a byte.
+            if (mesh->piece != 0) meshJson["piece"] = mesh->piece;
             if (mesh->sourcePath.empty())
             {
                 // Procedural (Cube/Sphere/Plane/Capsule): no hay fichero de
@@ -2008,6 +2013,63 @@ namespace
         return nullptr;
     }
 
+    // Caches con la vida de UNA carga (fromJson, cloneGameObject,
+    // insertFromJson): dentro de ella el fichero es estable y se comparte
+    // entre los nodos que repiten sourcePath. Ver el comentario de
+    // hasBonesCache en Scene::fromJson para por que no viven mas.
+    //  - hasBones: el sondeo de huesos por sourcePath.
+    //  - staticModels: el StaticModel de la rama estatica SINCRONA (Stop de
+    //    Play recarga sin loader ni precarga). Sin ella cada nodo hacia su
+    //    propio ReadFile completo de Assimp: 60 piezas de un .glb = 60
+    //    lecturas del mismo fichero. Un loadStatic por fichero y cada nodo
+    //    toma meshes[piece]; la malla de cada pieza se comparte entre los
+    //    nodos que la piden (quien la edite la copia, editMesh).
+    //  - staticErrors: el fallo de ese loadStatic, para que los demas nodos
+    //    del mismo fichero den el mismo aviso sin volver a leerlo.
+    struct NodeLoadCache
+    {
+        std::unordered_map<std::string, bool> hasBones;
+        struct StaticEntry
+        {
+            DonTopo::StaticModel                                     model;
+            std::unordered_map<int, std::shared_ptr<const DonTopo::Mesh>> byPiece;
+        };
+        std::unordered_map<std::string, StaticEntry> staticModels;
+        std::unordered_map<std::string, std::string> staticErrors;
+    };
+
+    // La pieza `piece` de `sourcePath` a traves de la cache: mismo resultado y
+    // mismos errores que ModelLoader::load(sourcePath, piece) -- pieza fuera
+    // de rango lanza con la ruta y el indice --, con UNA lectura por fichero.
+    std::shared_ptr<const DonTopo::Mesh> staticPieceFromCache(NodeLoadCache& cache, const std::string& sourcePath,
+                                                             int piece)
+    {
+        if (auto err = cache.staticErrors.find(sourcePath); err != cache.staticErrors.end())
+            throw std::runtime_error(err->second);
+        auto it = cache.staticModels.find(sourcePath);
+        if (it == cache.staticModels.end())
+        {
+            try
+            {
+                NodeLoadCache::StaticEntry entry;
+                entry.model = DonTopo::ModelLoader::loadStatic(sourcePath);
+                it = cache.staticModels.emplace(sourcePath, std::move(entry)).first;
+            }
+            catch (const std::exception& e)
+            {
+                cache.staticErrors[sourcePath] = e.what();
+                throw;
+            }
+        }
+        NodeLoadCache::StaticEntry& entry = it->second;
+        if (piece < 0 || static_cast<size_t>(piece) >= entry.model.meshes.size())
+            throw std::runtime_error("'" + sourcePath + "' no tiene la pieza " + std::to_string(piece) +
+                                     " (tiene " + std::to_string(entry.model.meshes.size()) + ")");
+        auto& mesh = entry.byPiece[piece];
+        if (!mesh) mesh = std::make_shared<const DonTopo::Mesh>(entry.model.meshes[piece]);
+        return mesh;
+    }
+
     // Reconstruye node (ya insertado en el árbol) desde j, y recursivamente
     // sus hijos. parentWorld es el worldTransform ya resuelto del padre —
     // necesario para pasar un worldTransform correcto a las factories de
@@ -2018,7 +2080,7 @@ namespace
     void nodeFromJson(const nlohmann::json& j, GameObject* node, const glm::mat4& parentWorld,
                        DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio,
                        std::vector<std::string>* warnings,
-                       std::unordered_map<std::string, bool>* hasBonesCache,
+                       NodeLoadCache* loadCache,
                        const std::string& assetRoot,
                        DonTopo::AsyncAssetLoader* loader = nullptr,
                        const DonTopo::PreloadedMeshCache* preloaded = nullptr,
@@ -2070,6 +2132,11 @@ namespace
             std::string sourcePath = j["mesh"].value("sourcePath", "");
             std::string meshName   = j["mesh"].value("name", "");
             node->meshVisible      = j["mesh"].value("visible", true);
+            // Que pieza del fichero (Mesh::piece). Ausente o invalida = 0, que es
+            // lo que cargaban las escenas de antes.
+            int piece = 0;
+            if (const auto it = j["mesh"].find("piece"); it != j["mesh"].end() && it->is_number_integer())
+                piece = std::max(0, it->get<int>());
             // El flag "skinned" se sigue GUARDANDO (dato informativo, y no
             // rompe ficheros viejos) pero ya no se lee: manda el fichero, en
             // carga igual que en import. Si no fuera así, las escenas guardadas
@@ -2083,13 +2150,13 @@ namespace
                 // Cache por-carga (ver hasBonesCache más abajo): sin ella cada
                 // nodo que comparte sourcePath con otro repetiría el ReadFile
                 // completo de Assimp que hace hasBones.
-                if (hasBonesCache)
+                if (loadCache)
                 {
-                    auto it = hasBonesCache->find(sourcePath);
-                    if (it != hasBonesCache->end())
+                    auto it = loadCache->hasBones.find(sourcePath);
+                    if (it != loadCache->hasBones.end())
                         skinned = it->second;
                     else
-                        skinned = (*hasBonesCache)[sourcePath] = DonTopo::ModelLoader::hasBones(sourcePath);
+                        skinned = loadCache->hasBones[sourcePath] = DonTopo::ModelLoader::hasBones(sourcePath);
                 }
                 else
                 {
@@ -2250,7 +2317,7 @@ namespace
                     std::shared_ptr<const DonTopo::Mesh> cached;
                     if (preloaded)
                     {
-                        auto it = preloaded->find(sourcePath);
+                        auto it = preloaded->find(DonTopo::meshCacheKey(sourcePath, piece));
                         if (it != preloaded->end() && it->second)
                             cached = it->second;
                     }
@@ -2265,11 +2332,17 @@ namespace
                         // la petición. El pump lo resolverá por id — nunca por
                         // puntero, que sería dangling si el usuario lo borra
                         // mientras carga.
-                        node->pendingMeshJob = loader->requestMesh(sourcePath, node->id);
+                        node->pendingMeshJob = loader->requestMesh(sourcePath, node->id, piece);
+                    }
+                    else if (loadCache)
+                    {
+                        // Síncrono (Stop de Play): una lectura por fichero, no
+                        // por nodo. Ver NodeLoadCache.
+                        node->setMesh(staticPieceFromCache(*loadCache, sourcePath, piece));
                     }
                     else
                     {
-                        auto mesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load(sourcePath));
+                        auto mesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load(sourcePath, piece));
                         node->setMesh(std::move(mesh));
                     }
                 }
@@ -3346,7 +3419,7 @@ namespace
             // sería la lista escrita a mano de siempre.
             try
             {
-                nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache, assetRoot, loader, preloaded, carryOverrideBaseline);
+                nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, loadCache, assetRoot, loader, preloaded, carryOverrideBaseline);
             }
             catch (const nlohmann::json::exception& e)
             {
@@ -3490,10 +3563,16 @@ namespace DonTopo
         // mallas colgando, y sembrar únicamente src dejaba a los hijos yendo a
         // disco igual. Vale para las dos cachés, que se llenan en la misma
         // pasada.
-        std::unordered_map<std::string, bool> cache;
+        // Por el sourcePath REAL de la malla (m->sourcePath), no por la clave
+        // de mallas: desde que collectMeshes indexa por meshCacheKey (pieza
+        // incluida), la clave de una pieza != 0 lleva "#piece=N" y ya no
+        // coincide con el sourcePath a secas que busca hasBonesCache más
+        // abajo — sin esto, cada pieza != 0 de un modelo estático clonado
+        // volvía a sondear el fichero con Assimp en vez de usar la cache.
+        NodeLoadCache cache;
         const PreloadedMeshCache mallas = collectMeshes(src);
         for (const auto& [ruta, m] : mallas)
-            cache[ruta] = dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr;
+            cache.hasBones[m->sourcePath] = dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr;
         try
         {
             // Raíz vacía, pareja de la de arriba: j se serializó con raíz vacía
@@ -3825,6 +3904,11 @@ namespace DonTopo
         return true;
     }
 
+    std::string meshCacheKey(const std::string& sourcePath, int piece)
+    {
+        return piece == 0 ? sourcePath : sourcePath + "#piece=" + std::to_string(piece);
+    }
+
     PreloadedMeshCache Scene::collectMeshes(GameObject* root)
     {
         PreloadedMeshCache out;
@@ -3833,7 +3917,7 @@ namespace DonTopo
             if (!n->hasMesh()) return;
             const std::string& ruta = n->getMesh()->sourcePath;
             if (ruta.empty()) return;   // procedural: no hay fichero que evitar
-            out[ruta] = n->getMesh();
+            out[meshCacheKey(ruta, n->getMesh()->piece)] = n->getMesh();
         });
         return out;
     }
@@ -3876,10 +3960,23 @@ namespace DonTopo
         // (preloaded), la cache de hasBones se siembra con ellas y no se toca
         // el disco; si no, arranca vacía y sólo aporta el dedup entre los
         // nodos de ESE subárbol.
-        std::unordered_map<std::string, bool> cache;
+        NodeLoadCache cache;
+        // Por el sourcePath REAL de la malla (m->sourcePath), no por la clave de
+        // PreloadedMeshCache: desde Task 2 esa clave es meshCacheKey(sourcePath,
+        // piece), que para una pieza != 0 lleva "#piece=N" y ya no coincide con
+        // el sourcePath a secas que busca hasBonesCache en nodeFromJson. Sin
+        // esto, cada hijo de pieza != 0 (insertModelPieces, su redo vía
+        // CreateGameObjectCommand::execute, y el undo de su Delete) fallaba la
+        // consulta a esta cache y volvía a sondear el fichero con
+        // ModelLoader::hasBones -un ReadFile síncrono de Assimp en el hilo
+        // principal-, exactamente lo que preloaded existe para evitar. Mismo
+        // patrón que Scene::cloneGameObject (ver su comentario, unas líneas más
+        // arriba en este fichero). OR en vez de asignar directo: si dos
+        // entradas comparten sourcePath (varias piezas del mismo fichero), una
+        // no-skinned posterior no debe enmascarar a una skinned ya vista.
         if (preloaded)
             for (const auto& [ruta, m] : *preloaded)
-                cache[ruta] = dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr;
+                if (m) cache.hasBones[m->sourcePath] = cache.hasBones[m->sourcePath] || (dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr);
         try
         {
             // Raíz vacía, pareja de subtreeToJson: j vino de ahí con raíz
@@ -4159,7 +4256,9 @@ namespace DonTopo
         // sola carga el fichero es estable, así que compartirla entre los
         // nodos que repiten sourcePath (varios enemigos con el mismo FBX) es
         // seguro y evita repetir el ReadFile completo de Assimp por cada uno.
-        std::unordered_map<std::string, bool> hasBonesCache;
+        // Ahora es NodeLoadCache: lleva tambien el StaticModel de la rama
+        // estatica sincrona, con la misma vida y por la misma razon.
+        NodeLoadCache hasBonesCache;
         try
         {
             // carryOverrideBaseline NO se pasa (default false), a propósito:

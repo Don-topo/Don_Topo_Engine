@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <vector>
 
 using namespace DonTopo;
 
@@ -31,6 +32,29 @@ static std::unique_ptr<ICommand> makeSceneCommand(int& target, int before, int a
 {
     return std::make_unique<PropertyCommand<int>>(
         "Scene edit", before, after, [&target](const int& v) { target = v; });
+}
+
+// CompositeCommand: un solo paso; execute en orden, undo al reves.
+struct RecordingCommand : public ICommand
+{
+    std::vector<std::string>& log;
+    std::string               name;
+    RecordingCommand(std::vector<std::string>& l, std::string n) : log(l), name(std::move(n)) {}
+    void execute() override { log.push_back("do " + name); }
+    void undo() override { log.push_back("undo " + name); }
+    std::string label() const override { return name; }
+};
+
+static void test_composite_command_order()
+{
+    std::vector<std::string> log;
+    CompositeCommand group("grupo");
+    group.add(std::make_unique<RecordingCommand>(log, "a"));
+    group.add(std::make_unique<RecordingCommand>(log, "b"));
+    group.execute();
+    group.undo();
+    CHECK(log == std::vector<std::string>({ "do a", "do b", "undo b", "undo a" }));
+    CHECK(group.label() == "grupo");
 }
 
 // ── El flag que separa las dos familias ─────────────────────────────────────
@@ -308,6 +332,8 @@ static void test_revision_cambia_con_cada_movimiento_del_historial()
 
 int main()
 {
+    test_composite_command_order();
+
     test_push_de_render_no_ensucia_la_escena();
     test_push_de_escena_si_ensucia();
     test_un_push_de_render_no_limpia_el_dirty_previo();

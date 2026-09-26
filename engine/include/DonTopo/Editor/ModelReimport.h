@@ -32,6 +32,7 @@ struct ModelReimportResult {
 // flushUploadsAndWait al final: rebuildStaticMesh NO soporta cambiar vertices.
 ModelReimportResult reimportModelUsers(GameObject* sceneRoot,
                                        const std::filesystem::path& fbx,
-                                       EditorRenderer* renderer);
+                                       EditorRenderer* renderer,
+                                       float scaleRatio = 1.0f);
 
 } // namespace DonTopo

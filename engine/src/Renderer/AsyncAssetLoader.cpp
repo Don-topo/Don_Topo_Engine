@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <memory>
+#include <unordered_map>
 #include <utility>
 #include "DonTopo/Renderer/EditorRenderer.h"
 
@@ -63,7 +65,7 @@ namespace DonTopo
         }
     }
 
-    JobSystem::JobId AsyncAssetLoader::requestMesh(const std::string& path, uint64_t targetId)
+    JobSystem::JobId AsyncAssetLoader::requestMesh(const std::string& path, uint64_t targetId, int piece)
     {
         // El id se reserva ANTES de tocar el grupo: el primer waiter de un path
         // encola el job con ESTE id, y el grupo lo guarda para poder
@@ -85,7 +87,7 @@ namespace DonTopo
             needsJob = group.waiters.empty();
             if (needsJob)
                 group.jobId = id;
-            group.waiters.emplace_back(id, targetId);
+            group.waiters.push_back({ id, targetId, piece });
         }
 
         if (needsJob)
@@ -125,7 +127,7 @@ namespace DonTopo
             {
                 PendingGroup& group = it->second;
                 auto w = std::find_if(group.waiters.begin(), group.waiters.end(),
-                                      [id](const auto& pair) { return pair.first == id; });
+                                      [id](const Waiter& waiter) { return waiter.job == id; });
                 if (w == group.waiters.end())
                     continue;
 
@@ -158,15 +160,53 @@ namespace DonTopo
             m_jobs.cancel(jobToCancel);
     }
 
-    LoadedMesh AsyncAssetLoader::buildResultFor(const LoadedMesh& src,
-                                                JobSystem::JobId job, uint64_t targetId)
+    LoadedMesh AsyncAssetLoader::buildResultFor(const LoadedMesh& src, const StaticModel* model,
+                                                const Waiter& w,
+                                                const std::vector<DecodedImage>* decodedImages,
+                                                const std::vector<std::shared_ptr<const Mesh>>& pieceMeshes)
     {
         LoadedMesh out;
-        out.job      = job;
-        out.targetId = targetId;
+        out.job      = w.job;
+        out.targetId = w.targetId;
         out.path     = src.path;
         out.error    = src.error;
-        out.images   = src.images;   // copia: cada target sube su propia textura
+        out.piece    = w.piece;
+
+        if (model)
+        {
+            // Estatico: src.mesh no se usa (runJob no lo rellena para este
+            // camino). El error de runJob (p.ej. "no tiene mallas") tiene
+            // prioridad sobre el de rango: comprobarlo ANTES evita pisar un
+            // mensaje mas preciso con "no tiene la pieza 0" cuando el fichero
+            // ni siquiera trae mallas.
+            if (!src.error.empty())
+                return out;
+            if (w.piece < 0 || static_cast<size_t>(w.piece) >= model->meshes.size())
+            {
+                out.error = "'" + src.path + "' no tiene la pieza " + std::to_string(w.piece);
+                return out;
+            }
+            // Copia PROPIA del Mesh para este waiter: el mismo contrato de
+            // propiedad que la rama personaje de mas abajo (dos GameObject no
+            // pueden compartir un Mesh mutable). decodedImages, en cambio, ya
+            // viene calculado por runJob UNA vez por pieza distinta — aqui
+            // solo se copia el vector de pixeles, nunca se vuelve a decodificar.
+            out.mesh = std::make_shared<Mesh>(model->meshes[w.piece]);
+            if (decodedImages) out.images = *decodedImages;   // copia: cada waiter sube su propia textura
+            if (model->pieces.size() > 1)
+            {
+                out.pieces      = model->pieces;   // copia pequeña: unas pocas apariciones
+                // Copia del VECTOR DE PUNTEROS, no de las mallas: pieceMeshes
+                // ya trae los Mesh construidos (una vez por job, en runJob) y
+                // aqui se comparten via shared_ptr entre todos los waiters del
+                // grupo, en vez de duplicar las N mallas del fichero por cada
+                // uno de los N waiters.
+                out.pieceMeshes = pieceMeshes;
+            }
+            return out;
+        }
+
+        out.images = src.images;   // copia: cada target sube su propia textura
 
         // Copia profunda del Mesh, no del shared_ptr. Compartirlo dejaría a dos
         // GameObject apuntando al mismo Mesh mutable, cambiando la semántica de
@@ -187,27 +227,30 @@ namespace DonTopo
     {
         LoadedMesh loaded;
         loaded.path = path;
+        std::shared_ptr<StaticModel> model;   // solo si el fichero no tiene huesos
 
         try
         {
-            loaded.mesh = ModelLoader::loadAuto(path);
-            if (loaded.mesh)
+            if (ModelLoader::hasBones(path))
             {
-                // Solo se decodifica Mesh::material (singular). Un
-                // SkinnedMesh (loadAuto de un FBX con rig) guarda sus
-                // texturas por submesh en SkinnedMesh::materials, que aquí
-                // NO se toca a propósito — decisión diferida. Para esos
-                // modelos, loaded.images queda vacío y la textura se sigue
-                // resolviendo en el hilo principal por la vía síncrona
+                // Personaje: entero, como siempre. SkinnedMesh guarda sus
+                // texturas por submesh en materials[] (plural), que aquí no se
+                // toca a propósito — decisión diferida (ver el comentario de
+                // testTexturesArriveDecoded). loaded.images queda vacío y la
+                // textura se resuelve en el hilo principal por la vía síncrona
                 // existente (el fallback de buildRenderObject, Task 6).
-                const Material& mat = loaded.mesh->material;
-                decodeSlot(mat.texturePath,             mat.embeddedTexture,            DecodedImage::Albedo, loaded.images);
-                decodeSlot(mat.normalMapPath,           mat.embeddedNormalMap,          DecodedImage::Normal, loaded.images);
-                decodeSlot(mat.metallicRoughnessPath,   mat.embeddedMetallicRoughness,  DecodedImage::ORM,    loaded.images);
+                // loadSkinned directo, no loadAuto: hasBones ya se pregunto
+                // arriba, y loadAuto lo repetiria (otro ReadFile completo).
+                loaded.mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(path));
+                if (!loaded.mesh) loaded.error = "No se pudo cargar el modelo: " + path;
             }
             else
             {
-                loaded.error = "No se pudo cargar el modelo: " + path;
+                // Estatico: UN ReadFile para todas las mallas del fichero,
+                // independientemente de cuantas piezas esten esperando. Cada
+                // waiter decodifica su propia textura en buildResultFor.
+                model = std::make_shared<StaticModel>(ModelLoader::loadStatic(path));
+                if (model->meshes.empty()) loaded.error = "'" + path + "' no tiene mallas";
             }
         }
         catch (const std::exception& e)
@@ -216,14 +259,16 @@ namespace DonTopo
             // worker es std::terminate. Viaja como string.
             loaded.mesh  = nullptr;
             loaded.error = e.what();
+            model        = nullptr;
         }
         catch (...)
         {
             loaded.mesh  = nullptr;
             loaded.error = "Error desconocido cargando " + path;
+            model        = nullptr;
         }
 
-        std::vector<std::pair<JobSystem::JobId, uint64_t>> waiters;
+        std::vector<Waiter> waiters;
         uint64_t myEpoch = 0;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -244,13 +289,50 @@ namespace DonTopo
             // que servir.
         }
 
-        // Las copias se hacen FUERA del lock: con decenas de objetos del mismo
-        // path, el hilo principal se quedaría esperando el mutex justo mientras
-        // intenta pintar.
+        // Las copias (y la decodificacion) se hacen FUERA del lock: con
+        // decenas de objetos del mismo path, el hilo principal se quedaría
+        // esperando el mutex justo mientras intenta pintar.
+        //
+        // Dos cachés LOCALES a este job, construidas UNA vez y compartidas por
+        // TODOS los waiters (nunca una vez por waiter):
+        //  - decodedByPiece: si dos waiters piden la MISMA pieza (100
+        //    instancias del mismo modelo estatico), decodificar su textura una
+        //    sola vez y copiar el vector de pixeles ya decodificados es mucho
+        //    mas barato que decodificar N veces — stbi_load es la mitad del
+        //    coste de cargar un modelo (ver el comentario de DecodedImage en
+        //    el header).
+        //  - pieceMeshesShared: el vector de punteros a TODAS las mallas del
+        //    fichero (solo si pieces.size() > 1) se construye una vez; cada
+        //    waiter recibe una copia del VECTOR de shared_ptr, que comparte
+        //    los Mesh (const, inmutables) en vez de duplicarlos. Con un modelo
+        //    de 200 piezas cargado como 200 hijos, construir las 200 mallas
+        //    por waiter serian 40000 copias; asi son 200, compartidas.
+        std::unordered_map<int, std::vector<DecodedImage>> decodedByPiece;
+        std::vector<std::shared_ptr<const Mesh>>            pieceMeshesShared;
+        if (model && loaded.error.empty() && model->pieces.size() > 1)
+            for (const Mesh& m : model->meshes)
+                pieceMeshesShared.push_back(std::make_shared<const Mesh>(m));
+
         std::vector<LoadedMesh> results;
         results.reserve(waiters.size());
-        for (const auto& [job, targetId] : waiters)
-            results.push_back(buildResultFor(loaded, job, targetId));
+        for (const Waiter& w : waiters)
+        {
+            const std::vector<DecodedImage>* decoded = nullptr;
+            if (model && loaded.error.empty()
+                && w.piece >= 0 && static_cast<size_t>(w.piece) < model->meshes.size())
+            {
+                auto [it, inserted] = decodedByPiece.try_emplace(w.piece);
+                if (inserted)
+                {
+                    const Material& mat = model->meshes[w.piece].material;
+                    decodeSlot(mat.texturePath,           mat.embeddedTexture,           DecodedImage::Albedo, it->second);
+                    decodeSlot(mat.normalMapPath,         mat.embeddedNormalMap,         DecodedImage::Normal, it->second);
+                    decodeSlot(mat.metallicRoughnessPath, mat.embeddedMetallicRoughness, DecodedImage::ORM,    it->second);
+                }
+                decoded = &it->second;
+            }
+            results.push_back(buildResultFor(loaded, model.get(), w, decoded, pieceMeshesShared));
+        }
 
         std::lock_guard<std::mutex> lock(m_mutex);
         // Si hubo un cancelAllPending() mientras copiábamos fuera del lock, la

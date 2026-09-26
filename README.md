@@ -774,7 +774,7 @@ every voice of that file and a Force mono switch for 2D clips; both are saved in
 `.obj`, `.gltf` and `.glb`) it offers a uniform scale, the normals mode (from the file, smooth or flat),
 recalculating tangents, flipping UVs and importing the embedded animations, again in the same sidecar;
 applying it reloads every object in the scene that uses that model, keeping its transform, material
-overrides and Animator (it is not undoable). Each FBX uses its own settings, so a character and its
+overrides and Animator (it is not undoable). A static model made of several pieces (a glTF house with walls, roof and windows) is added as one child per piece under the selected object, each with its node transform and its own material, in a single undo step. Each FBX uses its own settings, so a character and its
 animation files (a Mixamo download, for example) need the same scale. Materials can be
 saved as a reusable `.mat` asset (right-click empty space → **Create → Material**), assigned to any
 material slot by dragging it from the grid, and edited by double-clicking it; editing a shared

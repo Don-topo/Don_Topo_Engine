@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <set>
@@ -747,13 +748,21 @@ AudioImportApplyResult applyAudioImportSettings(const std::filesystem::path& ass
 ModelImportApplyResult applyModelImportSettings(
     const std::filesystem::path& asset,
     const ModelImportSettings& settings,
-    const std::function<int(const std::filesystem::path&)>& reimport)
+    const std::function<int(const std::filesystem::path&, float scaleRatio)>& reimport)
 {
     ModelImportApplyResult r;
+    // La escala VIEJA se lee antes de escribir: la traslacion de cada pieza de
+    // un modelo repartido en hijos ya lleva esa escala dentro del localTransform
+    // (collectPieces la multiplico al hacer Add Mesh), y el reimport tiene que
+    // corregirla por nueva/vieja. La nueva se relee DESPUES, ya acotada como la
+    // vera ModelLoader.
+    const float oldScale = loadModelImportSettings(asset).scale;
     if (!saveModelImportSettings(asset, settings, &r.error))
         return r;                                    // nada recargado si no se pudo escribir
     r.ok = true;
-    if (reimport) r.refreshed = reimport(asset);
+    const float newScale = loadModelImportSettings(asset).scale;
+    const float ratio    = oldScale > 0.0f ? newScale / oldScale : 1.0f;
+    if (reimport) r.refreshed = reimport(asset, std::isfinite(ratio) ? ratio : 1.0f);
     return r;
 }
 
@@ -1877,9 +1886,9 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             {
                 const ModelImportApplyResult r = applyModelImportSettings(
                     m_importTarget, m_importModelEdit,
-                    [&](const std::filesystem::path& p)
+                    [&](const std::filesystem::path& p, float scaleRatio)
                     {
-                        const ModelReimportResult mr = reimportModelUsers(sceneRoot, p, ctx.renderer);
+                        const ModelReimportResult mr = reimportModelUsers(sceneRoot, p, ctx.renderer, scaleRatio);
                         for (const std::string& w : mr.warnings) ctx.pushLog(w);
                         return mr.reimported;
                     });

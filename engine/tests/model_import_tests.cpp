@@ -4,6 +4,7 @@
 // poner el sidecar sin ensuciar assets/.
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Core/ImportSettings.h"
+#include "gltf_fixtures.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <glm/gtc/matrix_transform.hpp>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -404,8 +406,11 @@ static void test_preview_matches_the_engine_triangle_count()
     const ModelPreview character = ModelLoader::loadPreview("assets/modelAnimation.fbx");
     CHECK(character.parts.size() > 1);
 
-    // Estatico con DOS mallas (dos grupos de OBJ, sin huesos): load solo pinta la
-    // primera, y el preview tambien. Ningun asset del repo cubre este caso.
+    // Estatico con DOS mallas (dos grupos de OBJ, sin huesos): loadAuto (el
+    // objeto simple, sin repartir en hijos) solo pinta la primera, pero desde
+    // la Task 5 el preview trae TODAS las apariciones -- aqui 2, una por
+    // grupo -- igual que collectPieces/loadStatic: la miniatura ya no
+    // pretende igualar a un loadAuto que deliberadamente se queda corto.
     const fs::path dir = makeDir("dt_model_preview_two_meshes");
     writeText(dir / "dos.obj",
               "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 5 0 0\nv 6 0 0\nv 5 1 0\n"
@@ -414,7 +419,8 @@ static void test_preview_matches_the_engine_triangle_count()
     const std::shared_ptr<Mesh> twoEngine = ModelLoader::loadAuto((dir / "dos.obj").string());
     const ModelPreview twoPreview = ModelLoader::loadPreview((dir / "dos.obj").string());
     CHECK(twoEngine && twoEngine->indices.size() == 3);      // precondicion: el motor pinta una
-    if (twoEngine) CHECK(previewTriangles(twoPreview) == twoEngine->indices.size() / 3);
+    CHECK(twoPreview.parts.size() == 2);
+    CHECK(previewTriangles(twoPreview) == 2);
 }
 
 // La textura embebida se reduce: lado mayor <= 256.
@@ -504,6 +510,25 @@ static void test_preview_image_rejects_huge_sources()
     }
     CHECK(ModelLoader::loadPreviewImage(dir / "huge.tga").rgba.empty());
     CHECK(ModelLoader::loadPreviewImage(dir / "no_existe.png").rgba.empty());
+}
+
+// La miniatura pinta TODAS las piezas en su sitio: el preview trae una parte por
+// aparicion, con la transformacion aplicada.
+static void test_preview_draws_every_piece_in_place()
+{
+    const fs::path dir = makeDir("dt_pieces_preview");
+    dt_fixture::writeThreePieceGltf(dir / "casa.gltf");
+    const ModelPreview p = ModelLoader::loadPreview((dir / "casa.gltf").string());
+    CHECK(p.status == PreviewStatus::Ok);
+    CHECK(p.parts.size() == 3);
+    if (p.parts.size() != 3) return;
+    auto hasPos = [](const PreviewPart& part, const glm::vec3& q) {
+        for (const glm::vec3& v : part.positions) if (glm::length(v - q) < 1e-4f) return true;
+        return false;
+    };
+    CHECK(hasPos(p.parts[0], { 6, 0, 0 }));    // (1,0,0) de A trasladado 5 en X
+    CHECK(hasPos(p.parts[1], { 0, 2, 0 }));    // (0,1,0) de B escalado 2
+    CHECK(hasPos(p.parts[2], { 1, 0, -3 }));   // (1,0,0) de C trasladado -3 en Z
 }
 
 // ── Formatos, texturas en subcarpeta y ficheros asociados ────────────────────
@@ -735,6 +760,167 @@ static void test_gltf_texture_uri_with_spaces_loads()
     catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
 }
 
+// ── Piezas de un modelo estatico ─────────────────────────────────────────────
+
+static bool nearMat(const glm::mat4& a, const glm::mat4& b)
+{
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            if (std::abs(a[c][r] - b[c][r]) > 1e-4f) return false;
+    return true;
+}
+
+static bool hasVertex(const Mesh& m, const glm::vec3& p)
+{
+    for (const Vertex& v : m.vertices) if (glm::length(v.pos - p) < 1e-4f) return true;
+    return false;
+}
+
+static void test_load_static_lists_every_piece()
+{
+    const fs::path dir = makeDir("dt_pieces_three");
+    dt_fixture::writeThreePieceGltf(dir / "casa.gltf");
+    try
+    {
+        const StaticModel m = ModelLoader::loadStatic((dir / "casa.gltf").string());
+        CHECK(m.meshes.size() == 2);
+        CHECK(m.pieces.size() == 3);
+        if (m.meshes.size() == 2) { CHECK(m.meshes[0].piece == 0); CHECK(m.meshes[1].piece == 1); }
+        if (m.pieces.size() != 3) return;
+        CHECK(m.pieces[0].piece == 0 && m.pieces[0].name == "A");
+        CHECK(m.pieces[1].piece == 1 && m.pieces[1].name == "B");
+        CHECK(m.pieces[2].piece == 0 && m.pieces[2].name == "C");   // malla reutilizada
+        CHECK(nearMat(m.pieces[0].transform, glm::translate(glm::mat4(1.0f), glm::vec3(5, 0, 0))));
+        CHECK(nearMat(m.pieces[1].transform, glm::scale(glm::mat4(1.0f), glm::vec3(2.0f))));
+        CHECK(nearMat(m.pieces[2].transform, glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -3))));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
+static void test_load_piece_gives_that_mesh()
+{
+    const fs::path dir = makeDir("dt_pieces_load");
+    dt_fixture::writeThreePieceGltf(dir / "casa.gltf");
+    try
+    {
+        const Mesh b = ModelLoader::load((dir / "casa.gltf").string(), 1);
+        CHECK(b.piece == 1);
+        CHECK(hasVertex(b, { 0, 0, 1 }) && !hasVertex(b, { 1, 0, 0 }));   // triangulo en YZ, sin transformar
+        const Mesh a0 = ModelLoader::load((dir / "casa.gltf").string());
+        const Mesh a1 = ModelLoader::load((dir / "casa.gltf").string(), 0);
+        CHECK(a0.piece == 0 && a0.vertices.size() == a1.vertices.size() && hasVertex(a0, { 1, 0, 0 }));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+
+    bool threw = false;
+    try { (void)ModelLoader::load((dir / "casa.gltf").string(), 7); }
+    catch (const std::runtime_error&) { threw = true; }
+    CHECK(threw);
+}
+
+// Review Focus 5: una sola malla = una sola pieza (y el editor no crea hijos).
+static void test_single_mesh_file_is_one_piece()
+{
+    const fs::path obj = writeObj("dt_pieces_single", kFoldedObj);
+    const StaticModel m = ModelLoader::loadStatic(obj.string());
+    CHECK(m.meshes.size() == 1);
+    CHECK(m.pieces.size() == 1);
+}
+
+// La escala del sidecar lleva las piezas juntas: tambien multiplica la traslacion.
+static void test_sidecar_scale_moves_the_pieces_too()
+{
+    const fs::path dir = makeDir("dt_pieces_scale");
+    const fs::path gltf = dir / "casa.gltf";
+    dt_fixture::writeThreePieceGltf(gltf);
+    ModelImportSettings s;
+    s.scale = 2.0f;
+    writeSettings(gltf, s);
+    const StaticModel m = ModelLoader::loadStatic(gltf.string());
+    CHECK(m.pieces.size() == 3);
+    if (m.pieces.size() == 3) CHECK(std::abs(m.pieces[0].transform[3].x - 10.0f) < 1e-4f);
+    if (!m.meshes.empty()) CHECK(hasVertex(m.meshes[0], { 2, 0, 0 }));
+}
+
+// Review de la Task 1: hasTriangles nunca se ejercitaba en su rama false. Una
+// malla sin ningun triangulo (primitivo LINES) no debe generar pieza, aunque
+// SI aparezca en meshes (loadStatic construye una Mesh por cada malla del
+// fichero, con triangulos o sin ellos).
+static void test_lineless_mesh_produces_no_piece()
+{
+    const fs::path dir = makeDir("dt_pieces_no_triangles");
+    dt_fixture::writeMixedTriangleAndLineGltf(dir / "mix.gltf");
+    try
+    {
+        const StaticModel m = ModelLoader::loadStatic((dir / "mix.gltf").string());
+        CHECK(m.meshes.size() == 2);
+        CHECK(m.pieces.size() == 1);
+        if (m.pieces.size() == 1) CHECK(m.pieces[0].name == "T");
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
+// Review de la Task 1: con la raiz en identidad, un solo nivel de nodos no
+// distingue "padre * hijo" de "hijo * padre". Con dos niveles reales (A
+// trasladado, B escalado, colgando de A) la traslacion resultante SOLO
+// coincide con A*B si la composicion es la correcta.
+static void test_nested_node_transform_composes_parent_then_child()
+{
+    const fs::path dir = makeDir("dt_pieces_nested");
+    dt_fixture::writeNestedNodeGltf(dir / "nested.gltf");
+    try
+    {
+        const StaticModel m = ModelLoader::loadStatic((dir / "nested.gltf").string());
+        CHECK(m.pieces.size() == 1);
+        if (m.pieces.size() != 1) return;
+        const glm::mat4 expected = glm::translate(glm::mat4(1.0f), glm::vec3(5, 0, 0)) *
+                                    glm::scale(glm::mat4(1.0f), glm::vec3(2.0f));
+        CHECK(nearMat(m.pieces[0].transform, expected));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
+// Review final: un glTF con UN solo nodo de primer nivel no tiene raiz
+// sintetica -- ese nodo ES mRootNode y lleva la correccion de ejes/unidades del
+// autor. En glTF la raiz aporta su transformacion (solo FBX la descarta).
+static void test_gltf_single_root_node_transform_is_applied()
+{
+    const fs::path dir = makeDir("dt_pieces_single_root");
+    dt_fixture::writeSingleRootNodeGltf(dir / "raiz.gltf");
+    try
+    {
+        const StaticModel m = ModelLoader::loadStatic((dir / "raiz.gltf").string());
+        CHECK(m.pieces.size() == 2);
+        if (m.pieces.size() != 2) return;
+        const glm::mat4 s2 = glm::scale(glm::mat4(1.0f), glm::vec3(2.0f));
+        CHECK(nearMat(m.pieces[0].transform, s2 * glm::translate(glm::mat4(1.0f), glm::vec3(1, 0, 0))));
+        CHECK(nearMat(m.pieces[1].transform, s2 * glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 1))));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
+// Review final: una pieza con un eje casi aplastado (escala 1e-20) da una
+// matriz normal con 1e20; la longitud de la normal transformada desborda a inf
+// y `len > 1e-8f` la dejaba pasar: normal = tn / inf = vector cero. Toda normal
+// de la miniatura tiene que ser finita y unitaria.
+static void test_preview_normals_survive_a_flattened_piece()
+{
+    const fs::path dir = makeDir("dt_pieces_flattened");
+    dt_fixture::writeFlattenedPieceGltf(dir / "plano.gltf");
+    const ModelPreview p = ModelLoader::loadPreview((dir / "plano.gltf").string());
+    CHECK(p.status == PreviewStatus::Ok);
+    CHECK(p.parts.size() == 2);
+    int malas = 0;
+    for (const PreviewPart& part : p.parts)
+        for (const glm::vec3& n : part.normals)
+        {
+            const float len = glm::length(n);
+            if (!std::isfinite(n.x) || !std::isfinite(n.y) || !std::isfinite(n.z) || std::abs(len - 1.0f) > 1e-3f)
+                ++malas;
+        }
+    CHECK(malas == 0);
+}
+
 int main()
 {
     test_defaults_match_the_old_flags();
@@ -767,6 +953,15 @@ int main()
     test_gltf_missing_bin_fails_cleanly();
     test_companions_of_obj_include_the_mtl_textures();
     test_gltf_texture_uri_with_spaces_loads();
+    test_load_static_lists_every_piece();
+    test_load_piece_gives_that_mesh();
+    test_single_mesh_file_is_one_piece();
+    test_sidecar_scale_moves_the_pieces_too();
+    test_lineless_mesh_produces_no_piece();
+    test_nested_node_transform_composes_parent_then_child();
+    test_preview_draws_every_piece_in_place();
+    test_gltf_single_root_node_transform_is_applied();
+    test_preview_normals_survive_a_flattened_piece();
 
     if (g_failures == 0) std::printf("ALL MODEL IMPORT TESTS PASSED\n");
     return g_failures == 0 ? 0 : 1;

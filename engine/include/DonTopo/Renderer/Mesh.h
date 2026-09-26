@@ -17,6 +17,9 @@ namespace DonTopo
         // para localizar qué GameObjects referencian un fichero al hacer
         // rename/delete.
         std::string             sourcePath;
+        // Indice de la malla dentro del fichero (scene->mMeshes[piece]). 0 = la
+        // primera, que es lo unico que se cargaba antes de las piezas.
+        int                     piece = 0;
 
         virtual ~Mesh() = default;
     };

@@ -59,11 +59,35 @@ namespace DonTopo
         int totalChannels  = 0;
     };
 
+    struct ModelPiece
+    {
+        int         piece = 0;        // indice en scene->mMeshes
+        std::string name;             // nombre del nodo (o de la malla si el nodo no tiene)
+        glm::mat4   transform{1.0f};  // relativa a la raiz; traslacion x escala del sidecar
+    };
+
+    struct StaticModel
+    {
+        std::vector<Mesh>       meshes;   // una por scene->mMeshes; meshes[i].piece == i
+        std::vector<ModelPiece> pieces;   // apariciones, en profundidad
+    };
+
     class ModelLoader
     {
         public:
             static Mesh load(const std::string& path);
             static SkinnedMesh loadSkinned(const std::string& path);
+
+            // Un solo ReadFile: todas las mallas del fichero y donde aparece cada
+            // una en los nodos. Para modelos SIN huesos (con huesos, loadSkinned).
+            // La transformacion de cada pieza es relativa a la raiz (la de un FBX
+            // lleva la conversion de unidades) y su traslacion va por la escala
+            // del sidecar. Las mallas sin triangulos no son pieza. Lanza como load.
+            static StaticModel loadStatic(const std::string& path);
+
+            // La malla `piece` del fichero, sin transformacion. load(path) es
+            // load(path, 0). Pieza fuera de rango: std::runtime_error.
+            static Mesh load(const std::string& path, int piece);
 
             // Importa las animaciones de path mapeando cada canal al esqueleto
             // skel POR NOMBRE de hueso. No construye geometría ni materiales:
