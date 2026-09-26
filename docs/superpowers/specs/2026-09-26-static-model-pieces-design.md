@@ -228,3 +228,10 @@ normales con malla propia.
    Delete, precarga del runtime). Por eso la pieza 0 conserva el `sourcePath` a
    secas como clave, y hay tests de ida y vuelta del undo de Delete con un
    subárbol de dos piezas.
+3. **Las texturas de los hijos se decodifican en el hilo principal al añadir el
+   modelo.** El registro de cada hijo en GPU (`registerGameObject`) decodifica
+   sus texturas externas de forma síncrona, como ya hacen hoy el undo de Delete
+   y el duplicado; el worker solo entrega decodificada la pieza pedida. Se
+   acepta como deuda (arreglarlo exige tocar el registro en GPU de los dos
+   backends): un modelo grande de muchas piezas con texturas externas da un
+   tirón visible al añadirse. No se relee el fichero del modelo.
