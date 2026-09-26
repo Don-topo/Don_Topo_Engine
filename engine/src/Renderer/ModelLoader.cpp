@@ -847,7 +847,35 @@ namespace DonTopo
             bool skinned = false;
             for (uint32_t m = 0; m < scene->mNumMeshes; ++m)
                 skinned = skinned || scene->mMeshes[m]->mNumBones > 0;
-            const uint32_t meshCount = skinned ? scene->mNumMeshes : 1;
+
+            // Con huesos, todas las submallas en bind pose (como loadSkinned). Sin
+            // huesos y con MAS de una aparicion en los nodos, una parte POR
+            // aparicion con su transform (igual que StaticModel::pieces via
+            // collectPieces): la miniatura deja de fingir que el modelo es una
+            // unica malla cuando no lo es. Con una aparicion o ninguna, lo de
+            // siempre -- malla 0 sin transformar -- que es lo que de verdad pinta
+            // un objeto sin repartir en hijos (loadAuto).
+            struct Appearance { uint32_t meshIndex; glm::mat4 transform; };
+            std::vector<Appearance> appearances;
+            if (skinned)
+            {
+                for (uint32_t m = 0; m < scene->mNumMeshes; ++m)
+                    appearances.push_back({ m, glm::mat4(1.0f) });
+            }
+            else
+            {
+                const std::vector<ModelPiece> pieces = collectPieces(scene, settings.scale);
+                if (pieces.size() > 1)
+                {
+                    for (const ModelPiece& piece : pieces)
+                        if (piece.piece >= 0 && static_cast<uint32_t>(piece.piece) < scene->mNumMeshes)
+                            appearances.push_back({ static_cast<uint32_t>(piece.piece), piece.transform });
+                }
+                else if (scene->mNumMeshes > 0)
+                {
+                    appearances.push_back({ 0, glm::mat4(1.0f) });
+                }
+            }
 
             const fs::path modelDir = fs::path(path).parent_path();
             std::unordered_map<uint32_t, PreviewImage> albedoByMaterial;
@@ -890,19 +918,26 @@ namespace DonTopo
                 return albedoByMaterial.emplace(matIndex, std::move(img)).first->second;
             };
 
-            for (uint32_t m = 0; m < meshCount; ++m)
+            for (const Appearance& app : appearances)
             {
-                const aiMesh* ai = scene->mMeshes[m];
+                const aiMesh* ai = scene->mMeshes[app.meshIndex];
+                // Identidad para el caso de siempre: mat3(1) invertida y traspuesta
+                // sigue siendo la identidad, así que la normal no cambia.
+                const glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(app.transform)));
                 PreviewPart part;
                 part.positions.reserve(ai->mNumVertices);
                 for (uint32_t i = 0; i < ai->mNumVertices; ++i)
                 {
-                    part.positions.emplace_back(ai->mVertices[i].x * settings.scale,
-                                                ai->mVertices[i].y * settings.scale,
-                                                ai->mVertices[i].z * settings.scale);
-                    part.normals.push_back(ai->mNormals
+                    const glm::vec3 pos(ai->mVertices[i].x * settings.scale,
+                                        ai->mVertices[i].y * settings.scale,
+                                        ai->mVertices[i].z * settings.scale);
+                    part.positions.push_back(glm::vec3(app.transform * glm::vec4(pos, 1.0f)));
+                    const glm::vec3 n = ai->mNormals
                         ? glm::vec3(ai->mNormals[i].x, ai->mNormals[i].y, ai->mNormals[i].z)
-                        : glm::vec3(0.0f, 1.0f, 0.0f));
+                        : glm::vec3(0.0f, 1.0f, 0.0f);
+                    const glm::vec3 tn = normalMat * n;
+                    const float len = glm::length(tn);
+                    part.normals.push_back(len > 1e-8f ? tn / len : n);
                     part.uvs.push_back(ai->mTextureCoords[0]
                         ? glm::vec2(ai->mTextureCoords[0][i].x, ai->mTextureCoords[0][i].y)
                         : glm::vec2(0.0f));

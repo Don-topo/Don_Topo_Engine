@@ -39,8 +39,75 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
     });
 
     bool anyRegistered = false;
+
+    // Cola comun a los dos caminos (estatico por pieza y el de siempre), justo
+    // despues de applyMaterialOverrides: registro en GPU y contador de
+    // recargados. Extraida a lambda porque son mas de 3 lineas y divergir aqui
+    // ha sido la fuente de bugs sutiles del reimport en el pasado.
+    auto finishReload = [&](GameObject* go)
+    {
+        if (renderer)
+        {
+            if (const SkinnedMesh* sk = go->getSkinnedMesh())
+                go->skinnedRenderIndex = renderer->addSkinnedMesh(*sk, nullptr);
+            else
+                go->staticRenderIndex = renderer->addStaticMesh(*go->getMesh(), nullptr);
+            anyRegistered = true;
+        }
+        if (go->hasAnimator())
+            if (const SkinnedMesh* sk = go->getSkinnedMesh())
+                go->getAnimator()->rebindClips(*sk, &r.warnings);
+
+        ++r.reimported;
+    };
+
     for (auto& [sourcePath, users] : groups)
     {
+        // Estatico: una lectura con todas las piezas y cada objeto recarga la
+        // SUYA. La que ya no existe deja el objeto como estaba, con aviso (mismo
+        // contrato que una recarga fallida).
+        if (!ModelLoader::hasBones(sourcePath))
+        {
+            StaticModel model;
+            try { model = ModelLoader::loadStatic(sourcePath); }
+            catch (const std::exception& e)
+            {
+                r.warnings.push_back("Reimport de '" + fbx.filename().string() + "' fallido: " + e.what() +
+                                     " (los objetos se quedan como estaban)");
+                r.skipped += static_cast<int>(users.size());
+                continue;
+            }
+            std::map<int, std::shared_ptr<const Mesh>> byPiece;
+            for (GameObject* go : users)
+            {
+                if (go->pendingMeshJob != 0)
+                {
+                    r.warnings.push_back("Reimport: '" + go->name + "' tiene una carga en curso, se salta");
+                    ++r.skipped;
+                    continue;
+                }
+                const int piece = go->getMesh()->piece;
+                if (piece < 0 || static_cast<size_t>(piece) >= model.meshes.size())
+                {
+                    r.warnings.push_back("Reimport: '" + go->name + "' usaba la pieza " + std::to_string(piece) +
+                                         ", que ya no esta en el fichero: se queda como estaba");
+                    ++r.skipped;
+                    continue;
+                }
+                auto& next = byPiece[piece];
+                if (!next) next = std::make_shared<const Mesh>(model.meshes[piece]);
+                if (renderer) renderer->removeMeshComponent(go);
+                else          go->setMesh(nullptr);
+                go->setMesh(next);
+                // DESPUES de setMesh, que baja los base*Taken: applyMaterialOverrides
+                // recaptura como baseline lo que trae la malla NUEVA y reaplica encima
+                // los overrides del objeto y su .mat.
+                applyMaterialOverrides(*go);
+                finishReload(go);
+            }
+            continue;
+        }
+
         std::shared_ptr<Mesh> fresh;
         try
         {
@@ -87,20 +154,7 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
             // recaptura como baseline lo que trae la malla NUEVA y reaplica encima
             // los overrides del objeto y su .mat.
             applyMaterialOverrides(*go);
-
-            if (renderer)
-            {
-                if (const SkinnedMesh* sk = go->getSkinnedMesh())
-                    go->skinnedRenderIndex = renderer->addSkinnedMesh(*sk, nullptr);
-                else
-                    go->staticRenderIndex = renderer->addStaticMesh(*go->getMesh(), nullptr);
-                anyRegistered = true;
-            }
-            if (go->hasAnimator())
-                if (const SkinnedMesh* sk = go->getSkinnedMesh())
-                    go->getAnimator()->rebindClips(*sk, &r.warnings);
-
-            ++r.reimported;
+            finishReload(go);
         }
     }
 

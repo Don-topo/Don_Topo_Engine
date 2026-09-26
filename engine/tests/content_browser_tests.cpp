@@ -13,6 +13,8 @@
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Editor/ModelReimport.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
+#include "DonTopo/Core/Scene.h"
+#include "gltf_fixtures.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1428,6 +1430,32 @@ static void test_reimport_also_reloads_characters_that_use_the_fbx_as_animation_
     CHECK(otro.reimported == 0 && otro.skipped == 0);
 }
 
+// Review Focus 2: reimport por pieza. Cada objeto recarga SU pieza; el de una
+// pieza que ya no existe conserva su malla y hay aviso.
+static void test_reimport_missing_piece_keeps_the_old_mesh()
+{
+    const fs::path dir = fs::temp_directory_path() / "dt_reimport_pieces";
+    fs::create_directories(dir);
+    const fs::path gltf = dir / "casa.gltf";
+    dt_fixture::writeThreePieceGltf(gltf);
+
+    Scene scene("Test");
+    GameObject* a = scene.addGameObject("A");
+    GameObject* b = scene.addGameObject("B");
+    GameObject* x = scene.addGameObject("X");
+    auto old = std::make_shared<Mesh>(); old->sourcePath = gltf.string(); old->name = "vieja";
+    auto pa = std::make_shared<Mesh>(*old); pa->piece = 0;
+    auto pb = std::make_shared<Mesh>(*old); pb->piece = 1;
+    auto px = std::make_shared<Mesh>(*old); px->piece = 9;      // no existe en el fichero
+    a->setMesh(pa); b->setMesh(pb); x->setMesh(px);
+
+    const ModelReimportResult r = reimportModelUsers(&scene.getRoot(), gltf, nullptr);
+    CHECK(a->getMesh()->piece == 0 && !a->getMesh()->vertices.empty());
+    CHECK(b->getMesh()->piece == 1 && !b->getMesh()->vertices.empty());
+    CHECK(x->getMesh()->name == "vieja");                          // intacto
+    CHECK(!r.warnings.empty());
+}
+
 // ── applyModelImportSettings ─────────────────────────────────────────────────
 
 static void test_apply_model_writes_sidecar_and_reimports_once()
@@ -1502,6 +1530,7 @@ int main()
     test_reimport_without_users_is_a_noop();
     test_reimport_skips_an_object_with_a_pending_load();
     test_reimport_skinned_keeps_the_animation_config_and_rebinds();
+    test_reimport_missing_piece_keeps_the_old_mesh();
     test_classify_material_extension();
     test_material_is_draggable();
     test_accept_or_import_mat_texture_imports_external_path();

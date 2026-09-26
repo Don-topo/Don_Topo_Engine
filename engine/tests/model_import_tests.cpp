@@ -406,8 +406,11 @@ static void test_preview_matches_the_engine_triangle_count()
     const ModelPreview character = ModelLoader::loadPreview("assets/modelAnimation.fbx");
     CHECK(character.parts.size() > 1);
 
-    // Estatico con DOS mallas (dos grupos de OBJ, sin huesos): load solo pinta la
-    // primera, y el preview tambien. Ningun asset del repo cubre este caso.
+    // Estatico con DOS mallas (dos grupos de OBJ, sin huesos): loadAuto (el
+    // objeto simple, sin repartir en hijos) solo pinta la primera, pero desde
+    // la Task 5 el preview trae TODAS las apariciones -- aqui 2, una por
+    // grupo -- igual que collectPieces/loadStatic: la miniatura ya no
+    // pretende igualar a un loadAuto que deliberadamente se queda corto.
     const fs::path dir = makeDir("dt_model_preview_two_meshes");
     writeText(dir / "dos.obj",
               "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 5 0 0\nv 6 0 0\nv 5 1 0\n"
@@ -416,7 +419,8 @@ static void test_preview_matches_the_engine_triangle_count()
     const std::shared_ptr<Mesh> twoEngine = ModelLoader::loadAuto((dir / "dos.obj").string());
     const ModelPreview twoPreview = ModelLoader::loadPreview((dir / "dos.obj").string());
     CHECK(twoEngine && twoEngine->indices.size() == 3);      // precondicion: el motor pinta una
-    if (twoEngine) CHECK(previewTriangles(twoPreview) == twoEngine->indices.size() / 3);
+    CHECK(twoPreview.parts.size() == 2);
+    CHECK(previewTriangles(twoPreview) == 2);
 }
 
 // La textura embebida se reduce: lado mayor <= 256.
@@ -506,6 +510,25 @@ static void test_preview_image_rejects_huge_sources()
     }
     CHECK(ModelLoader::loadPreviewImage(dir / "huge.tga").rgba.empty());
     CHECK(ModelLoader::loadPreviewImage(dir / "no_existe.png").rgba.empty());
+}
+
+// La miniatura pinta TODAS las piezas en su sitio: el preview trae una parte por
+// aparicion, con la transformacion aplicada.
+static void test_preview_draws_every_piece_in_place()
+{
+    const fs::path dir = makeDir("dt_pieces_preview");
+    dt_fixture::writeThreePieceGltf(dir / "casa.gltf");
+    const ModelPreview p = ModelLoader::loadPreview((dir / "casa.gltf").string());
+    CHECK(p.status == PreviewStatus::Ok);
+    CHECK(p.parts.size() == 3);
+    if (p.parts.size() != 3) return;
+    auto hasPos = [](const PreviewPart& part, const glm::vec3& q) {
+        for (const glm::vec3& v : part.positions) if (glm::length(v - q) < 1e-4f) return true;
+        return false;
+    };
+    CHECK(hasPos(p.parts[0], { 6, 0, 0 }));    // (1,0,0) de A trasladado 5 en X
+    CHECK(hasPos(p.parts[1], { 0, 2, 0 }));    // (0,1,0) de B escalado 2
+    CHECK(hasPos(p.parts[2], { 1, 0, -3 }));   // (1,0,0) de C trasladado -3 en Z
 }
 
 // ── Formatos, texturas en subcarpeta y ficheros asociados ────────────────────
@@ -895,6 +918,7 @@ int main()
     test_sidecar_scale_moves_the_pieces_too();
     test_lineless_mesh_produces_no_piece();
     test_nested_node_transform_composes_parent_then_child();
+    test_preview_draws_every_piece_in_place();
 
     if (g_failures == 0) std::printf("ALL MODEL IMPORT TESTS PASSED\n");
     return g_failures == 0 ? 0 : 1;
