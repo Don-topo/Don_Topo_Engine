@@ -10,6 +10,7 @@
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/ModelLoader.h"
+#include "gltf_fixtures.h"
 
 #include <algorithm>
 #include <atomic>
@@ -376,11 +377,42 @@ void testCancelAllPendingDropsInflightResults(const std::string& fbx)
     }
 }
 
+// Dos piezas del mismo fichero: UN ReadFile, cada objeto su pieza, y la lista de
+// apariciones viaja con el resultado.
+void testPiecesShareOneReadFile()
+{
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "dt_loader_pieces";
+    std::filesystem::create_directories(dir);
+    const std::string gltf = (dir / "casa.gltf").string();
+    dt_fixture::writeThreePieceGltf(gltf);
+
+    DonTopo::JobSystem js;
+    js.start();
+    DonTopo::AsyncAssetLoader loader(js);
+    loader.requestMesh(gltf, 10, 0);
+    loader.requestMesh(gltf, 11, 1);
+    std::vector<DonTopo::LoadedMesh> got = drain(loader, 2);
+    assert(got.size() == 2);
+    assert(loader.readFileCount() == 1 && "dos piezas del mismo fichero = un solo ReadFile");
+    for (const auto& r : got)
+    {
+        assert(r.error.empty());
+        assert(r.mesh != nullptr);
+        const int esperada = r.targetId == 11 ? 1 : 0;
+        assert(r.piece == esperada && r.mesh->piece == esperada);
+        assert(r.pieces.size() == 3);
+        assert(r.pieceMeshes.size() == 2);
+    }
+    js.shutdown();
+}
+
 } // namespace
 
 int main()
 {
     const std::string fbx = findTestFbx();
+
+    testPiecesShareOneReadFile();
 
     testMissingFileReportsError();
     testCancelBeforeStartDropsPending();

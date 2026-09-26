@@ -63,7 +63,7 @@ namespace DonTopo
         }
     }
 
-    JobSystem::JobId AsyncAssetLoader::requestMesh(const std::string& path, uint64_t targetId)
+    JobSystem::JobId AsyncAssetLoader::requestMesh(const std::string& path, uint64_t targetId, int piece)
     {
         // El id se reserva ANTES de tocar el grupo: el primer waiter de un path
         // encola el job con ESTE id, y el grupo lo guarda para poder
@@ -85,7 +85,7 @@ namespace DonTopo
             needsJob = group.waiters.empty();
             if (needsJob)
                 group.jobId = id;
-            group.waiters.emplace_back(id, targetId);
+            group.waiters.push_back({ id, targetId, piece });
         }
 
         if (needsJob)
@@ -125,7 +125,7 @@ namespace DonTopo
             {
                 PendingGroup& group = it->second;
                 auto w = std::find_if(group.waiters.begin(), group.waiters.end(),
-                                      [id](const auto& pair) { return pair.first == id; });
+                                      [id](const Waiter& waiter) { return waiter.job == id; });
                 if (w == group.waiters.end())
                     continue;
 
@@ -159,14 +159,42 @@ namespace DonTopo
     }
 
     LoadedMesh AsyncAssetLoader::buildResultFor(const LoadedMesh& src,
-                                                JobSystem::JobId job, uint64_t targetId)
+                                                const StaticModel* model, const Waiter& w)
     {
         LoadedMesh out;
-        out.job      = job;
-        out.targetId = targetId;
+        out.job      = w.job;
+        out.targetId = w.targetId;
         out.path     = src.path;
         out.error    = src.error;
-        out.images   = src.images;   // copia: cada target sube su propia textura
+        out.piece    = w.piece;
+
+        if (model)
+        {
+            // Estatico: src.mesh no se usa (runJob no lo rellena para este
+            // camino). Cada waiter decodifica SU pieza aqui, no antes — es lo
+            // que reemplaza la decodificacion unica de antes (una sola
+            // Mesh::material para todo el fichero), que era correcta para un
+            // FBX de una malla pero serviria la textura de la pieza 0 a
+            // todo el mundo en un modelo de varias piezas.
+            if (w.piece < 0 || static_cast<size_t>(w.piece) >= model->meshes.size())
+            {
+                out.error = "'" + src.path + "' no tiene la pieza " + std::to_string(w.piece);
+                return out;
+            }
+            out.mesh = std::make_shared<Mesh>(model->meshes[w.piece]);
+            const Material& mat = out.mesh->material;
+            decodeSlot(mat.texturePath,           mat.embeddedTexture,           DecodedImage::Albedo, out.images);
+            decodeSlot(mat.normalMapPath,         mat.embeddedNormalMap,         DecodedImage::Normal, out.images);
+            decodeSlot(mat.metallicRoughnessPath, mat.embeddedMetallicRoughness, DecodedImage::ORM,    out.images);
+            if (model->pieces.size() > 1)
+            {
+                out.pieces = model->pieces;
+                for (const Mesh& m : model->meshes) out.pieceMeshes.push_back(std::make_shared<const Mesh>(m));
+            }
+            return out;
+        }
+
+        out.images = src.images;   // copia: cada target sube su propia textura
 
         // Copia profunda del Mesh, no del shared_ptr. Compartirlo dejaría a dos
         // GameObject apuntando al mismo Mesh mutable, cambiando la semántica de
@@ -187,27 +215,28 @@ namespace DonTopo
     {
         LoadedMesh loaded;
         loaded.path = path;
+        std::shared_ptr<StaticModel> model;   // solo si el fichero no tiene huesos
 
         try
         {
-            loaded.mesh = ModelLoader::loadAuto(path);
-            if (loaded.mesh)
+            if (ModelLoader::hasBones(path))
             {
-                // Solo se decodifica Mesh::material (singular). Un
-                // SkinnedMesh (loadAuto de un FBX con rig) guarda sus
-                // texturas por submesh en SkinnedMesh::materials, que aquí
-                // NO se toca a propósito — decisión diferida. Para esos
-                // modelos, loaded.images queda vacío y la textura se sigue
-                // resolviendo en el hilo principal por la vía síncrona
+                // Personaje: entero, como siempre. SkinnedMesh guarda sus
+                // texturas por submesh en materials[] (plural), que aquí no se
+                // toca a propósito — decisión diferida (ver el comentario de
+                // testTexturesArriveDecoded). loaded.images queda vacío y la
+                // textura se resuelve en el hilo principal por la vía síncrona
                 // existente (el fallback de buildRenderObject, Task 6).
-                const Material& mat = loaded.mesh->material;
-                decodeSlot(mat.texturePath,             mat.embeddedTexture,            DecodedImage::Albedo, loaded.images);
-                decodeSlot(mat.normalMapPath,           mat.embeddedNormalMap,          DecodedImage::Normal, loaded.images);
-                decodeSlot(mat.metallicRoughnessPath,   mat.embeddedMetallicRoughness,  DecodedImage::ORM,    loaded.images);
+                loaded.mesh = ModelLoader::loadAuto(path);
+                if (!loaded.mesh) loaded.error = "No se pudo cargar el modelo: " + path;
             }
             else
             {
-                loaded.error = "No se pudo cargar el modelo: " + path;
+                // Estatico: UN ReadFile para todas las mallas del fichero,
+                // independientemente de cuantas piezas esten esperando. Cada
+                // waiter decodifica su propia textura en buildResultFor.
+                model = std::make_shared<StaticModel>(ModelLoader::loadStatic(path));
+                if (model->meshes.empty()) loaded.error = "'" + path + "' no tiene mallas";
             }
         }
         catch (const std::exception& e)
@@ -216,14 +245,16 @@ namespace DonTopo
             // worker es std::terminate. Viaja como string.
             loaded.mesh  = nullptr;
             loaded.error = e.what();
+            model        = nullptr;
         }
         catch (...)
         {
             loaded.mesh  = nullptr;
             loaded.error = "Error desconocido cargando " + path;
+            model        = nullptr;
         }
 
-        std::vector<std::pair<JobSystem::JobId, uint64_t>> waiters;
+        std::vector<Waiter> waiters;
         uint64_t myEpoch = 0;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -249,8 +280,8 @@ namespace DonTopo
         // intenta pintar.
         std::vector<LoadedMesh> results;
         results.reserve(waiters.size());
-        for (const auto& [job, targetId] : waiters)
-            results.push_back(buildResultFor(loaded, job, targetId));
+        for (const Waiter& w : waiters)
+            results.push_back(buildResultFor(loaded, model.get(), w));
 
         std::lock_guard<std::mutex> lock(m_mutex);
         // Si hubo un cancelAllPending() mientras copiábamos fuera del lock, la

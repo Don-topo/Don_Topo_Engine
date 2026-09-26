@@ -2273,9 +2273,7 @@ namespace
                         // la petición. El pump lo resolverá por id — nunca por
                         // puntero, que sería dangling si el usuario lo borra
                         // mientras carga.
-                        // TODO(Task 3): pasar piece cuando requestMesh acepte
-                        // un tercer argumento.
-                        node->pendingMeshJob = loader->requestMesh(sourcePath, node->id);
+                        node->pendingMeshJob = loader->requestMesh(sourcePath, node->id, piece);
                     }
                     else
                     {

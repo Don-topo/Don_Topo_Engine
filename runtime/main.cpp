@@ -29,12 +29,14 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <set>
 #include <string>
-#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "DonTopo/Core/AnimatorComponent.h"
@@ -306,14 +308,25 @@ int main(int argc, char** argv)
                 return EXIT_FAILURE;
             }
 
-            // Set de sourcePath únicos: varios nodos que comparten FBX generan un
-            // solo ReadFile (el loader además dedup por path internamente).
-            std::unordered_set<std::string> uniquePaths;
+            // Set de (sourcePath, piece) únicos: varios nodos que comparten
+            // fichero Y pieza generan un solo ReadFile (el loader además dedup
+            // por path internamente); dos piezas del mismo modelo estático
+            // piden la misma petición de path pero distinta pieza, así que la
+            // pieza entra en la clave del set.
+            std::set<std::pair<std::string, int>> uniquePaths;
             std::function<void(const nlohmann::json&)> collect = [&](const nlohmann::json& node) {
                 if (node.contains("mesh") && node["mesh"].is_object())
                 {
                     const std::string sp = node["mesh"].value("sourcePath", std::string());
-                    if (!sp.empty()) uniquePaths.insert(sp);
+                    if (!sp.empty())
+                    {
+                        // Misma lectura que nodeFromJson: ausente o invalida = 0.
+                        int piece = 0;
+                        if (const auto it = node["mesh"].find("piece");
+                            it != node["mesh"].end() && it->is_number_integer())
+                            piece = std::max(0, it->get<int>());
+                        uniquePaths.insert({ sp, piece });
+                    }
                 }
                 if (auto it = node.find("children"); it != node.end() && it->is_array())
                     for (const auto& child : *it)
@@ -322,12 +335,12 @@ int main(int argc, char** argv)
             if (sceneJson->contains("root") && (*sceneJson)["root"].is_object())
                 collect((*sceneJson)["root"]);
 
-            // Encola una petición por path. targetId no se usa aquí (la cache se
-            // indexa por path, no por GameObject: aún no hay escena), así que va
-            // un índice cualquiera distinto de 0.
+            // Encola una petición por (path, piece). targetId no se usa aquí (la
+            // cache se indexa por meshCacheKey, no por GameObject: aún no hay
+            // escena), así que va un índice cualquiera distinto de 0.
             uint64_t reqId = 1;
             for (const auto& p : uniquePaths)
-                assetLoader.requestMesh(p, reqId++);
+                assetLoader.requestMesh(p.first, reqId++, p.second);
 
             // Bombea el splash mientras cargan los workers, guardando cada
             // resultado en la cache por path. Un error (fichero movido/roto)
@@ -344,7 +357,7 @@ int main(int argc, char** argv)
                         continue;
                     }
                     if (r.mesh)
-                        preloaded[r.path] = r.mesh;
+                        preloaded[DonTopo::meshCacheKey(r.path, r.piece)] = r.mesh;
                 }
                 pumpSplash(false, 0.0f);
             }

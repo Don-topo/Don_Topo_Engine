@@ -1,6 +1,7 @@
 #pragma once
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/TextureImport.h"
 
 #include <cstdint>
@@ -8,7 +9,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace DonTopo
@@ -34,12 +34,15 @@ namespace DonTopo
     // ni un puntero compartido mutable, ni un GameObject*.
     struct LoadedMesh
     {
-        JobSystem::JobId          job      = 0;
-        uint64_t                  targetId = 0;   // GameObject::id, nunca un puntero
-        std::string               path;
-        std::shared_ptr<Mesh>     mesh;           // puede ser SkinnedMesh (loadAuto)
-        std::vector<DecodedImage> images;
-        std::string               error;          // no vacío = falló
+        JobSystem::JobId                         job      = 0;
+        uint64_t                                 targetId = 0;   // GameObject::id, nunca un puntero
+        std::string                              path;
+        std::shared_ptr<Mesh>                    mesh;           // puede ser SkinnedMesh (loadAuto)
+        std::vector<DecodedImage>                images;
+        std::string                              error;          // no vacío = falló
+        int                                       piece = 0;     // que pieza de mesh->sourcePath es esta
+        std::vector<ModelPiece>                  pieces;        // apariciones, si es estatico con > 1
+        std::vector<std::shared_ptr<const Mesh>> pieceMeshes;   // todas las mallas del fichero, si pieces no esta vacio
     };
 
     struct MaterialOverride;   // GameObject.h; solo referencia, ver más abajo
@@ -70,8 +73,10 @@ namespace DonTopo
             // targetId es el GameObject::id al que asignar el mesh. El pump
             // resuelve por id sobre la escena viva: si el objeto se borró
             // mientras cargaba, el resultado se descarta sin tocar memoria
-            // liberada.
-            JobSystem::JobId requestMesh(const std::string& path, uint64_t targetId);
+            // liberada. piece es la pieza del fichero (ModelLoader::load(path,
+            // piece) para el camino sincrono); 0 = el fichero entero o su
+            // primera/unica malla, igual que hoy.
+            JobSystem::JobId requestMesh(const std::string& path, uint64_t targetId, int piece = 0);
 
             void cancel(JobSystem::JobId id);
 
@@ -105,15 +110,22 @@ namespace DonTopo
             // jobId se guarda aparte de los waiters a propósito: es el id con
             // el que se encoló el job, que sigue siendo válido aunque su waiter
             // original se cancele mientras otros siguen esperando el ReadFile.
+            //
+            // Un waiter ya no es solo (job, targetId): dos peticiones del mismo
+            // path pueden pedir piezas distintas (dos GameObject del mismo
+            // modelo estatico), y esa pieza tiene que viajar con el waiter para
+            // que buildResultFor sepa cual de las mallas del ReadFile servirle.
+            struct Waiter { JobSystem::JobId job; uint64_t targetId; int piece; };
+
             struct PendingGroup
             {
-                JobSystem::JobId jobId = 0;   // id encolado en el JobSystem (primer waiter)
-                std::vector<std::pair<JobSystem::JobId, uint64_t>> waiters;  // (job, targetId)
+                JobSystem::JobId     jobId = 0;   // id encolado en el JobSystem (primer waiter)
+                std::vector<Waiter>  waiters;
             };
 
             void      runJob(const std::string& path);
             LoadedMesh buildResultFor(const LoadedMesh& src,
-                                      JobSystem::JobId job, uint64_t targetId);
+                                      const StaticModel* model, const Waiter& w);
 
             JobSystem&              m_jobs;
             mutable std::mutex      m_mutex;
