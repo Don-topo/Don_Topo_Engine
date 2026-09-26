@@ -406,6 +406,63 @@ void testPiecesShareOneReadFile()
     js.shutdown();
 }
 
+// Dos waiters de la MISMA pieza comparten la decodificacion (una textura
+// decodificada, no dos) pero NO el Mesh (cada uno tiene su propia copia,
+// mismo contrato que la rama personaje) — y todos los waiters del grupo, sin
+// importar su pieza, comparten los MISMOS punteros en pieceMeshes (se
+// construyen una vez por job, no una vez por waiter).
+//
+// Sabotaje de la Task 3 (revision de coste): compartir el shared_ptr<Mesh>
+// entre los dos waiters de la pieza 0 en vez de copiarlo — el assert de
+// punteros distintos de mesh salta. O: reconstruir pieceMeshes por waiter en
+// vez de compartir el vector — el assert de punteros iguales de pieceMeshes
+// salta (comparten CONTENIDO pero no IDENTIDAD).
+void testSamePieceSharesDecodeDistinctMesh()
+{
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "dt_loader_pieces";
+    std::filesystem::create_directories(dir);
+    const std::string gltf = (dir / "casa.gltf").string();
+    dt_fixture::writeThreePieceGltf(gltf);
+
+    DonTopo::JobSystem js;
+    js.start();
+    DonTopo::AsyncAssetLoader loader(js);
+    loader.requestMesh(gltf, 20, 0);   // pieza 0, primer waiter
+    loader.requestMesh(gltf, 21, 0);   // pieza 0, SEGUNDO waiter, misma pieza
+    loader.requestMesh(gltf, 22, 1);   // pieza 1, para variar
+    std::vector<DonTopo::LoadedMesh> got = drain(loader, 3);
+    assert(got.size() == 3);
+    assert(loader.readFileCount() == 1 && "tres peticiones del mismo fichero = un solo ReadFile");
+
+    const DonTopo::LoadedMesh* r20 = nullptr;
+    const DonTopo::LoadedMesh* r21 = nullptr;
+    for (const auto& r : got)
+    {
+        assert(r.error.empty());
+        assert(r.mesh != nullptr);
+        assert(r.pieces.size() == 3);
+        assert(r.pieceMeshes.size() == 2);
+        if (r.targetId == 20) r20 = &r;
+        if (r.targetId == 21) r21 = &r;
+    }
+    assert(r20 && r21);
+
+    // Misma pieza, pero cada waiter tiene su PROPIO Mesh: compartir el
+    // puntero rompería el contrato de propiedad de siempre (dos GameObject
+    // sobre el mismo Mesh mutable).
+    assert(r20->mesh.get() != r21->mesh.get()
+           && "dos waiters de la misma pieza no deben compartir el Mesh");
+
+    // pieceMeshes, en cambio, SI se comparte entre todos los waiters del
+    // grupo (se construye una vez por job): mismos punteros, no solo mismo
+    // contenido.
+    for (size_t i = 0; i < r20->pieceMeshes.size(); ++i)
+        assert(r20->pieceMeshes[i].get() == r21->pieceMeshes[i].get()
+               && "pieceMeshes debe compartir los mismos Mesh entre waiters del mismo job");
+
+    js.shutdown();
+}
+
 } // namespace
 
 int main()
@@ -413,6 +470,7 @@ int main()
     const std::string fbx = findTestFbx();
 
     testPiecesShareOneReadFile();
+    testSamePieceSharesDecodeDistinctMesh();
 
     testMissingFileReportsError();
     testCancelBeforeStartDropsPending();

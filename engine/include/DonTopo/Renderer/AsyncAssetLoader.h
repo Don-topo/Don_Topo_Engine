@@ -124,8 +124,19 @@ namespace DonTopo
             };
 
             void      runJob(const std::string& path);
-            LoadedMesh buildResultFor(const LoadedMesh& src,
-                                      const StaticModel* model, const Waiter& w);
+
+            // decodedImages y pieceMeshes ya vienen calculados por runJob,
+            // UNA vez por job, no una vez por waiter: decodedImages es la
+            // textura de la pieza de ESTE waiter (nulo si no aplica), y
+            // pieceMeshes es el vector de TODAS las mallas del fichero,
+            // compartido (shared_ptr) entre todos los waiters del grupo. Este
+            // método solo copia — nunca decodifica ni construye Mesh nuevos
+            // salvo el propio de w.piece, que sí es una copia por waiter (ver
+            // el comentario de la rama personaje, en el .cpp).
+            LoadedMesh buildResultFor(const LoadedMesh& src, const StaticModel* model,
+                                      const Waiter& w,
+                                      const std::vector<DecodedImage>* decodedImages,
+                                      const std::vector<std::shared_ptr<const Mesh>>& pieceMeshes);
 
             JobSystem&              m_jobs;
             mutable std::mutex      m_mutex;
