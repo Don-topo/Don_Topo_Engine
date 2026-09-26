@@ -210,7 +210,7 @@ struct ModelImportApplyResult {
 ModelImportApplyResult applyModelImportSettings(
     const std::filesystem::path& asset,
     const ModelImportSettings& settings,
-    const std::function<int(const std::filesystem::path&)>& reimport);
+    const std::function<int(const std::filesystem::path&, float scaleRatio)>& reimport);
 
 // Borra un fichero (con su .import.json) o una carpeta entera. El error del
 // sistema, si lo hay; vacio = borrado.

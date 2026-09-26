@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -1456,7 +1457,81 @@ static void test_reimport_missing_piece_keeps_the_old_mesh()
     CHECK(!r.warnings.empty());
 }
 
+// Review final: la escala del sidecar entra en la traslacion de cada pieza al
+// hacer Add Mesh (collectPieces) y de ahi al localTransform del hijo. Un
+// reimport con otra escala tiene que llevarse tambien las traslaciones, o el
+// modelo se desmonta: cada pieza encoge sobre su origen y se queda donde
+// estaba. Solo se mueven los hijos de un grupo de piezas (fichero de > 1
+// pieza Y padre con >= 2 hijos de ese sourcePath); un objeto suelto con la
+// pieza 0 lo coloco el usuario y no se toca.
+static void test_reimport_scales_the_translations_of_a_piece_group()
+{
+    const fs::path dir = fs::temp_directory_path() / "dt_reimport_piece_scale";
+    fs::create_directories(dir);
+    const fs::path gltf = dir / "casa.gltf";
+    dt_fixture::writeThreePieceGltf(gltf);
+
+    Scene scene("Test");
+    GameObject* casa  = scene.addGameObject("Casa");
+    casa->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(100, 0, 0));
+    GameObject* a     = scene.addGameObject("A", casa);
+    GameObject* b     = scene.addGameObject("B", casa);
+    GameObject* suelto = scene.addGameObject("Suelto");
+    auto old = std::make_shared<Mesh>(); old->sourcePath = gltf.string();
+    auto pa = std::make_shared<Mesh>(*old); pa->piece = 0;
+    auto pb = std::make_shared<Mesh>(*old); pb->piece = 1;
+    auto ps = std::make_shared<Mesh>(*old); ps->piece = 0;
+    a->setMesh(pa); b->setMesh(pb); suelto->setMesh(ps);
+    a->localTransform      = glm::translate(glm::mat4(1.0f), glm::vec3(5, 0, 0));
+    b->localTransform      = glm::translate(glm::mat4(1.0f), glm::vec3(0, 1, -3)) *
+                             glm::scale(glm::mat4(1.0f), glm::vec3(2.0f));
+    suelto->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(7, 8, 9));
+    scene.getRoot().updateWorldTransforms();
+
+    const ModelReimportResult r = reimportModelUsers(&scene.getRoot(), gltf, nullptr, 2.0f);
+    CHECK(r.reimported == 3);
+    auto near3 = [](const glm::vec4& v, const glm::vec3& q) { return glm::length(glm::vec3(v) - q) < 1e-4f; };
+    CHECK(near3(a->localTransform[3], { 10, 0, 0 }));
+    CHECK(near3(b->localTransform[3], { 0, 2, -6 }));
+    CHECK(std::abs(b->localTransform[1].y - 2.0f) < 1e-4f);         // la escala de la pieza no cambia
+    CHECK(near3(a->worldTransform[3], { 110, 0, 0 }));              // mundo recalculado
+    CHECK(near3(suelto->localTransform[3], { 7, 8, 9 }));           // suelto: intacto
+    CHECK(near3(casa->localTransform[3], { 100, 0, 0 }));           // el padre tampoco se toca
+
+    // Ratio 1 (reimport sin cambio de escala): nada se mueve.
+    reimportModelUsers(&scene.getRoot(), gltf, nullptr);
+    CHECK(near3(a->localTransform[3], { 10, 0, 0 }));
+}
+
 // ── applyModelImportSettings ─────────────────────────────────────────────────
+
+// La proporcion nueva/vieja que llega al reimport se calcula con la escala que
+// habia ANTES de escribir el sidecar y la que queda DESPUES (ya acotada).
+static void test_apply_model_passes_the_scale_ratio()
+{
+    std::error_code ec;
+    const fs::path d = fs::temp_directory_path(ec) / "dt_cb_apply_model_ratio";
+    fs::remove_all(d, ec);
+    fs::create_directories(d, ec);
+    const fs::path fbx = d / "nave.fbx";
+    std::ofstream(fbx) << "fbx";
+
+    ModelImportSettings s;
+    s.scale = 0.5f;
+    std::string err;
+    CHECK(saveModelImportSettings(fbx, s, &err));
+
+    float ratio = 0.0f;
+    ModelImportSettings nuevo;                                   // escala 1: borra el sidecar
+    const ModelImportApplyResult r = applyModelImportSettings(
+        fbx, nuevo, [&](const fs::path&, float k) { ratio = k; return 1; });
+    CHECK(r.ok);
+    CHECK(std::abs(ratio - 2.0f) < 1e-6f);
+
+    nuevo.scale = 0.01f;
+    applyModelImportSettings(fbx, nuevo, [&](const fs::path&, float k) { ratio = k; return 1; });
+    CHECK(std::abs(ratio - 0.01f) < 1e-6f);
+}
 
 static void test_apply_model_writes_sidecar_and_reimports_once()
 {
@@ -1472,7 +1547,7 @@ static void test_apply_model_writes_sidecar_and_reimports_once()
     int calls = 0;
     fs::path seen;
     const ModelImportApplyResult r = applyModelImportSettings(
-        fbx, s, [&](const fs::path& p) { ++calls; seen = p; return 3; });
+        fbx, s, [&](const fs::path& p, float) { ++calls; seen = p; return 3; });
     CHECK(r.ok);
     CHECK(r.error.empty());
     CHECK(r.refreshed == 3);
@@ -1494,7 +1569,7 @@ static void test_apply_model_write_failure_does_not_reimport()
     s.scale = 0.5f;
     int calls = 0;
     const ModelImportApplyResult r = applyModelImportSettings(
-        fbx, s, [&](const fs::path&) { ++calls; return 1; });
+        fbx, s, [&](const fs::path&, float) { ++calls; return 1; });
     CHECK(!r.ok);
     CHECK(!r.error.empty());
     CHECK(calls == 0);
@@ -1523,6 +1598,8 @@ int main()
 {
     test_reimport_also_reloads_characters_that_use_the_fbx_as_animation_source();
     test_apply_model_writes_sidecar_and_reimports_once();
+    test_apply_model_passes_the_scale_ratio();
+    test_reimport_scales_the_translations_of_a_piece_group();
     test_apply_model_write_failure_does_not_reimport();
     test_apply_model_without_reimport_only_writes();
     test_reimport_replaces_the_meshes_of_that_fbx_only();

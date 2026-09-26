@@ -3,10 +3,12 @@
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Physics/Colliders/Collider.h"
 #include "DonTopo/Renderer/EditorRenderer.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 
+#include <cmath>
 #include <exception>
 #include <map>
 #include <memory>
@@ -14,7 +16,7 @@
 namespace DonTopo {
 
 ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesystem::path& fbx,
-                                       EditorRenderer* renderer)
+                                       EditorRenderer* renderer, float scaleRatio)
 {
     ModelReimportResult r;
     if (!sceneRoot) return r;
@@ -77,6 +79,24 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
                 r.skipped += static_cast<int>(users.size());
                 continue;
             }
+            // Hijos de un grupo de piezas (Add Mesh de un modelo de > 1 pieza):
+            // la escala del sidecar entro en la traslacion de su localTransform
+            // (collectPieces), asi que un reimport con otra escala la corrige
+            // por nueva/vieja. Si no, cada pieza encoge sobre su propio origen
+            // y se queda en las posiciones de la escala vieja: el modelo se
+            // desmonta. Grupo = el fichero tiene > 1 pieza Y el padre del
+            // objeto tiene >= 2 hijos con ese mismo sourcePath. Un objeto
+            // suelto (pieza 0 anadida antes de esta feature, o un fichero de
+            // una pieza) lo coloco el usuario: no se mueve.
+            auto inPieceGroup = [&](const GameObject* go)
+            {
+                if (model.pieces.size() <= 1 || !go->parent) return false;
+                int siblings = 0;
+                for (const auto& c : go->parent->children)
+                    if (c->hasMesh() && c->getMesh()->sourcePath == sourcePath) ++siblings;
+                return siblings >= 2;
+            };
+            const bool rescale = std::isfinite(scaleRatio) && scaleRatio > 0.0f && scaleRatio != 1.0f;
             std::map<int, std::shared_ptr<const Mesh>> byPiece;
             for (GameObject* go : users)
             {
@@ -103,6 +123,21 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
                 // recaptura como baseline lo que trae la malla NUEVA y reaplica encima
                 // los overrides del objeto y su .mat.
                 applyMaterialOverrides(*go);
+                if (rescale && inPieceGroup(go))
+                {
+                    go->localTransform[3].x *= scaleRatio;
+                    go->localTransform[3].y *= scaleRatio;
+                    go->localTransform[3].z *= scaleRatio;
+                    // Misma receta que applyLocalTransform (ViewportPanel):
+                    // mundo recalculado y teleport, o el actor de PhysX se
+                    // queda donde estaba. Con el subarbol entero, que los
+                    // nietos tambien se han movido.
+                    go->updateWorldTransforms(go->parent ? go->parent->worldTransform : glm::mat4(1.0f));
+                    go->traverse([](GameObject* n)
+                    {
+                        if (auto col = n->anyCollider()) col->teleport(n->worldTransform);
+                    });
+                }
                 finishReload(go);
             }
             continue;
