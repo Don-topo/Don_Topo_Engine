@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <memory>
 #include <unordered_map>
 #include <utility>
 #include "DonTopo/Renderer/EditorRenderer.h"
@@ -238,7 +239,9 @@ namespace DonTopo
                 // testTexturesArriveDecoded). loaded.images queda vacío y la
                 // textura se resuelve en el hilo principal por la vía síncrona
                 // existente (el fallback de buildRenderObject, Task 6).
-                loaded.mesh = ModelLoader::loadAuto(path);
+                // loadSkinned directo, no loadAuto: hasBones ya se pregunto
+                // arriba, y loadAuto lo repetiria (otro ReadFile completo).
+                loaded.mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(path));
                 if (!loaded.mesh) loaded.error = "No se pudo cargar el modelo: " + path;
             }
             else

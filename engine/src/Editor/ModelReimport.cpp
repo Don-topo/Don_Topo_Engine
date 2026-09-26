@@ -6,6 +6,7 @@
 #include "DonTopo/Physics/Colliders/Collider.h"
 #include "DonTopo/Renderer/EditorRenderer.h"
 #include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 
 #include <cmath>
@@ -146,7 +147,10 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
         std::shared_ptr<Mesh> fresh;
         try
         {
-            fresh = ModelLoader::loadAuto(sourcePath);
+            // Aqui el fichero tiene huesos (la rama estatica ya salio arriba):
+            // loadSkinned directo, no loadAuto, que repetiria el hasBones --
+            // otro ReadFile completo por personaje.
+            fresh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(sourcePath));
         }
         catch (const std::exception& e)
         {
