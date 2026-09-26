@@ -7,6 +7,8 @@
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Audio/AudioListenerComponent.h"
 #include <algorithm>
+#include <cmath>
+#include <glm/gtc/type_ptr.hpp>
 #include "DonTopo/Renderer/EditorRenderer.h"
 
 namespace DonTopo {
@@ -20,6 +22,40 @@ GameObject* duplicateAsSibling(Scene& scene, GameObject* src,
     // HERMANO: el padre del duplicado es el del ORIGINAL, no el original. Pasar
     // `src` aquí lo colgaría de sí mismo y cada Ctrl+D anidaría un nivel más.
     return scene.cloneGameObject(src, src->parent, physics, audio);
+}
+
+std::vector<GameObject*> insertModelPieces(Scene& scene, GameObject* parent, const std::string& sourcePath,
+                                           const std::vector<ModelPiece>& pieces,
+                                           const std::vector<std::shared_ptr<const Mesh>>& meshes,
+                                           PhysicsManager& physics, AudioManager& audio,
+                                           std::vector<std::string>* warnings)
+{
+    std::vector<GameObject*> out;
+    if (!parent) return out;
+    for (const ModelPiece& p : pieces)
+    {
+        if (p.piece < 0 || static_cast<size_t>(p.piece) >= meshes.size() || !meshes[p.piece]) continue;
+        glm::mat4 local = p.transform;
+        const float* v = glm::value_ptr(local);
+        if (!std::all_of(v, v + 16, [](float f) { return std::isfinite(f); }))
+        {
+            local = glm::mat4(1.0f);
+            if (warnings) warnings->push_back("La pieza '" + p.name + "' traia una transformacion invalida: se usa la identidad");
+        }
+        nlohmann::json localJson = nlohmann::json::array();
+        for (int i = 0; i < 16; ++i) localJson.push_back(glm::value_ptr(local)[i]);
+        const nlohmann::json j = {
+            { "name", p.name.empty() ? std::string("Pieza ") + std::to_string(p.piece) : p.name },
+            { "localTransform", localJson },
+            { "mesh", { { "sourcePath", sourcePath }, { "name", meshes[p.piece]->name }, { "skinned", false },
+                        { "visible", true }, { "piece", p.piece } } },
+            { "children", nlohmann::json::array() } };
+        PreloadedMeshCache cache;
+        cache[meshCacheKey(sourcePath, p.piece)] = meshes[p.piece];
+        if (GameObject* node = scene.insertFromJson(j, parent, parent->children.size(), physics, audio, &cache))
+            out.push_back(node);
+    }
+    return out;
 }
 
 ReparentCommand::ReparentCommand(Scene& scene, std::string label, uint64_t id,
@@ -79,14 +115,17 @@ void DeleteGameObjectCommand::undo()
 
 CreateGameObjectCommand::CreateGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio,
                                                   EditorRenderer& renderer, std::string label,
-                                                  uint64_t parentId, size_t index, nlohmann::json snapshot)
+                                                  uint64_t parentId, size_t index, nlohmann::json snapshot,
+                                                  PreloadedMeshCache preloaded)
     : m_scene(scene), m_physics(physics), m_audio(audio), m_renderer(renderer),
-      m_label(std::move(label)), m_parentId(parentId), m_index(index), m_snapshot(std::move(snapshot)) {}
+      m_label(std::move(label)), m_parentId(parentId), m_index(index), m_snapshot(std::move(snapshot)),
+      m_preloaded(std::move(preloaded)) {}
 
 void CreateGameObjectCommand::execute()
 {
     GameObject* parent = m_scene.findById(m_parentId);
-    GameObject* node = m_scene.insertFromJson(m_snapshot, parent, m_index, m_physics, m_audio);
+    GameObject* node = m_scene.insertFromJson(m_snapshot, parent, m_index, m_physics, m_audio,
+                                               m_preloaded.empty() ? nullptr : &m_preloaded);
     if (node)
     {
         m_renderer.registerGameObject(node);

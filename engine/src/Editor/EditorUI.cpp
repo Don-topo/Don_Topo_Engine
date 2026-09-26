@@ -20,6 +20,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <ImGuiFileDialog.h>
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <ctime>
@@ -1103,6 +1104,46 @@ void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Edi
 {
     for (auto& r : results)
     {
+        // Añadir un Mesh entra en el undo AQUÍ y no al pulsar el botón: la
+        // carga es asíncrona, y hasta que applyLoadedMesh no hace el setMesh no
+        // hay malla que guardar. Solo las que pidió el usuario desde Properties
+        // (la carga de escena pasa por este mismo pump), y se consulta aunque
+        // haya fallado, para que no se quede apuntada.
+        const bool delUsuario = m_propertiesPanel.consumeUserMeshJob(r.targetId, r.job);
+
+        // Varias piezas en un modelo estatico: el seleccionado pasa a ser el padre
+        // y cada pieza un hijo. Un solo paso de undo, con las mallas ya cargadas en
+        // cada comando para que rehacer no lea el fichero.
+        if (delUsuario && r.error.empty() && r.pieces.size() > 1)
+        {
+            if (GameObject* parent = scene.findById(r.targetId))
+            {
+                parent->pendingMeshJob = 0;
+                std::vector<std::string> warnings;
+                const std::vector<GameObject*> kids = insertModelPieces(
+                    scene, parent, r.path, r.pieces, r.pieceMeshes, *m_physics, *m_audio, &warnings);
+                for (const std::string& w : warnings) m_logPanel.push(w);
+                auto group = std::make_unique<CompositeCommand>(
+                    "Añadir modelo '" + std::filesystem::path(r.path).stem().string() + "' a '" + parent->name + "'");
+                for (GameObject* kid : kids)
+                {
+                    renderer.registerGameObject(kid);
+                    PreloadedMeshCache cache;
+                    cache[meshCacheKey(r.path, kid->getMesh()->piece)] = kid->getMesh();
+                    const size_t index = static_cast<size_t>(
+                        std::find_if(parent->children.begin(), parent->children.end(),
+                                     [&](const auto& c) { return c.get() == kid; }) - parent->children.begin());
+                    group->add(std::make_unique<CreateGameObjectCommand>(
+                        scene, *m_physics, *m_audio, renderer, group->label(), parent->id, index,
+                        scene.subtreeToJson(kid), std::move(cache)));
+                }
+                renderer.flushUploadsAndWait();
+                if (!group->empty()) m_undoHistory.push(std::move(group));   // sin execute: ya estan creados
+                m_propertiesPanel.invalidateCaches();
+            }
+            continue;
+        }
+
         std::string              err;
         std::vector<std::string> avisos;
         // Los avisos salen al Log pasara lo que pasara con la carga: describen
@@ -1114,13 +1155,7 @@ void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Edi
         if (!ok && !err.empty())
             m_logPanel.push(err);
 
-        // Añadir un Mesh entra en el undo AQUÍ y no al pulsar el botón: la
-        // carga es asíncrona, y hasta que applyLoadedMesh no hace el setMesh no
-        // hay malla que guardar. Solo las que pidió el usuario desde Properties
-        // (la carga de escena pasa por este mismo pump), y se consulta aunque
-        // haya fallado, para que no se quede apuntada. Se apila SIN execute():
-        // el setMesh ya está hecho.
-        const bool delUsuario = m_propertiesPanel.consumeUserMeshJob(r.targetId, r.job);
+        // Se apila SIN execute(): el setMesh ya está hecho.
         if (ok && delUsuario)
         {
             if (GameObject* go = scene.findById(r.targetId))

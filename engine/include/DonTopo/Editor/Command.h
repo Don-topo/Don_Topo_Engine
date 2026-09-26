@@ -11,6 +11,7 @@
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/GameObject.h" // MaterialOverride y Mesh, para MeshComponentCommand
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Renderer/ModelLoader.h" // ModelPiece, para insertModelPieces
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
@@ -46,6 +47,23 @@ public:
     virtual void execute() = 0;   // aplica "after" (redo)
     virtual void undo() = 0;      // aplica "before"
     virtual std::string label() const = 0;   // pa Log Console
+};
+
+// Varios comandos como UN paso de undo: execute en orden, undo en orden
+// inverso. Nace para "Add Mesh" de un modelo de varias piezas -un
+// CreateGameObjectCommand por hijo creado-, pero no depende de eso: agrupa
+// cualquier lista de ICommand.
+class CompositeCommand : public ICommand {
+public:
+    explicit CompositeCommand(std::string label) : m_label(std::move(label)) {}
+    void add(std::unique_ptr<ICommand> cmd) { m_cmds.push_back(std::move(cmd)); }
+    bool empty() const { return m_cmds.empty(); }
+    void execute() override { for (auto& c : m_cmds) c->execute(); }
+    void undo() override { for (auto it = m_cmds.rbegin(); it != m_cmds.rend(); ++it) (*it)->undo(); }
+    std::string label() const override { return m_label; }
+private:
+    std::string m_label;
+    std::vector<std::unique_ptr<ICommand>> m_cmds;
 };
 
 // Comando genérico pa cualquier propiedad value-type de un GameObject o de
@@ -216,13 +234,24 @@ private:
     std::unordered_map<std::string, std::shared_ptr<const Mesh>> m_meshes;
 };
 
+// Mismo tipo que el PreloadedMeshCache de Scene.h (sourcePath/pieza -> malla
+// viva). Se repite aquí, en vez de incluir Scene.h, por el mismo motivo que el
+// m_meshes a mano de DeleteGameObjectCommand: Scene.h arrastraría medio motor
+// a todo el que incluye Command.h. Redeclarar el mismo alias en el mismo
+// namespace con el mismo tipo subyacente es legal.
+using PreloadedMeshCache = std::unordered_map<std::string, std::shared_ptr<const Mesh>>;
+
 // Inverso de DeleteGameObjectCommand: reconstruye desde snapshot (execute) /
 // borra (undo). snapshot ya incluye el subárbol completo tal y como quedó
 // justo después de crearlo (mismo formato que DeleteGameObjectCommand).
 class CreateGameObjectCommand : public ICommand {
 public:
+    // preloaded: mallas ya en RAM para insertFromJson (ver Scene::insertFromJson).
+    // Con ellas, un redo no relee el fichero de origen — vacío (el default) se
+    // comporta como antes: insertFromJson recibe nullptr y lee de disco.
     CreateGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio, EditorRenderer& renderer,
-                             std::string label, uint64_t parentId, size_t index, nlohmann::json snapshot);
+                             std::string label, uint64_t parentId, size_t index, nlohmann::json snapshot,
+                             PreloadedMeshCache preloaded = {});
     void execute() override;
     void undo() override;
     std::string label() const override { return m_label; }
@@ -236,7 +265,19 @@ private:
     uint64_t m_parentId;
     size_t m_index;
     nlohmann::json m_snapshot;
+    PreloadedMeshCache m_preloaded;
 };
+
+// Crea un hijo de `parent` por aparicion de `pieces`, al final de sus hijos,
+// con el nombre y la transformacion de la pieza y la malla meshes[piece] (sin
+// leer disco). Una transformacion con algun valor no finito pasa a identidad
+// con un aviso en `warnings`. Devuelve los hijos creados, en orden; indices de
+// render a -1 (el llamante registra). Es el seam que se prueba sin GPU.
+std::vector<GameObject*> insertModelPieces(Scene& scene, GameObject* parent, const std::string& sourcePath,
+                                           const std::vector<ModelPiece>& pieces,
+                                           const std::vector<std::shared_ptr<const Mesh>>& meshes,
+                                           PhysicsManager& physics, AudioManager& audio,
+                                           std::vector<std::string>* warnings);
 
 // Añade (add=true) o quita (add=false) el CameraComponent del GameObject id;
 // undo() hace lo contrario.
