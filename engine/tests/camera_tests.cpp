@@ -1418,6 +1418,47 @@ static void test_insert_model_pieces_uses_the_given_meshes(PhysicsManager& pm, A
     CHECK(warnings.size() == 1);
 }
 
+// Fix de revisión (task-4): Scene::insertFromJson sembraba hasBonesCache con la
+// CLAVE de PreloadedMeshCache (meshCacheKey, que para una pieza != 0 lleva
+// "#piece=N") en vez del sourcePath REAL de la malla (mesh->sourcePath), que es
+// por lo que nodeFromJson consulta esa cache. Con la clave equivocada, cada
+// hijo de pieza != 0 fallaba la consulta y volvía a sondear el fichero con
+// ModelLoader::hasBones -un ReadFile síncrono de Assimp en el hilo principal-,
+// justo lo que preloaded existe para evitar (insertModelPieces, su redo vía
+// CreateGameObjectCommand::execute, y el undo de Delete de esos hijos).
+//
+// Se usa un FBX RIGGED de verdad (modelAnimation.fbx, hasBones == true, mismo
+// fichero que usa animator_tests.cpp) con una malla ESTÁTICA falsa en la
+// cache: sin el fix, hasBones(sourcePath) vuelve a sondear el fichero, ve que
+// SÍ declara huesos, el nodo toma la rama skinned y jamás llega a mirar la
+// malla estática de la cache -que es lo que este test comprueba por nombre.
+static void test_insert_from_json_uses_cached_mesh_for_rigged_source_without_probing(PhysicsManager& pm,
+                                                                                      AudioManager& am)
+{
+    const std::string src = "assets/modelAnimation.fbx";
+    CHECK(ModelLoader::hasBones(src));   // si esto falla, el fichero cambió o no es el sitio
+
+    Scene scene("Test");
+    GameObject* casa = scene.addGameObject("Casa");
+
+    auto piezaFalsa = std::make_shared<Mesh>();
+    piezaFalsa->sourcePath = src;
+    piezaFalsa->piece = 1;
+    piezaFalsa->name = "piezaFalsaEstatica";
+
+    std::vector<ModelPiece> pieces(1);
+    pieces[0] = { 1, "Pieza1", glm::mat4(1.0f) };
+    const std::vector<std::shared_ptr<const Mesh>> meshes = { nullptr, piezaFalsa };
+    std::vector<std::string> warnings;
+    const std::vector<GameObject*> kids = insertModelPieces(scene, casa, src, pieces, meshes, pm, am, &warnings);
+    CHECK(kids.size() == 1);
+    if (kids.size() != 1) return;
+    CHECK(kids[0]->hasMesh());
+    if (!kids[0]->hasMesh()) return;
+    CHECK(kids[0]->getMesh()->name == "piezaFalsaEstatica");   // vino de la cache, no de disco
+    CHECK(!kids[0]->isSkinned());                              // no tomó la rama skinned
+}
+
 // Un objeto colgado directamente del root de la escena también sale hermano:
 // su padre es el root, no nullptr.
 static void test_duplicate_of_root_child_is_sibling(PhysicsManager& pm, AudioManager& am)
@@ -8482,6 +8523,7 @@ int main()
     test_find_by_id_duplicate_writes_only_first_never_the_other();
     test_duplicate_is_sibling_not_child(pm, am);
     test_insert_model_pieces_uses_the_given_meshes(pm, am);
+    test_insert_from_json_uses_cached_mesh_for_rigged_source_without_probing(pm, am);
     test_duplicate_of_root_child_is_sibling(pm, am);
     test_duplicate_rejects_scene_root(pm, am);
     test_duplicate_subtree_has_unique_ids(pm, am);

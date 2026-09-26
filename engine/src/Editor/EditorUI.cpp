@@ -1123,13 +1123,25 @@ void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Edi
                 const std::vector<GameObject*> kids = insertModelPieces(
                     scene, parent, r.path, r.pieces, r.pieceMeshes, *m_physics, *m_audio, &warnings);
                 for (const std::string& w : warnings) m_logPanel.push(w);
+                // Ninguna pieza entró (todas fuera de rango o sin malla): el padre
+                // se queda sin malla y sin hijos nuevos. Sin este aviso, el usuario
+                // ve que "Add Mesh" no hizo nada y no sabe por qué.
+                if (kids.empty())
+                    m_logPanel.push("'" + std::filesystem::path(r.path).stem().string() +
+                                     "': ninguna pieza se pudo añadir a '" + parent->name + "'");
                 auto group = std::make_unique<CompositeCommand>(
                     "Añadir modelo '" + std::filesystem::path(r.path).stem().string() + "' a '" + parent->name + "'");
                 for (GameObject* kid : kids)
                 {
                     renderer.registerGameObject(kid);
+                    // Clave por el sourcePath de la MALLA, no por r.path: es lo que
+                    // subtreeToJson serializa de verdad (mesh->sourcePath, ver
+                    // Scene::nodeToJson) y lo que el redo de CreateGameObjectCommand
+                    // busca en la caché al releer ese JSON. Coinciden en la práctica,
+                    // pero depender de r.path aquí sería una coincidencia implícita,
+                    // no un contrato.
                     PreloadedMeshCache cache;
-                    cache[meshCacheKey(r.path, kid->getMesh()->piece)] = kid->getMesh();
+                    cache[meshCacheKey(kid->getMesh()->sourcePath, kid->getMesh()->piece)] = kid->getMesh();
                     const size_t index = static_cast<size_t>(
                         std::find_if(parent->children.begin(), parent->children.end(),
                                      [&](const auto& c) { return c.get() == kid; }) - parent->children.begin());

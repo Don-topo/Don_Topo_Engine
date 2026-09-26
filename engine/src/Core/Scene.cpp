@@ -3896,9 +3896,22 @@ namespace DonTopo
         // el disco; si no, arranca vacía y sólo aporta el dedup entre los
         // nodos de ESE subárbol.
         std::unordered_map<std::string, bool> cache;
+        // Por el sourcePath REAL de la malla (m->sourcePath), no por la clave de
+        // PreloadedMeshCache: desde Task 2 esa clave es meshCacheKey(sourcePath,
+        // piece), que para una pieza != 0 lleva "#piece=N" y ya no coincide con
+        // el sourcePath a secas que busca hasBonesCache en nodeFromJson. Sin
+        // esto, cada hijo de pieza != 0 (insertModelPieces, su redo vía
+        // CreateGameObjectCommand::execute, y el undo de su Delete) fallaba la
+        // consulta a esta cache y volvía a sondear el fichero con
+        // ModelLoader::hasBones -un ReadFile síncrono de Assimp en el hilo
+        // principal-, exactamente lo que preloaded existe para evitar. Mismo
+        // patrón que Scene::cloneGameObject (ver su comentario, unas líneas más
+        // arriba en este fichero). OR en vez de asignar directo: si dos
+        // entradas comparten sourcePath (varias piezas del mismo fichero), una
+        // no-skinned posterior no debe enmascarar a una skinned ya vista.
         if (preloaded)
             for (const auto& [ruta, m] : *preloaded)
-                cache[ruta] = dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr;
+                if (m) cache[m->sourcePath] = cache[m->sourcePath] || (dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr);
         try
         {
             // Raíz vacía, pareja de subtreeToJson: j vino de ahí con raíz
