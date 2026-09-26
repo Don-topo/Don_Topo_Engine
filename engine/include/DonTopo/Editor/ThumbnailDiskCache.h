@@ -13,7 +13,8 @@ namespace DonTopo {
 // 2: los .obj declaran sus .mtl como dependencia (las entradas de la 1 no los tienen).
 // 3: los .gltf declaran sus .bin e imagenes (modelCompanionFiles).
 // 4: el preview de un modelo estatico pinta todas sus piezas.
-inline constexpr uint32_t kThumbDiskVersion = 4;
+// 5: los glTF aplican la transformacion de la raiz.
+inline constexpr uint32_t kThumbDiskVersion = 5;
 
 // Miniaturas ya generadas, una por fichero en <proyecto>/.dt-cache/thumbs/, con
 // la lista de dependencias y sus mtime. Se usa desde los workers: todo const y

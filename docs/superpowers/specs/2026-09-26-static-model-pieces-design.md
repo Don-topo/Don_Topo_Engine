@@ -78,10 +78,14 @@ static Mesh load(const std::string& path, int piece);
 - `load(path)` pasa a ser `load(path, 0)`, sin cambiar su resultado.
 - `piece` fuera de rango lanza `std::runtime_error` con la ruta y el índice.
 - **Transformación relativa a la raíz.** Es el producto de las transformaciones
-  de los nodos desde los hijos de la raíz hasta el nodo de la pieza, **sin** la
-  de la raíz. La raíz de un FBX lleva la conversión de unidades (×0,01);
-  aplicarla descuadraría un modelo de varias piezas frente a uno de una sola,
-  que hoy no la lleva.
+  de los nodos desde la raíz hasta el nodo de la pieza. La de la raíz entra
+  **solo en glTF/GLB** y se descarta **solo en FBX**: la raíz de un FBX lleva la
+  conversión de unidades (×0,01) y aplicarla descuadraría un modelo de varias
+  piezas frente a uno de una sola, que hoy no la lleva. En glTF, con un único
+  nodo de primer nivel Assimp no crea raíz sintética y ese nodo **es**
+  `mRootNode`: su transformación es la corrección de ejes/unidades del autor y
+  descartarla desmontaba el modelo. Con dos o más nodos de primer nivel la raíz
+  es sintética e identidad, así que no cambia nada. En OBJ la raíz es identidad.
 - **La escala del sidecar** (`ModelImportSettings::scale`) ya multiplica los
   vértices. Aquí multiplica también la traslación de cada `transform`, para que
   las piezas sigan juntas al escalar.
@@ -220,10 +224,12 @@ normales con malla propia.
 ## Riesgos
 
 1. **Unidades y ejes de la raíz en FBX.** Excluir la transformación de la raíz
-   es la hipótesis de que Assimp pone ahí la conversión de unidades y ejes. Si
-   un FBX la pone en otro nodo, sus piezas saldrán ×100 o giradas respecto a su
-   versión de una pieza. La verificación manual con un FBX de varias piezas lo
-   decide.
+   (solo en FBX; glTF/GLB la aplican, ver `ModelLoader`) es la hipótesis de que
+   Assimp pone ahí la conversión de unidades y ejes. Si un FBX la pone en otro
+   nodo, sus piezas saldrán ×100 o giradas respecto a su versión de una pieza.
+   La verificación manual con un FBX de varias piezas lo decide. En glTF la
+   raíz es o bien sintética (identidad) o bien el único nodo del autor, y en los
+   dos casos aplicarla es lo correcto.
 2. **La clave de la caché de precarga toca caminos que hoy funcionan** (undo de
    Delete, precarga del runtime). Por eso la pieza 0 conserva el `sourcePath` a
    secas como clave, y hay tests de ida y vuelta del undo de Delete con un

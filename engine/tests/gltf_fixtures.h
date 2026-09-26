@@ -59,8 +59,10 @@ inline void writeThreePieceGltf(const std::filesystem::path& p)
 // Con dos niveles reales, la traslacion de A*B da (5,0,0); B*A daria (10,0,0).
 // "Vacio" es un segundo nodo en la raiz de la escena, sin el: Assimp no crea un
 // nodo raiz sintetico cuando solo hay UN nodo en scene.nodes, y A pasaria a ser
-// el propio scene->mRootNode (su traslacion se ignoraria "por ser la raiz",
-// justo lo contrario de lo que este test quiere comprobar).
+// el propio scene->mRootNode. En glTF la raiz SI aporta su transformacion
+// (solo FBX la descarta), asi que el resultado seria el mismo, pero entonces
+// el test no distinguiria "hijo de la raiz" de "nodo anidado": con "Vacio" la
+// raiz es la sintetica (identidad) y A y B son dos niveles reales.
 inline void writeNestedNodeGltf(const std::filesystem::path& p)
 {
     const float data[9] = { 0, 0, 0,  1, 0, 0,  0, 1, 0 };   // triangulo en XY
@@ -100,6 +102,46 @@ inline void writeMixedTriangleAndLineGltf(const std::filesystem::path& p)
         R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},)"
                      R"({"bufferView":1,"componentType":5126,"count":2,"type":"VEC3","min":[0,0,0],"max":[0,0,1]},)"
                      R"({"bufferView":2,"componentType":5126,"count":2,"type":"VEC3"}]})";
+}
+
+// UN solo nodo en scene.nodes ("Raiz", escala 2) con dos hijos que llevan la
+// malla: P trasladado (1,0,0) y Q trasladado (0,0,1). Con un unico nodo de
+// primer nivel Assimp (glTF2) NO crea raiz sintetica: "Raiz" ES
+// scene->mRootNode, y su escala es la correccion de ejes/unidades del autor.
+inline void writeSingleRootNodeGltf(const std::filesystem::path& p)
+{
+    const float data[9] = { 0, 0, 0,  1, 0, 0,  0, 1, 0 };   // triangulo en XY
+    std::vector<uint8_t> buf(sizeof(data));
+    std::memcpy(buf.data(), data, sizeof(data));
+    std::ofstream(p) << R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],)"
+        R"("nodes":[{"name":"Raiz","children":[1,2],"scale":[2,2,2]},)"
+                 R"({"name":"P","mesh":0,"translation":[1,0,0]},)"
+                 R"({"name":"Q","mesh":0,"translation":[0,0,1]}],)"
+        R"("meshes":[{"name":"tri","primitives":[{"attributes":{"POSITION":0}}]}],)"
+        R"("buffers":[{"uri":"data:application/octet-stream;base64,)" << base64(buf) << R"(","byteLength":36}],)"
+        R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36}],)"
+        R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}]})";
+}
+
+// Dos nodos con la misma malla (triangulo en XY con normales del fichero
+// (0.6, 0, 0.8)): "Aplastado" con escala 1e-20 en X y "Normal" sin transformar.
+// La matriz normal de "Aplastado" vale diag(1e20, 1, 1): la normal
+// transformada tiene componentes finitas pero su longitud desborda el float a
+// inf, y normalizar por inf da el vector cero.
+inline void writeFlattenedPieceGltf(const std::filesystem::path& p)
+{
+    const float data[18] = { 0, 0, 0,  1, 0, 0,  0, 1, 0,              // posiciones
+                             0.6f, 0, 0.8f,  0.6f, 0, 0.8f,  0.6f, 0, 0.8f };   // normales
+    std::vector<uint8_t> buf(sizeof(data));
+    std::memcpy(buf.data(), data, sizeof(data));
+    std::ofstream(p) << R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],)"
+        R"("nodes":[{"name":"Aplastado","mesh":0,"scale":[1e-20,1,1]},)"
+                 R"({"name":"Normal","mesh":0}],)"
+        R"("meshes":[{"name":"tri","primitives":[{"attributes":{"POSITION":0,"NORMAL":1}}]}],)"
+        R"("buffers":[{"uri":"data:application/octet-stream;base64,)" << base64(buf) << R"(","byteLength":72}],)"
+        R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36}],)"
+        R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},)"
+                     R"({"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"}]})";
 }
 
 } // namespace dt_fixture

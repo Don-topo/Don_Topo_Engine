@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -233,10 +234,22 @@ namespace DonTopo
         return false;
     }
 
-    // Apariciones de cada malla en los nodos, en profundidad. La raiz NO aporta
-    // su transformacion (en FBX lleva unidades y ejes); sus mallas, si tiene,
-    // van con identidad.
-    static std::vector<ModelPiece> collectPieces(const aiScene* scene, float scale)
+    // glTF/GLB por extension (sin distinguir mayusculas).
+    static bool isGltfPath(const std::string& path)
+    {
+        std::string ext = std::filesystem::path(path).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return ext == ".gltf" || ext == ".glb";
+    }
+
+    // Apariciones de cada malla en los nodos, en profundidad. La raiz aporta su
+    // transformacion SOLO en glTF/GLB (`applyRoot`): con un unico nodo de primer
+    // nivel Assimp no crea raiz sintetica y ese nodo ES mRootNode, con la
+    // correccion de ejes/unidades del autor; con varios, la raiz es sintetica e
+    // identidad. En FBX se descarta (lleva la conversion de unidades del
+    // importador) y sus mallas, si tiene, van con identidad. En OBJ es identidad.
+    static std::vector<ModelPiece> collectPieces(const aiScene* scene, float scale, bool applyRoot)
     {
         std::vector<ModelPiece> out;
         std::function<void(const aiNode*, const glm::mat4&)> walk = [&](const aiNode* node, const glm::mat4& m)
@@ -258,8 +271,8 @@ namespace DonTopo
                 walk(node->mChildren[c], m * aiToGlm(node->mChildren[c]->mTransformation));
         };
         if (!scene->mRootNode) return out;
-        // La raiz se recorre con identidad; cada hijo entra con SU transformacion.
-        walk(scene->mRootNode, glm::mat4(1.0f));
+        // Cada hijo entra con SU transformacion; la raiz, solo si applyRoot.
+        walk(scene->mRootNode, applyRoot ? aiToGlm(scene->mRootNode->mTransformation) : glm::mat4(1.0f));
         return out;
     }
 
@@ -299,7 +312,7 @@ namespace DonTopo
             out.meshes.push_back(meshFromAssimp(scene, scene->mMeshes[i], settings, path));
             out.meshes.back().piece = static_cast<int>(i);
         }
-        out.pieces = collectPieces(scene, settings.scale);
+        out.pieces = collectPieces(scene, settings.scale, isGltfPath(path));
         return out;
     }
 
@@ -864,7 +877,7 @@ namespace DonTopo
             }
             else
             {
-                const std::vector<ModelPiece> pieces = collectPieces(scene, settings.scale);
+                const std::vector<ModelPiece> pieces = collectPieces(scene, settings.scale, isGltfPath(path));
                 if (pieces.size() > 1)
                 {
                     for (const ModelPiece& piece : pieces)
@@ -937,7 +950,11 @@ namespace DonTopo
                         : glm::vec3(0.0f, 1.0f, 0.0f);
                     const glm::vec3 tn = normalMat * n;
                     const float len = glm::length(tn);
-                    part.normals.push_back(len > 1e-8f ? tn / len : n);
+                    // Un eje (casi) aplastado da inf en la matriz normal, o una
+                    // longitud que desborda a inf con componentes finitas:
+                    // `len > 1e-8f` deja pasar el inf y tn / inf es NaN o el
+                    // vector cero. Entonces, la normal del fichero sin tocar.
+                    part.normals.push_back(std::isfinite(len) && len > 1e-8f ? tn / len : n);
                     part.uvs.push_back(ai->mTextureCoords[0]
                         ? glm::vec2(ai->mTextureCoords[0][i].x, ai->mTextureCoords[0][i].y)
                         : glm::vec2(0.0f));

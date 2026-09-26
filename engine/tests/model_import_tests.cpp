@@ -880,6 +880,47 @@ static void test_nested_node_transform_composes_parent_then_child()
     catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
 }
 
+// Review final: un glTF con UN solo nodo de primer nivel no tiene raiz
+// sintetica -- ese nodo ES mRootNode y lleva la correccion de ejes/unidades del
+// autor. En glTF la raiz aporta su transformacion (solo FBX la descarta).
+static void test_gltf_single_root_node_transform_is_applied()
+{
+    const fs::path dir = makeDir("dt_pieces_single_root");
+    dt_fixture::writeSingleRootNodeGltf(dir / "raiz.gltf");
+    try
+    {
+        const StaticModel m = ModelLoader::loadStatic((dir / "raiz.gltf").string());
+        CHECK(m.pieces.size() == 2);
+        if (m.pieces.size() != 2) return;
+        const glm::mat4 s2 = glm::scale(glm::mat4(1.0f), glm::vec3(2.0f));
+        CHECK(nearMat(m.pieces[0].transform, s2 * glm::translate(glm::mat4(1.0f), glm::vec3(1, 0, 0))));
+        CHECK(nearMat(m.pieces[1].transform, s2 * glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 1))));
+    }
+    catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
+}
+
+// Review final: una pieza con un eje casi aplastado (escala 1e-20) da una
+// matriz normal con 1e20; la longitud de la normal transformada desborda a inf
+// y `len > 1e-8f` la dejaba pasar: normal = tn / inf = vector cero. Toda normal
+// de la miniatura tiene que ser finita y unitaria.
+static void test_preview_normals_survive_a_flattened_piece()
+{
+    const fs::path dir = makeDir("dt_pieces_flattened");
+    dt_fixture::writeFlattenedPieceGltf(dir / "plano.gltf");
+    const ModelPreview p = ModelLoader::loadPreview((dir / "plano.gltf").string());
+    CHECK(p.status == PreviewStatus::Ok);
+    CHECK(p.parts.size() == 2);
+    int malas = 0;
+    for (const PreviewPart& part : p.parts)
+        for (const glm::vec3& n : part.normals)
+        {
+            const float len = glm::length(n);
+            if (!std::isfinite(n.x) || !std::isfinite(n.y) || !std::isfinite(n.z) || std::abs(len - 1.0f) > 1e-3f)
+                ++malas;
+        }
+    CHECK(malas == 0);
+}
+
 int main()
 {
     test_defaults_match_the_old_flags();
@@ -919,6 +960,8 @@ int main()
     test_lineless_mesh_produces_no_piece();
     test_nested_node_transform_composes_parent_then_child();
     test_preview_draws_every_piece_in_place();
+    test_gltf_single_root_node_transform_is_applied();
+    test_preview_normals_survive_a_flattened_piece();
 
     if (g_failures == 0) std::printf("ALL MODEL IMPORT TESTS PASSED\n");
     return g_failures == 0 ? 0 : 1;
