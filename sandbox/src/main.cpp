@@ -15,6 +15,7 @@
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Renderer/Gizmos.h"
+#include "DonTopo/Editor/EditorShortcuts.h"
 #include "DonTopo/Editor/EditorUI.h"
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Renderer/D3D12/D3D12Renderer.h"
@@ -262,6 +263,10 @@ int main()
             struct D3D12WindowCtx {
                 DonTopo::D3D12::D3D12Renderer* renderer;
                 std::vector<DonTopo::DroppedFile> drops;
+                // Filled in once they exist (below): the key callback needs
+                // them for the F shortcut. Null until then, and checked.
+                DonTopo::EditorUI* editor = nullptr;
+                DonTopo::Camera*   camera = nullptr;
             };
             D3D12WindowCtx d3dWindowCtx{ &d3d12, {} };
             glfwSetWindowUserPointer(window.getNativeWindow(), &d3dWindowCtx);
@@ -282,6 +287,38 @@ int main()
             // El editor, con este backend detrás. A partir de aquí el camino
             // es el mismo que con Vulkan: los paneles hablan con la interfaz.
             DonTopo::EditorUI editor;
+            d3dWindowCtx.editor = &editor;
+
+            // Editor shortcuts and the game canvas' text channel, as in the
+            // Vulkan path. They MUST be installed before editor.initUi: in this
+            // path ImGui installs its own GLFW callbacks (install_callbacks =
+            // true, see EditorUI) and chains the ones already set, so ImGui
+            // keeps receiving every key and character and these don't forward
+            // anything to it. Installed after initUi, they would replace ImGui's.
+            glfwSetKeyCallback(window.getNativeWindow(), [](GLFWwindow* w, int key, int, int action, int) {
+                auto* c = static_cast<D3D12WindowCtx*>(glfwGetWindowUserPointer(w));
+                switch (DonTopo::editorKeyAction(key, action, ImGui::GetIO().WantTextInput))
+                {
+                    case DonTopo::EditorKeyAction::CloseWindow:
+                        glfwSetWindowShouldClose(w, GLFW_TRUE);
+                        break;
+                    case DonTopo::EditorKeyAction::FocusSelected:
+                        if (c && c->editor && c->camera)
+                            c->editor->focusSelected(*c->camera);
+                        break;
+                    case DonTopo::EditorKeyAction::None:
+                        break;
+                }
+            });
+            glfwSetCharCallback(window.getNativeWindow(), [](GLFWwindow* w, unsigned int ch) {
+                // Same gate as the Vulkan path: only in Play and only while ImGui
+                // has no text focus, or renaming a GameObject would also type
+                // into the scene's InputField.
+                auto* c = static_cast<D3D12WindowCtx*>(glfwGetWindowUserPointer(w));
+                if (c && c->editor && c->editor->isPlaying() && !ImGui::GetIO().WantTextInput)
+                    DonTopo::pushUiInputChar(ch);
+            });
+
             editor.setRenderer(std::move(d3d12Owned));
             editor.setActiveRenderBackend(backend.backend);
             if (!backend.message.empty())
@@ -390,6 +427,7 @@ int main()
 
             // Cámara de vuelo, la misma que ya tenía este camino.
             DonTopo::Camera d3dCamera(glm::vec3(6.0f, 4.5f, 8.0f), -126.87f, -21.8f);
+            d3dWindowCtx.camera = &d3dCamera;
             d3dCamera.moveSpeed = 8.0f;
             d3d12.setCamera(d3dCamera);
 
@@ -910,12 +948,20 @@ int main()
 
         glfwSetKeyCallback(window.getNativeWindow(), [](GLFWwindow* w, int key, int scancode, int action, int mods) {
             ImGui_ImplGlfw_KeyCallback(w, key, scancode, action, mods);
-            if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-                glfwSetWindowShouldClose(w, GLFW_TRUE);
-            if (key == GLFW_KEY_F && action == GLFW_PRESS && !ImGui::GetIO().WantTextInput)
+            // Same decision as the DirectX 12 path (editorKeyAction).
+            switch (DonTopo::editorKeyAction(key, action, ImGui::GetIO().WantTextInput))
             {
-                auto* ctx = static_cast<AppCtx*>(glfwGetWindowUserPointer(w));
-                ctx->ed->focusSelected(*ctx->cam);
+                case DonTopo::EditorKeyAction::CloseWindow:
+                    glfwSetWindowShouldClose(w, GLFW_TRUE);
+                    break;
+                case DonTopo::EditorKeyAction::FocusSelected:
+                {
+                    auto* ctx = static_cast<AppCtx*>(glfwGetWindowUserPointer(w));
+                    ctx->ed->focusSelected(*ctx->cam);
+                    break;
+                }
+                case DonTopo::EditorKeyAction::None:
+                    break;
             }
         });
 

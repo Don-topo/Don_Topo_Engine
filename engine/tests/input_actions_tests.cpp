@@ -6,6 +6,7 @@
 // código GLFW (Core lo lee con glfwGetGamepadState), no como ImGuiKey, así que
 // hace falta la traducción inversa para poder guardarlo como binding.
 #include "DonTopo/Core/Input.h"
+#include "DonTopo/Editor/EditorShortcuts.h"
 #include "DonTopo/Editor/InputActionsPanel.h"
 
 #include <GLFW/glfw3.h>
@@ -338,8 +339,30 @@ static void testOutOfRangeCodesDiscardedForEveryDevice()
     }
 }
 
+// Editor window shortcuts, shared by the Vulkan and the DirectX 12 paths of
+// sandbox/src/main.cpp. Before this lived only in the Vulkan key callback, so
+// under DirectX 12 neither F (focus) nor Esc (close) did anything.
+static void testEditorShortcuts()
+{
+    using DonTopo::EditorKeyAction;
+    using DonTopo::editorKeyAction;
+    CHECK(editorKeyAction(GLFW_KEY_F, GLFW_PRESS, false) == EditorKeyAction::FocusSelected);
+    // Typing an "f" into a text field (Hierarchy rename, Script Editor) must not jump the camera.
+    CHECK(editorKeyAction(GLFW_KEY_F, GLFW_PRESS, true) == EditorKeyAction::None);
+    CHECK(editorKeyAction(GLFW_KEY_ESCAPE, GLFW_PRESS, false) == EditorKeyAction::CloseWindow);
+    // Esc closes the window even while typing: it did in the Vulkan path, and
+    // that behaviour is kept as it was.
+    CHECK(editorKeyAction(GLFW_KEY_ESCAPE, GLFW_PRESS, true) == EditorKeyAction::CloseWindow);
+    // Only the press counts: release and key repeat do nothing.
+    CHECK(editorKeyAction(GLFW_KEY_F, GLFW_RELEASE, false) == EditorKeyAction::None);
+    CHECK(editorKeyAction(GLFW_KEY_F, GLFW_REPEAT, false) == EditorKeyAction::None);
+    CHECK(editorKeyAction(GLFW_KEY_ESCAPE, GLFW_RELEASE, false) == EditorKeyAction::None);
+    CHECK(editorKeyAction(GLFW_KEY_G, GLFW_PRESS, false) == EditorKeyAction::None);
+}
+
 int main()
 {
+    testEditorShortcuts();
     testPadRoundTrip();
     testPadOutOfRange();
     testKeyboardAndMouseStillTranslate();
