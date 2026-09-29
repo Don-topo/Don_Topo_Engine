@@ -284,7 +284,7 @@ static void test_dead_entity_wins_over_nan(ScriptManager& sm)
     if (!ok)
     {
         const std::string err = sm.lua()["err"];
-        CHECK(err.find("destruida") != std::string::npos);
+        CHECK(err.find("destroyed") != std::string::npos);
         CHECK(err.find("SetPosition") == std::string::npos);
     }
     CHECK(!logContains(log, "SetPosition"));
@@ -2690,7 +2690,7 @@ static void test_layer_fuera_de_rango_es_error(ScriptManager& sm, PhysicsManager
 
     CHECK(sm.lua()["okAlto"].get<bool>() == false);
     CHECK(sm.lua()["okBajo"].get<bool>() == false);
-    CHECK(sm.lua()["errAlto"].get<std::string>().find("fuera de rango") != std::string::npos);
+    CHECK(sm.lua()["errAlto"].get<std::string>().find("out of range") != std::string::npos);
     CHECK(col->getLayer() == 3); // ni el 32 ni el -1 han entrado
 }
 
