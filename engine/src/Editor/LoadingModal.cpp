@@ -31,11 +31,11 @@ namespace DonTopo
                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration
                      | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
 
-        ImGui::Text("Cargando escena...  %d / %d", m_done, m_total);
+        ImGui::Text("Loading scene...  %d / %d", m_done, m_total);
         const float frac = (m_total > 0) ? (float)m_done / (float)m_total : 0.0f;
         ImGui::ProgressBar(frac, ImVec2(320.0f, 0.0f));
 
-        const bool cancelled = ImGui::Button("Cancelar");
+        const bool cancelled = ImGui::Button("Cancel");
         ImGui::End();
 
         // Cancelar deja la escena con lo cargado hasta aquí. Es un estado

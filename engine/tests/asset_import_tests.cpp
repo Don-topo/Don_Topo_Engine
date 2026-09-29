@@ -130,7 +130,7 @@ static void test_import_uncreatable_dest_dir_reports_cause(const fs::path& root)
     AssetImportOutcome outcome = importExternalAsset(source, blocker / "subcarpeta");
 
     CHECK(outcome.result == AssetImportResult::RejectedCopyFailed);
-    CHECK(outcome.errorMessage.rfind("No se pudo crear la carpeta destino", 0) == 0);
+    CHECK(outcome.errorMessage.rfind("Could not create the destination folder", 0) == 0);
 }
 
 static void test_import_external_copies_sidecar(const fs::path& root)

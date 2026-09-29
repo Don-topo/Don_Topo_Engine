@@ -385,11 +385,11 @@ void InputActionsPanel::draw()
             const std::string name(m_newNameBuf);
             if (name.empty())
             {
-                m_warning = "El nombre no puede estar vacio.";
+                m_warning = "The name cannot be empty.";
             }
             else if (findAction(name) >= 0)
             {
-                m_warning = "Ya existe una accion llamada '" + name + "'.";
+                m_warning = "There is already an action named '" + name + "'.";
             }
             else
             {
@@ -407,7 +407,7 @@ void InputActionsPanel::draw()
 
         if (m_actions.empty())
         {
-            ImGui::TextDisabled("No hay acciones. Escribe un nombre y pulsa Create.");
+            ImGui::TextDisabled("No actions. Type a name and press Create.");
         }
 
         // --- Escucha de binding ---
@@ -469,11 +469,11 @@ void InputActionsPanel::draw()
                     const int clash = findAction(name);
                     if (name.empty())
                     {
-                        m_warning = "El nombre no puede estar vacio.";
+                        m_warning = "The name cannot be empty.";
                     }
                     else if (clash >= 0 && clash != i)
                     {
-                        m_warning = "Ya existe una accion llamada '" + name + "'.";
+                        m_warning = "There is already an action named '" + name + "'.";
                     }
                     else
                     {
@@ -504,13 +504,13 @@ void InputActionsPanel::draw()
                 {
                     if (ImGui::Button("Cancel listen")) m_listeningIndex = -1;
                     ImGui::SameLine();
-                    ImGui::TextDisabled("Pulsa tecla, boton de raton, boton de mando, stick o gatillo (Esc cancela)");
+                    ImGui::TextDisabled("Press a key, mouse button, gamepad button, stick or trigger (Esc cancels)");
                     // Sin mando reconocido no llega ningun boton: decirlo aqui
                     // evita que parezca que la escucha esta rota.
                     if (!glfwJoystickIsGamepad(GLFW_JOYSTICK_1))
                     {
                         ImGui::SameLine();
-                        ImGui::TextDisabled("[sin mando]");
+                        ImGui::TextDisabled("[no gamepad]");
                     }
                 }
                 else if (ImGui::Button("Add Binding"))
@@ -523,7 +523,7 @@ void InputActionsPanel::draw()
             ImGui::Indent();
             if (a.bindings.empty())
             {
-                ImGui::TextDisabled("(sin bindings)");
+                ImGui::TextDisabled("(no bindings)");
             }
             for (int b = 0; b < static_cast<int>(a.bindings.size()); ++b)
             {

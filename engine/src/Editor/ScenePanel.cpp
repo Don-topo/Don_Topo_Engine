@@ -140,7 +140,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         if (ImGui::MenuItem("Create GameObject") && sceneRoot)
         {
             GameObject* created = sceneRoot->addChild("GameObject");
-            ctx.pushLog("GameObject '" + created->name + "' creado");
+            ctx.pushLog("GameObject '" + created->name + "' created");
 
             if (ctx.scene && ctx.physics && ctx.audio && ctx.renderer)
             {
@@ -149,7 +149,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 nlohmann::json snapshot = ctx.scene->subtreeToJson(created);
                 ctx.undo->push(std::make_unique<CreateGameObjectCommand>(
                     *ctx.scene, *ctx.physics, *ctx.audio, *ctx.renderer,
-                    "Crear '" + created->name + "'", parentId, index, std::move(snapshot)));
+                    "Create '" + created->name + "'", parentId, index, std::move(snapshot)));
             }
         }
         // Visible solo si no hay ya una cámara en la escena — el invariante lo
@@ -192,7 +192,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             if (go == ctx.selected) selectionInSubtree = true;
         });
 
-        ctx.pushLog("GameObject '" + target->name + "' eliminado");
+        ctx.pushLog("GameObject '" + target->name + "' deleted");
 
         // Snapshot pa Undo, tomado ANTES de tocar nada.
         bool canUndoDelete = ctx.scene && ctx.physics && ctx.audio && ctx.renderer && target->parent;
@@ -231,7 +231,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 ctx.scriptManager->callOnDestroy(*s);
         }
 
-        assert(ctx.scene && "EditorContext::scene debe estar asignado (ver Renderer::setScene) antes de borrar GameObjects");
+        assert(ctx.scene && "EditorContext::scene must be set (see Renderer::setScene) before deleting GameObjects");
         ctx.scene->removeGameObject(target);
         if (ctx.scriptManager)
             ctx.scriptManager->rebuildAliveSet();
@@ -245,7 +245,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         {
             ctx.undo->push(std::make_unique<DeleteGameObjectCommand>(
                 *ctx.scene, *ctx.physics, *ctx.audio, *ctx.renderer,
-                "Borrar '" + deletedName + "'", parentId, index, std::move(snapshot)));
+                "Delete '" + deletedName + "'", parentId, index, std::move(snapshot)));
         }
     }
 
@@ -287,7 +287,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             if (!(newParentId == oldParentId && newIndex == oldIndex))
             {
                 ctx.undo->push(std::make_unique<ReparentCommand>(
-                    *ctx.scene, "Mover '" + draggedName + "'", id,
+                    *ctx.scene, "Move '" + draggedName + "'", id,
                     oldParentId, oldIndex, newParentId, newIndex));
             }
         }
@@ -317,14 +317,14 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             {
                 std::string oldName  = m_renameTarget->name;
                 m_renameTarget->name = newName;
-                ctx.pushLog("GameObject renombrado: '" + oldName + "' -> '" + newName + "'");
+                ctx.pushLog("GameObject renamed: '" + oldName + "' -> '" + newName + "'");
 
                 if (ctx.scene && newName != oldName)
                 {
                     Scene* scene = ctx.scene;
                     uint64_t id = m_renameTarget->id;
                     ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
-                        "Renombrar '" + oldName + "' a '" + newName + "'", oldName, newName,
+                        "Rename '" + oldName + "' a '" + newName + "'", oldName, newName,
                         [scene, id](const std::string& n) {
                             GameObject* go = scene->findById(id);
                             if (go) go->name = n;
@@ -366,7 +366,7 @@ void ScenePanel::createBasicShape(EditorContext& ctx, GameObject* parent, const 
     GameObject* go = parent->addChild(name);
     go->staticRenderIndex = ctx.renderer->addStaticMesh(*mesh);
     go->setMesh(std::move(mesh));
-    ctx.pushLog("GameObject '" + go->name + "' creado");
+    ctx.pushLog("GameObject '" + go->name + "' created");
 
     if (ctx.scene && ctx.physics && ctx.audio && ctx.renderer)
     {
@@ -375,7 +375,7 @@ void ScenePanel::createBasicShape(EditorContext& ctx, GameObject* parent, const 
         nlohmann::json snapshot = ctx.scene->subtreeToJson(go);
         ctx.undo->push(std::make_unique<CreateGameObjectCommand>(
             *ctx.scene, *ctx.physics, *ctx.audio, *ctx.renderer,
-            "Crear '" + go->name + "'", parentId, index, std::move(snapshot)));
+            "Create '" + go->name + "'", parentId, index, std::move(snapshot)));
     }
 }
 
@@ -385,7 +385,7 @@ void ScenePanel::createCamera(EditorContext& ctx, GameObject* parent)
 
     GameObject* go = parent->addChild("Camera");
     go->setCameraComponent(std::make_shared<CameraComponent>());
-    ctx.pushLog("GameObject '" + go->name + "' con Camera creado");
+    ctx.pushLog("GameObject '" + go->name + "' with Camera created");
 
     // Mismo patrón que createBasicShape: el snapshot se toma DESPUÉS de montar
     // el componente, así que el Undo/Redo lo reconstruye entero.
@@ -396,7 +396,7 @@ void ScenePanel::createCamera(EditorContext& ctx, GameObject* parent)
         nlohmann::json snapshot = ctx.scene->subtreeToJson(go);
         ctx.undo->push(std::make_unique<CreateGameObjectCommand>(
             *ctx.scene, *ctx.physics, *ctx.audio, *ctx.renderer,
-            "Crear '" + go->name + "'", parentId, index, std::move(snapshot)));
+            "Create '" + go->name + "'", parentId, index, std::move(snapshot)));
     }
 }
 
@@ -438,7 +438,7 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
         if (ImGui::MenuItem("Create GameObject"))
         {
             GameObject* created = node->addChild("GameObject");
-            ctx.pushLog("GameObject '" + created->name + "' creado");
+            ctx.pushLog("GameObject '" + created->name + "' created");
 
             if (ctx.scene && ctx.physics && ctx.audio && ctx.renderer)
             {
@@ -447,7 +447,7 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
                 nlohmann::json snapshot = ctx.scene->subtreeToJson(created);
                 ctx.undo->push(std::make_unique<CreateGameObjectCommand>(
                     *ctx.scene, *ctx.physics, *ctx.audio, *ctx.renderer,
-                    "Crear '" + created->name + "'", parentId, index, std::move(snapshot)));
+                    "Create '" + created->name + "'", parentId, index, std::move(snapshot)));
             }
         }
         // Mismo gate que el menú de la ventana: la cámara puede colgar de
