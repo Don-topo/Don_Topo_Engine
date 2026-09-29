@@ -2,6 +2,7 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
@@ -335,7 +336,17 @@ std::vector<ExportAsset> collectSceneAssets(
                 addMaterialTexture(modelPath, m->metallicRoughnessPath);
             }
             for (const MaterialOverride& ov : go->materialOverrides)
-                if (!ov.matAsset.empty()) add(ov.matAsset);   // el .mat no lleva sidecar propio
+            {
+                if (ov.matAsset.empty()) continue;
+                add(ov.matAsset);   // el .mat no lleva sidecar propio
+                // Its own textures too: the in-memory material only carries the
+                // ones that won (a per-slot override hides the .mat's), and the
+                // packaged .mat is repointed at them (writeExportPackage).
+                const MaterialAsset mat = loadMaterialAsset(ov.matAsset);
+                addMaterialTexture(modelPath, mat.albedo);
+                addMaterialTexture(modelPath, mat.normal);
+                addMaterialTexture(modelPath, mat.orm);
+            }
         }
 
         if (go->hasAudioClip())
@@ -643,6 +654,33 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
 
     for (const ExportAsset& a : assets)
         ok = copyOne(fs::path(a.sourcePath), pkg / fs::path(a.packagePath)) && ok;
+
+    // A .mat names its textures relative to its own folder (or absolute when
+    // that is impossible). Copied verbatim, one outside the project still
+    // pointed at the exporting machine, since the texture itself went to
+    // assets/_external/N. Rewrite each packaged .mat against the packaged
+    // copies; this runs after the loop so the textures already exist and
+    // saveMaterialAsset can relativize against them.
+    std::map<std::string, std::string> sourceToPackage;
+    for (const ExportAsset& a : assets)
+        sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
+    for (const ExportAsset& a : assets)
+    {
+        if (fs::path(a.packagePath).extension() != ".mat") continue;
+        MaterialAsset mat = loadMaterialAsset(fs::path(a.sourcePath));
+        for (std::string* tex : { &mat.albedo, &mat.normal, &mat.orm })
+        {
+            if (tex->empty()) continue;
+            const auto it = sourceToPackage.find(exportPathKey(*tex));
+            if (it != sourceToPackage.end()) *tex = (pkg / fs::path(it->second)).string();
+        }
+        std::string err;
+        if (!saveMaterialAsset(pkg / fs::path(a.packagePath), mat, &err))
+        {
+            r.messages.push_back("Could not rewrite the texture paths of " + a.packagePath + ": " + err);
+            ok = false;
+        }
+    }
 
     // Skybox: el ORIGEN es la carpeta que el proyecto tenga elegida, pero el
     // DESTINO es siempre assets/skybox, porque es donde el runtime lo busca.

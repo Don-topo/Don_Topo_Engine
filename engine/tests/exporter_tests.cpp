@@ -688,6 +688,69 @@ static void test_package_overwrite_is_clean(const fs::path& root)
     fs::remove_all(dest, ec);
 }
 
+// A .mat stores its textures relative to its own folder. Copied verbatim, a
+// texture outside the project (packaged under assets/_external/N) was still
+// referenced by its path on the exporting machine ("../../../Temp/..."), so the
+// game only found it there. The package's .mat must point at the packaged
+// copy, and the texture must be collected even when the in-memory material
+// does not carry it (only the matAsset override names it).
+static void test_mat_textures_are_packaged_and_repointed(const fs::path& root)
+{
+    std::error_code ec;
+    const fs::path tempRoot = fs::temp_directory_path(ec);
+    if (ec || tempRoot.empty()) { CHECK(!ec && !tempRoot.empty()); return; }
+
+    const fs::path outside = tempRoot / "dt_exporter_mat_outside";
+    fs::remove_all(outside, ec);
+    fs::create_directories(outside, ec);
+    const fs::path albedo = outside / "far_albedo.png";
+    std::ofstream(albedo) << "png";
+
+    const fs::path mat = root / "assets" / "Materials" / "far.mat";
+    fs::create_directories(mat.parent_path(), ec);
+    MaterialAsset asset;
+    asset.albedo    = albedo.string();
+    asset.roughness = 0.25f;
+    std::string err;
+    CHECK(saveMaterialAsset(mat, asset, &err));
+
+    Scene scene;
+    scene.setAssetRoot(root.string());
+    auto* go = scene.addGameObject("Cube");
+    go->setMesh(makeMesh({}));   // procedural, material not applied in memory
+    MaterialOverride ov; ov.index = 0; ov.matAsset = mat.string();
+    go->materialOverrides.push_back(ov);
+
+    const std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    std::string albedoPkg;
+    for (const ExportAsset& a : assets)
+        if (exportPathKey(a.sourcePath) == exportPathKey(albedo.string())) albedoPkg = a.packagePath;
+    CHECK(!albedoPkg.empty());
+
+    const fs::path dest = tempRoot / "dt_exporter_out_mat";
+    fs::remove_all(dest, ec);
+    const ExportResult r = writeExportPackage(assets, scene.toJson(), dest, "MiJuego", root,
+                                              root / "Scripts", root / "DonTopoRuntime.exe");
+    CHECK(r.ok);
+
+    const fs::path pkg    = dest / "MiJuego";
+    const fs::path pkgMat = pkg / "assets" / "Materials" / "far.mat";
+    const MaterialAsset loaded = loadMaterialAsset(pkgMat);
+    CHECK(!albedoPkg.empty() &&
+          exportPathKey(loaded.albedo) == exportPathKey((pkg / fs::path(albedoPkg)).string()));
+    CHECK(loaded.roughness == 0.25f);   // the rest of the material survives
+    std::ifstream in(pkgMat);
+    const nlohmann::json raw = nlohmann::json::parse(in, nullptr, false);
+    CHECK(raw.is_object() && raw.value("albedo", std::string(":")).find(':') == std::string::npos);
+    // Relative inside the package, never through the exporting machine's folders.
+    CHECK(raw.is_object() &&
+          raw.value("albedo", std::string("dt_exporter_mat_outside")).find("dt_exporter_mat_outside") == std::string::npos);
+
+    fs::remove_all(dest, ec);
+    fs::remove_all(outside, ec);
+    fs::remove(mat, ec);
+}
+
 // Un directorio destino con contenido ajeno (sin game.scene) hace abortar a
 // writeExportPackage SIN tocar nada: ni se borra lo que habia ni se crea el
 // paquete. Es el caso que rompia antes de inspectExportTarget/Occupied — el
@@ -1429,6 +1492,7 @@ int main()
     test_package_includes_splash(root);
     test_export_platform_rows();
     test_package_overwrite_is_clean(root);
+    test_mat_textures_are_packaged_and_repointed(root);
     test_writeExportPackage_aborts_on_occupied(root);
     test_missing_runtime_aborts(root);
     test_inspect_export_target_states();
