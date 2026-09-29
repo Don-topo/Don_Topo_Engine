@@ -3197,7 +3197,7 @@ static void test_autocomplete_firma_y_doc()
     CHECK(!doc.empty());
 
     luaApiDoc("Button:GetSize", firma, doc);
-    CHECK(firma == "() -> ancho, alto");   // generada en bucle para los 14 widgets
+    CHECK(firma == "() -> width, height");   // generada en bucle para los 14 widgets
 
     // Una keyword de Lua no tiene firma, pero sigue estando en la tabla.
     luaApiDoc("while", firma, doc);
