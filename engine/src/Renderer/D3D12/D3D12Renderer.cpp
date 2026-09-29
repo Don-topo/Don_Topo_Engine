@@ -24,6 +24,7 @@
 #include "DonTopo/Renderer/SelectionOutline.h"
 #include "DonTopo/Renderer/Plane.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/SplashScreen.h"  // loadSplashImage (no Vulkan use)
 #include "DonTopo/Renderer/MeshClock.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/SharedTextureCache.h"
@@ -395,7 +396,10 @@ constexpr UINT kSrvProbes   = kSrvThumbAtlas + 1;
 // comando con el bloom apagado.
 constexpr UINT kSrvCompositeOff = kSrvProbes + kMaxProbes * kSrvPerProbe;  // +0 escena, +1 negro
 
-constexpr UINT kSrvHeapSize = kSrvCompositeOff + 2;
+// The startup splash logo (beginSplash).
+constexpr UINT kSrvSplash = kSrvCompositeOff + 2;
+
+constexpr UINT kSrvHeapSize = kSrvSplash + 1;
 
 // Push de ssao.comp y ssao_blur.comp: los dos comparten el bloque, así que el
 // rango de root constants tiene que ser el mismo para los dos pipelines.
@@ -529,11 +533,15 @@ constexpr UINT kRtvViewport    = kRtvTaaHistory + kRtvTaaHistoryCount;
 // de una en una.
 constexpr UINT kRtvProbeFace   = kRtvViewport + 1;
 constexpr UINT kRtvProbeFaces  = 6;
+// sRGB views of the swapchain images, one per image, used only by the startup
+// splash: the swapchain is UNORM, and writing through an sRGB view is what makes
+// the splash look exactly like the Vulkan one (sRGB swapchain there).
+constexpr UINT kRtvSplash      = kRtvProbeFace + kRtvProbeFaces;
 // Lo que hay que pedir. Derivado, para que añadir un target arriba lo mueva
 // solo en vez de obligar a acordarse.
-constexpr UINT kRtvCount       = kRtvProbeFace + kRtvProbeFaces;
+constexpr UINT kRtvCount       = kRtvSplash + kFrameCount;
 
-static_assert(kRtvCount == kFrameCount + 12,
+static_assert(kRtvCount == 2 * kFrameCount + 12,
               "El reparto del heap de RTV ha cambiado: revisa que nadie sume "
               "offsets a mano y que kRtvCount siga cubriendo el ultimo indice");
 
@@ -1413,6 +1421,12 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12RootSignature> ssaaRootSignature;
     ComPtr<ID3D12PipelineState> ssaaPipeline;
 
+    // ── Startup splash (beginSplash / drawSplashFrame) ─────────────────────
+    ComPtr<ID3D12RootSignature> splashRootSignature;
+    ComPtr<ID3D12PipelineState> splashPipeline;
+    D3D12MA::Allocation*        splashLogo       = nullptr;
+    float                       splashLogoAspect = 1.0f;
+
     // ─── UI 2D del juego ─────────────────────────────────────────────────────
     // Los quads los arma UiCanvas en CPU (buildDrawData, que no sabe de ninguna
     // API) y aquí solo se suben y se dibujan. Un par de buffers por frame en
@@ -2227,6 +2241,18 @@ void D3D12Renderer::Impl::createRenderTargetViews()
                       "IDXGISwapChain3::GetBuffer");
         device->CreateRenderTargetView(renderTargets[i].Get(), nullptr, handle);
         handle.ptr += rtvSize;
+    }
+
+    // The splash's sRGB views of the same images. Created here, next to the
+    // normal ones, so a ResizeBuffers (which re-runs this) never leaves them
+    // pointing at released buffers.
+    D3D12_RENDER_TARGET_VIEW_DESC srgbView{};
+    srgbView.Format        = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    srgbView.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    for (UINT i = 0; i < kFrameCount; ++i) {
+        D3D12_CPU_DESCRIPTOR_HANDLE splashHandle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        splashHandle.ptr += static_cast<SIZE_T>(kRtvSplash + i) * rtvSize;
+        device->CreateRenderTargetView(renderTargets[i].Get(), &srgbView, splashHandle);
     }
 }
 
@@ -9863,6 +9889,185 @@ void D3D12Renderer::drawFrame()
     d.moveToNextFrame();
 }
 
+// ── Startup splash ─────────────────────────────────────────────────────────
+//
+// Mirrors the Vulkan path (SplashScreen + Renderer::beginSplash/drawSplashFrame)
+// with the same shaders (splash.vert/.frag, translated to DXIL by the build).
+// Before this the backend inherited EditorRenderer's defaults (no splash), and
+// the runtime silently started without one under DirectX 12.
+
+bool D3D12Renderer::beginSplash(const std::string& logoPath)
+{
+    Impl& d = *m_impl;
+    if (!d.initialized)
+        return false;
+
+    std::vector<uint8_t> rgba;
+    int w = 0, h = 0;
+    if (!loadSplashImage(logoPath, rgba, w, h) || w <= 0 || h <= 0)
+        return false;  // no logo: start without a splash, as in Vulkan
+
+    // splash.vert emits uv.y = 0 at clip y = -1. That is the TOP of the screen
+    // in Vulkan and the BOTTOM in D3D12, and the SPIR-V -> HLSL translation
+    // does not flip Y. The engine's own fullscreen passes don't notice (they
+    // read targets the engine rendered with the same convention), but this
+    // texture comes from a PNG: flip its rows so the logo is upright without
+    // touching the shader the Vulkan path shares.
+    const size_t rowBytes = static_cast<size_t>(w) * 4;
+    for (int top = 0, bottom = h - 1; top < bottom; ++top, --bottom)
+        std::swap_ranges(rgba.begin() + top * rowBytes, rgba.begin() + (top + 1) * rowBytes,
+                         rgba.begin() + bottom * rowBytes);
+
+    // sRGB, like the Vulkan splash (VK_FORMAT_R8G8B8A8_SRGB): sampling returns
+    // linear and the sRGB render target view re-encodes it, so colours match.
+    d.splashLogo = d.uploadTexture(rgba.data(), static_cast<UINT>(w), static_cast<UINT>(h), 1,
+                                   DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, 4, kSrvSplash);
+    d.splashLogoAspect = static_cast<float>(w) / static_cast<float>(h);
+
+    // Root signature: the three floats of splash.frag's push block in b0, the
+    // logo in t0 and a linear clamp sampler in s0 (same shape as FXAA).
+    D3D12_DESCRIPTOR_RANGE range{};
+    range.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    range.NumDescriptors     = 1;
+    range.BaseShaderRegister = 0;
+
+    D3D12_ROOT_PARAMETER params[2]{};
+    params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.ShaderRegister = 0;
+    params[0].Constants.Num32BitValues = 3;  // alpha, imgAR, screenAR
+    params[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
+    params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges   = &range;
+    params[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.MaxLOD           = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister   = 0;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    rootDesc.NumParameters     = _countof(params);
+    rootDesc.pParameters       = params;
+    rootDesc.NumStaticSamplers = 1;
+    rootDesc.pStaticSamplers   = &sampler;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errorBlob;
+    const HRESULT hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                                   &serialized, &errorBlob);
+    if (FAILED(hr)) {
+        std::string detail;
+        if (errorBlob)
+            detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                          errorBlob->GetBufferSize());
+        throw std::runtime_error("D3D12: splash root signature (HRESULT " + hresultToString(hr) +
+                                 ") " + detail);
+    }
+    throwIfFailed(d.device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                                serialized->GetBufferSize(),
+                                                IID_PPV_ARGS(&d.splashRootSignature)),
+                  "ID3D12Device::CreateRootSignature(splash)");
+
+    const std::vector<char> vs = readBinaryFile("shaders/splash.vert.dxil");
+    const std::vector<char> ps = readBinaryFile("shaders/splash.frag.dxil");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+    pso.pRootSignature        = d.splashRootSignature.Get();
+    pso.VS                    = {vs.data(), vs.size()};
+    pso.PS                    = {ps.data(), ps.size()};
+    pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pso.NumRenderTargets      = 1;
+    pso.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;  // the splash's sRGB views
+    pso.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+    pso.SampleDesc.Count      = 1;
+    pso.SampleMask            = UINT_MAX;
+    pso.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    pso.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    pso.RasterizerState.DepthClipEnable = TRUE;
+    for (auto& rt : pso.BlendState.RenderTarget)
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pso.DepthStencilState.DepthEnable   = FALSE;
+    pso.DepthStencilState.StencilEnable = FALSE;
+    throwIfFailed(d.device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&d.splashPipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(splash)");
+    return true;
+}
+
+void D3D12Renderer::drawSplashFrame(float alpha)
+{
+    Impl& d = *m_impl;
+    // Like the Vulkan version: without a splash, or with a lost device, the
+    // frame is simply skipped; drawFrame is the one that reports errors.
+    if (!d.initialized || !d.splashPipeline || d.deviceLost)
+        return;
+
+    // We are in the runtime's main loop, outside the WindowProc: a pending
+    // resize can be applied here (it also re-creates the splash's sRGB views).
+    d.applyPendingResize();
+
+    ID3D12CommandAllocator* allocator = d.allocators[d.frameIndex].Get();
+    if (FAILED(allocator->Reset()) || FAILED(d.commandList->Reset(allocator, d.splashPipeline.Get())))
+        return;
+
+    D3D12_RESOURCE_BARRIER toRenderTarget{};
+    toRenderTarget.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toRenderTarget.Transition.pResource   = d.renderTargets[d.frameIndex].Get();
+    toRenderTarget.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    toRenderTarget.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    toRenderTarget.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    d.commandList->ResourceBarrier(1, &toRenderTarget);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += static_cast<SIZE_T>(kRtvSplash + d.frameIndex) * d.rtvSize;
+    const float clear[4] = {0.05f, 0.05f, 0.06f, 1.0f};  // same background as splash.frag
+    d.commandList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    d.commandList->ClearRenderTargetView(rtv, clear, 0, nullptr);
+
+    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(d.width),
+                                  static_cast<float>(d.height), 0.0f, 1.0f};
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(d.width), static_cast<LONG>(d.height)};
+    d.commandList->RSSetViewports(1, &viewport);
+    d.commandList->RSSetScissorRects(1, &scissor);
+
+    const float push[3] = {alpha, d.splashLogoAspect,
+                           d.height > 0 ? static_cast<float>(d.width) / static_cast<float>(d.height)
+                                        : 1.0f};
+    ID3D12DescriptorHeap* heaps[] = {d.srvHeap.Get()};
+    d.commandList->SetDescriptorHeaps(1, heaps);
+    d.commandList->SetGraphicsRootSignature(d.splashRootSignature.Get());
+    d.commandList->SetGraphicsRoot32BitConstants(0, 3, push, 0);
+    D3D12_GPU_DESCRIPTOR_HANDLE logoTable = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
+    logoTable.ptr += static_cast<UINT64>(kSrvSplash) * d.srvSize;
+    d.commandList->SetGraphicsRootDescriptorTable(1, logoTable);
+    d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    d.commandList->DrawInstanced(3, 1, 0, 0);
+
+    D3D12_RESOURCE_BARRIER toPresent = toRenderTarget;
+    toPresent.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    toPresent.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+    d.commandList->ResourceBarrier(1, &toPresent);
+
+    if (FAILED(d.commandList->Close()))
+        return;
+    ID3D12CommandList* lists[] = {d.commandList.Get()};
+    d.queue->ExecuteCommandLists(1, lists);
+
+    // Vsync, as the Vulkan splash (FIFO): the fade is timed, not frame-counted.
+    const HRESULT presentHr = d.swapChain->Present(1, 0);
+    if (presentHr == DXGI_ERROR_DEVICE_REMOVED || presentHr == DXGI_ERROR_DEVICE_RESET) {
+        d.dumpDeviceRemoved("IDXGISwapChain3::Present (splash)", presentHr);
+        throw std::runtime_error("D3D12: device lost during the splash Present (HRESULT " +
+                                 hresultToString(presentHr) + ")");
+    }
+    d.drainInfoQueue();
+    d.moveToNextFrame();
+}
+
 void D3D12Renderer::resize(uint32_t width, uint32_t height)
 {
     Impl& d = *m_impl;
@@ -11867,6 +12072,12 @@ void D3D12Renderer::shutdown()
     // ese informe salga LIMPIO — en cuanto tolera ruido, deja de avisar.
     d.ssaaPipeline.Reset();
     d.ssaaRootSignature.Reset();
+    d.splashPipeline.Reset();
+    d.splashRootSignature.Reset();
+    if (d.splashLogo) {
+        d.splashLogo->Release();
+        d.splashLogo = nullptr;
+    }
     d.fogPipeline.Reset();
     d.fogRootSignature.Reset();
     d.compositePipeline.Reset();

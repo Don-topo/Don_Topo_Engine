@@ -80,6 +80,12 @@ public:
     // y presenta.
     void drawFrame();
 
+    // Startup splash, same visible result as the Vulkan path (SplashScreen):
+    // the logo letterboxed over a dark background, faded by `alpha`. false if
+    // the logo can't be loaded, and the runtime starts without a splash.
+    bool beginSplash(const std::string& logoPath) override;
+    void drawSplashFrame(float alpha) override;
+
     // ANOTA el nuevo tamaño; no toca la swapchain. El trabajo real lo hace
     // drawFrame() al empezar el frame siguiente.
     //
