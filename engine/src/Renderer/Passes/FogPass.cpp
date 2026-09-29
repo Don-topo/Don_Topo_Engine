@@ -21,7 +21,7 @@ struct FogPush {
     glm::vec4 scatterBaseHeight;
     glm::vec4 gStepsRes;
 };
-static_assert(sizeof(FogPush) == 128, "FogPush debe seguir en 128 bytes: fog.comp declara este layout");
+static_assert(sizeof(FogPush) == 128, "FogPush must stay at 128 bytes: fog.comp declares this layout");
 
 // ── Niebla volumetrica ──────────────────────────────────────────────────────
 void FogPass::createPipelines(const Context& ctx)
@@ -212,7 +212,7 @@ void FogPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& v
             m_gpuMs = (float)((double)(stamps[1] - stamps[0]) * ctx.timestampPeriod * 1e-6);
             if (++m_measuredFrames == 300)
             {
-                printf("fog (ray-marching): %.3f ms (%ux%u, %d pasos)\n",
+                printf("fog (ray-marching): %.3f ms (%ux%u, %d steps)\n",
                        m_gpuMs, ctx.renderExtent.width, ctx.renderExtent.height, ctx.state.fogSteps());
                 fflush(stdout);
             }

@@ -67,7 +67,7 @@ std::filesystem::path drawProjectSelector(ProjectSelectorState& st)
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    ImGui::TextUnformatted("Don Topo Engine - Proyectos");
+    ImGui::TextUnformatted("Don Topo Engine - Projects");
     ImGui::TextDisabled("%s", DonTopo::ProjectContext::workspaceDir().string().c_str());
     ImGui::Separator();
 
@@ -76,7 +76,7 @@ std::filesystem::path drawProjectSelector(ProjectSelectorState& st)
 
     ImGui::BeginChild("##ProjectList", ImVec2(0.0f, vp->WorkSize.y * 0.55f), true);
     if (st.entries.empty())
-        ImGui::TextDisabled("No hay ningun proyecto todavia: crea uno con 'Nuevo proyecto...'.");
+        ImGui::TextDisabled("There are no projects yet: create one with 'New project...'.");
     for (int i = 0; i < (int)st.entries.size(); ++i)
     {
         const std::string label = DonTopo::ProjectContext::readProjectName(st.entries[i]) +
@@ -94,21 +94,21 @@ std::filesystem::path drawProjectSelector(ProjectSelectorState& st)
     ImGui::EndChild();
 
     ImGui::BeginDisabled(st.picked < 0);
-    if (ImGui::Button("Abrir proyecto", ImVec2(160.0f, 0.0f)))
+    if (ImGui::Button("Open project", ImVec2(160.0f, 0.0f)))
         confirmed = true;
     ImGui::EndDisabled();
 
     ImGui::SameLine();
-    if (ImGui::Button("Nuevo proyecto...", ImVec2(160.0f, 0.0f)))
+    if (ImGui::Button("New project...", ImVec2(160.0f, 0.0f)))
     {
         st.newName[0] = '\0';
         st.createError.clear();
-        ImGui::OpenPopup("Crear proyecto");
+        ImGui::OpenPopup("Create project");
     }
 
-    if (ImGui::BeginPopupModal("Crear proyecto", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    if (ImGui::BeginPopupModal("Create project", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted("Nombre del proyecto:");
+        ImGui::TextUnformatted("Project name:");
         ImGui::SetNextItemWidth(320.0f);
         const bool enter = ImGui::InputText("##NewProjectName", st.newName, sizeof(st.newName),
                                             ImGuiInputTextFlags_EnterReturnsTrue);
@@ -119,7 +119,7 @@ std::filesystem::path drawProjectSelector(ProjectSelectorState& st)
         if (!st.createError.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", st.createError.c_str());
 
-        if (ImGui::Button("Crear", ImVec2(120.0f, 0.0f)) || enter)
+        if (ImGui::Button("Create", ImVec2(120.0f, 0.0f)) || enter)
         {
             std::filesystem::path created;
             if (DonTopo::ProjectContext::create(st.newName, created, st.createError))
@@ -135,7 +135,7 @@ std::filesystem::path drawProjectSelector(ProjectSelectorState& st)
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancelar", ImVec2(120.0f, 0.0f)))
+        if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f)))
         {
             st.createError.clear();
             ImGui::CloseCurrentPopup();
@@ -222,7 +222,7 @@ int main()
             d3d12.init(window);
 
 
-            std::cout << "D3D12: adaptador '" << d3d12.adapterName() << "'" << std::endl;
+            std::cout << "D3D12: adapter '" << d3d12.adapterName() << "'" << std::endl;
 
             // La escena del proyecto, cargada con el MISMO Scene::load que usa
             // el editor. La geometría entra por la API pública del backend,
@@ -406,8 +406,8 @@ int main()
             d3dScripts.init(d3dScriptsDir.string());
             editor.setScriptManager(&d3dScripts);
             editor.pushExternalLog(
-                "DirectX 12: el editor corre sobre este backend. Sin UI 2D del juego y sin "
-                "sondas de reflexion todavia.");
+                "DirectX 12: the editor runs on this backend. No in-game 2D UI and no "
+                "reflection probes yet.");
 
             // Selector de proyecto, el mismo que con Vulkan: mientras esté
             // activo el bucle solo presenta su frame, así que el editor no
@@ -798,7 +798,7 @@ int main()
             physx::PxVec3 origin(cube->worldTransform[3].x, cube->worldTransform[3].y + 200.0f, cube->worldTransform[3].z);
             physx::PxVec3 dir(0.0f, -1.0f, 0.0f);
             bool didHit = physics.raycast(origin, dir, 400.0f, hit);
-            std::cout << "[PhysX smoke test] raycast al cubo: " << (didHit ? "HIT" : "MISS") << std::endl;
+            std::cout << "[PhysX smoke test] raycast at the cube: " << (didHit ? "HIT" : "MISS") << std::endl;
         }
 #endif
 

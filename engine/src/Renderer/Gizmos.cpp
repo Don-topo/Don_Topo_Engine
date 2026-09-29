@@ -29,7 +29,7 @@ void Gizmos::addLine(const glm::vec3& a, const glm::vec3& b, const glm::vec3& co
     if (m_vertices.size() + 2 > kMaxGizmoVertices) {
         if (!m_capacityWarned) {
             fprintf(stderr,
-                "Gizmos: capacidad de %u vertices excedida, se descartan lineas adicionales\n",
+                "Gizmos: capacity of %u vertices exceeded, extra lines are discarded\n",
                 kMaxGizmoVertices);
             m_capacityWarned = true;
         }

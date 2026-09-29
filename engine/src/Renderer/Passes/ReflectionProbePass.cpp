@@ -19,7 +19,7 @@ namespace DonTopo {
 // de SharedGpuMesh y de SkinnedMatGfx, que este pase reescribe.
 static constexpr int kFrames = 2;
 static_assert(sizeof(SharedGpuMesh::descriptorSets) / sizeof(VkDescriptorSet) == kFrames,
-              "kFrames debe seguir el numero de descriptor sets por malla compartida");
+              "kFrames must follow the number of descriptor sets per shared mesh");
 
 // ── Reflection probes ───────────────────────────────────────────────────────
 // Nada de lo que hay aqui graba un solo comando en el command buffer del
@@ -920,9 +920,9 @@ void ReflectionProbePass::sync(const Context& ctx)
         if (count > 0)
         {
             m_lastBakeMs = total;
-            printf("reflection probes: bake de %d sonda(s) en %.2f ms de GPU "
-                   "(captura %ux%u x6, irradiancia %ux%u, prefiltrado %ux%u x%u mips, "
-                   "%.2f MB por sonda)\n",
+            printf("reflection probes: bake of %d probe(s) in %.2f ms of GPU "
+                   "(capture %ux%u x6, irradiance %ux%u, prefiltered %ux%u x%u mips, "
+                   "%.2f MB per probe)\n",
                    count, total, kFaceSize, kFaceSize,
                    IblPass::kIrradianceSize, IblPass::kIrradianceSize,
                    IblPass::kPrefilterSize, IblPass::kPrefilterSize, IblPass::kPrefilterMips,

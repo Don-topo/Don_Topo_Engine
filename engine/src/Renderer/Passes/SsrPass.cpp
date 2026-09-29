@@ -31,7 +31,7 @@ struct SsrPush {
     float   edgeFade;
     float   intensity;
 };
-static_assert(sizeof(SsrPush) == 48, "SsrPush debe seguir en 48 bytes: los dos .comp declaran este layout");
+static_assert(sizeof(SsrPush) == 48, "SsrPush must stay at 48 bytes: both .comp shaders declare this layout");
 
 // ── SSR ─────────────────────────────────────────────────────────────────────
 bool SsrPass::active(const Context& ctx) const
@@ -289,7 +289,7 @@ void SsrPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& p
                               * ctx.timestampPeriod * 1e-6);
             if (++m_measuredFrames == 300)
             {
-                printf("ssr (marcha + suma%s): %.3f ms (%ux%u, %d pasos)\n",
+                printf("ssr (march + sum%s): %.3f ms (%ux%u, %d steps)\n",
                        ctx.state.ssaoEnabled() ? "" : " + depth pre-pass",
                        m_gpuMs, ctx.swapChainExtent.width, ctx.swapChainExtent.height,
                        ctx.state.ssrMaxSteps());

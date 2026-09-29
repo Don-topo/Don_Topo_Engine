@@ -41,13 +41,13 @@ namespace {
     {
         std::string m = std::string("failed to allocate ") + que + " memory";
         if (r == VK_ERROR_TOO_MANY_OBJECTS)
-            m += ": alcanzado el tope de " + std::to_string(maxAllocs) +
-                 " asignaciones de memoria de esta GPU (unas " +
+            m += ": reached this GPU's cap of " + std::to_string(maxAllocs) +
+                 " memory allocations (about " +
                  std::to_string(maxAllocs / 2) +
-                 " mallas). No es falta de VRAM: es el numero de asignaciones,"
-                 " y el motor pide una por recurso";
+                 " meshes). It is not a lack of VRAM: it is the number of allocations,"
+                 " and the engine requests one per resource";
         else if (r == VK_ERROR_OUT_OF_DEVICE_MEMORY)
-            m += ": la GPU se ha quedado sin memoria";
+            m += ": the GPU ran out of memory";
         return m;
     }
 }
@@ -576,10 +576,10 @@ void GpuResources::releaseMaterialImage(VkImage img, VkDeviceMemory mem)
     // del driver— en una fuga al salir del proceso, y encima lo dice.
     if (m_placeholdersDestroyed)
     {
-        fprintf(stderr, "[GpuResources] releaseMaterialImage(img=%p) despues de "
-                        "destroySharedPlaceholders: el teardown esta soltando "
-                        "texturas de material demasiado tarde. No se destruye "
-                        "nada (ver H79).\n", (void*)img);
+        fprintf(stderr, "[GpuResources] releaseMaterialImage(img=%p) after "
+                        "destroySharedPlaceholders: the teardown is releasing "
+                        "material textures too late. Nothing is destroyed "
+                        "(see H79).\n", (void*)img);
         return;
     }
 

@@ -30,7 +30,7 @@ namespace DonTopo
         // que hashear sus bytes en crudo es determinista: no hay huecos sin
         // inicializar que metan ruido.
         static_assert(sizeof(Vertex) == 14 * sizeof(float),
-                      "makeSharedMeshKey hashea Vertex en crudo: si gana padding, hay que hashear campo a campo");
+                      "makeSharedMeshKey hashes Vertex raw: if it gains padding, it must be hashed field by field");
 
         uint64_t h = kFnvOffset;
         if (!mesh.vertices.empty())

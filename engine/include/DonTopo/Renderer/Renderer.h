@@ -1056,8 +1056,8 @@ namespace DonTopo {
             // copiada a mano en tres sitios de este fichero.
             InstanceBuffers                 m_instanceBuffers;
             static_assert(MAX_FRAMES == InstanceBuffers::kFrames,
-                          "Los frames en vuelo del Renderer y los de InstanceBuffers tienen que "
-                          "ser los mismos: los sets de los frames de mas nacerian sin buffer");
+                          "The Renderer's frames in flight and InstanceBuffers' must "
+                          "match: the sets of the extra frames would be born without a buffer");
             // Scratch reutilizado entre frames y entre passes: gatherAndBatch
             // corre una vez por cascada más otras dos (depth pre-pase y escena)
             // en cada frame, y no debe alojar nada en ese camino.

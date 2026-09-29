@@ -119,9 +119,9 @@ void Skybox::loadCubemap(GpuDevice& gpu, const std::array<std::string, 6>& faceP
         else if (iw != w || ih != h)
             // Con los tamaños: «face size mismatch» no decía CUÁL sobra ni por
             // cuánto, y el arreglo es recortar la imagen.
-            throw std::runtime_error("Skybox: la cara " + std::to_string(i) + " mide " +
+            throw std::runtime_error("Skybox: face " + std::to_string(i) + " measures " +
                                      std::to_string(iw) + "x" + std::to_string(ih) +
-                                     " y las anteriores " + std::to_string(w) + "x" +
+                                     " and the previous ones " + std::to_string(w) + "x" +
                                      std::to_string(h) + ": " + facePaths[i]);
     }
 

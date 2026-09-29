@@ -78,8 +78,8 @@ void GpuDevice::createInstance()
                 break;
             }
         if (!validationAvailable) {
-            printf("AVISO: %s no esta instalada (falta el SDK de Vulkan). Se arranca\n"
-                   "       sin capa de validacion: no habra mensajes de uso indebido.\n",
+            printf("WARNING: %s is not installed (the Vulkan SDK is missing). Starting\n"
+                   "       without the validation layer: there will be no misuse messages.\n",
                    validationLayer);
             fflush(stdout);
             // La extensión del messenger la trae la capa: pedirla sin ella es el
@@ -196,9 +196,9 @@ void GpuDevice::pickPhysicalDevice()
         m_maxMemoryAllocations   = props.limits.maxMemoryAllocationCount;
         m_maxUniformBufferRange  = props.limits.maxUniformBufferRange;
         if (allocationLimitIsTight(m_maxMemoryAllocations))
-            printf("AVISO: esta GPU admite %u asignaciones de memoria a la vez. El motor pide\n"
-                   "       una por recurso, o sea dos por malla, asi que la escena se queda\n"
-                   "       sin memoria sobre las %u mallas aunque sobre VRAM.\n",
+            printf("WARNING: this GPU allows %u memory allocations at a time. The engine requests\n"
+                   "       one per resource, so two per mesh, which means the scene runs out\n"
+                   "       of memory at about %u meshes even with VRAM to spare.\n",
                    m_maxMemoryAllocations,
                    meshesWithinAllocationLimit(m_maxMemoryAllocations));
     }

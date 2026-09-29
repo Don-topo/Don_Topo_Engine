@@ -143,8 +143,8 @@ namespace DonTopo
     // ArrayStride 160). Un desajuste de layout entre CPU y GPU no da error de
     // compilación en ningún lado, sólo lecturas desplazadas y basura en pantalla
     // — así que se comprueba aquí, donde sí puede fallar el build.
-    static_assert(offsetof(GpuBoneInfo, parentIndex)     == 24, "layout std430 de BoneInfo roto");
-    static_assert(offsetof(GpuBoneInfo, inverseBindPose) == 32, "layout std430 de BoneInfo roto");
-    static_assert(offsetof(GpuBoneInfo, bindLocal)       == 96, "layout std430 de BoneInfo roto");
-    static_assert(sizeof(GpuBoneInfo)                    == 160, "layout std430 de BoneInfo roto");
+    static_assert(offsetof(GpuBoneInfo, parentIndex)     == 24, "BoneInfo std430 layout broken");
+    static_assert(offsetof(GpuBoneInfo, inverseBindPose) == 32, "BoneInfo std430 layout broken");
+    static_assert(offsetof(GpuBoneInfo, bindLocal)       == 96, "BoneInfo std430 layout broken");
+    static_assert(sizeof(GpuBoneInfo)                    == 160, "BoneInfo std430 layout broken");
 }

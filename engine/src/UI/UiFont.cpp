@@ -758,14 +758,14 @@ namespace DonTopo
         FT_Library library = nullptr;
         if (FT_Init_FreeType(&library) != 0)
         {
-            std::printf("[UI] FreeType no arranca\n");
+            std::printf("[UI] FreeType does not start\n");
             return false;
         }
 
         FT_Face face = nullptr;
         if (FT_New_Face(library, path.c_str(), 0, &face) != 0)
         {
-            std::printf("[UI] fuente ilegible: %s\n", path.c_str());
+            std::printf("[UI] unreadable font: %s\n", path.c_str());
             FT_Done_FreeType(library);
             return false;
         }
@@ -878,7 +878,7 @@ namespace DonTopo
 
         if (!packed)
         {
-            std::printf("[UI] la fuente no cabe en un atlas de 4096: %s\n", path.c_str());
+            std::printf("[UI] the font does not fit in a 4096 atlas: %s\n", path.c_str());
             FT_Done_Face(face);
             FT_Done_FreeType(library);
             return false;
