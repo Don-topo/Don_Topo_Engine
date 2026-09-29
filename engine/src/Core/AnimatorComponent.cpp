@@ -7,7 +7,7 @@
 
 namespace DonTopo
 {
-    static_assert(AnimatorComponent::kMaxLayers == kMaxLayersPose, "AnimationPose y el Animator comparten el tope de capas");
+    static_assert(AnimatorComponent::kMaxLayers == kMaxLayersPose, "AnimationPose and the Animator share the layer cap");
     int AnimatorComponent::addState(State s, int layer)
     {
         Layer& L = lay(layer);
@@ -688,8 +688,8 @@ namespace DonTopo
                 if (st.propertyClipIndex < 0)
                 {
                     if (warnings)
-                        warnings->push_back("Animator: el estado '" + st.name + "' referencia el clip de "
-                                            "propiedades '" + st.propertyClipName + "', que no existe");
+                        warnings->push_back("Animator: state '" + st.name + "' references the "
+                                            "property clip '" + st.propertyClipName + "', which does not exist");
                     continue;
                 }
                 // Sin clip de malla resuelto, el reloj del estado sale del clip
@@ -713,15 +713,15 @@ namespace DonTopo
                     // parámetro exista y sea Float.
                     tr.resolved = !tr.parameterName.empty() && hasFloatParameter(tr.parameterName);
                     if (!tr.resolved && warnings)
-                        warnings->push_back("Animator: la curva del clip '" + clip.name +
-                                            "' escribe '" + tr.parameterName +
-                                            "', que no es un parametro Float declarado");
+                        warnings->push_back("Animator: the curve of clip '" + clip.name +
+                                            "' writes '" + tr.parameterName +
+                                            "', which is not a declared Float parameter");
                     continue;
                 }
                 tr.resolved = !go || propertyAvailable(*go, tr.property);
                 if (!tr.resolved && warnings)
-                    warnings->push_back("Animator: la pista '" + std::string(propertyName(tr.property)) +
-                                        "' del clip '" + clip.name + "' necesita un componente que el objeto no tiene");
+                    warnings->push_back("Animator: track '" + std::string(propertyName(tr.property)) +
+                                        "' of clip '" + clip.name + "' needs a component the object does not have");
             }
     }
 
@@ -1003,8 +1003,8 @@ namespace DonTopo
                     e.clipIndex = b;
                     e.duration  = (b >= 0) ? mesh.animationClips[b].duration : 0.0f;
                     if (b < 0 && !e.clipName.empty() && warnings)
-                        warnings->push_back("Animator: el estado '" + st.name + "' mezcla con el clip '" +
-                                            e.clipName + "', que no existe en el modelo");
+                        warnings->push_back("Animator: state '" + st.name + "' blends with clip '" +
+                                            e.clipName + "', which does not exist in the model");
                 }
 
                 const int found = findClip(st.clipName);
@@ -1012,8 +1012,8 @@ namespace DonTopo
                 {
                     st.clipIndex = -1;
                     if (warnings)
-                        warnings->push_back("Animator: el estado '" + st.name + "' referencia el clip '" +
-                                            st.clipName + "', que no existe en el modelo");
+                        warnings->push_back("Animator: state '" + st.name + "' references clip '" +
+                                            st.clipName + "', which does not exist in the model");
                     continue;
                 }
                 st.clipIndex      = found;
@@ -1035,8 +1035,8 @@ namespace DonTopo
                 if (it == mesh.skeleton.names.end())
                 {
                     if (warnings)
-                        warnings->push_back("Animator: la máscara de la capa '" + L.name +
-                                            "' nombra el hueso '" + nombre + "', que el modelo no tiene");
+                        warnings->push_back("Animator: the mask of layer '" + L.name +
+                                            "' names bone '" + nombre + "', which the model does not have");
                     continue;
                 }
                 L.maskResolved[(size_t)(it - mesh.skeleton.names.begin())] = 1;
@@ -1053,8 +1053,8 @@ namespace DonTopo
             if (it == mesh.skeleton.names.end())
             {
                 if (warnings && !c.boneName.empty())
-                    warnings->push_back("Animator: la IK '" + c.name + "' usa el hueso '" + c.boneName +
-                                        "', que el modelo no tiene");
+                    warnings->push_back("Animator: IK '" + c.name + "' uses bone '" + c.boneName +
+                                        "', which the model does not have");
                 continue;
             }
             const int   bi     = (int)(it - mesh.skeleton.names.begin());
@@ -1064,8 +1064,8 @@ namespace DonTopo
             if (c.type == IkType::TwoBone && (p < 0 || gp < 0))
             {
                 if (warnings)
-                    warnings->push_back("Animator: la IK '" + c.name + "' necesita una cadena de tres "
-                                        "huesos y '" + c.boneName + "' no tiene padre y abuelo");
+                    warnings->push_back("Animator: IK '" + c.name + "' needs a chain of three "
+                                        "bones and '" + c.boneName + "' has no parent and grandparent");
                 continue;
             }
             c.boneIndex = bi; c.parentIndex = p; c.grandParentIndex = gp;
@@ -1454,8 +1454,8 @@ namespace DonTopo
                     const bool origenOk = t.fromState == kAnyState || (t.fromState >= 0 && t.fromState < n);
                     const bool destinoOk = t.toState >= 0 && t.toState < n;
                     if (origenOk && destinoOk) return false;
-                    avisa("animator: transicion " + std::to_string(t.fromState) + " -> " +
-                          std::to_string(t.toState) + " con indices fuera de rango, se descarta");
+                    avisa("animator: transition " + std::to_string(t.fromState) + " -> " +
+                          std::to_string(t.toState) + " with indices out of range, discarded");
                     return true;
                 }),
             L.transitions.end());
@@ -1465,7 +1465,7 @@ namespace DonTopo
         {
             if (st.parent < -1 || st.parent >= n)
             {
-                avisa("animator.state." + st.name + ": padre fuera de rango, se deja en la raiz");
+                avisa("animator.state." + st.name + ": parent out of range, left at the root");
                 st.parent = -1;
             }
             // Su propia comprobacion de rango, no un `else` de la de arriba: una
@@ -1473,12 +1473,12 @@ namespace DonTopo
             // toca la primera, y aqui eso es indexar fuera del vector.
             if (st.parent >= 0 && st.parent < n && !L.states[(size_t)st.parent].isSubMachine)
             {
-                avisa("animator.state." + st.name + ": el padre no es una sub-maquina, se deja en la raiz");
+                avisa("animator.state." + st.name + ": the parent is not a sub-state machine, left at the root");
                 st.parent = -1;
             }
             if (st.subEntry < -1 || st.subEntry >= n)
             {
-                avisa("animator.state." + st.name + ": entrada fuera de rango, la sub-maquina queda vacia");
+                avisa("animator.state." + st.name + ": entry out of range, the sub-state machine is left empty");
                 st.subEntry = -1;
             }
         }
@@ -1496,7 +1496,7 @@ namespace DonTopo
             }
             if (L.states[(size_t)st.subEntry].parent != i)
             {
-                avisa("animator.state." + st.name + ": la entrada no es hija suya, la sub-maquina queda vacia");
+                avisa("animator.state." + st.name + ": the entry is not one of its children, the sub-state machine is left empty");
                 st.subEntry = -1;
             }
         }
@@ -1511,7 +1511,7 @@ namespace DonTopo
             if (pasos > n)
             {
                 avisa("animator.state." + L.states[(size_t)i].name +
-                      ": ciclo de sub-maquinas, se deja en la raiz");
+                      ": sub-state machine cycle, left at the root");
                 L.states[(size_t)i].parent = -1;
             }
         }
@@ -1520,7 +1520,7 @@ namespace DonTopo
         // sin arrancar.
         if (L.entryState < -1 || L.entryState >= n)
         {
-            avisa("animator: entrada de la capa fuera de rango");
+            avisa("animator: layer entry out of range");
             L.entryState = n > 0 ? 0 : -1;
         }
         if (L.currentState < -1 || L.currentState >= n) L.currentState = -1;

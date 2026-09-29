@@ -697,7 +697,7 @@ static void test_out_of_range_index_warns_on_scene_load(PhysicsManager& pm, Audi
     // que test_corrupt_materials_block_warns.
     bool warned = false;
     for (const auto& w : cargada.lastWarnings())
-        if (w.find("fuera de rango") != std::string::npos) { warned = true; break; }
+        if (w.find("out of range") != std::string::npos) { warned = true; break; }
     CHECK(warned);
 }
 
@@ -738,7 +738,7 @@ static void test_override_warnings_helper()
         // tiene que decir de QUÉ objeto e índice habla.
         CHECK(avisos[0].find("Cubo") != std::string::npos);
         CHECK(avisos[0].find("index 3") != std::string::npos);
-        CHECK(avisos[0].find("fuera de rango") != std::string::npos);
+        CHECK(avisos[0].find("out of range") != std::string::npos);
     }
 
     // Un negativo cuenta igual que un índice pasado: applyMaterialOverrides los

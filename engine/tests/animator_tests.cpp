@@ -7691,7 +7691,7 @@ static void test_ik_chain_resolution()
     for (const auto& w : avisos)
     {
         if (w.find("noExiste") != std::string::npos) nombre = true;
-        if (w.find("cadena")   != std::string::npos) cadena = true;
+        if (w.find("chain")   != std::string::npos) cadena = true;
     }
     CHECK(nombre && cadena);
 }
@@ -9219,8 +9219,8 @@ static void test_submachine_bad_file_warns(PhysicsManager& pm, AudioManager& am)
     bool rango = false, noCaja = false;
     for (const auto& w : loaded.lastWarnings())
     {
-        if (w.find("fuera de rango") != std::string::npos)        rango = true;
-        if (w.find("no es una sub-maquina") != std::string::npos) noCaja = true;
+        if (w.find("out of range") != std::string::npos)        rango = true;
+        if (w.find("is not a sub-state machine") != std::string::npos) noCaja = true;
     }
     CHECK(rango);
     CHECK(noCaja);
@@ -9244,7 +9244,7 @@ static void test_submachine_bad_file_warns(PhysicsManager& pm, AudioManager& am)
     CHECK(anim.states()[1].parent == -1 || anim.states()[3].parent == -1);
     bool ciclo = false;
     for (const auto& w : conCiclo.lastWarnings())
-        if (w.find("ciclo") != std::string::npos) ciclo = true;
+        if (w.find("cycle") != std::string::npos) ciclo = true;
     CHECK(ciclo);
 }
 

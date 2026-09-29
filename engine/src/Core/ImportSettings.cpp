@@ -56,7 +56,7 @@ std::optional<nlohmann::json> readSidecar(const std::filesystem::path& asset,
     const std::uintmax_t size = std::filesystem::file_size(sidecar, ec);
     if (ec || size > kMaxSidecarBytes)
     {
-        warn("sidecar ilegible o demasiado grande; se usan los valores por defecto");
+        warn("sidecar unreadable or too large; using the default values");
         return std::nullopt;
     }
     if (size == 0)
@@ -65,7 +65,7 @@ std::optional<nlohmann::json> readSidecar(const std::filesystem::path& asset,
     std::ifstream in(sidecar, std::ios::binary);
     if (!in)
     {
-        warn("no se pudo abrir el sidecar; se usan los valores por defecto");
+        warn("could not open the sidecar; using the default values");
         return std::nullopt;
     }
     const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
@@ -73,20 +73,20 @@ std::optional<nlohmann::json> readSidecar(const std::filesystem::path& asset,
     nlohmann::json j = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded() || !j.is_object())
     {
-        warn("JSON invalido; se usan los valores por defecto");
+        warn("invalid JSON; using the default values");
         return std::nullopt;
     }
     const auto version = j.find("version");
     if (version == j.end() || !version->is_number_integer() || version->get<long long>() != 1)
     {
-        warn("version de sidecar desconocida; se usan los valores por defecto");
+        warn("unknown sidecar version; using the default values");
         return std::nullopt;
     }
     const auto type = j.find("type");
     if (type == j.end() || !type->is_string() || type->get<std::string>() != expectedType)
     {
-        warn(std::string("el sidecar no es de tipo ") + expectedType +
-             "; se usan los valores por defecto");
+        warn(std::string("the sidecar is not of type ") + expectedType +
+             "; using the default values");
         return std::nullopt;
     }
     return j;
@@ -103,13 +103,13 @@ bool writeSidecar(const std::filesystem::path& asset, const nlohmann::json& j, s
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out)
         {
-            if (error) *error = "no se pudo escribir " + sidecar.string();
+            if (error) *error = "could not write " + sidecar.string();
             return false;
         }
         out << j.dump(2) << '\n';
         if (!out)
         {
-            if (error) *error = "escritura incompleta de " + sidecar.string();
+            if (error) *error = "incomplete write of " + sidecar.string();
             out.close();
             std::filesystem::remove(tmp, ec);
             return false;
@@ -118,7 +118,7 @@ bool writeSidecar(const std::filesystem::path& asset, const nlohmann::json& j, s
     std::filesystem::rename(tmp, sidecar, ec);
     if (ec)
     {
-        if (error) *error = "no se pudo renombrar a " + sidecar.string() + ": " + ec.message();
+        if (error) *error = "could not rename to " + sidecar.string() + ": " + ec.message();
         std::error_code rmEc;
         std::filesystem::remove(tmp, rmEc);
         return false;
@@ -134,7 +134,7 @@ bool removeSidecar(const std::filesystem::path& asset, std::string* error)
     std::filesystem::remove(sidecar, ec);
     if (ec)
     {
-        if (error) *error = "no se pudo borrar " + sidecar.string() + ": " + ec.message();
+        if (error) *error = "could not delete " + sidecar.string() + ": " + ec.message();
         return false;
     }
     return true;
@@ -178,12 +178,12 @@ TextureImportSettings loadTextureImportSettings(const std::filesystem::path& ass
         if      (v == "auto")   out.colorSpace = ColorSpaceOverride::Auto;
         else if (v == "srgb")   out.colorSpace = ColorSpaceOverride::Srgb;
         else if (v == "linear") out.colorSpace = ColorSpaceOverride::Linear;
-        else problems += "colorSpace desconocido (se usa auto). ";
+        else problems += "unknown colorSpace (using auto). ";
     }
     if (const auto it = j->find("mipmaps"); it != j->end())
     {
         if (it->is_boolean()) out.mipmaps = it->get<bool>();
-        else                  problems += "mipmaps no es booleano (se usa false). ";
+        else                  problems += "mipmaps is not a boolean (using false). ";
     }
     if (!problems.empty() && warning) *warning = problems;
     return out;
@@ -229,20 +229,20 @@ AudioImportSettings loadAudioImportSettings(const std::filesystem::path& asset, 
         {
             const double v = it->get<double>();
             if (!std::isfinite(v))
-                problems += "gainDb no es finito (se usa 0). ";
+                problems += "gainDb is not finite (using 0). ";
             else
             {
                 out.gainDb = clampAudioGainDb(static_cast<float>(v));
                 if (static_cast<double>(out.gainDb) != v)
-                    problems += "gainDb fuera de rango (acotado). ";
+                    problems += "gainDb out of range (clamped). ";
             }
         }
-        else problems += "gainDb no es numerico (se usa 0). ";
+        else problems += "gainDb is not numeric (using 0). ";
     }
     if (const auto it = j->find("forceMono"); it != j->end())
     {
         if (it->is_boolean()) out.forceMono = it->get<bool>();
-        else                  problems += "forceMono no es booleano (se usa false). ";
+        else                  problems += "forceMono is not a boolean (using false). ";
     }
     if (!problems.empty() && warning) *warning = problems;
     return out;
@@ -285,20 +285,20 @@ ModelImportSettings loadModelImportSettings(const std::filesystem::path& asset, 
             // 0.001 exacto, y un 0.001 escrito a mano saldria "fuera de rango".
             const double v = it->get<double>();
             if (std::isnan(v) || v <= 0.0)
-                problems += "scale no es positivo (se usa 1). ";
+                problems += "scale is not positive (using 1). ";
             else if (v > 1000.0)
             {
                 out.scale = kModelScaleMax;
-                problems += "scale fuera de rango (acotado). ";
+                problems += "scale out of range (clamped). ";
             }
             else if (v < 0.001)
             {
                 out.scale = kModelScaleMin;
-                problems += "scale fuera de rango (acotado). ";
+                problems += "scale out of range (clamped). ";
             }
             else out.scale = static_cast<float>(v);
         }
-        else problems += "scale no es numerico (se usa 1). ";
+        else problems += "scale is not numeric (using 1). ";
     }
     if (const auto it = j->find("normals"); it != j->end())
     {
@@ -306,14 +306,14 @@ ModelImportSettings loadModelImportSettings(const std::filesystem::path& asset, 
         if      (v == "file")   out.normals = NormalsMode::File;
         else if (v == "smooth") out.normals = NormalsMode::Smooth;
         else if (v == "flat")   out.normals = NormalsMode::Flat;
-        else problems += "normals desconocido (se usa file). ";
+        else problems += "unknown normals (using file). ";
     }
     auto readBool = [&](const char* key, bool& dst)
     {
         const auto it = j->find(key);
         if (it == j->end()) return;
         if (it->is_boolean()) dst = it->get<bool>();
-        else problems += std::string(key) + " no es booleano (se usa el defecto). ";
+        else problems += std::string(key) + " is not a boolean (using the default). ";
     };
     readBool("calcTangents",     out.calcTangents);
     readBool("flipUVs",          out.flipUVs);

@@ -29,7 +29,7 @@ namespace DonTopo
             "material.metallic", "material.roughness",
         };
         static_assert(sizeof(kNombres) / sizeof(kNombres[0]) == (size_t)PropertyId::Count,
-                      "la tabla de nombres tiene que cubrir PropertyId entero");
+                      "the name table must cover all of PropertyId");
     }
 
     const char* propertyName(PropertyId id)
