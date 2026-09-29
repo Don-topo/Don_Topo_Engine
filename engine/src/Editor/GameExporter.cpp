@@ -415,19 +415,26 @@ std::vector<ExportAsset> collectSceneAssets(
 namespace {
 
 // Reescribe un campo de path si el mapa lo conoce. Devuelve 1 si tocó algo.
+// storedBase: the folder a relative stored value is relative to (the Scene's
+// assetRoot for what toStoredPath wrote). Empty = look the value up as is.
 int rewriteField(nlohmann::json& holder, const char* field,
-                 const std::map<std::string, std::string>& sourceToPackage)
+                 const std::map<std::string, std::string>& sourceToPackage,
+                 const std::string& storedBase = {})
 {
     if (!holder.contains(field) || !holder[field].is_string()) return 0;
     const std::string current = holder[field].get<std::string>();
     if (current.empty()) return 0;
-    auto it = sourceToPackage.find(DonTopo::exportPathKey(current));
+    std::string lookup = current;
+    if (!storedBase.empty() && !fs::path(current).is_absolute())
+        lookup = (fs::path(storedBase) / fs::path(current)).string();
+    auto it = sourceToPackage.find(DonTopo::exportPathKey(lookup));
     if (it == sourceToPackage.end()) return 0;
     holder[field] = it->second;
     return 1;
 }
 
-int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& sourceToPackage)
+int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& sourceToPackage,
+                const std::string& assetRoot)
 {
     int n = 0;
     if (node.contains("mesh") && node["mesh"].is_object())
@@ -446,13 +453,15 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
         // baseOrm no se tocan: nodeToJson solo los escribe con
         // carryOverrideBaseline=true (clonar, undo/redo en memoria), y
         // exportGame llama a scene.toJson() con el default false.
+        // These four are the only fields toStoredPath writes relative to the
+        // scene's assetRoot (the project), which is not the export root.
         if (mesh.contains("materials") && mesh["materials"].is_array())
             for (nlohmann::json& mat : mesh["materials"])
             {
-                n += rewriteField(mat, "albedo", sourceToPackage);
-                n += rewriteField(mat, "normal", sourceToPackage);
-                n += rewriteField(mat, "orm", sourceToPackage);
-                n += rewriteField(mat, "matAsset", sourceToPackage);
+                n += rewriteField(mat, "albedo", sourceToPackage, assetRoot);
+                n += rewriteField(mat, "normal", sourceToPackage, assetRoot);
+                n += rewriteField(mat, "orm", sourceToPackage, assetRoot);
+                n += rewriteField(mat, "matAsset", sourceToPackage, assetRoot);
             }
     }
     if (node.contains("audioClip") && node["audioClip"].is_object())
@@ -488,20 +497,21 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
 
     if (node.contains("children") && node["children"].is_array())
         for (nlohmann::json& child : node["children"])
-            n += rewriteNode(child, sourceToPackage);
+            n += rewriteNode(child, sourceToPackage, assetRoot);
     return n;
 }
 
 } // namespace
 
 int rewriteScenePaths(nlohmann::json& sceneJson,
-                      const std::map<std::string, std::string>& sourceToPackage)
+                      const std::map<std::string, std::string>& sourceToPackage,
+                      const std::string& assetRoot)
 {
     // Acepta tanto el documento completo de Scene::toJson() ({version, root})
     // como un nodo suelto, para que los tests puedan armar el JSON a mano.
     if (sceneJson.contains("root") && sceneJson["root"].is_object())
-        return rewriteNode(sceneJson["root"], sourceToPackage);
-    return rewriteNode(sceneJson, sourceToPackage);
+        return rewriteNode(sceneJson["root"], sourceToPackage, assetRoot);
+    return rewriteNode(sceneJson, sourceToPackage, assetRoot);
 }
 
 ExportPlatform exportPlatformFor(platform::Os os)
@@ -1005,7 +1015,7 @@ ExportResult exportGame(Scene& scene,
         sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
 
     nlohmann::json sceneJson = scene.toJson();
-    rewriteScenePaths(sceneJson, sourceToPackage);
+    rewriteScenePaths(sceneJson, sourceToPackage, scene.assetRoot());
 
     return writeExportPackage(assets, sceneJson, destDir, gameName, projectRoot, scriptsDir,
                               runtimeExe, backend, skyboxFolder);

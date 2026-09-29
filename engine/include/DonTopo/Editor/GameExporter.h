@@ -65,8 +65,14 @@ std::vector<ExportAsset> collectSceneAssets(
 // keyeado por exportPathKey(sourcePath). Devuelve cuántos paths se
 // reescribieron. Las texturas no aparecen aquí porque el .scene no las
 // serializa: ModelLoader las deriva como dirname(fbx)/filename.
+//
+// assetRoot is the Scene's (Scene::assetRoot): the paths toJson stored relative
+// to it (matAsset, texture overrides) are resolved against it before the lookup,
+// not against the working directory. Empty = look them up as stored. No
+// default on purpose: a caller that forgets it silently breaks the package.
 int rewriteScenePaths(nlohmann::json& sceneJson,
-                      const std::map<std::string, std::string>& sourceToPackage);
+                      const std::map<std::string, std::string>& sourceToPackage,
+                      const std::string& assetRoot);
 
 // Valida que 'name' sea un componente de ruta seguro para construir
 // destDir / name. Rellena 'reason' con el motivo cuando devuelve false.

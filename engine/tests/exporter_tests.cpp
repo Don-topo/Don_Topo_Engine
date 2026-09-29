@@ -154,7 +154,7 @@ static void test_button_assets(const fs::path& root)
             sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
 
         nlohmann::json j = scene.toJson();
-        CHECK(rewriteScenePaths(j, sourceToPackage) == 2);
+        CHECK(rewriteScenePaths(j, sourceToPackage, scene.assetRoot()) == 2);
         const nlohmann::json& btn = j["root"]["children"][0]["button"];
         CHECK(btn["atlasPath"] == "assets/ui_atlas.png");
         CHECK(btn["fontPath"]  == "assets/hero.fbx");
@@ -326,7 +326,7 @@ static void test_rewrite_makes_paths_relative(const fs::path& root)
         sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
 
     nlohmann::json j = scene.toJson();
-    int rewritten = rewriteScenePaths(j, sourceToPackage);
+    int rewritten = rewriteScenePaths(j, sourceToPackage, scene.assetRoot());
 
     // hero.fbx (mesh) + hero.fbx (animationSource builtin? no lo hay) +
     // run.fbx + step.wav = 3 campos reescritos.
@@ -369,9 +369,61 @@ static void test_mat_asset_is_collected_and_rewritten(const fs::path& root)
     nlohmann::json j = scene.toJson();
     CHECK(j["root"]["children"][0]["mesh"]["materials"][0]["matAsset"].get<std::string>() == "assets/rojo.mat");
 
-    const int rewritten = rewriteScenePaths(j, sourceToPackage);
+    const int rewritten = rewriteScenePaths(j, sourceToPackage, scene.assetRoot());
     CHECK(rewritten >= 1);
     CHECK(j["root"]["children"][0]["mesh"]["materials"][0]["matAsset"].get<std::string>() == "assets/rojo.mat");
+}
+
+// The editor's real layout: the user's project lives in a subfolder
+// (projects/<name>) of the export root (the editor's own directory, which holds
+// the runtime, shaders and skybox). Scene::toJson stores matAsset and texture
+// overrides RELATIVE to the scene's assetRoot (the project), so a lookup keyed
+// on the raw stored string resolved it against the working directory, missed,
+// and left "assets/Materials/x.mat" in game.scene while the package had it at
+// projects/<name>/assets/Materials/x.mat: the exported procedural cube lost its
+// albedo and normal map in both backends. The test above hid it because there
+// assetRoot and the export root are the same folder.
+static void test_rewrite_resolves_paths_stored_relative_to_project(const fs::path& root)
+{
+    const fs::path project = root / "projects" / "p";
+    const fs::path mat     = project / "assets" / "Materials" / "Test.mat";
+    const fs::path normal  = project / "assets" / "Textures" / "n.png";
+    std::error_code ec;
+    fs::create_directories(mat.parent_path(), ec);
+    fs::create_directories(normal.parent_path(), ec);
+    std::ofstream(normal) << "png";
+    std::string err;
+    CHECK(saveMaterialAsset(mat, MaterialAsset{}, &err));
+
+    Scene scene;
+    scene.setAssetRoot(project.string());
+    auto* go = scene.addGameObject("Cube");
+    auto mesh = makeMesh({});   // procedural: no source file
+    mesh->material.normalMapPath = normal.string();
+    go->setMesh(mesh);
+    MaterialOverride ov;
+    ov.index    = 0;
+    ov.matAsset = mat.string();
+    ov.normal   = normal.string();
+    go->materialOverrides.push_back(ov);
+
+    std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    std::map<std::string, std::string> sourceToPackage;
+    for (const ExportAsset& a : assets)
+        sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
+    CHECK(sourceToPackage[exportPathKey(mat.string())] == "projects/p/assets/Materials/Test.mat");
+
+    nlohmann::json j = scene.toJson();
+    const nlohmann::json& before = j["root"]["children"][0]["mesh"]["materials"][0];
+    // Precondition: stored relative to the project, not to the export root.
+    CHECK(before["matAsset"].get<std::string>() == "assets/Materials/Test.mat");
+
+    CHECK(rewriteScenePaths(j, sourceToPackage, scene.assetRoot()) == 2);
+    const nlohmann::json& after = j["root"]["children"][0]["mesh"]["materials"][0];
+    CHECK(after["matAsset"].get<std::string>() == "projects/p/assets/Materials/Test.mat");
+    CHECK(after["normal"].get<std::string>()   == "projects/p/assets/Textures/n.png");
+
+    fs::remove_all(root / "projects", ec);
 }
 
 // Un path que no está en el mapa se deja intacto, no se borra ni se vacía.
@@ -383,7 +435,7 @@ static void test_rewrite_leaves_unknown_paths(const fs::path& root)
                   { "mesh", { { "sourcePath", "C:/otro/sitio/x.fbx" } } },
                   { "children", nlohmann::json::array() } };
 
-    int rewritten = rewriteScenePaths(j, {});
+    int rewritten = rewriteScenePaths(j, {}, {});
     CHECK(rewritten == 0);
     CHECK(j["root"]["mesh"]["sourcePath"].get<std::string>() == "C:/otro/sitio/x.fbx");
 }
@@ -445,7 +497,7 @@ static void test_rewrite_materials_override_outside_root(const fs::path& root)
     CHECK(j["root"]["children"][0]["mesh"]["materials"][0]["albedo"].get<std::string>()
           == albedoFile.string());
 
-    int rewritten = rewriteScenePaths(j, sourceToPackage);
+    int rewritten = rewriteScenePaths(j, sourceToPackage, scene.assetRoot());
     // sourcePath (hero.fbx, dentro de la raíz) + materials[0].albedo: 2 campos.
     CHECK(rewritten == 2);
 
@@ -1370,6 +1422,7 @@ int main()
     test_missing_asset_flagged(root);
     test_rewrite_makes_paths_relative(root);
     test_mat_asset_is_collected_and_rewritten(root);
+    test_rewrite_resolves_paths_stored_relative_to_project(root);
     test_rewrite_leaves_unknown_paths(root);
     test_rewrite_materials_override_outside_root(root);
     test_package_contents(root);
