@@ -9901,6 +9901,8 @@ bool D3D12Renderer::beginSplash(const std::string& logoPath)
     Impl& d = *m_impl;
     if (!d.initialized)
         return false;
+    if (d.splashPipeline)
+        return true;  // already set up: a second call must not leak the first logo
 
     std::vector<uint8_t> rgba;
     int w = 0, h = 0;
@@ -9918,6 +9920,10 @@ bool D3D12Renderer::beginSplash(const std::string& logoPath)
         std::swap_ranges(rgba.begin() + top * rowBytes, rgba.begin() + (top + 1) * rowBytes,
                          rgba.begin() + bottom * rowBytes);
 
+    // Like SplashScreen::init in Vulkan: any failure from here on (missing
+    // .dxil, root signature, PSO, a logo too big for a texture) means "no
+    // splash", never an exception that would kill the exported game at startup.
+    try {
     // sRGB, like the Vulkan splash (VK_FORMAT_R8G8B8A8_SRGB): sampling returns
     // linear and the sRGB render target view re-encodes it, so colours match.
     d.splashLogo = d.uploadTexture(rgba.data(), static_cast<UINT>(w), static_cast<UINT>(h), 1,
@@ -9995,6 +10001,17 @@ bool D3D12Renderer::beginSplash(const std::string& logoPath)
     pso.DepthStencilState.StencilEnable = FALSE;
     throwIfFailed(d.device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&d.splashPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(splash)");
+    } catch (const std::exception& e) {
+        diagLog(std::string("beginSplash: ") + e.what() + " (starting without a splash)");
+        d.splashPipeline.Reset();
+        d.splashRootSignature.Reset();
+        if (d.splashLogo) {
+            d.waitForGpu();  // the upload may still be referenced by the queue
+            d.splashLogo->Release();
+            d.splashLogo = nullptr;
+        }
+        return false;
+    }
     return true;
 }
 
@@ -10010,9 +10027,17 @@ void D3D12Renderer::drawSplashFrame(float alpha)
     // resize can be applied here (it also re-creates the splash's sRGB views).
     d.applyPendingResize();
 
+    // Same bookkeeping as drawFrame on failure: notarFrameDescartado logs it to
+    // d3d12_diag.log and counts the streak that eventually flags the device.
     ID3D12CommandAllocator* allocator = d.allocators[d.frameIndex].Get();
-    if (FAILED(allocator->Reset()) || FAILED(d.commandList->Reset(allocator, d.splashPipeline.Get())))
+    if (const HRESULT hr = allocator->Reset(); FAILED(hr)) {
+        d.notarFrameDescartado("ID3D12CommandAllocator::Reset (splash)", hr);
         return;
+    }
+    if (const HRESULT hr = d.commandList->Reset(allocator, d.splashPipeline.Get()); FAILED(hr)) {
+        d.notarFrameDescartado("ID3D12GraphicsCommandList::Reset (splash)", hr);
+        return;
+    }
 
     D3D12_RESOURCE_BARRIER toRenderTarget{};
     toRenderTarget.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -10028,15 +10053,19 @@ void D3D12Renderer::drawSplashFrame(float alpha)
     d.commandList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
     d.commandList->ClearRenderTargetView(rtv, clear, 0, nullptr);
 
-    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(d.width),
-                                  static_cast<float>(d.height), 0.0f, 1.0f};
-    const D3D12_RECT scissor{0, 0, static_cast<LONG>(d.width), static_cast<LONG>(d.height)};
+    // The swapchain's size, not the render size (width/height, which SSAA or
+    // the editor's panel can make different): this draws straight to the back
+    // buffer, like Vulkan with m_swapChainExtent.
+    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(d.swapWidth),
+                                  static_cast<float>(d.swapHeight), 0.0f, 1.0f};
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(d.swapWidth), static_cast<LONG>(d.swapHeight)};
     d.commandList->RSSetViewports(1, &viewport);
     d.commandList->RSSetScissorRects(1, &scissor);
 
     const float push[3] = {alpha, d.splashLogoAspect,
-                           d.height > 0 ? static_cast<float>(d.width) / static_cast<float>(d.height)
-                                        : 1.0f};
+                           d.swapHeight > 0 ? static_cast<float>(d.swapWidth) /
+                                                  static_cast<float>(d.swapHeight)
+                                            : 1.0f};
     ID3D12DescriptorHeap* heaps[] = {d.srvHeap.Get()};
     d.commandList->SetDescriptorHeaps(1, heaps);
     d.commandList->SetGraphicsRootSignature(d.splashRootSignature.Get());
@@ -10052,12 +10081,16 @@ void D3D12Renderer::drawSplashFrame(float alpha)
     toPresent.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
     d.commandList->ResourceBarrier(1, &toPresent);
 
-    if (FAILED(d.commandList->Close()))
+    if (const HRESULT hr = d.commandList->Close(); FAILED(hr)) {
+        d.notarFrameDescartado("ID3D12GraphicsCommandList::Close (splash)", hr);
         return;
+    }
     ID3D12CommandList* lists[] = {d.commandList.Get()};
     d.queue->ExecuteCommandLists(1, lists);
 
-    // Vsync, as the Vulkan splash (FIFO): the fade is timed, not frame-counted.
+    // Always vsync, whatever the project's present mode: the fade is timed, not
+    // frame-counted, so it looks the same; it only caps how long each splash
+    // frame blocks while assets load.
     const HRESULT presentHr = d.swapChain->Present(1, 0);
     if (presentHr == DXGI_ERROR_DEVICE_REMOVED || presentHr == DXGI_ERROR_DEVICE_RESET) {
         d.dumpDeviceRemoved("IDXGISwapChain3::Present (splash)", presentHr);
