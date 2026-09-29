@@ -364,10 +364,10 @@ static void test_repeated_warnings_are_collapsed(PhysicsManager& pm, AudioManage
 
     // Una sola entrada por mensaje, no tres ni dos.
     CHECK(countWarnings(loaded, "far") == 1);
-    CHECK(countWarnings(loaded, "más de una cámara") == 1);
+    CHECK(countWarnings(loaded, "more than one camera") == 1);
     CHECK(loaded.lastWarnings().size() == 2);
     // Y el recuento real va en el texto.
-    CHECK(countWarnings(loaded, "far: valor corrupto en la escena, se usa el valor por defecto (x3)") == 1);
+    CHECK(countWarnings(loaded, "far: corrupt value in the scene, using the default value (x3)") == 1);
     CHECK(countWarnings(loaded, "(x2)") == 1);
 }
 
@@ -528,7 +528,7 @@ static void test_corrupt_id_does_not_lose_scene(PhysicsManager& pm, AudioManager
     Scene loaded("Loaded");
     CHECK(loaded.fromJson(j, pm, am));
     checkEscenaSobrevive(loaded);
-    CHECK(countWarnings(loaded, "nodo 'Roto'.id") == 1);
+    CHECK(countWarnings(loaded, "node 'Roto'.id") == 1);
 
     // Y ningún id repetido, que es lo que pasaría si el campo corrupto acabara
     // en un 0 para todos los nodos rotos.
@@ -548,7 +548,7 @@ static void test_missing_children_does_not_lose_scene(PhysicsManager& pm, AudioM
     Scene loaded("Loaded");
     CHECK(loaded.fromJson(j, pm, am));
     checkEscenaSobrevive(loaded);
-    CHECK(countWarnings(loaded, "nodo 'Roto'.children") == 1);
+    CHECK(countWarnings(loaded, "node 'Roto'.children") == 1);
 }
 
 // "name" ausente en un hijo. El nodo se conserva (sin nombre), no se descarta:
@@ -659,10 +659,10 @@ static void test_corrupt_ui_string_warns(PhysicsManager& pm, AudioManager& am)
     // que se reporta y un string que se tragaba en silencio, a dos líneas de
     // distancia— es el hallazgo entero.
     CHECK(countWarnings(loaded, "fontSize") == 1);
-    CHECK(countWarnings(loaded, "button de 'Boton'.text") == 1);
-    CHECK(countWarnings(loaded, "panel de 'Panel'.sprite") == 1);
-    CHECK(countWarnings(loaded, "text de 'Texto'.fontPath") == 1);
-    CHECK(countWarnings(loaded, "image de 'Imagen'.atlasPath") == 1);
+    CHECK(countWarnings(loaded, "button of 'Boton'.text") == 1);
+    CHECK(countWarnings(loaded, "panel of 'Panel'.sprite") == 1);
+    CHECK(countWarnings(loaded, "text of 'Texto'.fontPath") == 1);
+    CHECK(countWarnings(loaded, "image of 'Imagen'.atlasPath") == 1);
 }
 
 // H6 de docs/core-audit.md. Scene::shutdown existe para una cosa muy concreta,
@@ -983,7 +983,7 @@ static void test_insert_from_json_discards_second_camera(PhysicsManager& pm, Aud
     // Con aviso: perder un componente al deshacer no puede ser mudo.
     bool aviso = false;
     for (const auto& w : scene.lastWarnings())
-        if (w.find("cámara") != std::string::npos || w.find("camara") != std::string::npos)
+        if (w.find("camera") != std::string::npos || w.find("camera") != std::string::npos)
             aviso = true;
     CHECK(aviso);
 }
@@ -1188,7 +1188,7 @@ static void test_insert_from_json_reassigns_colliding_id(PhysicsManager& pm, Aud
     // Console (que lee lastWarnings()) tiene que enterarse.
     bool avisoEncontrado = false;
     for (const auto& w : scene.lastWarnings())
-        if (w.find("ya estaba en uso") != std::string::npos) avisoEncontrado = true;
+        if (w.find("was already in use") != std::string::npos) avisoEncontrado = true;
     CHECK(avisoEncontrado);
 
     // Ningún id repetido en toda la escena.
@@ -1249,7 +1249,7 @@ static void test_scene_load_reassigns_duplicate_ids(PhysicsManager& pm, AudioMan
     //    venia roto (mismo criterio que insertFromJson).
     bool aviso = false;
     for (const auto& w : cargada.lastWarnings())
-        if (w.find("ya estaba en uso") != std::string::npos) aviso = true;
+        if (w.find("was already in use") != std::string::npos) aviso = true;
     CHECK(aviso);
 
     // 3. La consecuencia visible: mover el personaje NO puede tocar al plano.
@@ -1302,7 +1302,7 @@ static void test_insert_from_json_reassigns_id_colliding_within_same_subtree(Phy
 
     bool avisoEncontrado = false;
     for (const auto& w : scene.lastWarnings())
-        if (w.find("ya estaba en uso") != std::string::npos) avisoEncontrado = true;
+        if (w.find("was already in use") != std::string::npos) avisoEncontrado = true;
     CHECK(avisoEncontrado);
 
     // Ningún id repetido en toda la escena, por si acaso: el objetivo final

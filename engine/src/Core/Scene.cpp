@@ -812,7 +812,7 @@ namespace
                     {
                         if (warnings)
                             warnings->push_back("animator.state." + st.name + ": rootMotion '" + rm +
-                                                "' desconocido, se usa normal");
+                                                "' unknown, using normal");
                     }
                     else if (s.value("lockRootMotion", false))
                         st.rootMotion = AnimatorComponent::RootMotion::Lock;
@@ -828,7 +828,7 @@ namespace
                             ev.time = readFloat(ej, "time", 0.0f, warnings, ctxEv);
                             if (ev.time < 0.0f || ev.time > 1.0f)
                             {
-                                if (warnings) warnings->push_back(ctxEv + ": time fuera de [0,1], se ajusta");
+                                if (warnings) warnings->push_back(ctxEv + ": time outside [0,1], clamped");
                                 ev.time = std::clamp(ev.time, 0.0f, 1.0f);
                             }
                             st.events.push_back(std::move(ev));
@@ -840,8 +840,8 @@ namespace
                     if (st.speed < 0.0f)
                     {
                         if (warnings)
-                            warnings->push_back("animator.state." + st.name + ".speed negativo (" +
-                                                 std::to_string(st.speed) + "), se acota a 0");
+                            warnings->push_back("animator.state." + st.name + ".speed negative (" +
+                                                 std::to_string(st.speed) + "), clamped to 0");
                         st.speed = 0.0f;
                     }
                     if (s.contains("pos") && s["pos"].is_array() && s["pos"].size() == 2)
@@ -892,8 +892,8 @@ namespace
                         if (warnings)
                             warnings->push_back("animator.transition[" + std::to_string(tr.fromState) +
                                                  "->" + std::to_string(tr.toState) +
-                                                 "].exitTime negativo (" + std::to_string(tr.exitTime) +
-                                                 "), se acota a 0");
+                                                 "].exitTime negative (" + std::to_string(tr.exitTime) +
+                                                 "), clamped to 0");
                         tr.exitTime = 0.0f;
                     }
                     tr.canTransitionToSelf = t.value("canTransitionToSelf", false);
@@ -938,9 +938,9 @@ namespace
                         if (warnings)
                             warnings->push_back("animator.transition[" + std::to_string(tr.fromState) +
                                                  "->" + std::to_string(tr.toState) +
-                                                 "]: índice de estado fuera de rango (" +
+                                                 "]: state index out of range (" +
                                                  std::to_string(nEstados) +
-                                                 " estado(s) en el grafo), la transición se descarta");
+                                                 " state(s) in the graph), the transition is discarded");
                         continue;
                     }
                     a->addTransition(tr, capa);
@@ -959,8 +959,8 @@ namespace
             const int entrada = g.value("entryState", 0);
             if (!a->states(capa).empty() && (entrada < 0 || entrada >= (int)a->states(capa).size()) && warnings)
                 warnings->push_back("animator.entryState: " + std::to_string(entrada) +
-                                     " fuera de rango (" + std::to_string(a->states(capa).size()) +
-                                     " estado(s) en el grafo), se arranca en el estado 0");
+                                     " out of range (" + std::to_string(a->states(capa).size()) +
+                                     " state(s) in the graph), starting in state 0");
             a->setEntryState(entrada, capa);
         };
         // Clips de propiedades: el índice de cada estado y el `resolved` de
@@ -969,8 +969,8 @@ namespace
         {
             const auto& lista = j["propertyClips"];
             if ((int)lista.size() > AnimatorComponent::kMaxPropertyClips && warnings)
-                warnings->push_back("Animator: el fichero trae " + std::to_string(lista.size()) +
-                                     " clips de propiedades; se cargan los " +
+                warnings->push_back("Animator: the file has " + std::to_string(lista.size()) +
+                                     " property clips; loading the first " +
                                      std::to_string(AnimatorComponent::kMaxPropertyClips));
             for (const auto& cj : lista)
             {
@@ -982,8 +982,8 @@ namespace
                 if (clip.duration <= 0.0f)
                 {
                     if (warnings)
-                        warnings->push_back(ctxClip + ": duración no positiva (" +
-                                             std::to_string(clip.duration) + "), se acota");
+                        warnings->push_back(ctxClip + ": non-positive duration (" +
+                                             std::to_string(clip.duration) + "), clamped");
                     clip.duration = 0.001f;
                 }
                 if (cj.contains("tracks") && cj["tracks"].is_array())
@@ -1001,7 +1001,7 @@ namespace
                             if (tr.parameterName.empty())
                             {
                                 if (warnings)
-                                    warnings->push_back(ctxClip + ": una curva sin parametro, se descarta");
+                                    warnings->push_back(ctxClip + ": a curve without a parameter, discarded");
                                 continue;
                             }
                         }
@@ -1012,8 +1012,8 @@ namespace
                             if (tr.property == DonTopo::PropertyId::Count)
                             {
                                 if (warnings)
-                                    warnings->push_back(ctxClip + ": propiedad '" + prop +
-                                                         "' desconocida, la pista se descarta");
+                                    warnings->push_back(ctxClip + ": property '" + prop +
+                                                         "' unknown, the track is discarded");
                                 continue;
                             }
                         }
@@ -1040,8 +1040,8 @@ namespace
         {
             const auto& lista = j["ik"];
             if ((int)lista.size() > AnimatorComponent::kMaxIkConstraints && warnings)
-                warnings->push_back("Animator: el fichero trae " + std::to_string(lista.size()) +
-                                     " restricciones de IK; se cargan las " +
+                warnings->push_back("Animator: the file has " + std::to_string(lista.size()) +
+                                     " IK constraints; loading the first " +
                                      std::to_string(AnimatorComponent::kMaxIkConstraints));
             for (const auto& cj : lista)
             {
@@ -1053,7 +1053,7 @@ namespace
                 if (tipo == "twoBone") c.type = AnimatorComponent::IkType::TwoBone;
                 else if (tipo != "lookAt" && warnings)
                     warnings->push_back("animator.ik." + c.name + ": type '" + tipo +
-                                         "' desconocido, se usa lookAt");
+                                         "' unknown, using lookAt");
                 c.targetId = cj.value("target", (uint64_t)0);
                 c.poleId   = cj.value("pole", (uint64_t)0);
                 const std::string ctxIk = "animator.ik." + c.name;
@@ -1071,8 +1071,8 @@ namespace
         {
             const auto& capas = j["layers"];
             if ((int)capas.size() > AnimatorComponent::kMaxLayers - 1 && warnings)
-                warnings->push_back("Animator: el fichero trae " + std::to_string(capas.size() + 1) +
-                                     " capas; se cargan las " + std::to_string(AnimatorComponent::kMaxLayers));
+                warnings->push_back("Animator: the file has " + std::to_string(capas.size() + 1) +
+                                     " layers; loading the first " + std::to_string(AnimatorComponent::kMaxLayers));
             for (const auto& lj : capas)
             {
                 if (!lj.is_object()) continue;
@@ -1084,7 +1084,7 @@ namespace
                     a->setLayerMode(li, AnimatorComponent::LayerMode::Additive);
                 else if (modo != "override" && warnings)
                     warnings->push_back("animator.layer." + a->layer(li).name + ": mode '" + modo +
-                                         "' desconocido, se usa override");
+                                         "' unknown, using override");
                 if (lj.contains("mask") && lj["mask"].is_array())
                     for (const auto& b : lj["mask"])
                         if (b.is_string()) a->layerMutable(li).maskBones.push_back(b.get<std::string>());
@@ -1798,7 +1798,7 @@ namespace
         {
             if (required && warnings)
                 warnings->push_back(contexto + "." + key +
-                                     ": falta en la escena, se usa el valor por defecto");
+                                     ": missing in the scene, using the default value");
             return def;
         }
         const nlohmann::json& v = j[key];
@@ -1806,7 +1806,7 @@ namespace
         {
             if (warnings)
                 warnings->push_back(contexto + "." + key +
-                                     ": valor corrupto en la escena, se usa el valor por defecto");
+                                     ": corrupt value in the scene, using the default value");
             return def;
         }
         float f = v.get<float>();
@@ -1814,7 +1814,7 @@ namespace
         {
             if (warnings)
                 warnings->push_back(contexto + "." + key +
-                                     ": valor no finito (NaN/Inf) en la escena, se usa el valor por defecto");
+                                     ": non-finite value (NaN/Inf) in the scene, using the default value");
             return def;
         }
         return f;
@@ -1828,7 +1828,7 @@ namespace
         {
             if (required && warnings)
                 warnings->push_back(contexto + "." + key +
-                                     ": falta en la escena, se usa el valor por defecto");
+                                     ": missing in the scene, using the default value");
             return def;
         }
         const nlohmann::json& v = j[key];
@@ -1836,7 +1836,7 @@ namespace
         {
             if (warnings)
                 warnings->push_back(contexto + "." + key +
-                                     ": valor corrupto en la escena, se usa el valor por defecto");
+                                     ": corrupt value in the scene, using the default value");
             return def;
         }
         return v.get<bool>();
@@ -1852,7 +1852,7 @@ namespace
         {
             if (required && warnings)
                 warnings->push_back(contexto + "." + key +
-                                     ": falta en la escena, se usa el valor por defecto");
+                                     ": missing in the scene, using the default value");
             return def;
         }
         const nlohmann::json& v = j[key];
@@ -1860,7 +1860,7 @@ namespace
         {
             if (warnings)
                 warnings->push_back(contexto + "." + key +
-                                     ": valor corrupto en la escena, se usa el valor por defecto");
+                                     ": corrupt value in the scene, using the default value");
             return def;
         }
         return v.get<std::string>();
@@ -1910,14 +1910,14 @@ namespace
         {
             if (warnings)
                 warnings->push_back(contexto + "[" + std::to_string(idx) +
-                                     "]: se esperaba un número y no lo es, se usa el valor por defecto");
+                                     "]: expected a number and it is not one, using the default value");
             return def;
         }
         if (idx >= arr.size())
         {
             if (required && warnings)
                 warnings->push_back(contexto + "[" + std::to_string(idx) +
-                                     "]: falta en la escena, se usa el valor por defecto");
+                                     "]: missing in the scene, using the default value");
             return def;
         }
         const nlohmann::json& v = arr[idx];
@@ -1925,7 +1925,7 @@ namespace
         {
             if (warnings)
                 warnings->push_back(contexto + "[" + std::to_string(idx) +
-                                     "]: valor corrupto en la escena, se usa el valor por defecto");
+                                     "]: corrupt value in the scene, using the default value");
             return def;
         }
         float f = v.get<float>();
@@ -1933,7 +1933,7 @@ namespace
         {
             if (warnings)
                 warnings->push_back(contexto + "[" + std::to_string(idx) +
-                                     "]: valor no finito (NaN/Inf) en la escena, se usa el valor por defecto");
+                                     "]: non-finite value (NaN/Inf) in the scene, using the default value");
             return def;
         }
         return f;
@@ -1955,8 +1955,8 @@ namespace
         if (!ok)
         {
             if (warnings)
-                warnings->push_back(contexto + ": localTransform corrupto en la escena "
-                                     "(valor no numérico, ausente o no finito); se usa la matriz identidad");
+                warnings->push_back(contexto + ": corrupt localTransform in the scene "
+                                     "(non-numeric, missing or non-finite value); using the identity matrix");
             return glm::mat4(1.0f);
         }
         glm::mat4 m(1.0f);
@@ -2063,8 +2063,8 @@ namespace
         }
         NodeLoadCache::StaticEntry& entry = it->second;
         if (piece < 0 || static_cast<size_t>(piece) >= entry.model.meshes.size())
-            throw std::runtime_error("'" + sourcePath + "' no tiene la pieza " + std::to_string(piece) +
-                                     " (tiene " + std::to_string(entry.model.meshes.size()) + ")");
+            throw std::runtime_error("'" + sourcePath + "' has no piece " + std::to_string(piece) +
+                                     " (it has " + std::to_string(entry.model.meshes.size()) + ")");
         auto& mesh = entry.byPiece[piece];
         if (!mesh) mesh = std::make_shared<const DonTopo::Mesh>(entry.model.meshes[piece]);
         return mesh;
@@ -2112,12 +2112,12 @@ namespace
             }
             else if (warnings)
             {
-                warnings->push_back("nodo '" + node->name + "'.id: valor corrupto en la escena, "
-                                     "el objeto estrena un id nuevo");
+                warnings->push_back("node '" + node->name + "'.id: corrupt value in the scene, "
+                                     "the object gets a new id");
             }
         }
         node->localTransform = jsonToMat4(j.value("localTransform", nlohmann::json::array()),
-                                           warnings, "localTransform de '" + node->name + "'");
+                                           warnings, "localTransform of '" + node->name + "'");
         node->worldTransform = parentWorld * node->localTransform;
 
         node->ssrEnabled = j.value("ssrEnabled", false);
@@ -2177,14 +2177,14 @@ namespace
                 // estar hablando de dos assets diferentes.
                 if (!std::filesystem::exists(sourcePath))
                 {
-                    warnings->push_back(sourcePath + ": la escena lo tenía guardado como animado, pero el"
-                                                      " fichero no se encuentra (¿se movió o se borró?);"
-                                                      " la malla no se puede cargar");
+                    warnings->push_back(sourcePath + ": the scene saved it as animated, but the"
+                                                      " file cannot be found (was it moved or deleted?);"
+                                                      " the mesh cannot be loaded");
                 }
                 else
                 {
-                    warnings->push_back(sourcePath + ": la escena lo tenía guardado como animado, pero el fichero"
-                                                      " ya no declara huesos; se descartan sus fuentes de animación");
+                    warnings->push_back(sourcePath + ": the scene saved it as animated, but the file"
+                                                      " no longer declares bones; its animation sources are discarded");
                 }
             }
             try
@@ -2279,9 +2279,9 @@ namespace
                                 if (clipsOk)
                                     cfg.clipNames = cj.get<std::vector<std::string>>();
                                 else if (warnings)
-                                    warnings->push_back("mesh de '" + node->name +
-                                                         "'.animationSources.clips: lista corrupta en la "
-                                                         "escena, se ignoran los nombres guardados de esa fuente");
+                                    warnings->push_back("mesh of '" + node->name +
+                                                         "'.animationSources.clips: corrupt list in the "
+                                                         "scene, the names saved for that source are ignored");
                             }
 
                             fuentes.push_back(std::move(cfg));
@@ -2369,15 +2369,15 @@ namespace
                         // Media geometría es peor que ninguna: mismo criterio
                         // que jsonToMat4 con la matriz.
                         if (warnings)
-                            warnings->push_back("mesh de '" + node->name + "'.indices: lista corrupta "
-                                                 "en la escena, el objeto se carga sin malla");
+                            warnings->push_back("mesh of '" + node->name + "'.indices: corrupt list "
+                                                 "in the scene, the object loads without a mesh");
                     }
                     else
                     {
                         auto mesh = std::make_shared<DonTopo::Mesh>();
                         mesh->name = meshName;
                         for (const auto& vj : j["mesh"]["vertices"])
-                            mesh->vertices.push_back(jsonToVertex(vj, warnings, "mesh de '" + node->name + "'"));
+                            mesh->vertices.push_back(jsonToVertex(vj, warnings, "mesh of '" + node->name + "'"));
                         mesh->indices = idx.get<std::vector<uint32_t>>();
                         node->setMesh(std::move(mesh));
                     }
@@ -2405,7 +2405,7 @@ namespace
                 if (warnings)
                 {
                     const std::string ref = sourcePath.empty() ? meshName : sourcePath;
-                    warnings->push_back(ref + ": no se pudo cargar la malla (" + e.what() + ")");
+                    warnings->push_back(ref + ": could not load the mesh (" + e.what() + ")");
                 }
             }
 
@@ -2418,8 +2418,8 @@ namespace
                 if (!mats.is_array())
                 {
                     if (warnings)
-                        warnings->push_back("mesh de '" + node->name + "'.materials: no es una lista, "
-                                            "las texturas asignadas a mano se descartan");
+                        warnings->push_back("mesh of '" + node->name + "'.materials: not a list, "
+                                            "the hand-assigned textures are discarded");
                 }
                 else
                 {
@@ -2429,8 +2429,8 @@ namespace
                             || !entry["index"].is_number_integer())
                         {
                             if (warnings)
-                                warnings->push_back("mesh de '" + node->name + "'.materials: entrada sin "
-                                                    "index valido, se descarta");
+                                warnings->push_back("mesh of '" + node->name + "'.materials: entry without a "
+                                                    "valid index, discarded");
                             continue;
                         }
                         MaterialOverride ov;
@@ -2454,7 +2454,7 @@ namespace
                         // escrito a mano antes de que llegue al Material y a la
                         // clave de dedup — el centinela (negativo) no se ve
                         // afectado, clamp(-1, -1, 1) lo deja igual.
-                        const std::string materialesCtx = "mesh de '" + node->name + "'.materials";
+                        const std::string materialesCtx = "mesh of '" + node->name + "'.materials";
                         ov.metallic  = std::clamp(readFloat(entry, "metallic",  -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
                         ov.roughness = std::clamp(readFloat(entry, "roughness", -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
                         // El baseline SOLO se lee en el camino de MEMORIA (ver
@@ -2526,7 +2526,7 @@ namespace
         if (j.contains("boxCollider"))
         {
             const auto& c = j["boxCollider"];
-            const std::string ctx = "boxCollider de '" + node->name + "'";
+            const std::string ctx = "boxCollider of '" + node->name + "'";
             node->setBoxCollider(physics.createBoxColliderComponent(
                 jsonToVec3(c.value("halfExtents", nlohmann::json::array()), warnings, ctx + ".halfExtents", glm::vec3(25.0f), true),
                 jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center", glm::vec3(0.0f), true),
@@ -2544,7 +2544,7 @@ namespace
         if (j.contains("sphereCollider"))
         {
             const auto& c = j["sphereCollider"];
-            const std::string ctx = "sphereCollider de '" + node->name + "'";
+            const std::string ctx = "sphereCollider of '" + node->name + "'";
             node->setSphereCollider(physics.createSphereColliderComponent(
                 readFloat(c, "radius", 25.0f, warnings, ctx, true),
                 jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center", glm::vec3(0.0f), true),
@@ -2559,7 +2559,7 @@ namespace
         if (j.contains("capsuleCollider"))
         {
             const auto& c = j["capsuleCollider"];
-            const std::string ctx = "capsuleCollider de '" + node->name + "'";
+            const std::string ctx = "capsuleCollider of '" + node->name + "'";
             node->setCapsuleCollider(physics.createCapsuleColliderComponent(
                 readFloat(c, "radius", 15.0f, warnings, ctx, true),
                 readFloat(c, "halfHeight", 25.0f, warnings, ctx, true),
@@ -2575,7 +2575,7 @@ namespace
         if (j.contains("planeCollider"))
         {
             const auto& c = j["planeCollider"];
-            const std::string ctx = "planeCollider de '" + node->name + "'";
+            const std::string ctx = "planeCollider of '" + node->name + "'";
             node->setPlaneCollider(physics.createPlaneColliderComponent(
                 jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center", glm::vec3(0.0f), true),
                 node->worldTransform));
@@ -2605,8 +2605,8 @@ namespace
                 // perdía la carga entera. Se avisa y se trata como "sin campo
                 // legacy", que deja el collider static — el estado por defecto.
                 if (warnings)
-                    warnings->push_back(std::string(key) + " de '" + node->name +
-                                         "'.useGravity: valor corrupto en la escena, se ignora");
+                    warnings->push_back(std::string(key) + " of '" + node->name +
+                                         "'.useGravity: corrupt value in the scene, ignored");
                 return -1;
             }
             return g.get<bool>() ? 1 : 0;
@@ -2614,7 +2614,7 @@ namespace
         if (j.contains("rigidbody"))
         {
             const auto& r = j["rigidbody"];
-            const std::string ctx = "rigidbody de '" + node->name + "'";
+            const std::string ctx = "rigidbody of '" + node->name + "'";
             auto rb = std::make_shared<Rigidbody>();
             rb->setMass(readFloat(r, "mass", 1.0f, warnings, ctx));
             rb->setUseGravity(r.value("useGravity", true));
@@ -2650,7 +2650,7 @@ namespace
         if (j.contains("camera"))
         {
             const auto& c = j["camera"];
-            const std::string ctx = "camera de '" + node->name + "'";
+            const std::string ctx = "camera of '" + node->name + "'";
             auto cam = std::make_shared<CameraComponent>();
             cam->setMode(c.value("mode", std::string("perspective")) == "orthographic"
                              ? CameraComponent::ProjectionMode::Orthographic
@@ -2670,7 +2670,7 @@ namespace
         if (j.contains("reflectionProbe"))
         {
             const auto& p = j["reflectionProbe"];
-            const std::string ctx = "reflectionProbe de '" + node->name + "'";
+            const std::string ctx = "reflectionProbe of '" + node->name + "'";
             auto probe = std::make_shared<ReflectionProbeComponent>();
             probe->setRadius(readFloat(p, "radius", 300.0f, warnings, ctx));
             probe->setIntensity(readFloat(p, "intensity", 1.0f, warnings, ctx));
@@ -2682,7 +2682,7 @@ namespace
         if (j.contains("light"))
         {
             const auto& l = j["light"];
-            const std::string ctx = "light de '" + node->name + "'";
+            const std::string ctx = "light of '" + node->name + "'";
             auto light = std::make_shared<LightComponent>();
             light->setType(lightTypeFromStr(l.value("type", std::string("point"))));
             light->setColor(jsonToVec3(l.value("color", nlohmann::json::array()),
@@ -2703,7 +2703,7 @@ namespace
         if (j.contains("canvas"))
         {
             const auto& c = j["canvas"];
-            const std::string ctx = "canvas de '" + node->name + "'";
+            const std::string ctx = "canvas of '" + node->name + "'";
             // Un bool o un string corrupto (null, o del tipo que no toca) cae al
             // default en vez de lanzar: .value() sí lanza con un null, y un
             // campo roto no puede tumbar la carga de la escena entera.
@@ -2739,7 +2739,7 @@ namespace
         if (j.contains("button"))
         {
             const auto& b = j["button"];
-            const std::string ctx = "button de '" + node->name + "'";
+            const std::string ctx = "button of '" + node->name + "'";
             // Un bool o un string corrupto (null, o del tipo que no toca) cae al
             // default en vez de lanzar: .value() sí lanza con un null, y un
             // campo roto no puede tumbar la carga de la escena entera.
@@ -2795,7 +2795,7 @@ namespace
         if (j.contains("text"))
         {
             const auto& t = j["text"];
-            const std::string ctx = "text de '" + node->name + "'";
+            const std::string ctx = "text of '" + node->name + "'";
             // Mismo criterio que el Button: un bool o un string corrupto cae al
             // default en vez de lanzar, que un campo roto no puede tumbar la
             // carga de la escena entera.
@@ -2834,7 +2834,7 @@ namespace
         if (j.contains("progressBar"))
         {
             const auto& p = j["progressBar"];
-            const std::string ctx = "progressBar de '" + node->name + "'";
+            const std::string ctx = "progressBar of '" + node->name + "'";
             auto bar = std::make_shared<ProgressBarComponent>();
             bar->anchorMin = readVec2XY(p, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             bar->anchorMax = readVec2XY(p, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2864,7 +2864,7 @@ namespace
         if (j.contains("panel"))
         {
             const auto& p = j["panel"];
-            const std::string ctx = "panel de '" + node->name + "'";
+            const std::string ctx = "panel of '" + node->name + "'";
             auto panel = std::make_shared<PanelComponent>();
             panel->anchorMin = readVec2XY(p, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             panel->anchorMax = readVec2XY(p, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2883,7 +2883,7 @@ namespace
         if (j.contains("image"))
         {
             const auto& im = j["image"];
-            const std::string ctx = "image de '" + node->name + "'";
+            const std::string ctx = "image of '" + node->name + "'";
             auto img = std::make_shared<ImageComponent>();
             img->anchorMin = readVec2XY(im, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             img->anchorMax = readVec2XY(im, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2923,7 +2923,7 @@ namespace
         if (j.contains("slider"))
         {
             const auto& sl = j["slider"];
-            const std::string ctx = "slider de '" + node->name + "'";
+            const std::string ctx = "slider of '" + node->name + "'";
             auto slider = std::make_shared<SliderComponent>();
             slider->anchorMin = readVec2XY(sl, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             slider->anchorMax = readVec2XY(sl, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2957,7 +2957,7 @@ namespace
         if (j.contains("checkbox"))
         {
             const auto& cb = j["checkbox"];
-            const std::string ctx = "checkbox de '" + node->name + "'";
+            const std::string ctx = "checkbox of '" + node->name + "'";
             auto chk = std::make_shared<CheckboxComponent>();
             chk->anchorMin = readVec2XY(cb, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             chk->anchorMax = readVec2XY(cb, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2981,7 +2981,7 @@ namespace
         if (j.contains("toggle"))
         {
             const auto& tg = j["toggle"];
-            const std::string ctx = "toggle de '" + node->name + "'";
+            const std::string ctx = "toggle of '" + node->name + "'";
             auto tog = std::make_shared<ToggleComponent>();
             tog->anchorMin = readVec2XY(tg, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             tog->anchorMax = readVec2XY(tg, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -3009,7 +3009,7 @@ namespace
         if (j.contains("scrollbar"))
         {
             const auto& sb = j["scrollbar"];
-            const std::string ctx = "scrollbar de '" + node->name + "'";
+            const std::string ctx = "scrollbar of '" + node->name + "'";
             auto scr = std::make_shared<ScrollbarComponent>();
             scr->anchorMin = readVec2XY(sb, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             scr->anchorMax = readVec2XY(sb, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -3043,7 +3043,7 @@ namespace
         if (j.contains("inputField"))
         {
             const auto& fj = j["inputField"];
-            const std::string ctx = "inputField de '" + node->name + "'";
+            const std::string ctx = "inputField of '" + node->name + "'";
             auto f = std::make_shared<InputFieldComponent>();
             f->anchorMin = readVec2XY(fj, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             f->anchorMax = readVec2XY(fj, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -3090,7 +3090,7 @@ namespace
         if (j.contains("dropdown"))
         {
             const auto& dj = j["dropdown"];
-            const std::string ctx = "dropdown de '" + node->name + "'";
+            const std::string ctx = "dropdown of '" + node->name + "'";
             auto d = std::make_shared<DropdownComponent>();
             d->anchorMin = readVec2XY(dj, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             d->anchorMax = readVec2XY(dj, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -3135,7 +3135,7 @@ namespace
         if (j.contains("scrollView"))
         {
             const auto& vj = j["scrollView"];
-            const std::string ctx = "scrollView de '" + node->name + "'";
+            const std::string ctx = "scrollView of '" + node->name + "'";
             auto v = std::make_shared<ScrollViewComponent>();
             v->anchorMin = readVec2XY(vj, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             v->anchorMax = readVec2XY(vj, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -3159,7 +3159,7 @@ namespace
         if (j.contains("layout"))
         {
             const auto& l = j["layout"];
-            const std::string ctx = "layout de '" + node->name + "'";
+            const std::string ctx = "layout of '" + node->name + "'";
             auto layout = std::make_shared<LayoutComponent>();
             layout->anchorMin = readVec2XY(l, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             layout->anchorMax = readVec2XY(l, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -3211,7 +3211,7 @@ namespace
         if (j.contains("audioClip"))
         {
             const auto& c = j["audioClip"];
-            const std::string ctx = "audioClip de '" + node->name + "'";
+            const std::string ctx = "audioClip of '" + node->name + "'";
             // path/is3D/loop los escribe nodeToJson SIEMPRE, así que required
             // = true: si faltan no es back-compat, es corrupción y hay que
             // nombrarla. Antes se leían con .at(): un audioClip al que le
@@ -3233,8 +3233,8 @@ namespace
                 if (!DonTopo::isSupportedAudioExtension(ext))
                 {
                     if (warnings)
-                        warnings->push_back(ctx + ".path: formato de audio no soportado ('" +
-                                             ext + "'), el clip se descarta");
+                        warnings->push_back(ctx + ".path: unsupported audio format ('" +
+                                             ext + "'), the clip is discarded");
                     path.clear();
                 }
             }
@@ -3261,8 +3261,8 @@ namespace
                 const std::string busName = readString(c, "bus", "sfx", warnings, ctx);
                 DonTopo::AudioBus bus = DonTopo::AudioBus::Sfx;
                 if (!DonTopo::audioBusFromStr(busName, bus) && warnings)
-                    warnings->push_back(ctx + ".bus: valor desconocido '" + busName +
-                                         "', se usa 'sfx'");
+                    warnings->push_back(ctx + ".bus: unknown value '" + busName +
+                                         "', using 'sfx'");
                 clip->setBus(bus);
                 // Mismo criterio que el bus: ausente = "sample" (como se cargaba
                 // todo antes), nombre desconocido = aviso. OJO: setLoadMode
@@ -3273,15 +3273,15 @@ namespace
                 const std::string loadModeName = readString(c, "loadMode", "sample", warnings, ctx);
                 DonTopo::AudioLoadMode loadMode = DonTopo::AudioLoadMode::Sample;
                 if (!DonTopo::audioLoadModeFromStr(loadModeName, loadMode) && warnings)
-                    warnings->push_back(ctx + ".loadMode: valor desconocido '" + loadModeName +
-                                         "', se usa 'sample'");
+                    warnings->push_back(ctx + ".loadMode: unknown value '" + loadModeName +
+                                         "', using 'sample'");
                 clip->setLoadMode(loadMode);
                 // Curva de atenuacion: mismo criterio que bus y loadMode.
                 const std::string rolloffName = readString(c, "rolloff", "inverse", warnings, ctx);
                 DonTopo::AudioRolloff rolloff = DonTopo::AudioRolloff::Inverse;
                 if (!DonTopo::audioRolloffFromStr(rolloffName, rolloff) && warnings)
-                    warnings->push_back(ctx + ".rolloff: valor desconocido '" + rolloffName +
-                                         "', se usa 'inverse'");
+                    warnings->push_back(ctx + ".rolloff: unknown value '" + rolloffName +
+                                         "', using 'inverse'");
                 clip->setRolloff(rolloff);
                 // Las tres de la voz. Defaults neutros: una escena anterior a
                 // esta feature suena exactamente igual que antes.
@@ -3312,7 +3312,7 @@ namespace
         if (j.contains("reverbZone"))
         {
             const auto& z = j["reverbZone"];
-            const std::string zctx = "reverbZone de '" + node->name + "'";
+            const std::string zctx = "reverbZone of '" + node->name + "'";
             auto zone = std::make_shared<DonTopo::ReverbZoneComponent>();
             // El preset se valida contra la lista real: uno desconocido avisa y
             // cae a "room" en vez de instalar un ambiente cualquiera.
@@ -3321,8 +3321,8 @@ namespace
             if (std::find(known.begin(), known.end(), preset) == known.end())
             {
                 if (warnings)
-                    warnings->push_back(zctx + ".preset: desconocido '" + preset +
-                                         "', se usa 'room'");
+                    warnings->push_back(zctx + ".preset: unknown '" + preset +
+                                         "', using 'room'");
                 zone->setPreset("room");
             }
             else
@@ -3351,7 +3351,7 @@ namespace
                 // escena siguen. Antes era un .at() y se perdía la carga entera.
                 const std::string scriptName =
                     readString(sj, "name", std::string(), warnings,
-                                "scripts de '" + node->name + "'", /*required=*/true);
+                                "scripts of '" + node->name + "'", /*required=*/true);
                 if (scriptName.empty())
                     continue;   // readString ya ha avisado
                 auto comp = std::make_unique<DonTopo::ScriptComponent>(scriptName, node);
@@ -3380,8 +3380,8 @@ namespace
         if (childrenIt == j.end() || !childrenIt->is_array())
         {
             if (warnings)
-                warnings->push_back("nodo '" + node->name + "'.children: falta o no es una lista "
-                                     "en la escena, el objeto se carga sin hijos");
+                warnings->push_back("node '" + node->name + "'.children: missing or not a list "
+                                     "in the scene, the object loads without children");
             return;
         }
         for (const auto& childJson : *childrenIt)
@@ -3389,8 +3389,8 @@ namespace
             if (!childJson.is_object())
             {
                 if (warnings)
-                    warnings->push_back("nodo '" + node->name + "'.children: hay una entrada que no "
-                                         "es un objeto, se descarta");
+                    warnings->push_back("node '" + node->name + "'.children: there is an entry that is not "
+                                         "an object, discarded");
                 continue;
             }
             // El nombre también lo escribe nodeToJson siempre. Un nodo sin él se
@@ -3398,7 +3398,7 @@ namespace
             // nombre vacío y su aviso, en vez de tumbar la carga.
             GameObject* child = node->addChild(
                 readString(childJson, "name", std::string(), warnings,
-                            "nodo '" + node->name + "'.children", /*required=*/true));
+                            "node '" + node->name + "'.children", /*required=*/true));
             // El nodo hijo se carga DENTRO de un try. Motivo: los ~52 `.value(...)`
             // que quedan en los bloques de componente lanzan `json::type_error`
             // si la clave EXISTE con el tipo que no toca (comprobado: string,
@@ -3424,10 +3424,10 @@ namespace
             catch (const nlohmann::json::exception& e)
             {
                 if (warnings)
-                    warnings->push_back("nodo '" + child->name + "': un campo trae un tipo que no "
-                                         "toca (" + std::string(e.what()) + "). El nodo se queda sin "
-                                         "sus componentes y sin sus hijos; el resto de la escena "
-                                         "carga igual");
+                    warnings->push_back("node '" + child->name + "': a field has a type it should not "
+                                         "have (" + std::string(e.what()) + "). The node is left without "
+                                         "its components and its children; the rest of the scene "
+                                         "loads anyway");
             }
         }
     }
@@ -3600,8 +3600,8 @@ namespace DonTopo
             if (n->hasCameraComponent())
             {
                 n->setCameraComponent(nullptr);
-                m_warnings.push_back("Clone de '" + n->name +
-                                      "': se descarta el CameraComponent (ya hay una cámara en la escena)");
+                m_warnings.push_back("Clone of '" + n->name +
+                                      "': the CameraComponent is discarded (there is already a camera in the scene)");
             }
         });
         collapseWarnings();
@@ -3786,8 +3786,8 @@ namespace DonTopo
             const uint64_t idViejo = n->id;
             n->id = GameObject::allocateId();
             vistos.insert(n->id);
-            m_warnings.push_back("nodo '" + n->name + "': el id " + std::to_string(idViejo) +
-                                  " ya estaba en uso en la escena cargada; se reasigna a " +
+            m_warnings.push_back("node '" + n->name + "': id " + std::to_string(idViejo) +
+                                  " was already in use in the loaded scene; reassigned to " +
                                   std::to_string(n->id));
         });
     }
@@ -3798,8 +3798,8 @@ namespace DonTopo
         m_root.traverse([&](GameObject* n) {
             if (!n->hasCameraComponent()) return;
             if (!first) { first = n; return; }
-            m_warnings.push_back("Escena con más de una cámara: se descarta la de '" + n->name +
-                                  "' (se conserva la de '" + first->name + "')");
+            m_warnings.push_back("Scene with more than one camera: discarding the one on '" + n->name +
+                                  "' (keeping the one on '" + first->name + "')");
             n->setCameraComponent(nullptr);
         });
     }
@@ -3810,8 +3810,8 @@ namespace DonTopo
         m_root.traverse([&](GameObject* n) {
             if (!n->hasAudioListener()) return;
             if (!first) { first = n; return; }
-            m_warnings.push_back("Escena con más de un Audio Listener: se descarta el de '" + n->name +
-                                  "' (se conserva el de '" + first->name + "')");
+            m_warnings.push_back("Scene with more than one Audio Listener: discarding the one on '" + n->name +
+                                  "' (keeping the one on '" + first->name + "')");
             n->setAudioListener(nullptr);
         });
     }
@@ -4019,9 +4019,9 @@ namespace DonTopo
             {
                 const uint64_t idViejo = n->id;
                 n->id = GameObject::allocateId();
-                m_warnings.push_back("nodo '" + n->name + "': el id " + std::to_string(idViejo) +
-                                      " del snapshot ya estaba en uso en la escena; se reasigna a " +
-                                      std::to_string(n->id) + " para no chocar con el objeto vivo");
+                m_warnings.push_back("node '" + n->name + "': id " + std::to_string(idViejo) +
+                                      " from the snapshot was already in use in the scene; reassigned to " +
+                                      std::to_string(n->id) + " to avoid clashing with the live object");
             }
             idsVivos.insert(n->id);
 
@@ -4046,8 +4046,8 @@ namespace DonTopo
                 if (yaHayCamara)
                 {
                     n->setCameraComponent(nullptr);
-                    m_warnings.push_back("nodo '" + n->name +
-                                          "': se descarta su cámara (ya hay una cámara en la escena)");
+                    m_warnings.push_back("node '" + n->name +
+                                          "': its camera is discarded (there is already a camera in the scene)");
                 }
                 else
                 {
@@ -4059,8 +4059,8 @@ namespace DonTopo
                 if (yaHayOyente)
                 {
                     n->setAudioListener(nullptr);
-                    m_warnings.push_back("nodo '" + n->name +
-                                          "': se descarta su Audio Listener (ya hay uno en la escena)");
+                    m_warnings.push_back("node '" + n->name +
+                                          "': its Audio Listener is discarded (there is already one in the scene)");
                 }
                 else
                 {

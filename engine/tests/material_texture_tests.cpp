@@ -534,7 +534,7 @@ static void test_corrupt_materials_block_warns(PhysicsManager& pm, AudioManager&
     // rama "!mats.is_array()" y algún otro aviso ajeno colara por casualidad.
     bool warned = false;
     for (const auto& w : cargada.lastWarnings())
-        if (w.find("no es una lista") != std::string::npos) { warned = true; break; }
+        if (w.find("not a list") != std::string::npos) { warned = true; break; }
     CHECK(warned);
 }
 
