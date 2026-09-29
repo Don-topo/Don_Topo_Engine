@@ -2,6 +2,7 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
@@ -335,7 +336,17 @@ std::vector<ExportAsset> collectSceneAssets(
                 addMaterialTexture(modelPath, m->metallicRoughnessPath);
             }
             for (const MaterialOverride& ov : go->materialOverrides)
-                if (!ov.matAsset.empty()) add(ov.matAsset);   // el .mat no lleva sidecar propio
+            {
+                if (ov.matAsset.empty()) continue;
+                add(ov.matAsset);   // el .mat no lleva sidecar propio
+                // Its own textures too: the in-memory material only carries the
+                // ones that won (a per-slot override hides the .mat's), and the
+                // packaged .mat is repointed at them (writeExportPackage).
+                const MaterialAsset mat = loadMaterialAsset(ov.matAsset);
+                addMaterialTexture(modelPath, mat.albedo);
+                addMaterialTexture(modelPath, mat.normal);
+                addMaterialTexture(modelPath, mat.orm);
+            }
         }
 
         if (go->hasAudioClip())
@@ -415,19 +426,26 @@ std::vector<ExportAsset> collectSceneAssets(
 namespace {
 
 // Reescribe un campo de path si el mapa lo conoce. Devuelve 1 si tocó algo.
+// storedBase: the folder a relative stored value is relative to (the Scene's
+// assetRoot for what toStoredPath wrote). Empty = look the value up as is.
 int rewriteField(nlohmann::json& holder, const char* field,
-                 const std::map<std::string, std::string>& sourceToPackage)
+                 const std::map<std::string, std::string>& sourceToPackage,
+                 const std::string& storedBase = {})
 {
     if (!holder.contains(field) || !holder[field].is_string()) return 0;
     const std::string current = holder[field].get<std::string>();
     if (current.empty()) return 0;
-    auto it = sourceToPackage.find(DonTopo::exportPathKey(current));
+    std::string lookup = current;
+    if (!storedBase.empty() && !fs::path(current).is_absolute())
+        lookup = (fs::path(storedBase) / fs::path(current)).string();
+    auto it = sourceToPackage.find(DonTopo::exportPathKey(lookup));
     if (it == sourceToPackage.end()) return 0;
     holder[field] = it->second;
     return 1;
 }
 
-int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& sourceToPackage)
+int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& sourceToPackage,
+                const std::string& assetRoot)
 {
     int n = 0;
     if (node.contains("mesh") && node["mesh"].is_object())
@@ -446,13 +464,15 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
         // baseOrm no se tocan: nodeToJson solo los escribe con
         // carryOverrideBaseline=true (clonar, undo/redo en memoria), y
         // exportGame llama a scene.toJson() con el default false.
+        // These four are the only fields toStoredPath writes relative to the
+        // scene's assetRoot (the project), which is not the export root.
         if (mesh.contains("materials") && mesh["materials"].is_array())
             for (nlohmann::json& mat : mesh["materials"])
             {
-                n += rewriteField(mat, "albedo", sourceToPackage);
-                n += rewriteField(mat, "normal", sourceToPackage);
-                n += rewriteField(mat, "orm", sourceToPackage);
-                n += rewriteField(mat, "matAsset", sourceToPackage);
+                n += rewriteField(mat, "albedo", sourceToPackage, assetRoot);
+                n += rewriteField(mat, "normal", sourceToPackage, assetRoot);
+                n += rewriteField(mat, "orm", sourceToPackage, assetRoot);
+                n += rewriteField(mat, "matAsset", sourceToPackage, assetRoot);
             }
     }
     if (node.contains("audioClip") && node["audioClip"].is_object())
@@ -488,20 +508,21 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
 
     if (node.contains("children") && node["children"].is_array())
         for (nlohmann::json& child : node["children"])
-            n += rewriteNode(child, sourceToPackage);
+            n += rewriteNode(child, sourceToPackage, assetRoot);
     return n;
 }
 
 } // namespace
 
 int rewriteScenePaths(nlohmann::json& sceneJson,
-                      const std::map<std::string, std::string>& sourceToPackage)
+                      const std::map<std::string, std::string>& sourceToPackage,
+                      const std::string& assetRoot)
 {
     // Acepta tanto el documento completo de Scene::toJson() ({version, root})
     // como un nodo suelto, para que los tests puedan armar el JSON a mano.
     if (sceneJson.contains("root") && sceneJson["root"].is_object())
-        return rewriteNode(sceneJson["root"], sourceToPackage);
-    return rewriteNode(sceneJson, sourceToPackage);
+        return rewriteNode(sceneJson["root"], sourceToPackage, assetRoot);
+    return rewriteNode(sceneJson, sourceToPackage, assetRoot);
 }
 
 ExportPlatform exportPlatformFor(platform::Os os)
@@ -633,6 +654,33 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
 
     for (const ExportAsset& a : assets)
         ok = copyOne(fs::path(a.sourcePath), pkg / fs::path(a.packagePath)) && ok;
+
+    // A .mat names its textures relative to its own folder (or absolute when
+    // that is impossible). Copied verbatim, one outside the project still
+    // pointed at the exporting machine, since the texture itself went to
+    // assets/_external/N. Rewrite each packaged .mat against the packaged
+    // copies; this runs after the loop so the textures already exist and
+    // saveMaterialAsset can relativize against them.
+    std::map<std::string, std::string> sourceToPackage;
+    for (const ExportAsset& a : assets)
+        sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
+    for (const ExportAsset& a : assets)
+    {
+        if (fs::path(a.packagePath).extension() != ".mat") continue;
+        MaterialAsset mat = loadMaterialAsset(fs::path(a.sourcePath));
+        for (std::string* tex : { &mat.albedo, &mat.normal, &mat.orm })
+        {
+            if (tex->empty()) continue;
+            const auto it = sourceToPackage.find(exportPathKey(*tex));
+            if (it != sourceToPackage.end()) *tex = (pkg / fs::path(it->second)).string();
+        }
+        std::string err;
+        if (!saveMaterialAsset(pkg / fs::path(a.packagePath), mat, &err))
+        {
+            r.messages.push_back("Could not rewrite the texture paths of " + a.packagePath + ": " + err);
+            ok = false;
+        }
+    }
 
     // Skybox: el ORIGEN es la carpeta que el proyecto tenga elegida, pero el
     // DESTINO es siempre assets/skybox, porque es donde el runtime lo busca.
@@ -1005,7 +1053,7 @@ ExportResult exportGame(Scene& scene,
         sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
 
     nlohmann::json sceneJson = scene.toJson();
-    rewriteScenePaths(sceneJson, sourceToPackage);
+    rewriteScenePaths(sceneJson, sourceToPackage, scene.assetRoot());
 
     return writeExportPackage(assets, sceneJson, destDir, gameName, projectRoot, scriptsDir,
                               runtimeExe, backend, skyboxFolder);

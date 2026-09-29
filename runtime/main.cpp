@@ -114,6 +114,15 @@ void reportFatal(const std::string& msg)
     DonTopo::platform::showFatalError("Don Topo Engine", msg);
 }
 
+// What Scene::load repaired or ignored (a missing .mat, a bad collider...).
+// The editor shows these in its Log; without this the exported game just
+// renders without the asset and game.log says nothing about why.
+void logSceneWarnings(const DonTopo::Scene& scene, const std::string& scenePath)
+{
+    for (const std::string& w : scene.lastWarnings())
+        std::cerr << "Warning (" << scenePath << "): " << w << std::endl;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -375,6 +384,7 @@ int main(int argc, char** argv)
             jobSystem.shutdown();
             return EXIT_FAILURE;
         }
+        logSceneWarnings(scene, scenePath);
 
         // Sin CameraComponent, Renderer::currentFrameCamera() cae al repliegue
         // del editor (m_camera/m_viewMatrix), y si además la escena no tiene
@@ -592,6 +602,7 @@ int main(int argc, char** argv)
                 scriptManager.rebuildAliveSet();
                 std::cout << (luaLoaded ? "Escena cargada: " : "Error al cargar escena: ")
                           << luaScenePath << std::endl;
+                if (luaLoaded) logSceneWarnings(scene, luaScenePath);
             }
 
             auto now = std::chrono::high_resolution_clock::now();
