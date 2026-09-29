@@ -1117,9 +1117,9 @@ static void test_scene_load_warns_when_file_missing(PhysicsManager& pm, AudioMan
     for (const auto& w : loaded.lastWarnings())
     {
         if (w.find("dt_test_scene_file_missing.obj") != std::string::npos &&
-            w.find("no se encuentra") != std::string::npos)
+            w.find("cannot be found") != std::string::npos)
             warnsMissingFile = true;
-        if (w.find("ya no declara huesos") != std::string::npos)
+        if (w.find("no longer declares bones") != std::string::npos)
             wronglyClaimsBones = true;
     }
     CHECK(warnsMissingFile);
@@ -1154,7 +1154,7 @@ static void test_scene_load_warns_on_load_exception(PhysicsManager& pm, AudioMan
     bool warnsLoadFailure = false;
     for (const auto& w : loaded.lastWarnings())
         if (w.find("dt_test_scene_load_exception.obj") != std::string::npos &&
-            w.find("no se pudo cargar la malla") != std::string::npos)
+            w.find("could not load the mesh") != std::string::npos)
             warnsLoadFailure = true;
     CHECK(warnsLoadFailure);
 }
@@ -4919,7 +4919,7 @@ static void test_graph_command_noop_without_animator()
     go->setAnimator(a);
     const uint64_t id = go->id;
 
-    AnimatorGraphCommand cmd(scene, "Editar Animator", id, a->graph(), a->graph());
+    AnimatorGraphCommand cmd(scene, "Edit Animator", id, a->graph(), a->graph());
 
     go->setAnimator(nullptr);
     cmd.undo();
@@ -4958,7 +4958,7 @@ static void test_graph_command_rebinds_clips()
     a->update(0.5f, /*evaluateTransitions=*/false);
     const float tiempo = a->animTime();
 
-    AnimatorGraphCommand cmd(scene, "Editar Animator", go->id, stale, stale);
+    AnimatorGraphCommand cmd(scene, "Edit Animator", go->id, stale, stale);
     cmd.undo();
 
     CHECK(a->states()[0].clipIndex == 0);
@@ -5108,7 +5108,7 @@ static void test_tracker_label_is_per_gesture()
     std::unique_ptr<ICommand> c2 = tr.endFrame(scene, a.get(), false, 1);
 
     CHECK(c1 && c1->label() == "Borrar estado");
-    CHECK(c2 && c2->label() == "Editar Animator");
+    CHECK(c2 && c2->label() == "Edit Animator");
 }
 
 // ---- applySkinnedFrame: el bloque que los tres hosts repetían ----
@@ -6318,7 +6318,7 @@ static void test_events_scene_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.fromJson(j, pm, am));
     bool aviso = false;
     for (const auto& w : loaded.lastWarnings())
-        if (w.find("time fuera de [0,1]") != std::string::npos) aviso = true;
+        if (w.find("time outside [0,1]") != std::string::npos) aviso = true;
     CHECK(aviso);
     GameObject* found = loaded.findById(id);
     CHECK(found && found->hasAnimator());
@@ -7292,7 +7292,7 @@ static void test_layers_too_many_warns(PhysicsManager& pm, AudioManager& am)
     Scene loaded("Loaded");
     CHECK(loaded.fromJson(j, pm, am));
     bool avisado = false;
-    for (const auto& w : loaded.lastWarnings()) if (w.find("capas") != std::string::npos) avisado = true;
+    for (const auto& w : loaded.lastWarnings()) if (w.find("layers") != std::string::npos) avisado = true;
     CHECK(avisado);
 }
 
@@ -7691,7 +7691,7 @@ static void test_ik_chain_resolution()
     for (const auto& w : avisos)
     {
         if (w.find("noExiste") != std::string::npos) nombre = true;
-        if (w.find("cadena")   != std::string::npos) cadena = true;
+        if (w.find("chain")   != std::string::npos) cadena = true;
     }
     CHECK(nombre && cadena);
 }
@@ -7744,7 +7744,7 @@ static void test_ik_bad_file_warns(PhysicsManager& pm, AudioManager& am)
     for (const auto& w : loaded.lastWarnings())
     {
         if (w.find("loQueSea") != std::string::npos) tipo = true;
-        if (w.find("restricciones") != std::string::npos) tope = true;
+        if (w.find("IK constraints") != std::string::npos) tope = true;
     }
     CHECK(tipo && tope);
     GameObject* found = loaded.getRoot().children[0].get();
@@ -9219,8 +9219,8 @@ static void test_submachine_bad_file_warns(PhysicsManager& pm, AudioManager& am)
     bool rango = false, noCaja = false;
     for (const auto& w : loaded.lastWarnings())
     {
-        if (w.find("fuera de rango") != std::string::npos)        rango = true;
-        if (w.find("no es una sub-maquina") != std::string::npos) noCaja = true;
+        if (w.find("out of range") != std::string::npos)        rango = true;
+        if (w.find("is not a sub-state machine") != std::string::npos) noCaja = true;
     }
     CHECK(rango);
     CHECK(noCaja);
@@ -9244,7 +9244,7 @@ static void test_submachine_bad_file_warns(PhysicsManager& pm, AudioManager& am)
     CHECK(anim.states()[1].parent == -1 || anim.states()[3].parent == -1);
     bool ciclo = false;
     for (const auto& w : conCiclo.lastWarnings())
-        if (w.find("ciclo") != std::string::npos) ciclo = true;
+        if (w.find("cycle") != std::string::npos) ciclo = true;
     CHECK(ciclo);
 }
 
@@ -9329,8 +9329,8 @@ static void test_property_clips_bad_file_warns(PhysicsManager& pm, AudioManager&
     for (const auto& w : loaded.lastWarnings())
     {
         if (w.find("noExiste") != std::string::npos) prop = true;
-        if (w.find("duración") != std::string::npos) dur = true;
-        if (w.find("clips de propiedades") != std::string::npos) tope = true;
+        if (w.find("duration") != std::string::npos) dur = true;
+        if (w.find("property clips") != std::string::npos) tope = true;
     }
     CHECK(prop && dur && tope);
     GameObject* found = loaded.getRoot().children[0].get();

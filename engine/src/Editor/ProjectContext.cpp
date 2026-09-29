@@ -51,8 +51,8 @@ const char* const kPanelKeys[] = {
     "scene", "viewport", "properties", "log", "contentBrowser",
     "scriptEditor", "animator", "performance", "rendering", "inputActions"};
 static_assert(std::size(kPanelKeys) == ProjectContext::ViewSettings::PanelCount,
-              "kPanelKeys y el enum Panel van a la par: cada panel del enum necesita su clave, "
-              "en el mismo orden");
+              "kPanelKeys and the Panel enum go together: every panel in the enum needs its key, "
+              "in the same order");
 
 // Lectores tolerantes: la clave que falta, o que trae otro tipo, devuelve el
 // default sin lanzar. Es lo que hace que un "settings" a medias siga abriendo.
@@ -612,31 +612,31 @@ std::string ProjectContext::readProjectName(const fs::path& projectDir)
 bool ProjectContext::validateName(const std::string& name, std::string& error)
 {
     if (name.empty() || name.find_first_not_of(" \t") == std::string::npos) {
-        error = "El nombre no puede estar vacio.";
+        error = "The name cannot be empty.";
         return false;
     }
     if (name.size() > 64) {
-        error = "El nombre no puede pasar de 64 caracteres.";
+        error = "The name cannot be longer than 64 characters.";
         return false;
     }
     if (name == "." || name == "..") {
-        error = "Nombre reservado: '" + name + "'.";
+        error = "Reserved name: '" + name + "'.";
         return false;
     }
 
     for (unsigned char c : name) {
         if (c < 32) {
-            error = "El nombre no admite caracteres de control.";
+            error = "The name does not allow control characters.";
             return false;
         }
         if (std::string("<>:\"/\\|?*").find(static_cast<char>(c)) != std::string::npos) {
-            error = std::string("Caracter no valido en el nombre: '") + static_cast<char>(c) + "'.";
+            error = std::string("Invalid character in the name: '") + static_cast<char>(c) + "'.";
             return false;
         }
     }
 
     if (name.back() == ' ' || name.back() == '.') {
-        error = "El nombre no puede acabar en espacio ni en punto.";
+        error = "The name cannot end in a space or a dot.";
         return false;
     }
 
@@ -650,7 +650,7 @@ bool ProjectContext::validateName(const std::string& name, std::string& error)
     const std::string stem    = lowered.substr(0, lowered.find('.'));
     for (const char* reserved : kReserved) {
         if (stem == reserved) {
-            error = "Nombre reservado por Windows: '" + name + "'.";
+            error = "Name reserved by Windows: '" + name + "'.";
             return false;
         }
     }
@@ -659,7 +659,7 @@ bool ProjectContext::validateName(const std::string& name, std::string& error)
     // project.json), sin distinguir mayúsculas.
     const fs::path workspace = workspaceDir();
     if (workspace.empty()) {
-        error = "No se pudo localizar la carpeta de proyectos.";
+        error = "Could not locate the projects folder.";
         return false;
     }
 
@@ -671,7 +671,7 @@ bool ProjectContext::validateName(const std::string& name, std::string& error)
             if (!it->is_directory(entryEc) || entryEc)
                 continue;
             if (equalsNoCase(it->path().filename().string(), name)) {
-                error = "Ya existe un proyecto que se llama '" + it->path().filename().string() + "'.";
+                error = "There is already a project named '" + it->path().filename().string() + "'.";
                 return false;
             }
         }
@@ -692,7 +692,7 @@ bool ProjectContext::create(const std::string& name, fs::path& outDir, std::stri
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) {
-        error = "No se pudo crear la carpeta del proyecto: " + ec.message();
+        error = "Could not create the project folder: " + ec.message();
         return false;
     }
 
@@ -700,7 +700,7 @@ bool ProjectContext::create(const std::string& name, fs::path& outDir, std::stri
         ec.clear();
         fs::create_directories(dir / sub, ec);
         if (ec) {
-            error = std::string("No se pudo crear '") + sub + "': " + ec.message();
+            error = std::string("Could not create '") + sub + "': " + ec.message();
             return false;
         }
     }
@@ -713,12 +713,12 @@ bool ProjectContext::create(const std::string& name, fs::path& outDir, std::stri
 
     std::ofstream out(dir / "project.json");
     if (!out.is_open()) {
-        error = "No se pudo escribir project.json.";
+        error = "Could not write project.json.";
         return false;
     }
     out << j.dump(4);
     if (!out.good()) {
-        error = "No se pudo escribir project.json.";
+        error = "Could not write project.json.";
         return false;
     }
     out.close();
@@ -729,7 +729,7 @@ bool ProjectContext::create(const std::string& name, fs::path& outDir, std::stri
     // para que no pueda desincronizarse del esquema que lee Scene::fromJson.
     Scene startupScene;
     if (!startupScene.save((dir / kStartupScene).string())) {
-        error = "No se pudo crear la escena de arranque del proyecto.";
+        error = "Could not create the project's startup scene.";
         return false;
     }
 

@@ -48,16 +48,16 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
 {
     std::error_code ec;
     if (!std::filesystem::is_regular_file(source, ec) || ec)
-        return { AssetImportResult::RejectedCopyFailed, {}, "El origen no es un fichero", source };
+        return { AssetImportResult::RejectedCopyFailed, {}, "The source is not a file", source };
 
     // "" / "x.png" es un path relativo: copiaria al CWD del proceso.
     if (destDir.empty())
-        return { AssetImportResult::RejectedCopyFailed, {}, "La carpeta destino esta vacia", source };
+        return { AssetImportResult::RejectedCopyFailed, {}, "The destination folder is empty", source };
 
     std::filesystem::create_directories(destDir, ec);
     if (ec)
         return { AssetImportResult::RejectedCopyFailed, {},
-                 "No se pudo crear la carpeta destino: " + ec.message(), source };
+                 "Could not create the destination folder: " + ec.message(), source };
 
     const std::filesystem::path dest = destDir / source.filename();
     const bool ok = std::filesystem::copy_file(source, dest, ec);
@@ -72,7 +72,7 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
     std::string warnings;
     std::string sidecarError;
     if (!copyImportSidecar(source, dest, &sidecarError))
-        warnings = "no se pudo copiar el .import.json: " + sidecarError;
+        warnings = "could not copy the .import.json: " + sidecarError;
 
     // Un modelo lee otros ficheros (.mtl y sus texturas, .bin e imagenes de un
     // .gltf) en rutas relativas a su carpeta: se copian con la misma ruta, o la
@@ -90,7 +90,7 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
             if (!std::filesystem::copy_file(from, to, cec))
             {
                 if (!warnings.empty()) warnings += "; ";
-                warnings += (cec == std::errc::file_exists ? "ya existia " : "no se pudo copiar ") + rel;
+                warnings += (cec == std::errc::file_exists ? "already existed: " : "could not copy ") + rel;
                 continue;
             }
             copyImportSidecar(from, to, nullptr);
@@ -104,14 +104,14 @@ std::string describeImportResult(const AssetImportOutcome& outcome)
     switch (outcome.result)
     {
         case AssetImportResult::Copied:
-            return outcome.errorMessage.empty() ? std::string("importado")
-                                                : "importado (" + outcome.errorMessage + ")";
-        case AssetImportResult::RejectedExtension:    return "extension no soportada para importar";
-        case AssetImportResult::RejectedNameConflict: return "ya existe un fichero con ese nombre en el destino";
+            return outcome.errorMessage.empty() ? std::string("imported")
+                                                : "imported (" + outcome.errorMessage + ")";
+        case AssetImportResult::RejectedExtension:    return "extension not supported for import";
+        case AssetImportResult::RejectedNameConflict: return "a file with that name already exists at the destination";
         case AssetImportResult::RejectedCopyFailed:
-            return outcome.errorMessage.empty() ? "fallo de copia" : outcome.errorMessage;
+            return outcome.errorMessage.empty() ? "copy failed" : outcome.errorMessage;
     }
-    return "fallo de copia";
+    return "copy failed";
 }
 
 } // namespace DonTopo

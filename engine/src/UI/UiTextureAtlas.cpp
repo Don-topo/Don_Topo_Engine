@@ -57,13 +57,13 @@ namespace DonTopo
         }
         catch (const std::exception&)
         {
-            std::printf("[UI] sidecar de sprites ilegible: %s\n", jsonPath.c_str());
+            std::printf("[UI] unreadable sprite sidecar: %s\n", jsonPath.c_str());
             return false;
         }
 
         if (!j.is_object() || !j.contains("sprites") || !j["sprites"].is_object())
         {
-            std::printf("[UI] sidecar sin bloque 'sprites': %s\n", jsonPath.c_str());
+            std::printf("[UI] sidecar without a 'sprites' block: %s\n", jsonPath.c_str());
             return false;
         }
 
@@ -88,7 +88,7 @@ namespace DonTopo
             // invisible, sin un solo error por ningún lado: fuera.
             if (!(rect.width > 0.0f) || !(rect.height > 0.0f))
             {
-                std::printf("[UI] sprite '%s' con tamano invalido en %s: se ignora\n",
+                std::printf("[UI] sprite '%s' with an invalid size in %s: ignored\n",
                             name.c_str(), jsonPath.c_str());
                 continue;
             }
@@ -149,7 +149,7 @@ namespace DonTopo
         stbi_uc* data = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
         if (!data || w <= 0 || h <= 0)
         {
-            std::printf("[UI] atlas ilegible: %s\n", path.c_str());
+            std::printf("[UI] unreadable atlas: %s\n", path.c_str());
             if (data) stbi_image_free(data);
             return false;
         }
@@ -178,7 +178,7 @@ namespace DonTopo
         int w = 0, h = 0, channels = 0;
         if (!stbi_info(path.c_str(), &w, &h, &channels) || w <= 0 || h <= 0)
         {
-            std::printf("[UI] atlas ilegible: %s\n", path.c_str());
+            std::printf("[UI] unreadable atlas: %s\n", path.c_str());
             return false;
         }
 

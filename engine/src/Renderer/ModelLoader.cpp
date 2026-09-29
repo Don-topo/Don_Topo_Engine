@@ -290,8 +290,8 @@ namespace DonTopo
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
             throw std::runtime_error("Assimp: " + std::string(importer.GetErrorString()));
         if (piece < 0 || static_cast<uint32_t>(piece) >= scene->mNumMeshes)
-            throw std::runtime_error("'" + path + "' no tiene la pieza " + std::to_string(piece) +
-                                     " (tiene " + std::to_string(scene->mNumMeshes) + ")");
+            throw std::runtime_error("'" + path + "' has no piece " + std::to_string(piece) +
+                                     " (it has " + std::to_string(scene->mNumMeshes) + ")");
         Mesh mesh = meshFromAssimp(scene, scene->mMeshes[piece], settings, path);
         mesh.piece = piece;
         return mesh;
@@ -611,7 +611,7 @@ namespace DonTopo
         }
         if (scene->mNumAnimations == 0)
         {
-            out.warnings.push_back(file + ": no contiene animaciones");
+            out.warnings.push_back(file + ": contains no animations");
             return out;
         }
 
@@ -630,7 +630,7 @@ namespace DonTopo
             if (!clipHasMotion(clip))
             {
                 out.warnings.push_back(file + ": el clip '" + clip.name +
-                                       "' no anima nada (una sola key por canal), descartado");
+                                       "' animates nothing (a single key per channel), discarded");
                 continue;
             }
             // Despues de decidir si anima: esa decision no depende de la escala.
@@ -640,8 +640,8 @@ namespace DonTopo
 
         if (out.mappedChannels == 0)
         {
-            out.warnings.push_back(file + ": ningún hueso coincide con el esqueleto (0/"
-                                    + std::to_string(out.totalChannels) + " canales)");
+            out.warnings.push_back(file + ": no bone matches the skeleton (0/"
+                                    + std::to_string(out.totalChannels) + " channels)");
             out.clips.clear();
             return out;
         }
@@ -649,8 +649,8 @@ namespace DonTopo
         if (!unknownBones.empty())
         {
             std::string msg = file + ": " + std::to_string(out.mappedChannels) + "/"
-                            + std::to_string(out.totalChannels) + " canales mapeados, "
-                            + std::to_string(unknownBones.size()) + " huesos desconocidos ignorados (";
+                            + std::to_string(out.totalChannels) + " channels mapped, "
+                            + std::to_string(unknownBones.size()) + " unknown bones ignored (";
             // Solo los 5 primeros: la lista completa de un rig ajeno llenaría
             // el Log Console sin decir nada más de lo que dicen 5 ejemplos.
             const size_t shown = unknownBones.size() < 5 ? unknownBones.size() : 5;

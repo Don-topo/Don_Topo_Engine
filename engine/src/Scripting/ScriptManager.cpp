@@ -80,7 +80,7 @@ namespace DonTopo
         std::error_code ec;
         if (!std::filesystem::is_directory(m_scriptsDir, ec))
         {
-            log("Scripts: carpeta '" + scriptsDir + "' no encontrada — sin scripts");
+            log("Scripts: folder '" + scriptsDir + "' not found, no scripts");
             return;
         }
         for (const auto& entry : std::filesystem::recursive_directory_iterator(m_scriptsDir, ec))
@@ -106,7 +106,7 @@ namespace DonTopo
                 std::error_code ec;
                 m_erroredScripts[className] = { path, std::filesystem::last_write_time(path, ec) };
             }
-            log("Script '" + className + "': error de compilación: " + err.what());
+            log("Script '" + className + "': compilation error: " + err.what());
             return false;
         }
 
@@ -114,13 +114,13 @@ namespace DonTopo
         if (classObj.get_type() != sol::type::table)
         {
             m_compileErrors[className] =
-                "el archivo no define una tabla global '" + className + "'";
+                "the file does not define a global table '" + className + "'";
             if (!m_registry.count(className))
             {
                 std::error_code ec;
                 m_erroredScripts[className] = { path, std::filesystem::last_write_time(path, ec) };
             }
-            log("Script '" + className + "': no define la tabla global '" + className + "'");
+            log("Script '" + className + "': does not define the global table '" + className + "'");
             return false;
         }
 
@@ -134,7 +134,7 @@ namespace DonTopo
         m_registry[className] = std::move(cls);
         m_compileErrors.erase(className);
         m_erroredScripts.erase(className);
-        log("Script '" + className + "' registrado (" +
+        log("Script '" + className + "' registered (" +
             std::to_string(m_registry[className].props.size()) + " props)");
         return true;
     }
@@ -611,7 +611,7 @@ namespace DonTopo
         for (const std::string& name : changed)
         {
             const std::filesystem::path path = m_registry[name].path;
-            log("Script '" + name + "' cambió en disco — recargando");
+            log("Script '" + name + "' changed on disk, reloading");
             // Actualiza mtime siempre (aunque compile mal, pa no reintentar
             // en bucle el mismo contenido roto).
             m_registry[name].mtime = std::filesystem::last_write_time(path, ec);
@@ -667,7 +667,7 @@ namespace DonTopo
         for (const std::string& name : retryErrored)
         {
             const std::filesystem::path path = m_erroredScripts[name].first;
-            log("Script '" + name + "': reintentando script con error previo");
+            log("Script '" + name + "': retrying a script that failed before");
             m_erroredScripts[name].second = std::filesystem::last_write_time(path, ec);
             loadScript(path);
         }

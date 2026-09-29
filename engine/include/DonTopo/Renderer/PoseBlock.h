@@ -19,7 +19,7 @@ namespace DonTopo
     constexpr uint32_t kPoseBlockSamples = kPoseBlockLayers + 4 * kMaxLayersPose;
     constexpr uint32_t kPoseBlockMasks   = kPoseBlockSamples + 4 * kMaxLayersPose * kMaxPoseSamplesPerLayer;
     static_assert(kPoseBlockSamples == 36 && kPoseBlockMasks == 228,
-                  "bone_eval.comp lee el bloque de pose en estos offsets");
+                  "bone_eval.comp reads the pose block at these offsets");
 
     inline uint32_t poseBlockUints(uint32_t boneCount)
     {

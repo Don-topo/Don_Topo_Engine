@@ -641,7 +641,7 @@ namespace DonTopo
                 // Un componente que no puede ser igual a ninguno real fuerza el
                 // primer volcado: un nodo recién creado ya nace sucio, pero los
                 // campos hay que escribirlos igual.
-                cache.buttonPrev[i].text = "\x01(sin volcar)";
+                cache.buttonPrev[i].text = "\x01(not synced)";
 
                 // Handlers de script. Se instalan AQUÍ, en el único sitio que
                 // crea nodos, porque clear() se acaba de llevar por delante los
@@ -671,7 +671,7 @@ namespace DonTopo
                 cache.barIds[i]   = entry.first;
                 cache.barNodes[i] = &p;
                 cache.barFills[i] = &f;
-                cache.barPrev[i].backgroundPath = "\x01(sin volcar)";
+                cache.barPrev[i].backgroundPath = "\x01(not synced)";
                 return &p;
             };
 
@@ -684,7 +684,7 @@ namespace DonTopo
                 // Un componente que no puede ser igual a ninguno real fuerza el
                 // primer volcado: un nodo recién creado ya nace sucio, pero los
                 // campos hay que escribirlos igual.
-                cache.panelPrev[i].sprite = "\x01(sin volcar)";
+                cache.panelPrev[i].sprite = "\x01(not synced)";
                 return &p;
             };
 
@@ -694,7 +694,7 @@ namespace DonTopo
                 Image& im = padre.add<Image>(uiImageNodeName(entry.first));
                 cache.imageIds[i]   = entry.first;
                 cache.imageNodes[i] = &im;
-                cache.imagePrev[i].sprite = "\x01(sin volcar)";
+                cache.imagePrev[i].sprite = "\x01(not synced)";
                 return &im;
             };
 
@@ -712,7 +712,7 @@ namespace DonTopo
                 cache.sliderNodes[i]   = &s;
                 cache.sliderFills[i]   = &f;
                 cache.sliderHandles[i] = &h;
-                cache.sliderPrev[i].backgroundSprite = "\x01(sin volcar)";
+                cache.sliderPrev[i].backgroundSprite = "\x01(not synced)";
 
                 // Input. Se instala AQUÍ, en el único sitio que crea nodos,
                 // porque clear() se acaba de llevar por delante los del árbol
@@ -755,7 +755,7 @@ namespace DonTopo
                 cache.checkboxIds[i]    = entry.first;
                 cache.checkboxNodes[i]  = &c;
                 cache.checkboxChecks[i] = &m;
-                cache.checkboxPrev[i].backgroundSprite = "\x01(sin volcar)";
+                cache.checkboxPrev[i].backgroundSprite = "\x01(not synced)";
 
                 std::weak_ptr<UiCheckboxRuntime> rt = entry.second->callbacks.ptr;
                 c.onClick = [rt](UiEvent&)
@@ -779,7 +779,7 @@ namespace DonTopo
                 cache.toggleIds[i]   = entry.first;
                 cache.toggleNodes[i] = &t;
                 cache.toggleKnobs[i] = &k;
-                cache.togglePrev[i].backgroundSprite = "\x01(sin volcar)";
+                cache.togglePrev[i].backgroundSprite = "\x01(not synced)";
 
                 std::weak_ptr<UiToggleRuntime> rt = entry.second->callbacks.ptr;
                 t.onClick = [rt](UiEvent&)
@@ -803,7 +803,7 @@ namespace DonTopo
                 cache.scrollbarIds[i]     = entry.first;
                 cache.scrollbarNodes[i]   = &s;
                 cache.scrollbarHandles[i] = &h;
-                cache.scrollbarPrev[i].backgroundSprite = "\x01(sin volcar)";
+                cache.scrollbarPrev[i].backgroundSprite = "\x01(not synced)";
 
                 std::weak_ptr<UiScrollbarRuntime> rt = entry.second->callbacks.ptr;
                 auto desdeElRaton = [rt, canal = &s](UiEvent& e)
@@ -856,7 +856,7 @@ namespace DonTopo
                 cache.inputFieldNodes[i]  = &f;
                 cache.inputFieldTexts[i]  = &t;
                 cache.inputFieldCarets[i] = &c;
-                cache.inputFieldPrev[i].placeholder = "\x01(sin volcar)";
+                cache.inputFieldPrev[i].placeholder = "\x01(not synced)";
 
                 std::weak_ptr<UiInputFieldRuntime> rt = entry.second->callbacks.ptr;
 
@@ -931,7 +931,7 @@ namespace DonTopo
                 cache.dropdownItems[i].clear();
                 cache.dropdownItemLabels[i].clear();
                 cache.dropdownOptionCounts[i] = entry.second->options.size();
-                cache.dropdownPrev[i].backgroundSprite = "\x01(sin volcar)";
+                cache.dropdownPrev[i].backgroundSprite = "\x01(not synced)";
 
                 std::weak_ptr<UiDropdownRuntime> rt = entry.second->callbacks.ptr;
 
@@ -986,7 +986,7 @@ namespace DonTopo
                 cache.scrollViewIds[i]      = entry.first;
                 cache.scrollViewNodes[i]    = &v;
                 cache.scrollViewContents[i] = &c;
-                cache.scrollViewPrev[i].backgroundSprite = "\x01(sin volcar)";
+                cache.scrollViewPrev[i].backgroundSprite = "\x01(not synced)";
 
                 std::weak_ptr<UiScrollViewRuntime> rt = entry.second->callbacks.ptr;
                 v.onScroll = [rt](UiEvent& e)
@@ -1030,7 +1030,7 @@ namespace DonTopo
                 Text& t = padre.add<Text>(uiTextNodeName(entry.first));
                 cache.textIds[i]   = entry.first;
                 cache.textNodes[i] = &t;
-                cache.textPrev[i].text = "\x01(sin volcar)";
+                cache.textPrev[i].text = "\x01(not synced)";
                 return &t;
             };
 

@@ -506,7 +506,7 @@ namespace DonTopo
         T& add(std::string childName = {})
         {
             static_assert(std::is_base_of<UiElement, T>::value,
-                          "Un hijo del canvas tiene que derivar de UiElement");
+                          "A canvas child must derive from UiElement");
             m_children.push_back(std::make_unique<T>(std::move(childName)));
             // El padre se cablea AQUÍ y en ningún otro sitio: es lo que permite
             // que un evento burbujee sin que el canvas lleve un mapa aparte.

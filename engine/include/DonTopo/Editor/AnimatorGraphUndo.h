@@ -47,7 +47,7 @@ public:
     bool sessionOpen() const { return m_open; }
 
 private:
-    static constexpr const char* kEtiquetaPorDefecto = "Editar Animator";
+    static constexpr const char* kEtiquetaPorDefecto = "Edit Animator";
 
     void open(uint64_t goId, const AnimatorComponent& anim, uint64_t undoRevision);
     void close();

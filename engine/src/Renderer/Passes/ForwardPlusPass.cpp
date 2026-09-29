@@ -29,7 +29,7 @@ struct FpLightGpu {
     glm::vec4 direction;    // xyz dir, w tipo
     glm::vec4 params;       // range, cos interior, cos exterior, ancho
 };
-static_assert(sizeof(FpLightGpu) == 80, "FpLightGpu debe seguir en 80 bytes: es el stride std430 del array de luces");
+static_assert(sizeof(FpLightGpu) == 80, "FpLightGpu must stay at 80 bytes: it is the std430 stride of the light array");
 
 // Push constant compartida por los dos .comp.
 struct FpPush {
@@ -42,7 +42,7 @@ struct FpPush {
     uint32_t pad0;
     uint32_t pad1;
 };
-static_assert(sizeof(FpPush) == 32, "FpPush debe seguir en 32 bytes: los dos .comp declaran este layout");
+static_assert(sizeof(FpPush) == 32, "FpPush must stay at 32 bytes: both .comp shaders declare this layout");
 
 // ── Forward+ ────────────────────────────────────────────────────────────────
 void ForwardPlusPass::gridDims(const Context& ctx, RendererState::FpMode mode,
@@ -418,7 +418,7 @@ void ForwardPlusPass::record(const Context& ctx, VkCommandBuffer cmd, const glm:
             m_gpuMs = (float)((double)(stamps[1] - stamps[0]) * ctx.timestampPeriod * 1e-6);
             if (++m_measuredFrames == 300)
             {
-                printf("forward+ (%s): culling %.3f ms, %.1f luces/celda, %u celdas desbordadas (%ux%u interno)\n",
+                printf("forward+ (%s): culling %.3f ms, %.1f lights/cell, %u overflowing cells (%ux%u internal)\n",
                        ctx.activeMode == RendererState::FpMode::Tiled ? "tiled" : "clustered",
                        m_gpuMs, m_avgPerCell, m_overflowCells,
                        ctx.renderExtent.width, ctx.renderExtent.height);

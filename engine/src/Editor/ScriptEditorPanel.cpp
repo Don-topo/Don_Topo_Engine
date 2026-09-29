@@ -165,7 +165,7 @@ void ScriptEditorPanel::openFile(const std::filesystem::path& path)
     std::optional<std::string> content = FileManager::readText(path.string());
     if (!content)
     {
-        log("Script Editor: no se pudo abrir '" + path.string() + "'");
+        log("Script Editor: could not open '" + path.string() + "'");
         return;
     }
 
@@ -239,7 +239,7 @@ void ScriptEditorPanel::reloadFromDisk(Tab& tab)
     std::optional<std::string> content = FileManager::readText(tab.path.string());
     if (!content)
     {
-        log("Script Editor: no se pudo releer '" + tab.path.string() + "'");
+        log("Script Editor: could not re-read '" + tab.path.string() + "'");
         return;
     }
     tab.editor.SetText(*content);
@@ -262,7 +262,7 @@ void ScriptEditorPanel::saveTab(Tab& tab)
         tab.externalChange = false;
     }
     else
-        log("Script Editor: no se pudo guardar '" + tab.path.string() + "'");
+        log("Script Editor: could not save '" + tab.path.string() + "'");
 
     refreshDiagnostics(tab);
 }
@@ -331,7 +331,7 @@ bool ScriptEditorPanel::findNext(Tab& tab, bool backwards)
         return true;
     }
 
-    tab.findStatus = "sin coincidencias";
+    tab.findStatus = "no matches";
     return false;
 }
 
@@ -356,7 +356,7 @@ bool ScriptEditorPanel::drawFindBar(Tab& tab)
         }
         if (ImGui::IsItemActive()) consumed = true;
         ImGui::SameLine();
-        if (ImGui::Button("Cerrar##goto")) tab.gotoOpen = false;
+        if (ImGui::Button("Close##goto")) tab.gotoOpen = false;
     }
 
     if (!tab.findOpen) return consumed;
@@ -372,11 +372,11 @@ bool ScriptEditorPanel::drawFindBar(Tab& tab)
     const bool findFieldActive = ImGui::IsItemActive();
     if (submitted) findNext(tab, false);
     ImGui::SameLine();
-    ImGui::TextUnformatted("Buscar");
+    ImGui::TextUnformatted("Find");
 
     ImGui::SameLine();
     ImGui::Checkbox("Aa", &tab.findCaseSensitive);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Distinguir mayusculas y minusculas");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Match case");
 
     ImGui::SameLine();
     if (ImGui::Button("<")) findNext(tab, true);
@@ -388,10 +388,10 @@ bool ScriptEditorPanel::drawFindBar(Tab& tab)
     ImGui::InputText("##reemplazar", tab.replaceBuffer, sizeof(tab.replaceBuffer));
     const bool replaceFieldActive = ImGui::IsItemActive();
     ImGui::SameLine();
-    ImGui::TextUnformatted("Reemplazar por");
+    ImGui::TextUnformatted("Replace with");
 
     ImGui::SameLine();
-    if (ImGui::Button("Reemplazar"))
+    if (ImGui::Button("Replace"))
     {
         // Solo se sustituye si lo seleccionado ES la coincidencia: pulsar
         // Reemplazar sin haber buscado antes buscaría y sustituiría de golpe,
@@ -419,7 +419,7 @@ bool ScriptEditorPanel::drawFindBar(Tab& tab)
         findNext(tab, false);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Todo"))
+    if (ImGui::Button("All"))
     {
         const std::string needle(tab.findBuffer);
         if (!needle.empty())
@@ -457,12 +457,12 @@ bool ScriptEditorPanel::drawFindBar(Tab& tab)
                 tab.dirty = true;
                 tab.syntaxDelay = kSyntaxDelayFrames;
             }
-            tab.findStatus = count > 0 ? (std::to_string(count) + " sustituciones")
-                                       : std::string("sin coincidencias");
+            tab.findStatus = count > 0 ? (std::to_string(count) + " replacements")
+                                       : std::string("no matches");
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cerrar##buscar"))
+    if (ImGui::Button("Close##buscar"))
     {
         tab.findOpen = false;
         tab.findStatus.clear();
@@ -501,10 +501,10 @@ void ScriptEditorPanel::drawStatusBar(Tab& tab)
         if (ImGui::IsItemClicked())
             tab.editor.SetCursorPosition(TextEditor::Coordinates(tab.errorLine - 1, 0));
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Clic para ir a la linea del error");
+            ImGui::SetTooltip("Click to go to the error line");
     }
     else
-        ImGui::TextDisabled("|  sin errores de sintaxis");
+        ImGui::TextDisabled("|  no syntax errors");
 }
 
 void ScriptEditorPanel::draw()
@@ -546,10 +546,10 @@ void ScriptEditorPanel::draw()
             ImGui::PushID(i);
             if (ImGui::BeginTabItem(tabLabel.c_str(), &open, flags))
             {
-                if (ImGui::Button("Guardar"))
+                if (ImGui::Button("Save"))
                     saveTab(tab);
                 ImGui::SameLine();
-                if (ImGui::Button("Buscar"))
+                if (ImGui::Button("Find"))
                 {
                     tab.findOpen = true;
                     tab.findFocusRequested = true;
@@ -558,10 +558,10 @@ void ScriptEditorPanel::draw()
                 if (ImGui::Button("Ir a linea"))
                     tab.gotoOpen = true;
                 ImGui::SameLine();
-                if (ImGui::Button("Recargar"))
+                if (ImGui::Button("Reload"))
                     reloadFromDisk(tab);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Vuelve a leer el fichero de disco y descarta los cambios sin guardar");
+                    ImGui::SetTooltip("Re-reads the file from disk and discards unsaved changes");
 
                 const bool panelFocused =
                     ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
@@ -595,19 +595,19 @@ void ScriptEditorPanel::draw()
                         {
                             reloadFromDisk(tab);
                             log("Script Editor: '" + tab.path.filename().string() +
-                                "' cambio en disco y se ha recargado");
+                                "' changed on disk and was reloaded");
                         }
                     }
                 }
                 if (tab.externalChange)
                 {
                     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
-                        "Este fichero ha cambiado en disco y tienes cambios sin guardar.");
+                        "This file changed on disk and you have unsaved changes.");
                     ImGui::SameLine();
-                    if (ImGui::Button("Recargar y perder los mios"))
+                    if (ImGui::Button("Reload and lose mine"))
                         reloadFromDisk(tab);
                     ImGui::SameLine();
-                    if (ImGui::Button("Quedarme con los mios"))
+                    if (ImGui::Button("Keep mine"))
                         tab.externalChange = false;
                 }
 
@@ -866,17 +866,17 @@ void ScriptEditorPanel::draw()
 
     if (m_openCloseConfirmPopup)
     {
-        ImGui::OpenPopup("Cambios sin guardar##ScriptEditor");
+        ImGui::OpenPopup("Unsaved changes##ScriptEditor");
         m_openCloseConfirmPopup = false;
     }
 
-    if (ImGui::BeginPopupModal("Cambios sin guardar##ScriptEditor", nullptr,
+    if (ImGui::BeginPopupModal("Unsaved changes##ScriptEditor", nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize))
     {
         Tab& tab = m_tabs[m_closeConfirmIndex];
-        ImGui::Text("'%s' tiene cambios sin guardar.", tab.path.filename().string().c_str());
+        ImGui::Text("'%s' has unsaved changes.", tab.path.filename().string().c_str());
 
-        if (ImGui::Button("Guardar"))
+        if (ImGui::Button("Save"))
         {
             saveTab(tab);
             m_tabs.erase(m_tabs.begin() + m_closeConfirmIndex);
@@ -884,14 +884,14 @@ void ScriptEditorPanel::draw()
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Descartar"))
+        if (ImGui::Button("Discard"))
         {
             m_tabs.erase(m_tabs.begin() + m_closeConfirmIndex);
             m_closeConfirmIndex = -1;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancelar"))
+        if (ImGui::Button("Cancel"))
         {
             m_closeConfirmIndex = -1;
             ImGui::CloseCurrentPopup();

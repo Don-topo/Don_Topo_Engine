@@ -41,7 +41,7 @@ public:
         uint32_t ikBlockOffset;     // en uints
         uint32_t flags;             // bit 0: la jerarquía escribe solo mundo
     };
-    static_assert(sizeof(Push) == 24, "Push: los 4 .comp y ComputePush de D3D12 declaran este layout");
+    static_assert(sizeof(Push) == 24, "Push: the 4 .comp shaders and D3D12's ComputePush declare this layout");
 
     struct Context {
         GpuDevice& gpu;

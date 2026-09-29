@@ -183,7 +183,7 @@ namespace DonTopo
                 return out;
             if (w.piece < 0 || static_cast<size_t>(w.piece) >= model->meshes.size())
             {
-                out.error = "'" + src.path + "' no tiene la pieza " + std::to_string(w.piece);
+                out.error = "'" + src.path + "' has no piece " + std::to_string(w.piece);
                 return out;
             }
             // Copia PROPIA del Mesh para este waiter: el mismo contrato de
@@ -242,7 +242,7 @@ namespace DonTopo
                 // loadSkinned directo, no loadAuto: hasBones ya se pregunto
                 // arriba, y loadAuto lo repetiria (otro ReadFile completo).
                 loaded.mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(path));
-                if (!loaded.mesh) loaded.error = "No se pudo cargar el modelo: " + path;
+                if (!loaded.mesh) loaded.error = "Could not load the model: " + path;
             }
             else
             {
@@ -250,7 +250,7 @@ namespace DonTopo
                 // independientemente de cuantas piezas esten esperando. Cada
                 // waiter decodifica su propia textura en buildResultFor.
                 model = std::make_shared<StaticModel>(ModelLoader::loadStatic(path));
-                if (model->meshes.empty()) loaded.error = "'" + path + "' no tiene mallas";
+                if (model->meshes.empty()) loaded.error = "'" + path + "' has no meshes";
             }
         }
         catch (const std::exception& e)
@@ -264,7 +264,7 @@ namespace DonTopo
         catch (...)
         {
             loaded.mesh  = nullptr;
-            loaded.error = "Error desconocido cargando " + path;
+            loaded.error = "Unknown error loading " + path;
             model        = nullptr;
         }
 
@@ -426,7 +426,7 @@ namespace DonTopo
 
         if (!r.error.empty())
         {
-            if (outError) *outError = "Error cargando '" + r.path + "': " + r.error;
+            if (outError) *outError = "Error loading '" + r.path + "': " + r.error;
             return false;
         }
         if (!r.mesh) return false;
@@ -496,7 +496,7 @@ namespace DonTopo
         catch (const std::exception& e)
         {
             target->setMesh(previousMesh);
-            if (outError) *outError = std::string("Error subiendo a GPU '") + r.path + "': " + e.what();
+            if (outError) *outError = std::string("Error uploading to the GPU '") + r.path + "': " + e.what();
             return false;
         }
         return true;

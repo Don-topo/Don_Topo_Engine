@@ -505,7 +505,7 @@ void testSyncStaticPiecesShareOneLoad()
           "la misma pieza sale de UNA carga del fichero, compartida");
     CHECK(x9 && !x9->hasMesh(), "una pieza que no existe deja el nodo sin malla");
     bool aviso = false;
-    for (const std::string& w : scene.lastWarnings()) aviso = aviso || w.find("pieza 9") != std::string::npos;
+    for (const std::string& w : scene.lastWarnings()) aviso = aviso || w.find("piece 9") != std::string::npos;
     CHECK(aviso, "y avisa como cuando ModelLoader::load lanzaba");
 }
 

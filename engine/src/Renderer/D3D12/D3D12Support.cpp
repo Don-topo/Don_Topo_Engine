@@ -36,7 +36,7 @@ SupportInfo querySupport() {
 
     ComPtr<IDXGIFactory4> factory;
     if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) {
-        info.error = "CreateDXGIFactory2 falló: no hay DXGI disponible en este sistema";
+        info.error = "CreateDXGIFactory2 failed: no DXGI available on this system";
         return info;
     }
 
@@ -66,7 +66,7 @@ SupportInfo querySupport() {
         }
     }
 
-    info.error = "ningún adaptador hardware soporta D3D_FEATURE_LEVEL_11_0";
+    info.error = "no hardware adapter supports D3D_FEATURE_LEVEL_11_0";
     return info;
 }
 

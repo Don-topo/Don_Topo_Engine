@@ -456,14 +456,14 @@ static void test_unique_folder_name(const fs::path& root)
     fs::path dir = root / "unique_name_dir";
     fs::create_directories(dir, ec);
 
-    CHECK(uniqueFolderName(dir) == "Nueva carpeta");
-    fs::create_directories(dir / "Nueva carpeta", ec);
-    CHECK(uniqueFolderName(dir) == "Nueva carpeta 2");
-    fs::create_directories(dir / "Nueva carpeta 2", ec);
-    CHECK(uniqueFolderName(dir) == "Nueva carpeta 3");
+    CHECK(uniqueFolderName(dir) == "New Folder");
+    fs::create_directories(dir / "New Folder", ec);
+    CHECK(uniqueFolderName(dir) == "New Folder 2");
+    fs::create_directories(dir / "New Folder 2", ec);
+    CHECK(uniqueFolderName(dir) == "New Folder 3");
     // Un FICHERO con ese nombre tambien ocupa el sitio.
-    std::ofstream(dir / "Nueva carpeta 3") << "x";
-    CHECK(uniqueFolderName(dir) == "Nueva carpeta 4");
+    std::ofstream(dir / "New Folder 3") << "x";
+    CHECK(uniqueFolderName(dir) == "New Folder 4");
 }
 
 // breadcrumbSegments: de la raiz del proyecto a la carpeta actual, con rutas
@@ -1096,9 +1096,9 @@ static void test_unique_material_name()
     const fs::path d = fs::temp_directory_path(ec) / "dt_cb_unique_mat";
     fs::remove_all(d, ec);
     fs::create_directories(d, ec);
-    CHECK(uniqueMaterialName(d) == "Nuevo material.mat");
-    std::ofstream(d / "Nuevo material.mat") << "x";
-    CHECK(uniqueMaterialName(d) == "Nuevo material 2.mat");
+    CHECK(uniqueMaterialName(d) == "New Material.mat");
+    std::ofstream(d / "New Material.mat") << "x";
+    CHECK(uniqueMaterialName(d) == "New Material 2.mat");
 }
 
 // applyMaterialAssetSettings escribe el fichero y reconstruye SOLO a quien

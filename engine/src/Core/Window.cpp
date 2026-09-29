@@ -64,7 +64,7 @@ void Window::init(int width, int height, const char* title, const char* iconPath
             glfwSetWindowIcon(m_window, 1, &image);
             stbi_image_free(pixels);
         } else {
-            std::fprintf(stderr, "Window: no se pudo cargar el icono '%s'\n", iconPath);
+            std::fprintf(stderr, "Window: could not load the icon '%s'\n", iconPath);
         }
     }
 

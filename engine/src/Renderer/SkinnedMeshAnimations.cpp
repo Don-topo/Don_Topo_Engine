@@ -82,8 +82,8 @@ namespace DonTopo
                 const std::string& wanted = (*forcedNames)[i];
                 clip.name = uniqueClipName(mesh.animationClips, wanted);
                 if (clip.name != wanted)
-                    warnings.push_back(file + ": el nombre de clip guardado '" + wanted
-                                        + "' ya estaba en uso, renombrado a '" + clip.name + "'");
+                    warnings.push_back(file + ": the saved clip name '" + wanted
+                                        + "' was already in use, renamed to '" + clip.name + "'");
             }
             else
             {
@@ -174,8 +174,8 @@ namespace DonTopo
             {
                 if (savedNames[i] != savedNames[j]) continue;
                 if (!skip[i] && !skip[j])
-                    warnings.push_back("Nombre de clip duplicado al restaurar la fuente builtin: '"
-                                        + savedNames[i] + "' — se conservan los nombres originales");
+                    warnings.push_back("Duplicate clip name when restoring the builtin source: '"
+                                        + savedNames[i] + "', the original names are kept");
                 skip[i] = true;
                 skip[j] = true;
             }
@@ -203,8 +203,8 @@ namespace DonTopo
             for (const auto& c : mesh.animationClips)
             {
                 if (c.name != savedNames[i] || inBatch(c.name)) continue;
-                warnings.push_back("Nombre de clip guardado '" + savedNames[i]
-                                    + "' ya en uso por otro clip — no se aplica al restaurar la fuente builtin");
+                warnings.push_back("Saved clip name '" + savedNames[i]
+                                    + "' already used by another clip, not applied when restoring the builtin source");
                 skip[i] = true;
                 break;
             }

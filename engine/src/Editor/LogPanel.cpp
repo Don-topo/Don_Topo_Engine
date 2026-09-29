@@ -231,7 +231,7 @@ void LogPanel::draw()
     if (ImGui::Button("Copy"))
         copySelection();
     ImGui::SameLine();
-    ImGui::TextDisabled("click / Ctrl+click / Shift+click, Ctrl+C copia");
+    ImGui::TextDisabled("click / Ctrl+click / Shift+click, Ctrl+C copies");
     ImGui::Separator();
 
     // Clipper: solo se pintan las filas visibles, no las 200 del buffer.

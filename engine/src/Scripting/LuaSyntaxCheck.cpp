@@ -22,7 +22,7 @@ std::optional<std::pair<int, std::string>> checkLuaSyntax(const std::string& sou
     }
 
     const char* raw = lua_tostring(L, -1);
-    std::string message = raw ? raw : "error de sintaxis desconocido";
+    std::string message = raw ? raw : "unknown syntax error";
     lua_close(L);
 
     static const std::regex linePattern(R"(:(\d+):\s*(.*))");

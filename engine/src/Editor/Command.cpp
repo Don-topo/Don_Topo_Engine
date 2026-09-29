@@ -40,12 +40,12 @@ std::vector<GameObject*> insertModelPieces(Scene& scene, GameObject* parent, con
         if (!std::all_of(v, v + 16, [](float f) { return std::isfinite(f); }))
         {
             local = glm::mat4(1.0f);
-            if (warnings) warnings->push_back("La pieza '" + p.name + "' traia una transformacion invalida: se usa la identidad");
+            if (warnings) warnings->push_back("Piece '" + p.name + "' had an invalid transform: the identity is used");
         }
         nlohmann::json localJson = nlohmann::json::array();
         for (int i = 0; i < 16; ++i) localJson.push_back(glm::value_ptr(local)[i]);
         const nlohmann::json j = {
-            { "name", p.name.empty() ? std::string("Pieza ") + std::to_string(p.piece) : p.name },
+            { "name", p.name.empty() ? std::string("Piece ") + std::to_string(p.piece) : p.name },
             { "localTransform", localJson },
             { "mesh", { { "sourcePath", sourcePath }, { "name", meshes[p.piece]->name }, { "skinned", false },
                         { "visible", true }, { "piece", p.piece } } },

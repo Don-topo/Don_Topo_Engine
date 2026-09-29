@@ -95,7 +95,7 @@ std::optional<std::filesystem::path> acceptOrImportAsset(const DonTopo::EditorCo
     // hecho nada".
     if (ctx.editingLocked)
     {
-        ctx.logModule("Project", "Carga de escena en curso: el asset elegido se descarta");
+        ctx.logModule("Project", "Scene load in progress: the chosen asset is discarded");
         return std::nullopt;
     }
 
@@ -109,7 +109,7 @@ std::optional<std::filesystem::path> acceptOrImportAsset(const DonTopo::EditorCo
     const DonTopo::ProjectContext workspace(DonTopo::ProjectContext::workspaceDir());
     if (workspace.contains(path))
     {
-        ctx.logModule("Project", "Asset de otro proyecto, rechazado: " + path.string());
+        ctx.logModule("Project", "Asset from another project, rejected: " + path.string());
         return std::nullopt;
     }
 
@@ -120,7 +120,7 @@ std::optional<std::filesystem::path> acceptOrImportAsset(const DonTopo::EditorCo
     const std::string ext = path.extension().string();
     if (!DonTopo::isImportableExtension(ext))
     {
-        ctx.logModule("Project", "Extension no soportada para importar: " + path.string());
+        ctx.logModule("Project", "Unsupported extension for import: " + path.string());
         return std::nullopt;
     }
 
@@ -128,11 +128,11 @@ std::optional<std::filesystem::path> acceptOrImportAsset(const DonTopo::EditorCo
     const DonTopo::AssetImportOutcome outcome = DonTopo::importExternalAsset(path, destDir);
     if (outcome.result != DonTopo::AssetImportResult::Copied)
     {
-        ctx.logModule("Project", "Import rechazado (" + path.filename().string() + "): " +
+        ctx.logModule("Project", "Import rejected (" + path.filename().string() + "): " +
                       DonTopo::describeImportResult(outcome));
         return std::nullopt;
     }
-    ctx.logModule("Project", "Asset importado: " + outcome.destPath.filename().string());
+    ctx.logModule("Project", "Asset imported: " + outcome.destPath.filename().string());
     return outcome.destPath;
 }
 
@@ -184,10 +184,10 @@ void drawTriggerRigidbodyHint(const DonTopo::GameObject* go, bool isTrigger)
 {
     if (!isTrigger || !go || go->hasRigidbody()) return;
     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
-                       "Sin Rigidbody: solo detecta objetos que sí lo tengan");
+                       "No Rigidbody: only detects objects that have one");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("PhysX no reporta solapes entre dos objetos estáticos.\n"
-                          "Añade un Rigidbody a este objeto o al que deba entrar.");
+        ImGui::SetTooltip("PhysX does not report overlaps between two static objects.\n"
+                          "Add a Rigidbody to this object or to the one that should enter.");
 }
 
 // Resolutores de collider por tipo. Punteros a función (sin capturas) para que
@@ -236,8 +236,8 @@ void drawColliderLayerCombo(DonTopo::EditorContext& ctx, const char* label,
     if (capa == antes) return;
 
     collider->setLayer(capa);
-    const std::string desc = std::string("Layer de '") + ctx.selected->name + "' (" + seccion + ")";
-    ctx.pushLog(desc + " cambiado a " + etiquetas[capa]);
+    const std::string desc = std::string("Layer of '") + ctx.selected->name + "' (" + seccion + ")";
+    ctx.pushLog(desc + " changed to " + etiquetas[capa]);
     if (!ctx.scene || !ctx.undo) return;
 
     DonTopo::Scene* scene = ctx.scene;
@@ -375,7 +375,7 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, uint64_t ownerId,
         // En el log y no en silencio: el usuario ha navegado un diálogo entero
         // y su elección no va a ninguna parte (mismo criterio que
         // assignMaterialTexture).
-        ctx.pushLog("El objeto que pidió el mesh ya no existe; carga descartada");
+        ctx.pushLog("The object that requested the mesh no longer exists; load discarded");
         return;
     }
 
@@ -388,7 +388,7 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, uint64_t ownerId,
     const std::string ext = std::filesystem::path(path).extension().string();
     if (!ModelLoader::isSupportedModelExtension(ext))
     {
-        m_meshLoadError = "Formato no soportado: " + ext;
+        m_meshLoadError = "Unsupported format: " + ext;
         return;
     }
 
@@ -400,7 +400,7 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, uint64_t ownerId,
     // apile su undo (ver consumeUserMeshJob).
     m_userMeshJobs[owner->id] = owner->pendingMeshJob;
     m_meshLoadError.clear();
-    ctx.pushLog("Cargando '" + path + "'...");
+    ctx.pushLog("Loading '" + path + "'...");
 }
 
 bool PropertiesPanel::consumeUserMeshJob(uint64_t targetId, uint64_t job)
@@ -466,14 +466,14 @@ void PropertiesPanel::loadAudioClipForSelected(EditorContext& ctx, const std::st
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     if (!isSupportedAudioExtension(ext))
     {
-        m_audioLoadError = "Formato no soportado: " + ext;
+        m_audioLoadError = "Unsupported format: " + ext;
         return;
     }
 
     auto clip = ctx.audio->createAudioClipComponent(path, /*is3D=*/false, /*loop=*/false);
     if (!clip)
     {
-        m_audioLoadError = "No se pudo cargar el audio";
+        m_audioLoadError = "Could not load the audio";
         return;
     }
     // El alta pasa por el undo como el resto de componentes del panel. El
@@ -484,7 +484,7 @@ void PropertiesPanel::loadAudioClipForSelected(EditorContext& ctx, const std::st
     {
         auto cmd = std::make_unique<AudioClipComponentCommand>(
             *ctx.scene, *ctx.audio,
-            "Añadir Audio Clip a '" + ctx.selected->name + "'", ctx.selected->id,
+            "Add Audio Clip to '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/true, path, audioClipStateOf(*clip));
         // El componente ya está creado: se asigna aquí y el comando solo lo
         // recrea si hace falta un redo. Crearlo dos veces cargaría el sonido
@@ -492,12 +492,12 @@ void PropertiesPanel::loadAudioClipForSelected(EditorContext& ctx, const std::st
         ctx.selected->setAudioClip(std::move(clip));
         ctx.undo->push(std::move(cmd));
         m_audioLoadError.clear();
-        ctx.pushLog("Componente Audio Clip añadido a '" + ctx.selected->name + "'");
+        ctx.pushLog("Audio Clip component added to '" + ctx.selected->name + "'");
         return;
     }
     ctx.selected->setAudioClip(std::move(clip));
     m_audioLoadError.clear();
-    ctx.pushLog("Componente Audio Clip añadido a '" + ctx.selected->name + "'");
+    ctx.pushLog("Audio Clip component added to '" + ctx.selected->name + "'");
 }
 
 void PropertiesPanel::drawAssetDropBox(EditorContext& ctx, const char* idSuffix,
@@ -685,11 +685,11 @@ void PropertiesPanel::draw(EditorContext& ctx)
                 m_transformBeforeEdit = ctx.selected->localTransform;
 
             if (posCommitted)
-                ctx.pushLog("Position de '" + ctx.selected->name + "' cambiado a " + formatVec3(m_editPosition));
+                ctx.pushLog("Position of '" + ctx.selected->name + "' changed to " + formatVec3(m_editPosition));
             if (rotCommitted)
-                ctx.pushLog("Rotation de '" + ctx.selected->name + "' cambiado a " + formatVec3(m_editRotationDeg));
+                ctx.pushLog("Rotation of '" + ctx.selected->name + "' changed to " + formatVec3(m_editRotationDeg));
             if (scaleCommitted)
-                ctx.pushLog("Scale de '" + ctx.selected->name + "' cambiado a " + formatVec3(m_editScale));
+                ctx.pushLog("Scale of '" + ctx.selected->name + "' changed to " + formatVec3(m_editScale));
 
             if (changed)
             {
@@ -724,7 +724,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
                 glm::mat4 before = m_transformBeforeEdit;
                 glm::mat4 after = ctx.selected->localTransform;
                 ctx.undo->push(std::make_unique<PropertyCommand<glm::mat4>>(
-                    "Transform de '" + ctx.selected->name + "'", before, after,
+                    "Transform of '" + ctx.selected->name + "'", before, after,
                     [scene, id](const glm::mat4& t) {
                         GameObject* go = scene->findById(id);
                         if (!go) return;
@@ -811,12 +811,12 @@ void PropertiesPanel::drawSsrSection(EditorContext& ctx)
     {
         const bool before = ctx.selected->ssrEnabled;
         ctx.selected->ssrEnabled = enabled;
-        ctx.pushLog("SSR de '" + ctx.selected->name + "' " +
-                    (enabled ? "activado" : "desactivado"));
+        ctx.pushLog("SSR of '" + ctx.selected->name + "' " +
+                    (enabled ? "enabled" : "disabled"));
         if (scene && ctx.undo)
         {
             ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
-                "SSR de '" + ctx.selected->name + "'", before, enabled,
+                "SSR of '" + ctx.selected->name + "'", before, enabled,
                 [scene, id](const bool& v) {
                     if (GameObject* go = scene->findById(id)) go->ssrEnabled = v;
                 }));
@@ -846,13 +846,13 @@ void PropertiesPanel::drawSsrSection(EditorContext& ctx)
     if (ImGui::IsItemDeactivatedAfterEdit() && m_ssrDragActive && m_ssrDragOwnerId == id)
     {
         m_ssrDragActive = false;
-        ctx.pushLog("Reflectivity de '" + ctx.selected->name + "' cambiado a " +
+        ctx.pushLog("Reflectivity of '" + ctx.selected->name + "' changed to " +
                     std::to_string(ctx.selected->ssrIntensity));
         if (scene && ctx.undo)
         {
             const float after = ctx.selected->ssrIntensity;
             ctx.undo->push(std::make_unique<PropertyCommand<float>>(
-                "Reflectivity de '" + ctx.selected->name + "'", m_ssrDragBeforeIntensity, after,
+                "Reflectivity of '" + ctx.selected->name + "'", m_ssrDragBeforeIntensity, after,
                 [scene, id](const float& v) {
                     if (GameObject* go = scene->findById(id)) go->ssrIntensity = v;
                 }));
@@ -875,8 +875,8 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
     const uint64_t            id    = ctx.selected->id;
     ReflectionProbeComponent* probe = ctx.selected->getReflectionProbe().get();
 
-    ImGui::TextWrapped("La sonda captura el entorno desde la posición de este objeto "
-                       "y sustituye al IBL global en lo que caiga dentro del radio.");
+    ImGui::TextWrapped("The probe captures the surroundings from this object's position "
+                       "and replaces the global IBL for whatever falls inside its radius.");
 
     // Los "before" se leen ANTES de dibujar los sliders: SliderFloat salta al
     // valor bajo el cursor en el mismo frame del click, así que releerlos
@@ -900,12 +900,12 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
     {
         m_probeDragActive = false;
         const float after = probe->getRadius();
-        ctx.pushLog("Radius de la sonda de '" + ctx.selected->name + "' cambiado a " +
+        ctx.pushLog("Radius of probe '" + ctx.selected->name + "' changed to " +
                     std::to_string(after));
         if (scene && ctx.undo)
         {
             ctx.undo->push(std::make_unique<PropertyCommand<float>>(
-                "Radius de la sonda de '" + ctx.selected->name + "'", m_probeDragBefore, after,
+                "Radius of probe '" + ctx.selected->name + "'", m_probeDragBefore, after,
                 [scene, id](const float& v) {
                     if (GameObject* go = scene->findById(id))
                         if (go->hasReflectionProbe()) go->getReflectionProbe()->setRadius(v);
@@ -929,12 +929,12 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
     {
         m_probeDragActive = false;
         const float after = probe->getIntensity();
-        ctx.pushLog("Intensity de la sonda de '" + ctx.selected->name + "' cambiada a " +
+        ctx.pushLog("Intensity of probe '" + ctx.selected->name + "' changed to " +
                     std::to_string(after));
         if (scene && ctx.undo)
         {
             ctx.undo->push(std::make_unique<PropertyCommand<float>>(
-                "Intensity de la sonda de '" + ctx.selected->name + "'", m_probeDragBefore, after,
+                "Intensity of probe '" + ctx.selected->name + "'", m_probeDragBefore, after,
                 [scene, id](const float& v) {
                     if (GameObject* go = scene->findById(id))
                         if (go->hasReflectionProbe()) go->getReflectionProbe()->setIntensity(v);
@@ -949,15 +949,15 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
         if (ImGui::Button("Bake"))
         {
             ctx.renderer->requestProbeBake(id);
-            ctx.pushLog("Bake de la sonda de '" + ctx.selected->name + "' encolado");
+            ctx.pushLog("Bake of probe '" + ctx.selected->name + "' queued");
         }
         ImGui::SameLine();
         const float ms = ctx.renderer->probeBakeMs(id);
-        if (ms < 0.0f) ImGui::TextUnformatted("sin bakear");
-        else           ImGui::Text("%.2f ms de GPU", ms);
+        if (ms < 0.0f) ImGui::TextUnformatted("not baked");
+        else           ImGui::Text("%.2f ms of GPU", ms);
         // Del backend activo, no del de Vulkan por su nombre: cada uno guarda
         // recursos distintos por sonda (H51).
-        ImGui::Text("Memoria: %.2f MB",
+        ImGui::Text("Memory: %.2f MB",
                     (double)ctx.renderer->probeMemoryBytes() / (1024.0 * 1024.0));
     }
 
@@ -965,7 +965,7 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
     {
         ctx.selected->setReflectionProbe(nullptr);
         m_probeDragActive = false;
-        ctx.pushLog("Componente Reflection Probe quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Reflection Probe component removed from '" + ctx.selected->name + "'");
         ImGui::TreePop();
         return;
     }
@@ -987,9 +987,9 @@ void PropertiesPanel::drawReverbZoneSection(EditorContext& ctx)
     if (sectionOpen)
     {
         auto& zone = ctx.selected->getReverbZone();
-        ImGui::TextWrapped("Ambiente sonoro con forma de esfera: dentro suena todo con esta "
-                           "reverberacion. La posicion sale del Transform. Caben varias por "
-                           "escena, y FMOD mezcla las que se solapen.");
+        ImGui::TextWrapped("Spherical sound ambience: everything inside sounds with this "
+                           "reverb. The position comes from the Transform. Several fit in a "
+                           "scene, and FMOD blends the ones that overlap.");
 
         bool enabled = zone->getEnabled();
         if (ImGui::Checkbox("Enabled##reverb", &enabled))
@@ -1020,8 +1020,8 @@ void PropertiesPanel::drawReverbZoneSection(EditorContext& ctx)
         if (ImGui::SliderFloat("Max distance##reverb", &maxD, 1.0f, 2000.0f, "%.1f"))
             zone->setMaxDistance(maxD);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Dentro de Min la reverb va a tope; entre Min y Max se desvanece. "
-                              "Fuera de Max no hay efecto.");
+            ImGui::SetTooltip("Inside Min the reverb is at full strength; between Min and Max it fades out. "
+                              "Beyond Max there is no effect.");
 
         ImGui::TreePop();
     }
@@ -1031,7 +1031,7 @@ void PropertiesPanel::drawReverbZoneSection(EditorContext& ctx)
         // El recurso de FMOD lo suelta el sync del frame siguiente, que ve que
         // este id ya no tiene zona (Scene::syncReverbZones -> retainReverbZones).
         ctx.selected->setReverbZone(nullptr);
-        ctx.pushLog("Componente Reverb Zone quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Reverb Zone component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -1048,9 +1048,9 @@ void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
 
     if (sectionOpen)
     {
-        ImGui::TextWrapped("Desde aquí se oye el audio 3D de la escena. La posición y la "
-                           "orientación salen del Transform de este objeto (mira hacia su "
-                           "-Z local), no de campos propios. Como mucho uno por escena.");
+        ImGui::TextWrapped("The scene's 3D audio is heard from here. The position and "
+                           "orientation come from this object's Transform (it faces its "
+                           "local -Z), not from fields of its own. At most one per scene.");
 
         bool enabled = ctx.selected->getAudioListener()->getEnabled();
         if (ImGui::Checkbox("Enabled", &enabled))
@@ -1066,7 +1066,7 @@ void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
         if (ctx.scene && ctx.undo)
         {
             auto cmd = std::make_unique<AudioListenerComponentCommand>(
-                *ctx.scene, "Quitar Audio Listener de '" + ctx.selected->name + "'",
+                *ctx.scene, "Remove Audio Listener from '" + ctx.selected->name + "'",
                 ctx.selected->id, /*add=*/false,
                 ctx.selected->getAudioListener()->getEnabled());
             cmd->execute();
@@ -1076,7 +1076,7 @@ void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
         {
             ctx.selected->setAudioListener(nullptr);
         }
-        ctx.pushLog("Componente Audio Listener quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Audio Listener component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -1098,9 +1098,9 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
     if (sectionOpen)
     {
         CanvasComponent* c = ctx.selected->getCanvas().get();
-        ImGui::TextWrapped("Raíz de la UI 2D. El área útil sale del render, menos los insets "
-                           "del safe area y recortada al aspect ratio; de ahí sale una escala "
-                           "única y uniforme para todo el árbol.");
+        ImGui::TextWrapped("Root of the 2D UI. The usable area comes from the render, minus the "
+                           "safe area insets and cropped to the aspect ratio; that gives a single, "
+                           "uniform scale for the whole tree.");
 
         // Los campos se alcanzan por un accessor sin captura (function pointer)
         // y no por puntero a miembro: así los cuatro insets del safe area, que
@@ -1119,8 +1119,8 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*c, idx);
-                const std::string lbl = std::string(label) + " del canvas de '" + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of canvas '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -1155,8 +1155,8 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
                 m_canvasDragField = nullptr;
                 if (after != m_canvasDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " del canvas de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of canvas '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_canvasDragBefore, after,
@@ -1189,8 +1189,8 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
                 m_canvasDragField = nullptr;
                 if (after != m_canvasDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " del canvas de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiada");
+                    const std::string lbl = std::string(label) + " of canvas '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_canvasDragBefore2, after,
@@ -1210,8 +1210,8 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &val) && val != before)
             {
                 acc(*c) = val;
-                const std::string lbl = std::string(label) + " del canvas de '" + owner + "'";
-                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of canvas '" + owner + "'";
+                ctx.pushLog(lbl + (val ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, val,
@@ -1244,7 +1244,7 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
         dragFloat("Screen DPI",
                   +[](CanvasComponent& cc) -> float& { return cc.screenDpi; },
                   1.0f, 0.0f, 2000.0f, "%.1f");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = desconocido: se usa el Fallback DPI");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = unknown: the Fallback DPI is used");
         dragFloat("Fallback DPI",
                   +[](CanvasComponent& cc) -> float& { return cc.fallbackDpi; },
                   1.0f, 1.0f, 2000.0f, "%.1f");
@@ -1252,7 +1252,7 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
                   +[](CanvasComponent& cc) -> float& { return cc.referenceDpi; },
                   1.0f, 1.0f, 2000.0f, "%.1f");
 
-        ImGui::Text("Safe Area (px reales)");
+        ImGui::Text("Safe Area (real px)");
         dragFloat("Left##safe",
                   +[](CanvasComponent& cc) -> float& { return cc.safeArea.left; },
                   1.0f, 0.0f, 8192.0f, "%.0f");
@@ -1269,7 +1269,7 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
         dragFloat("Aspect Ratio",
                   +[](CanvasComponent& cc) -> float& { return cc.aspectRatio; },
                   0.01f, 0.0f, 10.0f, "%.4f");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = apagado. 16/9 = 1.7778");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = off. 16/9 = 1.7778");
 
         ImGui::TextDisabled("Modo");
         static const char* kRenderModes[] = { "Screen Space", "World" };
@@ -1279,14 +1279,14 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
         if (c->renderMode == UiCanvasRenderMode::World)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f),
-                               "En World se ignoran: Scale Mode, Screen Match, Match,\n"
-                               "los tres DPI, Safe Area y Aspect Ratio.");
+                               "Ignored in World: Scale Mode, Screen Match, Match,\n"
+                               "the three DPI fields, Safe Area and Aspect Ratio.");
 
             dragFloat("World Scale", +[](CanvasComponent& x) -> float& { return x.worldScale; },
                       0.0001f, 0.0f, 10.0f, "%.4f");
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Unidades de mundo por PIXEL de canvas.\n"
-                                  "Un canvas de 1920x1080 a 0.001 mide 1.92 x 1.08 unidades.");
+                ImGui::SetTooltip("World units per canvas PIXEL.\n"
+                                  "A 1920x1080 canvas at 0.001 measures 1.92 x 1.08 units.");
 
             static const char* kBillboards[] = { "None", "Yaw Only", "Full" };
             comboEnum("Billboard", (int)c->billboard, kBillboards, IM_ARRAYSIZE(kBillboards),
@@ -1294,7 +1294,7 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
 
             checkBox("Depth Test", +[](CanvasComponent& x) -> bool& { return x.depthTest; });
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("A false se dibuja siempre encima, atravesando paredes");
+                ImGui::SetTooltip("When false it is always drawn on top, through walls");
         }
 
         ImGui::TreePop();
@@ -1303,11 +1303,11 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<CanvasComponentCommand>(
-            *ctx.scene, "Quitar Canvas de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Canvas from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getCanvas());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Canvas quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Canvas component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -1343,8 +1343,8 @@ void PropertiesPanel::setButtonAssetPath(EditorContext& ctx, uint64_t ownerId, b
     if (!(isFont ? isUiFontPath(path) : isUiAtlasPath(path)))
     {
         m_buttonPathError = std::string("No es ") +
-                            (isFont ? "una fuente (.ttf .otf .ttc): "
-                                    : "una imagen (.png .jpg .jpeg .bmp .tga): ") +
+                            (isFont ? "a font (.ttf .otf .ttc): "
+                                    : "an image (.png .jpg .jpeg .bmp .tga): ") +
                             std::filesystem::path(path).filename().string();
         ctx.pushLog(m_buttonPathError);
         return;
@@ -1362,9 +1362,9 @@ void PropertiesPanel::setButtonAssetPath(EditorContext& ctx, uint64_t ownerId, b
 
     (isFont ? b.fontPath : b.atlasPath) = path;
 
-    const std::string lbl = std::string(isFont ? "Fuente" : "Atlas") +
-                            " del botón de '" + go->name + "'";
-    ctx.pushLog(lbl + " cambiada a " + path);
+    const std::string lbl = std::string(isFont ? "Font" : "Atlas") +
+                            " of button '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -1421,9 +1421,9 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
     if (sectionOpen)
     {
         ButtonComponent* b = ctx.selected->getButton().get();
-        ImGui::TextWrapped("Widget de la UI 2D. Se dibuja en el árbol del Canvas de la escena, "
-                           "y el estado (Normal/Hover/Pressed/Disabled/Selected) lo resuelve el "
-                           "propio canvas con el ratón y el foco.");
+        ImGui::TextWrapped("2D UI widget. It is drawn in the scene's Canvas tree, "
+                           "and its state (Normal/Hover/Pressed/Disabled/Selected) is resolved by the "
+                           "canvas itself from the mouse and focus.");
 
         // Mismos accessors sin captura (function pointer) que el Canvas: así los
         // campos de dentro de una struct usan el MISMO helper que el resto.
@@ -1443,8 +1443,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*b, idx);
-                const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of button '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -1462,8 +1462,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &v) && v != before)
             {
                 acc(*b) = v;
-                const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
-                ctx.pushLog(lbl + (v ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of button '" + owner + "'";
+                ctx.pushLog(lbl + (v ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, v,
@@ -1498,8 +1498,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                 m_buttonDragField = nullptr;
                 if (after != m_buttonDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of button '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_buttonDragBefore, after,
@@ -1532,8 +1532,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                 m_buttonDragField = nullptr;
                 if (after != m_buttonDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of button '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_buttonDragBefore2, after,
@@ -1567,8 +1567,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                 m_buttonDragField = nullptr;
                 if (after != m_buttonDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of button '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_buttonDragBefore4, after,
@@ -1604,8 +1604,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                 m_buttonDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of button '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -1632,7 +1632,7 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             // completo, que es lo que hace UiTextureAtlas::uvRect sin nombre.
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
-            items.push_back("(imagen entera)");
+            items.push_back("(whole image)");
             for (const std::string& n : nombres) items.push_back(n.c_str());
 
             int current = 0;
@@ -1645,7 +1645,7 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
-                huerfano = before + "  (no esta en el atlas)";
+                huerfano = before + "  (not in the atlas)";
                 items.push_back(huerfano.c_str());
                 current = (int)items.size() - 1;
             }
@@ -1661,8 +1661,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                 if (after != before)
                 {
                     acc(*b) = after;
-                    const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    const std::string lbl = std::string(label) + " of button '" + owner + "'";
+                    ctx.pushLog(lbl + " changed to '" + after + "'");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, before, after,
@@ -1687,8 +1687,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                  1.0f, 0.0f, 16384.0f, "%.0f");
         colorEdit("Color", +[](ButtonComponent& c) -> glm::vec4& { return c.color; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Color base del quad. Con Transition = Color Tint o Animation lo\n"
-                              "sobrescribe el color del estado; solo manda con Sprite Swap.");
+            ImGui::SetTooltip("Base color of the quad. With Transition = Color Tint or Animation the\n"
+                              "state color overrides it; it only applies with Sprite Swap.");
         checkBox("Visible", +[](ButtonComponent& c) -> bool& { return c.visible; });
 
         // Ruta escribible a mano + la caja de asset común (drawAssetDropBox:
@@ -1733,23 +1733,23 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
         // Sin atlas no hay nada que trocear, y el botón deshabilitado dice por
         // qué mejor que su ausencia.
         ImGui::BeginDisabled(b->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...")) ctx.openSpriteEditor(b->atlasPath);
+        if (ImGui::Button("Edit sprites...")) ctx.openSpriteEditor(b->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && b->atlasPath.empty())
-            ImGui::SetTooltip("Primero elige un atlas");
+            ImGui::SetTooltip("Choose an atlas first");
         spriteField("Sprite", +[](ButtonComponent& c) -> std::string& { return c.sprite; });
 
-        ImGui::TextDisabled("Estados");
+        ImGui::TextDisabled("States");
         checkBox("Interactable", +[](ButtonComponent& c) -> bool& { return c.interactable; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("A false se pinta Disabled y no emite Click");
+            ImGui::SetTooltip("When false it is painted Disabled and emits no Click");
         checkBox("Selected", +[](ButtonComponent& c) -> bool& { return c.selected; });
 
         static const char* kTransitions[] = { "Color Tint", "Sprite Swap", "Animation" };
         comboEnum("Transition", (int)b->transition, kTransitions, IM_ARRAYSIZE(kTransitions),
                   +[](ButtonComponent& c, int v) { c.transition = (UiButtonTransition)v; });
 
-        ImGui::TextDisabled("Colores por estado (Color Tint / Animation)");
+        ImGui::TextDisabled("Colors per state (Color Tint / Animation)");
         colorEdit("Normal##col",   +[](ButtonComponent& c) -> glm::vec4& { return c.normalColor; });
         colorEdit("Hover##col",    +[](ButtonComponent& c) -> glm::vec4& { return c.hoverColor; });
         colorEdit("Pressed##col",  +[](ButtonComponent& c) -> glm::vec4& { return c.pressedColor; });
@@ -1764,16 +1764,16 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
 
         dragFloat("Fade Duration", +[](ButtonComponent& c) -> float& { return c.fadeDuration; },
                   0.01f, 0.0f, 10.0f, "%.3f");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Segundos del fundido de Animation. 0 = salto seco");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Seconds of the Animation fade. 0 = instant switch");
 
-        ImGui::TextDisabled("Texto");
+        ImGui::TextDisabled("Text");
         inputText("Text", +[](ButtonComponent& c) -> std::string& { return c.text; });
         assetBox("Font", /*isFont=*/true,
                  +[](ButtonComponent& c) -> std::string& { return c.fontPath; },
                  "ButtonFontDlg", "Choose font", ".ttf,.otf,.ttc",
                  "Drop .ttf/.otf here");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Vacía = la fuente por defecto del proyecto");
+            ImGui::SetTooltip("Empty = the project's default font");
 
         if (!m_buttonPathError.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_buttonPathError.c_str());
@@ -1789,7 +1789,7 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
         comboEnum("V Align", (int)b->textVAlign, kVAligns, IM_ARRAYSIZE(kVAligns),
                   +[](ButtonComponent& c, int v) { c.textVAlign = (UiTextVAlign)v; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Dónde cae la etiqueta a lo alto del botón");
+            ImGui::SetTooltip("Where the label sits vertically within the button");
 
         ImGui::TreePop();
     }
@@ -1797,11 +1797,11 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<ButtonComponentCommand>(
-            *ctx.scene, "Quitar Button de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Button from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getButton());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Button quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Button component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -1812,7 +1812,7 @@ void PropertiesPanel::setTextFontPath(EditorContext& ctx, uint64_t ownerId,
     // file dialog, así que el filtro solo hay que ponerlo una vez.
     if (!isUiFontPath(path))
     {
-        m_textPathError = "No es una fuente (.ttf .otf .ttc): " +
+        m_textPathError = "Not a font (.ttf .otf .ttc): " +
                           std::filesystem::path(path).filename().string();
         ctx.pushLog(m_textPathError);
         return;
@@ -1830,8 +1830,8 @@ void PropertiesPanel::setTextFontPath(EditorContext& ctx, uint64_t ownerId,
 
     t.fontPath = path;
 
-    const std::string lbl = "Fuente del texto de '" + go->name + "'";
-    ctx.pushLog(lbl + " cambiada a " + path);
+    const std::string lbl = "Font of text '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -1875,8 +1875,8 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
     if (sectionOpen)
     {
         TextComponent* t = ctx.selected->getText().get();
-        ImGui::TextWrapped("Etiqueta de la UI 2D. Se dibuja en el árbol del Canvas de la escena. "
-                           "El texto acepta tags de estilo: <color=#RRGGBB>, <size=N>, <b> y <i>.");
+        ImGui::TextWrapped("2D UI label. It is drawn in the scene's Canvas tree. "
+                           "The text accepts style tags: <color=#RRGGBB>, <size=N>, <b> and <i>.");
 
         // Los mismos accessors sin captura (function pointer) y el mismo baile
         // de undo que la sección del Button. Los labels llevan "##txt" porque un
@@ -1897,8 +1897,8 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*t, idx);
-                const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of text '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -1916,8 +1916,8 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &v) && v != before)
             {
                 acc(*t) = v;
-                const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
-                ctx.pushLog(lbl + (v ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of text '" + owner + "'";
+                ctx.pushLog(lbl + (v ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, v,
@@ -1949,8 +1949,8 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
                 m_textDragField = nullptr;
                 if (after != m_textDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of text '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_textDragBefore, after,
@@ -1983,8 +1983,8 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
                 m_textDragField = nullptr;
                 if (after != m_textDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of text '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_textDragBefore2, after,
@@ -2016,8 +2016,8 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
                 m_textDragField = nullptr;
                 if (after != m_textDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of text '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_textDragBefore4, after,
@@ -2051,8 +2051,8 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
                 m_textDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of text '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -2077,14 +2077,14 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
                  1.0f, 0.0f, 16384.0f, "%.0f");
         checkBox("Visible##txt", +[](TextComponent& c) -> bool& { return c.visible; });
 
-        ImGui::TextDisabled("Texto");
+        ImGui::TextDisabled("Text");
         inputText("Text##txt", +[](TextComponent& c) -> std::string& { return c.text; });
 
         // Ruta escribible a mano + la caja de asset común (drawAssetDropBox). El
         // veto por extensión está en setTextFontPath, por donde pasan los dos.
         inputText("Font##txt", +[](TextComponent& c) -> std::string& { return c.fontPath; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Vacía = la fuente por defecto del proyecto");
+            ImGui::SetTooltip("Empty = the project's default font");
         drawAssetDropBox(ctx, "txtfont", "Drop .ttf/.otf here",
             [&]
             {
@@ -2107,7 +2107,7 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
                   0.5f, 1.0f, 512.0f, "%.1f");
         colorEdit("Color##txt", +[](TextComponent& c) -> glm::vec4& { return c.color; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Color del relleno del glyph");
+            ImGui::SetTooltip("Glyph fill color");
 
         static const char* kAligns[] = { "Left", "Center", "Right", "Justify" };
         comboEnum("Align##txt", (int)t->align, kAligns, IM_ARRAYSIZE(kAligns),
@@ -2117,35 +2117,35 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
         comboEnum("V Align##txt", (int)t->vAlign, kVAligns, IM_ARRAYSIZE(kVAligns),
                   +[](TextComponent& c, int v) { c.vAlign = (UiTextVAlign)v; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Dónde cae el bloque de líneas a lo alto del rect");
+            ImGui::SetTooltip("Where the block of lines sits vertically within the rect");
 
         static const char* kOverflows[] = { "Overflow", "Clip", "Ellipsis" };
         comboEnum("Overflow##txt", (int)t->overflow, kOverflows, IM_ARRAYSIZE(kOverflows),
                   +[](TextComponent& c, int v) { c.overflow = (UiTextOverflow)v; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Qué pasa con lo que no cabe en el rect. Clip parte el lote por scissor");
+            ImGui::SetTooltip("What happens to what does not fit in the rect. Clip splits the batch by scissor");
 
         checkBox("Word Wrap##txt", +[](TextComponent& c) -> bool& { return c.wordWrap; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Corta por palabras contra el ancho del rect. Los '\\n' cortan siempre");
+            ImGui::SetTooltip("Wraps by words against the rect's width. '\\n' always breaks");
 
-        ImGui::TextDisabled("Contorno");
+        ImGui::TextDisabled("Outline");
         dragFloat("Outline Width##txt", +[](TextComponent& c) -> float& { return c.outlineWidth; },
                   0.05f, 0.0f, 32.0f, "%.2f");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Píxeles de pantalla. 0 = sin contorno");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Screen pixels. 0 = no outline");
         colorEdit("Outline Color##txt",
                   +[](TextComponent& c) -> glm::vec4& { return c.outlineColor; });
 
-        ImGui::TextDisabled("Sombra");
+        ImGui::TextDisabled("Shadow");
         dragVec2("Shadow Offset##txt",
                  +[](TextComponent& c) -> glm::vec2& { return c.shadowOffset; },
                  0.25f, -64.0f, 64.0f, "%.2f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Píxeles. A {0,0} (o con alfa 0) no se emite ni un quad de sombra");
+            ImGui::SetTooltip("Pixels. At {0,0} (or with alpha 0) not a single shadow quad is emitted");
         colorEdit("Shadow Color##txt",
                   +[](TextComponent& c) -> glm::vec4& { return c.shadowColor; });
 
-        ImGui::TextDisabled("Estilo de los tags <b> e <i>");
+        ImGui::TextDisabled("Style of the <b> and <i> tags");
         dragFloat("Bold Strength##txt", +[](TextComponent& c) -> float& { return c.boldStrength; },
                   0.01f, 0.0f, 1.0f, "%.3f");
         dragFloat("Italic Skew##txt", +[](TextComponent& c) -> float& { return c.italicSkew; },
@@ -2157,11 +2157,11 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<TextComponentCommand>(
-            *ctx.scene, "Quitar Text de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Text from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getText());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Text quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Text component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -2179,9 +2179,9 @@ namespace
 
     const char* barImageFieldLabel(int field)
     {
-        if (field == 1) return "Imagen de fondo de la barra de '";
-        if (field == 2) return "Imagen de relleno de la barra de '";
-        return "Atlas de la barra de '";
+        if (field == 1) return "Background image of bar '";
+        if (field == 2) return "Fill image of bar '";
+        return "Atlas of bar '";
     }
 }
 
@@ -2193,7 +2193,7 @@ void PropertiesPanel::setProgressBarImagePath(EditorContext& ctx, uint64_t owner
     // ponerlo una vez.
     if (!isUiAtlasPath(path))
     {
-        m_barPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+        m_barPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
                          std::filesystem::path(path).filename().string();
         ctx.pushLog(m_barPathError);
         return;
@@ -2212,7 +2212,7 @@ void PropertiesPanel::setProgressBarImagePath(EditorContext& ctx, uint64_t owner
     barImagePathRef(p, field) = path;
 
     const std::string lbl = std::string(barImageFieldLabel(field)) + go->name + "'";
-    ctx.pushLog(lbl + " cambiada a " + path);
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -2257,8 +2257,8 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
     if (sectionOpen)
     {
         ProgressBarComponent* p = ctx.selected->getProgressBar().get();
-        ImGui::TextWrapped("Barra de progreso de la UI 2D. Se dibuja en el árbol del Canvas "
-                           "como fondo + relleno; el relleno sale de value contra [min, max].");
+        ImGui::TextWrapped("2D UI progress bar. It is drawn in the Canvas tree "
+                           "as background + fill; the fill comes from value against [min, max].");
 
         // Los mismos accessors sin captura (function pointer) y el mismo baile
         // de undo que las secciones del Button y del Text. Los labels llevan
@@ -2279,8 +2279,8 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*p, idx);
-                const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of bar '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -2298,8 +2298,8 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &v) && v != before)
             {
                 acc(*p) = v;
-                const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
-                ctx.pushLog(lbl + (v ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of bar '" + owner + "'";
+                ctx.pushLog(lbl + (v ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, v,
@@ -2331,8 +2331,8 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
                 m_barDragField = nullptr;
                 if (after != m_barDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of bar '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_barDragBefore, after,
@@ -2365,8 +2365,8 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
                 m_barDragField = nullptr;
                 if (after != m_barDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of bar '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_barDragBefore2, after,
@@ -2398,8 +2398,8 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
                 m_barDragField = nullptr;
                 if (after != m_barDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of bar '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_barDragBefore4, after,
@@ -2433,8 +2433,8 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
                 m_barDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of bar '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -2462,7 +2462,7 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
                  1.0f, 0.0f, 16384.0f, "%.0f");
         checkBox("Visible##bar", +[](ProgressBarComponent& c) -> bool& { return c.visible; });
 
-        ImGui::TextDisabled("Valor");
+        ImGui::TextDisabled("Value");
         // Sin tope por min/max a propósito: el componente no clampa nada (lo
         // normaliza el sync), y el rango puede venir de un script.
         dragFloat("Value##bar", +[](ProgressBarComponent& c) -> float& { return c.value; },
@@ -2472,8 +2472,8 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
         dragFloat("Max##bar", +[](ProgressBarComponent& c) -> float& { return c.maxValue; },
                   0.01f, -1e9f, 1e9f, "%.3f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Con Max <= Min la barra sale vacía: no hay forma de repartir "
-                              "un intervalo vacío");
+            ImGui::SetTooltip("With Max <= Min the bar comes out empty: there is no way to split "
+                              "an empty interval");
 
         static const char* kDirs[] = { "Left To Right", "Right To Left",
                                        "Bottom To Top", "Top To Bottom" };
@@ -2482,14 +2482,14 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
                       c.fillDirection = (UiProgressFillDirection)v;
                   });
 
-        ImGui::TextDisabled("Colores");
+        ImGui::TextDisabled("Colors");
         colorEdit("Background Color##bar",
                   +[](ProgressBarComponent& c) -> glm::vec4& { return c.color; });
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Color del FONDO (el rect entero)");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("BACKGROUND color (the whole rect)");
         colorEdit("Fill Color##bar",
                   +[](ProgressBarComponent& c) -> glm::vec4& { return c.fillColor; });
 
-        ImGui::TextDisabled("Imágenes");
+        ImGui::TextDisabled("Images");
         // Una ruta escribible a mano por campo + la caja de asset común
         // (drawAssetDropBox). El veto por extensión está en
         // setProgressBarImagePath, por donde pasan los tres campos y los dos
@@ -2525,15 +2525,15 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
         assetBox("Atlas##bar", 0,
                  +[](ProgressBarComponent& c) -> std::string& { return c.atlasPath; },
                  "barAtlas",
-                 "Imagen compartida: la usan las partes que no traigan la suya");
+                 "Shared image: used by the parts that do not bring their own");
         assetBox("Background Image##bar", 1,
                  +[](ProgressBarComponent& c) -> std::string& { return c.backgroundPath; },
                  "barBg",
-                 "Vacía = el Atlas; y sin ninguno, un quad de Background Color");
+                 "Empty = the Atlas; and without one, a Background Color quad");
         assetBox("Fill Image##bar", 2,
                  +[](ProgressBarComponent& c) -> std::string& { return c.fillPath; },
                  "barFill",
-                 "Vacía = el Atlas; y sin ninguno, un quad de Fill Color");
+                 "Empty = the Atlas; and without one, a Fill Color quad");
 
         if (!m_barPathError.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_barPathError.c_str());
@@ -2544,11 +2544,11 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<ProgressBarComponentCommand>(
-            *ctx.scene, "Quitar Progress Bar de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Progress Bar from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getProgressBar());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Progress Bar quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Progress Bar component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -2576,9 +2576,9 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
         const bool ownsRect = !ctx.selected->hasButton() && !ctx.selected->hasText() &&
                               !ctx.selected->hasProgressBar();
 
-        ImGui::TextWrapped("Auto-layout de la UI 2D: coloca a los HIJOS de este objeto. Sin "
-                           "otro componente de UI aquí, el contenedor es un rect propio que "
-                           "agrupa y recorta sin dibujarse.");
+        ImGui::TextWrapped("2D UI auto-layout: places this object's CHILDREN. Without "
+                           "another UI component here, the container is a rect of its own that "
+                           "groups and clips without being drawn.");
 
         // Mismos accessors sin captura (function pointer) y mismo baile de undo
         // que las secciones del Button, el Text y la ProgressBar. Los labels
@@ -2598,8 +2598,8 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*l, idx);
-                const std::string lbl = std::string(label) + " del layout de '" + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of layout '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -2617,8 +2617,8 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &v) && v != before)
             {
                 acc(*l) = v;
-                const std::string lbl = std::string(label) + " del layout de '" + owner + "'";
-                ctx.pushLog(lbl + (v ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of layout '" + owner + "'";
+                ctx.pushLog(lbl + (v ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, v,
@@ -2650,8 +2650,8 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
                 m_layoutDragField = nullptr;
                 if (after != m_layoutDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " del layout de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of layout '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_layoutDragBefore, after,
@@ -2684,8 +2684,8 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
                 m_layoutDragField = nullptr;
                 if (after != m_layoutDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " del layout de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of layout '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_layoutDragBefore2, after,
@@ -2719,8 +2719,8 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
                 m_layoutDragField = nullptr;
                 if (after != (int)m_layoutDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " del layout de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of layout '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                             lbl, (int)m_layoutDragBefore, after,
@@ -2737,12 +2737,12 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
         comboEnum("Mode##layout", (int)l->mode, kModos, IM_ARRAYSIZE(kModos),
                   +[](LayoutComponent& c, int v) { c.mode = (UiLayoutMode)v; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("None = solo agrupa y recorta; los hijos se anclan por su cuenta");
+            ImGui::SetTooltip("None = only groups and clips; the children anchor on their own");
 
-        ImGui::TextDisabled("Rect del contenedor");
+        ImGui::TextDisabled("Container rect");
         if (!ownsRect)
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
-                               "El rect lo manda el otro componente de UI de este objeto");
+                               "The rect is driven by this object's other UI component");
         dragVec2("Anchor Min##layout",
                  +[](LayoutComponent& c) -> glm::vec2& { return c.anchorMin; },
                  0.01f, 0.0f, 1.0f, "%.3f");
@@ -2768,18 +2768,18 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
         dragFloat("Bottom##layout", +[](LayoutComponent& c) -> float& { return c.paddingBottom; },
                   1.0f, 0.0f, 16384.0f, "%.0f");
 
-        ImGui::TextDisabled("Colocación");
+        ImGui::TextDisabled("Placement");
         dragVec2("Spacing##layout", +[](LayoutComponent& c) -> glm::vec2& { return c.spacing; },
                  1.0f, -16384.0f, 16384.0f, "%.0f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("X entre columnas, Y entre filas");
+            ImGui::SetTooltip("X between columns, Y between rows");
 
         static const char* kAlin[] = { "Start", "Center", "End" };
         comboEnum("Cross Align##layout", (int)l->crossAlign, kAlin, IM_ARRAYSIZE(kAlin),
                   +[](LayoutComponent& c, int v) { c.crossAlign = (UiCrossAlign)v; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Alineación en el eje TRANSVERSAL. El Grid no la usa: la celda "
-                              "ya fija los dos ejes");
+            ImGui::SetTooltip("Alignment on the CROSS axis. Grid does not use it: the cell "
+                              "already fixes both axes");
 
         // Los dos campos de la rejilla se enseñan siempre, deshabilitados fuera
         // de Grid: esconderlos cambiaría la FORMA del panel al tocar el modo, y
@@ -2790,26 +2790,26 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
                  1.0f, 0.0f, 16384.0f, "%.0f");
         dragColumns("Columns##layout");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("0 = las que quepan en el ancho del contenedor");
+            ImGui::SetTooltip("0 = as many as fit in the container's width");
         if (!esGrid) ImGui::EndDisabled();
 
         ImGui::TextDisabled("Content size fitter");
         checkBox("Fit Width##layout", +[](LayoutComponent& c) -> bool& { return c.fitWidth; });
         checkBox("Fit Height##layout", +[](LayoutComponent& c) -> bool& { return c.fitHeight; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Ese eje del Size pasa a ser la extensión de los hijos colocados "
-                              "más el padding");
+            ImGui::SetTooltip("That Size axis becomes the extent of the placed children "
+                              "plus the padding");
 
-        ImGui::TextDisabled("Este objeto dentro del layout de su padre");
+        ImGui::TextDisabled("This object inside its parent's layout");
         checkBox("Ignore Layout##layout",
                  +[](LayoutComponent& c) -> bool& { return c.ignoreLayout; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Se ancla por su cuenta y NO ocupa hueco en el layout del padre");
+            ImGui::SetTooltip("Anchors on its own and does NOT take a slot in the parent's layout");
         checkBox("Clip Children##layout",
                  +[](LayoutComponent& c) -> bool& { return c.clipChildren; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Recorta a los descendientes contra este rect (se INTERSECA con "
-                              "el recorte que venga del padre)");
+            ImGui::SetTooltip("Clips the descendants against this rect (INTERSECTED with "
+                              "the clipping coming from the parent)");
 
         ImGui::TreePop();
     }
@@ -2817,11 +2817,11 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<LayoutComponentCommand>(
-            *ctx.scene, "Quitar Layout de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Layout from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getLayout());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Layout quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Layout component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -2832,7 +2832,7 @@ void PropertiesPanel::setPanelAtlasPath(EditorContext& ctx, uint64_t ownerId,
     // pasan el drop y el file dialog, así que el filtro va una sola vez.
     if (!isUiAtlasPath(path))
     {
-        m_panelPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+        m_panelPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
                            std::filesystem::path(path).filename().string();
         ctx.pushLog(m_panelPathError);
         return;
@@ -2850,8 +2850,8 @@ void PropertiesPanel::setPanelAtlasPath(EditorContext& ctx, uint64_t ownerId,
 
     p.atlasPath = path;
 
-    const std::string lbl = "Atlas del panel de '" + go->name + "'";
-    ctx.pushLog(lbl + " cambiado a " + path);
+    const std::string lbl = "Atlas of panel '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -2896,8 +2896,8 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
     if (sectionOpen)
     {
         PanelComponent* p = ctx.selected->getPanel().get();
-        ImGui::TextWrapped("Rectángulo de fondo de la UI 2D. Sin atlas es un quad de color "
-                           "plano; con atlas, el sprite estirado al rect.");
+        ImGui::TextWrapped("2D UI background rectangle. Without an atlas it is a flat color "
+                           "quad; with an atlas, the sprite stretched to the rect.");
 
         using Vec2Ref = glm::vec2&   (*)(PanelComponent&);
         using Vec4Ref = glm::vec4&   (*)(PanelComponent&);
@@ -2911,8 +2911,8 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &v) && v != before)
             {
                 acc(*p) = v;
-                const std::string lbl = std::string(label) + " del panel de '" + owner + "'";
-                ctx.pushLog(lbl + (v ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of panel '" + owner + "'";
+                ctx.pushLog(lbl + (v ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, v,
@@ -2947,8 +2947,8 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
                 m_panelDragField = nullptr;
                 if (after != m_panelDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " del panel de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of panel '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_panelDragBefore2, after,
@@ -2980,8 +2980,8 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
                 m_panelDragField = nullptr;
                 if (after != m_panelDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " del panel de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of panel '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_panelDragBefore4, after,
@@ -3015,8 +3015,8 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
                 m_panelDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " del panel de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of panel '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -3040,7 +3040,7 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
 
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
-            items.push_back("(imagen entera)");
+            items.push_back("(whole image)");
             for (const std::string& n : nombres) items.push_back(n.c_str());
 
             int current = 0;
@@ -3052,7 +3052,7 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
-                huerfano = before + "  (no esta en el atlas)";
+                huerfano = before + "  (not in the atlas)";
                 items.push_back(huerfano.c_str());
                 current = (int)items.size() - 1;
             }
@@ -3067,8 +3067,8 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
                 if (after != before)
                 {
                     acc(*p) = after;
-                    const std::string lbl = std::string(label) + " del panel de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    const std::string lbl = std::string(label) + " of panel '" + owner + "'";
+                    ctx.pushLog(lbl + " changed to '" + after + "'");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, before, after,
@@ -3099,9 +3099,9 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
         checkBox("Raycast Target##panel",
                  +[](PanelComponent& c) -> bool& { return c.raycastTarget; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("A false el panel deja pasar el ratón a lo que tenga detrás.\n"
-                              "Un fondo a pantalla completa con esto activo se come TODOS los\n"
-                              "clics y no hay nada que lo delate a la vista.");
+            ImGui::SetTooltip("When false the panel lets the mouse through to whatever is behind it.\n"
+                              "A full-screen background with this on swallows ALL the\n"
+                              "clicks, and nothing on screen gives it away.");
 
         ImGui::TextDisabled("Sprite");
         inputText("Atlas##panel", +[](PanelComponent& c) -> std::string& { return c.atlasPath; });
@@ -3124,10 +3124,10 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
         // Sin atlas no hay nada que trocear, y el botón deshabilitado dice por
         // qué mejor que su ausencia.
         ImGui::BeginDisabled(p->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##panel")) ctx.openSpriteEditor(p->atlasPath);
+        if (ImGui::Button("Edit sprites...##panel")) ctx.openSpriteEditor(p->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && p->atlasPath.empty())
-            ImGui::SetTooltip("Primero elige un atlas");
+            ImGui::SetTooltip("Choose an atlas first");
         spriteField("Sprite##panel", +[](PanelComponent& c) -> std::string& { return c.sprite; });
 
         if (!m_panelPathError.empty())
@@ -3139,11 +3139,11 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<PanelComponentCommand>(
-            *ctx.scene, "Quitar Panel de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Panel from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getPanel());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Panel quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Panel component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -3152,7 +3152,7 @@ void PropertiesPanel::setImageAtlasPath(EditorContext& ctx, uint64_t ownerId,
 {
     if (!isUiAtlasPath(path))
     {
-        m_imagePathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+        m_imagePathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
                            std::filesystem::path(path).filename().string();
         ctx.pushLog(m_imagePathError);
         return;
@@ -3170,8 +3170,8 @@ void PropertiesPanel::setImageAtlasPath(EditorContext& ctx, uint64_t ownerId,
 
     im.atlasPath = path;
 
-    const std::string lbl = "Atlas de la imagen de '" + go->name + "'";
-    ctx.pushLog(lbl + " cambiado a " + path);
+    const std::string lbl = "Atlas of image '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -3213,8 +3213,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
     if (sectionOpen)
     {
         ImageComponent* im = ctx.selected->getImage().get();
-        ImGui::TextWrapped("Sprite de la UI 2D. Los cuatro modos se resuelven en CPU dentro del "
-                           "batcher (N quads del mismo atlas y el mismo scissor).");
+        ImGui::TextWrapped("2D UI sprite. The four modes are resolved on the CPU inside the "
+                           "batcher (N quads from the same atlas and the same scissor).");
 
         using FloatRef = float&       (*)(ImageComponent&);
         using Vec2Ref  = glm::vec2&   (*)(ImageComponent&);
@@ -3231,8 +3231,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*im, idx);
-                const std::string lbl = std::string(label) + " de la imagen de '" + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of image '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -3250,8 +3250,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &v) && v != before)
             {
                 acc(*im) = v;
-                const std::string lbl = std::string(label) + " de la imagen de '" + owner + "'";
-                ctx.pushLog(lbl + (v ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of image '" + owner + "'";
+                ctx.pushLog(lbl + (v ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, v,
@@ -3283,8 +3283,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
                 m_imageDragField = nullptr;
                 if (after != m_imageDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " de la imagen de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of image '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_imageDragBefore, after,
@@ -3317,8 +3317,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
                 m_imageDragField = nullptr;
                 if (after != m_imageDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " de la imagen de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of image '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_imageDragBefore2, after,
@@ -3350,8 +3350,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
                 m_imageDragField = nullptr;
                 if (after != m_imageDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " de la imagen de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of image '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_imageDragBefore4, after,
@@ -3385,8 +3385,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
                 m_imageDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " de la imagen de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of image '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -3407,7 +3407,7 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
 
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
-            items.push_back("(imagen entera)");
+            items.push_back("(whole image)");
             for (const std::string& n : nombres) items.push_back(n.c_str());
 
             int current = 0;
@@ -3417,7 +3417,7 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
-                huerfano = before + "  (no esta en el atlas)";
+                huerfano = before + "  (not in the atlas)";
                 items.push_back(huerfano.c_str());
                 current = (int)items.size() - 1;
             }
@@ -3432,8 +3432,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
                 if (after != before)
                 {
                     acc(*im) = after;
-                    const std::string lbl = std::string(label) + " de la imagen de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    const std::string lbl = std::string(label) + " of image '" + owner + "'";
+                    ctx.pushLog(lbl + " changed to '" + after + "'");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, before, after,
@@ -3461,12 +3461,12 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
                  1.0f, 0.0f, 16384.0f, "%.0f");
         colorEdit("Color##image", +[](ImageComponent& c) -> glm::vec4& { return c.color; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Tinte del sprite (se multiplica)");
+            ImGui::SetTooltip("Sprite tint (multiplied)");
         checkBox("Visible##image", +[](ImageComponent& c) -> bool& { return c.visible; });
         checkBox("Raycast Target##image",
                  +[](ImageComponent& c) -> bool& { return c.raycastTarget; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("A false la imagen deja pasar el ratón a lo que tenga detrás");
+            ImGui::SetTooltip("When false the image lets the mouse through to whatever is behind it");
 
         ImGui::TextDisabled("Sprite");
         inputText("Atlas##image", +[](ImageComponent& c) -> std::string& { return c.atlasPath; });
@@ -3487,10 +3487,10 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
             [&](const std::string& dropped) { setImageAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(im->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##image")) ctx.openSpriteEditor(im->atlasPath);
+        if (ImGui::Button("Edit sprites...##image")) ctx.openSpriteEditor(im->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && im->atlasPath.empty())
-            ImGui::SetTooltip("Primero elige un atlas");
+            ImGui::SetTooltip("Choose an atlas first");
         spriteField("Sprite##image", +[](ImageComponent& c) -> std::string& { return c.sprite; });
 
         if (!m_imagePathError.empty())
@@ -3504,12 +3504,12 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
         comboEnum("Mode##image", (int)im->mode, kModes, IM_ARRAYSIZE(kModes),
                   +[](ImageComponent& c, int v) { c.mode = (UiImageMode)v; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Normal: el sprite estirado al rect.\n"
-                              "Tiled: repetido a su tamaño nativo.\n"
-                              "Sliced: 9-slice, las esquinas no se estiran.\n"
-                              "Filled: solo una fracción del rect.");
+            ImGui::SetTooltip("Normal: the sprite stretched to the rect.\n"
+                              "Tiled: repeated at its native size.\n"
+                              "Sliced: 9-slice, the corners do not stretch.\n"
+                              "Filled: only a fraction of the rect.");
 
-        ImGui::TextDisabled("Sliced (bordes en píxeles DEL SPRITE)");
+        ImGui::TextDisabled("Sliced (borders in SPRITE pixels)");
         dragFloat("Border Left##image",
                   +[](ImageComponent& c) -> float& { return c.borderLeft; },
                   1.0f, 0.0f, 4096.0f, "%.1f");
@@ -3524,8 +3524,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
                   1.0f, 0.0f, 4096.0f, "%.1f");
         checkBox("Fill Center##image", +[](ImageComponent& c) -> bool& { return c.fillCenter; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Sin centro salen 8 quads: es lo que quiere un marco que deja\n"
-                              "ver lo de detrás");
+            ImGui::SetTooltip("Without the center you get 8 quads: what a frame that shows\n"
+                              "what is behind it wants");
 
         ImGui::TextDisabled("Tiled");
         {
@@ -3549,8 +3549,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
                 m_imageDragField = nullptr;
                 if (after != (int)m_imageDragBefore)
                 {
-                    const std::string lbl = "Max Tiles de la imagen de '" + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = "Max Tiles of image '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                             lbl, (int)m_imageDragBefore, after,
@@ -3563,8 +3563,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
             }
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Tope duro de quads. Pasado el tope, el elemento se dibuja como\n"
-                              "Normal en vez de reventar el buffer de vértices.");
+            ImGui::SetTooltip("Hard quad cap. Past the cap, the element is drawn as\n"
+                              "Normal instead of blowing up the vertex buffer.");
 
         ImGui::TextDisabled("Filled");
         static const char* kFillDirs[] = { "Horizontal", "Vertical" };
@@ -3576,12 +3576,12 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
                   IM_ARRAYSIZE(kFillOrigins),
                   +[](ImageComponent& c, int v) { c.fillOrigin = (UiFillOrigin)v; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Start es izquierda en Horizontal y arriba en Vertical");
+            ImGui::SetTooltip("Start is left in Horizontal and top in Vertical");
         dragFloat("Fill Amount##image",
                   +[](ImageComponent& c) -> float& { return c.fillAmount; },
                   0.01f, 0.0f, 1.0f, "%.3f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("A 0 no se emite ni un quad");
+            ImGui::SetTooltip("At 0 not a single quad is emitted");
 
         ImGui::TreePop();
     }
@@ -3589,11 +3589,11 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<ImageComponentCommand>(
-            *ctx.scene, "Quitar Image de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Image from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getImage());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Image quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Image component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -3605,7 +3605,7 @@ void PropertiesPanel::setSliderAtlasPath(EditorContext& ctx, uint64_t ownerId,
     // pasan el drop y el file dialog, asi que el filtro va una sola vez.
     if (!isUiAtlasPath(path))
     {
-        m_sliderPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+        m_sliderPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
                          std::filesystem::path(path).filename().string();
         ctx.pushLog(m_sliderPathError);
         return;
@@ -3623,8 +3623,8 @@ void PropertiesPanel::setSliderAtlasPath(EditorContext& ctx, uint64_t ownerId,
 
     c.atlasPath = path;
 
-    const std::string lbl = std::string("Atlas ") + "del slider de " + go->name + "'";
-    ctx.pushLog(lbl + " cambiado a " + path);
+    const std::string lbl = std::string("Atlas ") + "of slider '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -3668,7 +3668,7 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
     if (sectionOpen)
     {
         SliderComponent* sl = ctx.selected->getSlider().get();
-        ImGui::TextWrapped("Widget de valor arrastrable. La pista entera es zona de clic; el asa se descuenta del recorrido para no salirse por las puntas.");
+        ImGui::TextWrapped("Draggable value widget. The whole track is a click zone; the handle is subtracted from the travel so it never sticks out of the ends.");
 
         using FloatRef = float&       (*)(SliderComponent&);
         using Vec2Ref  = glm::vec2&   (*)(SliderComponent&);
@@ -3687,8 +3687,8 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*sl, idx);
-                const std::string lbl = std::string(label) + " del slider de " + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of slider '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -3707,8 +3707,8 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &val) && val != before)
             {
                 acc(*sl) = val;
-                const std::string lbl = std::string(label) + " del slider de " + owner + "'";
-                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of slider '" + owner + "'";
+                ctx.pushLog(lbl + (val ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, val,
@@ -3743,8 +3743,8 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
                 m_sliderDragField = nullptr;
                 if (after != m_sliderDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " del slider de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of slider '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_sliderDragBefore, after,
@@ -3777,8 +3777,8 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
                 m_sliderDragField = nullptr;
                 if (after != m_sliderDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " del slider de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of slider '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_sliderDragBefore2, after,
@@ -3810,8 +3810,8 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
                 m_sliderDragField = nullptr;
                 if (after != m_sliderDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " del slider de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of slider '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_sliderDragBefore4, after,
@@ -3847,8 +3847,8 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
                 m_sliderDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " del slider de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of slider '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -3872,7 +3872,7 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
 
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
-            items.push_back("(imagen entera)");
+            items.push_back("(whole image)");
             for (const std::string& n : nombres) items.push_back(n.c_str());
 
             int current = 0;
@@ -3884,7 +3884,7 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
-                huerfano = before + "  (no esta en el atlas)";
+                huerfano = before + "  (not in the atlas)";
                 items.push_back(huerfano.c_str());
                 current = (int)items.size() - 1;
             }
@@ -3899,8 +3899,8 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
                 if (after != before)
                 {
                     acc(*sl) = after;
-                    const std::string lbl = std::string(label) + " del slider de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    const std::string lbl = std::string(label) + " of slider '" + owner + "'";
+                    ctx.pushLog(lbl + " changed to '" + after + "'");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, before, after,
@@ -3926,9 +3926,9 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
         checkBox("Visible##slider", +[](SliderComponent& c) -> bool& { return c.visible; });
         checkBox("Interactable##slider", +[](SliderComponent& c) -> bool& { return c.interactable; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("A false se dibuja igual pero no se deja mover");
+            ImGui::SetTooltip("When false it is drawn the same but cannot be moved");
 
-        ImGui::TextDisabled("Valor");
+        ImGui::TextDisabled("Value");
         dragFloat("Value##slider", +[](SliderComponent& c) -> float& { return c.value; },
                   0.01f, -1e6f, 1e6f, "%.3f");
         dragFloat("Min##slider", +[](SliderComponent& c) -> float& { return c.minValue; },
@@ -3937,22 +3937,22 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
                   0.01f, -1e6f, 1e6f, "%.3f");
         checkBox("Whole Numbers##slider", +[](SliderComponent& c) -> bool& { return c.wholeNumbers; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Redondea el valor que se ESCRIBE, no solo el que se dibuja");
+            ImGui::SetTooltip("Rounds the value that is WRITTEN, not just the one drawn");
 
         static const char* kSliderDirs[] = { "Left To Right", "Right To Left",
                                              "Bottom To Top", "Top To Bottom" };
         comboEnum("Direction##slider", (int)sl->direction, kSliderDirs, IM_ARRAYSIZE(kSliderDirs),
                   +[](SliderComponent& c, int v) { c.direction = (UiSliderDirection)v; });
 
-        ImGui::TextDisabled("Colores y asa");
+        ImGui::TextDisabled("Colors and handle");
         colorEdit("Track Color##slider", +[](SliderComponent& c) -> glm::vec4& { return c.color; });
         colorEdit("Fill Color##slider", +[](SliderComponent& c) -> glm::vec4& { return c.fillColor; });
         colorEdit("Handle Color##slider", +[](SliderComponent& c) -> glm::vec4& { return c.handleColor; });
         dragFloat("Handle Size##slider", +[](SliderComponent& c) -> float& { return c.handleSize; },
                   0.5f, 0.0f, 4096.0f, "%.1f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Largo del asa EN EL EJE del recorrido, en px. A 0 el recorrido\n"
-                              "es el rect entero.");
+            ImGui::SetTooltip("Handle length ALONG the travel axis, in px. At 0 the travel\n"
+                              "is the whole rect.");
 
         ImGui::TextDisabled("Sprites");
         inputText("Atlas##slider", +[](SliderComponent& c) -> std::string& { return c.atlasPath; });
@@ -3973,10 +3973,10 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
             [&](const std::string& dropped) { setSliderAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(sl->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##slider")) ctx.openSpriteEditor(sl->atlasPath);
+        if (ImGui::Button("Edit sprites...##slider")) ctx.openSpriteEditor(sl->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && sl->atlasPath.empty())
-            ImGui::SetTooltip("Primero elige un atlas");
+            ImGui::SetTooltip("Choose an atlas first");
         spriteField("Background##slider", +[](SliderComponent& c) -> std::string& { return c.backgroundSprite; });
         spriteField("Fill##slider", +[](SliderComponent& c) -> std::string& { return c.fillSprite; });
         spriteField("Handle##slider", +[](SliderComponent& c) -> std::string& { return c.handleSprite; });
@@ -3990,11 +3990,11 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<SliderComponentCommand>(
-            *ctx.scene, "Quitar Slider de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Slider from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getSlider());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Slider quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Slider component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -4006,7 +4006,7 @@ void PropertiesPanel::setCheckboxAtlasPath(EditorContext& ctx, uint64_t ownerId,
     // pasan el drop y el file dialog, asi que el filtro va una sola vez.
     if (!isUiAtlasPath(path))
     {
-        m_checkboxPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+        m_checkboxPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
                          std::filesystem::path(path).filename().string();
         ctx.pushLog(m_checkboxPathError);
         return;
@@ -4024,8 +4024,8 @@ void PropertiesPanel::setCheckboxAtlasPath(EditorContext& ctx, uint64_t ownerId,
 
     c.atlasPath = path;
 
-    const std::string lbl = std::string("Atlas ") + "de la casilla de " + go->name + "'";
-    ctx.pushLog(lbl + " cambiado a " + path);
+    const std::string lbl = std::string("Atlas ") + "of checkbox '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -4069,7 +4069,7 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
     if (sectionOpen)
     {
         CheckboxComponent* cb = ctx.selected->getCheckbox().get();
-        ImGui::TextWrapped("Casilla de verificacion. Un click invierte el valor. La etiqueta de texto va aparte: el componente Text cabe en este mismo GameObject.");
+        ImGui::TextWrapped("Checkbox. A click toggles the value. The text label is separate: a Text component fits on this same GameObject.");
 
         using FloatRef = float&       (*)(CheckboxComponent&);
         using Vec2Ref  = glm::vec2&   (*)(CheckboxComponent&);
@@ -4088,8 +4088,8 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*cb, idx);
-                const std::string lbl = std::string(label) + " de la casilla de " + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of checkbox '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -4108,8 +4108,8 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &val) && val != before)
             {
                 acc(*cb) = val;
-                const std::string lbl = std::string(label) + " de la casilla de " + owner + "'";
-                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of checkbox '" + owner + "'";
+                ctx.pushLog(lbl + (val ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, val,
@@ -4144,8 +4144,8 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
                 m_checkboxDragField = nullptr;
                 if (after != m_checkboxDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " de la casilla de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of checkbox '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_checkboxDragBefore, after,
@@ -4178,8 +4178,8 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
                 m_checkboxDragField = nullptr;
                 if (after != m_checkboxDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " de la casilla de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of checkbox '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_checkboxDragBefore2, after,
@@ -4211,8 +4211,8 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
                 m_checkboxDragField = nullptr;
                 if (after != m_checkboxDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " de la casilla de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of checkbox '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_checkboxDragBefore4, after,
@@ -4248,8 +4248,8 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
                 m_checkboxDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " de la casilla de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of checkbox '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -4273,7 +4273,7 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
 
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
-            items.push_back("(imagen entera)");
+            items.push_back("(whole image)");
             for (const std::string& n : nombres) items.push_back(n.c_str());
 
             int current = 0;
@@ -4285,7 +4285,7 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
-                huerfano = before + "  (no esta en el atlas)";
+                huerfano = before + "  (not in the atlas)";
                 items.push_back(huerfano.c_str());
                 current = (int)items.size() - 1;
             }
@@ -4300,8 +4300,8 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
                 if (after != before)
                 {
                     acc(*cb) = after;
-                    const std::string lbl = std::string(label) + " de la casilla de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    const std::string lbl = std::string(label) + " of checkbox '" + owner + "'";
+                    ctx.pushLog(lbl + " changed to '" + after + "'");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, before, after,
@@ -4327,17 +4327,17 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
         checkBox("Visible##checkbox", +[](CheckboxComponent& c) -> bool& { return c.visible; });
         checkBox("Interactable##checkbox", +[](CheckboxComponent& c) -> bool& { return c.interactable; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("A false se dibuja igual pero el click no la mueve");
+            ImGui::SetTooltip("When false it is drawn the same but a click does not change it");
 
-        ImGui::TextDisabled("Valor y marca");
+        ImGui::TextDisabled("Value and checkmark");
         checkBox("Is On##checkbox", +[](CheckboxComponent& c) -> bool& { return c.isOn; });
         colorEdit("Box Color##checkbox", +[](CheckboxComponent& c) -> glm::vec4& { return c.color; });
         colorEdit("Check Color##checkbox", +[](CheckboxComponent& c) -> glm::vec4& { return c.checkColor; });
         dragFloat("Check Padding##checkbox", +[](CheckboxComponent& c) -> float& { return c.checkPadding; },
                   0.5f, 0.0f, 4096.0f, "%.1f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Px que la marca se mete hacia dentro por los cuatro lados.\n"
-                              "Uno que no cabe deja la marca a cero, nunca del reves.");
+            ImGui::SetTooltip("Px the checkmark is inset on all four sides.\n"
+                              "One that does not fit leaves the checkmark at zero, never inverted.");
 
         ImGui::TextDisabled("Sprites");
         inputText("Atlas##checkbox", +[](CheckboxComponent& c) -> std::string& { return c.atlasPath; });
@@ -4358,10 +4358,10 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
             [&](const std::string& dropped) { setCheckboxAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(cb->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##checkbox")) ctx.openSpriteEditor(cb->atlasPath);
+        if (ImGui::Button("Edit sprites...##checkbox")) ctx.openSpriteEditor(cb->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && cb->atlasPath.empty())
-            ImGui::SetTooltip("Primero elige un atlas");
+            ImGui::SetTooltip("Choose an atlas first");
         spriteField("Background##checkbox", +[](CheckboxComponent& c) -> std::string& { return c.backgroundSprite; });
         spriteField("Checkmark##checkbox", +[](CheckboxComponent& c) -> std::string& { return c.checkmarkSprite; });
 
@@ -4374,11 +4374,11 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<CheckboxComponentCommand>(
-            *ctx.scene, "Quitar Checkbox de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Checkbox from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getCheckbox());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Checkbox quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Checkbox component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -4390,7 +4390,7 @@ void PropertiesPanel::setToggleAtlasPath(EditorContext& ctx, uint64_t ownerId,
     // pasan el drop y el file dialog, asi que el filtro va una sola vez.
     if (!isUiAtlasPath(path))
     {
-        m_togglePathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+        m_togglePathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
                          std::filesystem::path(path).filename().string();
         ctx.pushLog(m_togglePathError);
         return;
@@ -4408,8 +4408,8 @@ void PropertiesPanel::setToggleAtlasPath(EditorContext& ctx, uint64_t ownerId,
 
     c.atlasPath = path;
 
-    const std::string lbl = std::string("Atlas ") + "del interruptor de " + go->name + "'";
-    ctx.pushLog(lbl + " cambiado a " + path);
+    const std::string lbl = std::string("Atlas ") + "of toggle '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -4453,7 +4453,7 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
     if (sectionOpen)
     {
         ToggleComponent* tg = ctx.selected->getToggle().get();
-        ImGui::TextWrapped("Interruptor deslizante. Guarda el mismo dato que el Checkbox (un bool) pero con otros campos: dos colores de pista y el tamano del mando.");
+        ImGui::TextWrapped("Sliding switch. It stores the same data as the Checkbox (a bool) but with other fields: two track colors and the knob size.");
 
         using FloatRef = float&       (*)(ToggleComponent&);
         using Vec2Ref  = glm::vec2&   (*)(ToggleComponent&);
@@ -4472,8 +4472,8 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*tg, idx);
-                const std::string lbl = std::string(label) + " del interruptor de " + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of toggle '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -4492,8 +4492,8 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &val) && val != before)
             {
                 acc(*tg) = val;
-                const std::string lbl = std::string(label) + " del interruptor de " + owner + "'";
-                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of toggle '" + owner + "'";
+                ctx.pushLog(lbl + (val ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, val,
@@ -4528,8 +4528,8 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
                 m_toggleDragField = nullptr;
                 if (after != m_toggleDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " del interruptor de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of toggle '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_toggleDragBefore, after,
@@ -4562,8 +4562,8 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
                 m_toggleDragField = nullptr;
                 if (after != m_toggleDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " del interruptor de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of toggle '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_toggleDragBefore2, after,
@@ -4595,8 +4595,8 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
                 m_toggleDragField = nullptr;
                 if (after != m_toggleDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " del interruptor de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of toggle '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_toggleDragBefore4, after,
@@ -4632,8 +4632,8 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
                 m_toggleDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " del interruptor de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of toggle '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -4657,7 +4657,7 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
 
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
-            items.push_back("(imagen entera)");
+            items.push_back("(whole image)");
             for (const std::string& n : nombres) items.push_back(n.c_str());
 
             int current = 0;
@@ -4669,7 +4669,7 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
-                huerfano = before + "  (no esta en el atlas)";
+                huerfano = before + "  (not in the atlas)";
                 items.push_back(huerfano.c_str());
                 current = (int)items.size() - 1;
             }
@@ -4684,8 +4684,8 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
                 if (after != before)
                 {
                     acc(*tg) = after;
-                    const std::string lbl = std::string(label) + " del interruptor de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    const std::string lbl = std::string(label) + " of toggle '" + owner + "'";
+                    ctx.pushLog(lbl + " changed to '" + after + "'");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, before, after,
@@ -4711,19 +4711,19 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
         checkBox("Visible##toggle", +[](ToggleComponent& c) -> bool& { return c.visible; });
         checkBox("Interactable##toggle", +[](ToggleComponent& c) -> bool& { return c.interactable; });
 
-        ImGui::TextDisabled("Valor, colores y mando");
+        ImGui::TextDisabled("Value, colors and knob");
         checkBox("Is On##toggle", +[](ToggleComponent& c) -> bool& { return c.isOn; });
         colorEdit("Off Color##toggle", +[](ToggleComponent& c) -> glm::vec4& { return c.offColor; });
         colorEdit("On Color##toggle", +[](ToggleComponent& c) -> glm::vec4& { return c.onColor; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("La pista NO tiene un color suelto: se pinta con este o con\n"
-                              "Off Color segun el estado.");
+            ImGui::SetTooltip("The track has NO color of its own: it is painted with this one or with\n"
+                              "Off Color depending on the state.");
         colorEdit("Knob Color##toggle", +[](ToggleComponent& c) -> glm::vec4& { return c.knobColor; });
         dragFloat("Knob Size##toggle", +[](ToggleComponent& c) -> float& { return c.knobSize; },
                   0.5f, 0.0f, 4096.0f, "%.1f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Se acota a lo que quede entre paddings: uno mas grande que la\n"
-                              "pista asomaria por el borde.");
+            ImGui::SetTooltip("Clamped to what is left between paddings: one bigger than the\n"
+                              "track would stick out of the edge.");
         dragFloat("Knob Padding##toggle", +[](ToggleComponent& c) -> float& { return c.knobPadding; },
                   0.5f, 0.0f, 4096.0f, "%.1f");
 
@@ -4746,10 +4746,10 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
             [&](const std::string& dropped) { setToggleAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(tg->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##toggle")) ctx.openSpriteEditor(tg->atlasPath);
+        if (ImGui::Button("Edit sprites...##toggle")) ctx.openSpriteEditor(tg->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && tg->atlasPath.empty())
-            ImGui::SetTooltip("Primero elige un atlas");
+            ImGui::SetTooltip("Choose an atlas first");
         spriteField("Background##toggle", +[](ToggleComponent& c) -> std::string& { return c.backgroundSprite; });
         spriteField("Knob##toggle", +[](ToggleComponent& c) -> std::string& { return c.knobSprite; });
 
@@ -4762,11 +4762,11 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<ToggleComponentCommand>(
-            *ctx.scene, "Quitar Toggle de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Toggle from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getToggle());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Toggle quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Toggle component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -4778,7 +4778,7 @@ void PropertiesPanel::setScrollbarAtlasPath(EditorContext& ctx, uint64_t ownerId
     // pasan el drop y el file dialog, asi que el filtro va una sola vez.
     if (!isUiAtlasPath(path))
     {
-        m_scrollbarPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+        m_scrollbarPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
                          std::filesystem::path(path).filename().string();
         ctx.pushLog(m_scrollbarPathError);
         return;
@@ -4796,8 +4796,8 @@ void PropertiesPanel::setScrollbarAtlasPath(EditorContext& ctx, uint64_t ownerId
 
     c.atlasPath = path;
 
-    const std::string lbl = std::string("Atlas ") + "de la barra de " + go->name + "'";
-    ctx.pushLog(lbl + " cambiado a " + path);
+    const std::string lbl = std::string("Atlas ") + "of scrollbar '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -4841,7 +4841,7 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
     if (sectionOpen)
     {
         ScrollbarComponent* sb = ctx.selected->getScrollbar().get();
-        ImGui::TextWrapped("Canal con asa de tamano variable. El valor va siempre en 0..1: quien lo interpreta es lo que se desplaza, no la barra.");
+        ImGui::TextWrapped("Channel with a variable-size handle. The value is always in 0..1: whatever scrolls interprets it, not the bar.");
 
         using FloatRef = float&       (*)(ScrollbarComponent&);
         using Vec2Ref  = glm::vec2&   (*)(ScrollbarComponent&);
@@ -4860,8 +4860,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*sb, idx);
-                const std::string lbl = std::string(label) + " de la barra de " + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of scrollbar '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -4880,8 +4880,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &val) && val != before)
             {
                 acc(*sb) = val;
-                const std::string lbl = std::string(label) + " de la barra de " + owner + "'";
-                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of scrollbar '" + owner + "'";
+                ctx.pushLog(lbl + (val ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, val,
@@ -4916,8 +4916,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
                 m_scrollbarDragField = nullptr;
                 if (after != m_scrollbarDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " de la barra de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of scrollbar '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_scrollbarDragBefore, after,
@@ -4950,8 +4950,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
                 m_scrollbarDragField = nullptr;
                 if (after != m_scrollbarDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " de la barra de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of scrollbar '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_scrollbarDragBefore2, after,
@@ -4983,8 +4983,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
                 m_scrollbarDragField = nullptr;
                 if (after != m_scrollbarDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " de la barra de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of scrollbar '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_scrollbarDragBefore4, after,
@@ -5020,8 +5020,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
                 m_scrollbarDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " de la barra de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of scrollbar '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -5045,7 +5045,7 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
 
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
-            items.push_back("(imagen entera)");
+            items.push_back("(whole image)");
             for (const std::string& n : nombres) items.push_back(n.c_str());
 
             int current = 0;
@@ -5057,7 +5057,7 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
-                huerfano = before + "  (no esta en el atlas)";
+                huerfano = before + "  (not in the atlas)";
                 items.push_back(huerfano.c_str());
                 current = (int)items.size() - 1;
             }
@@ -5072,8 +5072,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
                 if (after != before)
                 {
                     acc(*sb) = after;
-                    const std::string lbl = std::string(label) + " de la barra de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    const std::string lbl = std::string(label) + " of scrollbar '" + owner + "'";
+                    ctx.pushLog(lbl + " changed to '" + after + "'");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, before, after,
@@ -5099,14 +5099,14 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
         checkBox("Visible##scrollbar", +[](ScrollbarComponent& c) -> bool& { return c.visible; });
         checkBox("Interactable##scrollbar", +[](ScrollbarComponent& c) -> bool& { return c.interactable; });
 
-        ImGui::TextDisabled("Valor");
+        ImGui::TextDisabled("Value");
         dragFloat("Value##scrollbar", +[](ScrollbarComponent& c) -> float& { return c.value; },
                   0.01f, 0.0f, 1.0f, "%.3f");
         dragFloat("Handle Fraction##scrollbar", +[](ScrollbarComponent& c) -> float& { return c.handleFraction; },
                   0.01f, 0.0f, 1.0f, "%.3f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Fraccion del canal que ocupa el asa: 1 = el contenido cabe\n"
-                              "entero y no hay nada que desplazar.");
+            ImGui::SetTooltip("Fraction of the channel taken by the handle: 1 = the content fits\n"
+                              "entirely and there is nothing to scroll.");
 
         static const char* kScrollDirs[] = { "Left To Right", "Right To Left",
                                              "Top To Bottom", "Bottom To Top" };
@@ -5134,8 +5134,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
                 m_scrollbarDragField = nullptr;
                 if (after != (int)m_scrollbarDragBefore)
                 {
-                    const std::string lbl = "Number Of Steps de la barra de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = "Number Of Steps of scrollbar '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                             lbl, (int)m_scrollbarDragBefore, after,
@@ -5148,15 +5148,15 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
             }
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Paradas discretas. 0 y 1 = continuo: enganchar a una sola\n"
-                              "parada dejaria la barra muerta en un sitio.");
+            ImGui::SetTooltip("Discrete stops. 0 and 1 = continuous: snapping to a single\n"
+                              "stop would leave the bar stuck in one place.");
 
         dragFloat("Scroll Step##scrollbar", +[](ScrollbarComponent& c) -> float& { return c.scrollStep; },
                   0.01f, 0.0f, 1.0f, "%.3f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Cuanto mueve la rueda por muesca, en fraccion del recorrido");
+            ImGui::SetTooltip("How much the wheel moves per notch, as a fraction of the travel");
 
-        ImGui::TextDisabled("Colores");
+        ImGui::TextDisabled("Colors");
         colorEdit("Track Color##scrollbar", +[](ScrollbarComponent& c) -> glm::vec4& { return c.color; });
         colorEdit("Handle Color##scrollbar", +[](ScrollbarComponent& c) -> glm::vec4& { return c.handleColor; });
 
@@ -5179,10 +5179,10 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
             [&](const std::string& dropped) { setScrollbarAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(sb->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##scrollbar")) ctx.openSpriteEditor(sb->atlasPath);
+        if (ImGui::Button("Edit sprites...##scrollbar")) ctx.openSpriteEditor(sb->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && sb->atlasPath.empty())
-            ImGui::SetTooltip("Primero elige un atlas");
+            ImGui::SetTooltip("Choose an atlas first");
         spriteField("Background##scrollbar", +[](ScrollbarComponent& c) -> std::string& { return c.backgroundSprite; });
         spriteField("Handle##scrollbar", +[](ScrollbarComponent& c) -> std::string& { return c.handleSprite; });
 
@@ -5195,11 +5195,11 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<ScrollbarComponentCommand>(
-            *ctx.scene, "Quitar Scrollbar de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Scrollbar from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getScrollbar());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Scrollbar quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Scrollbar component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -5209,7 +5209,7 @@ void PropertiesPanel::setInputFieldAtlasPath(EditorContext& ctx, uint64_t ownerI
 {
     if (!isUiAtlasPath(path))
     {
-        m_inputFieldPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+        m_inputFieldPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
                          std::filesystem::path(path).filename().string();
         ctx.pushLog(m_inputFieldPathError);
         return;
@@ -5227,8 +5227,8 @@ void PropertiesPanel::setInputFieldAtlasPath(EditorContext& ctx, uint64_t ownerI
 
     c.atlasPath = path;
 
-    const std::string lbl = std::string("Atlas ") + "del campo de " + go->name + "'";
-    ctx.pushLog(lbl + " cambiado a " + path);
+    const std::string lbl = std::string("Atlas ") + "of input field '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -5245,7 +5245,7 @@ void PropertiesPanel::setInputFieldFontPath(EditorContext& ctx, uint64_t ownerId
     // dialog, asi que el filtro va una sola vez.
     if (!isUiFontPath(path))
     {
-        m_inputFieldPathError = "No es una fuente (.ttf .otf .ttc): " +
+        m_inputFieldPathError = "Not a font (.ttf .otf .ttc): " +
                          std::filesystem::path(path).filename().string();
         ctx.pushLog(m_inputFieldPathError);
         return;
@@ -5263,8 +5263,8 @@ void PropertiesPanel::setInputFieldFontPath(EditorContext& ctx, uint64_t ownerId
 
     c.fontPath = path;
 
-    const std::string lbl = std::string("Fuente ") + "del campo de " + go->name + "'";
-    ctx.pushLog(lbl + " cambiada a " + path);
+    const std::string lbl = std::string("Font ") + "of input field '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -5319,7 +5319,7 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
     if (sectionOpen)
     {
         InputFieldComponent* fld = ctx.selected->getInputField().get();
-        ImGui::TextWrapped("Campo de texto. Es el unico widget en el que escribe el JUGADOR: el canvas entrega los caracteres al elemento con foco y el handler los mete aqui.");
+        ImGui::TextWrapped("Text field. It is the only widget the PLAYER types into: the canvas delivers the characters to the focused element and the handler inserts them here.");
 
         using FloatRef = float&       (*)(InputFieldComponent&);
         using Vec2Ref  = glm::vec2&   (*)(InputFieldComponent&);
@@ -5337,8 +5337,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*fld, idx);
-                const std::string lbl = std::string(label) + " del campo de " + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of input field '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -5357,8 +5357,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &val) && val != before)
             {
                 acc(*fld) = val;
-                const std::string lbl = std::string(label) + " del campo de " + owner + "'";
-                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of input field '" + owner + "'";
+                ctx.pushLog(lbl + (val ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, val,
@@ -5393,8 +5393,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
                 m_inputFieldDragField = nullptr;
                 if (after != m_inputFieldDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " del campo de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of input field '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_inputFieldDragBefore, after,
@@ -5427,8 +5427,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
                 m_inputFieldDragField = nullptr;
                 if (after != m_inputFieldDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " del campo de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of input field '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_inputFieldDragBefore2, after,
@@ -5460,8 +5460,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
                 m_inputFieldDragField = nullptr;
                 if (after != m_inputFieldDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " del campo de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of input field '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_inputFieldDragBefore4, after,
@@ -5497,8 +5497,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
                 m_inputFieldDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " del campo de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of input field '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -5522,7 +5522,7 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
 
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
-            items.push_back("(imagen entera)");
+            items.push_back("(whole image)");
             for (const std::string& n : nombres) items.push_back(n.c_str());
 
             int current = 0;
@@ -5532,7 +5532,7 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
-                huerfano = before + "  (no esta en el atlas)";
+                huerfano = before + "  (not in the atlas)";
                 items.push_back(huerfano.c_str());
                 current = (int)items.size() - 1;
             }
@@ -5547,8 +5547,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
                 if (after != before)
                 {
                     acc(*fld) = after;
-                    const std::string lbl = std::string(label) + " del campo de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    const std::string lbl = std::string(label) + " of input field '" + owner + "'";
+                    ctx.pushLog(lbl + " changed to '" + after + "'");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, before, after,
@@ -5576,16 +5576,16 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
         checkBox("Visible##inputfield", +[](InputFieldComponent& c) -> bool& { return c.visible; });
         checkBox("Interactable##inputfield", +[](InputFieldComponent& c) -> bool& { return c.interactable; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("A false ni siquiera toma el foco");
+            ImGui::SetTooltip("When false it does not even take focus");
         checkBox("Read Only##inputfield", +[](InputFieldComponent& c) -> bool& { return c.readOnly; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Toma el foco y deja mover el cursor, pero no cambiar el texto");
+            ImGui::SetTooltip("Takes focus and lets the cursor move, but not change the text");
 
-        ImGui::TextDisabled("Texto");
+        ImGui::TextDisabled("Text");
         inputText("Text##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.text; });
         inputText("Placeholder##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.placeholder; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Lo que se ensena con el campo VACIO, con su propio color");
+            ImGui::SetTooltip("What is shown when the field is EMPTY, with its own color");
         dragFloat("Font Size##inputfield", +[](InputFieldComponent& c) -> float& { return c.fontSize; },
                   0.5f, 1.0f, 512.0f, "%.1f");
         colorEdit("Text Color##inputfield", +[](InputFieldComponent& c) -> glm::vec4& { return c.textColor; });
@@ -5597,7 +5597,7 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
         dragFloat("Padding##inputfield", +[](InputFieldComponent& c) -> float& { return c.padding; },
                   0.5f, 0.0f, 4096.0f, "%.1f");
 
-        ImGui::TextDisabled("Filtro");
+        ImGui::TextDisabled("Filter");
         {
             // characterLimit es un uint32 y no hay dragUint: se edita como entero
             // con el mismo baile de undo que los demas.
@@ -5619,8 +5619,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
                 m_inputFieldDragField = nullptr;
                 if (after != (int)m_inputFieldDragBefore)
                 {
-                    const std::string lbl = "Character Limit del campo de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = "Character Limit of input field '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                             lbl, (int)m_inputFieldDragBefore, after,
@@ -5633,7 +5633,7 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
             }
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Cuenta CARACTERES, no bytes. 0 = sin limite.");
+            ImGui::SetTooltip("Counts CHARACTERS, not bytes. 0 = no limit.");
 
         static const char* kContentTypes[] = { "Standard", "Integer Number", "Decimal Number",
                                                 "Alphanumeric", "Password" };
@@ -5641,11 +5641,11 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
                   IM_ARRAYSIZE(kContentTypes),
                   +[](InputFieldComponent& c, int v) { c.contentType = (UiInputContentType)v; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Filtra lo que se puede TECLEAR. Password guarda el texto tal\n"
-                              "cual y solo cambia lo que se ensena.");
+            ImGui::SetTooltip("Filters what can be TYPED. Password stores the text as\n"
+                              "is and only changes what is shown.");
         inputText("Password Char##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.passwordChar; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Vacio cae al asterisco: un campo que no ensena NADA parece roto");
+            ImGui::SetTooltip("Empty falls back to the asterisk: a field that shows NOTHING looks broken");
 
         ImGui::TextDisabled("Cursor");
         colorEdit("Caret Color##inputfield", +[](InputFieldComponent& c) -> glm::vec4& { return c.caretColor; });
@@ -5654,12 +5654,12 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
         dragFloat("Caret Blink Rate##inputfield", +[](InputFieldComponent& c) -> float& { return c.caretBlinkRate; },
                   0.01f, 0.0f, 10.0f, "%.3f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Segundos por medio ciclo. 0 = fijo, sin parpadeo.");
+            ImGui::SetTooltip("Seconds per half cycle. 0 = steady, no blinking.");
 
-        ImGui::TextDisabled("Fuente");
+        ImGui::TextDisabled("Font");
         inputText("Font##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.fontPath; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Vacia = la fuente por defecto del proyecto");
+            ImGui::SetTooltip("Empty = the project's default font");
         drawAssetDropBox(ctx, "inputfieldFont", "Drop .ttf/.otf here",
             [&]
             {
@@ -5694,10 +5694,10 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
             [&](const std::string& dropped) { setInputFieldAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(fld->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##inputfield")) ctx.openSpriteEditor(fld->atlasPath);
+        if (ImGui::Button("Edit sprites...##inputfield")) ctx.openSpriteEditor(fld->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && fld->atlasPath.empty())
-            ImGui::SetTooltip("Primero elige un atlas");
+            ImGui::SetTooltip("Choose an atlas first");
         spriteField("Background##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.backgroundSprite; });
 
         if (!m_inputFieldPathError.empty())
@@ -5709,11 +5709,11 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<InputFieldComponentCommand>(
-            *ctx.scene, "Quitar Input Field de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Input Field from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getInputField());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Input Field quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Input Field component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -5723,7 +5723,7 @@ void PropertiesPanel::setDropdownAtlasPath(EditorContext& ctx, uint64_t ownerId,
 {
     if (!isUiAtlasPath(path))
     {
-        m_dropdownPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+        m_dropdownPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
                          std::filesystem::path(path).filename().string();
         ctx.pushLog(m_dropdownPathError);
         return;
@@ -5741,8 +5741,8 @@ void PropertiesPanel::setDropdownAtlasPath(EditorContext& ctx, uint64_t ownerId,
 
     c.atlasPath = path;
 
-    const std::string lbl = std::string("Atlas ") + "del desplegable de " + go->name + "'";
-    ctx.pushLog(lbl + " cambiado a " + path);
+    const std::string lbl = std::string("Atlas ") + "of dropdown '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -5759,7 +5759,7 @@ void PropertiesPanel::setDropdownFontPath(EditorContext& ctx, uint64_t ownerId,
     // dialog, asi que el filtro va una sola vez.
     if (!isUiFontPath(path))
     {
-        m_dropdownPathError = "No es una fuente (.ttf .otf .ttc): " +
+        m_dropdownPathError = "Not a font (.ttf .otf .ttc): " +
                          std::filesystem::path(path).filename().string();
         ctx.pushLog(m_dropdownPathError);
         return;
@@ -5777,8 +5777,8 @@ void PropertiesPanel::setDropdownFontPath(EditorContext& ctx, uint64_t ownerId,
 
     c.fontPath = path;
 
-    const std::string lbl = std::string("Fuente ") + "del desplegable de " + go->name + "'";
-    ctx.pushLog(lbl + " cambiada a " + path);
+    const std::string lbl = std::string("Font ") + "of dropdown '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -5833,7 +5833,7 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
     if (sectionOpen)
     {
         DropdownComponent* dd = ctx.selected->getDropdown().get();
-        ImGui::TextWrapped("Desplegable. Anadir o quitar una opcion cambia la FORMA del arbol de UI, asi que el canvas se reconstruye; abrir y cerrar no.");
+        ImGui::TextWrapped("Dropdown. Adding or removing an option changes the SHAPE of the UI tree, so the canvas is rebuilt; opening and closing does not.");
 
         using FloatRef = float&       (*)(DropdownComponent&);
         using Vec2Ref  = glm::vec2&   (*)(DropdownComponent&);
@@ -5851,8 +5851,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*dd, idx);
-                const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of dropdown '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -5871,8 +5871,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &val) && val != before)
             {
                 acc(*dd) = val;
-                const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
-                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of dropdown '" + owner + "'";
+                ctx.pushLog(lbl + (val ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, val,
@@ -5907,8 +5907,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
                 m_dropdownDragField = nullptr;
                 if (after != m_dropdownDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of dropdown '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_dropdownDragBefore, after,
@@ -5941,8 +5941,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
                 m_dropdownDragField = nullptr;
                 if (after != m_dropdownDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of dropdown '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_dropdownDragBefore2, after,
@@ -5974,8 +5974,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
                 m_dropdownDragField = nullptr;
                 if (after != m_dropdownDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of dropdown '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_dropdownDragBefore4, after,
@@ -6011,8 +6011,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
                 m_dropdownDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of dropdown '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -6036,7 +6036,7 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
 
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
-            items.push_back("(imagen entera)");
+            items.push_back("(whole image)");
             for (const std::string& n : nombres) items.push_back(n.c_str());
 
             int current = 0;
@@ -6046,7 +6046,7 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
-                huerfano = before + "  (no esta en el atlas)";
+                huerfano = before + "  (not in the atlas)";
                 items.push_back(huerfano.c_str());
                 current = (int)items.size() - 1;
             }
@@ -6061,8 +6061,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
                 if (after != before)
                 {
                     acc(*dd) = after;
-                    const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    const std::string lbl = std::string(label) + " of dropdown '" + owner + "'";
+                    ctx.pushLog(lbl + " changed to '" + after + "'");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, before, after,
@@ -6090,7 +6090,7 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
         checkBox("Visible##dropdown", +[](DropdownComponent& c) -> bool& { return c.visible; });
         checkBox("Interactable##dropdown", +[](DropdownComponent& c) -> bool& { return c.interactable; });
 
-        ImGui::TextDisabled("Opciones");
+        ImGui::TextDisabled("Options");
         {
             // La lista entera es UN paso de undo: anadir, quitar o renombrar
             // empuja el vector completo. Por campo serian tres comandos para lo
@@ -6127,16 +6127,16 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
                 ImGui::PopID();
             }
 
-            if (ImGui::Button("Anadir opcion##dropdown"))
+            if (ImGui::Button("Add option##dropdown"))
             {
-                dd->options.push_back("Opcion " + std::to_string(dd->options.size() + 1));
+                dd->options.push_back("Option " + std::to_string(dd->options.size() + 1));
                 cambiada = true;
             }
 
             if (cambiada && scene && ctx.undo && dd->options != before)
             {
-                const std::string lbl = std::string("Opciones ") + "del desplegable de " + owner + "'";
-                ctx.pushLog(lbl + " cambiadas");
+                const std::string lbl = std::string("Options ") + "of dropdown '" + owner + "'";
+                ctx.pushLog(lbl + " changed");
                 ctx.undo->push(std::make_unique<PropertyCommand<std::vector<std::string>>>(
                     lbl, before, dd->options,
                     [scene, id](const std::vector<std::string>& v) {
@@ -6175,8 +6175,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
                 m_dropdownDragField = nullptr;
                 if (after != (int)m_dropdownDragBefore)
                 {
-                    const std::string lbl = "Value del desplegable de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = "Value of dropdown '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                             lbl, (int)m_dropdownDragBefore, after,
@@ -6188,12 +6188,12 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             }
         }
         if (!dd->selectedLabel().empty())
-            ImGui::TextDisabled("Elegida: %s", dd->selectedLabel().c_str());
+            ImGui::TextDisabled("Selected: %s", dd->selectedLabel().c_str());
         else if (!dd->options.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-                               "El indice no apunta a ninguna opcion");
+                               "The index does not point to any option");
 
-        ImGui::TextDisabled("Lista");
+        ImGui::TextDisabled("List");
         dragFloat("Item Height##dropdown", +[](DropdownComponent& c) -> float& { return c.itemHeight; },
                   0.5f, 0.0f, 4096.0f, "%.1f");
         {
@@ -6215,8 +6215,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
                 m_dropdownDragField = nullptr;
                 if (after != (int)m_dropdownDragBefore)
                 {
-                    const std::string lbl = "Max Visible Items del desplegable de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = "Max Visible Items of dropdown '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                             lbl, (int)m_dropdownDragBefore, after,
@@ -6229,25 +6229,25 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             }
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("0 = todas. Acota el alto de la lista para que un combo de\n"
-                              "cincuenta idiomas no ocupe tres pantallas.");
+            ImGui::SetTooltip("0 = all. Caps the list height so that a combo with\n"
+                              "fifty languages does not take up three screens.");
 
         colorEdit("List Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.listColor; });
         colorEdit("Item Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.itemColor; });
         colorEdit("Item Selected##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.itemSelectedColor; });
         colorEdit("Arrow Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.arrowColor; });
 
-        ImGui::TextDisabled("Texto");
+        ImGui::TextDisabled("Text");
         dragFloat("Font Size##dropdown", +[](DropdownComponent& c) -> float& { return c.fontSize; },
                   0.5f, 1.0f, 512.0f, "%.1f");
         colorEdit("Text Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.textColor; });
         dragFloat("Padding##dropdown", +[](DropdownComponent& c) -> float& { return c.padding; },
                   0.5f, 0.0f, 4096.0f, "%.1f");
 
-        ImGui::TextDisabled("Fuente");
+        ImGui::TextDisabled("Font");
         inputText("Font##dropdown", +[](DropdownComponent& c) -> std::string& { return c.fontPath; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Vacia = la fuente por defecto del proyecto");
+            ImGui::SetTooltip("Empty = the project's default font");
         drawAssetDropBox(ctx, "dropdownFont", "Drop .ttf/.otf here",
             [&]
             {
@@ -6282,10 +6282,10 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             [&](const std::string& dropped) { setDropdownAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(dd->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##dropdown")) ctx.openSpriteEditor(dd->atlasPath);
+        if (ImGui::Button("Edit sprites...##dropdown")) ctx.openSpriteEditor(dd->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && dd->atlasPath.empty())
-            ImGui::SetTooltip("Primero elige un atlas");
+            ImGui::SetTooltip("Choose an atlas first");
         spriteField("Background##dropdown", +[](DropdownComponent& c) -> std::string& { return c.backgroundSprite; });
         spriteField("Arrow##dropdown", +[](DropdownComponent& c) -> std::string& { return c.arrowSprite; });
         spriteField("Item##dropdown", +[](DropdownComponent& c) -> std::string& { return c.itemSprite; });
@@ -6299,11 +6299,11 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<DropdownComponentCommand>(
-            *ctx.scene, "Quitar Dropdown de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Dropdown from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getDropdown());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Dropdown quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Dropdown component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -6313,7 +6313,7 @@ void PropertiesPanel::setScrollViewAtlasPath(EditorContext& ctx, uint64_t ownerI
 {
     if (!isUiAtlasPath(path))
     {
-        m_scrollViewPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+        m_scrollViewPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
                          std::filesystem::path(path).filename().string();
         ctx.pushLog(m_scrollViewPathError);
         return;
@@ -6331,8 +6331,8 @@ void PropertiesPanel::setScrollViewAtlasPath(EditorContext& ctx, uint64_t ownerI
 
     c.atlasPath = path;
 
-    const std::string lbl = std::string("Atlas ") + "de la vista de " + go->name + "'";
-    ctx.pushLog(lbl + " cambiado a " + path);
+    const std::string lbl = std::string("Atlas ") + "of scroll view '" + go->name + "'";
+    ctx.pushLog(lbl + " changed to " + path);
     if (ctx.undo)
         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
             lbl, before, path,
@@ -6376,7 +6376,7 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
     if (sectionOpen)
     {
         ScrollViewComponent* sv = ctx.selected->getScrollView().get();
-        ImGui::TextWrapped("Vista desplazable. Los HIJOS de este GameObject cuelgan de su contenido, no del viewport: por eso desplazarse los arrastra.");
+        ImGui::TextWrapped("Scrollable view. This GameObject's CHILDREN hang from its content, not from the viewport: that is why scrolling drags them.");
 
         using FloatRef = float&       (*)(ScrollViewComponent&);
         using Vec2Ref  = glm::vec2&   (*)(ScrollViewComponent&);
@@ -6394,8 +6394,8 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
             if (ImGui::Combo(label, &idx, items, count) && idx != before)
             {
                 apply(*sv, idx);
-                const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
-                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                const std::string lbl = std::string(label) + " of scroll view '" + owner + "'";
+                ctx.pushLog(lbl + " changed to " + items[idx]);
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<int>>(
                         lbl, before, idx,
@@ -6414,8 +6414,8 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
             if (ImGui::Checkbox(label, &val) && val != before)
             {
                 acc(*sv) = val;
-                const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
-                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                const std::string lbl = std::string(label) + " of scroll view '" + owner + "'";
+                ctx.pushLog(lbl + (val ? " enabled" : " disabled"));
                 if (scene && ctx.undo)
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
                         lbl, before, val,
@@ -6450,8 +6450,8 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
                 m_scrollViewDragField = nullptr;
                 if (after != m_scrollViewDragBefore)
                 {
-                    const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of scroll view '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<float>>(
                             lbl, m_scrollViewDragBefore, after,
@@ -6484,8 +6484,8 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
                 m_scrollViewDragField = nullptr;
                 if (after != m_scrollViewDragBefore2)
                 {
-                    const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of scroll view '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
                             lbl, m_scrollViewDragBefore2, after,
@@ -6517,8 +6517,8 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
                 m_scrollViewDragField = nullptr;
                 if (after != m_scrollViewDragBefore4)
                 {
-                    const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of scroll view '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
                             lbl, m_scrollViewDragBefore4, after,
@@ -6554,8 +6554,8 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
                 m_scrollViewDragField = nullptr;
                 if (after != prev)
                 {
-                    const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado");
+                    const std::string lbl = std::string(label) + " of scroll view '" + owner + "'";
+                    ctx.pushLog(lbl + " changed");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, prev, after,
@@ -6579,7 +6579,7 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
 
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
-            items.push_back("(imagen entera)");
+            items.push_back("(whole image)");
             for (const std::string& n : nombres) items.push_back(n.c_str());
 
             int current = 0;
@@ -6589,7 +6589,7 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
-                huerfano = before + "  (no esta en el atlas)";
+                huerfano = before + "  (not in the atlas)";
                 items.push_back(huerfano.c_str());
                 current = (int)items.size() - 1;
             }
@@ -6604,8 +6604,8 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
                 if (after != before)
                 {
                     acc(*sv) = after;
-                    const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
-                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    const std::string lbl = std::string(label) + " of scroll view '" + owner + "'";
+                    ctx.pushLog(lbl + " changed to '" + after + "'");
                     if (scene && ctx.undo)
                         ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
                             lbl, before, after,
@@ -6632,16 +6632,16 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
         colorEdit("Color##scrollview", +[](ScrollViewComponent& c) -> glm::vec4& { return c.color; });
         checkBox("Visible##scrollview", +[](ScrollViewComponent& c) -> bool& { return c.visible; });
 
-        ImGui::TextDisabled("Ejes y contenido");
+        ImGui::TextDisabled("Axes and content");
         checkBox("Horizontal##scrollview", +[](ScrollViewComponent& c) -> bool& { return c.horizontal; });
         checkBox("Vertical##scrollview", +[](ScrollViewComponent& c) -> bool& { return c.vertical; });
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Un eje apagado no se mueve aunque el contenido sea mas grande");
+            ImGui::SetTooltip("A disabled axis does not move even if the content is bigger");
         dragVec2("Content Size##scrollview", +[](ScrollViewComponent& c) -> glm::vec2& { return c.contentSize; },
                  1.0f, 0.0f, 65536.0f, "%.0f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Tamano del area desplazable. Es un CAMPO y no algo medido de los\n"
-                              "hijos: medir el subarbol cada frame acoplaria el scroll al layout.");
+            ImGui::SetTooltip("Size of the scrollable area. It is a FIELD and not something measured from the\n"
+                              "children: measuring the subtree every frame would couple scrolling to layout.");
         dragVec2("Normalized Pos##scrollview",
                  +[](ScrollViewComponent& c) -> glm::vec2& { return c.normalizedPosition; },
                  0.01f, 0.0f, 1.0f, "%.3f");
@@ -6649,16 +6649,16 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
                   +[](ScrollViewComponent& c) -> float& { return c.scrollSensitivity; },
                   1.0f, 0.0f, 4096.0f, "%.1f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Pixeles que mueve la rueda por muesca");
+            ImGui::SetTooltip("Pixels the wheel moves per notch");
 
         {
             const glm::vec2 r = sv->scrollRange();
-            ImGui::TextDisabled("Recorrido: %.0f x %.0f px", r.x, r.y);
+            ImGui::TextDisabled("Travel: %.0f x %.0f px", r.x, r.y);
             if (r.x <= 0.0f && r.y <= 0.0f)
                 ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-                                   "El contenido cabe entero: no hay nada que desplazar");
+                                   "The content fits entirely: there is nothing to scroll");
         }
-        ImGui::TextDisabled("Los hijos de este GameObject cuelgan del contenido, no del viewport.");
+        ImGui::TextDisabled("This GameObject's children hang from the content, not from the viewport.");
 
         ImGui::TextDisabled("Sprites");
         inputText("Atlas##scrollview", +[](ScrollViewComponent& c) -> std::string& { return c.atlasPath; });
@@ -6679,10 +6679,10 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
             [&](const std::string& dropped) { setScrollViewAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(sv->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##scrollview")) ctx.openSpriteEditor(sv->atlasPath);
+        if (ImGui::Button("Edit sprites...##scrollview")) ctx.openSpriteEditor(sv->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && sv->atlasPath.empty())
-            ImGui::SetTooltip("Primero elige un atlas");
+            ImGui::SetTooltip("Choose an atlas first");
         spriteField("Background##scrollview", +[](ScrollViewComponent& c) -> std::string& { return c.backgroundSprite; });
 
         if (!m_scrollViewPathError.empty())
@@ -6694,11 +6694,11 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
     if (removeClicked && ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<ScrollViewComponentCommand>(
-            *ctx.scene, "Quitar Scroll View de '" + ctx.selected->name + "'", ctx.selected->id,
+            *ctx.scene, "Remove Scroll View from '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/false, *ctx.selected->getScrollView());
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        ctx.pushLog("Componente Scroll View quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Scroll View component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -6715,8 +6715,8 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
     LightComponent*   light = ctx.selected->getLight().get();
     const std::string owner = ctx.selected->name;
 
-    ImGui::TextWrapped("La posición y la dirección salen del Transform de este objeto "
-                       "(la luz apunta hacia su -Z local), no de campos propios.");
+    ImGui::TextWrapped("The position and direction come from this object's Transform "
+                       "(the light points along its local -Z), not from fields of its own.");
 
     const char* kTypes[] = { "Point", "Spot", "Directional", "Area" };
     int typeIdx = (int)light->getType();
@@ -6725,11 +6725,11 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
     {
         const int before = (int)light->getType();
         light->setType((LightType)typeIdx);
-        ctx.pushLog("Tipo de la luz de '" + owner + "' cambiado a " + kTypes[typeIdx]);
+        ctx.pushLog("Type of light '" + owner + "' changed to " + kTypes[typeIdx]);
         if (scene && ctx.undo)
         {
             ctx.undo->push(std::make_unique<PropertyCommand<int>>(
-                "Tipo de la luz de '" + owner + "'", before, typeIdx,
+                "Type of light '" + owner + "'", before, typeIdx,
                 [scene, id](const int& v) {
                     if (GameObject* go = scene->findById(id))
                         if (go->hasLight()) go->getLight()->setType((LightType)v);
@@ -6740,18 +6740,18 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
     // Lo que el render sabe hacer con las sombras, dicho aquí en vez de que el
     // usuario lo deduzca mirando una sombra que no cuadra. La regla no depende
     // de qué luz esté seleccionada, así que se enseña siempre.
-    ImGui::TextDisabled("Sombras: la PRIMERA luz de la escena, y hasta 4 focos mas.");
+    ImGui::TextDisabled("Shadows: the FIRST light in the scene, and up to 4 more spot lights.");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "La primera luz proyecta sombra sea del tipo que sea, y con la mejor\n"
-            "tecnica para el suyo: cascadas si es direccional, un cubemap de seis\n"
-            "caras si es de punto, una cara en perspectiva si es un foco.\n\n"
-            "Ademas, los 4 primeros FOCOS que vengan detras proyectan tambien, con\n"
-            "una cara cada uno. Solo focos: una direccional secundaria necesitaria\n"
-            "sus propias cuatro cascadas y una de punto seis caras, y no caben.\n\n"
-            "Las demas iluminan, pero no arrojan sombra. El orden es el de la\n"
-            "escena, no el de brillo ni el de cercania: si dependiera de la camara,\n"
-            "una luz ganaria y perderia su sombra al moverte.");
+            "The first light casts shadows whatever its type, using the best\n"
+            "technique for it: cascades if directional, a six-face cubemap\n"
+            "if point, one perspective face if spot.\n\n"
+            "In addition, the first 4 SPOT lights after it cast shadows too, with\n"
+            "one face each. Spots only: a secondary directional would need\n"
+            "its own four cascades and a point light six faces, and they do not fit.\n\n"
+            "The rest light the scene but cast no shadow. The order is the\n"
+            "scene's, not by brightness or proximity: if it depended on the camera,\n"
+            "a light would gain and lose its shadow as you move.");
 
     // Ya no hay aviso: los tres tipos tienen su sombra correcta. Una direccional
     // proyecta en paralelo con cascadas, que es lo que corresponde a una luz en
@@ -6776,11 +6776,11 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
     if (ImGui::IsItemDeactivatedAfterEdit() && m_lightDragOwnerId == id)
     {
         const glm::vec3 after = light->getColor();
-        ctx.pushLog("Color de la luz de '" + owner + "' cambiado");
+        ctx.pushLog("Color of light '" + owner + "' changed");
         if (scene && ctx.undo)
         {
             ctx.undo->push(std::make_unique<PropertyCommand<glm::vec3>>(
-                "Color de la luz de '" + owner + "'", m_lightColorBefore, after,
+                "Color of light '" + owner + "'", m_lightColorBefore, after,
                 [scene, id](const glm::vec3& v) {
                     if (GameObject* go = scene->findById(id))
                         if (go->hasLight()) go->getLight()->setColor(v);
@@ -6816,12 +6816,12 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
         {
             m_lightDragActive = false;
             const float after = (light->*getter)();
-            ctx.pushLog(std::string(label) + " de la luz de '" + owner + "' cambiado a " +
+            ctx.pushLog(std::string(label) + " of light '" + owner + "' changed to " +
                         std::to_string(after));
             if (scene && ctx.undo)
             {
                 ctx.undo->push(std::make_unique<PropertyCommand<float>>(
-                    std::string(label) + " de la luz de '" + owner + "'", m_lightDragBefore, after,
+                    std::string(label) + " of light '" + owner + "'", m_lightDragBefore, after,
                     [scene, id, setter](const float& x) {
                         if (GameObject* go = scene->findById(id))
                             if (go->hasLight()) ((*go->getLight()).*setter)(x);
@@ -6851,11 +6851,11 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
                         &LightComponent::getInnerAngle, &LightComponent::setInnerAngle);
             floatSlider("Outer Angle", 0.0f, 89.9f, "%.1f",
                         &LightComponent::getOuterAngle, &LightComponent::setOuterAngle);
-            ImGui::TextDisabled("El interior nunca pasa del exterior: se arrastran entre ellos.");
+            ImGui::TextDisabled("The inner angle never exceeds the outer one: they drag each other.");
             break;
 
         case LightType::Directional:
-            ImGui::TextDisabled("Sin alcance: ilumina toda la escena en la dirección del -Z local.");
+            ImGui::TextDisabled("No range: lights the whole scene along the local -Z direction.");
             break;
 
         case LightType::Area:
@@ -6863,7 +6863,7 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
                         &LightComponent::getAreaWidth, &LightComponent::setAreaWidth);
             floatSlider("Area Height", 1.0f, 5000.0f, "%.0f",
                         &LightComponent::getAreaHeight, &LightComponent::setAreaHeight);
-            ImGui::TextDisabled("El alcance sale del ancho (Width/2), no del Range.");
+            ImGui::TextDisabled("The range comes from the width (Width/2), not from Range.");
             break;
     }
 
@@ -6871,7 +6871,7 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
     {
         ctx.selected->setLight(nullptr);
         m_lightDragActive = false;
-        ctx.pushLog("Componente Light quitado de '" + owner + "'");
+        ctx.pushLog("Light component removed from '" + owner + "'");
         ImGui::TreePop();
         return;
     }
@@ -6999,8 +6999,8 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
         {
             if (ctx.physics)
                 ctx.physics->setTrigger(ctx.selected->getBoxCollider(), m_editIsTrigger);
-            ctx.pushLog(std::string("Is Trigger de '") + ctx.selected->name +
-                     "' (Box Collider) " + (m_editIsTrigger ? "activado" : "desactivado"));
+            ctx.pushLog(std::string("Is Trigger of '") + ctx.selected->name +
+                     "' (Box Collider) " + (m_editIsTrigger ? "enabled" : "disabled"));
             if (ctx.scene)
             {
                 BoxColliderState before{ m_editColliderCenter, m_editColliderSize, oldTrigger,
@@ -7008,7 +7008,7 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
                 BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editIsTrigger,
                                         m_editColliderStaticFriction, m_editColliderDynamicFriction, m_editColliderBounciness };
                 ctx.undo->push(std::make_unique<PropertyCommand<BoxColliderState>>(
-                    "Is Trigger de '" + ctx.selected->name + "' (Box Collider)", before, after, applyBoxState));
+                    "Is Trigger of '" + ctx.selected->name + "' (Box Collider)", before, after, applyBoxState));
             }
         }
         drawTriggerRigidbodyHint(ctx.selected, m_editIsTrigger);
@@ -7023,11 +7023,11 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
                                                     m_editColliderStaticFriction, m_editColliderDynamicFriction, m_editColliderBounciness };
 
     if (centerCommitted)
-        ctx.pushLog("Center de '" + ctx.selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderCenter));
+        ctx.pushLog("Center of '" + ctx.selected->name + "' (Box Collider) changed to " + formatVec3(m_editColliderCenter));
     if (sizeCommitted)
-        ctx.pushLog("Size de '" + ctx.selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderSize));
+        ctx.pushLog("Size of '" + ctx.selected->name + "' (Box Collider) changed to " + formatVec3(m_editColliderSize));
     if (materialCommitted)
-        ctx.pushLog("Material de '" + ctx.selected->name + "' (Box Collider) cambiado");
+        ctx.pushLog("Material of '" + ctx.selected->name + "' (Box Collider) changed");
 
     if (colliderChanged)
     {
@@ -7043,14 +7043,14 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
         BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editIsTrigger,
                                 m_editColliderStaticFriction, m_editColliderDynamicFriction, m_editColliderBounciness };
         ctx.undo->push(std::make_unique<PropertyCommand<BoxColliderState>>(
-            "Box Collider de '" + ctx.selected->name + "'", before, after, applyBoxState));
+            "Box Collider of '" + ctx.selected->name + "'", before, after, applyBoxState));
     }
 
     if (removeClicked)
     {
         ctx.selected->setBoxCollider(nullptr);
         m_caches.box = nullptr;
-        ctx.pushLog("Componente Box Collider quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Box Collider component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -7159,8 +7159,8 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
         {
             if (ctx.physics)
                 ctx.physics->setTrigger(ctx.selected->getSphereCollider(), m_editSphereIsTrigger);
-            ctx.pushLog(std::string("Is Trigger de '") + ctx.selected->name +
-                     "' (Sphere Collider) " + (m_editSphereIsTrigger ? "activado" : "desactivado"));
+            ctx.pushLog(std::string("Is Trigger of '") + ctx.selected->name +
+                     "' (Sphere Collider) " + (m_editSphereIsTrigger ? "enabled" : "disabled"));
             if (ctx.scene)
             {
                 SphereColliderState before{ m_editSphereCenter, m_editSphereRadius, oldTrigger,
@@ -7168,7 +7168,7 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
                 SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereIsTrigger,
                                            m_editSphereStaticFriction, m_editSphereDynamicFriction, m_editSphereBounciness };
                 ctx.undo->push(std::make_unique<PropertyCommand<SphereColliderState>>(
-                    "Is Trigger de '" + ctx.selected->name + "' (Sphere Collider)", before, after, applySphereState));
+                    "Is Trigger of '" + ctx.selected->name + "' (Sphere Collider)", before, after, applySphereState));
             }
         }
         drawTriggerRigidbodyHint(ctx.selected, m_editSphereIsTrigger);
@@ -7183,11 +7183,11 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
                                                           m_editSphereStaticFriction, m_editSphereDynamicFriction, m_editSphereBounciness };
 
     if (centerCommitted)
-        ctx.pushLog("Center de '" + ctx.selected->name + "' (Sphere Collider) cambiado a " + formatVec3(m_editSphereCenter));
+        ctx.pushLog("Center of '" + ctx.selected->name + "' (Sphere Collider) changed to " + formatVec3(m_editSphereCenter));
     if (radiusCommitted)
-        ctx.pushLog("Radius de '" + ctx.selected->name + "' (Sphere Collider) cambiado a " + formatFloat(m_editSphereRadius));
+        ctx.pushLog("Radius of '" + ctx.selected->name + "' (Sphere Collider) changed to " + formatFloat(m_editSphereRadius));
     if (materialCommitted)
-        ctx.pushLog("Material de '" + ctx.selected->name + "' (Sphere Collider) cambiado");
+        ctx.pushLog("Material of '" + ctx.selected->name + "' (Sphere Collider) changed");
 
     if (colliderChanged)
     {
@@ -7203,14 +7203,14 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
         SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereIsTrigger,
                                    m_editSphereStaticFriction, m_editSphereDynamicFriction, m_editSphereBounciness };
         ctx.undo->push(std::make_unique<PropertyCommand<SphereColliderState>>(
-            "Sphere Collider de '" + ctx.selected->name + "'", before, after, applySphereState));
+            "Sphere Collider of '" + ctx.selected->name + "'", before, after, applySphereState));
     }
 
     if (removeClicked)
     {
         ctx.selected->setSphereCollider(nullptr);
         m_caches.sphere = nullptr;
-        ctx.pushLog("Componente Sphere Collider quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Sphere Collider component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -7331,8 +7331,8 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
         {
             if (ctx.physics)
                 ctx.physics->setTrigger(ctx.selected->getCapsuleCollider(), m_editCapsuleIsTrigger);
-            ctx.pushLog(std::string("Is Trigger de '") + ctx.selected->name +
-                     "' (Capsule Collider) " + (m_editCapsuleIsTrigger ? "activado" : "desactivado"));
+            ctx.pushLog(std::string("Is Trigger of '") + ctx.selected->name +
+                     "' (Capsule Collider) " + (m_editCapsuleIsTrigger ? "enabled" : "disabled"));
             if (ctx.scene)
             {
                 CapsuleColliderState before{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, oldTrigger,
@@ -7340,7 +7340,7 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
                 CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleIsTrigger,
                                             m_editCapsuleStaticFriction, m_editCapsuleDynamicFriction, m_editCapsuleBounciness };
                 ctx.undo->push(std::make_unique<PropertyCommand<CapsuleColliderState>>(
-                    "Is Trigger de '" + ctx.selected->name + "' (Capsule Collider)", before, after, applyCapsuleState));
+                    "Is Trigger of '" + ctx.selected->name + "' (Capsule Collider)", before, after, applyCapsuleState));
             }
         }
         drawTriggerRigidbodyHint(ctx.selected, m_editCapsuleIsTrigger);
@@ -7355,13 +7355,13 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
                                                             m_editCapsuleStaticFriction, m_editCapsuleDynamicFriction, m_editCapsuleBounciness };
 
     if (centerCommitted)
-        ctx.pushLog("Center de '" + ctx.selected->name + "' (Capsule Collider) cambiado a " + formatVec3(m_editCapsuleCenter));
+        ctx.pushLog("Center of '" + ctx.selected->name + "' (Capsule Collider) changed to " + formatVec3(m_editCapsuleCenter));
     if (radiusCommitted)
-        ctx.pushLog("Radius de '" + ctx.selected->name + "' (Capsule Collider) cambiado a " + formatFloat(m_editCapsuleRadius));
+        ctx.pushLog("Radius of '" + ctx.selected->name + "' (Capsule Collider) changed to " + formatFloat(m_editCapsuleRadius));
     if (heightCommitted)
-        ctx.pushLog("Height de '" + ctx.selected->name + "' (Capsule Collider) cambiado a " + formatFloat(m_editCapsuleHeight));
+        ctx.pushLog("Height of '" + ctx.selected->name + "' (Capsule Collider) changed to " + formatFloat(m_editCapsuleHeight));
     if (materialCommitted)
-        ctx.pushLog("Material de '" + ctx.selected->name + "' (Capsule Collider) cambiado");
+        ctx.pushLog("Material of '" + ctx.selected->name + "' (Capsule Collider) changed");
 
     if (colliderChanged)
     {
@@ -7378,14 +7378,14 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
         CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleIsTrigger,
                                     m_editCapsuleStaticFriction, m_editCapsuleDynamicFriction, m_editCapsuleBounciness };
         ctx.undo->push(std::make_unique<PropertyCommand<CapsuleColliderState>>(
-            "Capsule Collider de '" + ctx.selected->name + "'", before, after, applyCapsuleState));
+            "Capsule Collider of '" + ctx.selected->name + "'", before, after, applyCapsuleState));
     }
 
     if (removeClicked)
     {
         ctx.selected->setCapsuleCollider(nullptr);
         m_caches.capsule = nullptr;
-        ctx.pushLog("Componente Capsule Collider quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Capsule Collider component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -7478,8 +7478,8 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
         {
             if (ctx.physics)
                 ctx.physics->setTrigger(ctx.selected->getPlaneCollider(), m_editPlaneIsTrigger);
-            ctx.pushLog(std::string("Is Trigger de '") + ctx.selected->name +
-                     "' (Plane Collider) " + (m_editPlaneIsTrigger ? "activado" : "desactivado"));
+            ctx.pushLog(std::string("Is Trigger of '") + ctx.selected->name +
+                     "' (Plane Collider) " + (m_editPlaneIsTrigger ? "enabled" : "disabled"));
             if (ctx.scene)
             {
                 PlaneColliderState before{ m_editPlaneCenter, oldTrigger,
@@ -7487,7 +7487,7 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
                 PlaneColliderState after{ m_editPlaneCenter, m_editPlaneIsTrigger,
                                           m_editPlaneStaticFriction, m_editPlaneDynamicFriction, m_editPlaneBounciness };
                 ctx.undo->push(std::make_unique<PropertyCommand<PlaneColliderState>>(
-                    "Is Trigger de '" + ctx.selected->name + "' (Plane Collider)", before, after, applyPlaneState));
+                    "Is Trigger of '" + ctx.selected->name + "' (Plane Collider)", before, after, applyPlaneState));
             }
         }
         drawTriggerRigidbodyHint(ctx.selected, m_editPlaneIsTrigger);
@@ -7502,9 +7502,9 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
                                                         m_editPlaneStaticFriction, m_editPlaneDynamicFriction, m_editPlaneBounciness };
 
     if (centerCommitted)
-        ctx.pushLog("Center de '" + ctx.selected->name + "' (Plane Collider) cambiado a " + formatVec3(m_editPlaneCenter));
+        ctx.pushLog("Center of '" + ctx.selected->name + "' (Plane Collider) changed to " + formatVec3(m_editPlaneCenter));
     if (materialCommitted)
-        ctx.pushLog("Material de '" + ctx.selected->name + "' (Plane Collider) cambiado");
+        ctx.pushLog("Material of '" + ctx.selected->name + "' (Plane Collider) changed");
 
     if (colliderChanged)
     {
@@ -7519,14 +7519,14 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
         PlaneColliderState after{ m_editPlaneCenter, m_editPlaneIsTrigger,
                                   m_editPlaneStaticFriction, m_editPlaneDynamicFriction, m_editPlaneBounciness };
         ctx.undo->push(std::make_unique<PropertyCommand<PlaneColliderState>>(
-            "Plane Collider de '" + ctx.selected->name + "'", before, after, applyPlaneState));
+            "Plane Collider of '" + ctx.selected->name + "'", before, after, applyPlaneState));
     }
 
     if (removeClicked)
     {
         ctx.selected->setPlaneCollider(nullptr);
         m_caches.plane = nullptr;
-        ctx.pushLog("Componente Plane Collider quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Plane Collider component removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -7618,7 +7618,7 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
         m_rigidbodyDragActive = false;
         if (ctx.scene)
             ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
-                "Rigidbody de '" + ctx.selected->name + "'", m_rigidbodyBeforeEdit, currentState(), applyRbState));
+                "Rigidbody of '" + ctx.selected->name + "'", m_rigidbodyBeforeEdit, currentState(), applyRbState));
     }
 
     // --- Checkboxes: comando inmediato con before/after ---
@@ -7627,11 +7627,11 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
         if (ImGui::Checkbox("Use Gravity", &m_editRbUseGravity))
         {
             applyRbState(currentState());
-            ctx.pushLog(std::string("Use Gravity de '") + ctx.selected->name +
-                     "' (Rigidbody) " + (m_editRbUseGravity ? "activado" : "desactivado"));
+            ctx.pushLog(std::string("Use Gravity of '") + ctx.selected->name +
+                     "' (Rigidbody) " + (m_editRbUseGravity ? "enabled" : "disabled"));
             if (ctx.scene)
                 ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
-                    "Use Gravity de '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
+                    "Use Gravity of '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
         }
     }
     {
@@ -7639,11 +7639,11 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
         if (ImGui::Checkbox("Is Kinematic", &m_editRbKinematic))
         {
             applyRbState(currentState());
-            ctx.pushLog(std::string("Is Kinematic de '") + ctx.selected->name +
-                     "' (Rigidbody) " + (m_editRbKinematic ? "activado" : "desactivado"));
+            ctx.pushLog(std::string("Is Kinematic of '") + ctx.selected->name +
+                     "' (Rigidbody) " + (m_editRbKinematic ? "enabled" : "disabled"));
             if (ctx.scene)
                 ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
-                    "Is Kinematic de '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
+                    "Is Kinematic of '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
         }
     }
     {
@@ -7651,30 +7651,30 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
         if (ImGui::Checkbox("Collision Detection (CCD)", &m_editRbCcd))
         {
             applyRbState(currentState());
-            ctx.pushLog(std::string("CCD de '") + ctx.selected->name +
-                     "' (Rigidbody) " + (m_editRbCcd ? "activado" : "desactivado"));
+            ctx.pushLog(std::string("CCD of '") + ctx.selected->name +
+                     "' (Rigidbody) " + (m_editRbCcd ? "enabled" : "disabled"));
             if (ctx.scene)
                 ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
-                    "CCD de '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
+                    "CCD of '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Detección continua: evita que un cuerpo rápido atraviese\n"
-                              "geometría fina. Cuesta CPU; PhysX la ignora en kinematic.");
+            ImGui::SetTooltip("Continuous detection: keeps a fast body from passing through\n"
+                              "thin geometry. Costs CPU; PhysX ignores it for kinematic bodies.");
     }
     {
         RigidbodyState before = currentState();
         if (ImGui::Checkbox("Interpolate", &m_editRbInterpolate))
         {
             applyRbState(currentState());
-            ctx.pushLog(std::string("Interpolate de '") + ctx.selected->name +
-                     "' (Rigidbody) " + (m_editRbInterpolate ? "activado" : "desactivado"));
+            ctx.pushLog(std::string("Interpolate of '") + ctx.selected->name +
+                     "' (Rigidbody) " + (m_editRbInterpolate ? "enabled" : "disabled"));
             if (ctx.scene)
                 ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
-                    "Interpolate de '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
+                    "Interpolate of '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Suaviza la pose VISIBLE entre pasos fijos de física.\n"
-                              "No cambia la simulación: raycasts y triggers ven la pose real.");
+            ImGui::SetTooltip("Smooths the VISIBLE pose between fixed physics steps.\n"
+                              "It does not change the simulation: raycasts and triggers see the real pose.");
     }
 
     // --- Constraints ---
@@ -7703,7 +7703,7 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
         applyRbState(currentState());
         if (ctx.scene)
             ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
-                "Constraints de '" + ctx.selected->name + "' (Rigidbody)", cbBefore, currentState(), applyRbState));
+                "Constraints of '" + ctx.selected->name + "' (Rigidbody)", cbBefore, currentState(), applyRbState));
     }
 
     if (ImGui::Button("Remove Rigidbody"))
@@ -7712,7 +7712,7 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
             ctx.physics->detachRigidbody(col);
         ctx.selected->setRigidbody(nullptr);
         m_caches.rigidbody = nullptr;
-        ctx.pushLog("Componente Rigidbody quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Rigidbody component removed from '" + ctx.selected->name + "'");
     }
 
     ImGui::TreePop();
@@ -7770,10 +7770,10 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
             m_editCamMode = (modeIdx == 1) ? CameraComponent::ProjectionMode::Orthographic
                                             : CameraComponent::ProjectionMode::Perspective;
             applyCamState(currentState());
-            ctx.pushLog(std::string("Projection de '") + ctx.selected->name + "' (Camera): " + modes[modeIdx]);
+            ctx.pushLog(std::string("Projection of '") + ctx.selected->name + "' (Camera): " + modes[modeIdx]);
             if (ctx.scene)
                 ctx.undo->push(std::make_unique<PropertyCommand<CameraState>>(
-                    "Projection de '" + ctx.selected->name + "' (Camera)", before, currentState(), applyCamState));
+                    "Projection of '" + ctx.selected->name + "' (Camera)", before, currentState(), applyCamState));
         }
     }
 
@@ -7836,7 +7836,7 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
         m_cameraDragActive = false;
         if (ctx.scene)
             ctx.undo->push(std::make_unique<PropertyCommand<CameraState>>(
-                "Camera de '" + ctx.selected->name + "'", m_cameraBeforeEdit, currentState(), applyCamState));
+                "Camera of '" + ctx.selected->name + "'", m_cameraBeforeEdit, currentState(), applyCamState));
     }
 
     if (ImGui::Button("Remove Camera"))
@@ -7846,11 +7846,11 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
         // irreversible.
         CameraState st = currentState();
         m_caches.camera = nullptr;
-        ctx.pushLog("Componente Camera quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Camera component removed from '" + ctx.selected->name + "'");
         if (ctx.scene && ctx.undo)
         {
             auto cmd = std::make_unique<CameraComponentCommand>(
-                *ctx.scene, "Quitar Camera de '" + ctx.selected->name + "'", id, /*add=*/false, st);
+                *ctx.scene, "Remove Camera from '" + ctx.selected->name + "'", id, /*add=*/false, st);
             cmd->execute();
             ctx.undo->push(std::move(cmd));
         }
@@ -7875,14 +7875,14 @@ void PropertiesPanel::drawAnimatorSection(EditorContext& ctx)
     if (!ImGui::TreeNodeEx("Animator", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
         return;
 
-    ImGui::Text("Estados: %d", (int)anim->states().size());
-    ImGui::Text("Transiciones: %d", (int)anim->transitions().size());
-    if (anim->layerCount() > 1) ImGui::Text("Capas: %d (estados y transiciones: la base)", anim->layerCount());
+    ImGui::Text("States: %d", (int)anim->states().size());
+    ImGui::Text("Transitions: %d", (int)anim->transitions().size());
+    if (anim->layerCount() > 1) ImGui::Text("Layers: %d (states and transitions: the base layer)", anim->layerCount());
     const int entry = anim->entryState();
     if (entry >= 0 && entry < (int)anim->states().size())
-        ImGui::Text("Entrada: %s", anim->states()[entry].name.c_str());
+        ImGui::Text("Entry: %s", anim->states()[entry].name.c_str());
     else
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Sin estado de entrada");
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "No entry state");
 
     if (!anim->parameters().empty())
     {
@@ -7902,11 +7902,11 @@ void PropertiesPanel::drawAnimatorSection(EditorContext& ctx)
         // grafo se conserva en el comando pa que el Undo lo devuelva entero.
         const uint64_t id = ctx.selected->id;
         AnimatorComponent st = *anim;
-        ctx.pushLog("Componente Animator quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Animator component removed from '" + ctx.selected->name + "'");
         if (ctx.scene && ctx.undo)
         {
             auto cmd = std::make_unique<AnimatorComponentCommand>(
-                *ctx.scene, "Quitar Animator de '" + ctx.selected->name + "'", id, /*add=*/false, st);
+                *ctx.scene, "Remove Animator from '" + ctx.selected->name + "'", id, /*add=*/false, st);
             cmd->execute();
             ctx.undo->push(std::move(cmd));
         }
@@ -7950,12 +7950,12 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
             {
                 const bool before = ctx.selected->meshVisible;
                 ctx.selected->meshVisible = visible;
-                ctx.pushLog("Mesh de '" + ctx.selected->name + "' " +
-                            (visible ? "visible" : "oculto"));
+                ctx.pushLog("Mesh of '" + ctx.selected->name + "' " +
+                            (visible ? "visible" : "hidden"));
                 if (meshScene && ctx.undo)
                 {
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
-                        "Visible de '" + ctx.selected->name + "'", before, visible,
+                        "Visible of '" + ctx.selected->name + "'", before, visible,
                         [meshScene, meshId](const bool& v) {
                             if (GameObject* go = meshScene->findById(meshId)) go->meshVisible = v;
                         }));
@@ -7974,14 +7974,14 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
             // vaciar, y de la guarda por hasMesh(), vive en
             // MeshComponentCommand (Command.h), que es quien lo hace.
             auto cmd = std::make_unique<MeshComponentCommand>(
-                *ctx.scene, ctx.renderer, "Quitar Mesh de '" + ctx.selected->name + "'",
+                *ctx.scene, ctx.renderer, "Remove Mesh from '" + ctx.selected->name + "'",
                 *ctx.selected, /*add=*/false);
             cmd->execute();
             if (ctx.undo) ctx.undo->push(std::move(cmd));
             // Vuelve a ocultar la sección tras quitar el mesh — hay que
             // pulsar "Add > Mesh" de nuevo para reabrirla.
             m_meshAddRequestedFor = 0;
-            ctx.pushLog("Componente Mesh quitado de '" + ctx.selected->name + "'");
+            ctx.pushLog("Mesh component removed from '" + ctx.selected->name + "'");
         }
 
         return;
@@ -8184,8 +8184,8 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                 m_materialFactorSlider.draw("Metallic", mat.metallic, 0.0f, 1.0f, "%.2f");
             ImGui::EndDisabled();
             if (hasOrmMap && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("Hay un mapa Metallic/Roughness asignado: manda el mapa, "
-                                  "este slider no tiene efecto mientras siga puesto.");
+                ImGui::SetTooltip("A Metallic/Roughness map is assigned: the map wins, "
+                                  "this slider has no effect while it stays assigned.");
             if (rm.activated)
             {
                 m_materialFactorDragActive        = true;
@@ -8230,12 +8230,12 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                     const float beforeOverride =
                         currentFactorOverride(*ctx.selected, materialIndex, MaterialFactorSlot::Metallic);
                     auto cmd = std::make_unique<MaterialFactorCommand>(
-                        *ctx.scene, ctx.renderer, "Metallic de '" + ctx.selected->name + "'",
+                        *ctx.scene, ctx.renderer, "Metallic of '" + ctx.selected->name + "'",
                         ownerId, materialIndex, MaterialFactorSlot::Metallic,
                         beforeOverride, rm.value);
                     cmd->execute();
                     if (ctx.undo) ctx.undo->push(std::move(cmd));
-                    ctx.pushLog("Metallic de '" + ctx.selected->name + "' cambiado");
+                    ctx.pushLog("Metallic of '" + ctx.selected->name + "' changed");
                 }
             }
 
@@ -8244,8 +8244,8 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                 m_materialFactorSlider.draw("Roughness", mat.roughness, 0.0f, 1.0f, "%.2f");
             ImGui::EndDisabled();
             if (hasOrmMap && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("Hay un mapa Metallic/Roughness asignado: manda el mapa, "
-                                  "este slider no tiene efecto mientras siga puesto.");
+                ImGui::SetTooltip("A Metallic/Roughness map is assigned: the map wins, "
+                                  "this slider has no effect while it stays assigned.");
             if (rr.activated)
             {
                 m_materialFactorDragActive        = true;
@@ -8273,12 +8273,12 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                     const float beforeOverride =
                         currentFactorOverride(*ctx.selected, materialIndex, MaterialFactorSlot::Roughness);
                     auto cmd = std::make_unique<MaterialFactorCommand>(
-                        *ctx.scene, ctx.renderer, "Roughness de '" + ctx.selected->name + "'",
+                        *ctx.scene, ctx.renderer, "Roughness of '" + ctx.selected->name + "'",
                         ownerId, materialIndex, MaterialFactorSlot::Roughness,
                         beforeOverride, rr.value);
                     cmd->execute();
                     if (ctx.undo) ctx.undo->push(std::move(cmd));
-                    ctx.pushLog("Roughness de '" + ctx.selected->name + "' cambiado");
+                    ctx.pushLog("Roughness of '" + ctx.selected->name + "' changed");
                 }
             }
         }
@@ -8334,7 +8334,7 @@ void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId
         // El objeto se borró (o el snapshot es de un undo/redo de por medio)
         // mientras el diálogo seguía abierto: sin este aviso la elección se
         // descartaría en silencio y parecería que Browse no hizo nada.
-        ctx.logModule("Mesh", "No se pudo aplicar la textura: el objeto ya no existe");
+        ctx.logModule("Mesh", "Could not apply the texture: the object no longer exists");
         return;
     }
     if (!go->hasMesh() || ctx.editingLocked) return;
@@ -8352,7 +8352,7 @@ void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId
     const std::vector<const Material*> mats = materialsOfMesh(*go);
     if (materialIndex < 0 || materialIndex >= (int)mats.size())
     {
-        ctx.logModule("Mesh", "No se pudo aplicar la textura: el material ya no existe en '"
+        ctx.logModule("Mesh", "Could not apply the texture: the material no longer exists on '"
                               + go->name + "'");
         return;
     }
@@ -8367,7 +8367,7 @@ void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId
             { ".png", ".jpg", ".jpeg", ".bmp", ".tga" };
         if (!kImagenes.count(ext))
         {
-            m_textureLoadError = "Formato no soportado: " + ext;
+            m_textureLoadError = "Unsupported format: " + ext;
             return;
         }
     }
@@ -8382,12 +8382,12 @@ void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId
 
     auto cmd = std::make_unique<MaterialTextureCommand>(
         *ctx.scene, ctx.renderer,
-        (path.empty() ? "Quitar textura de '" : "Textura de '") + go->name + "'",
+        (path.empty() ? "Remove texture from '" : "Texture of '") + go->name + "'",
         go->id, materialIndex, slot, antes, path);
     cmd->execute();
     if (ctx.undo) ctx.undo->push(std::move(cmd));
 
-    ctx.pushLog((path.empty() ? "Textura quitada de '" : "Textura asignada a '")
+    ctx.pushLog((path.empty() ? "Texture removed from '" : "Texture assigned to '")
                 + go->name + "'");
 }
 
@@ -8396,13 +8396,13 @@ void PropertiesPanel::assignMaterialAsset(EditorContext& ctx, uint64_t ownerId, 
 {
     if (!ctx.scene) return;
     GameObject* go = ctx.scene->findById(ownerId);
-    if (!go) { ctx.logModule("Mesh", "No se pudo vincular el material: el objeto ya no existe"); return; }
+    if (!go) { ctx.logModule("Mesh", "Could not link the material: the object no longer exists"); return; }
     if (!go->hasMesh() || ctx.editingLocked) return;
 
     const std::vector<const Material*> mats = materialsOfMesh(*go);
     if (materialIndex < 0 || materialIndex >= (int)mats.size())
     {
-        ctx.logModule("Mesh", "No se pudo vincular el material: el material ya no existe en '" + go->name + "'");
+        ctx.logModule("Mesh", "Could not link the material: the material no longer exists on '" + go->name + "'");
         return;
     }
     if (!path.empty())
@@ -8411,7 +8411,7 @@ void PropertiesPanel::assignMaterialAsset(EditorContext& ctx, uint64_t ownerId, 
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         if (ext != ".mat")
         {
-            m_textureLoadError = "Formato no soportado: " + ext;
+            m_textureLoadError = "Unsupported format: " + ext;
             return;
         }
     }
@@ -8421,11 +8421,11 @@ void PropertiesPanel::assignMaterialAsset(EditorContext& ctx, uint64_t ownerId, 
 
     auto cmd = std::make_unique<MaterialAssetCommand>(
         *ctx.scene, ctx.renderer,
-        (path.empty() ? "Desvincular material de '" : "Material de '") + go->name + "'",
+        (path.empty() ? "Unlink material from '" : "Material of '") + go->name + "'",
         go->id, materialIndex, antes, path);
     cmd->execute();
     if (ctx.undo) ctx.undo->push(std::move(cmd));
-    ctx.pushLog((path.empty() ? "Material desvinculado de '" : "Material vinculado a '") + go->name + "'");
+    ctx.pushLog((path.empty() ? "Material unlinked from '" : "Material linked to '") + go->name + "'");
 }
 
 void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
@@ -8503,9 +8503,9 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             // bueno y solo se notaba porque no sonaba nada.
             if (clip->hasLoadError())
             {
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "No se pudo cargar");
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Could not load");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("'%s': fichero ausente, formato no soportado o datos corruptos",
+                    ImGui::SetTooltip("'%s': missing file, unsupported format or corrupt data",
                                       clip->getPath().c_str());
             }
 
@@ -8550,8 +8550,8 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 toggled = true;
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Silencia sin perder el volumen: al desmarcarlo vuelve el "
-                                  "que habia. Se guarda en la escena.");
+                ImGui::SetTooltip("Mutes without losing the volume: unchecking it restores the "
+                                  "previous one. Saved in the scene.");
 
             bool playOnAwake = clip->getPlayOnAwake();
             if (ImGui::Checkbox("Play On Awake", &playOnAwake))
@@ -8573,13 +8573,13 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 toggled = true;
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Grupo por el que sale el sonido. Master escala a los otros "
-                                  "dos.\nSolo afecta a la PROXIMA reproduccion: el grupo se "
-                                  "elige al arrancar la voz.");
+                ImGui::SetTooltip("Group the sound plays through. Master scales the other "
+                                  "two.\nOnly affects the NEXT playback: the group is "
+                                  "chosen when the voice starts.");
 
             // Modo de carga. A diferencia del bus, este SI recarga el sonido
             // (va en el FMOD_MODE) y corta lo que estuviera sonando.
-            const char* kLoadModeNames[] = { "Sample (en RAM)", "Stream (del disco)" };
+            const char* kLoadModeNames[] = { "Sample (in RAM)", "Stream (from disk)" };
             int loadModeIdx = static_cast<int>(clip->getLoadMode());
             if (ImGui::Combo("Load Mode", &loadModeIdx, kLoadModeNames, IM_ARRAYSIZE(kLoadModeNames)))
             {
@@ -8587,19 +8587,19 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 toggled = true;
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Sample: se descomprime entero en RAM. Arranca al instante y "
-                                  "admite varias voces a la vez.\nStream: se lee del disco sobre "
-                                  "la marcha, ocupa muy poca memoria, pero SOLO puede sonar una "
-                                  "vez a la vez.\nUsa Stream para musica y ambientes largos, "
-                                  "Sample para efectos.\nCambiarlo recarga el sonido y corta lo "
-                                  "que este sonando.");
+                ImGui::SetTooltip("Sample: fully decompressed into RAM. Starts instantly and "
+                                  "allows several voices at once.\nStream: read from disk on "
+                                  "the fly, uses very little memory, but can only play ONE "
+                                  "instance at a time.\nUse Stream for music and long ambiences, "
+                                  "Sample for effects.\nChanging it reloads the sound and cuts whatever "
+                                  "is playing.");
 
             // Curva de atenuacion. Como Load Mode, va en el FMOD_MODE y recarga.
             // Solo se dibuja en 3D: en 2D no hay atenuacion por distancia que
             // moldear, igual que las distancias min/max de mas abajo.
             if (is3D)
             {
-                const char* kRolloffNames[] = { "Inverse (realista)", "Linear",
+                const char* kRolloffNames[] = { "Inverse (realistic)", "Linear",
                                                  "Linear Square" };
                 int rolloffIdx = static_cast<int>(clip->getRolloff());
                 if (ImGui::Combo("Rolloff", &rolloffIdx, kRolloffNames, IM_ARRAYSIZE(kRolloffNames)))
@@ -8608,11 +8608,11 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                     toggled = true;
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Forma de la caida entre Min y Max distance.\nInverse: cae "
-                                      "rapido de cerca y se estira a lo lejos (la de fabrica, la "
-                                      "mas realista).\nLinear: cae a ritmo constante y calla del "
-                                      "todo en Max distance.\nLinear Square: intermedia, tambien "
-                                      "calla en Max.\nCambiarla recarga el sonido.");
+                    ImGui::SetTooltip("Shape of the falloff between Min and Max distance.\nInverse: falls "
+                                      "fast up close and stretches out far away (the default, the "
+                                      "most realistic).\nLinear: falls at a constant rate and goes fully "
+                                      "silent at Max distance.\nLinear Square: in between, also "
+                                      "silent at Max.\nChanging it reloads the sound.");
             }
 
             if (toggled && ctx.scene && ctx.undo)
@@ -8620,7 +8620,7 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 const uint64_t ownerId = ctx.selected->id;
                 Scene* sc = ctx.scene;
                 ctx.undo->push(std::make_unique<PropertyCommand<AudioClipState>>(
-                    "Audio Clip de '" + ctx.selected->name + "'",
+                    "Audio Clip of '" + ctx.selected->name + "'",
                     toggleBefore, audioClipStateOf(*clip),
                     [sc, ownerId](const AudioClipState& s) { applyAudioClipState(*sc, ownerId, s); }));
             }
@@ -8693,8 +8693,8 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 activated |= ImGui::IsItemActivated();
                 committed |= ImGui::IsItemDeactivatedAfterEdit();
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Ensancha la fuente 3D. 0 la deja como un punto; valores "
-                                      "altos la vuelven envolvente al acercarse.");
+                    ImGui::SetTooltip("Widens the 3D source. 0 keeps it a point; high "
+                                      "values make it enveloping up close.");
 
                 float doppler = dopplerBefore;
                 if (ImGui::SliderFloat("Doppler", &doppler, 0.0f, 5.0f, "%.2f"))
@@ -8702,9 +8702,9 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 activated |= ImGui::IsItemActivated();
                 committed |= ImGui::IsItemDeactivatedAfterEdit();
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Cuanto altera el tono la velocidad relativa entre la "
-                                      "fuente y el listener.\n0 lo apaga (por defecto). Solo "
-                                      "actua en Play: en Edit Mode no se calculan velocidades.");
+                    ImGui::SetTooltip("How much the relative velocity between the "
+                                      "source and the listener shifts the pitch.\n0 turns it off (default). Only "
+                                      "works in Play: velocities are not computed in Edit Mode.");
             }
             else
             {
@@ -8716,8 +8716,8 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 activated |= ImGui::IsItemActivated();
                 committed |= ImGui::IsItemDeactivatedAfterEdit();
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("-1 todo a la izquierda, 0 centrado, 1 a la derecha. "
-                                      "Solo para clips 2D.");
+                    ImGui::SetTooltip("-1 fully left, 0 centered, 1 fully right. "
+                                      "2D clips only.");
             }
 
             // Sin gate por m_audioDragActive: solo un widget de ImGui puede
@@ -8768,7 +8768,7 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 {
                     if (ctx.scene)
                         ctx.undo->push(std::make_unique<PropertyCommand<AudioClipState>>(
-                            "Audio Clip de '" + ctx.selected->name + "'", before, after,
+                            "Audio Clip of '" + ctx.selected->name + "'", before, after,
                             [scene, clipOwnerId](const AudioClipState& s) {
                                 applyAudioClipState(*scene, clipOwnerId, s);
                             }));
@@ -8787,7 +8787,7 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             {
                 auto cmd = std::make_unique<AudioClipComponentCommand>(
                     *ctx.scene, *ctx.audio,
-                    "Quitar Audio Clip de '" + ctx.selected->name + "'", ctx.selected->id,
+                    "Remove Audio Clip from '" + ctx.selected->name + "'", ctx.selected->id,
                     /*add=*/false, clip->getPath(), audioClipStateOf(*clip));
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
@@ -8799,7 +8799,7 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             // Vuelve a ocultar la sección tras quitar el clip — hay que
             // pulsar "Add > Audio Clip" de nuevo para reabrirla.
             m_audioClipAddRequestedFor = 0;
-            ctx.pushLog("Componente Audio Clip quitado de '" + ctx.selected->name + "'");
+            ctx.pushLog("Audio Clip component removed from '" + ctx.selected->name + "'");
         }
 
         return;
@@ -8890,10 +8890,10 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                 const std::string* err = ctx.scriptManager->getCompileError(comp->scriptName);
                 if (err)
                     ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                        "Error de compilación:\n%s", err->c_str());
+                        "Compilation error:\n%s", err->c_str());
                 else
                     ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                        "Script no encontrado: %s.lua", comp->scriptName.c_str());
+                        "Script not found: %s.lua", comp->scriptName.c_str());
                 // Overrides intactos (spec: no se pierden datos)
             }
             else
@@ -8962,7 +8962,7 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                             }, value);
                         }
                         ctx.pushLog("Script '" + comp->scriptName + "." + prop.name +
-                                "' cambiado en '" + ctx.selected->name + "'");
+                                "' changed on '" + ctx.selected->name + "'");
                     }
                 }
 
@@ -8983,7 +8983,7 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                                 else comp->instance[prop.name] = v;
                             }, prop.defaultValue);
                     }
-                    ctx.pushLog("Script '" + comp->scriptName + "' reseteado a defaults en '" +
+                    ctx.pushLog("Script '" + comp->scriptName + "' reset to defaults on '" +
                             ctx.selected->name + "'");
                 }
             }
@@ -8997,7 +8997,7 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
         if (ctx.isPlaying) ctx.scriptManager->callOnDestroy(*toRemove);
         const std::string name = toRemove->scriptName;
         ctx.selected->removeScript(toRemove);
-        ctx.pushLog("Componente Script '" + name + "' quitado de '" + ctx.selected->name + "'");
+        ctx.pushLog("Script component '" + name + "' removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -9020,7 +9020,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             // Owner opaco = GameObject, para que TriggerEvent.other lo resuelva.
             ctx.selected->getBoxCollider()->setOwner(ctx.selected);
             m_caches.box = nullptr;
-            ctx.pushLog("Componente Box Collider añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Box Collider component added to '" + ctx.selected->name + "'");
         }
 
         if (ImGui::Selectable("Sphere Collider") && !alreadyHasAny && ctx.physics)
@@ -9029,7 +9029,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 25.0f, glm::vec3(0.0f), ctx.selected->worldTransform, /*dynamic=*/false));
             ctx.selected->getSphereCollider()->setOwner(ctx.selected);
             m_caches.sphere = nullptr;
-            ctx.pushLog("Componente Sphere Collider añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Sphere Collider component added to '" + ctx.selected->name + "'");
         }
 
         if (ImGui::Selectable("Capsule Collider") && !alreadyHasAny && ctx.physics)
@@ -9038,7 +9038,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 15.0f, 25.0f, glm::vec3(0.0f), ctx.selected->worldTransform, /*dynamic=*/false));
             ctx.selected->getCapsuleCollider()->setOwner(ctx.selected);
             m_caches.capsule = nullptr;
-            ctx.pushLog("Componente Capsule Collider añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Capsule Collider component added to '" + ctx.selected->name + "'");
         }
 
         if (ImGui::Selectable("Plane Collider") && !alreadyHasAny && ctx.physics)
@@ -9047,7 +9047,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 glm::vec3(0.0f), ctx.selected->worldTransform));
             ctx.selected->getPlaneCollider()->setOwner(ctx.selected);
             m_caches.plane = nullptr;
-            ctx.pushLog("Componente Plane Collider añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Plane Collider component added to '" + ctx.selected->name + "'");
         }
 
         ImGui::EndDisabled();
@@ -9063,7 +9063,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 if (auto col = ctx.selected->anyCollider())
                     ctx.physics->attachRigidbody(col, rb);
                 m_caches.rigidbody = nullptr;
-                ctx.pushLog("Componente Rigidbody añadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Rigidbody component added to '" + ctx.selected->name + "'");
             }
         }
 
@@ -9089,7 +9089,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<AudioListenerComponentCommand>(
-                    *ctx.scene, "Añadir Audio Listener a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Audio Listener to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, /*enabled=*/true);
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
@@ -9098,12 +9098,12 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             {
                 ctx.selected->setAudioListener(std::make_shared<AudioListenerComponent>());
             }
-            ctx.pushLog("Componente Audio Listener añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Audio Listener component added to '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();
         if (existingListener && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Ya hay un Audio Listener en la escena ('%s'): quítalo de ahí "
-                              "antes de poner otro", existingListener->name.c_str());
+            ImGui::SetTooltip("There is already an Audio Listener in the scene ('%s'): remove it from there "
+                              "before adding another", existingListener->name.c_str());
 
         // Reverb Zone: sin invariante de escena (caben varias, y FMOD mezcla
         // las que se solapen), asi que el unico gate es no poner dos al mismo
@@ -9113,7 +9113,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         if (ImGui::Selectable("Reverb Zone") && !alreadyHasReverb)
         {
             ctx.selected->setReverbZone(std::make_shared<ReverbZoneComponent>());
-            ctx.pushLog("Componente Reverb Zone añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Reverb Zone component added to '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();
 
@@ -9126,11 +9126,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         if (ImGui::Selectable("Canvas") && !alreadyHasCanvas && ctx.scene && ctx.undo)
         {
             auto cmd = std::make_unique<CanvasComponentCommand>(
-                *ctx.scene, "Añadir Canvas a '" + ctx.selected->name + "'", ctx.selected->id,
+                *ctx.scene, "Add Canvas to '" + ctx.selected->name + "'", ctx.selected->id,
                 /*add=*/true, CanvasComponent{});
             cmd->execute();
             ctx.undo->push(std::move(cmd));
-            ctx.pushLog("Componente Canvas añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Canvas component added to '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();
 
@@ -9145,11 +9145,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Button") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<ButtonComponentCommand>(
-                    *ctx.scene, "Añadir Button a '" + ctx.selected->name + "'", ctx.selected->id,
+                    *ctx.scene, "Add Button to '" + ctx.selected->name + "'", ctx.selected->id,
                     /*add=*/true, ButtonComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Button añadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Button component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9157,11 +9157,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Text") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<TextComponentCommand>(
-                    *ctx.scene, "Añadir Text a '" + ctx.selected->name + "'", ctx.selected->id,
+                    *ctx.scene, "Add Text to '" + ctx.selected->name + "'", ctx.selected->id,
                     /*add=*/true, TextComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Text añadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Text component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9170,11 +9170,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Panel") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<PanelComponentCommand>(
-                    *ctx.scene, "Añadir Panel a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Panel to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, PanelComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Panel añadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Panel component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9182,11 +9182,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Image") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<ImageComponentCommand>(
-                    *ctx.scene, "Añadir Image a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Image to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, ImageComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Image añadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Image component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9194,11 +9194,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Slider") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<SliderComponentCommand>(
-                    *ctx.scene, "Anadir Slider a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Slider to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, SliderComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Slider anadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Slider component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9206,11 +9206,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Checkbox") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<CheckboxComponentCommand>(
-                    *ctx.scene, "Anadir Checkbox a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Checkbox to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, CheckboxComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Checkbox anadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Checkbox component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9218,11 +9218,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Toggle") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<ToggleComponentCommand>(
-                    *ctx.scene, "Anadir Toggle a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Toggle to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, ToggleComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Toggle anadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Toggle component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9230,11 +9230,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Scroll Bar") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<ScrollbarComponentCommand>(
-                    *ctx.scene, "Anadir Scroll Bar a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Scroll Bar to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, ScrollbarComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Scroll Bar anadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Scroll Bar component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9242,11 +9242,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Input Field") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<InputFieldComponentCommand>(
-                    *ctx.scene, "Anadir Input Field a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Input Field to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, InputFieldComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Input Field anadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Input Field component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9254,11 +9254,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Dropdown") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<DropdownComponentCommand>(
-                    *ctx.scene, "Anadir Dropdown a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Dropdown to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, DropdownComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Dropdown anadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Dropdown component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9266,11 +9266,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Scroll View") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<ScrollViewComponentCommand>(
-                    *ctx.scene, "Anadir Scroll View a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Scroll View to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, ScrollViewComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Scroll View anadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Scroll View component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9278,11 +9278,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Progress Bar") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<ProgressBarComponentCommand>(
-                    *ctx.scene, "Añadir Progress Bar a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Progress Bar to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, ProgressBarComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Progress Bar añadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Progress Bar component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 
@@ -9293,11 +9293,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             if (ImGui::Selectable("Layout") && ctx.scene && ctx.undo)
             {
                 auto cmd = std::make_unique<LayoutComponentCommand>(
-                    *ctx.scene, "Añadir Layout a '" + ctx.selected->name + "'",
+                    *ctx.scene, "Add Layout to '" + ctx.selected->name + "'",
                     ctx.selected->id, /*add=*/true, LayoutComponent{});
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
-                ctx.pushLog("Componente Layout añadido a '" + ctx.selected->name + "'");
+                ctx.pushLog("Layout component added to '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
         }
@@ -9315,15 +9315,15 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             CameraState st{ defaults.getMode(), defaults.getFov(), defaults.getOrthographicSize(),
                             defaults.getNear(), defaults.getFar() };
             auto cmd = std::make_unique<CameraComponentCommand>(
-                *ctx.scene, "Añadir Camera a '" + ctx.selected->name + "'", ctx.selected->id, /*add=*/true, st);
+                *ctx.scene, "Add Camera to '" + ctx.selected->name + "'", ctx.selected->id, /*add=*/true, st);
             cmd->execute();
             ctx.undo->push(std::move(cmd));
             m_caches.camera = nullptr;
-            ctx.pushLog("Componente Camera añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Camera component added to '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();
         if (existingCamera && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Ya hay una cámara en la escena ('%s')", existingCamera->name.c_str());
+            ImGui::SetTooltip("There is already a camera in the scene ('%s')", existingCamera->name.c_str());
 
         // Reflection Probe: sin invariante de unicidad (caben las que quepan en
         // memoria), así que el único gate es no añadir dos a un mismo objeto.
@@ -9334,7 +9334,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         if (ImGui::Selectable("Reflection Probe") && !alreadyHasProbe)
         {
             ctx.selected->setReflectionProbe(std::make_shared<ReflectionProbeComponent>());
-            ctx.pushLog("Componente Reflection Probe añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Reflection Probe component added to '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();
 
@@ -9346,7 +9346,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         if (ImGui::Selectable("Light") && !alreadyHasLight)
         {
             ctx.selected->setLight(std::make_shared<LightComponent>());
-            ctx.pushLog("Componente Light añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Light component added to '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();
 
@@ -9364,11 +9364,11 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             // vía setAnimator(nullptr). Remove sí pasa por el stack (ver más abajo
             // en drawAnimatorSection) porque ahí no hay ese riesgo.
             ctx.selected->setAnimator(std::make_shared<AnimatorComponent>());
-            ctx.pushLog("Componente Animator añadido a '" + ctx.selected->name + "'");
+            ctx.pushLog("Animator component added to '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();
         if (!canAnimate && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("El Animator necesita un mesh skinned (los clips vienen del FBX)");
+            ImGui::SetTooltip("The Animator needs a skinned mesh (the clips come from the FBX)");
 
         if (ctx.scriptManager)
         {
@@ -9383,12 +9383,12 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                         ctx.selected->addScript(std::move(comp));
                         // En Play el lifecycle instancia y dispara Awake/Start
                         // en el siguiente update (started == false).
-                        ctx.pushLog("Componente Script '" + name + "' añadido a '" + ctx.selected->name + "'");
+                        ctx.pushLog("Script component '" + name + "' added to '" + ctx.selected->name + "'");
                     }
                 }
                 if (!ctx.scriptManager->getRegistry().empty())
                     ImGui::Separator();
-                if (ImGui::MenuItem("Nuevo Script..."))
+                if (ImGui::MenuItem("New Script..."))
                 {
                     m_newScriptTargetId = ctx.selected->id;
                     m_newScriptNameBuffer[0] = '\0';
@@ -9409,19 +9409,19 @@ void PropertiesPanel::drawNewScriptPopup(EditorContext& ctx)
 {
     if (m_openNewScriptPopup)
     {
-        ImGui::OpenPopup("Nuevo Script");
+        ImGui::OpenPopup("New Script");
         m_openNewScriptPopup = false;
     }
 
-    if (!ImGui::BeginPopupModal("Nuevo Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    if (!ImGui::BeginPopupModal("New Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         return;
 
-    ImGui::Text("Nombre del script (sin .lua):");
+    ImGui::Text("Script name (without .lua):");
     ImGui::InputText("##NewScriptName", m_newScriptNameBuffer, sizeof(m_newScriptNameBuffer));
     if (!m_newScriptError.empty())
         ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", m_newScriptError.c_str());
 
-    if (ImGui::Button("Crear"))
+    if (ImGui::Button("Create"))
     {
         const std::string name = m_newScriptNameBuffer;
 
@@ -9435,18 +9435,18 @@ void PropertiesPanel::drawNewScriptPopup(EditorContext& ctx)
         const std::filesystem::path path = ctx.scriptManager->scriptsDirPath() / (name + ".lua");
 
         if (!validName)
-            m_newScriptError = "Nombre inválido: letra o '_' inicial, luego alfanuméricos o '_'";
+            m_newScriptError = "Invalid name: must start with a letter or '_', then letters, digits or '_'";
         else if (ctx.scriptManager->hasClass(name) || std::filesystem::exists(path))
-            m_newScriptError = "Ya existe un script con ese nombre";
+            m_newScriptError = "A script with that name already exists";
         else
         {
             std::ofstream file(path);
             if (!file)
-                m_newScriptError = "No se pudo crear el archivo en " + path.string();
+                m_newScriptError = "Could not create the file at " + path.string();
             else
             {
                 file << name << " = {\n"
-                     << "    -- Propiedades serializables (aparecen en el editor)\n"
+                     << "    -- Serializable properties (shown in the editor)\n"
                      << "    speed = 1\n"
                      << "}\n\n"
                      << "function " << name << ":Start()\n"
@@ -9472,20 +9472,20 @@ void PropertiesPanel::drawNewScriptPopup(EditorContext& ctx)
                     {
                         target->addScript(
                             std::make_unique<ScriptComponent>(name, target));
-                        ctx.pushLog("Script '" + name + "' creado y añadido a '" +
+                        ctx.pushLog("Script '" + name + "' created and added to '" +
                                 target->name + "'");
                     }
                     else
-                        ctx.pushLog("Script '" + name + "' creado (el GameObject ya no existe)");
+                        ctx.pushLog("Script '" + name + "' created (the GameObject no longer exists)");
                     ImGui::CloseCurrentPopup();
                 }
                 else
-                    m_newScriptError = "El script no compiló (ver Log)";
+                    m_newScriptError = "The script did not compile (see Log)";
             }
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancelar"))
+    if (ImGui::Button("Cancel"))
         ImGui::CloseCurrentPopup();
 
     ImGui::EndPopup();

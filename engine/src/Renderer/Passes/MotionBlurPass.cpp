@@ -24,7 +24,7 @@ struct MotionBlurPush {
     int32_t   samples;
 };
 static_assert(sizeof(MotionBlurPush) == 84,
-              "MotionBlurPush debe seguir en 84 bytes: motion_blur.comp declara este layout");
+              "MotionBlurPush must stay at 84 bytes: motion_blur.comp declares this layout");
 
 // ── Motion blur ─────────────────────────────────────────────────────────────
 bool MotionBlurPass::active(const Context& ctx) const

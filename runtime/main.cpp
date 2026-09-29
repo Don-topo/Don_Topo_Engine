@@ -163,7 +163,7 @@ int main(int argc, char** argv)
                             requested = DonTopo::renderBackendFromName(it->get<std::string>(), ok);
                             if (!ok)
                             {
-                                std::cout << "game.cfg: backend de render desconocido, se usa Vulkan"
+                                std::cout << "game.cfg: unknown render backend, using Vulkan"
                                           << std::endl;
                                 requested = DonTopo::RenderBackend::Vulkan;
                             }
@@ -172,7 +172,7 @@ int main(int argc, char** argv)
                 }
                 catch (const std::exception&)
                 {
-                    std::cout << "game.cfg ilegible: se usa Vulkan" << std::endl;
+                    std::cout << "game.cfg unreadable: using Vulkan" << std::endl;
                 }
             }
 
@@ -312,7 +312,7 @@ int main(int argc, char** argv)
             auto sceneJson = DonTopo::FileManager::readJson(scenePath);
             if (!sceneJson)
             {
-                reportFatal("Error: no se pudo cargar la escena '" + scenePath + "'");
+                reportFatal("Error: could not load the scene '" + scenePath + "'");
                 jobSystem.shutdown();
                 return EXIT_FAILURE;
             }
@@ -361,8 +361,8 @@ int main(int argc, char** argv)
                 {
                     if (!r.error.empty())
                     {
-                        std::cerr << "Precarga fallida '" << r.path << "': " << r.error
-                                  << " (se reintentara desde disco al cargar la escena)" << std::endl;
+                        std::cerr << "Preload failed '" << r.path << "': " << r.error
+                                  << " (it will be retried from disk when the scene loads)" << std::endl;
                         continue;
                     }
                     if (r.mesh)
@@ -380,7 +380,7 @@ int main(int argc, char** argv)
         // config de animación.
         if (!scene.load(scenePath, physics, audio, /*loader=*/nullptr, /*preloaded=*/&preloaded))
         {
-            reportFatal("Error: no se pudo cargar la escena '" + scenePath + "'");
+            reportFatal("Error: could not load the scene '" + scenePath + "'");
             jobSystem.shutdown();
             return EXIT_FAILURE;
         }
@@ -393,8 +393,8 @@ int main(int argc, char** argv)
         // avisa al dar a Play (EditorUI.cpp); aquí no hay Play que pulsar, así
         // que el aviso va nada más cargar la escena.
         if (!scene.findCamera())
-            std::cerr << "Aviso: la escena no tiene una camara (CameraComponent); "
-                          "el juego no podra renderizar correctamente." << std::endl;
+            std::cerr << "Warning: the scene has no camera (CameraComponent); "
+                          "the game will not be able to render correctly." << std::endl;
 
         std::vector<DonTopo::GameObject*> allNodes;
         scene.traverse([&](DonTopo::GameObject* go) { allNodes.push_back(go); });
@@ -545,7 +545,7 @@ int main(int argc, char** argv)
             DonTopo::GameObject* listenerGo = scene.findAudioListener();
             const bool listenerActive = listenerGo && listenerGo->getAudioListener()->getEnabled();
             if (!listenerActive)
-                std::cerr << "Sin Audio Listener en la escena: el audio 3D se oye desde la camara"
+                std::cerr << "No Audio Listener in the scene: 3D audio is heard from the camera"
                           << std::endl;
             scene.traverse([](DonTopo::GameObject* go) {
                 if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
@@ -600,7 +600,7 @@ int main(int argc, char** argv)
                 // El alive set de Lua guardaba punteros de la escena vieja y los
                 // GameObject nuevos pueden reusar esas direcciones.
                 scriptManager.rebuildAliveSet();
-                std::cout << (luaLoaded ? "Escena cargada: " : "Error al cargar escena: ")
+                std::cout << (luaLoaded ? "Scene loaded: " : "Error loading scene: ")
                           << luaScenePath << std::endl;
                 if (luaLoaded) logSceneWarnings(scene, luaScenePath);
             }
@@ -676,8 +676,8 @@ int main(int argc, char** argv)
             audioFailures.clear();
             audio.pollLoadFailures(audioFailures);
             for (const auto& failed : audioFailures)
-                std::cerr << "No se pudo cargar el audio '" << failed
-                          << "': fichero ausente, formato no soportado o datos corruptos"
+                std::cerr << "Could not load the audio '" << failed
+                          << "': missing file, unsupported format or corrupt data"
                           << std::endl;
             physics.stepSimulation(dt);
             scene.update(dt);

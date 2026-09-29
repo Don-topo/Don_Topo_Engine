@@ -72,7 +72,7 @@ bool isValidExportGameName(const std::string& name, std::string& reason)
     // real (tab, CR, LF, form feed...).
     if (name.empty() || std::all_of(name.begin(), name.end(), isBlankChar))
     {
-        reason = "El nombre no puede estar vacio";
+        reason = "The name cannot be empty";
         return false;
     }
     // Cubre "." y ".." a la vez que cualquier nombre con puntos/espacios
@@ -81,7 +81,7 @@ bool isValidExportGameName(const std::string& name, std::string& reason)
     // usuario en el popup.
     if (name.back() == '.' || isBlankChar(name.back()))
     {
-        reason = "El nombre no puede terminar en '.' ni en espacio";
+        reason = "The name cannot end in '.' or a space";
         return false;
     }
     // Mismo conjunto de caracteres reservados de Windows que
@@ -94,7 +94,7 @@ bool isValidExportGameName(const std::string& name, std::string& reason)
     {
         if (kReserved.find(c) != std::string::npos)
         {
-            reason = "El nombre no puede contener ninguno de estos caracteres: \\ / : * ? \" < > |";
+            reason = "The name cannot contain any of these characters: \\ / : * ? \" < > |";
             return false;
         }
     }
@@ -105,7 +105,7 @@ bool isValidExportGameName(const std::string& name, std::string& reason)
     // en el set) pero se deja como red de seguridad extra sobre operator/.
     if (fs::path(name).filename().string() != name)
     {
-        reason = "El nombre no puede contener separadores de ruta";
+        reason = "The name cannot contain path separators";
         return false;
     }
     // Nombres de dispositivo reservados por Windows (CON, NUL, COM1..9,
@@ -127,7 +127,7 @@ bool isValidExportGameName(const std::string& name, std::string& reason)
     {
         if (baseUpper == reserved)
         {
-            reason = "'" + name + "' es un nombre de dispositivo reservado por Windows";
+            reason = "'" + name + "' is a device name reserved by Windows";
             return false;
         }
     }
@@ -565,8 +565,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
 
     if (!fs::exists(runtimeExe, ec) || ec)
     {
-        r.messages.push_back("Export cancelado: no se encuentra " + runtimeExe.string() +
-                             ". Compila el target DonTopoRuntime.");
+        r.messages.push_back("Export cancelled: cannot find " + runtimeExe.string() +
+                             ". Build the DonTopoRuntime target.");
         return r;
     }
 
@@ -581,10 +581,10 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     const ExportTargetState targetState = inspectExportTarget(pkg);
     if (targetState == ExportTargetState::Occupied)
     {
-        r.messages.push_back("Export cancelado: '" + pkg.string() +
-                             "' ya existe y tiene contenido que no es de un export anterior "
-                             "(no hay ningun game.scene dentro). No se ha borrado nada: "
-                             "elige otro nombre u otra carpeta destino.");
+        r.messages.push_back("Export cancelled: '" + pkg.string() +
+                             "' already exists and has content that is not from a previous export "
+                             "(there is no game.scene inside). Nothing was deleted: "
+                             "choose another name or destination folder.");
         return r;
     }
 
@@ -606,9 +606,9 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     fs::remove_all(pkg, removeEc);
     if (removeEc)
     {
-        r.messages.push_back("Export fallido: no se pudo limpiar el paquete anterior en " +
+        r.messages.push_back("Export failed: could not clean the previous package at " +
                              pkg.string() + " (" + removeEc.message() +
-                             "). ¿Hay algún proceso usando ficheros de esa carpeta?");
+                             "). Is some process using files in that folder?");
         return r;
     }
 
@@ -616,7 +616,7 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     fs::create_directories(pkg, createEc);
     if (createEc)
     {
-        r.messages.push_back("Export fallido: no se pudo crear " + pkg.string());
+        r.messages.push_back("Export failed: could not create " + pkg.string());
         return r;
     }
 
@@ -626,7 +626,7 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         fs::create_directories(to.parent_path(), cec);
         if (!fs::copy_file(from, to, fs::copy_options::overwrite_existing, cec))
         {
-            r.messages.push_back("No se pudo copiar " + from.string());
+            r.messages.push_back("Could not copy " + from.string());
             return false;
         }
         std::error_code sec;
@@ -647,7 +647,7 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                         fs::perm_options::add, pec);
         if (pec)
         {
-            r.messages.push_back("No se pudo marcar " + exeDst.string() + " como ejecutable");
+            r.messages.push_back("Could not mark " + exeDst.string() + " as executable");
             ok = false;
         }
     }
@@ -709,9 +709,9 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     {
         std::string list;
         for (const std::string& f : missingFaces) list += (list.empty() ? "" : ", ") + f;
-        r.messages.push_back("Export incompleto: faltan " + std::to_string(missingFaces.size()) +
-                             " de las 6 caras del skybox (" + list +
-                             "); el juego exportado abortaria al cargarlo.");
+        r.messages.push_back("Export incomplete: missing " + std::to_string(missingFaces.size()) +
+                             " of the 6 skybox faces (" + list +
+                             "); the exported game would abort when loading it.");
         ok = false;
     }
 
@@ -725,8 +725,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         if (fs::exists(logo, lec) && !lec)
             ok = copyOne(logo, pkg / "splash.png") && ok;
         else
-            r.messages.push_back("Aviso: no se encontro " + logo.string() +
-                                 "; el juego exportado arrancara sin splash screen.");
+            r.messages.push_back("Warning: could not find " + logo.string() +
+                                 "; the exported game will start without a splash screen.");
     }
 
     // Mapa de acciones del panel Input Actions: Input lo lee como
@@ -740,8 +740,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         if (fs::exists(actions, aec) && !aec)
             ok = copyOne(actions, pkg / "input_actions.json") && ok;
         else
-            r.messages.push_back("Aviso: no se encontro " + actions.string() +
-                                 "; el juego exportado no tendra acciones de input definidas.");
+            r.messages.push_back("Warning: could not find " + actions.string() +
+                                 "; the exported game will have no input actions defined.");
     }
 
     // shaders/*.spv a la raíz del paquete: Renderer::createPipeline los abre
@@ -762,10 +762,10 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         }
         if (spvCopied == 0)
         {
-            r.messages.push_back("Export incompleto: no se copio ningun shader .spv desde " +
+            r.messages.push_back("Export incomplete: no .spv shader was copied from " +
                                  (projectRoot / "shaders").string() +
-                                 (dec ? " (" + dec.message() + ")" : " (carpeta vacia o sin .spv)") +
-                                 "; el juego exportado moriria al crear la pipeline.");
+                                 (dec ? " (" + dec.message() + ")" : " (folder empty or without .spv)") +
+                                 "; the exported game would die when creating the pipeline.");
             ok = false;
         }
     }
@@ -788,9 +788,9 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         }
         if (dxilCopied == 0 && backend == RenderBackend::D3D12)
         {
-            r.messages.push_back("Aviso: se eligio DirectX 12 pero no hay ningun shader .dxil en " +
+            r.messages.push_back("Warning: DirectX 12 was chosen but there is no .dxil shader in " +
                                  (projectRoot / "shaders").string() +
-                                 "; el juego exportado no podra usar ese backend.");
+                                 "; the exported game will not be able to use that backend.");
         }
     }
 
@@ -820,15 +820,15 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
             }
             else
             {
-                r.messages.push_back("No se pudo escribir " + cfgPath.string() +
-                                     "; el juego arrancara con Vulkan.");
+                r.messages.push_back("Could not write " + cfgPath.string() +
+                                     "; the game will start with Vulkan.");
                 ok = false;
             }
         }
         else
         {
-            r.messages.push_back("No se pudo crear " + cfgPath.string() +
-                                 "; el juego arrancara con Vulkan.");
+            r.messages.push_back("Could not create " + cfgPath.string() +
+                                 "; the game will start with Vulkan.");
             ok = false;
         }
     }
@@ -886,9 +886,9 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         {
             std::string lib = plat.audioLibPrefixes[0];
             if (!lib.empty() && lib.back() == '.') lib += "N";
-            r.messages.push_back("Aviso: no se encontro " + (projectRoot / lib).string() +
-                                 "; el motor se compilo con FMOD, asi que el juego exportado no "
-                                 "arrancara hasta que copies esa biblioteca junto al ejecutable.");
+            r.messages.push_back("Warning: could not find " + (projectRoot / lib).string() +
+                                 "; the engine was built with FMOD, so the exported game will not "
+                                 "start until you copy that library next to the executable.");
         }
     }
 #endif
@@ -933,13 +933,13 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
             else                                                  ok = false;
         }
         if (crtCopied == 0)
-            r.messages.push_back("Aviso: no se encontro ninguna DLL del CRT de MSVC "
-                                 "(VCRUNTIME140.dll, MSVCP140.dll...) junto al editor en " +
+            r.messages.push_back("Warning: no MSVC CRT DLL was found "
+                                 "(VCRUNTIME140.dll, MSVCP140.dll...) next to the editor in " +
                                  projectRoot.string() +
-                                 "; el juego exportado solo arrancara en maquinas que ya "
-                                 "tengan instalado el Visual C++ Redistributable. Vuelve a "
-                                 "configurar con configure-release.bat para que el build las "
-                                 "deje ahi.");
+                                 "; the exported game will only start on machines that already "
+                                 "have the Visual C++ Redistributable installed. Re-run "
+                                 "configure-release.bat so that the build leaves them "
+                                 "there.");
     }
 #endif
 
@@ -959,22 +959,22 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     // probar en local es legitimo y el resto del paquete es correcto.
 #ifndef NDEBUG
     if (plat.warnDebugCrt)
-    r.messages.push_back("Aviso: exportado en configuracion Debug. Este paquete solo arranca en "
-                         "maquinas con Visual Studio instalado, porque enlaza el CRT de "
-                         "depuracion de MSVC (ucrtbased.dll y companeros), que no es "
-                         "redistribuible. Para repartir el juego: configure-release.bat, "
-                         "build-release.bat, y exporta desde build-ninja-release.");
+    r.messages.push_back("Warning: exported in the Debug configuration. This package only starts on "
+                         "machines with Visual Studio installed, because it links MSVC's debug "
+                         "CRT (ucrtbased.dll and friends), which is not "
+                         "redistributable. To ship the game: configure-release.bat, "
+                         "build-release.bat, and export from build-ninja-release.");
 #endif
 
     // glibc no se puede empaquetar: el juego necesita la de esta maquina o una
     // mas nueva. libstdc++ si va dentro del runtime (runtime/CMakeLists.txt).
     if (plat.warnGlibc && !platform::libcVersion().empty())
-        r.messages.push_back("Aviso: el juego necesita glibc " + platform::libcVersion() +
-                             " o superior; no arrancara en distros mas antiguas que esta.");
+        r.messages.push_back("Warning: the game needs glibc " + platform::libcVersion() +
+                             " or newer; it will not start on distros older than this one.");
 
     if (!FileManager::writeJson((pkg / "game.scene").string(), rewrittenScene))
     {
-        r.messages.push_back("No se pudo escribir game.scene");
+        r.messages.push_back("Could not write game.scene");
         ok = false;
     }
     else
@@ -989,8 +989,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
 
     r.ok = ok;
     if (ok)
-        r.messages.push_back("Export completado en " + pkg.string() + ": " +
-                             std::to_string(r.fileCount) + " ficheros, " +
+        r.messages.push_back("Export completed in " + pkg.string() + ": " +
+                             std::to_string(r.fileCount) + " files, " +
                              std::to_string(r.totalBytes / 1024) + " KB");
     return r;
 }
@@ -1014,7 +1014,7 @@ ExportResult exportGame(Scene& scene,
     std::string nameError;
     if (!isValidExportGameName(gameName, nameError))
     {
-        r.messages.push_back("Export cancelado: nombre invalido (" + nameError + ")");
+        r.messages.push_back("Export cancelled: invalid name (" + nameError + ")");
         return r;
     }
 
@@ -1022,15 +1022,15 @@ ExportResult exportGame(Scene& scene,
     // usuario puede arreglarlo, y no en un .exe que abre una ventana negra.
     if (!scene.findCamera())
     {
-        r.messages.push_back("Export cancelado: la escena no tiene camara (Add > Camera en Properties)");
+        r.messages.push_back("Export cancelled: the scene has no camera (Add > Camera in Properties)");
         return r;
     }
 
     std::error_code ec;
     if (!fs::exists(runtimeExe, ec))
     {
-        r.messages.push_back("Export cancelado: falta " + runtimeExe.string() +
-                             ". Compila el target DonTopoRuntime.");
+        r.messages.push_back("Export cancelled: missing " + runtimeExe.string() +
+                             ". Build the DonTopoRuntime target.");
         return r;
     }
 
@@ -1041,8 +1041,8 @@ ExportResult exportGame(Scene& scene,
         if (!a.existsOnDisk) missing.push_back(a.sourcePath);
     if (!missing.empty())
     {
-        r.messages.push_back("Export cancelado: faltan en disco " +
-                             std::to_string(missing.size()) + " assets referenciados:");
+        r.messages.push_back("Export cancelled: missing on disk " +
+                             std::to_string(missing.size()) + " referenced assets:");
         for (const std::string& m : missing)
             r.messages.push_back("  " + m);
         return r;

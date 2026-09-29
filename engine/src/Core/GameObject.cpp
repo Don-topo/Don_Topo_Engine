@@ -147,10 +147,10 @@ namespace DonTopo
             // toca sin la otra, el aviso deja de describir lo que de verdad se
             // ignora, que es peor que no avisar.
             if (ov.index >= 0 && static_cast<size_t>(ov.index) < nMats) continue;
-            out.push_back("mesh de '" + go.name + "'.materials: index " +
-                          std::to_string(ov.index) + " fuera de rango (" +
-                          std::to_string(nMats) + " material(es) en el mesh), "
-                          "el override de ese slot se ignora");
+            out.push_back("mesh of '" + go.name + "'.materials: index " +
+                          std::to_string(ov.index) + " out of range (" +
+                          std::to_string(nMats) + " material(s) in the mesh), "
+                          "the override for that slot is ignored");
         }
         // Un .mat invalido no rompe la carga (se hereda todo en silencio en
         // applyMaterialOverrides, que no tiene canal de log y corre en cada
@@ -171,7 +171,7 @@ namespace DonTopo
             std::string warning;
             loadMaterialAsset(ov.matAsset, &warning);
             if (!warning.empty())
-                out.push_back("mesh de '" + go.name + "'.materials: " + marker + warning);
+                out.push_back("mesh of '" + go.name + "'.materials: " + marker + warning);
         }
     }
 

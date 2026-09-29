@@ -34,15 +34,15 @@ BackendSelection resolveRenderBackend(RenderBackend requested)
 
 #ifndef DT_D3D12_ENABLED
     sel.fellBack = true;
-    sel.message  = "DirectX 12: este build se compiló con DTE_ENABLE_D3D12=OFF. Se arranca con Vulkan.";
+    sel.message  = "DirectX 12: this build was compiled with DTE_ENABLE_D3D12=OFF. Starting with Vulkan.";
     return sel;
 #else
     const D3D12::SupportInfo support = D3D12::querySupport();
     if (!support.supported)
     {
         sel.fellBack = true;
-        sel.message  = "DirectX 12 no está disponible en esta máquina (" + support.error +
-                      "). Se arranca con Vulkan.";
+        sel.message  = "DirectX 12 is not available on this machine (" + support.error +
+                      "). Starting with Vulkan.";
         return sel;
     }
 
@@ -50,8 +50,8 @@ BackendSelection resolveRenderBackend(RenderBackend requested)
     // la advertencia de hasta dónde llega el backend hoy.
     sel.backend  = RenderBackend::D3D12;
     sel.fellBack = false;
-    sel.message  = "Backend DirectX 12 activo (" + support.adapterName +
-                  "). Corre el editor y el juego exportado.";
+    sel.message  = "DirectX 12 backend active (" + support.adapterName +
+                  "). It runs the editor and the exported game.";
     return sel;
 #endif
 }

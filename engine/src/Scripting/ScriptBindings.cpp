@@ -66,7 +66,7 @@ namespace DonTopo::ScriptBindings
         GameObject* deref(const LuaEntity& e)
         {
             if (!e.go || !e.mgr || !e.mgr->isAlive(e.go))
-                throw std::runtime_error("Entity destruida o inválida");
+                throw std::runtime_error("Entity destroyed or invalid");
             return e.go;
         }
 
@@ -93,7 +93,7 @@ namespace DonTopo::ScriptBindings
         {
             if (std::isfinite(v)) return true;
             mgr.log(std::string("[Lua][WARN] ") + metodo +
-                    ": valor no finito (NaN/Inf) ignorado, se conserva el anterior");
+                    ": non-finite value (NaN/Inf) ignored, the previous one is kept");
             return false;
         }
 
@@ -101,7 +101,7 @@ namespace DonTopo::ScriptBindings
         {
             if (std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z)) return true;
             mgr.log(std::string("[Lua][WARN] ") + metodo +
-                    ": vector con componente no finito (NaN/Inf) ignorado, se conserva el anterior");
+                    ": vector with a non-finite component (NaN/Inf) ignored, the previous one is kept");
             return false;
         }
 
@@ -117,8 +117,8 @@ namespace DonTopo::ScriptBindings
             if (!mode) return true;
             if (*mode >= 0 && *mode <= kForceModeMax) return true;
             mgr.log(std::string("[Lua][WARN] ") + metodo +
-                    ": ForceMode fuera de rango (" + std::to_string(*mode) +
-                    "), fuerza ignorada — usa la tabla ForceMode");
+                    ": ForceMode out of range (" + std::to_string(*mode) +
+                    "), force ignored; use the ForceMode table");
             return false;
         }
 
@@ -294,7 +294,7 @@ namespace DonTopo::ScriptBindings
             engine["loadScene"] = [&mgr](const std::string& path) -> bool {
                 if (path.empty())
                 {
-                    mgr.log("[Lua][ERROR] DonTopo.loadScene: ruta vacía");
+                    mgr.log("[Lua][ERROR] DonTopo.loadScene: empty path");
                     return false;
                 }
                 auto parsed = FileManager::readJson(path);
@@ -304,7 +304,7 @@ namespace DonTopo::ScriptBindings
                                    parsed->contains("root") && (*parsed)["root"].is_object();
                 if (!structureOk)
                 {
-                    mgr.log("[Lua][ERROR] DonTopo.loadScene: no se pudo leer la escena '" + path + "'");
+                    mgr.log("[Lua][ERROR] DonTopo.loadScene: could not read the scene '" + path + "'");
                     return false;
                 }
                 // Última petición del frame gana: se pisa la anterior sin avisar.
@@ -357,7 +357,7 @@ namespace DonTopo::ScriptBindings
 
             auto lightOf = [](const LuaLight& c) -> LightComponent* {
                 GameObject* go = deref(c.e);
-                if (!go->hasLight()) throw std::runtime_error("El GameObject ya no tiene Light");
+                if (!go->hasLight()) throw std::runtime_error("The GameObject no longer has a Light");
                 return go->getLight().get();
             };
             lua.new_usertype<LuaLight>("Light",
@@ -372,8 +372,8 @@ namespace DonTopo::ScriptBindings
                         if (v < static_cast<int>(LightType::Point) ||
                             v > static_cast<int>(LightType::Area))
                         {
-                            mgr.log("[Lua][WARN] Light.type: valor fuera de rango (" +
-                                    std::to_string(v) + "), usa la tabla LightType");
+                            mgr.log("[Lua][WARN] Light.type: value out of range (" +
+                                    std::to_string(v) + "), use the LightType table");
                             return;
                         }
                         l->setType(static_cast<LightType>(v));
@@ -432,7 +432,7 @@ namespace DonTopo::ScriptBindings
 
             auto camOf = [](const LuaCamera& c) -> CameraComponent* {
                 GameObject* go = deref(c.e);
-                if (!go->hasCameraComponent()) throw std::runtime_error("El GameObject ya no tiene Camera");
+                if (!go->hasCameraComponent()) throw std::runtime_error("The GameObject no longer has a Camera");
                 return go->getCameraComponent().get();
             };
             lua.new_usertype<LuaCamera>("Camera",
@@ -444,8 +444,8 @@ namespace DonTopo::ScriptBindings
                         if (v < static_cast<int>(CameraComponent::ProjectionMode::Perspective) ||
                             v > static_cast<int>(CameraComponent::ProjectionMode::Orthographic))
                         {
-                            mgr.log("[Lua][WARN] Camera.mode: valor fuera de rango (" +
-                                    std::to_string(v) + "), usa la tabla CameraProjection");
+                            mgr.log("[Lua][WARN] Camera.mode: value out of range (" +
+                                    std::to_string(v) + "), use the CameraProjection table");
                             return;
                         }
                         cam->setMode(static_cast<CameraComponent::ProjectionMode>(v));
@@ -502,8 +502,8 @@ namespace DonTopo::ScriptBindings
                 for (const std::string& d : Input::takeActionDiagnostics())
                     mgr.log("[Lua][WARN] " + d);
                 if (!ok && warned->insert(name).second)
-                    mgr.log("[Lua][WARN] Input: no existe la accion '" + name +
-                            "' (definela en el panel Input Actions)");
+                    mgr.log("[Lua][WARN] Input: there is no action '" + name +
+                            "' (define it in the Input Actions panel)");
                 return ok;
             };
             input["IsActionDown"]     = [known](const std::string& n) { return known(n) && Input::isActionDown(n); };
@@ -666,15 +666,15 @@ namespace DonTopo::ScriptBindings
                     const glm::vec3 dir = target - worldPos;
                     if (glm::length(dir) <= 1e-6f || glm::length(upVec) <= 1e-6f)
                     {
-                        mgr.log("[Lua][WARN] Transform.LookAt: objetivo en la propia posicion "
-                                "o 'up' nulo, rotacion sin cambios");
+                        mgr.log("[Lua][WARN] Transform.LookAt: target at its own position "
+                                "or null 'up', rotation unchanged");
                         return;
                     }
                     const glm::vec3 fwd = glm::normalize(dir);
                     if (std::abs(glm::dot(fwd, glm::normalize(upVec))) > 0.9999f)
                     {
-                        mgr.log("[Lua][WARN] Transform.LookAt: 'up' paralelo a la direccion de "
-                                "vista, rotacion sin cambios");
+                        mgr.log("[Lua][WARN] Transform.LookAt: 'up' parallel to the view "
+                                "direction, rotation unchanged");
                         return;
                     }
                     // lookAt devuelve una VIEW (mundo -> cámara); la pose del
@@ -727,7 +727,7 @@ namespace DonTopo::ScriptBindings
         void requireLayer(const char* what, int layer)
         {
             if (!DonTopo::PhysicsManager::isValidLayer(layer))
-                throw std::runtime_error(std::string(what) + ": capa fuera de rango (0-" +
+                throw std::runtime_error(std::string(what) + ": layer out of range (0-" +
                                          std::to_string(DonTopo::PhysicsManager::kLayerCount - 1) +
                                          "): " + std::to_string(layer));
         }
@@ -739,23 +739,23 @@ namespace DonTopo::ScriptBindings
                 sol::no_constructor,
                 "GetHalfExtents", [](const LuaBoxCollider& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                    if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                     return go->getBoxCollider()->getHalfExtents();
                 },
                 "SetHalfExtents", [&mgr](const LuaBoxCollider& c, const glm::vec3& he) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                    if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                     if (!ensureFinite(mgr, "BoxCollider.SetHalfExtents", he)) return;
                     go->getBoxCollider()->setHalfExtents(he);
                 },
                 "GetCenter", [](const LuaBoxCollider& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                    if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                     return go->getBoxCollider()->getCenter();
                 },
                 "SetCenter", [&mgr](const LuaBoxCollider& c, const glm::vec3& ctr) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                    if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                     if (!ensureFinite(mgr, "BoxCollider.SetCenter", ctr)) return;
                     go->getBoxCollider()->setCenter(ctr);
                 },
@@ -765,36 +765,36 @@ namespace DonTopo::ScriptBindings
                 "staticFriction", sol::property(
                     [](const LuaBoxCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                         return go->getBoxCollider()->getStaticFriction();
                     },
                     [&mgr](const LuaBoxCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                         if (!ensureFinite(mgr, "BoxCollider.staticFriction", v)) return;
                         go->getBoxCollider()->setFriction(v, go->getBoxCollider()->getDynamicFriction());
                     }),
                 "dynamicFriction", sol::property(
                     [](const LuaBoxCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                         return go->getBoxCollider()->getDynamicFriction();
                     },
                     [&mgr](const LuaBoxCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                         if (!ensureFinite(mgr, "BoxCollider.dynamicFriction", v)) return;
                         go->getBoxCollider()->setFriction(go->getBoxCollider()->getStaticFriction(), v);
                     }),
                 "bounciness", sol::property(
                     [](const LuaBoxCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                         return go->getBoxCollider()->getBounciness();
                     },
                     [&mgr](const LuaBoxCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                         if (!ensureFinite(mgr, "BoxCollider.bounciness", v)) return;
                         go->getBoxCollider()->setBounciness(v);
                     }),
@@ -804,12 +804,12 @@ namespace DonTopo::ScriptBindings
                 "layer", sol::property(
                     [](const LuaBoxCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                         return go->getBoxCollider()->getLayer();
                     },
                     [](const LuaBoxCollider& c, int v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                         requireLayer("BoxCollider.layer", v);
                         go->getBoxCollider()->setLayer(v);
                     }),
@@ -821,12 +821,12 @@ namespace DonTopo::ScriptBindings
                 "isTrigger", sol::property(
                     [](const LuaBoxCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                         return go->getBoxCollider()->isTrigger();
                     },
                     [&mgr](const LuaBoxCollider& c, bool v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!go->hasBoxCollider()) throw std::runtime_error("The GameObject no longer has a Box Collider");
                         PhysicsManager* pm = mgr.physics();
                         if (!pm) return;
                         pm->setTrigger(go->getBoxCollider(), v);
@@ -836,23 +836,23 @@ namespace DonTopo::ScriptBindings
                 sol::no_constructor,
                 "GetRadius", [](const LuaSphereCollider& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                    if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                     return go->getSphereCollider()->getRadius();
                 },
                 "SetRadius", [&mgr](const LuaSphereCollider& c, float r) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                    if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                     if (!ensureFinite(mgr, "SphereCollider.SetRadius", r)) return;
                     go->getSphereCollider()->setRadius(r);
                 },
                 "GetCenter", [](const LuaSphereCollider& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                    if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                     return go->getSphereCollider()->getCenter();
                 },
                 "SetCenter", [&mgr](const LuaSphereCollider& c, const glm::vec3& ctr) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                    if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                     if (!ensureFinite(mgr, "SphereCollider.SetCenter", ctr)) return;
                     go->getSphereCollider()->setCenter(ctr);
                 },
@@ -860,36 +860,36 @@ namespace DonTopo::ScriptBindings
                 "staticFriction", sol::property(
                     [](const LuaSphereCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                         return go->getSphereCollider()->getStaticFriction();
                     },
                     [&mgr](const LuaSphereCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                         if (!ensureFinite(mgr, "SphereCollider.staticFriction", v)) return;
                         go->getSphereCollider()->setFriction(v, go->getSphereCollider()->getDynamicFriction());
                     }),
                 "dynamicFriction", sol::property(
                     [](const LuaSphereCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                         return go->getSphereCollider()->getDynamicFriction();
                     },
                     [&mgr](const LuaSphereCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                         if (!ensureFinite(mgr, "SphereCollider.dynamicFriction", v)) return;
                         go->getSphereCollider()->setFriction(go->getSphereCollider()->getStaticFriction(), v);
                     }),
                 "bounciness", sol::property(
                     [](const LuaSphereCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                         return go->getSphereCollider()->getBounciness();
                     },
                     [&mgr](const LuaSphereCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                         if (!ensureFinite(mgr, "SphereCollider.bounciness", v)) return;
                         go->getSphereCollider()->setBounciness(v);
                     }),
@@ -897,12 +897,12 @@ namespace DonTopo::ScriptBindings
                 "layer", sol::property(
                     [](const LuaSphereCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                         return go->getSphereCollider()->getLayer();
                     },
                     [](const LuaSphereCollider& c, int v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                         requireLayer("SphereCollider.layer", v);
                         go->getSphereCollider()->setLayer(v);
                     }),
@@ -910,12 +910,12 @@ namespace DonTopo::ScriptBindings
                 "isTrigger", sol::property(
                     [](const LuaSphereCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                         return go->getSphereCollider()->isTrigger();
                     },
                     [&mgr](const LuaSphereCollider& c, bool v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!go->hasSphereCollider()) throw std::runtime_error("The GameObject no longer has a Sphere Collider");
                         PhysicsManager* pm = mgr.physics();
                         if (!pm) return;
                         pm->setTrigger(go->getSphereCollider(), v);
@@ -925,34 +925,34 @@ namespace DonTopo::ScriptBindings
                 sol::no_constructor,
                 "GetRadius", [](const LuaCapsuleCollider& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                    if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                     return go->getCapsuleCollider()->getRadius();
                 },
                 "SetRadius", [&mgr](const LuaCapsuleCollider& c, float r) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                    if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                     if (!ensureFinite(mgr, "CapsuleCollider.SetRadius", r)) return;
                     go->getCapsuleCollider()->setRadius(r);
                 },
                 "GetHalfHeight", [](const LuaCapsuleCollider& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                    if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                     return go->getCapsuleCollider()->getHalfHeight();
                 },
                 "SetHalfHeight", [&mgr](const LuaCapsuleCollider& c, float h) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                    if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                     if (!ensureFinite(mgr, "CapsuleCollider.SetHalfHeight", h)) return;
                     go->getCapsuleCollider()->setHalfHeight(h);
                 },
                 "GetCenter", [](const LuaCapsuleCollider& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                    if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                     return go->getCapsuleCollider()->getCenter();
                 },
                 "SetCenter", [&mgr](const LuaCapsuleCollider& c, const glm::vec3& ctr) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                    if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                     if (!ensureFinite(mgr, "CapsuleCollider.SetCenter", ctr)) return;
                     go->getCapsuleCollider()->setCenter(ctr);
                 },
@@ -960,36 +960,36 @@ namespace DonTopo::ScriptBindings
                 "staticFriction", sol::property(
                     [](const LuaCapsuleCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                         return go->getCapsuleCollider()->getStaticFriction();
                     },
                     [&mgr](const LuaCapsuleCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                         if (!ensureFinite(mgr, "CapsuleCollider.staticFriction", v)) return;
                         go->getCapsuleCollider()->setFriction(v, go->getCapsuleCollider()->getDynamicFriction());
                     }),
                 "dynamicFriction", sol::property(
                     [](const LuaCapsuleCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                         return go->getCapsuleCollider()->getDynamicFriction();
                     },
                     [&mgr](const LuaCapsuleCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                         if (!ensureFinite(mgr, "CapsuleCollider.dynamicFriction", v)) return;
                         go->getCapsuleCollider()->setFriction(go->getCapsuleCollider()->getStaticFriction(), v);
                     }),
                 "bounciness", sol::property(
                     [](const LuaCapsuleCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                         return go->getCapsuleCollider()->getBounciness();
                     },
                     [&mgr](const LuaCapsuleCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                         if (!ensureFinite(mgr, "CapsuleCollider.bounciness", v)) return;
                         go->getCapsuleCollider()->setBounciness(v);
                     }),
@@ -997,12 +997,12 @@ namespace DonTopo::ScriptBindings
                 "layer", sol::property(
                     [](const LuaCapsuleCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                         return go->getCapsuleCollider()->getLayer();
                     },
                     [](const LuaCapsuleCollider& c, int v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                         requireLayer("CapsuleCollider.layer", v);
                         go->getCapsuleCollider()->setLayer(v);
                     }),
@@ -1010,12 +1010,12 @@ namespace DonTopo::ScriptBindings
                 "isTrigger", sol::property(
                     [](const LuaCapsuleCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                         return go->getCapsuleCollider()->isTrigger();
                     },
                     [&mgr](const LuaCapsuleCollider& c, bool v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("The GameObject no longer has a Capsule Collider");
                         PhysicsManager* pm = mgr.physics();
                         if (!pm) return;
                         pm->setTrigger(go->getCapsuleCollider(), v);
@@ -1025,12 +1025,12 @@ namespace DonTopo::ScriptBindings
                 sol::no_constructor,
                 "GetCenter", [](const LuaPlaneCollider& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                    if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                     return go->getPlaneCollider()->getCenter();
                 },
                 "SetCenter", [&mgr](const LuaPlaneCollider& c, const glm::vec3& ctr) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                    if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                     if (!ensureFinite(mgr, "PlaneCollider.SetCenter", ctr)) return;
                     go->getPlaneCollider()->setCenter(ctr);
                 },
@@ -1038,36 +1038,36 @@ namespace DonTopo::ScriptBindings
                 "staticFriction", sol::property(
                     [](const LuaPlaneCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                         return go->getPlaneCollider()->getStaticFriction();
                     },
                     [&mgr](const LuaPlaneCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                         if (!ensureFinite(mgr, "PlaneCollider.staticFriction", v)) return;
                         go->getPlaneCollider()->setFriction(v, go->getPlaneCollider()->getDynamicFriction());
                     }),
                 "dynamicFriction", sol::property(
                     [](const LuaPlaneCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                         return go->getPlaneCollider()->getDynamicFriction();
                     },
                     [&mgr](const LuaPlaneCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                         if (!ensureFinite(mgr, "PlaneCollider.dynamicFriction", v)) return;
                         go->getPlaneCollider()->setFriction(go->getPlaneCollider()->getStaticFriction(), v);
                     }),
                 "bounciness", sol::property(
                     [](const LuaPlaneCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                         return go->getPlaneCollider()->getBounciness();
                     },
                     [&mgr](const LuaPlaneCollider& c, float v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                         if (!ensureFinite(mgr, "PlaneCollider.bounciness", v)) return;
                         go->getPlaneCollider()->setBounciness(v);
                     }),
@@ -1075,12 +1075,12 @@ namespace DonTopo::ScriptBindings
                 "layer", sol::property(
                     [](const LuaPlaneCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                         return go->getPlaneCollider()->getLayer();
                     },
                     [](const LuaPlaneCollider& c, int v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                         requireLayer("PlaneCollider.layer", v);
                         go->getPlaneCollider()->setLayer(v);
                     }),
@@ -1088,12 +1088,12 @@ namespace DonTopo::ScriptBindings
                 "isTrigger", sol::property(
                     [](const LuaPlaneCollider& c) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                         return go->getPlaneCollider()->isTrigger();
                     },
                     [&mgr](const LuaPlaneCollider& c, bool v) {
                         GameObject* go = deref(c.e);
-                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("The GameObject no longer has a Plane Collider");
                         PhysicsManager* pm = mgr.physics();
                         if (!pm) return;
                         pm->setTrigger(go->getPlaneCollider(), v);
@@ -1103,12 +1103,12 @@ namespace DonTopo::ScriptBindings
                 sol::no_constructor,
                 "Play", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
                 },
                 "Stop", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     go->getAudioClip()->stop();
                 },
                 // Se SOLAPA con lo que ya suene, al revés que Play, que corta la
@@ -1118,39 +1118,39 @@ namespace DonTopo::ScriptBindings
                 // sigue al objeto. Para clips cortos, nunca para loops.
                 "PlayOneShot", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     go->getAudioClip()->playOneShot(glm::vec3(go->worldTransform[3]));
                 },
                 "SetLoop", [](const LuaAudioClip& c, bool l) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     go->getAudioClip()->setLoop(l);
                 },
                 "GetLoop", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getLoop();
                 },
                 "SetVolume", [&mgr](const LuaAudioClip& c, float v) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     if (!ensureFinite(mgr, "AudioClip.SetVolume", v)) return;
                     go->getAudioClip()->setVolume(v);
                 },
                 "GetVolume", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getVolume();
                 },
                 "SetPitch", [&mgr](const LuaAudioClip& c, float p) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     if (!ensureFinite(mgr, "AudioClip.SetPitch", p)) return;
                     go->getAudioClip()->setPitch(p);
                 },
                 "GetPitch", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getPitch();
                 },
                 // Ojo: setIs3D RECARGA el sonido (unloadSound + loadSound
@@ -1159,12 +1159,12 @@ namespace DonTopo::ScriptBindings
                 // frame — al revés que SetVolume/SetPitch.
                 "SetIs3D", [](const LuaAudioClip& c, bool b) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     go->getAudioClip()->setIs3D(b);
                 },
                 "GetIs3D", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getIs3D();
                 },
                 // Distancias de atenuación 3D. Estaban en el componente y en el
@@ -1174,34 +1174,34 @@ namespace DonTopo::ScriptBindings
                 // invariante min <= max los impone el componente.
                 "SetMinDistance", [&mgr](const LuaAudioClip& c, float d) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     if (!ensureFinite(mgr, "AudioClip.SetMinDistance", d)) return;
                     go->getAudioClip()->setMinDistance(d);
                 },
                 "GetMinDistance", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getMinDistance();
                 },
                 "SetMaxDistance", [&mgr](const LuaAudioClip& c, float d) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     if (!ensureFinite(mgr, "AudioClip.SetMaxDistance", d)) return;
                     go->getAudioClip()->setMaxDistance(d);
                 },
                 "GetMaxDistance", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getMaxDistance();
                 },
                 "SetPlayOnAwake", [](const LuaAudioClip& c, bool b) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     go->getAudioClip()->setPlayOnAwake(b);
                 },
                 "GetPlayOnAwake", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getPlayOnAwake();
                 },
                 // Bus por NOMBRE ("master"/"music"/"sfx"), no por índice: es lo
@@ -1210,19 +1210,19 @@ namespace DonTopo::ScriptBindings
                 // cambia nada, en vez de caer a un bus arbitrario.
                 "SetBus", [&mgr](const LuaAudioClip& c, const std::string& name) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     AudioBus bus;
                     if (!audioBusFromStr(name, bus))
                     {
-                        mgr.log("[Lua][WARN] AudioClip.SetBus: bus desconocido '" + name +
-                                 "' (usa 'master', 'music' o 'sfx'), se conserva el anterior");
+                        mgr.log("[Lua][WARN] AudioClip.SetBus: unknown bus '" + name +
+                                 "' (use 'master', 'music' or 'sfx'), the previous one is kept");
                         return;
                     }
                     go->getAudioClip()->setBus(bus);
                 },
                 "GetBus", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return std::string(audioBusToStr(go->getAudioClip()->getBus()));
                 },
                 // Modo de carga por nombre ("sample"/"stream"), como el bus.
@@ -1230,38 +1230,38 @@ namespace DonTopo::ScriptBindings
                 // de arranque, no algo de llamar por frame.
                 "SetLoadMode", [&mgr](const LuaAudioClip& c, const std::string& name) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     AudioLoadMode mode;
                     if (!audioLoadModeFromStr(name, mode))
                     {
-                        mgr.log("[Lua][WARN] AudioClip.SetLoadMode: modo desconocido '" + name +
-                                 "' (usa 'sample' o 'stream'), se conserva el anterior");
+                        mgr.log("[Lua][WARN] AudioClip.SetLoadMode: unknown mode '" + name +
+                                 "' (use 'sample' or 'stream'), the previous one is kept");
                         return;
                     }
                     go->getAudioClip()->setLoadMode(mode);
                 },
                 "GetLoadMode", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return std::string(audioLoadModeToStr(go->getAudioClip()->getLoadMode()));
                 },
                 // Curva de atenuacion por nombre. Como SetLoadMode, RECARGA el
                 // sonido: es configuracion, no algo de tocar por frame.
                 "SetRolloff", [&mgr](const LuaAudioClip& c, const std::string& name) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     AudioRolloff r;
                     if (!audioRolloffFromStr(name, r))
                     {
-                        mgr.log("[Lua][WARN] AudioClip.SetRolloff: curva desconocida '" + name +
-                                 "' (usa 'inverse', 'linear' o 'linearSquare'), se conserva la anterior");
+                        mgr.log("[Lua][WARN] AudioClip.SetRolloff: unknown curve '" + name +
+                                 "' (use 'inverse', 'linear' or 'linearSquare'), the previous one is kept");
                         return;
                     }
                     go->getAudioClip()->setRolloff(r);
                 },
                 "GetRolloff", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return std::string(audioRolloffToStr(go->getAudioClip()->getRolloff()));
                 },
                 // Las tres de la voz: no recargan, pero se leen al arrancar la
@@ -1269,47 +1269,47 @@ namespace DonTopo::ScriptBindings
                 // hasta el siguiente Play.
                 "SetSpread", [&mgr](const LuaAudioClip& c, float d) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     if (!ensureFinite(mgr, "AudioClip.SetSpread", d)) return;
                     go->getAudioClip()->setSpread(d);
                 },
                 "GetSpread", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getSpread();
                 },
                 "SetStereoPan", [&mgr](const LuaAudioClip& c, float p) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     if (!ensureFinite(mgr, "AudioClip.SetStereoPan", p)) return;
                     go->getAudioClip()->setStereoPan(p);
                 },
                 "GetStereoPan", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getStereoPan();
                 },
                 "SetDopplerLevel", [&mgr](const LuaAudioClip& c, float l) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     if (!ensureFinite(mgr, "AudioClip.SetDopplerLevel", l)) return;
                     go->getAudioClip()->setDopplerLevel(l);
                 },
                 "GetDopplerLevel", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getDopplerLevel();
                 },
                 // Mute: silencio sin perder el volumen. A diferencia de Pause,
                 // esto SI se serializa — un objeto puede nacer mudo.
                 "SetMute", [](const LuaAudioClip& c, bool m) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     go->getAudioClip()->setMute(m);
                 },
                 "GetMute", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getMute();
                 },
                 // Posicion de reproduccion en segundos. GetTime devuelve -1 si
@@ -1317,18 +1317,18 @@ namespace DonTopo::ScriptBindings
                 // una respuesta distinta.
                 "GetTime", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getTime();
                 },
                 "SetTime", [&mgr](const LuaAudioClip& c, float t) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     if (!ensureFinite(mgr, "AudioClip.SetTime", t)) return;
                     go->getAudioClip()->setTime(t);
                 },
                 "GetPath", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getPath();
                 },
                 // Estado de la VOZ, no del componente. IsPlaying sigue el
@@ -1337,23 +1337,23 @@ namespace DonTopo::ScriptBindings
                 // no tenía forma de esperar a que un sonido terminara.
                 "IsPlaying", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->isPlaying();
                 },
                 "IsPaused", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->isPaused();
                 },
                 // Pause conserva la posición de reproducción; Stop la tira.
                 "Pause", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     go->getAudioClip()->pause();
                 },
                 "Resume", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
-                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     go->getAudioClip()->resume();
                 });
 
@@ -1369,7 +1369,7 @@ namespace DonTopo::ScriptBindings
                 RB_FreezeRotationX | RB_FreezeRotationY | RB_FreezeRotationZ;
             auto rbOf = [](const LuaRigidbody& c) -> Rigidbody* {
                 GameObject* go = deref(c.e);
-                if (!go->hasRigidbody()) throw std::runtime_error("El GameObject ya no tiene Rigidbody");
+                if (!go->hasRigidbody()) throw std::runtime_error("The GameObject no longer has a Rigidbody");
                 return go->getRigidbody().get();
             };
             lua.new_usertype<LuaRigidbody>("Rigidbody",
@@ -1485,7 +1485,7 @@ namespace DonTopo::ScriptBindings
             // declaran en el grafo y se consultan por nombre, no son campos.
             auto animOf = [](const LuaAnimator& c) -> AnimatorComponent* {
                 GameObject* go = deref(c.e);
-                if (!go->hasAnimator()) throw std::runtime_error("El GameObject ya no tiene Animator");
+                if (!go->hasAnimator()) throw std::runtime_error("The GameObject no longer has an Animator");
                 return go->getAnimator().get();
             };
             // Capa opcional de las llamadas por capa: sin argumento, la base.
@@ -1507,9 +1507,9 @@ namespace DonTopo::ScriptBindings
                 "Play", [animOf, capaDe, &mgr](const LuaAnimator& c, const std::string& estado, sol::optional<int> capa) {
                     AnimatorComponent* anim = animOf(c);
                     const int li = capaDe(anim, capa);
-                    if (li < 0) { mgr.log("[Lua][WARN] Animator.Play: no hay capa " + std::to_string(capa.value_or(0))); return false; }
+                    if (li < 0) { mgr.log("[Lua][WARN] Animator.Play: there is no layer " + std::to_string(capa.value_or(0))); return false; }
                     const bool ok = anim->play(estado, li);
-                    if (!ok) mgr.log("[Lua][WARN] Animator.Play: no hay ningún estado '" + estado + "'");
+                    if (!ok) mgr.log("[Lua][WARN] Animator.Play: there is no state '" + estado + "'");
                     return ok;
                 },
                 "CrossFade", [animOf, capaDe, &mgr](const LuaAnimator& c, const std::string& estado, float segundos,
@@ -1517,9 +1517,9 @@ namespace DonTopo::ScriptBindings
                     AnimatorComponent* anim = animOf(c);
                     if (!ensureFinite(mgr, "Animator.CrossFade", segundos)) return false;
                     const int li = capaDe(anim, capa);
-                    if (li < 0) { mgr.log("[Lua][WARN] Animator.CrossFade: no hay capa " + std::to_string(capa.value_or(0))); return false; }
+                    if (li < 0) { mgr.log("[Lua][WARN] Animator.CrossFade: there is no layer " + std::to_string(capa.value_or(0))); return false; }
                     const bool ok = anim->crossFade(estado, segundos, li);
-                    if (!ok) mgr.log("[Lua][WARN] Animator.CrossFade: no hay ningún estado '" + estado + "'");
+                    if (!ok) mgr.log("[Lua][WARN] Animator.CrossFade: there is no state '" + estado + "'");
                     return ok;
                 },
                 "GetNormalizedTime", [animOf, capaDe](const LuaAnimator& c, sol::optional<int> capa) {
@@ -1615,85 +1615,85 @@ namespace DonTopo::ScriptBindings
         CanvasComponent* canvasOf(const LuaCanvas& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasCanvas()) throw std::runtime_error("El GameObject ya no tiene Canvas");
+            if (!go->hasCanvas()) throw std::runtime_error("The GameObject no longer has a Canvas");
             return go->getCanvas().get();
         }
         ButtonComponent* buttonOf(const LuaButton& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasButton()) throw std::runtime_error("El GameObject ya no tiene Button");
+            if (!go->hasButton()) throw std::runtime_error("The GameObject no longer has a Button");
             return go->getButton().get();
         }
         TextComponent* textOf(const LuaText& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasText()) throw std::runtime_error("El GameObject ya no tiene Text");
+            if (!go->hasText()) throw std::runtime_error("The GameObject no longer has a Text");
             return go->getText().get();
         }
         ProgressBarComponent* barOf(const LuaProgressBar& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasProgressBar()) throw std::runtime_error("El GameObject ya no tiene ProgressBar");
+            if (!go->hasProgressBar()) throw std::runtime_error("The GameObject no longer has a ProgressBar");
             return go->getProgressBar().get();
         }
         LayoutComponent* layoutOf(const LuaLayout& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasLayout()) throw std::runtime_error("El GameObject ya no tiene Layout");
+            if (!go->hasLayout()) throw std::runtime_error("The GameObject no longer has a Layout");
             return go->getLayout().get();
         }
         PanelComponent* panelOf(const LuaPanel& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasPanel()) throw std::runtime_error("El GameObject ya no tiene Panel");
+            if (!go->hasPanel()) throw std::runtime_error("The GameObject no longer has a Panel");
             return go->getPanel().get();
         }
         ImageComponent* imageOf(const LuaImage& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasImage()) throw std::runtime_error("El GameObject ya no tiene Image");
+            if (!go->hasImage()) throw std::runtime_error("The GameObject no longer has an Image");
             return go->getImage().get();
         }
         SliderComponent* sliderOf(const LuaSlider& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasSlider()) throw std::runtime_error("El GameObject ya no tiene Slider");
+            if (!go->hasSlider()) throw std::runtime_error("The GameObject no longer has a Slider");
             return go->getSlider().get();
         }
         CheckboxComponent* checkboxOf(const LuaCheckbox& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasCheckbox()) throw std::runtime_error("El GameObject ya no tiene Checkbox");
+            if (!go->hasCheckbox()) throw std::runtime_error("The GameObject no longer has a Checkbox");
             return go->getCheckbox().get();
         }
         ToggleComponent* toggleOf(const LuaToggle& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasToggle()) throw std::runtime_error("El GameObject ya no tiene Toggle");
+            if (!go->hasToggle()) throw std::runtime_error("The GameObject no longer has a Toggle");
             return go->getToggle().get();
         }
         ScrollbarComponent* scrollbarOf(const LuaScrollbar& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasScrollbar()) throw std::runtime_error("El GameObject ya no tiene Scrollbar");
+            if (!go->hasScrollbar()) throw std::runtime_error("The GameObject no longer has a Scrollbar");
             return go->getScrollbar().get();
         }
         InputFieldComponent* inputFieldOf(const LuaInputField& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasInputField()) throw std::runtime_error("El GameObject ya no tiene InputField");
+            if (!go->hasInputField()) throw std::runtime_error("The GameObject no longer has an InputField");
             return go->getInputField().get();
         }
         DropdownComponent* dropdownOf(const LuaDropdown& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasDropdown()) throw std::runtime_error("El GameObject ya no tiene Dropdown");
+            if (!go->hasDropdown()) throw std::runtime_error("The GameObject no longer has a Dropdown");
             return go->getDropdown().get();
         }
         ScrollViewComponent* scrollViewOf(const LuaScrollView& c)
         {
             GameObject* go = deref(c.e);
-            if (!go->hasScrollView()) throw std::runtime_error("El GameObject ya no tiene ScrollView");
+            if (!go->hasScrollView()) throw std::runtime_error("The GameObject no longer has a ScrollView");
             return go->getScrollView().get();
         }
 
@@ -2556,8 +2556,8 @@ namespace DonTopo::ScriptBindings
 
                     if (!mgr.scene()->reparent(go, newParent))
                     {
-                        mgr.log("[Lua][WARN] Entity:SetParent: destino invalido "
-                                "(la raiz, o un descendiente del propio objeto)");
+                        mgr.log("[Lua][WARN] Entity:SetParent: invalid target "
+                                "(the root, or a descendant of the object itself)");
                         return false;
                     }
 
@@ -2578,8 +2578,8 @@ namespace DonTopo::ScriptBindings
                         if (finito)
                             go->localTransform = nuevoLocal;
                         else
-                            mgr.log("[Lua][WARN] Entity:SetParent: el padre tiene una "
-                                    "transformada degenerada, se conserva la pose local");
+                            mgr.log("[Lua][WARN] Entity:SetParent: the parent has a "
+                                    "degenerate transform, the local pose is kept");
                     }
 
                     // Los world del subárbol se recalculan ya, no el frame que
@@ -2868,8 +2868,8 @@ namespace DonTopo::ScriptBindings
                                        [](unsigned char ch) { return (char)std::tolower(ch); });
                         if (!isSupportedAudioExtension(ext))
                         {
-                            mgr->log("[Lua][WARN] AddComponent(\"AudioClip\"): formato no soportado '" +
-                                      ext + "' (usa .wav, .mp3, .ogg o .flac)");
+                            mgr->log("[Lua][WARN] AddComponent(\"AudioClip\"): unsupported format '" +
+                                      ext + "' (use .wav, .mp3, .ogg or .flac)");
                             return sol::nil;
                         }
                         auto clip = mgr->audioManager()->createAudioClipComponent(*arg, false, false);
@@ -3119,7 +3119,7 @@ namespace DonTopo::ScriptBindings
             if (!queryGiven(oOpts)) return true;
             if (oOpts.get_type() != sol::type::table)
             {
-                warn("options tiene que ser una tabla");
+                warn("options must be a table");
                 return false;
             }
             sol::table opts = oOpts.as<sol::table>();
@@ -3129,7 +3129,7 @@ namespace DonTopo::ScriptBindings
                 if (!queryGiven(v)) return true;
                 if (v.get_type() != sol::type::boolean)
                 {
-                    warn(std::string(key) + " tiene que ser booleano");
+                    warn(std::string(key) + " must be a boolean");
                     return false;
                 }
                 dst = v.as<bool>();
@@ -3144,13 +3144,13 @@ namespace DonTopo::ScriptBindings
             {
                 if (!oIgnore.is<LuaEntity>())
                 {
-                    warn("ignore tiene que ser una Entity");
+                    warn("ignore must be an Entity");
                     return false;
                 }
                 const LuaEntity e = oIgnore.as<LuaEntity>();
                 if (!e.go || !e.mgr || !e.mgr->isAlive(e.go))
                 {
-                    warn("ignore apunta a una Entity destruida");
+                    warn("ignore points to a destroyed Entity");
                     return false;
                 }
                 out.ignore = e.go;
@@ -3172,7 +3172,7 @@ namespace DonTopo::ScriptBindings
             const sol::object oDir    = argAt(1);
             if (!oOrigin.is<glm::vec3>() || !oDir.is<glm::vec3>())
             {
-                warn("origin y direction tienen que ser Vec3");
+                warn("origin and direction must be Vec3");
                 return false;
             }
             out.origin = oOrigin.as<glm::vec3>();
@@ -3183,7 +3183,7 @@ namespace DonTopo::ScriptBindings
             {
                 if (oMax.get_type() != sol::type::number)
                 {
-                    warn("maxDistance tiene que ser un numero");
+                    warn("maxDistance must be a number");
                     return false;
                 }
                 // Ausente o <= 0 -> se queda el default de 1000.
@@ -3298,7 +3298,7 @@ namespace DonTopo::ScriptBindings
             const sol::object oDir    = queryArgAt(va, 1);
             if (!oOrigin.is<glm::vec3>() || !oDir.is<glm::vec3>())
             {
-                warn("origin y direction tienen que ser Vec3");
+                warn("origin and direction must be Vec3");
                 return false;
             }
             out.origin = oOrigin.as<glm::vec3>();
@@ -3309,7 +3309,7 @@ namespace DonTopo::ScriptBindings
             const sol::object oRadius = queryArgAt(va, 2);
             if (!queryGiven(oRadius) || oRadius.get_type() != sol::type::number)
             {
-                warn("radius tiene que ser un numero");
+                warn("radius must be a number");
                 return false;
             }
             // PxSphereGeometry con radio <= 0 (o NaN) es geometría inválida:
@@ -3317,7 +3317,7 @@ namespace DonTopo::ScriptBindings
             const float r = oRadius.as<float>();
             if (!std::isfinite(r) || r <= 0.0f)
             {
-                warn("radius tiene que ser mayor que 0");
+                warn("radius must be greater than 0");
                 return false;
             }
             radius = r;
@@ -3327,7 +3327,7 @@ namespace DonTopo::ScriptBindings
             {
                 if (oMax.get_type() != sol::type::number)
                 {
-                    warn("maxDistance tiene que ser un numero");
+                    warn("maxDistance must be a number");
                     return false;
                 }
                 const float m = oMax.as<float>();
@@ -3389,7 +3389,7 @@ namespace DonTopo::ScriptBindings
             const sol::object oCenter = queryArgAt(va, 0);
             if (!oCenter.is<glm::vec3>())
             {
-                warn("center tiene que ser un Vec3");
+                warn("center must be a Vec3");
                 return false;
             }
             center = oCenter.as<glm::vec3>();
@@ -3397,13 +3397,13 @@ namespace DonTopo::ScriptBindings
             const sol::object oRadius = queryArgAt(va, 1);
             if (!queryGiven(oRadius) || oRadius.get_type() != sol::type::number)
             {
-                warn("radius tiene que ser un numero");
+                warn("radius must be a number");
                 return false;
             }
             const float r = oRadius.as<float>();
             if (!std::isfinite(r) || r <= 0.0f)
             {
-                warn("radius tiene que ser mayor que 0");
+                warn("radius must be greater than 0");
                 return false;
             }
             radius = r;
@@ -3427,7 +3427,7 @@ namespace DonTopo::ScriptBindings
             const sol::object oHalf   = queryArgAt(va, 1);
             if (!oCenter.is<glm::vec3>() || !oHalf.is<glm::vec3>())
             {
-                warn("center y halfExtents tienen que ser Vec3");
+                warn("center and halfExtents must be Vec3");
                 return false;
             }
             center      = oCenter.as<glm::vec3>();
@@ -3435,7 +3435,7 @@ namespace DonTopo::ScriptBindings
             if (!finite3(halfExtents) ||
                 halfExtents.x <= 0.0f || halfExtents.y <= 0.0f || halfExtents.z <= 0.0f)
             {
-                warn("halfExtents tiene que tener las tres componentes mayores que 0");
+                warn("halfExtents must have all three components greater than 0");
                 return false;
             }
 
@@ -3447,7 +3447,7 @@ namespace DonTopo::ScriptBindings
                 eulerDeg = oThird.as<glm::vec3>();
                 if (!finite3(eulerDeg))
                 {
-                    warn("rotation tiene que ser finita");
+                    warn("rotation must be finite");
                     return false;
                 }
                 optsIndex = 3;
@@ -3523,9 +3523,9 @@ namespace DonTopo::ScriptBindings
                                  const physx::PxOverlapBufferN<kOverlapMaxHits>& hits)
         {
             if (hits.getNbTouches() >= hits.getMaxNbTouches())
-                mgr.log(std::string("[Lua][WARN] Physics.") + fn + ": limite de " +
+                mgr.log(std::string("[Lua][WARN] Physics.") + fn + ": limit of " +
                         std::to_string(kOverlapMaxHits) +
-                        " solapes alcanzado, hay resultados descartados");
+                        " overlaps reached, some results were discarded");
         }
 #endif
 
@@ -3547,8 +3547,8 @@ namespace DonTopo::ScriptBindings
                 AudioBus bus;
                 if (!audioBusFromStr(name, bus))
                 {
-                    mgr.log("[Lua][WARN] Audio.SetBusVolume: bus desconocido '" + name +
-                             "' (usa 'master', 'music' o 'sfx')");
+                    mgr.log("[Lua][WARN] Audio.SetBusVolume: unknown bus '" + name +
+                             "' (use 'master', 'music' or 'sfx')");
                     return;
                 }
                 // Mismo trato que los setters del clip: un NaN aquí dejaría el
@@ -3578,8 +3578,8 @@ namespace DonTopo::ScriptBindings
                                [](unsigned char ch) { return (char)std::tolower(ch); });
                 if (!isSupportedAudioExtension(ext))
                 {
-                    mgr.log("[Lua][WARN] Audio.PlayClipAtPoint: formato no soportado '" + ext +
-                             "' (usa .wav, .mp3, .ogg o .flac)");
+                    mgr.log("[Lua][WARN] Audio.PlayClipAtPoint: unsupported format '" + ext +
+                             "' (use .wav, .mp3, .ogg or .flac)");
                     return;
                 }
                 const float v = volume.value_or(1.0f);
@@ -3592,8 +3592,8 @@ namespace DonTopo::ScriptBindings
                 AudioBus bus = AudioBus::Sfx;
                 if (busName && !audioBusFromStr(*busName, bus))
                 {
-                    mgr.log("[Lua][WARN] Audio.PlayClipAtPoint: bus desconocido '" + *busName +
-                             "' (usa 'master', 'music' o 'sfx')");
+                    mgr.log("[Lua][WARN] Audio.PlayClipAtPoint: unknown bus '" + *busName +
+                             "' (use 'master', 'music' or 'sfx')");
                     return;
                 }
                 am->playClipAtPoint(path, glm::vec3(x, y, z),
@@ -3608,7 +3608,7 @@ namespace DonTopo::ScriptBindings
                                [](unsigned char ch) { return (char)std::tolower(ch); });
                 if (!isSupportedAudioExtension(ext))
                 {
-                    mgr.log("[Lua][WARN] Audio.Preload: formato no soportado '" + ext + "'");
+                    mgr.log("[Lua][WARN] Audio.Preload: unsupported format '" + ext + "'");
                     return;
                 }
                 am->preloadClip(path);
@@ -3625,14 +3625,14 @@ namespace DonTopo::ScriptBindings
                 AudioBus bus;
                 if (!audioBusFromStr(busName, bus))
                 {
-                    mgr.log("[Lua][WARN] Audio.SetBusEffect: bus desconocido '" + busName + "'");
+                    mgr.log("[Lua][WARN] Audio.SetBusEffect: unknown bus '" + busName + "'");
                     return;
                 }
                 AudioEffect effect;
                 if (!audioEffectFromStr(effectName, effect))
                 {
-                    mgr.log("[Lua][WARN] Audio.SetBusEffect: efecto desconocido '" + effectName +
-                             "' (usa 'lowPass', 'highPass', 'echo' o 'reverb')");
+                    mgr.log("[Lua][WARN] Audio.SetBusEffect: unknown effect '" + effectName +
+                             "' (use 'lowPass', 'highPass', 'echo' or 'reverb')");
                     return;
                 }
                 if (!ensureFinite(mgr, "Audio.SetBusEffect", amount)) return;
@@ -3646,7 +3646,7 @@ namespace DonTopo::ScriptBindings
                 AudioBus bus;
                 if (!audioBusFromStr(busName, bus))
                 {
-                    mgr.log("[Lua][WARN] Audio.ClearBusEffect: bus desconocido '" + busName + "'");
+                    mgr.log("[Lua][WARN] Audio.ClearBusEffect: unknown bus '" + busName + "'");
                     return;
                 }
                 // Sin segundo argumento se limpia el bus entero: es lo que se
@@ -3655,7 +3655,7 @@ namespace DonTopo::ScriptBindings
                 AudioEffect effect;
                 if (!audioEffectFromStr(*effectName, effect))
                 {
-                    mgr.log("[Lua][WARN] Audio.ClearBusEffect: efecto desconocido '" +
+                    mgr.log("[Lua][WARN] Audio.ClearBusEffect: unknown effect '" +
                              *effectName + "'");
                     return;
                 }
@@ -3679,7 +3679,7 @@ namespace DonTopo::ScriptBindings
                 AudioBus bus;
                 if (!audioBusFromStr(name, bus))
                 {
-                    mgr.log("[Lua][WARN] Audio.GetBusVolume: bus desconocido '" + name + "'");
+                    mgr.log("[Lua][WARN] Audio.GetBusVolume: unknown bus '" + name + "'");
                     return 1.0f;
                 }
                 return am->getBusVolume(bus);
@@ -3692,51 +3692,51 @@ namespace DonTopo::ScriptBindings
                 sol::no_constructor,
                 "SetPreset", [&mgr](const LuaReverbZone& z, const std::string& name) {
                     GameObject* go = deref(z.e);
-                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    if (!go->hasReverbZone()) throw std::runtime_error("The GameObject no longer has a ReverbZone");
                     const auto& known = AudioManager::reverbPresetNames();
                     if (std::find(known.begin(), known.end(), name) == known.end())
                     {
-                        mgr.log("[Lua][WARN] ReverbZone.SetPreset: preset desconocido '" + name +
-                                 "', se conserva el anterior");
+                        mgr.log("[Lua][WARN] ReverbZone.SetPreset: unknown preset '" + name +
+                                 "', the previous one is kept");
                         return;
                     }
                     go->getReverbZone()->setPreset(name);
                 },
                 "GetPreset", [](const LuaReverbZone& z) {
                     GameObject* go = deref(z.e);
-                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    if (!go->hasReverbZone()) throw std::runtime_error("The GameObject no longer has a ReverbZone");
                     return go->getReverbZone()->getPreset();
                 },
                 "SetMinDistance", [&mgr](const LuaReverbZone& z, float d) {
                     GameObject* go = deref(z.e);
-                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    if (!go->hasReverbZone()) throw std::runtime_error("The GameObject no longer has a ReverbZone");
                     if (!ensureFinite(mgr, "ReverbZone.SetMinDistance", d)) return;
                     go->getReverbZone()->setMinDistance(d);
                 },
                 "GetMinDistance", [](const LuaReverbZone& z) {
                     GameObject* go = deref(z.e);
-                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    if (!go->hasReverbZone()) throw std::runtime_error("The GameObject no longer has a ReverbZone");
                     return go->getReverbZone()->getMinDistance();
                 },
                 "SetMaxDistance", [&mgr](const LuaReverbZone& z, float d) {
                     GameObject* go = deref(z.e);
-                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    if (!go->hasReverbZone()) throw std::runtime_error("The GameObject no longer has a ReverbZone");
                     if (!ensureFinite(mgr, "ReverbZone.SetMaxDistance", d)) return;
                     go->getReverbZone()->setMaxDistance(d);
                 },
                 "GetMaxDistance", [](const LuaReverbZone& z) {
                     GameObject* go = deref(z.e);
-                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    if (!go->hasReverbZone()) throw std::runtime_error("The GameObject no longer has a ReverbZone");
                     return go->getReverbZone()->getMaxDistance();
                 },
                 "SetEnabled", [](const LuaReverbZone& z, bool e) {
                     GameObject* go = deref(z.e);
-                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    if (!go->hasReverbZone()) throw std::runtime_error("The GameObject no longer has a ReverbZone");
                     go->getReverbZone()->setEnabled(e);
                 },
                 "GetEnabled", [](const LuaReverbZone& z) {
                     GameObject* go = deref(z.e);
-                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    if (!go->hasReverbZone()) throw std::runtime_error("The GameObject no longer has a ReverbZone");
                     return go->getReverbZone()->getEnabled();
                 });
 
@@ -3785,9 +3785,9 @@ namespace DonTopo::ScriptBindings
                 // cupieron se pierden y encima los descartados son arbitrarios
                 // (el orden llega sin ordenar), no "los más lejanos".
                 if (hits.getNbTouches() >= hits.getMaxNbTouches())
-                    mgr.log("[Lua][WARN] Physics.RaycastAll: limite de " +
+                    mgr.log("[Lua][WARN] Physics.RaycastAll: limit of " +
                             std::to_string(kRaycastAllMaxHits) +
-                            " impactos alcanzado, hay resultados descartados");
+                            " hits reached, some results were discarded");
 #else
                 (void)va;
 #endif

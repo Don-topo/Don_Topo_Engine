@@ -28,8 +28,8 @@ std::string AudioManager::outputWarningFor(int fmodOutputType)
 {
 #ifdef DT_FMOD_ENABLED
     if (fmodOutputType == FMOD_OUTPUTTYPE_NOSOUND)
-        return "Audio sin salida: FMOD no encontro ningun dispositivo de sonido y no sonara "
-               "nada. En Linux faltan libpulse0 o libasound2t64.";
+        return "Audio without output: FMOD found no sound device and nothing will "
+               "play. On Linux, libpulse0 or libasound2t64 is missing.";
 #endif
     (void)fmodOutputType;
     return {};
@@ -79,7 +79,7 @@ bool AudioManager::init()
         // canal al Log Console desde aquí (mismo motivo documentado en
         // AudioClipComponent::setVolume); los hosts que quieran avisar en su UI
         // tienen el bool de retorno y available().
-        std::cerr << "Audio deshabilitado: " << e.what() << std::endl;
+        std::cerr << "Audio disabled: " << e.what() << std::endl;
         return false;
     }
 #else

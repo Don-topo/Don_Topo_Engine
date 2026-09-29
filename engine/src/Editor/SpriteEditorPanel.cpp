@@ -73,14 +73,14 @@ namespace DonTopo
         m_drag = Drag::None;
 
         if (imagePath.empty()) return;
-        if (!ctx.renderer) { m_error = "Sin renderer"; return; }
+        if (!ctx.renderer) { m_error = "No renderer"; return; }
 
         // El atlas VIVO del renderer (cacheado por ruta): así lo que se guarda
         // aquí se ve en el viewport sin recargar la escena.
         UiTextureAtlas* atlas = ctx.renderer->loadUiAtlas(imagePath);
         if (!atlas)
         {
-            m_error = "No se pudo abrir la imagen: " + imagePath;
+            m_error = "Could not open the image: " + imagePath;
             return;
         }
 
@@ -95,8 +95,8 @@ namespace DonTopo
                 m_entries.push_back(Entry{name, *r});
 
         if (m_textureId == 0)
-            m_error = "La imagen está cargada pero el backend no da handle para "
-                      "enseñarla; los rects se pueden editar a mano.";
+            m_error = "The image is loaded but the backend gives no handle to "
+                      "show it; the rects can be edited by hand.";
     }
 
     void SpriteEditorPanel::save(EditorContext& ctx)
@@ -106,7 +106,7 @@ namespace DonTopo
         UiTextureAtlas* vivo = ctx.renderer->loadUiAtlas(m_path);
         if (!vivo)
         {
-            m_error = "El atlas ya no está cargado: no se guarda nada";
+            m_error = "The atlas is no longer loaded: nothing is saved";
             return;
         }
 
@@ -127,15 +127,15 @@ namespace DonTopo
             const ProjectContext workspace(ProjectContext::workspaceDir());
             if (workspace.contains(sidecar))
             {
-                m_error = "El atlas es de otro proyecto: no se escribe nada";
-                ctx.logModule("Project", "Sidecar de sprites rechazado: " + sidecar);
+                m_error = "The atlas belongs to another project: nothing is written";
+                ctx.logModule("Project", "Sprite sidecar rejected: " + sidecar);
                 return;
             }
         }
 
         if (!vivo->saveSprites(sidecar))
         {
-            m_error = "No se pudo escribir " + sidecar;
+            m_error = "Could not write " + sidecar;
             if (ctx.pushLog) ctx.pushLog(m_error);
             return;
         }
@@ -143,7 +143,7 @@ namespace DonTopo
         m_dirty = false;
         m_error.clear();
         if (ctx.pushLog)
-            ctx.pushLog("Sprites guardados en " + sidecar + " (" +
+            ctx.pushLog("Sprites saved to " + sidecar + " (" +
                         std::to_string(m_entries.size()) + ")");
         // Properties cachea los nombres por ruta: sin este aviso, los combos
         // seguirían enseñando la lista de antes hasta cambiar de atlas.
@@ -178,7 +178,7 @@ namespace DonTopo
                             (float)m_gridSpacingY * (float)(m_gridRows - 1);
         if (dispX <= 0.0f || dispY <= 0.0f)
         {
-            m_error = "La rejilla no cabe en la imagen con esos márgenes";
+            m_error = "The grid does not fit in the image with those margins";
             return;
         }
 
@@ -186,7 +186,7 @@ namespace DonTopo
         const float ch = std::floor(dispY / (float)m_gridRows);
         if (cw < 1.0f || ch < 1.0f)
         {
-            m_error = "Celdas de menos de un píxel";
+            m_error = "Cells smaller than one pixel";
             return;
         }
 
@@ -214,9 +214,9 @@ namespace DonTopo
 
     void SpriteEditorPanel::drawToolbar(EditorContext& ctx)
     {
-        if (ImGui::Button("Guardar")) save(ctx);
+        if (ImGui::Button("Save")) save(ctx);
         ImGui::SameLine();
-        if (ImGui::Button("Recargar"))
+        if (ImGui::Button("Reload"))
         {
             // El "deshacer" de este panel: vuelve a lo que dice el fichero.
             const std::string path = m_path;
@@ -224,8 +224,8 @@ namespace DonTopo
             loadFrom(ctx, path);
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("%s%s", m_path.empty() ? "(sin imagen)" : m_path.c_str(),
-                            m_dirty ? "  *sin guardar" : "");
+        ImGui::TextDisabled("%s%s", m_path.empty() ? "(no image)" : m_path.c_str(),
+                            m_dirty ? "  *unsaved" : "");
 
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
         ImGui::SliderFloat("Zoom", &m_zoom, 0.25f, 8.0f, "%.2fx");
@@ -249,7 +249,7 @@ namespace DonTopo
         ImGui::BeginChild("sprite_list", ImVec2(280.0f, 0.0f), true);
 
         ImGui::TextDisabled("Sprites (%d)", (int)m_entries.size());
-        if (ImGui::Button("Nuevo"))
+        if (ImGui::Button("New"))
         {
             UiSpriteRect r{};
             r.x = 0.0f; r.y = 0.0f;
@@ -260,7 +260,7 @@ namespace DonTopo
             m_dirty = true;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Borrar") && m_selected >= 0 && m_selected < (int)m_entries.size())
+        if (ImGui::Button("Delete") && m_selected >= 0 && m_selected < (int)m_entries.size())
         {
             m_entries.erase(m_entries.begin() + m_selected);
             m_selected = -1;
@@ -283,7 +283,7 @@ namespace DonTopo
         if (m_selected >= 0 && m_selected < (int)m_entries.size())
         {
             Entry& e = m_entries[m_selected];
-            ImGui::TextDisabled("Seleccionado");
+            ImGui::TextDisabled("Selected");
 
             ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::InputText("##nombre", m_nameBuf, sizeof(m_nameBuf),
@@ -294,9 +294,9 @@ namespace DonTopo
                 // Dos sprites con el mismo nombre serían uno solo al guardar (el
                 // mapa se queda con el último) y el otro desaparecería sin más.
                 if (nuevo.empty())
-                    m_error = "Un sprite sin nombre no se puede referenciar";
+                    m_error = "A sprite without a name cannot be referenced";
                 else if (choque >= 0 && choque != m_selected)
-                    m_error = "Ya hay un sprite llamado '" + nuevo + "'";
+                    m_error = "There is already a sprite named '" + nuevo + "'";
                 else
                 {
                     e.name  = nuevo;
@@ -319,14 +319,14 @@ namespace DonTopo
         }
 
         ImGui::Separator();
-        ImGui::TextDisabled("Rejilla uniforme");
+        ImGui::TextDisabled("Uniform grid");
 
         // InputInt2 y no dos InputInt: el InputInt de uno en uno dibuja los
         // botones -/+ DENTRO del ancho pedido, así que con la columna estrecha
         // del panel no quedaba sitio ni para ver el número. Las etiquetas van
         // encima por lo mismo: a la derecha se comían el ancho útil.
         int colsFilas[2] = { m_gridCols, m_gridRows };
-        ImGui::TextDisabled("Columnas / Filas");
+        ImGui::TextDisabled("Columns / Rows");
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::InputInt2("##colsfilas", colsFilas))
         {
@@ -335,7 +335,7 @@ namespace DonTopo
         }
 
         int offset[2] = { m_gridOffsetX, m_gridOffsetY };
-        ImGui::TextDisabled("Margen X / Y");
+        ImGui::TextDisabled("Margin X / Y");
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::InputInt2("##offset", offset))
         {
@@ -344,7 +344,7 @@ namespace DonTopo
         }
 
         int gap[2] = { m_gridSpacingX, m_gridSpacingY };
-        ImGui::TextDisabled("Hueco X / Y");
+        ImGui::TextDisabled("Gap X / Y");
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::InputInt2("##gap", gap))
         {
@@ -352,7 +352,7 @@ namespace DonTopo
             m_gridSpacingY = std::max(0, gap[1]);
         }
 
-        ImGui::TextDisabled("Prefijo de los nombres");
+        ImGui::TextDisabled("Name prefix");
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputText("##prefijo", m_gridPrefix, sizeof(m_gridPrefix));
 
@@ -366,10 +366,10 @@ namespace DonTopo
             const float ch = std::floor(((float)m_imageH - (float)m_gridOffsetY -
                                          (float)m_gridSpacingY * (float)(m_gridRows - 1)) /
                                         (float)m_gridRows);
-            ImGui::TextDisabled("Celda: %.0f x %.0f px", cw, ch);
+            ImGui::TextDisabled("Cell: %.0f x %.0f px", cw, ch);
         }
 
-        if (ImGui::Button("Generar (reemplaza todo)", ImVec2(-1.0f, 0.0f))) sliceGrid();
+        if (ImGui::Button("Generate (replaces everything)", ImVec2(-1.0f, 0.0f))) sliceGrid();
 
         ImGui::EndChild();
     }
@@ -382,7 +382,7 @@ namespace DonTopo
 
         if (m_imageW == 0 || m_imageH == 0)
         {
-            ImGui::TextDisabled("Abre una imagen desde el campo Atlas de un Button.");
+            ImGui::TextDisabled("Open an image from a Button's Atlas field.");
             ImGui::EndChild();
             return;
         }

@@ -151,7 +151,7 @@ void PerformancePanel::draw(EditorContext& ctx)
         // sale de él.
         if (!ctx.renderer)
         {
-            ImGui::TextDisabled("Sin Renderer.");
+            ImGui::TextDisabled("No Renderer.");
             ImGui::End();
             return;
         }
@@ -263,7 +263,7 @@ void PerformancePanel::draw(EditorContext& ctx)
         }
 
         ImGui::Text("%.1f FPS   %.2f ms/frame (CPU)", m_showFps, m_showFrameMs);
-        ImGui::TextDisabled("Todo el panel —numeros, barras y graficas— avanza cada %.1f s.",
+        ImGui::TextDisabled("The whole panel (numbers, bars and graphs) advances every %.1f s.",
                             kSampleInterval);
 
         // ¿Quién marca el frame? Se compara la MEDIA de CPU (no el frame
@@ -273,19 +273,19 @@ void PerformancePanel::draw(EditorContext& ctx)
         if (m_passTotal > 0.0f && m_histFilled > 0)
         {
             if (r.presentMode() == PresentMode::Vsync)
-                ImGui::TextDisabled("CPU %.2f ms vs GPU %.2f ms — con Vsync la diferencia es "
-                                    "espera al refresco: para medir, pon Immediate.",
+                ImGui::TextDisabled("CPU %.2f ms vs GPU %.2f ms: with Vsync the difference is "
+                                    "waiting for the refresh; to measure, use Immediate.",
                                     m_showAvgMs, m_passTotal);
             else if (m_showAvgMs - m_passTotal <= 0.5f)
-                ImGui::Text("Limitado por GPU (CPU %.2f ms, GPU %.2f ms)", m_showAvgMs, m_passTotal);
+                ImGui::Text("GPU bound (CPU %.2f ms, GPU %.2f ms)", m_showAvgMs, m_passTotal);
             else
-                ImGui::Text("Limitado por CPU (+%.2f ms sobre la GPU: %.2f vs %.2f ms)",
+                ImGui::Text("CPU bound (+%.2f ms over the GPU: %.2f vs %.2f ms)",
                             m_showAvgMs - m_passTotal, m_showAvgMs, m_passTotal);
         }
 
         // ── CPU: historial ───────────────────────────────────────────────────
         ImGui::PushID("cpu");
-        if (ImGui::CollapsingHeader("CPU (historial)", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("CPU (history)", ImGuiTreeNodeFlags_DefaultOpen))
         {
             // El historial es circular, así que se pasa el offset para que la
             // gráfica avance de izquierda a derecha en vez de saltar.
@@ -301,20 +301,20 @@ void PerformancePanel::draw(EditorContext& ctx)
             ImGui::PlotHistogram("##fps", m_plotFpsHistory, m_plotFilled,
                                  m_plotFilled == kHistory ? m_plotCursor : 0,
                                  overlay, 0.0f, 165.0f, ImVec2(-1.0f, 60.0f));
-            ImGui::TextDisabled("Un punto por refresco: el PEOR frame de cada %.1f s en la\n"
-                                "curva de ms, los FPS medios en el histograma. %d puntos = %.0f s.",
+            ImGui::TextDisabled("One point per refresh: the WORST frame of every %.1f s in the\n"
+                                "ms curve, the average FPS in the histogram. %d points = %.0f s.",
                                 kSampleInterval, kHistory, kHistory * kSampleInterval);
             ImGui::Text("min %.2f ms   media %.2f ms   max %.2f ms",
                         m_showMinMs, m_showAvgMs, m_showMaxMs);
             ImGui::Text("1%% low: %.1f FPS", m_showLowFps);
-            ImGui::TextDisabled("Estos cuatro salen del historial POR FRAME (%d frames, %d\n"
-                                "llenos), no de la grafica: el 1%% low es el peor frame suelto.",
+            ImGui::TextDisabled("These four come from the PER-FRAME history (%d frames, %d\n"
+                                "filled), not from the graph: the 1%% low is the single worst frame.",
                                 kHistory, m_histFilled);
         }
         ImGui::PopID();
 
         ImGui::PushID("gpu");
-        if (ImGui::CollapsingHeader("GPU por pass", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("GPU per pass", ImGuiTreeNodeFlags_DefaultOpen))
         {
             // Los nueve pases EN ORDEN DE PIPELINE, que es informacion en si
             // misma: se lee como se graba el frame. La tabla es ordenable, pero
@@ -324,11 +324,11 @@ void PerformancePanel::draw(EditorContext& ctx)
             // m_passMs. Si se añade un pase hay que tocar los dos sitios, y por
             // eso el static_assert de debajo.
             static const char* const kPassNames[] = {
-                "Sombras", "Escena", "AO (SSAO)", "Forward+ (cull)", "SSR",
-                "Niebla",  "Motion blur", "Bloom", "Anti-aliasing",
+                "Shadows", "Scene", "AO (SSAO)", "Forward+ (cull)", "SSR",
+                "Fog",  "Motion blur", "Bloom", "Anti-aliasing",
             };
             constexpr int kPassCount = (int)(sizeof(kPassNames) / sizeof(kPassNames[0]));
-            static_assert(kPassCount == kPasses, "nombres y medidas de pase descuadrados");
+            static_assert(kPassCount == kPasses, "pass names and timings out of step");
             PassRow rows[kPassCount];
             for (int i = 0; i < kPassCount; ++i) rows[i] = {kPassNames[i], m_passMs[i]};
 
@@ -369,11 +369,11 @@ void PerformancePanel::draw(EditorContext& ctx)
 
                 for (int i = 0; i < kPassCount; ++i)
                     gpuRow(rows[i].name, rows[i].ms, m_passTotal, rows[i].name == hottestName);
-                gpuRow("TOTAL (sin UI)", m_passTotal, m_passTotal, false);
+                gpuRow("TOTAL (without UI)", m_passTotal, m_passTotal, false);
                 ImGui::EndTable();
             }
-            ImGui::TextDisabled("Los pasos apagados y los dos primeros frames salen como '--'.\n"
-                                "En naranja, el pass mas caro. Click en 'ms' para ordenar.");
+            ImGui::TextDisabled("Disabled passes and the first two frames show as '--'.\n"
+                                "In orange, the most expensive pass. Click 'ms' to sort.");
         }
         ImGui::PopID();
 
@@ -382,12 +382,12 @@ void PerformancePanel::draw(EditorContext& ctx)
         // llamen igual en dos secciones distintas colisionan, y el sintoma es
         // que uno de los dos deja de responder.
         ImGui::PushID("dibujo");
-        if (ImGui::CollapsingHeader("Dibujo", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("Drawing", ImGuiTreeNodeFlags_DefaultOpen))
         {
             ImGui::Text("Draw calls:  %d", m_drawCalls);
-            ImGui::Text("Instancias:  %d", m_instances);
-            ImGui::Text("Culleados:   %d", m_culled);
-            ImGui::TextDisabled("Solo el pass de escena (estaticos instanciados + skinned).");
+            ImGui::Text("Instances:  %d", m_instances);
+            ImGui::Text("Culled:     %d", m_culled);
+            ImGui::TextDisabled("Scene pass only (instanced statics + skinned).");
 
             // Debe ser siempre 0, asi que solo se pinta cuando NO lo es: una
             // fila permanente a cero es ruido, y este numero solo importa el
@@ -395,7 +395,7 @@ void PerformancePanel::draw(EditorContext& ctx)
             // desbordadas de Forward+.
             if (m_instanceOverflow > 0)
                 ImGui::TextColored(kWarn,
-                                   "%d objetos sin sitio en el SSBO: pierden sombra",
+                                   "%d objects without room in the SSBO: they lose their shadow",
                                    m_instanceOverflow);
 
             // Ranuras de objeto. Aqui y no en el menu View porque es un
@@ -406,7 +406,7 @@ void PerformancePanel::draw(EditorContext& ctx)
                 if (capacity == 0) {
                     // Backend sin tope duro: el vector crece, asi que el numero
                     // solo es util comparado consigo mismo.
-                    ImGui::Text("%s %zu (sin tope)", label, used);
+                    ImGui::Text("%s %zu (no cap)", label, used);
                     return;
                 }
                 const float uso = (float)used / (float)capacity;
@@ -417,8 +417,8 @@ void PerformancePanel::draw(EditorContext& ctx)
             };
             slotRow("Slots GPU:   ", m_slotObjects, m_slotObjectCap);
             slotRow("Slots skinned:", m_slotSkinned, m_slotSkinnedCap);
-            ImGui::TextDisabled("Pasado el tope, el objeto se dibuja con el bloque global\n"
-                                "de descriptores: sale plano, pero no se sale del heap.");
+            ImGui::TextDisabled("Past the cap, the object is drawn with the global descriptor\n"
+                                "block: it looks flat, but it does not overflow the heap.");
         }
         ImGui::PopID();
 
@@ -426,42 +426,42 @@ void PerformancePanel::draw(EditorContext& ctx)
         // El "por que" de los numeros de arriba: cuantos objetos y cuantas
         // luces hay, y que parte de ellos se esta perdiendo por un tope.
         ImGui::PushID("escena");
-        if (ImGui::CollapsingHeader("Escena", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen))
         {
             if (ctx.scene)
             {
-                ImGui::Text("Objetos:     %zu  (%zu con malla)", m_sceneObjects, m_sceneMeshes);
-                ImGui::Text("Con luz:     %zu", m_sceneLightNodes);
+                ImGui::Text("Objects:     %zu  (%zu with a mesh)", m_sceneObjects, m_sceneMeshes);
+                ImGui::Text("With light:  %zu", m_sceneLightNodes);
             }
             else
             {
-                ImGui::TextDisabled("Sin escena.");
+                ImGui::TextDisabled("No scene.");
             }
 
             // El total lo pone quien monta el frame, no el backend: es el unico
             // que ve las luces DESCARTADAS. collectLights se queda con las
             // primeras MAX_LIGHTS y tira el resto en silencio.
             if (m_sceneLights > (size_t)MAX_LIGHTS)
-                ImGui::TextColored(kWarn, "Luces:       %zu / %d — el resto ni ilumina ni "
-                                          "proyecta sombra", m_sceneLights, MAX_LIGHTS);
+                ImGui::TextColored(kWarn, "Lights:      %zu / %d: the rest neither light nor "
+                                          "cast shadows", m_sceneLights, MAX_LIGHTS);
             else
-                ImGui::Text("Luces:       %zu / %d", m_sceneLights, MAX_LIGHTS);
+                ImGui::Text("Lights:      %zu / %d", m_sceneLights, MAX_LIGHTS);
 
             // Forward+ solo cuenta si esta encendido: apagado no graba ni un
             // dispatch y sus contadores no significan nada.
             if (r.forwardPlusMode() != RendererState::FpMode::Off)
             {
-                ImGui::Text("Luces/celda: %.1f  (Forward+ %s)",
+                ImGui::Text("Lights/cell: %.1f  (Forward+ %s)",
                             m_fpAvgPerCell,
                             r.forwardPlusMode() == RendererState::FpMode::Tiled ? "tiled"
                                                                                 : "clustered");
                 if (m_fpOverflowCells > 0)
-                    ImGui::TextColored(kWarn, "%u celdas desbordadas (pierden luces)",
+                    ImGui::TextColored(kWarn, "%u overflowing cells (they lose lights)",
                                        m_fpOverflowCells);
             }
             else
             {
-                ImGui::TextDisabled("Forward+: apagado.");
+                ImGui::TextDisabled("Forward+: off.");
             }
 
             // Sondas de reflexion: lo caro de una sonda es su VRAM y su bake,
@@ -470,20 +470,20 @@ void PerformancePanel::draw(EditorContext& ctx)
             // guardan cosas distintas (H51).
             if (m_probes > 0)
             {
-                ImGui::Text("Sondas:      %d  (%.2f MB c/u, %.1f MB en total)",
+                ImGui::Text("Probes:      %d  (%.2f MB each, %.1f MB in total)",
                             m_probes, m_probeMbEach, m_probeMbEach * (double)m_probes);
                 // Un "0.00 ms" se leeria como bake instantaneo en vez de como
                 // "nunca se ha horneado" (H56), asi que se distingue.
                 char b[kGpuMsTextSize];
                 if (m_probeBakeMs <= 0.0f)
-                    ImGui::TextDisabled("Ultimo bake: sin bakear");
+                    ImGui::TextDisabled("Last bake: not baked");
                 else
-                    ImGui::Text("Ultimo bake: %s ms de GPU",
+                    ImGui::Text("Last bake: %s ms of GPU",
                                 gpuMsText(m_probeBakeMs, b, kGpuMsTextSize));
             }
             else
             {
-                ImGui::TextDisabled("Sondas: ninguna en la escena.");
+                ImGui::TextDisabled("Probes: none in the scene.");
             }
         }
         ImGui::PopID();
@@ -493,7 +493,7 @@ void PerformancePanel::draw(EditorContext& ctx)
         // medidas de arriba. Un tiempo de pass sin saber a que resolucion y con
         // que AA se tomo no se puede comparar con el de ayer.
         ImGui::PushID("config");
-        if (ImGui::CollapsingHeader("Configuracion activa"))
+        if (ImGui::CollapsingHeader("Active configuration"))
         {
             const uint32_t rw = r.renderWidth(), rh = r.renderHeight();
             const uint32_t uw = r.uiWidth(),     uh = r.uiHeight();
@@ -502,14 +502,14 @@ void PerformancePanel::draw(EditorContext& ctx)
             // Con SSAA el render interno es MAYOR que la salida, y ese factor
             // es lo que explica el coste del pass de escena.
             if (rw != uw || rh != uh)
-                ImGui::Text("Salida:      %u x %u  (SSAA x%.2f)", uw, uh, r.ssaaFactor());
+                ImGui::Text("Output:      %u x %u  (SSAA x%.2f)", uw, uh, r.ssaaFactor());
             else
-                ImGui::Text("Salida:      %u x %u", uw, uh);
+                ImGui::Text("Output:      %u x %u", uw, uh);
 
-            const char* aa = "ninguno";
+            const char* aa = "none";
             switch (r.aaMode())
             {
-                case RendererState::AaMode::None: aa = "ninguno"; break;
+                case RendererState::AaMode::None: aa = "none"; break;
                 case RendererState::AaMode::Fxaa: aa = "FXAA";    break;
                 case RendererState::AaMode::Ssaa: aa = "SSAA";    break;
                 case RendererState::AaMode::Msaa: aa = "MSAA";    break;
@@ -520,7 +520,7 @@ void PerformancePanel::draw(EditorContext& ctx)
             else
                 ImGui::Text("Anti-alias:  %s", aa);
 
-            ImGui::Text("Sombras:     %d x %d texeles, alcance %.0f",
+            ImGui::Text("Shadows:     %d x %d texels, range %.0f",
                         r.shadowResolution(), r.shadowResolution(), r.shadowDistance());
 
             // Lo PEDIDO, no lo efectivo: el backend cae a Vsync sin avisar si
@@ -532,31 +532,31 @@ void PerformancePanel::draw(EditorContext& ctx)
                 case PresentMode::Mailbox:   pm = "Mailbox";   break;
                 case PresentMode::Immediate: pm = "Immediate"; break;
             }
-            ImGui::Text("Presentacion: %s (pedido)", pm);
+            ImGui::Text("Presentation: %s (requested)", pm);
             if (r.isWireframeMode())
-                ImGui::TextColored(kWarn, "Modo alambre activo: los tiempos no son los del "
-                                          "render normal");
-            ImGui::TextDisabled("Se cambia en el panel Rendering; aqui solo se lee, para\n"
-                                "poder comparar dos medidas sabiendo con que se tomaron.");
+                ImGui::TextColored(kWarn, "Wireframe mode on: the timings are not those of the "
+                                          "normal render");
+            ImGui::TextDisabled("It is changed in the Rendering panel; here it is only read, to\n"
+                                "compare two measurements knowing what they were taken with.");
         }
         ImGui::PopID();
 
         // ── Proceso: RAM, CPU, VRAM ──────────────────────────────────────────
         ImGui::PushID("proceso");
-        if (ImGui::CollapsingHeader("Proceso", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("Process", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            ImGui::Text("RAM (working set): %.1f MB  (pico %.1f MB)", m_workingSetMb, m_peakWorkingMb);
-            ImGui::Text("CPU del proceso:   %.1f %%", m_cpuPercent);
+            ImGui::Text("RAM (working set): %.1f MB  (peak %.1f MB)", m_workingSetMb, m_peakWorkingMb);
+            ImGui::Text("Process CPU:       %.1f %%", m_cpuPercent);
             if (m_gpuBudgetMb > 0.0f)
             {
                 // Mismo umbral que las ranuras de objeto: al 90 % del
                 // presupuesto el driver ya empieza a echar recursos a RAM.
                 const float uso = std::clamp(m_gpuUsedMb / m_gpuBudgetMb, 0.0f, 1.0f);
                 if (uso >= 0.9f)
-                    ImGui::TextColored(kWarn, "VRAM del proceso:  %.1f MB / %.1f MB de presupuesto",
+                    ImGui::TextColored(kWarn, "Process VRAM:      %.1f MB / %.1f MB of budget",
                                        m_gpuUsedMb, m_gpuBudgetMb);
                 else
-                    ImGui::Text("VRAM del proceso:  %.1f MB / %.1f MB de presupuesto",
+                    ImGui::Text("Process VRAM:      %.1f MB / %.1f MB of budget",
                                 m_gpuUsedMb, m_gpuBudgetMb);
                 if (uso >= 0.9f) ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kWarn);
                 ImGui::ProgressBar(uso, ImVec2(-1.0f, 0.0f));
@@ -564,9 +564,9 @@ void PerformancePanel::draw(EditorContext& ctx)
             }
             else
             {
-                ImGui::TextDisabled("VRAM: no disponible en esta plataforma.");
+                ImGui::TextDisabled("VRAM: not available on this platform.");
             }
-            ImGui::TextDisabled("Lecturas del kernel/driver, no por frame.");
+            ImGui::TextDisabled("Kernel/driver readings, not per frame.");
         }
         ImGui::PopID();
     }

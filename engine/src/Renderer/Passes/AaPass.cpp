@@ -31,7 +31,7 @@ struct FxaaPush {
     float edgeThreshold;
     float edgeThresholdMin;
 };
-static_assert(sizeof(FxaaPush) == 20, "FxaaPush debe seguir en 20 bytes: fxaa.frag declara este layout");
+static_assert(sizeof(FxaaPush) == 20, "FxaaPush must stay at 20 bytes: fxaa.frag declares this layout");
 
 // SSAA: mismo layout que declara ssaa_resolve.frag.
 struct SsaaPush {
@@ -39,7 +39,7 @@ struct SsaaPush {
     float invSrcY;
     int32_t taps;       // muestras por eje del filtro de bajada
 };
-static_assert(sizeof(SsaaPush) == 12, "SsaaPush debe seguir en 12 bytes: ssaa_resolve.frag declara este layout");
+static_assert(sizeof(SsaaPush) == 12, "SsaaPush must stay at 12 bytes: ssaa_resolve.frag declares this layout");
 
 // TAA: mismo layout que declara taa.frag.
 struct TaaPush {
@@ -49,7 +49,7 @@ struct TaaPush {
     float     feedback;
     int32_t   historyValid;
 };
-static_assert(sizeof(TaaPush) == 80, "TaaPush debe seguir en 80 bytes: taa.frag declara este layout");
+static_assert(sizeof(TaaPush) == 80, "TaaPush must stay at 80 bytes: taa.frag declares this layout");
 
 // ── Anti-aliasing ───────────────────────────────────────────────────────────
 void AaPass::createRenderPasses(const Context& ctx)

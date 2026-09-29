@@ -418,7 +418,7 @@ void ViewportPanel::drawTransformGizmo(EditorContext& ctx, const glm::mat4& came
             const glm::mat4 before = m_gizmoBefore;
             const glm::mat4 after  = go->localTransform;
             ctx.undo->push(std::make_unique<PropertyCommand<glm::mat4>>(
-                "Transform de '" + m_gizmoName + "'", before, after,
+                "Transform of '" + m_gizmoName + "'", before, after,
                 [scene, id](const glm::mat4& t) { applyLocalTransform(*scene, id, t); }));
 
             // Misma forma exacta que la línea que emite PropertiesPanel al
@@ -428,8 +428,8 @@ void ViewportPanel::drawTransformGizmo(EditorContext& ctx, const glm::mat4& came
             const glm::vec3 v = gizmoLoggedValue(m_gizmoModeAtGrab, after);
             std::snprintf(buf, sizeof(buf), "(%.2f, %.2f, %.2f)", v.x, v.y, v.z);
             if (ctx.pushLog)
-                ctx.pushLog(std::string(gizmoChannelLabel(m_gizmoModeAtGrab)) + " de '" +
-                            m_gizmoName + "' cambiado a " + std::string(buf));
+                ctx.pushLog(std::string(gizmoChannelLabel(m_gizmoModeAtGrab)) + " of '" +
+                            m_gizmoName + "' changed to " + std::string(buf));
         }
     }
 

@@ -1288,7 +1288,7 @@ static void test_scene_rejects_unsupported_extension(PhysicsManager& pm, AudioMa
 
     bool warned = false;
     for (const auto& w : loaded.lastWarnings())
-        if (w.find("no soportado") != std::string::npos) { warned = true; break; }
+        if (w.find("unsupported") != std::string::npos) { warned = true; break; }
     CHECK(warned);
 
     // Y el caso de control: la MISMA ruta con una extensión válida sí crea el

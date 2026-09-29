@@ -52,21 +52,21 @@ namespace DonTopo {
         // es private, así que este static_assert vive aquí (contexto de miembro) en vez
         // de a nivel de archivo.
         static_assert(Gizmos::kFramesInFlight == MAX_FRAMES,
-            "Gizmos::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+            "Gizmos::kFramesInFlight must match Renderer::MAX_FRAMES");
         // Mismo caso: MotionBlurPass dimensiona sus imagenes y sus sets por
         // frame en vuelo sin poder ver MAX_FRAMES.
         static_assert(MotionBlurPass::kFramesInFlight == MAX_FRAMES,
-            "MotionBlurPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+            "MotionBlurPass::kFramesInFlight must match Renderer::MAX_FRAMES");
         static_assert(FogPass::kFramesInFlight == MAX_FRAMES,
-            "FogPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+            "FogPass::kFramesInFlight must match Renderer::MAX_FRAMES");
         static_assert(SsrPass::kFramesInFlight == MAX_FRAMES,
-            "SsrPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+            "SsrPass::kFramesInFlight must match Renderer::MAX_FRAMES");
         static_assert(AaPass::kFramesInFlight == MAX_FRAMES,
-            "AaPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+            "AaPass::kFramesInFlight must match Renderer::MAX_FRAMES");
         static_assert(SsaoPass::kFramesInFlight == MAX_FRAMES,
-            "SsaoPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+            "SsaoPass::kFramesInFlight must match Renderer::MAX_FRAMES");
         static_assert(DepthPrepassPass::kFramesInFlight == MAX_FRAMES,
-            "DepthPrepassPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+            "DepthPrepassPass::kFramesInFlight must match Renderer::MAX_FRAMES");
 
         // Fase 1: lo minimo para poder presentar un frame (splash incluido).
         // El auto-fit de cámara y los recursos de escena (pipelines, shadow,
@@ -728,7 +728,7 @@ namespace DonTopo {
         // tiene que estar vacía. Si no, alguien se saltó el release; se avisa y
         // no se destruye nada a ciegas (mismo criterio que H79).
         if (m_skinnedTextures.size() != 0)
-            fprintf(stderr, "[Renderer] %zu texturas de personaje sin soltar al cerrar\n",
+            fprintf(stderr, "[Renderer] %zu character textures not released at shutdown\n",
                     m_skinnedTextures.size());
         m_res.destroySharedPlaceholders();
         // Ahora sí: ya no queda ningún destroySkinnedRenderObject pendiente que
@@ -2320,7 +2320,7 @@ namespace DonTopo {
             if (++m_aaMeasuredFrames == 300)
             {
                 static const char* kNames[] = { "none", "fxaa", "ssaa", "msaa", "taa" };
-                printf("aa (%s, %ux muestras): pass propio %.3f ms, render completo %.3f ms (%ux%u interno, %ux%u ventana)\n",
+                printf("aa (%s, %ux samples): own pass %.3f ms, full render %.3f ms (%ux%u internal, %ux%u window)\n",
                        kNames[(int)m_aaActiveMode], (uint32_t)m_aaSampleCount, m_aaGpuMs, m_renderGpuMs,
                        m_renderExtent.width, m_renderExtent.height,
                        m_swapChainExtent.width, m_swapChainExtent.height);
@@ -2877,9 +2877,9 @@ namespace DonTopo {
         const uint32_t topeUbo = m_gpu.maxUniformBufferRange();
         if (topeUbo > 0 && size > topeUbo)
         {
-            printf("AVISO: el bloque UBO ocupa %llu bytes y esta GPU admite %u como maximo.\n"
-                   "       Lo domina MAX_LIGHTS (%d luces): bajarlo es lo que lo devuelve\n"
-                   "       dentro del limite.\n",
+            printf("WARNING: the UBO block takes %llu bytes and this GPU allows at most %u.\n"
+                   "       MAX_LIGHTS (%d lights) dominates it: lowering it is what brings it back\n"
+                   "       within the limit.\n",
                    (unsigned long long)size, topeUbo, MAX_LIGHTS);
             fflush(stdout);
         }

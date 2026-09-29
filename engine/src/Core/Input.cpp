@@ -209,21 +209,21 @@ namespace DonTopo
                     // guarda sin tener que acordarse.
                     const auto descarta = [&](const char* queDispositivo) {
                         s_actionDiagnostics.push_back(
-                            "Input: la acción '" + name + "' tiene un binding de " +
-                            queDispositivo + " con un código fuera de rango (" +
-                            std::to_string(b.code) + "); se descarta ese binding");
+                            "Input: action '" + name + "' has a binding of " +
+                            queDispositivo + " with a code out of range (" +
+                            std::to_string(b.code) + "); that binding is discarded");
                     };
 
                     if (device == "key")
                     {
-                        if (b.code < 0 || b.code > GLFW_KEY_LAST) { descarta("tecla"); continue; }
+                        if (b.code < 0 || b.code > GLFW_KEY_LAST) { descarta("key"); continue; }
                         b.device = ActionDevice::Key;
                     }
                     else if (device == "mouse")
                     {
                         if (b.code < 0 || b.code > GLFW_MOUSE_BUTTON_LAST)
                         {
-                            descarta("botón de ratón");
+                            descarta("mouse button");
                             continue;
                         }
                         b.device = ActionDevice::Mouse;
@@ -232,7 +232,7 @@ namespace DonTopo
                     {
                         if (b.code < 0 || b.code > GLFW_GAMEPAD_BUTTON_LAST)
                         {
-                            descarta("botón de mando");
+                            descarta("gamepad button");
                             continue;
                         }
                         b.device = ActionDevice::Pad;
@@ -241,7 +241,7 @@ namespace DonTopo
                     {
                         if (b.code < 0 || b.code >= kPadAxisBindingCount)
                         {
-                            descarta("eje de mando");
+                            descarta("gamepad axis");
                             continue;
                         }
                         b.device = ActionDevice::PadAxis;
@@ -249,8 +249,8 @@ namespace DonTopo
                     else
                     {
                         s_actionDiagnostics.push_back(
-                            "Input: la acción '" + name + "' tiene un binding de un dispositivo "
-                            "desconocido ('" + device + "'); se descarta ese binding");
+                            "Input: action '" + name + "' has a binding of an unknown "
+                            "device ('" + device + "'); that binding is discarded");
                         continue;
                     }
                     bindings.push_back(b);

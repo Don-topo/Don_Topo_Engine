@@ -153,7 +153,7 @@ bool ThumbnailDiskCache::store(const fs::path& asset, const ThumbnailResult& res
 
         auto fail = [this]() {
             if (!m_warned.exchange(true))
-                std::fprintf(stderr, "[Thumbnails] no se puede escribir la cache en %s: las miniaturas se generan sin guardar\n",
+                std::fprintf(stderr, "[Thumbnails] cannot write the cache at %s: thumbnails are generated without being saved\n",
                              m_dir.string().c_str());
             return false;
         };

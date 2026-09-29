@@ -75,8 +75,8 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
             try { model = ModelLoader::loadStatic(sourcePath); }
             catch (const std::exception& e)
             {
-                r.warnings.push_back("Reimport de '" + fbx.filename().string() + "' fallido: " + e.what() +
-                                     " (los objetos se quedan como estaban)");
+                r.warnings.push_back("Reimport of '" + fbx.filename().string() + "' failed: " + e.what() +
+                                     " (the objects stay as they were)");
                 r.skipped += static_cast<int>(users.size());
                 continue;
             }
@@ -103,15 +103,15 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
             {
                 if (go->pendingMeshJob != 0)
                 {
-                    r.warnings.push_back("Reimport: '" + go->name + "' tiene una carga en curso, se salta");
+                    r.warnings.push_back("Reimport: '" + go->name + "' has a load in progress, skipped");
                     ++r.skipped;
                     continue;
                 }
                 const int piece = go->getMesh()->piece;
                 if (piece < 0 || static_cast<size_t>(piece) >= model.meshes.size())
                 {
-                    r.warnings.push_back("Reimport: '" + go->name + "' usaba la pieza " + std::to_string(piece) +
-                                         ", que ya no esta en el fichero: se queda como estaba");
+                    r.warnings.push_back("Reimport: '" + go->name + "' used piece " + std::to_string(piece) +
+                                         ", which is no longer in the file: it stays as it was");
                     ++r.skipped;
                     continue;
                 }
@@ -154,8 +154,8 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
         }
         catch (const std::exception& e)
         {
-            r.warnings.push_back("Reimport de '" + fbx.filename().string() + "' fallido: " + e.what() +
-                                 " (los objetos se quedan como estaban)");
+            r.warnings.push_back("Reimport of '" + fbx.filename().string() + "' failed: " + e.what() +
+                                 " (the objects stay as they were)");
             r.skipped += static_cast<int>(users.size());
             continue;
         }
@@ -166,7 +166,7 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
             // toca (mismo criterio que MeshComponentCommand::put).
             if (go->pendingMeshJob != 0)
             {
-                r.warnings.push_back("Reimport: '" + go->name + "' tiene una carga en curso, se salta");
+                r.warnings.push_back("Reimport: '" + go->name + "' has a load in progress, skipped");
                 ++r.skipped;
                 continue;
             }

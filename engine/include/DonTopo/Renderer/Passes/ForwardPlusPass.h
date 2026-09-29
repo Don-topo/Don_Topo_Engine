@@ -52,7 +52,7 @@ public:
         float    sliceScale;
         float    sliceBias;
     };
-    static_assert(sizeof(ParamsGpu) == 48, "ParamsGpu debe seguir en 48 bytes: los dos .comp y pbr.frag declaran este layout");
+    static_assert(sizeof(ParamsGpu) == 48, "ParamsGpu must stay at 48 bytes: both .comp shaders and pbr.frag declare this layout");
 
     struct Context {
         GpuDevice&        gpu;

@@ -378,7 +378,7 @@ void IblPass::fillIblWrites(VkDescriptorSet set, VkImageView irradiance,
         writes[i].pImageInfo      = &infos[i];
     }
     static_assert(kBindingPrefilter == kBindingIrradiance + 1,
-                  "los dos bindings del IBL van seguidos: el bucle da por hecho ese +1");
+                  "the two IBL bindings are consecutive: the loop assumes that +1");
 }
 
 void IblPass::writeBindings(const Context& ctx, VkDescriptorSet set,

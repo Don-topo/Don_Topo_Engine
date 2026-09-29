@@ -18,7 +18,7 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
     if (!ctx.renderer)
     {
         if (ImGui::Begin("Rendering", &m_open))
-            ImGui::TextDisabled("Sin renderer activo.");
+            ImGui::TextDisabled("No active renderer.");
         ImGui::End();
         return;
     }
@@ -38,12 +38,12 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
         return;
     }
 
-    if (ImGui::CollapsingHeader("Ambiente (IBL)", ImGuiTreeNodeFlags_DefaultOpen))
+    if (ImGui::CollapsingHeader("Ambient (IBL)", ImGuiTreeNodeFlags_DefaultOpen))
     {
         // Scope de IDs propio para esta seccion, como el que daba su BeginMenu
         // antes de que esto fuera un panel: sin el, un widget que se llame como
         // la seccion choca con la cabecera.
-        ImGui::PushID("Ambiente (IBL)");
+        ImGui::PushID("Ambient (IBL)");
             const bool ambientOn = m_ctl.checkbox("Ambient (IBL)",
                 [rend] { return rend->ambientEnabled(); },
                 [rend](bool v) { rend->setAmbientEnabled(v); });
@@ -61,12 +61,12 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
         ImGui::PopID();
     }
 
-    if (ImGui::CollapsingHeader("Sondas de reflexion"))
+    if (ImGui::CollapsingHeader("Reflection probes"))
     {
         // Scope de IDs propio para esta seccion, como el que daba su BeginMenu
         // antes de que esto fuera un panel: sin el, un widget que se llame como
         // la seccion choca con la cabecera.
-        ImGui::PushID("Sondas de reflexion");
+        ImGui::PushID("Reflection probes");
             // Reflection probes: control GLOBAL (rehornear la escena entera).
             // El radio y la intensidad de cada sonda van en su Properties,
             // que es donde se edita lo que es de un objeto. El bake solo se
@@ -81,18 +81,18 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
             // La cifra la da el BACKEND ACTIVO: los dos guardan cosas
             // distintas por sonda y antes se enseñaba siempre la de Vulkan
             // (H51).
-            ImGui::Text("Sondas: %d  (%.2f MB c/u)", probes,
+            ImGui::Text("Probes: %d  (%.2f MB each)", probes,
                         (double)rend->probeMemoryBytes() / (1024.0 * 1024.0));
             // Sin sondas no hay bake que contar, y un "0.00 ms" se lee como
             // horneado instantáneo en vez de como "nunca" (H56). Es la
             // misma distinción que ya hacía la sección Reflection Probe del
             // panel Properties con su "sin bakear".
             if (probes == 0)
-                ImGui::TextDisabled("Ultimo bake: sin sondas en la escena");
+                ImGui::TextDisabled("Last bake: no probes in the scene");
             else if (rend->lastProbeBakeMs() <= 0.0f)
-                ImGui::TextDisabled("Ultimo bake: sin bakear");
+                ImGui::TextDisabled("Last bake: not baked");
             else
-                ImGui::Text("Ultimo bake: %.2f ms de GPU", rend->lastProbeBakeMs());
+                ImGui::Text("Last bake: %.2f ms of GPU", rend->lastProbeBakeMs());
         ImGui::PopID();
     }
 
@@ -113,12 +113,12 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
         ImGui::PopID();
     }
 
-    if (ImGui::CollapsingHeader("Presentacion (vsync)"))
+    if (ImGui::CollapsingHeader("Presentation (vsync)"))
     {
         // Scope de IDs propio para esta seccion, como el que daba su BeginMenu
         // antes de que esto fuera un panel: sin el, un widget que se llame como
         // la seccion choca con la cabecera.
-        ImGui::PushID("Presentacion (vsync)");
+        ImGui::PushID("Presentation (vsync)");
             // Modo de presentación. Los que el device no da salen
             // DESHABILITADOS con su motivo, no escondidos: si el core
             // soporta N opciones la UI ofrece N, y el matiz se documenta.
@@ -129,15 +129,15 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
                 const char* kNombres[] = { "Vsync", "Mailbox", "Immediate" };
                 // Dos lineas por modo: que hace, y que se paga por ello.
                 const char* kQueHace[] = {
-                    "Espera al refresco.",
-                    "Triple buffer: ni espera ni rompe la imagen.",
-                    "No espera al refresco.",
+                    "Waits for the refresh.",
+                    "Triple buffer: neither waits nor tears the image.",
+                    "Does not wait for the refresh.",
                 };
                 const char* kQueCuesta[] = {
-                    "Sin tearing, pero clava los FPS a los del monitor.",
-                    "Dibuja frames que se descartan. Solo lo da Vulkan.",
-                    "Aparece tearing, y es el UNICO modo con el que se puede medir"
-                    " el coste real de un frame: con Vsync todo sale a 16 ms.",
+                    "No tearing, but it pins the FPS to the monitor's.",
+                    "Draws frames that get discarded. Only Vulkan offers it.",
+                    "Tearing appears, and it is the ONLY mode that measures"
+                    " the real cost of a frame: with Vsync everything comes out at 16 ms.",
                 };
 
                 const int actual = static_cast<int>(rend->presentMode());
@@ -174,7 +174,7 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
                                 ImGui::Separator();
                                 ImGui::TextColored(
                                     ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                                    "No disponible en este equipo con el backend activo.");
+                                    "Not available on this machine with the active backend.");
                             }
                             ImGui::EndTooltip();
                         }
@@ -185,12 +185,12 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
         ImGui::PopID();
     }
 
-    if (ImGui::CollapsingHeader("Sombras"))
+    if (ImGui::CollapsingHeader("Shadows"))
     {
         // Scope de IDs propio para esta seccion, como el que daba su BeginMenu
         // antes de que esto fuera un panel: sin el, un widget que se llame como
         // la seccion choca con la cabecera.
-        ImGui::PushID("Sombras");
+        ImGui::PushID("Shadows");
             // Sombras en cascada. Los dos eran constantes de compilacion
             // hasta ahora, y son de lo que mas se nota: las 4 cascadas se
             // reparten "Shadow distance", asi que bajarla concentra los
@@ -224,11 +224,11 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
                 [rend] { return rend->cascadeLambda(); },
                 [rend](float v) { rend->setCascadeLambda(v); });
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("0 = cortes uniformes, 1 = logaritmicos.\n"
-                                  "Alto da resolucion cerca; bajo reparte mas parejo.");
+                ImGui::SetTooltip("0 = uniform splits, 1 = logarithmic.\n"
+                                  "High gives resolution up close; low spreads it more evenly.");
 
             { char b[kGpuMsTextSize];
-                ImGui::Text("Sombras GPU: %s ms", gpuMsText(rend->shadowGpuMs(), b, kGpuMsTextSize)); }
+                ImGui::Text("Shadows GPU: %s ms", gpuMsText(rend->shadowGpuMs(), b, kGpuMsTextSize)); }
         ImGui::PopID();
     }
 
@@ -347,12 +347,12 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
         ImGui::PopID();
     }
 
-    if (ImGui::CollapsingHeader("Niebla"))
+    if (ImGui::CollapsingHeader("Fog"))
     {
         // Scope de IDs propio para esta seccion, como el que daba su BeginMenu
         // antes de que esto fuera un panel: sin el, un widget que se llame como
         // la seccion choca con la cabecera.
-        ImGui::PushID("Niebla");
+        ImGui::PushID("Fog");
             // Niebla volumetrica: interruptor global, ajuste de sesion (no
             // se serializa) igual que el bloom, el SSAO y el SSR. Apagada
             // deja la imagen exactamente como antes de la feature y el coste
@@ -503,7 +503,7 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
                     m_ctl.pushUndo<float>("SSAA factor", antes, m_ssaaPendingFactor,
                         [rend](const float& v) { rend->setSsaaFactor(v); });
                 }
-                ImGui::TextDisabled("%.2fx pixeles por frame",
+                ImGui::TextDisabled("%.2fx pixels per frame",
                                     m_ssaaPendingFactor * m_ssaaPendingFactor);
             }
             else if (aaMode == AaMode::Msaa)
@@ -536,7 +536,7 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
                 ImGui::TextDisabled("(max %dx)", maxSamples);
                 if (maxSamples <= 1)
                     ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                                       "Esta GPU no soporta multimuestra: MSAA no hara nada.");
+                                       "This GPU does not support multisampling: MSAA will do nothing.");
             }
             else if (aaMode == AaMode::Taa)
             {
@@ -597,15 +597,15 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
                 if (total > (size_t)MAX_LIGHTS)
                 {
                     ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                                       "%zu luces en escena, solo %d iluminan.",
+                                       "%zu lights in the scene, only %d contribute.",
                                        total, MAX_LIGHTS);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip(
-                            "El bloque UBO tiene sitio para MAX_LIGHTS luces y se queda "
-                            "con\nlas primeras en orden de escena. Las demas ni iluminan "
-                            "ni\nproyectan sombra.\n\nSubir ese tope obliga a recompilar "
-                            "los shaders que declaran el\nbloque, asi que no es un ajuste "
-                            "de la UI.");
+                            "The UBO block has room for MAX_LIGHTS lights and keeps "
+                            "\nthe first ones in scene order. The rest neither light "
+                            "\nnor cast shadows.\n\nRaising that cap requires recompiling "
+                            "the shaders that declare the\nblock, so it is not a UI "
+                            "setting.");
                 }
             }
 
@@ -619,11 +619,11 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
 
                 { char b[kGpuMsTextSize];
                 ImGui::Text("Forward+ GPU: %s ms", gpuMsText(rend->forwardPlusGpuMs(), b, kGpuMsTextSize)); }
-                ImGui::Text("Luces/celda: %.1f", rend->forwardPlusAvgPerCell());
+                ImGui::Text("Lights/cell: %.1f", rend->forwardPlusAvgPerCell());
                 const uint32_t overflow = rend->forwardPlusOverflowCells();
                 if (overflow > 0)
                     ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                                       "%u celdas desbordadas (pierden luces)", overflow);
+                                       "%u overflowing cells (they lose lights)", overflow);
             }
         ImGui::PopID();
     }
@@ -657,17 +657,17 @@ void RenderingPanel::draw(EditorContext& ctx, RenderBackend active, RenderBacken
             selected = (RenderBackend)backendCurrent;
             guardar();
             if (selected != active)
-                log(std::string("Backend de render cambiado a ") +
+                log(std::string("Render backend changed to ") +
                                 renderBackendName(selected) +
-                                ": reinicia el editor para aplicarlo");
+                                ": restart the editor to apply it");
         }
 
         if (selected != active)
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                               "Requiere reiniciar (ahora: %s)",
+                               "Requires a restart (now: %s)",
                                renderBackendName(active));
         else
-            ImGui::TextDisabled("En uso: %s", renderBackendName(active));
+            ImGui::TextDisabled("In use: %s", renderBackendName(active));
         ImGui::PopID();
     }
 

@@ -41,7 +41,7 @@ namespace DonTopo
         allocInfo.commandPool        = m_gpu.commandPool();
         allocInfo.commandBufferCount = 1;
         if (vkAllocateCommandBuffers(m_gpu.device(), &allocInfo, &m_cmd) != VK_SUCCESS)
-            throw std::runtime_error("TransferBatch: fallo al reservar command buffer");
+            throw std::runtime_error("TransferBatch: failed to allocate the command buffer");
 
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -64,7 +64,7 @@ namespace DonTopo
         VkFenceCreateInfo fenceInfo{};
         fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         if (vkCreateFence(m_gpu.device(), &fenceInfo, nullptr, &m_fence) != VK_SUCCESS)
-            throw std::runtime_error("TransferBatch: fallo al crear la fence");
+            throw std::runtime_error("TransferBatch: failed to create the fence");
 
         VkSubmitInfo submitInfo{};
         submitInfo.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -88,7 +88,7 @@ namespace DonTopo
         // un use-after-free que las capas de validación cazan, pero que en
         // release corrompe en silencio.
         if (vkGetFenceStatus(m_gpu.device(), m_fence) != VK_SUCCESS)
-            throw std::runtime_error("TransferBatch::reclaim con la fence sin senalar");
+            throw std::runtime_error("TransferBatch::reclaim with the fence not signaled");
 
         for (auto& [buf, mem] : m_staging)
         {

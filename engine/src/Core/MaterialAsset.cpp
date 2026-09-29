@@ -54,38 +54,38 @@ MaterialAsset loadMaterialAsset(const std::filesystem::path& mat, std::string* w
         // (nullptr), así que `warn` no hace nada en el camino caliente — el
         // coste solo existe cuando collectMaterialOverrideWarnings (que solo
         // corre al cargar la escena) lo pide.
-        warn("material inexistente; se hereda todo del modelo");
+        warn("missing material; everything is inherited from the model");
         return out;
     }
 
     const std::uintmax_t size = std::filesystem::file_size(mat, ec);
     if (ec || size > kMaxMaterialAssetBytes)
     {
-        warn("material ilegible o demasiado grande; se hereda todo del modelo");
+        warn("material unreadable or too large; everything is inherited from the model");
         return out;
     }
     if (size == 0) return out;
 
     std::ifstream in(mat, std::ios::binary);
-    if (!in) { warn("no se pudo abrir el material; se hereda todo del modelo"); return out; }
+    if (!in) { warn("could not open the material; everything is inherited from the model"); return out; }
     const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     const nlohmann::json j = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded() || !j.is_object())
     {
-        warn("JSON invalido; se hereda todo del modelo");
+        warn("invalid JSON; everything is inherited from the model");
         return out;
     }
     const auto version = j.find("version");
     if (version == j.end() || !version->is_number_integer() || version->get<long long>() != 1)
     {
-        warn("version de material desconocida; se hereda todo del modelo");
+        warn("unknown material version; everything is inherited from the model");
         return out;
     }
     const auto type = j.find("type");
     if (type == j.end() || !type->is_string() || type->get<std::string>() != "material")
     {
-        warn("el fichero no es de tipo material; se hereda todo del modelo");
+        warn("the file is not of type material; everything is inherited from the model");
         return out;
     }
 
@@ -96,7 +96,7 @@ MaterialAsset loadMaterialAsset(const std::filesystem::path& mat, std::string* w
         const auto it = j.find(key);
         if (it == j.end()) return;
         if (it->is_string()) dst = fromRelativeToFolder(it->get<std::string>(), folder);
-        else problems += std::string(key) + " no es una ruta valida (se hereda). ";
+        else problems += std::string(key) + " is not a valid path (inherited). ";
     };
     readPath("albedo", out.albedo);
     readPath("normal", out.normal);
@@ -106,12 +106,12 @@ MaterialAsset loadMaterialAsset(const std::filesystem::path& mat, std::string* w
     {
         const auto it = j.find(key);
         if (it == j.end()) return;
-        if (!it->is_number()) { problems += std::string(key) + " no es numerico (se hereda). "; return; }
+        if (!it->is_number()) { problems += std::string(key) + " is not numeric (inherited). "; return; }
         const double v = it->get<double>();
-        if (!std::isfinite(v)) { problems += std::string(key) + " no es finito (se hereda). "; return; }
+        if (!std::isfinite(v)) { problems += std::string(key) + " is not finite (inherited). "; return; }
         dst = clampFactor(static_cast<float>(v));
         if (static_cast<double>(dst) != v)
-            problems += std::string(key) + " fuera de rango (acotado). ";
+            problems += std::string(key) + " out of range (clamped). ";
     };
     readFactor("metallic",  out.metallic);
     readFactor("roughness", out.roughness);
@@ -137,11 +137,11 @@ bool saveMaterialAsset(const std::filesystem::path& mat, const MaterialAsset& as
     tmp += ".tmp";
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out) { if (error) *error = "no se pudo escribir " + mat.string(); return false; }
+        if (!out) { if (error) *error = "could not write " + mat.string(); return false; }
         out << j.dump(2) << '\n';
         if (!out)
         {
-            if (error) *error = "escritura incompleta de " + mat.string();
+            if (error) *error = "incomplete write of " + mat.string();
             out.close();
             std::filesystem::remove(tmp, ec);
             return false;
@@ -150,7 +150,7 @@ bool saveMaterialAsset(const std::filesystem::path& mat, const MaterialAsset& as
     std::filesystem::rename(tmp, mat, ec);
     if (ec)
     {
-        if (error) *error = "no se pudo renombrar a " + mat.string() + ": " + ec.message();
+        if (error) *error = "could not rename to " + mat.string() + ": " + ec.message();
         std::error_code rmEc;
         std::filesystem::remove(tmp, rmEc);
         return false;

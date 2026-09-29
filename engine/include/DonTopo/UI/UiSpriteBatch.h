@@ -111,8 +111,8 @@ namespace DonTopo
         // deshace la gamma a mano, o el color sale lavado.
         int32_t   linearOutput = 0;
     };
-    static_assert(offsetof(UiPushConstants, transform)    == 0,  "ui.vert espera la mat4 en el offset 0");
-    static_assert(offsetof(UiPushConstants, linearOutput) == 64, "ui.frag espera el flag en el offset 64");
+    static_assert(offsetof(UiPushConstants, transform)    == 0,  "ui.vert expects the mat4 at offset 0");
+    static_assert(offsetof(UiPushConstants, linearOutput) == 64, "ui.frag expects the flag at offset 64");
 
     // Lo que se empuja de verdad: hasta el ultimo byte util, sin el relleno de
     // alineacion que sizeof(UiPushConstants) mete detras (glm::mat4 alinea a 16,
