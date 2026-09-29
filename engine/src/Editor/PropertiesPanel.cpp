@@ -400,7 +400,7 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, uint64_t ownerId,
     // apile su undo (ver consumeUserMeshJob).
     m_userMeshJobs[owner->id] = owner->pendingMeshJob;
     m_meshLoadError.clear();
-    ctx.pushLog("Cargando '" + path + "'...");
+    ctx.pushLog("Loading '" + path + "'...");
 }
 
 bool PropertiesPanel::consumeUserMeshJob(uint64_t targetId, uint64_t job)
@@ -957,7 +957,7 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
         else           ImGui::Text("%.2f ms of GPU", ms);
         // Del backend activo, no del de Vulkan por su nombre: cada uno guarda
         // recursos distintos por sonda (H51).
-        ImGui::Text("Memoria: %.2f MB",
+        ImGui::Text("Memory: %.2f MB",
                     (double)ctx.renderer->probeMemoryBytes() / (1024.0 * 1024.0));
     }
 
@@ -1252,7 +1252,7 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
                   +[](CanvasComponent& cc) -> float& { return cc.referenceDpi; },
                   1.0f, 1.0f, 2000.0f, "%.1f");
 
-        ImGui::Text("Safe Area (px reales)");
+        ImGui::Text("Safe Area (real px)");
         dragFloat("Left##safe",
                   +[](CanvasComponent& cc) -> float& { return cc.safeArea.left; },
                   1.0f, 0.0f, 8192.0f, "%.0f");
@@ -1733,7 +1733,7 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
         // Sin atlas no hay nada que trocear, y el botón deshabilitado dice por
         // qué mejor que su ausencia.
         ImGui::BeginDisabled(b->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...")) ctx.openSpriteEditor(b->atlasPath);
+        if (ImGui::Button("Edit sprites...")) ctx.openSpriteEditor(b->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && b->atlasPath.empty())
             ImGui::SetTooltip("Choose an atlas first");
@@ -1766,7 +1766,7 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                   0.01f, 0.0f, 10.0f, "%.3f");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Seconds of the Animation fade. 0 = instant switch");
 
-        ImGui::TextDisabled("Texto");
+        ImGui::TextDisabled("Text");
         inputText("Text", +[](ButtonComponent& c) -> std::string& { return c.text; });
         assetBox("Font", /*isFont=*/true,
                  +[](ButtonComponent& c) -> std::string& { return c.fontPath; },
@@ -2077,7 +2077,7 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
                  1.0f, 0.0f, 16384.0f, "%.0f");
         checkBox("Visible##txt", +[](TextComponent& c) -> bool& { return c.visible; });
 
-        ImGui::TextDisabled("Texto");
+        ImGui::TextDisabled("Text");
         inputText("Text##txt", +[](TextComponent& c) -> std::string& { return c.text; });
 
         // Ruta escribible a mano + la caja de asset común (drawAssetDropBox). El
@@ -2129,7 +2129,7 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Wraps by words against the rect's width. '\\n' always breaks");
 
-        ImGui::TextDisabled("Contorno");
+        ImGui::TextDisabled("Outline");
         dragFloat("Outline Width##txt", +[](TextComponent& c) -> float& { return c.outlineWidth; },
                   0.05f, 0.0f, 32.0f, "%.2f");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Screen pixels. 0 = no outline");
@@ -2462,7 +2462,7 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
                  1.0f, 0.0f, 16384.0f, "%.0f");
         checkBox("Visible##bar", +[](ProgressBarComponent& c) -> bool& { return c.visible; });
 
-        ImGui::TextDisabled("Valor");
+        ImGui::TextDisabled("Value");
         // Sin tope por min/max a propósito: el componente no clampa nada (lo
         // normaliza el sync), y el rango puede venir de un script.
         dragFloat("Value##bar", +[](ProgressBarComponent& c) -> float& { return c.value; },
@@ -3124,7 +3124,7 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
         // Sin atlas no hay nada que trocear, y el botón deshabilitado dice por
         // qué mejor que su ausencia.
         ImGui::BeginDisabled(p->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##panel")) ctx.openSpriteEditor(p->atlasPath);
+        if (ImGui::Button("Edit sprites...##panel")) ctx.openSpriteEditor(p->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && p->atlasPath.empty())
             ImGui::SetTooltip("Choose an atlas first");
@@ -3487,7 +3487,7 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
             [&](const std::string& dropped) { setImageAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(im->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##image")) ctx.openSpriteEditor(im->atlasPath);
+        if (ImGui::Button("Edit sprites...##image")) ctx.openSpriteEditor(im->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && im->atlasPath.empty())
             ImGui::SetTooltip("Choose an atlas first");
@@ -3928,7 +3928,7 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("When false it is drawn the same but cannot be moved");
 
-        ImGui::TextDisabled("Valor");
+        ImGui::TextDisabled("Value");
         dragFloat("Value##slider", +[](SliderComponent& c) -> float& { return c.value; },
                   0.01f, -1e6f, 1e6f, "%.3f");
         dragFloat("Min##slider", +[](SliderComponent& c) -> float& { return c.minValue; },
@@ -3973,7 +3973,7 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
             [&](const std::string& dropped) { setSliderAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(sl->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##slider")) ctx.openSpriteEditor(sl->atlasPath);
+        if (ImGui::Button("Edit sprites...##slider")) ctx.openSpriteEditor(sl->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && sl->atlasPath.empty())
             ImGui::SetTooltip("Choose an atlas first");
@@ -4358,7 +4358,7 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
             [&](const std::string& dropped) { setCheckboxAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(cb->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##checkbox")) ctx.openSpriteEditor(cb->atlasPath);
+        if (ImGui::Button("Edit sprites...##checkbox")) ctx.openSpriteEditor(cb->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && cb->atlasPath.empty())
             ImGui::SetTooltip("Choose an atlas first");
@@ -4746,7 +4746,7 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
             [&](const std::string& dropped) { setToggleAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(tg->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##toggle")) ctx.openSpriteEditor(tg->atlasPath);
+        if (ImGui::Button("Edit sprites...##toggle")) ctx.openSpriteEditor(tg->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && tg->atlasPath.empty())
             ImGui::SetTooltip("Choose an atlas first");
@@ -5099,7 +5099,7 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
         checkBox("Visible##scrollbar", +[](ScrollbarComponent& c) -> bool& { return c.visible; });
         checkBox("Interactable##scrollbar", +[](ScrollbarComponent& c) -> bool& { return c.interactable; });
 
-        ImGui::TextDisabled("Valor");
+        ImGui::TextDisabled("Value");
         dragFloat("Value##scrollbar", +[](ScrollbarComponent& c) -> float& { return c.value; },
                   0.01f, 0.0f, 1.0f, "%.3f");
         dragFloat("Handle Fraction##scrollbar", +[](ScrollbarComponent& c) -> float& { return c.handleFraction; },
@@ -5179,7 +5179,7 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
             [&](const std::string& dropped) { setScrollbarAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(sb->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##scrollbar")) ctx.openSpriteEditor(sb->atlasPath);
+        if (ImGui::Button("Edit sprites...##scrollbar")) ctx.openSpriteEditor(sb->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && sb->atlasPath.empty())
             ImGui::SetTooltip("Choose an atlas first");
@@ -5581,7 +5581,7 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Takes focus and lets the cursor move, but not change the text");
 
-        ImGui::TextDisabled("Texto");
+        ImGui::TextDisabled("Text");
         inputText("Text##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.text; });
         inputText("Placeholder##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.placeholder; });
         if (ImGui::IsItemHovered())
@@ -5597,7 +5597,7 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
         dragFloat("Padding##inputfield", +[](InputFieldComponent& c) -> float& { return c.padding; },
                   0.5f, 0.0f, 4096.0f, "%.1f");
 
-        ImGui::TextDisabled("Filtro");
+        ImGui::TextDisabled("Filter");
         {
             // characterLimit es un uint32 y no hay dragUint: se edita como entero
             // con el mismo baile de undo que los demas.
@@ -5694,7 +5694,7 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
             [&](const std::string& dropped) { setInputFieldAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(fld->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##inputfield")) ctx.openSpriteEditor(fld->atlasPath);
+        if (ImGui::Button("Edit sprites...##inputfield")) ctx.openSpriteEditor(fld->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && fld->atlasPath.empty())
             ImGui::SetTooltip("Choose an atlas first");
@@ -6237,7 +6237,7 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
         colorEdit("Item Selected##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.itemSelectedColor; });
         colorEdit("Arrow Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.arrowColor; });
 
-        ImGui::TextDisabled("Texto");
+        ImGui::TextDisabled("Text");
         dragFloat("Font Size##dropdown", +[](DropdownComponent& c) -> float& { return c.fontSize; },
                   0.5f, 1.0f, 512.0f, "%.1f");
         colorEdit("Text Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.textColor; });
@@ -6282,7 +6282,7 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             [&](const std::string& dropped) { setDropdownAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(dd->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##dropdown")) ctx.openSpriteEditor(dd->atlasPath);
+        if (ImGui::Button("Edit sprites...##dropdown")) ctx.openSpriteEditor(dd->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && dd->atlasPath.empty())
             ImGui::SetTooltip("Choose an atlas first");
@@ -6679,7 +6679,7 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
             [&](const std::string& dropped) { setScrollViewAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(sv->atlasPath.empty() || !ctx.openSpriteEditor);
-        if (ImGui::Button("Editar sprites...##scrollview")) ctx.openSpriteEditor(sv->atlasPath);
+        if (ImGui::Button("Edit sprites...##scrollview")) ctx.openSpriteEditor(sv->atlasPath);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered() && sv->atlasPath.empty())
             ImGui::SetTooltip("Choose an atlas first");
@@ -7951,7 +7951,7 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
                 const bool before = ctx.selected->meshVisible;
                 ctx.selected->meshVisible = visible;
                 ctx.pushLog("Mesh of '" + ctx.selected->name + "' " +
-                            (visible ? "visible" : "oculto"));
+                            (visible ? "visible" : "hidden"));
                 if (meshScene && ctx.undo)
                 {
                     ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
@@ -8599,7 +8599,7 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             // moldear, igual que las distancias min/max de mas abajo.
             if (is3D)
             {
-                const char* kRolloffNames[] = { "Inverse (realista)", "Linear",
+                const char* kRolloffNames[] = { "Inverse (realistic)", "Linear",
                                                  "Linear Square" };
                 int rolloffIdx = static_cast<int>(clip->getRolloff());
                 if (ImGui::Combo("Rolloff", &rolloffIdx, kRolloffNames, IM_ARRAYSIZE(kRolloffNames)))
@@ -8997,7 +8997,7 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
         if (ctx.isPlaying) ctx.scriptManager->callOnDestroy(*toRemove);
         const std::string name = toRemove->scriptName;
         ctx.selected->removeScript(toRemove);
-        ctx.pushLog("Componente Script '" + name + "' removed from '" + ctx.selected->name + "'");
+        ctx.pushLog("Script component '" + name + "' removed from '" + ctx.selected->name + "'");
     }
 }
 
@@ -9383,7 +9383,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                         ctx.selected->addScript(std::move(comp));
                         // En Play el lifecycle instancia y dispara Awake/Start
                         // en el siguiente update (started == false).
-                        ctx.pushLog("Componente Script '" + name + "' added to '" + ctx.selected->name + "'");
+                        ctx.pushLog("Script component '" + name + "' added to '" + ctx.selected->name + "'");
                     }
                 }
                 if (!ctx.scriptManager->getRegistry().empty())

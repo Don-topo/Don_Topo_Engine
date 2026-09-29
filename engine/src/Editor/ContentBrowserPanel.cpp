@@ -394,7 +394,7 @@ MoveOutcome moveAsset(const std::filesystem::path& src, const std::filesystem::p
 {
     std::error_code ec;
     if (!std::filesystem::exists(src, ec) || ec)
-        return { MoveResult::RejectedFailed, {}, "El origen no existe" };
+        return { MoveResult::RejectedFailed, {}, "The source does not exist" };
 
     if (samePath(src.parent_path(), destDir))
         return { MoveResult::RejectedSameFolder, {}, "" };
@@ -454,7 +454,7 @@ MoveOutcome moveAsset(const std::filesystem::path& src, const std::filesystem::p
         std::string sidecarError;
         if (!moveImportSidecar(src, dest, &sidecarError))
             return { MoveResult::Moved, dest,
-                     "el asset se movio pero no su .import.json: " + sidecarError };
+                     "the asset was moved but not its .import.json: " + sidecarError };
     }
     return { MoveResult::Moved, dest, "" };
 }
@@ -469,7 +469,7 @@ RenameFileOutcome renameAssetFile(const std::filesystem::path& from, const std::
     if (!isDir && !samePath(importSidecarPath(from), importSidecarPath(to)) &&
         importSidecarConflict(from, to))
     {
-        out.error = "Ya existe un .import.json con ese nombre";
+        out.error = "An .import.json with that name already exists";
         return out;
     }
     std::error_code ec;
@@ -484,7 +484,7 @@ RenameFileOutcome renameAssetFile(const std::filesystem::path& from, const std::
     {
         std::string sidecarError;
         if (!moveImportSidecar(from, to, &sidecarError))
-            out.warning = "El asset se renombro pero no su .import.json: " + sidecarError;
+            out.warning = "The asset was renamed but not its .import.json: " + sidecarError;
     }
     return out;
 }
@@ -527,7 +527,7 @@ std::vector<BreadcrumbSegment> breadcrumbSegments(const std::filesystem::path& r
 
 std::string uniqueFolderName(const std::filesystem::path& dir)
 {
-    const std::string base = "Nueva carpeta";
+    const std::string base = "New Folder";
     std::error_code ec;
     if (!std::filesystem::exists(dir / base, ec))
         return base;
@@ -541,7 +541,7 @@ std::string uniqueFolderName(const std::filesystem::path& dir)
 
 std::string uniqueMaterialName(const std::filesystem::path& dir)
 {
-    const std::string base = "Nuevo material";
+    const std::string base = "New Material";
     std::error_code ec;
     if (!std::filesystem::exists(dir / (base + ".mat"), ec))
         return base + ".mat";
@@ -987,7 +987,7 @@ void ContentBrowserPanel::applyPendingMove(EditorContext& ctx, GameObject* scene
     // la escena se está reemplazando y reescribir sus referencias no tiene sentido.
     if (ctx.editingLocked)
     {
-        ctx.pushLog("Carga de escena en curso: el movimiento del asset se descarta");
+        ctx.pushLog("Scene load in progress: the asset move is discarded");
         return;
     }
 
@@ -1002,7 +1002,7 @@ void ContentBrowserPanel::applyPendingMove(EditorContext& ctx, GameObject* scene
         // a los demás (mismo criterio que el import de varios ficheros).
         if (!pathUnderDir(src, m_projectRoot) || !destInside)
         {
-            ctx.pushLog("Movimiento rechazado: origen o destino fuera del proyecto");
+            ctx.pushLog("Move rejected: source or destination outside the project");
             continue;
         }
 
@@ -1015,7 +1015,7 @@ void ContentBrowserPanel::applyPendingMove(EditorContext& ctx, GameObject* scene
         {
             ++moved;
             if (!outcome.errorMessage.empty())
-                ctx.pushLog("Aviso al mover '" + src.filename().string() + "': " + outcome.errorMessage);
+                ctx.pushLog("Warning while moving '" + src.filename().string() + "': " + outcome.errorMessage);
             updateSceneReferencesForRename(ctx, sceneRoot, src, outcome.newPath, isDir);
             // Si la carpeta actual era la movida (o colgaba de ella) ya no existe
             // con esa ruta: seguirla a su sitio nuevo en vez de dejar el grid
@@ -1031,25 +1031,25 @@ void ContentBrowserPanel::applyPendingMove(EditorContext& ctx, GameObject* scene
         case MoveResult::RejectedSameFolder:
             break; // ya estaba ahí: no hay nada que decir
         case MoveResult::RejectedIntoSelf:
-            ctx.pushLog("No se puede mover una carpeta dentro de sí misma");
+            ctx.pushLog("A folder cannot be moved into itself");
             break;
         case MoveResult::RejectedNameConflict:
-            ctx.pushLog("Movimiento rechazado: ya existe '" + src.filename().string() +
+            ctx.pushLog("Move rejected: there is already a '" + src.filename().string() +
                         "' en '" + mv.destDir.filename().string() + "'");
             break;
         case MoveResult::RejectedFailed:
-            ctx.pushLog("No se pudo mover '" + src.filename().string() + "': " + outcome.errorMessage);
+            ctx.pushLog("Could not move '" + src.filename().string() + "': " + outcome.errorMessage);
             break;
         }
     }
 
     if (moved == 1 && mv.srcs.size() == 1)
-        ctx.pushLog("Asset movido: '" + mv.srcs[0].filename().string() + "' -> '" +
+        ctx.pushLog("Asset moved: '" + mv.srcs[0].filename().string() + "' -> '" +
                     mv.destDir.filename().string() + "'");
     else if (moved == 1)
-        ctx.pushLog("1 asset movido a '" + mv.destDir.filename().string() + "'");
+        ctx.pushLog("1 asset moved to '" + mv.destDir.filename().string() + "'");
     else if (moved > 1)
-        ctx.pushLog(std::to_string(moved) + " assets movidos a '" + mv.destDir.filename().string() + "'");
+        ctx.pushLog(std::to_string(moved) + " assets moved to '" + mv.destDir.filename().string() + "'");
 }
 
 void ContentBrowserPanel::drawFolderTree(const std::filesystem::path& dir)
@@ -1188,12 +1188,12 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             {
                 if (o.result == AssetImportResult::Copied)
                 {
-                    ctx.pushLog("Asset importado: " + o.destPath.filename().string());
+                    ctx.pushLog("Asset imported: " + o.destPath.filename().string());
                     m_scanned = false;
                 }
                 else
                 {
-                    ctx.pushLog("Import rechazado (" + o.sourcePath.filename().string() + "): " +
+                    ctx.pushLog("Import rejected (" + o.sourcePath.filename().string() + "): " +
                                 describeImportResult(o));
                 }
             }
@@ -1328,15 +1328,15 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         {
             struct KindOption { const char* label; std::optional<AssetKind> kind; };
             static const KindOption kOptions[] = {
-                {"Todos", std::nullopt},           {"Carpetas", AssetKind::Folder},
+                {"Todos", std::nullopt},           {"Folders", AssetKind::Folder},
                 {"3D", AssetKind::Model3D},        {"Audio", AssetKind::Audio},
-                {"Imagen", AssetKind::Image},      {"Fuente", AssetKind::Font},
-                {"Escena", AssetKind::Scene},      {"Script", AssetKind::Script},
+                {"Image", AssetKind::Image},      {"Font", AssetKind::Font},
+                {"Scene", AssetKind::Scene},      {"Script", AssetKind::Script},
                 {"Shader", AssetKind::Shader},     {"Material", AssetKind::Material},
-                {"Otros", AssetKind::Other},
+                {"Other", AssetKind::Other},
             };
             ImGui::SetNextItemWidth(std::max(80.0f, paneW - 140.0f));
-            ImGui::InputTextWithHint("##AssetFilterText", "Buscar por nombre...",
+            ImGui::InputTextWithHint("##AssetFilterText", "Search by name...",
                                      m_filterText, sizeof(m_filterText));
             ImGui::SameLine();
             ImGui::SetNextItemWidth(-FLT_MIN);
@@ -1482,7 +1482,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     // otra escena dejaría al snapshot del Stop describiendo una
                     // escena que ya no existe.
                     if (ctx.pushLog)
-                        ctx.pushLog("Para el Play Mode para cargar una escena");
+                        ctx.pushLog("Stop Play Mode to load a scene");
                 }
                 else
                 {
@@ -1528,7 +1528,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     for (const auto& p : m_selection.items)
                         joined += p.string() + "\n";
                     ImGui::SetDragDropPayload("DT_ASSET_MULTI", joined.c_str(), joined.size() + 1);
-                    ImGui::Text("%zu elementos", m_selection.items.size());
+                    ImGui::Text("%zu items", m_selection.items.size());
                 }
                 else
                 {
@@ -1618,11 +1618,11 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     std::filesystem::create_directory(created, mkEc);
                     if (mkEc)
                     {
-                        ctx.pushLog("No se pudo crear la carpeta: " + mkEc.message());
+                        ctx.pushLog("Could not create the folder: " + mkEc.message());
                     }
                     else
                     {
-                        ctx.pushLog("Carpeta creada: " + created.filename().string());
+                        ctx.pushLog("Folder created: " + created.filename().string());
                         m_scanned = false;
                         beginAssetRename(created, /*isDir=*/true);
                     }
@@ -1634,11 +1634,11 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     std::string saveErr;
                     if (!saveMaterialAsset(created, MaterialAsset{}, &saveErr))
                     {
-                        ctx.pushLog("No se pudo crear el material: " + saveErr);
+                        ctx.pushLog("Could not create the material: " + saveErr);
                     }
                     else
                     {
-                        ctx.pushLog("Material creado: " + created.filename().string());
+                        ctx.pushLog("Material created: " + created.filename().string());
                         m_scanned = false;
                         beginAssetRename(created, /*isDir=*/false);
                     }
@@ -1650,29 +1650,29 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 
         if (m_openScenePromptPopup)
         {
-            ImGui::OpenPopup("Guardar cambios de escena");
+            ImGui::OpenPopup("Save scene changes");
             m_openScenePromptPopup = false;
         }
-        if (ImGui::BeginPopupModal("Guardar cambios de escena", nullptr,
+        if (ImGui::BeginPopupModal("Save scene changes", nullptr,
                                     ImGuiWindowFlags_AlwaysAutoResize))
         {
-            ImGui::TextUnformatted("La escena actual tiene cambios sin guardar.");
-            ImGui::TextUnformatted("¿Guardar los cambios de la escena actual?");
-            ImGui::Text("Se cargará: %s", m_sceneLoadTarget.filename().string().c_str());
+            ImGui::TextUnformatted("The current scene has unsaved changes.");
+            ImGui::TextUnformatted("Save the changes to the current scene?");
+            ImGui::Text("Will load: %s", m_sceneLoadTarget.filename().string().c_str());
             ImGui::Separator();
-            if (ImGui::Button("Guardar"))
+            if (ImGui::Button("Save"))
             {
                 m_scenePromptChoice = ScenePromptChoice::Save;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if (ImGui::Button("No guardar"))
+            if (ImGui::Button("Don't save"))
             {
                 m_scenePromptChoice = ScenePromptChoice::Discard;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Cancelar"))
+            if (ImGui::Button("Cancel"))
             {
                 m_sceneLoadTarget.clear();
                 ImGui::CloseCurrentPopup();
@@ -1710,7 +1710,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 std::string newStem = trim(m_assetRenameBuffer);
                 if (!isValidFileName(newStem))
                 {
-                    m_assetRenameError = "Nombre invalido";
+                    m_assetRenameError = "Invalid name";
                 }
                 else
                 {
@@ -1721,7 +1721,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     std::error_code existsEc;
                     if (!samePath(newPath, m_assetRenameTarget) && std::filesystem::exists(newPath, existsEc))
                     {
-                        m_assetRenameError = "Ya existe un fichero/carpeta con ese nombre";
+                        m_assetRenameError = "A file/folder with that name already exists";
                     }
                     else
                     {
@@ -1735,7 +1735,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                         {
                             if (!renamed.warning.empty())
                                 ctx.pushLog(renamed.warning);
-                            ctx.pushLog("Asset renombrado: '" + m_assetRenameTarget.filename().string() +
+                            ctx.pushLog("Asset renamed: '" + m_assetRenameTarget.filename().string() +
                                     "' -> '" + newPath.filename().string() + "'");
                             updateSceneReferencesForRename(ctx, sceneRoot, m_assetRenameTarget, newPath, m_assetRenameIsDir);
                             m_scanned = false;
@@ -1759,18 +1759,18 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         if (ImGui::BeginPopupModal("Delete Asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         {
             if (m_assetDeleteTargets.size() == 1)
-                ImGui::Text("Borrar '%s'?", m_assetDeleteTargets[0].first.filename().string().c_str());
+                ImGui::Text("Delete '%s'?", m_assetDeleteTargets[0].first.filename().string().c_str());
             else
-                ImGui::Text("Borrar %zu elementos?", m_assetDeleteTargets.size());
+                ImGui::Text("Delete %zu items?", m_assetDeleteTargets.size());
             if (m_assetDeleteAffectedCount > 0)
                 ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
-                    "%d objeto(s) lo usan y perderan la referencia.", m_assetDeleteAffectedCount);
+                    "%d object(s) use it and will lose the reference.", m_assetDeleteAffectedCount);
             if (!m_assetDeleteError.empty())
                 ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_assetDeleteError.c_str());
             ImGui::Separator();
-            bool confirm = ImGui::Button("Borrar");
+            bool confirm = ImGui::Button("Delete");
             ImGui::SameLine();
-            bool cancel = ImGui::Button("Cancelar");
+            bool cancel = ImGui::Button("Cancel");
 
             if (confirm)
             {
@@ -1789,7 +1789,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     }
                     else
                     {
-                        ctx.pushLog("Asset eliminado: " + target.string());
+                        ctx.pushLog("Asset deleted: " + target.string());
                         detachSceneReferencesForDelete(ctx, sceneRoot, target, isDir);
                     }
                 }
@@ -1833,8 +1833,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 ImGui::SliderFloat("Gain (dB)", &m_importAudioEdit.gainDb,
                                    kAudioGainMinDb, kAudioGainMaxDb, "%.1f dB");
                 ImGui::Checkbox("Force mono", &m_importAudioEdit.forceMono);
-                ImGui::TextDisabled("La ganancia se suma al volumen del componente.");
-                ImGui::TextDisabled("Mono: solo clips 2D y desde la proxima reproduccion.");
+                ImGui::TextDisabled("The gain is added to the component's volume.");
+                ImGui::TextDisabled("Mono: 2D clips only, from the next playback on.");
             }
             else if (m_importKind == ImportSettingsKind::Model)
             {
@@ -1842,30 +1842,30 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                                  kModelScaleMin, kModelScaleMax, "%.4f");
                 int normals = static_cast<int>(m_importModelEdit.normals);
                 if (ImGui::Combo("Normals", &normals,
-                                 "Del fichero (planas si faltan)\0Suaves (regenera)\0Planas (regenera)\0"))
+                                 "From file (flat if missing)\0Smooth (regenerate)\0Flat (regenerate)\0"))
                     m_importModelEdit.normals = static_cast<NormalsMode>(normals);
-                ImGui::Checkbox("Recalcular tangentes", &m_importModelEdit.calcTangents);
-                ImGui::Checkbox("Voltear UVs", &m_importModelEdit.flipUVs);
-                ImGui::Checkbox("Importar animaciones", &m_importModelEdit.importAnimations);
-                ImGui::TextDisabled("Se aplica a todos los objetos que usan este modelo.");
-                ImGui::TextDisabled("Los colliders no se re-dimensionan.");
+                ImGui::Checkbox("Recompute tangents", &m_importModelEdit.calcTangents);
+                ImGui::Checkbox("Flip UVs", &m_importModelEdit.flipUVs);
+                ImGui::Checkbox("Import animations", &m_importModelEdit.importAnimations);
+                ImGui::TextDisabled("Applies to every object that uses this model.");
+                ImGui::TextDisabled("Colliders are not resized.");
             }
             else
             {
                 int colorSpace = static_cast<int>(m_importEdit.colorSpace);
-                if (ImGui::Combo("Color space", &colorSpace, "Auto (por slot)\0sRGB\0Linear\0"))
+                if (ImGui::Combo("Color space", &colorSpace, "Auto (per slot)\0sRGB\0Linear\0"))
                     m_importEdit.colorSpace = static_cast<ColorSpaceOverride>(colorSpace);
                 ImGui::Checkbox("Mipmaps", &m_importEdit.mipmaps);
-                ImGui::TextDisabled("Auto: color base sRGB, normal y ORM lineal.");
+                ImGui::TextDisabled("Auto: base color sRGB, normal and ORM linear.");
             }
 
             if (!m_importError.empty())
                 ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_importError.c_str());
             ImGui::Separator();
 
-            const bool apply  = ImGui::Button("Aplicar");
+            const bool apply  = ImGui::Button("Apply");
             ImGui::SameLine();
-            const bool cancel = ImGui::Button("Cancelar");
+            const bool cancel = ImGui::Button("Cancel");
 
             if (apply && m_importKind == ImportSettingsKind::Audio)
             {
@@ -1874,7 +1874,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     [&ctx](const std::string& p) { if (ctx.audio) ctx.audio->refreshImportSettings(p); });
                 if (r.ok)
                 {
-                    ctx.pushLog("Import settings aplicados: " + m_importTarget.filename().string());
+                    ctx.pushLog("Import settings applied: " + m_importTarget.filename().string());
                     ImGui::CloseCurrentPopup();
                 }
                 else
@@ -1894,8 +1894,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     });
                 if (r.ok)
                 {
-                    ctx.pushLog("Import settings aplicados: " + m_importTarget.filename().string() +
-                                " (" + std::to_string(r.refreshed) + " objeto(s) recargados)");
+                    ctx.pushLog("Import settings applied: " + m_importTarget.filename().string() +
+                                " (" + std::to_string(r.refreshed) + " object(s) reloaded)");
                     ImGui::CloseCurrentPopup();
                 }
                 else
@@ -1918,8 +1918,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     });
                 if (r.ok)
                 {
-                    ctx.pushLog("Import settings aplicados: " + m_importTarget.filename().string() +
-                                " (" + std::to_string(r.refreshed) + " objeto(s) actualizados)");
+                    ctx.pushLog("Import settings applied: " + m_importTarget.filename().string() +
+                                " (" + std::to_string(r.refreshed) + " object(s) updated)");
                     ImGui::CloseCurrentPopup();
                 }
                 else
@@ -1959,7 +1959,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             {
                 ImGui::PushID(s.nombre);
                 ImGui::Text("%s: %s", s.nombre,
-                            s.dest->empty() ? "Heredar del modelo"
+                            s.dest->empty() ? "Inherit from model"
                                             : std::filesystem::path(*s.dest).filename().string().c_str());
                 if (ImGui::Button("Browse..."))
                 {
@@ -1994,13 +1994,13 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             }
 
             bool heredaMetallic = m_matAssetEdit.metallic < 0.0f;
-            if (ImGui::Checkbox("Heredar Metallic", &heredaMetallic))
+            if (ImGui::Checkbox("Inherit Metallic", &heredaMetallic))
                 m_matAssetEdit.metallic = heredaMetallic ? -1.0f : 0.5f;
             if (!heredaMetallic)
                 ImGui::SliderFloat("Metallic", &m_matAssetEdit.metallic, 0.0f, 1.0f, "%.2f");
 
             bool heredaRoughness = m_matAssetEdit.roughness < 0.0f;
-            if (ImGui::Checkbox("Heredar Roughness", &heredaRoughness))
+            if (ImGui::Checkbox("Inherit Roughness", &heredaRoughness))
                 m_matAssetEdit.roughness = heredaRoughness ? -1.0f : 0.5f;
             if (!heredaRoughness)
                 ImGui::SliderFloat("Roughness", &m_matAssetEdit.roughness, 0.0f, 1.0f, "%.2f");
@@ -2009,9 +2009,9 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_matAssetError.c_str());
             ImGui::Separator();
 
-            const bool matApply  = ImGui::Button("Aplicar");
+            const bool matApply  = ImGui::Button("Apply");
             ImGui::SameLine();
-            const bool matCancel = ImGui::Button("Cancelar");
+            const bool matCancel = ImGui::Button("Cancel");
             if (matApply)
             {
                 const MaterialAssetApplyResult r = applyMaterialAssetSettings(
@@ -2026,8 +2026,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     });
                 if (r.ok)
                 {
-                    ctx.pushLog("Material aplicado: " + m_matAssetTarget.filename().string() +
-                                " (" + std::to_string(r.refreshed) + " objeto(s) actualizados)");
+                    ctx.pushLog("Material applied: " + m_matAssetTarget.filename().string() +
+                                " (" + std::to_string(r.refreshed) + " object(s) updated)");
                     m_matAssetWindowOpen = false;
                 }
                 else

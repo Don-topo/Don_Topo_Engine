@@ -62,15 +62,15 @@ void drawCollisionLayersWindow(DonTopo::PhysicsManager* physics,
     {
         if (!physics)
         {
-            ImGui::TextDisabled("Sin PhysicsManager: no hay capas que editar.");
+            ImGui::TextDisabled("No PhysicsManager: there are no layers to edit.");
             ImGui::End();
             return;
         }
 
         ImGui::TextWrapped(
-            "Capas de colision del proyecto. La matriz es SIMETRICA: marcar (a,b) "
-            "marca tambien (b,a), por eso solo se dibuja la mitad superior. Todo "
-            "marcado = sin filtros, el comportamiento por defecto.");
+            "The project's collision layers. The matrix is SYMMETRIC: checking (a,b) "
+            "also checks (b,a), which is why only the upper half is drawn. Everything "
+            "checked = no filtering, the default behavior.");
         ImGui::Separator();
 
         const int total = physics->layerCount();
@@ -102,7 +102,7 @@ void drawCollisionLayersWindow(DonTopo::PhysicsManager* physics,
             if (i == 0)
             {
                 ImGui::SameLine();
-                ImGui::TextDisabled("(la capa por defecto no se borra)");
+                ImGui::TextDisabled("(the default layer cannot be deleted)");
             }
             ImGui::PopID();
         }
@@ -117,30 +117,30 @@ void drawCollisionLayersWindow(DonTopo::PhysicsManager* physics,
         if (total >= PhysicsManager::kLayerCount)
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("maximo %d capas", PhysicsManager::kLayerCount);
+            ImGui::TextDisabled("at most %d layers", PhysicsManager::kLayerCount);
         }
 
         // --- Confirmacion de borrado ----------------------------------------
         if (g_layerPendienteDeBorrar > 0)
-            ImGui::OpenPopup("Borrar capa");
-        if (ImGui::BeginPopupModal("Borrar capa", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            ImGui::OpenPopup("Delete layer");
+        if (ImGui::BeginPopupModal("Delete layer", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         {
             const int capa = g_layerPendienteDeBorrar;
-            ImGui::Text("Borrar la capa %d (\"%s\")?", capa,
+            ImGui::Text("Delete layer %d (\"%s\")?", capa,
                         capa > 0 ? physics->getLayerName(capa).c_str() : "");
             ImGui::TextWrapped(
-                "Los colliders que la usaban pasaran a la capa 0, las capas de "
-                "encima bajaran un indice y la matriz perdera su fila y su "
-                "columna. NO se puede deshacer con Ctrl+Z.");
+                "Colliders using it will move to layer 0, the layers "
+                "above will shift down one index and the matrix will lose its row and "
+                "column. It CANNOT be undone with Ctrl+Z.");
             ImGui::Separator();
-            if (ImGui::Button("Borrar"))
+            if (ImGui::Button("Delete"))
             {
                 if (physics->removeLayer(capa)) onChanged();
                 g_layerPendienteDeBorrar = -1;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Cancelar"))
+            if (ImGui::Button("Cancel"))
             {
                 g_layerPendienteDeBorrar = -1;
                 ImGui::CloseCurrentPopup();
@@ -465,7 +465,7 @@ void EditorUI::initUiD3D12(const InitInfo& info)
             // Quedarse sin sitio aquí sería un fallo silencioso que acabaría
             // pisando descriptores de la escena.
             if (pool->next >= pool->capacity)
-                throw std::runtime_error("EditorUI: ImGui pidio mas descriptores de los reservados");
+                throw std::runtime_error("EditorUI: ImGui requested more descriptors than were reserved");
             index = pool->next++;
         }
         outCpu->ptr = pool->cpuStart + static_cast<uint64_t>(index) * pool->stride;
@@ -613,7 +613,7 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
     // (tests headless, arranque antes de crearlo) se quedan los defaults de
     // ViewSettings, que son los mismos que los del manager.
     static_assert(ProjectContext::ViewSettings::LayerCount == PhysicsManager::kLayerCount,
-                  "El project.json y el PhysicsManager tienen que contar las mismas capas");
+                  "project.json and the PhysicsManager must have the same number of layers");
     if (m_physics)
     {
         s.layerActive = m_physics->layerCount();
@@ -671,7 +671,7 @@ void EditorUI::applyProjectSettings()
         ProjectContext::readSettings(m_project->root(), currentSettings());
 
     if (s.loadFailed)
-        m_logPanel.push("Ajustes del proyecto ilegibles: se abren los efectos apagados");
+        m_logPanel.push("Unreadable project settings: effects open turned off");
 
     // Audio primero: no depende del Renderer, y ponerlo aquí deja claro que
     // comparte el mismo momento de aplicación que el resto de ajustes.
@@ -733,13 +733,13 @@ void EditorUI::applyProjectSettings()
     bool aaOk = true;
     const EditorRenderer::AaMode aa = aaModeFromName(s.aaMode, aaOk);
     if (!aaOk)
-        m_logPanel.push("Modo de anti-aliasing desconocido en el proyecto ('" + s.aaMode + "'): se usa None");
+        m_logPanel.push("Unknown anti-aliasing mode in the project ('" + s.aaMode + "'): se usa None");
     m_renderer->setAaMode(aa);
 
     bool fpOk = true;
     const EditorRenderer::FpMode fp = fpModeFromName(s.fpMode, fpOk);
     if (!fpOk)
-        m_logPanel.push("Modo de Forward+ desconocido en el proyecto ('" + s.fpMode + "'): se usa Off");
+        m_logPanel.push("Unknown Forward+ mode in the project ('" + s.fpMode + "'): se usa Off");
     m_renderer->setForwardPlusMode(fp);
     m_renderer->setForwardPlusLightRadius(s.fpLightRadius);
     m_renderer->setShadowDistance(s.shadowDistance);
@@ -759,12 +759,12 @@ void EditorUI::applyProjectSettings()
 
     m_selectedBackend = renderBackendFromName(s.renderBackend, backendOk);
     if (!backendOk)
-        m_logPanel.push("Backend de render desconocido en el proyecto ('" + s.renderBackend +
+        m_logPanel.push("Unknown render backend in the project ('" + s.renderBackend +
                         "'): se usa Vulkan");
     if (m_selectedBackend != m_activeBackend)
-        m_logPanel.push(std::string("Este proyecto pide el backend ") +
-                        renderBackendName(m_selectedBackend) + " y el editor está corriendo con " +
-                        renderBackendName(m_activeBackend) + ": reinicia para aplicarlo");
+        m_logPanel.push(std::string("This project asks for the ") +
+                        renderBackendName(m_selectedBackend) + " backend and the editor is running with " +
+                        renderBackendName(m_activeBackend) + ": restart to apply it");
 
     // Capas de física: los nombres tal cual, y la matriz recorriendo sólo la
     // mitad SUPERIOR (b >= a). setLayerCollision escribe ya las dos mitades, así
@@ -812,7 +812,7 @@ void EditorUI::applyProjectSettings()
         // Editor, que no existe hasta que hay proyecto.
         if (!open && i != ProjectContext::ViewSettings::PanelScriptEditor)
             m_logPanel.push("EditorUI: el panel " + std::to_string(i) +
-                            " no esta en panelOpenPtrs(); su visibilidad no se guarda.");
+                            " is not in panelOpenPtrs(); its visibility is not saved.");
     }
 }
 
@@ -834,7 +834,7 @@ void EditorUI::applySkyboxFolder(const std::string& folder)
             guardada = rel.generic_string();
         else
             m_logPanel.push("Skybox: '" + folder +
-                            "' esta fuera del proyecto; el juego exportado no la encontrara.");
+                            "' is outside the project; the exported game will not find it.");
     }
 
     std::snprintf(m_skyboxFolder, sizeof(m_skyboxFolder), "%s", guardada.c_str());
@@ -843,7 +843,7 @@ void EditorUI::applySkyboxFolder(const std::string& folder)
     tmp.skyboxFolder = guardada;
     m_renderer->initSkybox(tmp.skyboxFaces());
     saveProjectSettings();
-    m_logPanel.push("Skybox recargado desde '" + guardada + "'");
+    m_logPanel.push("Skybox reloaded from '" + guardada + "'");
 }
 
 void EditorUI::drawEnvironmentWindow()
@@ -855,9 +855,9 @@ void EditorUI::drawEnvironmentWindow()
     if (ImGui::Begin("Environment", &m_environmentWindowOpen))
     {
         ImGui::TextWrapped(
-            "Carpeta del cielo. Dentro se esperan las seis caras con estos nombres: "
-            "px, nx, py, ny, pz y nz (.png). Cambiarla tambien recalcula la "
-            "iluminacion ambiental, que sale de convolucionar este mismo cubemap.");
+            "Sky folder. The six faces are expected inside with these names: "
+            "px, nx, py, ny, pz and nz (.png). Changing it also recomputes the "
+            "ambient lighting, which comes from convolving this same cubemap.");
         ImGui::Separator();
 
         ImGui::SetNextItemWidth(-1.0f);
@@ -873,7 +873,7 @@ void EditorUI::drawEnvironmentWindow()
                         ImGuiFileDialogFlags_DisableThumbnailMode |
                         ImGuiFileDialogFlags_DisablePlaceMode;
             // filters = nullptr -> IGFD selecciona carpeta, igual que el export.
-            m_skyboxDialog->OpenDialog("SkyboxDlg", "Carpeta del skybox", nullptr, cfg);
+            m_skyboxDialog->OpenDialog("SkyboxDlg", "Skybox folder", nullptr, cfg);
             m_skyboxDlgOpen = true;
         }
         ImGui::SameLine();
@@ -884,7 +884,7 @@ void EditorUI::drawEnvironmentWindow()
         // Zona de arrastre. Acepta DT_ASSET_DIR, que es el payload que el Content
         // Browser pone SOLO a las carpetas: asi ningun fichero cae aqui.
         ImGui::BeginChild("##SkyboxDrop", ImVec2(0, 44), true);
-        ImGui::TextDisabled("...o arrastra aqui una carpeta desde el Content Browser");
+        ImGui::TextDisabled("...or drag a folder here from the Content Browser");
         if (ImGui::BeginDragDropTarget())
         {
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_DIR"))
@@ -910,7 +910,7 @@ void EditorUI::saveProjectSettings()
         return; // sin proyecto abierto esto no corre: comportamiento de antes.
 
     if (!ProjectContext::writeSettings(m_project->root(), currentSettings()))
-        m_logPanel.push("No se pudieron guardar los ajustes en el project.json");
+        m_logPanel.push("Could not save the settings to project.json");
 }
 
 void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
@@ -936,8 +936,8 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
         m_audioFailures.clear();
         m_audio->pollLoadFailures(m_audioFailures);
         for (const auto& path : m_audioFailures)
-            m_logPanel.push("No se pudo cargar el audio '" + path +
-                             "': fichero ausente, formato no soportado o datos corruptos");
+            m_logPanel.push("Could not load the audio '" + path +
+                             "': missing file, unsupported format or corrupt data");
         if (!m_audioOutputWarned && !m_audio->outputWarning().empty())
         {
             m_logPanel.push(m_audio->outputWarning());
@@ -957,7 +957,7 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
     if (std::string luaScenePath; ScriptBindings::takePendingSceneLoad(luaScenePath))
     {
         if (!m_isPlaying)
-            m_logPanel.push("DonTopo.loadScene ignorado: solo funciona en Play Mode");
+            m_logPanel.push("DonTopo.loadScene ignored: it only works in Play Mode");
         else
         {
             loadSceneFile(luaScenePath);
@@ -1040,12 +1040,12 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
                 m_sceneFileDialog->OpenDialog("SceneDlg", "Save Scene", ".json", cfg);
                 return;
             }
-            if (!projectAllows(m_currentScenePath, "Escena")) return;
+            if (!projectAllows(m_currentScenePath, "Scene")) return;
             bool saved = m_scene && m_scene->save(m_currentScenePath);
             if (saved) m_undoHistory.markSceneSaved();
-            m_sceneIOError = saved ? "" : "No se pudo guardar la escena";
-            m_logPanel.push(saved ? ("Escena guardada: " + m_currentScenePath)
-                                  : ("Error al guardar escena: " + m_currentScenePath));
+            m_sceneIOError = saved ? "" : "Could not save the scene";
+            m_logPanel.push(saved ? ("Scene saved: " + m_currentScenePath)
+                                  : ("Error saving scene: " + m_currentScenePath));
             if (saved && !thenLoad.empty())
                 loadSceneFile(thenLoad.string());
         },
@@ -1128,9 +1128,9 @@ void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Edi
                 // ve que "Add Mesh" no hizo nada y no sabe por qué.
                 if (kids.empty())
                     m_logPanel.push("'" + std::filesystem::path(r.path).stem().string() +
-                                     "': ninguna pieza se pudo añadir a '" + parent->name + "'");
+                                     "': no piece could be added to '" + parent->name + "'");
                 auto group = std::make_unique<CompositeCommand>(
-                    "Añadir modelo '" + std::filesystem::path(r.path).stem().string() + "' a '" + parent->name + "'");
+                    "Add model '" + std::filesystem::path(r.path).stem().string() + "' a '" + parent->name + "'");
                 for (GameObject* kid : kids)
                 {
                     renderer.registerGameObject(kid);
@@ -1172,7 +1172,7 @@ void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Edi
         {
             if (GameObject* go = scene.findById(r.targetId))
                 m_undoHistory.push(std::make_unique<MeshComponentCommand>(
-                    scene, &renderer, "Añadir Mesh a '" + go->name + "'", *go, /*add=*/true));
+                    scene, &renderer, "Add Mesh to '" + go->name + "'", *go, /*add=*/true));
         }
     }
 
@@ -1269,7 +1269,7 @@ void EditorUI::duplicateSelection()
     GameObject* clone = duplicateAsSibling(*m_scene, m_selected, *m_physics, *m_audio);
     if (!clone)
     {
-        m_logPanel.push("No se pudo duplicar '" + m_selected->name + "'");
+        m_logPanel.push("Could not duplicate '" + m_selected->name + "'");
         return;
     }
 
@@ -1294,11 +1294,11 @@ void EditorUI::duplicateSelection()
     nlohmann::json snapshot = m_scene->subtreeToJson(clone);
     m_undoHistory.push(std::make_unique<CreateGameObjectCommand>(
         *m_scene, *m_physics, *m_audio, *m_renderer,
-        "Duplicar '" + m_selected->name + "'", parent->id, index, std::move(snapshot)));
+        "Duplicate '" + m_selected->name + "'", parent->id, index, std::move(snapshot)));
 
     m_selected = clone;
     m_propertiesPanel.invalidateCaches();
-    m_logPanel.push("GameObject '" + clone->name + "' duplicado");
+    m_logPanel.push("GameObject '" + clone->name + "' duplicated");
 }
 
 // ── Ajustes de render con undo (P8/H49) ─────────────────────────────────────
@@ -1332,7 +1332,7 @@ void EditorUI::drawMenuBar()
                             ImGuiFileDialogFlags_DisableThumbnailMode |
                             ImGuiFileDialogFlags_DisablePlaceMode;
                 // filters = nullptr -> IGFD selecciona carpeta, no fichero.
-                m_exportDialog->OpenDialog("ExportDlg", "Carpeta destino del export", nullptr, cfg);
+                m_exportDialog->OpenDialog("ExportDlg", "Export destination folder", nullptr, cfg);
                 m_exportDlgOpen = true;
             }
             ImGui::EndMenu();
@@ -1395,8 +1395,8 @@ void EditorUI::drawMenuBar()
                 }
                 ImGui::EndDisabled();
                 if (!m_audio->available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("Sin dispositivo de audio en esta maquina: el editor "
-                                      "arranca mudo y estos mandos no tienen efecto");
+                    ImGui::SetTooltip("No audio device on this machine: the editor "
+                                      "starts muted and these controls have no effect");
                 ImGui::Separator();
             }
             // Peso del ambiente IBL. Ajuste de sesion: no se serializa en la
@@ -1436,9 +1436,9 @@ void EditorUI::drawToolbar()
             if (m_scriptManager) m_scriptManager->onPlayStop();
             // Restore síncrono (async=false): sin modal, determinista. Meter
             // estados a medias en la transición Play->Stop no compensa.
-            m_sceneIOError = reloadSceneFromJson(m_playSnapshot, /*async=*/false) ? "" : "No se pudo restaurar la escena";
+            m_sceneIOError = reloadSceneFromJson(m_playSnapshot, /*async=*/false) ? "" : "Could not restore the scene";
             m_isPlaying = false;
-            m_logPanel.push("Play Mode detenido");
+            m_logPanel.push("Play Mode stopped");
         }
         ImGui::PopStyleColor();
     }
@@ -1453,7 +1453,7 @@ void EditorUI::drawToolbar()
             // consola). Sin cámara, Play arranca igual con la del editor — que
             // se pueda iterar sin cámara importa más que forzar disciplina.
             if (!m_scene->findCamera())
-                m_logPanel.push("No hay cámara en la escena; usando la del editor");
+                m_logPanel.push("No camera in the scene; using the editor's");
             m_isPlaying = true;
             // Los Animator arrancan Play desde su estado de entrada, con el
             // reloj a cero y los parámetros limpios.
@@ -1504,12 +1504,12 @@ void EditorUI::drawToolbar()
             GameObject* listenerGo = m_scene->findAudioListener();
             const bool listenerActive = listenerGo && listenerGo->getAudioListener()->getEnabled();
             if (!listenerActive)
-                m_logPanel.push("Sin Audio Listener en la escena: el audio 3D se oye desde la camara");
+                m_logPanel.push("No Audio Listener in the scene: 3D audio is heard from the camera");
             m_scene->traverse([](GameObject* go) {
                 if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
                     go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
             });
-            m_logPanel.push("Play Mode iniciado");
+            m_logPanel.push("Play Mode started");
         }
     }
     ImGui::EndDisabled();
@@ -1524,9 +1524,9 @@ void EditorUI::drawToolbar()
     ImGui::SameLine();
     ImGui::TextUnformatted("|");
     const struct { GizmoMode mode; const char* label; const char* tip; } kGizmoBtns[] = {
-        { GizmoMode::Translate, "Move",   "Mover (W)"   },
-        { GizmoMode::Rotate,    "Rotate", "Rotar (E)"   },
-        { GizmoMode::Scale,     "Scale",  "Escalar (R)" },
+        { GizmoMode::Translate, "Move",   "Move (W)"   },
+        { GizmoMode::Rotate,    "Rotate", "Rotate (E)"   },
+        { GizmoMode::Scale,     "Scale",  "Scale (R)" },
     };
     for (const auto& b : kGizmoBtns)
     {
@@ -1580,7 +1580,7 @@ void EditorUI::drawToolbar()
         m_sceneFileDialog->OpenDialog("SceneDlg", "Save Scene", ".json", cfg);
     }
     if (m_isPlaying && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Para el Play Mode para guardar o cargar escenas");
+        ImGui::SetTooltip("Stop Play Mode to save or load scenes");
 
     ImGui::SameLine();
     if (ImGui::Button("Load Scene") && m_scene)
@@ -1597,7 +1597,7 @@ void EditorUI::drawToolbar()
     }
     ImGui::EndDisabled();
     if (m_isPlaying && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Para el Play Mode para guardar o cargar escenas");
+        ImGui::SetTooltip("Stop Play Mode to save or load scenes");
 
     if (!m_sceneIOError.empty())
     {
@@ -1732,7 +1732,7 @@ bool EditorUI::openProjectScene()
     std::error_code ec;
     if (!std::filesystem::exists(scene, ec) || ec)
     {
-        m_logPanel.push("[Project] El proyecto no tiene escena de arranque: " + scene.string());
+        m_logPanel.push("[Project] The project has no startup scene: " + scene.string());
         return false;
     }
     return loadSceneFile(scene.string());
@@ -1745,7 +1745,7 @@ bool EditorUI::projectAllows(const std::filesystem::path& path, const char* what
     if (m_project->contains(path))
         return true;
 
-    m_logPanel.push(std::string("[Project] ") + what + " fuera del proyecto, rechazado: " +
+    m_logPanel.push(std::string("[Project] ") + what + " outside the project, rejected: " +
                     path.string());
     return false;
 }
@@ -1755,7 +1755,7 @@ bool EditorUI::loadSceneFile(const std::string& path)
     // Sandbox del proyecto: una escena de otro proyecto (o de fuera del
     // workspace) se rechaza aquí, que es por donde pasan TODAS las cargas —
     // menú File, doble click en el Content Browser y DonTopo.loadScene de Lua.
-    if (!projectAllows(path, "Escena"))
+    if (!projectAllows(path, "Scene"))
         return false;
 
     // Valida la estructura básica del JSON ANTES de tocar GPU/Scene:
@@ -1778,8 +1778,8 @@ bool EditorUI::loadSceneFile(const std::string& path)
         m_undoHistory.markSceneSaved();
         m_currentScenePath = path;
     }
-    m_sceneIOError = loaded ? "" : "No se pudo cargar la escena";
-    m_logPanel.push(loaded ? ("Escena cargada: " + path) : ("Error al cargar escena: " + path));
+    m_sceneIOError = loaded ? "" : "Could not load the scene";
+    m_logPanel.push(loaded ? ("Scene loaded: " + path) : ("Error loading scene: " + path));
     return loaded;
 }
 
@@ -1800,7 +1800,7 @@ void EditorUI::drawSceneDialog()
         m_sceneFileDialog->Close();
         m_sceneDlgOpen = false;
         m_pendingSceneLoadAfterSave.clear();
-        m_logPanel.push("Operación de escena cancelada: no se puede guardar ni cargar en Play Mode");
+        m_logPanel.push("Scene operation cancelled: cannot save or load in Play Mode");
         return;
     }
 
@@ -1813,7 +1813,7 @@ void EditorUI::drawSceneDialog()
             // Igual que en la carga: el destino tiene que caer dentro del
             // proyecto. Se rechaza antes de escribir, así que el fichero de
             // fuera ni se crea ni se pisa.
-            if (!projectAllows(path, "Escena"))
+            if (!projectAllows(path, "Scene"))
             {
                 m_sceneFileDialog->Close();
                 m_sceneDlgOpen = false;
@@ -1826,8 +1826,8 @@ void EditorUI::drawSceneDialog()
                 m_undoHistory.markSceneSaved();
                 m_currentScenePath = path;
             }
-            m_sceneIOError = saved ? "" : "No se pudo guardar la escena";
-            m_logPanel.push(saved ? ("Escena guardada: " + path) : ("Error al guardar escena: " + path));
+            m_sceneIOError = saved ? "" : "Could not save the scene";
+            m_logPanel.push(saved ? ("Scene saved: " + path) : ("Error saving scene: " + path));
 
             // Este Save venía del "Guardar" del modal del Content Browser sobre
             // una escena sin fichero: encadena aquí la carga que quedó
@@ -1877,8 +1877,8 @@ void EditorUI::drawExportDialog()
 
     if (ImGui::BeginPopupModal("Export Game", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::Text("Destino: %s", m_exportDestDir.c_str());
-        ImGui::InputText("Nombre", m_exportNameBuffer, sizeof(m_exportNameBuffer));
+        ImGui::Text("Destination: %s", m_exportDestDir.c_str());
+        ImGui::InputText("Name", m_exportNameBuffer, sizeof(m_exportNameBuffer));
 
         // pkg es lo que realmente se va a crear/borrar: se calcula y se
         // enseña aquí (no el nombre crudo) para que el usuario evalúe la
@@ -1908,11 +1908,11 @@ void EditorUI::drawExportDialog()
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", nameError.c_str());
         else if (occupied)
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
-                               "'%s' ya existe y tiene contenido que no es de un export "
-                               "anterior; elige otro nombre u otra carpeta destino.",
+                               "'%s' already exists and has content that is not from a previous "
+                               "export; choose another name or destination folder.",
                                pkg.string().c_str());
         else
-            ImGui::Text("Paquete: %s", pkg.string().c_str());
+            ImGui::Text("Package: %s", pkg.string().c_str());
 
         // Backend con el que arrancará el juego. No tiene por qué ser el del
         // editor: se exporta para la máquina del jugador, no para esta. Se
@@ -1923,8 +1923,8 @@ void EditorUI::drawExportDialog()
         ImGui::Combo("Render backend", &m_exportBackend, exportBackendNames,
                      IM_ARRAYSIZE(exportBackendNames));
         if (m_exportBackend == (int)RenderBackend::D3D12)
-            ImGui::TextDisabled("En una maquina sin DirectX 12 el juego arranca con\n"
-                                "Vulkan y lo deja dicho en game.log.");
+            ImGui::TextDisabled("On a machine without DirectX 12 the game starts with\n"
+                                "Vulkan and says so in game.log.");
 
         ImGui::BeginDisabled(!canExport);
         if (ImGui::Button("Export"))
@@ -1947,11 +1947,11 @@ void EditorUI::drawExportDialog()
 
     if (m_openExportConfirmPopup)
     {
-        ImGui::OpenPopup("Sobrescribir export");
+        ImGui::OpenPopup("Overwrite export");
         m_openExportConfirmPopup = false;
     }
 
-    if (ImGui::BeginPopupModal("Sobrescribir export", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    if (ImGui::BeginPopupModal("Overwrite export", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
         // Misma ruta resuelta que el popup anterior, no el nombre crudo: es
         // literalmente lo que remove_all() va a borrar si el usuario
@@ -1966,9 +1966,9 @@ void EditorUI::drawExportDialog()
         // antes este texto — Occupied (fallo de fs::status incluido) nunca
         // deja abrir este popup.
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
-                           "'%s' contiene un export anterior.", pkg.string().c_str());
-        ImGui::Text("Se borrara todo su contenido antes de exportar.");
-        if (ImGui::Button("Borrar y exportar"))
+                           "'%s' contains a previous export.", pkg.string().c_str());
+        ImGui::Text("All of its content will be deleted before exporting.");
+        if (ImGui::Button("Delete and export"))
         {
             runExport();
             ImGui::CloseCurrentPopup();
@@ -1989,7 +1989,7 @@ void EditorUI::runExport()
     // dereferenciar m_scene.
     if (!m_scene)
     {
-        m_logPanel.push("Export cancelado: no hay escena abierta");
+        m_logPanel.push("Export cancelled: no scene is open");
         return;
     }
 
@@ -2000,7 +2000,7 @@ void EditorUI::runExport()
     // hueco, esta es la función que hay que blindar: es la que lee la escena.
     if (m_isPlaying)
     {
-        m_logPanel.push("Export cancelado: para el Play Mode antes de exportar");
+        m_logPanel.push("Export cancelled: stop Play Mode before exporting");
         return;
     }
 
@@ -2038,8 +2038,8 @@ void EditorUI::runExport()
             const fs::path src(a.sourcePath);
             if (m_project->contains(src))
                 continue;
-            m_logPanel.push(std::string("[Project] Aviso: el export incluye un asset de ") +
-                            (workspace.contains(src) ? "OTRO proyecto: " : "fuera del proyecto: ") +
+            m_logPanel.push(std::string("[Project] Warning: the export includes an asset from ") +
+                            (workspace.contains(src) ? "ANOTHER project: " : "outside the project: ") +
                             a.sourcePath);
         }
     }
@@ -2053,7 +2053,7 @@ void EditorUI::runExport()
     for (const std::string& msg : result.messages)
         m_logPanel.push(msg);
     if (!result.ok)
-        m_logPanel.push("Export FALLIDO");
+        m_logPanel.push("Export FAILED");
 }
 
 } // namespace DonTopo

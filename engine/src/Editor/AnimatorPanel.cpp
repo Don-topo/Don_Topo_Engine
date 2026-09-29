@@ -174,8 +174,8 @@ namespace {
         dl->AddText(ImVec2(p0.x + 3.0f, p1.y - 16.0f), IM_COL32(150, 150, 160, 200), txt);
 
         if (hover && cercana < 0 && !arrastrandoEsta)
-            ImGui::SetTooltip("Arrastra una key para moverla.\n"
-                              "Doble clic: nueva key.  Clic derecho sobre una: la quita.");
+            ImGui::SetTooltip("Drag a key to move it.\n"
+                              "Double-click: new key.  Right-click on one: removes it.");
         return tocada;
     }
 
@@ -406,9 +406,9 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
         // Diferido: borrar dentro del for-range invalidaría el iterador.
         if (!toRemove.empty())
         {
-            m_graphUndo.setLabel("Quitar parámetro");
+            m_graphUndo.setLabel("Remove parameter");
             anim->removeParameter(toRemove);
-            ctx.pushLog("Animator: parámetro '" + toRemove + "' eliminado");
+            ctx.pushLog("Animator: parameter '" + toRemove + "' removed");
         }
 
         ImGui::Separator();
@@ -421,9 +421,9 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
         ImGui::Combo("##newparamtype", &m_newParamType, types, IM_ARRAYSIZE(types));
         if (ImGui::Button("Add Parameter") && m_newParamName[0] != '\0')
         {
-            m_graphUndo.setLabel("Añadir parámetro");
+            m_graphUndo.setLabel("Add parameter");
             anim->addParameter(m_newParamName, (AnimatorComponent::ParamType)m_newParamType);
-            ctx.pushLog(std::string("Animator: parámetro '") + m_newParamName + "' añadido");
+            ctx.pushLog(std::string("Animator: parameter '") + m_newParamName + "' added");
             m_newParamName[0] = '\0';
         }
     }
@@ -470,7 +470,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
                 }
             }
             if (li == 0 && ImGui::IsItemHovered())
-                ImGui::SetTooltip("Capa base: siempre override, peso 1 y todo el cuerpo.");
+                ImGui::SetTooltip("Base layer: always override, weight 1 and the whole body.");
             ImGui::PopID();
         }
 
@@ -482,7 +482,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
             {
                 m_layer = n;
                 m_nivelId = -1;   // el nivel es de la capa que se deja atras
-                ctx.pushLog("Animator: capa '" + anim->layer(n).name + "' añadida");
+                ctx.pushLog("Animator: layer '" + anim->layer(n).name + "' added");
             }
         }
         ImGui::EndDisabled();
@@ -490,7 +490,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
         ImGui::BeginDisabled(m_layer == 0);
         if (ImGui::Button("-##removeLayer"))
         {
-            ctx.pushLog("Animator: capa '" + anim->layer(m_layer).name + "' quitada");
+            ctx.pushLog("Animator: layer '" + anim->layer(m_layer).name + "' removed");
             anim->removeLayer(m_layer);
             m_layer = std::min(m_layer, anim->layerCount() - 1);
         }
@@ -526,11 +526,11 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
             if (ImGui::Combo("Mode##lm", &modo, modos, 2))
                 anim->setLayerMode(m_layer, (AnimatorComponent::LayerMode)modo);
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Override sustituye la pose de los huesos de la máscara;\n"
-                                  "Additive le suma la diferencia de cada clip con su primer fotograma.");
+                ImGui::SetTooltip("Override replaces the pose of the bones in the mask;\n"
+                                  "Additive adds each clip's difference from its first frame.");
             const std::string etiqueta = L.maskBones.empty()
-                ? std::string("Mask: todo el cuerpo")
-                : "Mask: " + std::to_string(L.maskBones.size()) + " hueso(s)";
+                ? std::string("Mask: whole body")
+                : "Mask: " + std::to_string(L.maskBones.size()) + " bone(s)";
             if (ImGui::Button((etiqueta + "##lmask").c_str(), ImVec2(200.0f, 0.0f)))
                 ImGui::OpenPopup("layerMask");
             drawLayerMaskPopup(go);
@@ -563,9 +563,9 @@ void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
             for (const auto* o : objetos)
                 if (o->id == id) actual = o;
             ImGui::SetNextItemWidth(160.0f);
-            if (ImGui::BeginCombo(etiqueta, actual ? actual->name.c_str() : "(ninguno)"))
+            if (ImGui::BeginCombo(etiqueta, actual ? actual->name.c_str() : "(none)"))
             {
-                if (ImGui::Selectable("(ninguno)", id == 0)) id = 0;
+                if (ImGui::Selectable("(none)", id == 0)) id = 0;
                 for (const auto* o : objetos)
                 {
                     if (o == go) continue;
@@ -593,7 +593,7 @@ void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
             int tipo = (int)c.type;
             const char* tipos[] = { "Look at", "Two bone" };
             ImGui::SetNextItemWidth(160.0f);
-            if (ImGui::Combo("Tipo##tipo", &tipo, tipos, 2))
+            if (ImGui::Combo("Type##tipo", &tipo, tipos, 2))
             {
                 c.type = (AnimatorComponent::IkType)tipo;
                 // La cadena (padre y abuelo) depende del tipo: hay que
@@ -606,7 +606,7 @@ void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
             const bool roto = c.boneIndex < 0;
             if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
             ImGui::SetNextItemWidth(160.0f);
-            if (ImGui::BeginCombo("Hueso##hueso", c.boneName.empty() ? "(elige hueso)" : c.boneName.c_str()))
+            if (ImGui::BeginCombo("Bone##hueso", c.boneName.empty() ? "(choose bone)" : c.boneName.c_str()))
             {
                 if (mesh)
                     for (const auto& n : mesh->skeleton.names)
@@ -619,26 +619,26 @@ void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
             }
             if (roto) ImGui::PopStyleColor();
             if (roto && ImGui::IsItemHovered())
-                ImGui::SetTooltip("El hueso no existe en el modelo, o la cadena no llega a tres huesos:\n"
-                                  "la restricción no se aplica.");
+                ImGui::SetTooltip("The bone does not exist in the model, or the chain is shorter than three bones:\n"
+                                  "the constraint is not applied.");
 
-            selectorObjeto("Objetivo##objetivo", c.targetId);
+            selectorObjeto("Target##objetivo", c.targetId);
             if (c.type == AnimatorComponent::IkType::TwoBone)
             {
                 selectorObjeto("Pole##pole", c.poleId);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Hacia dónde apunta el codo o la rodilla.");
+                    ImGui::SetTooltip("Where the elbow or knee points.");
             }
             ImGui::SetNextItemWidth(160.0f);
-            ImGui::SliderFloat("Peso##peso", &c.weight, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Weight##peso", &c.weight, 0.0f, 1.0f, "%.2f");
             if (c.type == AnimatorComponent::IkType::LookAt)
             {
                 ImGui::SetNextItemWidth(160.0f);
-                ImGui::DragFloat3("Eje##eje", &c.aimAxis.x, 0.01f);
+                ImGui::DragFloat3("Axis##eje", &c.aimAxis.x, 0.01f);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Eje LOCAL del hueso que apunta al objetivo.");
+                    ImGui::SetTooltip("LOCAL axis of the bone that points at the target.");
                 ImGui::SetNextItemWidth(160.0f);
-                ImGui::SliderFloat("Angulo max##ang", &c.maxAngle, 0.0f, 180.0f, "%.0f");
+                ImGui::SliderFloat("Max angle##ang", &c.maxAngle, 0.0f, 180.0f, "%.0f");
             }
             ImGui::Separator();
             ImGui::PopID();
@@ -651,10 +651,10 @@ void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
             AnimatorComponent::IkConstraint nueva;
             nueva.name = "IK " + std::to_string(anim->ikConstraints().size() + 1);
             anim->addIkConstraint(nueva);
-            ctx.pushLog("Animator: restriccion de IK anadida");
+            ctx.pushLog("Animator: IK constraint added");
         }
         ImGui::EndDisabled();
-        if (!mesh) ImGui::TextDisabled("Sin mesh skinned no hay huesos que elegir.");
+        if (!mesh) ImGui::TextDisabled("Without a skinned mesh there are no bones to choose.");
     }
     ImGui::PopID();
 }
@@ -665,7 +665,7 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
     ImGui::PushID("propclips");
     if (ImGui::CollapsingHeader("Property Clips"))
     {
-        ImGui::TextDisabled("Animan el objeto: transform, luz y material.");
+        ImGui::TextDisabled("They animate the object: transform, light and material.");
         auto& clips = anim->propertyClipsMutable();
         int quitarClip = -1;
         for (int i = 0; i < (int)clips.size(); i++)
@@ -678,7 +678,7 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
             // dependa de su propio estado— la cabecera pasa a ser otro widget y
             // se pierde si estaba abierta. ImGui abre y cierra por ID, así que
             // cada clip recuerda su estado él solo.
-            const std::string etiqueta = (clip.name.empty() ? std::string("(sin nombre)") : clip.name) +
+            const std::string etiqueta = (clip.name.empty() ? std::string("(unnamed)") : clip.name) +
                                          "###clip";
             // AllowOverlap: la cabecera ocupa la fila entera, así que sin el
             // flag ImGui le da el clic a ella (el primer item enviado) y la "x"
@@ -692,14 +692,14 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                 char nombre[64];
                 std::snprintf(nombre, sizeof(nombre), "%s", clip.name.c_str());
                 ImGui::SetNextItemWidth(130.0f);
-                if (ImGui::InputText("Nombre###nombre", nombre, sizeof(nombre)))
+                if (ImGui::InputText("Name###nombre", nombre, sizeof(nombre)))
                 {
                     clip.name = nombre;
                     // El estado referencia por NOMBRE: renombrar obliga a re-resolver.
                     anim->bindProperties(go, nullptr);
                 }
                 ImGui::SetNextItemWidth(130.0f);
-                if (ImGui::DragFloat("Duracion (s)###dur", &clip.duration, 0.01f, 0.001f, 600.0f, "%.3f"))
+                if (ImGui::DragFloat("Duration (s)###dur", &clip.duration, 0.01f, 0.001f, 600.0f, "%.3f"))
                 {
                     if (clip.duration < 0.001f) clip.duration = 0.001f;
                     // La duración del estado sale de aquí cuando no hay clip de malla.
@@ -728,14 +728,14 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     // Animator (una curva de clip).
                     ImGui::SetNextItemWidth(90.0f);
                     if (ImGui::BeginCombo("###destino",
-                                          pista.target == TrackTarget::Parameter ? "Parametro" : "Propiedad"))
+                                          pista.target == TrackTarget::Parameter ? "Parameter" : "Property"))
                     {
-                        if (ImGui::Selectable("Propiedad", pista.target == TrackTarget::Property))
+                        if (ImGui::Selectable("Property", pista.target == TrackTarget::Property))
                         {
                             pista.target = TrackTarget::Property;
                             anim->bindProperties(go, nullptr);
                         }
-                        if (ImGui::Selectable("Parametro", pista.target == TrackTarget::Parameter))
+                        if (ImGui::Selectable("Parameter", pista.target == TrackTarget::Parameter))
                         {
                             pista.target = TrackTarget::Parameter;
                             anim->bindProperties(go, nullptr);
@@ -749,7 +749,7 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                         // Solo los Float: una curva no puede escribir otra cosa.
                         // El nombre actual se ve aunque el parámetro ya no exista
                         // (la pista sale en rojo), para no perderlo en silencio.
-                        const char* actual = pista.parameterName.empty() ? "(sin parametro)"
+                        const char* actual = pista.parameterName.empty() ? "(no parameter)"
                                                                          : pista.parameterName.c_str();
                         if (ImGui::BeginCombo("###param", actual))
                         {
@@ -781,10 +781,10 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     if (roto) ImGui::PopStyleColor();
                     if (roto && ImGui::IsItemHovered())
                         ImGui::SetTooltip(pista.target == TrackTarget::Parameter
-                                              ? "No hay un parametro Float con ese nombre:\n"
-                                                "la curva no se aplica."
-                                              : "El objeto no tiene el componente que necesita esta pista:\n"
-                                                "no se aplica.");
+                                              ? "There is no Float parameter with that name:\n"
+                                                "the curve is not applied."
+                                              : "The object lacks the component this track needs:\n"
+                                                "it is not applied.");
                     ImGui::SameLine();
                     if (ImGui::SmallButton("x###pista")) quitarPista = p;
 
@@ -830,13 +830,13 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     ImGui::PopID();
                 }
                 if (quitarPista >= 0) clip.tracks.erase(clip.tracks.begin() + quitarPista);
-                if (ImGui::SmallButton("+ pista"))
+                if (ImGui::SmallButton("+ track"))
                 {
                     clip.tracks.push_back(PropertyTrack{});
                     anim->bindProperties(go, nullptr);
                 }
                 ImGui::SameLine();
-                if (ImGui::SmallButton("+ curva"))
+                if (ImGui::SmallButton("+ curve"))
                 {
                     // Una curva escribe un parámetro; se crea sobre el primer
                     // Float que haya, y si no hay ninguno sale en rojo hasta que
@@ -864,7 +864,7 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
             PropertyClip nuevo;
             nuevo.name = "Clip " + std::to_string(anim->propertyClips().size() + 1);
             if (anim->addPropertyClip(nuevo) >= 0)
-                ctx.pushLog("Animator: clip de propiedades '" + nuevo.name + "' anadido");
+                ctx.pushLog("Animator: property clip '" + nuevo.name + "' added");
         }
         ImGui::EndDisabled();
     }
@@ -878,18 +878,18 @@ void AnimatorPanel::drawLayerMaskPopup(GameObject* go)
     const SkinnedMesh* mesh = go->getSkinnedMesh();
     auto& L = anim->layerMutable(m_layer);
     bool cambio = false;
-    if (ImGui::Button("Todo el cuerpo"))
+    if (ImGui::Button("Whole body"))
     {
         L.maskBones.clear();
         cambio = true;
     }
     if (!mesh)
     {
-        ImGui::TextDisabled("El GameObject no tiene un mesh skinned.");
+        ImGui::TextDisabled("The GameObject has no skinned mesh.");
     }
     else
     {
-        ImGui::TextDisabled("Clic: el hueso y su rama. Ctrl+clic: solo el hueso.");
+        ImGui::TextDisabled("Click: the bone and its branch. Ctrl+click: the bone only.");
         const auto& nombres = mesh->skeleton.names;
         const auto& padres  = mesh->skeleton.parentIndex;
         const int   n       = (int)nombres.size();
@@ -1084,17 +1084,17 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // no disparan.
         if (states[i].isSubMachine)
         {
-            ImGui::TextDisabled("sub-maquina");
+            ImGui::TextDisabled("sub-state machine");
             const int ent = states[i].subEntry;
             if (ent >= 0 && ent < (int)states.size())
-                ImGui::TextDisabled("entra por: %s", states[(size_t)ent].name.c_str());
+                ImGui::TextDisabled("enters through: %s", states[(size_t)ent].name.c_str());
             else
-                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "sin entrada: no se puede entrar");
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "no entry: it cannot be entered");
         }
         // clipIndex < 0: el clip del grafo no existe en el modelo (bindClips ya
         // avisó al cargar). Se marca aquí también o el nodo mentiría.
         else if (states[i].clipIndex < 0)
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "clip: %s (no existe)", states[i].clipName.c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "clip: %s (does not exist)", states[i].clipName.c_str());
         else
             ImGui::TextDisabled("clip: %s", states[i].clipName.c_str());
 
@@ -1106,8 +1106,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         {
             const int pa = states[i].parent;
             const std::string etiqueta =
-                std::string("padre: ") +
-                (pa >= 0 && pa < (int)states.size() ? states[(size_t)pa].name : std::string("(raiz)")) +
+                std::string("parent: ") +
+                (pa >= 0 && pa < (int)states.size() ? states[(size_t)pa].name : std::string("(root)")) +
                 "###padre";
             if (ImGui::SmallButton(etiqueta.c_str()))
             {
@@ -1119,8 +1119,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             {
                 const int ent = states[i].subEntry;
                 const std::string etEnt =
-                    std::string("entrada: ") +
-                    (ent >= 0 && ent < (int)states.size() ? states[(size_t)ent].name : std::string("(ninguna)")) +
+                    std::string("entry: ") +
+                    (ent >= 0 && ent < (int)states.size() ? states[(size_t)ent].name : std::string("(none)")) +
                     "###entrada";
                 if (ImGui::SmallButton(etEnt.c_str()))
                 {
@@ -1151,19 +1151,19 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         {
             using RM = AnimatorComponent::RootMotion;
             int modo = (int)states[i].rootMotion;
-            ImGui::TextUnformatted("raiz:");
+            ImGui::TextUnformatted("root:");
             ImGui::SameLine();
             if (ImGui::RadioButton("normal##rm", modo == 0)) modo = 0;
             if (ImGui::IsItemHovered())
-                m_tooltipNodo = "La pose mueve la raiz: el clip se desplaza con su animacion.";
+                m_tooltipNodo = "The pose moves the root: the clip travels with its animation.";
             ImGui::SameLine();
-            if (ImGui::RadioButton("bloq.##rm", modo == 1)) modo = 1;
+            if (ImGui::RadioButton("locked##rm", modo == 1)) modo = 1;
             if (ImGui::IsItemHovered())
-                m_tooltipNodo = "Clava la traslacion de la raiz a su bind pose: el clip se reproduce en el sitio. La rotacion de la raiz y el resto de huesos animan igual.";
+                m_tooltipNodo = "Pins the root's translation to its bind pose: the clip plays in place. The root's rotation and the rest of the bones animate as usual.";
             ImGui::SameLine();
             if (ImGui::RadioButton("root motion##rm", modo == 2)) modo = 2;
             if (ImGui::IsItemHovered())
-                m_tooltipNodo = "El avance horizontal de la raiz mueve al GameObject (con Rigidbody dinamico, como velocidad). La Y se queda en la pose y la rotacion no se aplica.";
+                m_tooltipNodo = "The root's horizontal motion moves the GameObject (as velocity with a dynamic Rigidbody). Y stays in the pose and rotation is not applied.";
             if (modo != (int)states[i].rootMotion)
                 anim->statesMutable(m_layer)[i].rootMotion = (RM)modo;
         }
@@ -1174,11 +1174,11 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         ImGui::DragFloat("speed", &anim->statesMutable(m_layer)[i].speed, 0.01f, 0.0f, 100.0f, "%.2f");
         if (anim->statesMutable(m_layer)[i].speed < 0.0f) anim->statesMutable(m_layer)[i].speed = 0.0f;
         if (ImGui::IsItemHovered())
-            m_tooltipNodo = "Multiplica el ritmo del clip (1 = normal, 0 = congelado).";
+            m_tooltipNodo = "Multiplies the clip's pace (1 = normal, 0 = frozen).";
         ImGui::SameLine();
         {
             const std::string& sp = states[i].speedParam;
-            const std::string etiqueta = "x " + (sp.empty() ? std::string("(ninguno)") : sp) + "##speedparam";
+            const std::string etiqueta = "x " + (sp.empty() ? std::string("(none)") : sp) + "##speedparam";
             if (ImGui::Button(etiqueta.c_str()))
             {
                 m_blendPickRequested = true;
@@ -1186,7 +1186,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 m_blendPickKind      = 2;
             }
             if (ImGui::IsItemHovered())
-                m_tooltipNodo = "Parametro float que multiplica la velocidad (como el Multiplier de Unity).";
+                m_tooltipNodo = "Float parameter that multiplies the speed (like Unity's Multiplier).";
         }
 
         // --- Blend 1D: clips extra con su umbral ---
@@ -1202,7 +1202,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 // continuo. Que la lista salga vacía es la pista de que hay que
                 // declarar uno abajo, en Parameters.
                 const std::string paramLabel = stMut.blendParam.empty()
-                                               ? std::string("(sin parametro)") : stMut.blendParam;
+                                               ? std::string("(no parameter)") : stMut.blendParam;
                 if (ImGui::Button(("by: " + paramLabel + "##by").c_str(), ImVec2(140.0f, 0.0f)))
                 {
                     m_blendPickRequested = true;
@@ -1210,9 +1210,9 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                     m_blendPickKind      = 1;
                 }
                 ImGui::SetNextItemWidth(60.0f);
-                ImGui::DragFloat("umbral##clipThr", &stMut.clipThreshold, 0.01f);
+                ImGui::DragFloat("threshold##clipThr", &stMut.clipThreshold, 0.01f);
                 if (ImGui::IsItemHovered())
-                    m_tooltipNodo = "Umbral del clip principal del estado.";
+                    m_tooltipNodo = "Threshold of the state's main clip.";
 
                 // --- Blend 2D ---
                 // Con un segundo parámetro cada clip es un punto (umbral, Y) y
@@ -1238,7 +1238,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                         stMut.blendParamY.clear();
                 }
                 if (ImGui::IsItemHovered())
-                    m_tooltipNodo = "Blend 2D: cada clip es un punto (umbral X, umbral Y).";
+                    m_tooltipNodo = "Blend 2D: each clip is a point (X threshold, Y threshold).";
                 if (!stMut.blendParamY.empty())
                 {
                     if (ImGui::Button(("Y: " + stMut.blendParamY + "##byY").c_str(), ImVec2(140.0f, 0.0f)))
@@ -1250,7 +1250,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                     ImGui::SetNextItemWidth(60.0f);
                     ImGui::DragFloat("Y##clipThrY", &stMut.clipThresholdY, 0.01f);
                     if (ImGui::IsItemHovered())
-                        m_tooltipNodo = "Umbral Y del clip principal del estado.";
+                        m_tooltipNodo = "Y threshold of the state's main clip.";
                 }
             }
 
@@ -1261,7 +1261,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 ImGui::PushID(k);
                 const bool roto = e.clipIndex < 0;
                 if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-                const std::string lbl = e.clipName.empty() ? std::string("(elige clip)") : e.clipName;
+                const std::string lbl = e.clipName.empty() ? std::string("(choose clip)") : e.clipName;
                 if (ImGui::Button((lbl + "##clip").c_str(), ImVec2(90.0f, 0.0f)))
                 {
                     m_blendPickRequested = true;
@@ -1311,10 +1311,10 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             const bool roto = !stMut.propertyClipName.empty() && stMut.propertyClipIndex < 0;
             if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
             if (ImGui::BeginCombo("##propclip",
-                                  stMut.propertyClipName.empty() ? "(sin clip de propiedades)"
+                                  stMut.propertyClipName.empty() ? "(no property clip)"
                                                                  : stMut.propertyClipName.c_str()))
             {
-                if (ImGui::Selectable("(ninguno)", stMut.propertyClipName.empty()))
+                if (ImGui::Selectable("(none)", stMut.propertyClipName.empty()))
                 {
                     stMut.propertyClipName.clear();
                     anim->bindProperties(go, nullptr);
@@ -1348,14 +1348,14 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             ImGui::SetNextItemWidth(50.0f);
             ImGui::DragFloat("##evTime", &ev.time, 0.005f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
             if (ImGui::IsItemHovered())
-                m_tooltipNodo = "Instante del ciclo, normalizado (0 = inicio, 1 = final).";
+                m_tooltipNodo = "Point in the cycle, normalized (0 = start, 1 = end).";
             ImGui::SameLine();
             if (ImGui::SmallButton("x")) quitarEvento = k;
             ImGui::PopID();
         }
         if (quitarEvento >= 0)
             stMut.events.erase(stMut.events.begin() + quitarEvento);
-        if (ImGui::Button("+ evento##addEvent", ImVec2(140.0f, 0.0f)))
+        if (ImGui::Button("+ event##addEvent", ImVec2(140.0f, 0.0f)))
             stMut.events.push_back({ "", 0.5f });
         ImGui::PopID();
         ImGui::PopID();
@@ -1468,9 +1468,9 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                     tr.toState   = toIdx;
                     // Sin condiciones no dispara nunca (por diseño): el usuario las
                     // añade con doble clic en el link.
-                    m_graphUndo.setLabel("Crear transición");
+                    m_graphUndo.setLabel("Create transition");
                     anim->addTransition(tr, m_layer);
-                    ctx.pushLog("Animator: transición creada (sin condiciones todavía)");
+                    ctx.pushLog("Animator: transition created (no conditions yet)");
                 }
             }
         }
@@ -1525,7 +1525,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // encima de idx, así que hay que ir de atrás hacia adelante pa que cada
         // erase no invalide los índices ya calculados y pendientes en este mismo
         // vector (statesToRemove son índices tomados ANTES de borrar nada).
-        if (!statesToRemove.empty()) m_graphUndo.setLabel("Borrar estado");
+        if (!statesToRemove.empty()) m_graphUndo.setLabel("Delete state");
         std::sort(statesToRemove.rbegin(), statesToRemove.rend());
         for (int idx : statesToRemove)
             // removeState reindexa las transiciones supervivientes.
@@ -1575,7 +1575,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             if (ImGui::MenuItem("Set as Entry"))
             {
                 anim->setEntryState(idx, m_layer);
-                ctx.pushLog("Animator: '" + anim->states(m_layer)[idx].name + "' es ahora el estado de entrada");
+                ctx.pushLog("Animator: '" + anim->states(m_layer)[idx].name + "' is now the entry state");
             }
         }
         ImGui::EndPopup();
@@ -1634,7 +1634,7 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
         // Padre: la raíz o cualquier caja que no sea él mismo ni esté DENTRO de
         // él (meter una caja dentro de sí misma haría un ciclo y dejaría a sus
         // hijos inalcanzables).
-        if (ImGui::Selectable("(raiz)", st.parent < 0)) st.parent = -1;
+        if (ImGui::Selectable("(root)", st.parent < 0)) st.parent = -1;
         const auto& sts = anim->states(m_layer);
         for (int i = 0; i < (int)sts.size(); i++)
         {
@@ -1656,12 +1656,12 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
             if (ImGui::Selectable(sts[(size_t)i].name.c_str(), st.subEntry == i)) st.subEntry = i;
         }
         if (!alguno)
-            ImGui::TextDisabled("La sub-maquina esta vacia: mete algun estado con 'padre'.");
+            ImGui::TextDisabled("The sub-state machine is empty: put some state in it with 'parent'.");
     }
     else if (m_blendPickKind == 2)
     {
         // Multiplicador de velocidad: "(ninguno)" o cualquier parámetro float.
-        if (ImGui::Selectable("(ninguno)", st.speedParam.empty()))
+        if (ImGui::Selectable("(none)", st.speedParam.empty()))
             st.speedParam.clear();
         bool alguno = false;
         for (const auto& p : anim->parameters())
@@ -1672,7 +1672,7 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
                 st.speedParam = p.name;
         }
         if (!alguno)
-            ImGui::TextDisabled("No hay parámetros float: declara uno en Parameters.");
+            ImGui::TextDisabled("No float parameters: declare one in Parameters.");
     }
     else if (m_blendPickKind == 0)
     {
@@ -1719,7 +1719,7 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
                 destino = p.name;
         }
         if (!alguno)
-            ImGui::TextDisabled("No hay parámetros float: declara uno en Parameters.");
+            ImGui::TextDisabled("No float parameters: declare one in Parameters.");
     }
     ImGui::EndPopup();
 }
@@ -1739,7 +1739,7 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
     ImGui::SetNextItemWidth(80);
     ImGui::DragFloat("cross-fade (s)", &tr.duration, 0.01f, 0.0f, 10.0f, "%.2f");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Segundos de mezcla con el estado de origen. 0 = corte instantaneo.");
+        ImGui::SetTooltip("Seconds of blending with the source state. 0 = instant cut.");
     // DragFloat con min 0 ya lo impide al arrastrar, pero no al teclear un
     // valor: un negativo dejaria blendWeight fuera de [0,1].
     if (tr.duration < 0.0f) tr.duration = 0.0f;
@@ -1750,21 +1750,21 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
     ImGui::PushID("exit_time");
     ImGui::Checkbox("Has Exit Time", &tr.hasExitTime);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Espera a que el estado de origen llegue a 'exit time'. Sin condiciones, dispara solo por tiempo.");
+        ImGui::SetTooltip("Waits for the source state to reach 'exit time'. Without conditions, it fires on time alone.");
     if (tr.hasExitTime)
     {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(80);
         ImGui::DragFloat("exit time", &tr.exitTime, 0.01f, 0.0f, 100.0f, "%.2f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Tiempo normalizado: 0.9 = al 90%% del clip, 2.5 = tras dos vueltas y media.");
+            ImGui::SetTooltip("Normalized time: 0.9 = at 90%% of the clip, 2.5 = after two and a half loops.");
         if (tr.exitTime < 0.0f) tr.exitTime = 0.0f;
     }
     if (tr.fromState == AnimatorComponent::kAnyState)
     {
         ImGui::Checkbox("Can Transition To Self", &tr.canTransitionToSelf);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Si puede volver al estado en el que ya se está. Encendido con un bool, lo reiniciaría cada frame.");
+            ImGui::SetTooltip("Whether it can go back to the state it is already in. On with a bool, it would restart it every frame.");
     }
     ImGui::PopID();
 
@@ -1868,7 +1868,7 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
     }
     ImGui::EndDisabled();
     if (fromLoops && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("El estado de origen está en loop: 'animation finished' nunca dispara aquí. Para salir por tiempo, usa 'Has Exit Time'.");
+        ImGui::SetTooltip("The source state loops: 'animation finished' never fires here. To leave on time, use 'Has Exit Time'.");
 
     ImGui::EndPopup();
 }
@@ -1881,7 +1881,7 @@ void AnimatorPanel::importAnimationSource(EditorContext& ctx, GameObject* go, co
     const std::string ext = std::filesystem::path(path).extension().string();
     if (!ModelLoader::isSupportedModelExtension(ext))
     {
-        m_animSrcError = "Formato no soportado: " + ext;
+        m_animSrcError = "Unsupported format: " + ext;
         return;
     }
 
@@ -1897,18 +1897,18 @@ void AnimatorPanel::importAnimationSource(EditorContext& ctx, GameObject* go, co
 
     if (!ok)
     {
-        m_animSrcError = warnings.empty() ? ("No se pudieron importar animaciones de " + path)
+        m_animSrcError = warnings.empty() ? ("Could not import animations from " + path)
                                            : warnings.back();
         return;
     }
     m_animSrcError.clear();
 
     auto cmd = std::make_unique<AnimationSourceCommand>(
-        *ctx.scene, ctx.renderer, "Añadir animaciones", go->id,
+        *ctx.scene, ctx.renderer, "Add animations", go->id,
         /*add=*/true, path, std::vector<std::string>{});
     cmd->execute();
     ctx.undo->push(std::move(cmd));
-    ctx.pushLog("Animator: animaciones de '" + path + "' importadas");
+    ctx.pushLog("Animator: animations from '" + path + "' imported");
 }
 
 void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
@@ -1942,7 +1942,7 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
 
         const std::string file = std::filesystem::path(src.path).filename().string();
         const std::string label = file + "  (" + std::to_string(src.clipNames.size()) + " clips)"
-                                + (src.builtin ? "  [modelo]" : "");
+                                + (src.builtin ? "  [model]" : "");
 
         // AllowOverlap: el nodo ocupa la fila entera (SpanAvailWidth) y la "X"
         // se pinta ENCIMA de él. Sin el flag, ImGui da el clic al primer item
@@ -1959,7 +1959,7 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
         if (ImGui::SmallButton("X")) sourceToRemove = (int)s;
         ImGui::EndDisabled();
         if (src.builtin && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Es el FBX del modelo: sus animaciones no se pueden quitar por separado.");
+            ImGui::SetTooltip("It is the model's FBX: its animations cannot be removed separately.");
 
         if (open)
         {
@@ -1994,8 +1994,8 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
 
                         if (rechazado)
                         {
-                            m_animSrcError = "No se pudo renombrar a '" + nuevo
-                                            + "': nombre vacío, duplicado o igual al actual";
+                            m_animSrcError = "Could not rename to '" + nuevo
+                                            + "': name empty, duplicated or the same as the current one";
                         }
                         else
                         {
@@ -2007,11 +2007,11 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
                             // en vez de mostrar qué cambió.
                             const std::string viejo = clipName;
                             auto cmd = std::make_unique<ClipRenameCommand>(
-                                *ctx.scene, "Renombrar clip", go->id, viejo, nuevo);
+                                *ctx.scene, "Rename clip", go->id, viejo, nuevo);
                             cmd->execute();
                             ctx.undo->push(std::move(cmd));
                             m_animSrcError.clear();
-                            ctx.pushLog("Animator: clip '" + viejo + "' renombrado a '" + nuevo + "'");
+                            ctx.pushLog("Animator: clip '" + viejo + "' renamed to '" + nuevo + "'");
                         }
                         m_renamingClip.clear();
                     }
@@ -2060,7 +2060,7 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
         }
 
         auto cmd = std::make_unique<AnimationSourceCommand>(
-            *ctx.scene, ctx.renderer, "Quitar animaciones", go->id,
+            *ctx.scene, ctx.renderer, "Remove animations", go->id,
             /*add=*/false, src.path, src.clipNames, pathOccurrence);
         cmd->execute();
         ctx.undo->push(std::move(cmd));
@@ -2070,7 +2070,7 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
         // rebindClips en caliente, así que clipIndex queda en -1 en el
         // momento del borrado (no hace falta esperar a una recarga de
         // escena o a un ciclo de Play/Stop).
-        ctx.pushLog("Animator: fuente de animación quitada; los estados que la usaran quedan sin clip");
+        ctx.pushLog("Animator: animation source removed; the states that used it are left without a clip");
     }
 
     if (ImGui::Button("Add Animation FBX..."))
@@ -2100,7 +2100,7 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
     // tamaño = fullPath.size()+1) que usa PropertiesPanel::drawMeshSection
     // para su propio drop target de modelos.
     ImGui::SameLine();
-    ImGui::TextDisabled("(o arrastra un modelo aquí)");
+    ImGui::TextDisabled("(or drag a model here)");
     if (ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
@@ -2131,11 +2131,11 @@ void AnimatorPanel::drawAnimationSourceDialog(EditorContext& ctx)
         GameObject* target = ctx.scene ? ctx.scene->findById(m_animSrcDlgTarget) : nullptr;
         if (!target)
         {
-            m_animSrcError = "El GameObject de destino ya no existe en la escena";
+            m_animSrcError = "The target GameObject no longer exists in the scene";
         }
         else if (!target->getSkinnedMesh())
         {
-            m_animSrcError = "'" + target->name + "' ya no tiene un mesh skinned";
+            m_animSrcError = "'" + target->name + "' no longer has a skinned mesh";
         }
         else
         {
@@ -2170,7 +2170,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
             GameObject* go = ctx.selected;
             if (!go || !go->hasAnimator())
             {
-                ImGui::TextDisabled("Selecciona un GameObject con componente Animator.");
+                ImGui::TextDisabled("Select a GameObject with an Animator component.");
                 ImGui::TextDisabled("Properties > Add > Animator");
                 m_boundTo = nullptr;
             }
@@ -2215,8 +2215,8 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 const SkinnedMesh* mesh = go->getSkinnedMesh();
                 if (!mesh || mesh->animationClips.empty())
                 {
-                    ImGui::TextDisabled("Sin mesh skinned con animaciones: los estados salen de\n"
-                                        "los clips de propiedades (abajo).");
+                    ImGui::TextDisabled("No skinned mesh with animations: the states come from\n"
+                                        "the property clips (below).");
                 }
                 else if (ImGui::BeginCombo("##addstate", "Add State from Clip"))
                 {
@@ -2238,7 +2238,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                         ed::SetCurrentEditor(m_ctx);
                         ed::SetNodePosition(nodeId(eid), ImVec2(st.editorPos.x, st.editorPos.y));
                         ed::SetCurrentEditor(nullptr);
-                        ctx.pushLog("Animator: estado '" + st.name + "' añadido");
+                        ctx.pushLog("Animator: state '" + st.name + "' added");
                     }
                     ImGui::EndCombo();
                 }
@@ -2259,7 +2259,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                     ed::SetCurrentEditor(m_ctx);
                     ed::SetNodePosition(nodeId(eid), ImVec2(caja.editorPos.x, caja.editorPos.y));
                     ed::SetCurrentEditor(nullptr);
-                    ctx.pushLog("Animator: sub-maquina anadida");
+                    ctx.pushLog("Animator: sub-state machine added");
                 }
 
                 // --- Añadir estado desde un clip de propiedades ---
@@ -2285,7 +2285,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                         ed::SetCurrentEditor(m_ctx);
                         ed::SetNodePosition(nodeId(eid), ImVec2(st.editorPos.x, st.editorPos.y));
                         ed::SetCurrentEditor(nullptr);
-                        ctx.pushLog("Animator: estado '" + st.name + "' añadido");
+                        ctx.pushLog("Animator: state '" + st.name + "' added");
                     }
                     ImGui::EndCombo();
                 }

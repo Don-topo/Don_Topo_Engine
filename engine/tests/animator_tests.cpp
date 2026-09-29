@@ -4919,7 +4919,7 @@ static void test_graph_command_noop_without_animator()
     go->setAnimator(a);
     const uint64_t id = go->id;
 
-    AnimatorGraphCommand cmd(scene, "Editar Animator", id, a->graph(), a->graph());
+    AnimatorGraphCommand cmd(scene, "Edit Animator", id, a->graph(), a->graph());
 
     go->setAnimator(nullptr);
     cmd.undo();
@@ -4958,7 +4958,7 @@ static void test_graph_command_rebinds_clips()
     a->update(0.5f, /*evaluateTransitions=*/false);
     const float tiempo = a->animTime();
 
-    AnimatorGraphCommand cmd(scene, "Editar Animator", go->id, stale, stale);
+    AnimatorGraphCommand cmd(scene, "Edit Animator", go->id, stale, stale);
     cmd.undo();
 
     CHECK(a->states()[0].clipIndex == 0);
@@ -5108,7 +5108,7 @@ static void test_tracker_label_is_per_gesture()
     std::unique_ptr<ICommand> c2 = tr.endFrame(scene, a.get(), false, 1);
 
     CHECK(c1 && c1->label() == "Borrar estado");
-    CHECK(c2 && c2->label() == "Editar Animator");
+    CHECK(c2 && c2->label() == "Edit Animator");
 }
 
 // ---- applySkinnedFrame: el bloque que los tres hosts repetían ----
