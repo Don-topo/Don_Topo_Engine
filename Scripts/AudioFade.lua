@@ -1,14 +1,14 @@
--- Baja el volumen del AudioClip del GameObject hasta cero y lo para.
--- Sirve de prueba manual de SetVolume/GetVolume por frame.
+-- Lowers the GameObject's AudioClip volume to zero and stops it.
+-- A manual test of SetVolume/GetVolume per frame.
 --
--- Deja "Play On Awake" DESACTIVADO en este GameObject: al pulsar Play,
--- onPlayStart ejecuta primero el Start() de este script (que ya llama a
--- clip:Play()) y DESPUÉS el motor recorre la escena arrancando los clips con
--- playOnAwake activo. No se solapan (el segundo play corta la voz anterior del
--- mismo clip), pero el clip se REINICIA desde el principio justo después de
--- haber arrancado, lo que se oye como un chasquido al entrar en Play.
+-- Leave "Play On Awake" OFF on this GameObject: when Play is pressed,
+-- onPlayStart first runs this script's Start() (which already calls
+-- clip:Play()) and THEN the engine walks the scene starting the clips with
+-- playOnAwake on. They do not overlap (the second play cuts the previous voice of
+-- the same clip), but the clip RESTARTS from the beginning right after it
+-- started, which sounds like a click when entering Play.
 AudioFade = {
-    -- Segundos que tarda el fade completo
+    -- Seconds the full fade takes
     fadeTime = 3
 }
 
@@ -18,7 +18,7 @@ function AudioFade:Start()
         self.clip:SetVolume(1.0)
         self.clip:Play()
     else
-        Log.Error("AudioFade: el GameObject no tiene AudioClip asignado")
+        Log.Error("AudioFade: the GameObject has no AudioClip assigned")
     end
 end
 

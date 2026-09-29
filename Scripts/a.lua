@@ -1,5 +1,5 @@
 a = {
-    -- Propiedades serializables (aparecen en el editor)
+    -- Serializable properties (shown in the editor)
     speed = 1
 }
 

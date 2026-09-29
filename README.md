@@ -733,7 +733,7 @@ with the right one.
 **One drag is one undo command, whatever the mode.** All three modes edit the same `glm::mat4`,
 so rotate and scale needed no new command type — but they do report a different channel, and the
 Log Console line is written to be indistinguishable from the one Properties emits for the same
-edit (`Rotation de 'Cubo' cambiado a (0.00, 35.00, 0.00)`, in degrees, not radians). The mode is
+edit (`Rotation of 'Cube' changed to (0.00, 35.00, 0.00)`, in degrees, not radians). The mode is
 latched when the drag *starts*: the shortcuts stay live while dragging, so pressing `E` halfway
 through a move would otherwise mislabel the log. The `before` snapshot is taken on the frame ImGuizmo starts
 being used and the `PropertyCommand<glm::mat4>` is pushed on the frame it stops — not once per
@@ -913,7 +913,7 @@ broken doesn't fire at all: entering half-way into a state that isn't there is w
 moving. Transitions are evaluated Any State first, then the current state's own, then its
 box's, then the box above it, so a general exit never beats a specific one. Deleting a box
 deletes what it holds, in one undo step. Double-click a box to go in, use the breadcrumb above
-the canvas to come back out, and the `padre` button on a node to move it into a box. It
+the canvas to come back out, and the `parent` combo on a node to move it into a box. It
 organises a graph; it is not Unity's hierarchical state machine, as there is no active
 compound state.
 
@@ -930,7 +930,7 @@ node never reshuffles the curves.
 A track can also write a **Float parameter** of the Animator instead of a property of the
 object: that is a **clip curve**. It lets the animation's own time drive the state machine —
 a transition on `speed > 4`, a value feeding a state's speed parameter, a window that opens
-and closes during an attack. In the **Property Clips** section, `+ curva` adds one and the
+and closes during an attack. In the **Property Clips** section, `+ curve` adds one and the
 combo picks which Float parameter it writes; a curve naming a parameter that isn't a declared
 Float shows in red and does nothing. Two rules are worth knowing: a curve is evaluated
 **before** the transitions, so its value of this frame already decides this frame's
@@ -1187,7 +1187,7 @@ slider that changes it. A pass that measured nothing reads `--`, never `0.000 ms
 
 ### Sprite Editor
 
-Open it with **View → Sprite Editor**, or with the **Editar sprites...** button that every UI
+Open it with **View → Sprite Editor**, or with the **Edit sprites...** button that every UI
 component with an atlas offers. It shows the image and lets you cut named rectangles out of it:
 drag to draw one, drag a corner to resize it, rename it in the list. A rect is kept inside the
 image and never degenerate — one that ran past the edge would sample UVs outside `[0, 1]` and

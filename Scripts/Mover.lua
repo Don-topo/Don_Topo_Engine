@@ -1,12 +1,12 @@
--- Mueve la entity con las flechas del teclado. Demuestra Input, props
--- múltiples y FixedUpdate.
+-- Moves the entity with the arrow keys. Shows Input, several props
+-- and FixedUpdate.
 Mover = {
     speed = 100,
     verbose = false
 }
 
 function Mover:Start()
-    if self.verbose then Log.Info("Mover listo en " .. self.entity.name) end
+    if self.verbose then Log.Info("Mover ready on " .. self.entity.name) end
 end
 
 function Mover:Update(dt)
@@ -20,5 +20,5 @@ function Mover:Update(dt)
 end
 
 function Mover:OnDestroy()
-    if self.verbose then Log.Info("Mover destruido") end
+    if self.verbose then Log.Info("Mover destroyed") end
 end

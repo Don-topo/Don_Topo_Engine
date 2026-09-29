@@ -43,7 +43,7 @@ find_package(Vulkan REQUIRED)
 option(DTE_ENABLE_D3D12 "Compilar el backend de render DirectX 12 (solo Windows)" ON)
 
 if(DTE_ENABLE_D3D12 AND NOT WIN32)
-    message(STATUS "DTE_ENABLE_D3D12: desactivado — el backend DirectX 12 solo existe en Windows")
+    message(STATUS "DTE_ENABLE_D3D12: disabled — the DirectX 12 backend only exists on Windows")
     set(DTE_ENABLE_D3D12 OFF)
 endif()
 
@@ -59,11 +59,11 @@ if(DTE_ENABLE_D3D12)
     find_program(DXC dxc HINTS $ENV{VULKAN_SDK}/Bin)
     if(NOT SPIRV_CROSS OR NOT DXC)
         message(FATAL_ERROR
-            "DTE_ENABLE_D3D12=ON pero faltan las herramientas de shaders:\n"
+            "DTE_ENABLE_D3D12=ON but the shader tools are missing:\n"
             "  spirv-cross: ${SPIRV_CROSS}\n"
             "  dxc:         ${DXC}\n"
-            "Ambas se instalan con el Vulkan SDK (VULKAN_SDK/Bin). Para compilar "
-            "solo el backend Vulkan, reconfigura con -DDTE_ENABLE_D3D12=OFF.")
+            "Both are installed with the Vulkan SDK (VULKAN_SDK/Bin). To build "
+            "only the Vulkan backend, reconfigure with -DDTE_ENABLE_D3D12=OFF.")
     endif()
 
     # D3D12MemoryAllocator — el equivalente de VulkanMemoryAllocator para DX12

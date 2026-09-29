@@ -3,9 +3,9 @@ AudioTest = {}
 function AudioTest:Start()
     self.clip = self.entity:GetComponent("AudioClip")
     if self.clip then
-        Log.Info("AudioTest: AudioClip encontrado, loop=" .. tostring(self.clip:GetLoop()))
+        Log.Info("AudioTest: AudioClip found, loop=" .. tostring(self.clip:GetLoop()))
     else
-        Log.Error("AudioTest: el GameObject no tiene AudioClip asignado")
+        Log.Error("AudioTest: the GameObject has no AudioClip assigned")
     end
 end
 

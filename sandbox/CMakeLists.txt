@@ -63,7 +63,7 @@ foreach(SHADER ${GLSL_SOURCES})
         elseif(SHADER_EXT STREQUAL ".comp")
             set(DXC_PROFILE cs_6_0)
         else()
-            message(FATAL_ERROR "Extensión de shader sin perfil DXC: ${SHADER}")
+            message(FATAL_ERROR "Shader extension without a DXC profile: ${SHADER}")
         endif()
 
         set(HLSL_OUT "${CMAKE_BINARY_DIR}/hlsl/${SHADER_NAME}.hlsl")
@@ -155,9 +155,9 @@ if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Release")
         )
     else()
         message(WARNING
-            "InstallRequiredSystemLibraries no encontro el CRT de MSVC: los juegos "
-            "exportados desde este build solo arrancaran donde ya este instalado el "
-            "Visual C++ Redistributable.")
+            "InstallRequiredSystemLibraries did not find the MSVC CRT: games "
+            "exported from this build will only start where the Visual C++ "
+            "Redistributable is already installed.")
     endif()
 endif()
 
