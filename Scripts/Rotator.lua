@@ -1,11 +1,11 @@
--- Rota la entity sobre Y. 'speed' (grados/seg) aparece editable en el
--- panel Properties automáticamente.
+-- Rotates the entity around Y. 'speed' (degrees/sec) shows up as editable in the
+-- Properties panel automatically.
 Rotator = {
     speed = 45
 }
 
 function Rotator:Awake()
-    Log.Info("Rotator despierto en " .. self.entity.name)
+    Log.Info("Rotator awake on " .. self.entity.name)
 end
 
 function Rotator:Update(dt)

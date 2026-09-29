@@ -26,8 +26,8 @@ set(_dtNodeEditorMathInl "${imguinodeeditor_SOURCE_DIR}/imgui_extra_math.inl")
 
 if(NOT EXISTS "${_dtNodeEditorMathInl}")
     message(FATAL_ERROR
-        "PatchImGuiNodeEditor: no se encuentra ${_dtNodeEditorMathInl}. "
-        "¿Cambió la estructura del repo de imgui-node-editor?"
+        "PatchImGuiNodeEditor: cannot find ${_dtNodeEditorMathInl}. "
+        "Did the imgui-node-editor repo layout change?"
     )
 endif()
 
@@ -56,11 +56,11 @@ if(_dtUnguardedOperatorPos EQUAL -1)
     # de imgui_node_editor fallará a continuación con un error claro de
     # símbolo duplicado, y ese error señalará directamente aquí.
     message(WARNING
-        "PatchImGuiNodeEditor: no se encontró el operator* sin guard en "
-        "${_dtNodeEditorMathInl}. Puede que upstream ya lo haya corregido "
-        "(nada que hacer) o que el archivo cambió de forma inesperada "
-        "(revisar este script). Si la compilación de imgui_node_editor "
-        "falla por 'operator*' redefinido, este es el sitio a mirar."
+        "PatchImGuiNodeEditor: the unguarded operator* was not found in "
+        "${_dtNodeEditorMathInl}. Upstream may have fixed it already "
+        "(nothing to do) or the file changed unexpectedly "
+        "(review this script). If building imgui_node_editor fails "
+        "with 'operator*' redefined, this is the place to look."
     )
     return()
 endif()
@@ -69,4 +69,4 @@ string(REPLACE "${_dtUnguardedOperator}" "${_dtGuardedOperator}" _dtNodeEditorMa
 
 file(WRITE "${_dtNodeEditorMathInl}" "${_dtNodeEditorMathInlContents}")
 
-message(STATUS "PatchImGuiNodeEditor: operator*(float, ImVec2) guardado con IMGUI_DEFINE_MATH_OPERATORS_IMPLEMENTED en ${_dtNodeEditorMathInl}")
+message(STATUS "PatchImGuiNodeEditor: operator*(float, ImVec2) guarded with IMGUI_DEFINE_MATH_OPERATORS_IMPLEMENTED in ${_dtNodeEditorMathInl}")

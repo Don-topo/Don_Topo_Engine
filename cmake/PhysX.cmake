@@ -95,7 +95,7 @@ if(WIN32 OR (UNIX AND NOT APPLE))
 
         set(PHYSX_FOUND TRUE)
     else()
-        message(WARNING "PhysX source no se descargó correctamente en ${PHYSX_ROOT_DIR}")
+        message(WARNING "PhysX source was not downloaded correctly into ${PHYSX_ROOT_DIR}")
     endif()
 endif()
 
@@ -124,7 +124,7 @@ if(PHYSX_FOUND)
     target_compile_definitions(PhysX::SDK INTERFACE PX_PHYSX_STATIC_LIB)
 else()
     message(WARNING
-        "PhysX SDK no disponible en esta plataforma — física no estará disponible.\n"
-        "  Soportado solo en Windows/Linux."
+        "PhysX SDK not available on this platform — physics will not be available.\n"
+        "  Supported on Windows/Linux only."
     )
 endif()

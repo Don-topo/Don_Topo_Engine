@@ -1,33 +1,34 @@
--- Empuja el GameObject con el Rigidbody, no con el Transform: esta es la forma
--- que SÍ colisiona (mover por Transform es un teletransporte y atraviesa las
--- paredes, ver el README).
+-- Pushes the GameObject through its Rigidbody, not its Transform: this is the way
+-- that DOES collide (moving through the Transform is a teleport and goes through
+-- walls, see the README).
 --
--- Requiere Rigidbody y que NO sea kinematic: un kinematic ignora las fuerzas.
+-- Needs a Rigidbody that is NOT kinematic: a kinematic body ignores forces.
+-- The prop names (fuerza = force, salto = jump) are kept because scenes save them.
 PushMe = {
     fuerza = 50000,
-    -- Impulso hacia arriba al pulsar Space
+    -- Upward impulse when Space is pressed
     salto = 30000
 }
 
 function PushMe:Start()
     self.rb = self.entity:GetComponent("Rigidbody")
     if not self.rb then
-        Log.Error("PushMe: el GameObject no tiene Rigidbody")
+        Log.Error("PushMe: the GameObject has no Rigidbody")
     end
 end
 
 function PushMe:Update(dt)
     if not self.rb then return end
 
-    -- Flechas: fuerza continua (se acumula mientras la tecla siga pulsada)
+    -- Arrows: continuous force (it accumulates while the key stays down)
     if Input.IsKeyDown(Key.Right) then self.rb:AddForce(self.fuerza * dt, 0, 0) end
     if Input.IsKeyDown(Key.Left)  then self.rb:AddForce(-self.fuerza * dt, 0, 0) end
     if Input.IsKeyDown(Key.Up)    then self.rb:AddForce(0, 0, -self.fuerza * dt) end
     if Input.IsKeyDown(Key.Down)  then self.rb:AddForce(0, 0, self.fuerza * dt) end
 
-    -- Space: impulso instantáneo (AddImpulse no se multiplica por dt)
+    -- Space: instant impulse (AddImpulse is not multiplied by dt)
     if Input.IsKeyPressed(Key.Space) then
         self.rb:AddImpulse(0, self.salto, 0)
-        Log.Info("Impulso! velocidad Y = " .. string.format("%.1f", self.rb.velocity.y))
+        Log.Info("Impulse! Y velocity = " .. string.format("%.1f", self.rb.velocity.y))
     end
 end

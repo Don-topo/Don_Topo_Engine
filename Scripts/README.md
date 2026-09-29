@@ -1,17 +1,17 @@
 # Lua Scripting API — Don Topo Engine
 
-Referencia completa de los métodos disponibles pa scripts Lua. Ver `README.md`
-(raíz) pa overview general; este documento detalla cada clase/tabla expuesta
-por `ScriptBindings.cpp`.
+Complete reference of the methods available to Lua scripts. See the root `README.md`
+for the general overview; this document details every class/table exposed by
+`ScriptBindings.cpp`.
 
-## Cómo se define un script
+## How a script is defined
 
-Cada archivo `Scripts/<Name>.lua` define una tabla global `<Name>` — su nombre
-de clase. Se adjunta a un GameObject vía **Properties → Add → Script**.
+Each file `Scripts/<Name>.lua` defines a global table `<Name>`: its class name. It is
+attached to a GameObject through **Properties → Add → Script**.
 
 ```lua
 Rotator = {
-    speed = 45   -- prop serializable (number/boolean/string), auto-UI en editor
+    speed = 45   -- serializable prop (number/boolean/string), auto-UI in the editor
 }
 
 function Rotator:Awake() end
@@ -24,366 +24,356 @@ function Rotator:OnDestroy() end
 
 ## Lifecycle
 
-| Callback | Cuándo |
+| Callback | When |
 | --- | --- |
-| `Awake()` | Al crear la instancia (Play Start o `Scene.Instantiate`), antes de cualquier `Start`/`Update` |
-| `Start()` | Una vez, antes del primer `Update` |
-| `Update(dt)` | Cada frame, en Play Mode |
-| `FixedUpdate(dt)` | Paso fijo (`1/60`), acumulador con tope anti spiral-of-death |
-| `LateUpdate()` | Cada frame, después de todos los `Update` |
-| `OnDestroy()` | Al destruirse el GameObject o quitarse el componente |
-| `OnTriggerEnter(other)` | Otro collider entra en este trigger |
-| `OnTriggerStay(other)` | Cada frame de física mientras siguen solapando |
-| `OnTriggerExit(other)` | El otro collider sale |
-| `OnCollisionEnter(other)` | Choque real (ningún collider es trigger): empieza el contacto |
-| `OnCollisionStay(other)` | Siguen en contacto |
-| `OnCollisionExit(other)` | Se separan |
+| `Awake()` | When the instance is created (Play start or `Scene.Instantiate`), before any `Start`/`Update` |
+| `Start()` | Once, before the first `Update` |
+| `Update(dt)` | Every frame, in Play Mode |
+| `FixedUpdate(dt)` | Fixed step (`1/60`), accumulator capped against the spiral of death |
+| `LateUpdate()` | Every frame, after all the `Update` calls |
+| `OnDestroy()` | When the GameObject is destroyed or the component removed |
+| `OnTriggerEnter(other)` | Another collider enters this trigger |
+| `OnTriggerStay(other)` | Every physics frame while they keep overlapping |
+| `OnTriggerExit(other)` | The other collider leaves |
+| `OnCollisionEnter(other)` | A real hit (neither collider is a trigger): contact begins |
+| `OnCollisionStay(other)` | They stay in contact |
+| `OnCollisionExit(other)` | They separate |
 
-Todos son opcionales — solo se llaman los que el script define. Un error en
-cualquiera loguea el mensaje y **desactiva ese componente** (deja de recibir
-callbacks) hasta hot reload o `Stop`; nunca crashea el motor.
+All of them are optional: only the ones the script defines are called. An error in any
+of them logs the message and **disables that component** (it stops receiving callbacks)
+until a hot reload or `Stop`; it never crashes the engine.
 
 ### Triggers
 
-Los tres `OnTrigger*` exigen que el GameObject tenga un collider con **Is
-Trigger** marcado en Properties. `other` es una `Entity`, igual que
-`self.entity`.
+The three `OnTrigger*` callbacks require the GameObject to have a collider with **Is
+Trigger** checked in Properties. `other` is an `Entity`, just like `self.entity`.
 
-Tres reglas que se descubren tarde si nadie las dice:
+Three rules you find out late if nobody tells you:
 
-- **Al menos uno de los dos objetos necesita un Rigidbody** — el trigger o el
-  que entra, da igual cuál. PhysX no reporta solapes entre dos objetos
-  estáticos, y un collider sin Rigidbody lo es. Sin esto no salta nada y no hay
-  ningún error: el editor lo avisa bajo el checkbox. Misma regla que Unity.
-- **Solo el lado trigger recibe los callbacks.** El objeto que entra no se
-  entera, salvo que él también sea trigger frente a un no-trigger.
-- **Trigger contra trigger no dispara nada**, por la misma limitación de PhysX.
+- **At least one of the two objects needs a Rigidbody**: the trigger or the one entering,
+  either one. PhysX does not report overlaps between two static objects, and a collider
+  without a Rigidbody is static. Without it nothing fires and there is no error: the
+  editor warns about it under the checkbox. Same rule as Unity.
+- **Only the trigger side receives the callbacks.** The object that enters is not told,
+  unless it is also a trigger against a non-trigger.
+- **Trigger against trigger fires nothing**, because of the same PhysX limitation.
 
-`OnTriggerStay` se sintetiza por frame (PhysX solo da Enter y Exit), así que
-loguear ahí inunda la consola enseguida.
+`OnTriggerStay` is synthesized per frame (PhysX only gives Enter and Exit), so logging
+there floods the console quickly.
 
-Ejemplos: `Scripts/TriggerProbe.lua` (cuenta entradas y salidas) y
-`Scripts/TriggerTest.lua` (destruye su GameObject en el Enter).
+Examples: `Scripts/TriggerProbe.lua` (counts entries and exits) and
+`Scripts/TriggerTest.lua` (destroys its GameObject on Enter).
 
-### Colisiones
+### Collisions
 
-`OnCollisionEnter`, `OnCollisionStay` y `OnCollisionExit` son los gemelos de los
-`OnTrigger*` para los pares que **chocan de verdad**, o sea aquellos en los que
-**ninguno** de los dos colliders es trigger. Reciben el mismo argumento único —la
-otra `Entity`— y corren en el mismo punto del frame (primero la física, luego los
-`Update`).
+`OnCollisionEnter`, `OnCollisionStay` and `OnCollisionExit` are the twins of the
+`OnTrigger*` callbacks for pairs that **really collide**, that is, pairs where
+**neither** collider is a trigger. They receive the same single argument (the other
+`Entity`) and run at the same point of the frame (physics first, then the `Update`
+calls).
 
 ```lua
-function Bala:OnCollisionEnter(other)
-    Log.Info("impacto contra " .. other.name)
+function Bullet:OnCollisionEnter(other)
+    Log.Info("hit against " .. other.name)
     DestroyGameObject(self.entity)
 end
 ```
 
-Las diferencias que conviene tener claras:
+The differences worth keeping clear:
 
 | | `OnTrigger*` | `OnCollision*` |
 | --- | --- | --- |
-| Cuándo | uno de los colliders tiene `isTrigger = true` | ninguno de los dos es trigger |
-| A quién se llama | al script del objeto **trigger** | a los scripts de **los dos** objetos |
-| Respuesta física | ninguna, se atraviesan | PhysX resuelve el impacto |
-| De dónde sale `Stay` | sintetizado, uno por sub-paso de física | `TOUCH_PERSISTS` nativo de PhysX |
+| When | one of the colliders has `isTrigger = true` | neither is a trigger |
+| Who is called | the script of the **trigger** object | the scripts of **both** objects |
+| Physical response | none, they pass through | PhysX resolves the impact |
+| Where `Stay` comes from | synthesized, one per physics sub-step | PhysX's native `TOUCH_PERSISTS` |
 
-Las dos familias son **mutuamente excluyentes por par**: un trigger no genera
-contactos, así que poner `isTrigger = true` a media partida cambia en silencio qué
-familia recibe ese collider. La matriz de capas filtra las dos igual: un par apagado
-en `Physics.SetLayerCollision` no produce ninguna de las dos. Y sigue valiendo la
-regla de "al menos un Rigidbody": dos colliders estáticos no forman par, así que no
-salta ninguna de las dos familias.
+The two families are **mutually exclusive per pair**: a trigger generates no contacts,
+so setting `isTrigger = true` mid-game silently changes which family that collider
+receives. The layer matrix filters both the same way: a pair turned off in
+`Physics.SetLayerCollision` produces neither. And the "at least one Rigidbody" rule
+still holds: two static colliders do not form a pair, so neither family fires.
 
-Scripts solo corren en **Play Mode**. `self.entity` (tipo `Entity`, ver abajo)
-se inyecta automáticamente en la instancia.
+Scripts only run in **Play Mode**. `self.entity` (type `Entity`, see below) is injected
+into the instance automatically.
 
-## Props serializables
+## Serializable props
 
-Cualquier campo `number`/`boolean`/`string` en la tabla de clase se detecta
-como prop y aparece en Properties (DragInt pa integers Lua, DragFloat pa
-floats). Solo los valores editados en el editor (que difieren del default)
-se serializan en la escena.
+Any `number`/`boolean`/`string` field in the class table is detected as a prop and
+shows up in Properties (DragInt for Lua integers, DragFloat for floats). Only the values
+edited in the editor (the ones that differ from the default) are serialized in the scene.
 
 ## Hot reload
 
-Editar un `.lua` cargado mientras el motor corre lo recarga (~1s de polling),
-preservando los valores de props ya asignados.
+Editing a loaded `.lua` while the engine runs reloads it (~1 s polling), keeping the
+prop values already assigned.
 
 ## Script Editor
 
-Doble clic en un `.lua` del Content Browser —o el botón **Edit** que hay junto al
-`ScriptComponent` en Properties— lo abre en el panel **Script Editor**: un editor de
-código multi-pestaña (ImGuiColorTextEdit, resaltado de Lua) acoplado junto al resto de
-paneles. `Ctrl+S` o el botón **Guardar** escriben el fichero a disco; el polling de hot
-reload recoge el cambio como el de cualquier edición externa. Cerrar una pestaña con
-cambios sin guardar pregunta guardar/descartar/cancelar.
+Double-clicking a `.lua` in the Content Browser, or the **Edit** button next to the
+`ScriptComponent` in Properties, opens it in the **Script Editor** panel: a multi-tab
+code editor (ImGuiColorTextEdit, Lua highlighting) docked with the rest of the panels.
+`Ctrl+S` or the **Save** button write the file to disk; the hot reload polling picks up
+the change like any external edit. Closing a tab with unsaved changes asks to
+save/discard/cancel.
 
-| Atajo | Qué hace |
+| Shortcut | What it does |
 | --- | --- |
-| `Ctrl+S` | Guardar |
-| `Ctrl+F` | Abrir la barra de **buscar / reemplazar** |
-| `F3` / `Shift+F3` | Siguiente / anterior coincidencia, sin volver a la barra |
-| `Ctrl+G` | **Ir a línea** |
-| `Ctrl+Space` | Abrir el autocompletado a mano |
-| `Enter` / `Tab` | Aceptar la sugerencia |
-| `Escape` | Cerrar el popup, o la barra de búsqueda si el foco está en ella |
+| `Ctrl+S` | Save |
+| `Ctrl+F` | Open the **find / replace** bar |
+| `F3` / `Shift+F3` | Next / previous match, without going back to the bar |
+| `Ctrl+G` | **Go to line** |
+| `Ctrl+Space` | Open autocomplete by hand |
+| `Enter` / `Tab` | Accept the suggestion |
+| `Escape` | Close the popup, or the find bar if it has focus |
 
-La búsqueda **envuelve** por el extremo contrario al llegar al final, y la
-casilla `Aa` decide si distingue mayúsculas. **Reemplazar** solo sustituye si lo
-seleccionado *es* la coincidencia: el primer clic sin haber buscado antes solo
-busca, no toca nada. **Todo** sustituye de una pasada sobre el texto entero y
-dice cuántas veces.
+Search **wraps around** to the opposite end when it reaches the end, and the `Aa` box
+decides whether it matches case. **Replace** only substitutes if the selection *is* the
+match: the first click without a previous search only searches and touches nothing.
+**All** replaces in one pass over the whole text and says how many times.
 
-La **comprobación de sintaxis** (solo compila, no ejecuta) corre **mientras se
-escribe**, no solo al guardar: espera unos frames de calma para no saltar en
-mitad de una palabra a medio teclear. El error sale como marca en la línea
-culpable —con el mensaje al pasar el ratón— y también en la **barra de estado**
-de abajo, que además lleva línea, columna y total de líneas; un clic en el
-mensaje lleva el cursor a la línea del error. Un fichero que ya venga roto de
-disco enseña el error nada más abrirlo.
+The **syntax check** (it only compiles, it does not run) runs **while you type**, not
+only on save: it waits a few quiet frames so it does not fire in the middle of a
+half-typed word. The error shows as a mark on the offending line (with the message on
+hover) and also in the **status bar** at the bottom, which also shows line, column and
+line count; clicking the message moves the cursor to the error line. A file that is
+already broken on disk shows the error as soon as it opens.
 
-Cuando Lua reporta el error en `<eof>` —lo que pasa al borrar un `end`, y cae
-en una línea que no existe— se marca la línea donde se **abrió** el bloque que
-quedó sin cerrar, que es donde está el problema de verdad.
+When Lua reports the error at `<eof>` (which happens when you delete an `end`, and lands
+on a line that does not exist), the line where the unclosed block was **opened** is
+marked, which is where the real problem is.
 
-Si el fichero **cambia en disco** mientras está abierto, la pestaña se entera:
-si no tiene cambios propios se recarga sola y lo dice en el Log Console; si los
-tiene, pregunta, porque cualquiera de las dos opciones pierde trabajo de
-alguien. El botón **Recargar** hace lo mismo a mano.
+If the file **changes on disk** while it is open, the tab notices: if it has no changes
+of its own it reloads by itself and says so in the Log Console; if it does, it asks,
+because either option loses someone's work. The **Reload** button does the same by hand.
 
-Abrir un `.lua` —desde el Content Browser o desde el botón **Edit** del
-`ScriptComponent` en Properties— además de abrir el panel lo **trae al frente**.
-Si estaba acoplado detrás de otra pestaña, esa pestaña pasa a estar delante; sin
-eso, el fichero se abría donde no se veía. Lo mismo hace **Editar sprites...**
-con el panel Sprite Editor.
+Opening a `.lua` (from the Content Browser or from the `ScriptComponent`'s **Edit**
+button in Properties) not only opens the panel but also **brings it to the front**. If it
+was docked behind another tab, that tab now comes forward; without that, the file opened
+where it could not be seen. **Edit sprites...** does the same with the Sprite Editor
+panel.
 
-También se crea un script desde cero con **Properties → Add → Script → Nuevo
-Script...**, que genera un `.lua` a partir de una plantilla.
+A script can also be created from scratch with **Properties → Add → Script → New
+Script...**, which generates a `.lua` from a template.
 
 ---
 
 ## Vec3
 
-Constructor `Vec3.new(x, y, z)` o `Vec3.new()` (cero). La tabla también es
-**invocable**, así que `Vec3(x, y, z)` y `Vec3()` hacen exactamente lo mismo; los
-ejemplos de este documento usan las dos formas indistintamente. Campos `.x/.y/.z`.
+Constructor `Vec3.new(x, y, z)` or `Vec3.new()` (zero). The table is also **callable**,
+so `Vec3(x, y, z)` and `Vec3()` do exactly the same; the examples in this document use
+both forms interchangeably. Fields `.x/.y/.z`.
 
-Operadores: `+`, `-` (binario y unario), `* escalar` **por los dos lados**
-(`v * 2` y `2 * v`), `/ escalar`, `==` (componente a componente) y `tostring`.
+Operators: `+`, `-` (binary and unary), `* scalar` **on both sides** (`v * 2` and
+`2 * v`), `/ scalar`, `==` (component-wise) and `tostring`.
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `v:Length()` | Longitud del vector |
-| `v:Normalized()` | Copia de longitud 1. El vector cero se devuelve **tal cual**, no `NaN` |
-| `a:Dot(b)` | Producto escalar |
-| `a:Cross(b)` | Producto vectorial |
-| `a:Distance(b)` | Distancia entre los dos puntos |
-| `a:Lerp(b, t)` | Interpolación lineal. `t` fuera de `[0,1]` **extrapola** (como `glm::mix`, a diferencia de Unity) |
+| `v:Length()` | Length of the vector |
+| `v:Normalized()` | Copy with length 1. The zero vector is returned **as is**, not `NaN` |
+| `a:Dot(b)` | Dot product |
+| `a:Cross(b)` | Cross product |
+| `a:Distance(b)` | Distance between the two points |
+| `a:Lerp(b, t)` | Linear interpolation. `t` outside `[0,1]` **extrapolates** (like `glm::mix`, unlike Unity) |
 
-Ninguno muta el receptor: todos devuelven un valor nuevo.
+None of them mutates the receiver: they all return a new value.
 
-Dividir por cero da `inf`/`NaN`. No revienta ahí mismo: lo ataja el guard de
-valores no finitos en cuanto el resultado intenta entrar en un setter del motor
-(se ignora el valor y se avisa por el Log Console).
+Dividing by zero gives `inf`/`NaN`. It does not blow up right there: the non-finite value
+guard catches it as soon as the result tries to enter an engine setter (the value is
+ignored and a warning goes to the Log Console).
 
 ## Time
 
-Reloj de los scripts. Lo rellena el motor **en cada `update`**, antes de llamar
-a ningún callback, así que `Awake` y `Start` de un componente nuevo ya ven el
-`Time` de su propio frame.
+The scripts' clock. The engine fills it **on every `update`**, before calling any
+callback, so the `Awake` and `Start` of a new component already see the `Time` of their
+own frame.
 
-| Campo | Descripción |
+| Field | Description |
 | --- | --- |
-| `Time.deltaTime` | Segundos del último frame. Lo mismo que el argumento que recibe `Update` |
-| `Time.fixedDeltaTime` | Paso fijo de `FixedUpdate`, en segundos. Constante |
-| `Time.time` | Segundos desde que empezó el Play **actual** |
-| `Time.frameCount` | Frames desde que empezó el Play actual |
+| `Time.deltaTime` | Seconds of the last frame. The same as the argument `Update` receives |
+| `Time.fixedDeltaTime` | `FixedUpdate`'s fixed step, in seconds. Constant |
+| `Time.time` | Seconds since the **current** Play started |
+| `Time.frameCount` | Frames since the current Play started |
 
-Entrar en Play reinicia `time` y `frameCount` a cero: un segundo Play tras un
-Stop no continúa donde lo dejó la partida anterior. Un `dt` no finito (un frame
-degenerado) se ignora entero en vez de dejar `Time.time` en `NaN` para siempre.
+Entering Play resets `time` and `frameCount` to zero: a second Play after a Stop does not
+continue where the previous run left off. A non-finite `dt` (a degenerate frame) is
+ignored entirely instead of leaving `Time.time` as `NaN` forever.
 
-La tabla es escribible desde Lua, pero no sirve de nada: el acumulador de
-verdad vive en C++ y el frame siguiente restaura el valor correcto.
+The table is writable from Lua, but that is useless: the real accumulator lives in C++
+and the next frame restores the right value.
 
 ```lua
-function Contador:Update(dt)
-    -- dt y Time.deltaTime son el mismo número.
+function Counter:Update(dt)
+    -- dt and Time.deltaTime are the same number.
     if Time.time > 5.0 then
-        Log.Info("han pasado 5 segundos y " .. Time.frameCount .. " frames")
+        Log.Info("5 seconds and " .. Time.frameCount .. " frames have passed")
     end
 end
 ```
 
 ## Log
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `Log.Info(msg)` | Log normal en Log Console |
-| `Log.Warn(msg)` | Log con prefijo `[WARN]` |
-| `Log.Error(msg)` | Log con prefijo `[ERROR]` |
+| `Log.Info(msg)` | Normal log in the Log Console |
+| `Log.Warn(msg)` | Log with a `[WARN]` prefix |
+| `Log.Error(msg)` | Log with an `[ERROR]` prefix |
 
-`print(...)` nativo de Lua también se redirige al Log Console (mismo destino
-que `Log.Info`).
+Lua's native `print(...)` is also redirected to the Log Console (same destination as
+`Log.Info`).
 
 ## Input
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `Input.IsKeyDown(key)` | true mientras la tecla está apretada |
-| `Input.IsKeyPressed(key)` | true solo en el frame que se apretó |
-| `Input.IsKeyReleased(key)` | true solo en el frame que se soltó |
-| `Input.IsMouseButtonDown(button)` | true mientras el botón está apretado |
-| `Input.IsActionDown(name)` | true mientras la **acción** está activa |
-| `Input.IsActionPressed(name)` | true solo en el frame en que se activó |
-| `Input.IsActionReleased(name)` | true solo en el frame en que se soltó |
+| `Input.IsKeyDown(key)` | true while the key is held |
+| `Input.IsKeyPressed(key)` | true only on the frame it was pressed |
+| `Input.IsKeyReleased(key)` | true only on the frame it was released |
+| `Input.IsMouseButtonDown(button)` | true while the button is held |
+| `Input.IsActionDown(name)` | true while the **action** is active |
+| `Input.IsActionPressed(name)` | true only on the frame it became active |
+| `Input.IsActionReleased(name)` | true only on the frame it was released |
 
-Tablas de constantes: `Key.Space/Enter/Escape/Tab/LeftShift/LeftControl/
+Constant tables: `Key.Space/Enter/Escape/Tab/LeftShift/LeftControl/
 Up/Down/Left/Right/A..Z/Num0..Num9`, `MouseButton.Left/Right/Middle`.
 
-### Mando
+### Gamepad
 
-Lo normal es usar **acciones con nombre** (el panel Input Actions ya sabe de
-mando y así el script no depende del dispositivo). Estas cuatro son el mando
-crudo, para cuando el script quiere un botón concreto:
+The normal thing is to use **named actions** (the Input Actions panel already knows about
+gamepads, and that way the script does not depend on the device). These four are the raw
+gamepad, for when the script wants a specific button:
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `Input.IsPadButtonDown(boton)` | true mientras el botón está apretado |
-| `Input.IsPadButtonPressed(boton)` | true solo en el frame del flanco |
-| `Input.IsPadAxisDown(codigo)` | true mientras la dirección de eje está activa |
-| `Input.IsPadAxisPressed(codigo)` | true solo en el frame del flanco |
+| `Input.IsPadButtonDown(button)` | true while the button is held |
+| `Input.IsPadButtonPressed(button)` | true only on the frame of the edge |
+| `Input.IsPadAxisDown(code)` | true while the axis direction is active |
+| `Input.IsPadAxisPressed(code)` | true only on the frame of the edge |
 
-Sin mando conectado devuelven `false`, nunca error. Se refieren al primer mando
-conectado con mapeo conocido.
+Without a connected gamepad they return `false`, never an error. They refer to the first
+connected gamepad with a known mapping.
 
 `PadButton.A/B/X/Y/LeftBumper/RightBumper/Back/Start/Guide/LeftThumb/
 RightThumb/DpadUp/DpadRight/DpadDown/DpadLeft`.
 
-Los **ejes** (sticks y gatillos) no se consultan por eje sino por **dirección**:
-un eje son dos bindings distintos, porque "stick izquierdo hacia arriba" y
-"hacia abajo" son dos cosas. Constantes ya compuestas:
-`PadAxis.LeftStickUp/Down/Left/Right`, `PadAxis.RightStickUp/Down/Left/Right`,
-`PadAxis.LeftTrigger`, `PadAxis.RightTrigger`. Cualquier otra se compone con
-`PadAxis.Code(eje, negativo)`.
+**Axes** (sticks and triggers) are not queried by axis but by **direction**: an axis is
+two separate bindings, because "left stick up" and "down" are two different things.
+Ready-made constants: `PadAxis.LeftStickUp/Down/Left/Right`,
+`PadAxis.RightStickUp/Down/Left/Right`, `PadAxis.LeftTrigger`, `PadAxis.RightTrigger`.
+Any other is built with `PadAxis.Code(axis, negative)`.
 
-Los nombres dicen hacia dónde se empuja, no el signo: en GLFW el eje Y de los
-sticks crece hacia abajo, así que `Up` es el eje negativo. Los gatillos vienen
-en `[-1,1]` con el reposo en `-1` y el motor los renormaliza a `[0,1]`, así que
-solo tienen dirección positiva.
+The names say which way it is pushed, not the sign: in GLFW the sticks' Y axis grows
+downwards, so `Up` is the negative axis. Triggers come in `[-1,1]` with rest at `-1` and
+the engine renormalizes them to `[0,1]`, so they only have a positive direction.
 
-### Acciones con nombre
+### Named actions
 
-Las tres `IsAction*` consultan las **acciones** que se definen en el panel **Input
-Actions**, no una tecla concreta: es la forma de que "saltar" sea la barra o el botón
-A del mando sin que el script sepa cuál. El nombre es el de la acción, tal cual.
+The three `IsAction*` functions query the **actions** defined in the **Input Actions**
+panel, not a specific key: that is how "jump" can be the space bar or the gamepad's A
+button without the script knowing which. The name is the action's, exactly.
 
-Un nombre desconocido devuelve `false` y avisa **una sola vez por nombre y sesión**:
-la llamada típica vive en `Update()` y un aviso por frame ahogaría el Log Console.
+An unknown name returns `false` and warns **only once per name and session**: the typical
+call lives in `Update()` and one warning per frame would drown the Log Console.
 
 ## Entity (`self.entity`)
 
-| Método/prop | Descripción |
+| Method/prop | Description |
 | --- | --- |
-| `entity.name` | Lectura/escritura del nombre del GameObject |
-| `entity.meshVisible` | Dibuja o esconde la malla. El objeto sigue vivo, colisionando y ejecutando sus scripts |
-| `entity:IsValid()` | false si la entity fue destruida |
-| `entity:GetTransform()` | Devuelve `Transform` |
-| `entity:GetParent()` | `Entity` del padre, o `nil` si es raíz |
-| `entity:SetParent(padre?, mantenerPoseDeMundo?)` | Cambia de padre. Sin argumento (o `nil`) lo cuelga de la raíz. Devuelve `false` si el destino no vale |
-| `entity:GetChildren()` | Tabla (array 1-based) de `Entity` hijos |
-| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"ReverbZone"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, `"Panel"`, `"Image"`, `"Slider"`, `"Checkbox"`, `"Toggle"`, `"Scrollbar"`, `"InputField"`, `"Dropdown"`, `"ScrollView"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
-| `entity:AddComponent(name, arg?)` | Añade componente (mismos defaults que el botón Add del editor; colliders mutuamente excluyentes). `AudioClip` requiere `arg` = ruta del asset. Los de UI no se excluyen entre sí (caben todos en el mismo GameObject) y pedir uno que ya está devuelve el que hay. `"Script:<Nombre>"` añade el script (Awake/Start se disparan en el siguiente lifecycle update) |
-| `entity:RemoveComponent(name)` | Quita el componente (scripts se remueven diferido, al final del frame) |
-| `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` / `GetPanel()` / `GetImage()` / `GetSlider()` / `GetCheckbox()` / `GetToggle()` / `GetScrollbar()` / `GetInputField()` / `GetDropdown()` / `GetScrollView()` | El componente de UI, o `nil` si no lo tiene |
-| `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` / `AddLayout()` / `AddPanel()` / `AddImage()` / `AddSlider()` / `AddCheckbox()` / `AddToggle()` / `AddScrollbar()` / `AddInputField()` / `AddDropdown()` / `AddScrollView()` | Lo crea con los valores por defecto del componente y devuelve el wrapper; si ya existe devuelve el que hay sin pisarlo |
-| `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` / `RemoveLayout()` / `RemovePanel()` / `RemoveImage()` / `RemoveSlider()` / `RemoveCheckbox()` / `RemoveToggle()` / `RemoveScrollbar()` / `RemoveInputField()` / `RemoveDropdown()` / `RemoveScrollView()` | Lo quita del GameObject |
-| `entity:GetLight()` / `AddLight()` / `RemoveLight()` | Componente de luz, con el mismo contrato que los de UI (`Get` devuelve `nil` si no está, `Add` no pisa el que hubiera) |
-| `entity:GetCamera()` / `AddCamera()` / `RemoveCamera()` | Cámara de juego, mismo contrato |
+| `entity.name` | Read/write the GameObject's name |
+| `entity.meshVisible` | Shows or hides the mesh. The object stays alive, colliding and running its scripts |
+| `entity:IsValid()` | false if the entity was destroyed |
+| `entity:GetTransform()` | Returns the `Transform` |
+| `entity:GetParent()` | The parent's `Entity`, or `nil` if it is at the root |
+| `entity:SetParent(parent?, keepWorldPose?)` | Changes the parent. Without an argument (or `nil`) it hangs it from the root. Returns `false` if the target is not valid |
+| `entity:GetChildren()` | Table (1-based array) of child `Entity` values |
+| `entity:GetComponent(name)` | Returns the component if it exists, otherwise `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"ReverbZone"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, `"Panel"`, `"Image"`, `"Slider"`, `"Checkbox"`, `"Toggle"`, `"Scrollbar"`, `"InputField"`, `"Dropdown"`, `"ScrollView"`, or `"Script:<ClassName>"` to reach the instance of another script on the same GameObject |
+| `entity:AddComponent(name, arg?)` | Adds a component (same defaults as the editor's Add button; colliders are mutually exclusive). `AudioClip` requires `arg` = the asset path. UI components do not exclude each other (they all fit on the same GameObject) and asking for one that is already there returns the existing one. `"Script:<Name>"` adds the script (Awake/Start fire on the next lifecycle update) |
+| `entity:RemoveComponent(name)` | Removes the component (scripts are removed deferred, at the end of the frame) |
+| `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` / `GetPanel()` / `GetImage()` / `GetSlider()` / `GetCheckbox()` / `GetToggle()` / `GetScrollbar()` / `GetInputField()` / `GetDropdown()` / `GetScrollView()` | The UI component, or `nil` if it has none |
+| `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` / `AddLayout()` / `AddPanel()` / `AddImage()` / `AddSlider()` / `AddCheckbox()` / `AddToggle()` / `AddScrollbar()` / `AddInputField()` / `AddDropdown()` / `AddScrollView()` | Creates it with the component's default values and returns the wrapper; if it already exists, returns the existing one without overwriting it |
+| `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` / `RemoveLayout()` / `RemovePanel()` / `RemoveImage()` / `RemoveSlider()` / `RemoveCheckbox()` / `RemoveToggle()` / `RemoveScrollbar()` / `RemoveInputField()` / `RemoveDropdown()` / `RemoveScrollView()` | Removes it from the GameObject |
+| `entity:GetLight()` / `AddLight()` / `RemoveLight()` | Light component, with the same contract as the UI ones (`Get` returns `nil` if missing, `Add` does not overwrite an existing one) |
+| `entity:GetCamera()` / `AddCamera()` / `RemoveCamera()` | Game camera, same contract |
 
-`"Light"` y `"Camera"` también valen como nombre en
+`"Light"` and `"Camera"` are also valid names for
 `GetComponent`/`AddComponent`/`RemoveComponent`.
 
-### Cambiar de padre
+### Changing the parent
 
-`SetParent` conserva por defecto la **pose de mundo**, como el
-`transform.parent` de Unity: el objeto se queda exactamente donde está y lo que
-se recalcula es su transform local.
+By default `SetParent` keeps the **world pose**, like Unity's `transform.parent`: the
+object stays exactly where it is and its local transform is what gets recomputed.
 
 ```lua
-local arma  = Scene.Find("Pistola")
-local mano  = Scene.Find("ManoDerecha")
+local gun  = Scene.Find("Gun")
+local hand = Scene.Find("RightHand")
 
-arma:SetParent(mano)          -- se queda donde está y pasa a seguir a la mano
-arma:SetParent(mano, false)   -- conserva el local: SALTA al origen de la mano
-arma:SetParent()              -- la suelta: vuelve a colgar de la raíz
+gun:SetParent(hand)          -- stays where it is and now follows the hand
+gun:SetParent(hand, false)   -- keeps the local: it JUMPS to the hand's origin
+gun:SetParent()              -- lets go: it hangs from the root again
 ```
 
-El `false` es lo que hace arrastrar en la jerarquía del editor.
+The `false` is what dragging in the editor's hierarchy does.
 
-Devuelve `false` **sin tocar nada** —y avisa por el Log Console— si el destino
-está dentro del propio subárbol del objeto. No es una escena rara: eso
-desengancharía el subárbol del árbol y se llevaría por delante lo que lo
-mantiene vivo.
+It returns `false` **without touching anything** (and warns in the Log Console) if the
+target is inside the object's own subtree. That is not an odd scene: it would detach the
+subtree from the tree and take down what keeps it alive.
 
-Los `worldTransform` del subárbol quedan al día **en el acto**, no en el frame
-siguiente: un `GetWorldPosition()` en la línea de después ya lee lo correcto.
+The subtree's `worldTransform` values are up to date **immediately**, not on the next
+frame: a `GetWorldPosition()` on the following line already reads the right value.
 
-Un padre con escala 0 no tiene inversa. En ese caso se conserva la pose local y
-se avisa, en vez de hornear un `NaN` en la matriz que arrastraría a los hijos.
+A parent with scale 0 has no inverse. In that case the local pose is kept and a warning
+is issued, instead of baking a `NaN` into the matrix that would drag the children along.
 
-Si el objeto lleva collider, mover con `mantenerPoseDeMundo` a `true` no lo
-mueve, así que no hay teleport. Con `false` salta, y vale lo mismo que dice
-[Mover por Transform NO colisiona](#mover-por-transform-no-colisiona).
+If the object has a collider, reparenting with `keepWorldPose` set to `true` does not move
+it, so there is no teleport. With `false` it jumps, and what
+[Moving through Transform does NOT collide](#moving-through-transform-does-not-collide)
+says applies.
 
 ## Light
 
-Luz de escena (`GetComponent("Light")` o `entity:GetLight()`). **No guarda
-posición ni dirección**: las dos salen del transform del GameObject —posición
-del objeto, dirección `-Z` local—, así que para mover o apuntar una luz se mueve
-o se gira su objeto.
+Scene light (`GetComponent("Light")` or `entity:GetLight()`). **It stores no position or
+direction**: both come from the GameObject's transform (the object's position, local
+`-Z` direction), so to move or aim a light you move or rotate its object.
 
-| Prop/método | Descripción |
+| Prop/method | Description |
 | --- | --- |
 | `light.type` | `LightType.Point/Spot/Directional/Area` |
-| `light.intensity` | Multiplicador del color, acotado a `0..100` |
-| `light.range` | Alcance de point y spot. La directional no atenúa y lo ignora; la area usa su ancho/2 |
-| `light.innerAngle` / `light.outerAngle` | Cono del spot, en **grados de semiángulo**. El interior nunca pasa del exterior |
-| `light.areaWidth` / `light.areaHeight` | Lado del rectángulo de la luz de área |
-| `light:GetColor()` / `light:SetColor(Vec3)` | Color rgb `0..1`, **sin** la intensidad premultiplicada |
+| `light.intensity` | Color multiplier, clamped to `0..100` |
+| `light.range` | Range of point and spot lights. Directional does not attenuate and ignores it; area uses its width/2 |
+| `light.innerAngle` / `light.outerAngle` | Spot cone, in **half-angle degrees**. The inner never exceeds the outer |
+| `light.areaWidth` / `light.areaHeight` | Sides of the area light's rectangle |
+| `light:GetColor()` / `light:SetColor(Vec3)` | RGB color `0..1`, **without** the intensity premultiplied |
 
-El color va por método y no por propiedad a propósito: siendo un `Vec3`,
-`light.color.x = 1` escribiría en una copia temporal y se perdería sin avisar.
+The color goes through a method and not a property on purpose: since it is a `Vec3`,
+`light.color.x = 1` would write into a temporary copy and be lost without a warning.
 
-Los rangos los acota el core, no la UI, así que un valor fuera de rango se
-recorta (`intensity = 500` deja 100). Un `type` que no esté en la tabla
-`LightType` **no se aplica**: se avisa por el Log Console y se conserva el
-anterior. `NaN`/`Inf`, lo mismo.
+The ranges are clamped by the core, not the UI, so an out-of-range value is clipped
+(`intensity = 500` leaves 100). A `type` that is not in the `LightType` table **is not
+applied**: a warning goes to the Log Console and the previous one is kept. `NaN`/`Inf`,
+the same.
 
-No hay invariante de unicidad: caben varias luces por escena, y el motor se
-queda con las primeras `MAX_LIGHTS` en orden de escena.
+There is no uniqueness invariant: several lights fit in a scene, and the engine keeps the
+first `MAX_LIGHTS` in scene order.
 
 ## Camera
 
-Cámara de juego (`GetComponent("Camera")` o `entity:GetCamera()`). Tampoco
-guarda posición ni orientación —salen del transform— ni aspect ratio, que lo
-dicta el viewport.
+Game camera (`GetComponent("Camera")` or `entity:GetCamera()`). It stores no position or
+orientation either (they come from the transform), nor an aspect ratio, which the
+viewport dictates.
 
-| Prop | Descripción |
+| Prop | Description |
 | --- | --- |
-| `camera.mode` | `CameraProjection.Perspective` u `Orthographic` |
-| `camera.fov` | Campo de visión en grados. **Solo** en perspectiva |
-| `camera.orthographicSize` | Semi-altura visible en unidades de mundo. **Solo** en ortográfica |
-| `camera.near` / `camera.far` | Planos de recorte |
+| `camera.mode` | `CameraProjection.Perspective` or `Orthographic` |
+| `camera.fov` | Field of view in degrees. Perspective **only** |
+| `camera.orthographicSize` | Visible half-height in world units. Orthographic **only** |
+| `camera.near` / `camera.far` | Clipping planes |
 
-Añadir una cámara desde Lua **no** comprueba que no haya otra en la escena: el
-invariante de "una por escena" lo impone el motor quedándose con la primera en
-pre-orden, igual que con el AudioListener.
+Adding a camera from Lua does **not** check that there is no other one in the scene: the
+"one per scene" invariant is enforced by the engine keeping the first one in pre-order,
+as with the AudioListener.
 
 ```lua
-function Interruptor:Update(dt)
+function Switch:Update(dt)
     local l = self.entity:GetLight()
     if l then
         l.intensity = 2.0 + math.sin(Time.time * 3.0)
@@ -393,234 +383,226 @@ end
 
 ## Transform
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `t:GetPosition()` / `t:SetPosition(Vec3)` | Posición local |
-| `t:GetRotation()` / `t:SetRotation(Vec3)` | Rotación local en euler-grados |
-| `t:GetScale()` / `t:SetScale(Vec3)` | Escala local |
-| `t:GetWorldPosition()` | Posición mundial (traducción de la world matrix) |
-| `t:Translate(Vec3 delta)` | Suma delta a la posición local |
-| `t:Rotate(Vec3 deltaEulerGrados)` | Rotación incremental compuesta como quaternion (no se atasca en rotación continua multi-eje) |
-| `t:SetWorldPosition(Vec3)` | Coloca el objeto en esa posición **de mundo** (deshace la transformada del padre) |
-| `t:GetForward()` | Eje `-Z` del objeto en mundo, normalizado |
-| `t:GetRight()` | Eje `+X` del objeto en mundo, normalizado |
-| `t:GetUp()` | Eje `+Y` del objeto en mundo, normalizado |
-| `t:LookAt(objetivo: Vec3, up: Vec3?)` | Gira el objeto para que su forward apunte al punto. `up` por defecto `(0,1,0)` |
+| `t:GetPosition()` / `t:SetPosition(Vec3)` | Local position |
+| `t:GetRotation()` / `t:SetRotation(Vec3)` | Local rotation in Euler degrees |
+| `t:GetScale()` / `t:SetScale(Vec3)` | Local scale |
+| `t:GetWorldPosition()` | World position (translation of the world matrix) |
+| `t:Translate(Vec3 delta)` | Adds delta to the local position |
+| `t:Rotate(Vec3 deltaEulerDegrees)` | Incremental rotation composed as a quaternion (it does not get stuck in continuous multi-axis rotation) |
+| `t:SetWorldPosition(Vec3)` | Places the object at that **world** position (undoes the parent's transform) |
+| `t:GetForward()` | The object's `-Z` axis in world space, normalized |
+| `t:GetRight()` | The object's `+X` axis in world space, normalized |
+| `t:GetUp()` | The object's `+Y` axis in world space, normalized |
+| `t:LookAt(target: Vec3, up: Vec3?)` | Rotates the object so its forward points at the point. `up` defaults to `(0,1,0)` |
 
-La convención es la de la cámara y la de `glm::lookAt`: se mira hacia `-Z`
-local. Los tres ejes salen ya normalizados — leídos crudos, un objeto escalado
-daría vectores más largos que 1.
+The convention is the camera's and `glm::lookAt`'s: the object looks along local `-Z`.
+The three axes come out already normalized; read raw, a scaled object would give vectors
+longer than 1.
 
-`LookAt` conserva posición y escala, y solo toca la rotación. Los dos casos
-degenerados —mirarse a sí mismo, o un `up` paralelo a la dirección de vista— no
-tienen respuesta: se avisa por el Log Console y la rotación **se queda como
-estaba**, en vez de instalar una matriz con `NaN` que arrastraría a los hijos.
+`LookAt` keeps position and scale and only touches the rotation. The two degenerate cases
+(looking at itself, or an `up` parallel to the view direction) have no answer: a warning
+goes to the Log Console and the rotation **stays as it was**, instead of installing a
+matrix with `NaN` that would drag the children along.
 
-Con padre, `GetWorldPosition` y `GetPosition` no son lo mismo: el segundo es
-local. `SetWorldPosition` sobre un objeto con un padre de escala 0 no puede
-resolverse (matriz singular) y también se ignora con aviso.
+With a parent, `GetWorldPosition` and `GetPosition` are not the same: the second is local.
+`SetWorldPosition` on an object whose parent has scale 0 cannot be solved (singular
+matrix) and is also ignored with a warning.
 
-### Mover por Transform NO colisiona
+### Moving through Transform does NOT collide
 
-Un objeto movido con `SetPosition`/`Translate` **atraviesa las paredes**, tenga
-o no Rigidbody. No es un fallo: mover el transform es un teletransporte, y
-PhysX no resuelve colisiones en un teleport — con Rigidbody kinematic va a
-`setKinematicTarget` (un kinematic empuja a los dinámicos, pero nada lo detiene
-a él) y con Rigidbody dinámico va a `setGlobalPose`, que lo deja donde le digas
-aunque quede solapado. Es la misma regla que en Unity con `transform.position`.
+An object moved with `SetPosition`/`Translate` **goes through walls**, with or without a
+Rigidbody. It is not a bug: moving the transform is a teleport, and PhysX does not resolve
+collisions on a teleport. With a kinematic Rigidbody it goes to `setKinematicTarget` (a
+kinematic body pushes dynamic ones, but nothing stops it) and with a dynamic Rigidbody it
+goes to `setGlobalPose`, which leaves it wherever you say even if it ends up overlapping.
+It is the same rule as `transform.position` in Unity.
 
-Para que un objeto **choque** de verdad hay que moverlo por la física: dejarlo
-caer con gravedad, o empujarlo con `AddForce`/`AddImpulse`/`velocity` del
-Rigidbody.
+For an object to really **collide** it has to be moved by physics: let it fall with
+gravity, or push it with the Rigidbody's `AddForce`/`AddImpulse`/`velocity`.
 
-Los **triggers sí funcionan** moviendo por Transform: detectan solape, que no
-necesita resolución de colisión. Por eso un objeto puede disparar
-`OnTriggerEnter` de una zona y aun así atravesar una pared sólida.
+**Triggers do work** when moving through Transform: they detect overlap, which needs no
+collision resolution. That is why an object can fire a zone's `OnTriggerEnter` and still
+go through a solid wall.
 
 ## Scene
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `Scene.Find(name)` | Primer GameObject con ese nombre (excluye la raíz), o `nil` |
-| `Scene.CreateGameObject(name, parent?)` | Crea un GameObject nuevo, opcionalmente hijo de `parent` |
-| `Scene.Destroy(entity)` | Encola destrucción (procesada al final del frame). Alias interno de `DestroyGameObject` |
-| `Scene.Instantiate(entity, parent?)` | Clona un GameObject (incl. sub-árbol, componentes, scripts); `Awake` se llama de inmediato, `Start` en el siguiente lifecycle update |
+| `Scene.Find(name)` | First GameObject with that name (the root excluded), or `nil` |
+| `Scene.CreateGameObject(name, parent?)` | Creates a new GameObject, optionally a child of `parent` |
+| `Scene.Destroy(entity)` | Queues destruction (processed at the end of the frame). Internal alias of `DestroyGameObject` |
+| `Scene.Instantiate(entity, parent?)` | Clones a GameObject (subtree, components and scripts included); `Awake` is called immediately, `Start` on the next lifecycle update |
 
 ## Physics
 
-Consultas contra la escena de física, y la matriz de capas de colisión. Solo hay
-escena de física en Play: fuera de Play `Raycast` devuelve `nil` y `RaycastHit`
-devuelve `false`.
+Queries against the physics scene, and the collision layer matrix. There is only a
+physics scene in Play: outside Play `Raycast` returns `nil` and `RaycastHit` returns
+`false`.
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `Physics.Raycast(origin, direction, maxDistance, options)` | Tabla con el impacto, o `nil` si no choca nada |
-| `Physics.RaycastHit(origin, direction, maxDistance, options)` | `true` / `false`; no construye la tabla del impacto |
-| `Physics.RaycastAll(origin, direction, maxDistance, options)` | **Todos** los impactos del rayo, en un array 1-based ordenado por `distance` ascendente |
-| `Physics.SphereCast(origin, direction, radius, maxDistance, options)` | Un impacto, con la misma forma que devuelve `Raycast`, o `nil` |
-| `Physics.OverlapSphere(center, radius, options)` | Array 1-based de `Entity` dentro de la esfera |
-| `Physics.OverlapBox(center, halfExtents, rotation, options)` | Array 1-based de `Entity` dentro de la caja |
-| `Physics.SetLayerCollision(a, b, enabled)` | Enciende/apaga el par de capas, **en los dos sentidos** |
-| `Physics.GetLayerCollision(a, b)` | `true` si las capas `a` y `b` colisionan |
+| `Physics.Raycast(origin, direction, maxDistance, options)` | Table with the hit, or `nil` if nothing is hit |
+| `Physics.RaycastHit(origin, direction, maxDistance, options)` | `true` / `false`; it does not build the hit table |
+| `Physics.RaycastAll(origin, direction, maxDistance, options)` | **All** the ray's hits, in a 1-based array sorted by ascending `distance` |
+| `Physics.SphereCast(origin, direction, radius, maxDistance, options)` | One hit, with the same shape `Raycast` returns, or `nil` |
+| `Physics.OverlapSphere(center, radius, options)` | 1-based array of `Entity` values inside the sphere |
+| `Physics.OverlapBox(center, halfExtents, rotation, options)` | 1-based array of `Entity` values inside the box |
+| `Physics.SetLayerCollision(a, b, enabled)` | Turns the layer pair on/off, **in both directions** |
+| `Physics.GetLayerCollision(a, b)` | `true` if layers `a` and `b` collide |
 
-`origin` y `direction` son `Vec3`. `direction` se normaliza dentro, así que no
-hace falta pasarla unitaria; con longitud 0 la llamada devuelve `nil` sin
-consultar la física. `maxDistance` es opcional: ausente o `<= 0` usa el default
-de **1000**.
+`origin` and `direction` are `Vec3`. `direction` is normalized inside, so it does not
+need to be a unit vector; with length 0 the call returns `nil` without querying physics.
+`maxDistance` is optional: missing or `<= 0` uses the default of **1000**.
 
-`options` es una tabla opcional, y todos sus campos lo son:
+`options` is an optional table, and all of its fields are optional:
 
-| Campo | Tipo | Default | Qué hace |
+| Field | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `hitTriggers` | bool | `false` | Si los colliders con *Is Trigger* cuentan como impacto |
-| `static` | bool | `true` | Consultar los colliders sin Rigidbody (actores estáticos) |
-| `dynamic` | bool | `true` | Consultar los colliders con Rigidbody (actores dinámicos) |
-| `ignore` | Entity | — | GameObject a ignorar, para que un script no se choque consigo mismo |
+| `hitTriggers` | bool | `false` | Whether colliders with *Is Trigger* count as a hit |
+| `static` | bool | `true` | Query colliders without a Rigidbody (static actors) |
+| `dynamic` | bool | `true` | Query colliders with a Rigidbody (dynamic actors) |
+| `ignore` | Entity | — | GameObject to ignore, so a script does not hit itself |
 
-Con `static = false` y `dynamic = false` no queda nada que consultar: devuelve
-`nil` (o `false`) sin tocar la física.
+With `static = false` and `dynamic = false` there is nothing left to query: it returns
+`nil` (or `false`) without touching physics.
 
-La tabla que devuelve `Raycast` trae exactamente estos campos:
+The table `Raycast` returns has exactly these fields:
 
-| Campo | Tipo | Descripción |
+| Field | Type | Description |
 | --- | --- | --- |
-| `entity` | Entity | GameObject impactado. `nil` si el collider no cuelga de ninguno |
-| `point` | Vec3 | Punto de impacto, en coordenadas de mundo |
-| `normal` | Vec3 | Normal de la superficie en el punto de impacto |
-| `distance` | number | Distancia desde `origin` hasta el impacto |
+| `entity` | Entity | GameObject hit. `nil` if the collider does not hang from any |
+| `point` | Vec3 | Hit point, in world coordinates |
+| `normal` | Vec3 | Surface normal at the hit point |
+| `distance` | number | Distance from `origin` to the hit |
 
-Un argumento del tipo equivocado no tumba el script: la llamada devuelve `nil`
-(o `false`) y deja un aviso en el Log.
+An argument of the wrong type does not bring down the script: the call returns `nil` (or
+`false`) and leaves a warning in the Log.
 
 ```lua
-Disparo = {
-    alcance = 50
+Shot = {
+    range = 50
 }
 
-function Disparo:Update()
+function Shot:Update()
     if not Input.IsKeyPressed(Key.Space) then return end
 
-    local origen = self.entity:GetTransform():GetWorldPosition()
-    -- Hacia delante en el mundo (+Z). Para disparar en la dirección en la que
-    -- mira el objeto, rota este Vec3 con su rotación.
-    local hit = Physics.Raycast(origen, Vec3(0, 0, 1), self.alcance,
+    local origin = self.entity:GetTransform():GetWorldPosition()
+    -- Forward in world space (+Z). To shoot in the direction the object faces,
+    -- rotate this Vec3 by its rotation.
+    local hit = Physics.Raycast(origin, Vec3(0, 0, 1), self.range,
                                 { ignore = self.entity })
 
     if hit then
-        local quien = hit.entity and hit.entity.name or "algo sin GameObject"
-        Log.Info("Impacto en " .. quien .. " a " .. hit.distance .. " unidades")
+        local who = hit.entity and hit.entity.name or "something without a GameObject"
+        Log.Info("Hit " .. who .. " at " .. hit.distance .. " units")
     else
-        Log.Info("Nada delante")
+        Log.Info("Nothing ahead")
     end
 end
 ```
 
-### RaycastAll — todos los impactos
+### RaycastAll — every hit
 
-En vez de pararse en el primero, recoge **todos** los colliders que hay a lo largo
-del rayo y devuelve un array 1-based de tablas de impacto, cada una con exactamente
-los mismos campos que `Physics.Raycast`, **ordenadas por `distance` ascendente**.
-Acepta las mismas `options`.
+Instead of stopping at the first one, it collects **every** collider along the ray and
+returns a 1-based array of hit tables, each with exactly the same fields as
+`Physics.Raycast`, **sorted by ascending `distance`**. It accepts the same `options`.
 
-Siempre devuelve una tabla: sin impactos —o fuera de Play, o con argumentos malos,
-que además dejan un aviso en el Log— devuelve una tabla **vacía**, nunca `nil`, así
-que `#hits` e `ipairs` son siempre seguros. El buffer aguanta **64** impactos por
-llamada; si el rayo cruza más, los sobrantes se pierden (PhysX trunca de forma
-arbitraria, así que lo que se cae **no** es necesariamente lo más lejano) y sale un
-`[Lua][WARN]` en el Log Console.
+It always returns a table: with no hits (or outside Play, or with bad arguments, which also
+leave a warning in the Log) it returns an **empty** table, never `nil`, so `#hits` and
+`ipairs` are always safe. The buffer holds **64** hits per call; if the ray crosses more,
+the extra ones are lost (PhysX truncates arbitrarily, so what gets dropped is **not**
+necessarily the farthest) and a `[Lua][WARN]` shows up in the Log Console.
 
 ```lua
 for i, hit in ipairs(Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)) do
-    Log.Info(i .. ": " .. hit.entity.name .. " @ " .. hit.distance)  -- el más cercano primero
+    Log.Info(i .. ": " .. hit.entity.name .. " @ " .. hit.distance)  -- nearest first
 end
 ```
 
-### SphereCast y los Overlap
+### SphereCast and the Overlaps
 
-Las tres toman la **misma tabla `options`** que los raycasts (`hitTriggers`,
-`static`, `dynamic`, `ignore`) y, como ellos, no hacen nada fuera de Play.
+All three take the **same `options` table** as the raycasts (`hitTriggers`, `static`,
+`dynamic`, `ignore`) and, like them, do nothing outside Play.
 
-`SphereCast` es el raycast "con grosor": una esfera de `radius` arranca centrada en
-`origin` y barre a lo largo de `direction`, así que pilla lo que un rayo de anchura
-cero se salta — es la forma habitual de mover un personaje sin que se cuele por las
-esquinas. Si la esfera ya solapa algo en `origin`, PhysX reporta `distance = 0` y
-`point`/`normal` no significan nada.
+`SphereCast` is the raycast "with thickness": a sphere of `radius` starts centered at
+`origin` and sweeps along `direction`, so it catches what a zero-width ray misses; it is
+the usual way to move a character without it slipping through corners. If the sphere
+already overlaps something at `origin`, PhysX reports `distance = 0` and
+`point`/`normal` mean nothing.
 
-Los dos `Overlap*` contestan "qué hay dentro de este volumen **ahora mismo**", así
-que devuelven la lista de `Entity` directamente, no tablas de impacto: un solape no
-tiene punto, ni normal, ni distancia. Cada entity sale **una sola vez** aunque
-varias de sus shapes solapen, los actores que no cuelgan de ningún GameObject se
-saltan, y el orden es el de PhysX, sin ordenar. En `OverlapBox`, `rotation` es un
-`Vec3` **opcional** de grados euler (misma convención que `Transform:SetRotation`) y
-se distingue de `options` por su tipo, así que
-`Physics.OverlapBox(c, h, { hitTriggers = true })` funciona sin rotación. Las dos
-topan en **64** solapes por llamada y avisan con un `[Lua][WARN]` al llenarse, igual
-que `RaycastAll`.
+The two `Overlap*` functions answer "what is inside this volume **right now**", so they
+return the list of `Entity` values directly, not hit tables: an overlap has no point, no
+normal and no distance. Each entity comes out **only once** even if several of its shapes
+overlap, actors that do not hang from any GameObject are skipped, and the order is
+PhysX's, unsorted. In `OverlapBox`, `rotation` is an **optional** `Vec3` of Euler degrees
+(same convention as `Transform:SetRotation`) and is told apart from `options` by its type,
+so `Physics.OverlapBox(c, h, { hitTriggers = true })` works without a rotation. Both cap
+at **64** overlaps per call and warn with a `[Lua][WARN]` when full, like `RaycastAll`.
 
 ```lua
--- ¿hay suelo delante antes de saltar?
-local suelo = Physics.SphereCast(self.entity:GetTransform():GetWorldPosition(),
-                                 Vec3(0,-1,0), 30, 200)
-if suelo then Log.Info("suelo a " .. suelo.distance) end
+-- is there ground ahead before jumping?
+local ground = Physics.SphereCast(self.entity:GetTransform():GetWorldPosition(),
+                                  Vec3(0,-1,0), 30, 200)
+if ground then Log.Info("ground at " .. ground.distance) end
 
--- todo lo que hay dentro del radio de la explosión
+-- everything inside the explosion radius
 for _, e in ipairs(Physics.OverlapSphere(Vec3(0,0,0), 250, { hitTriggers = true })) do
-    Log.Info("alcanzado: " .. e.name)
+    Log.Info("hit: " .. e.name)
 end
 ```
 
-### Capas de colisión
+### Collision layers
 
-`col.layer` es la **capa de colisión** del collider, un índice en la lista de capas
-del proyecto. La capa 0 es `"Default"` y siempre existe; las demás se **crean bajo
-demanda** desde **View → Collision Layers** (`Add Layer`, renombrar en línea, `x`
-para borrar — con confirmación, porque borrar no se puede deshacer). Borrar una capa
-**compacta** la lista: los colliders que la usaban caen a la capa 0, las capas por
-encima bajan un índice y la matriz pierde esa fila y esa columna. O sea que un script
-que cablee índices de capa apunta a otra capa distinta después de un borrado. El tope
-son **32** capas.
+`col.layer` is the collider's **collision layer**, an index into the project's layer list.
+Layer 0 is `"Default"` and always exists; the rest are **created on demand** from
+**View → Collision Layers** (`Add Layer`, rename inline, `x` to delete, with a
+confirmation because deleting cannot be undone). Deleting a layer **compacts** the list:
+the colliders that used it fall back to layer 0, the layers above shift down one index and
+the matrix loses that row and column. So a script that hardcodes layer indices points at a
+different layer after a deletion. The cap is **32** layers.
 
-Qué capas chocan de verdad lo decide una matriz global y **simétrica**:
-`Physics.SetLayerCollision(a, b, enabled)` pone el par en los dos sentidos —fijar
-`(a,b)` fija también `(b,a)`—, y `Physics.GetLayerCollision(a, b)` lo consulta.
+Which layers really collide is decided by a global, **symmetric** matrix:
+`Physics.SetLayerCollision(a, b, enabled)` sets the pair in both directions (setting
+`(a,b)` also sets `(b,a)`), and `Physics.GetLayerCollision(a, b)` queries it.
 
-La matriz arranca **toda a `true`**, así que un proyecto que no la toque se comporta
-igual que antes de que existieran las capas. Un par filtrado no produce ni contactos
-ni eventos `OnTrigger*` —la comprobación va antes de la rama de trigger del filter
-shader— y tanto el `layer` del collider como la matriz surten efecto **a media
-partida**: la filter data de PhysX de todas las shapes vivas se reescribe en el acto.
+The matrix starts **all `true`**, so a project that does not touch it behaves exactly as
+before layers existed. A filtered pair produces neither contacts nor `OnTrigger*` events
+(the check comes before the filter shader's trigger branch), and both the collider's
+`layer` and the matrix take effect **mid-game**: the PhysX filter data of every live shape
+is rewritten on the spot.
 
-Un índice fuera de `0..31` **lanza un error de Lua**; no se recorta, porque un
-recorte silencioso dejaría al script filtrando por una capa que nunca pidió. Lua
-acepta el rango `0..31` completo que soporta el core, incluso capas que aún no se han
-creado en el editor; el desplegable de Properties solo ofrece las que existen.
+An index outside `0..31` **raises a Lua error**; it is not clamped, because a silent clamp
+would leave the script filtering by a layer it never asked for. Lua accepts the full
+`0..31` range the core supports, even layers not yet created in the editor; the Properties
+dropdown only offers the ones that exist.
 
-Fuera de Play no hay escena de PhysX, así que `SetLayerCollision` no hace nada y
-`GetLayerCollision` contesta `true`, que es la matriz por defecto. Los nombres de las
-capas y la matriz se guardan por proyecto en la sección `settings` del `project.json`;
-el `layer` del collider es estado de runtime/editor y **no** se serializa con la
-escena.
+Outside Play there is no PhysX scene, so `SetLayerCollision` does nothing and
+`GetLayerCollision` answers `true`, which is the default matrix. The layer names and the
+matrix are saved per project in the `settings` section of `project.json`; the collider's
+`layer` is runtime/editor state and is **not** serialized with the scene.
 
-## DonTopo — cambio de escena en runtime
+## DonTopo — changing scenes at runtime
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `DonTopo.loadScene(path)` | Pide cargar la escena de `path` (fichero de Save Scene: `version: 1` + `root`). Devuelve `true` si la petición se encoló, `false` si la ruta está vacía, el fichero no existe, el JSON no parsea o la estructura no es de escena v1 (el motivo sale en el Log) |
+| `DonTopo.loadScene(path)` | Requests loading the scene at `path` (a Save Scene file: `version: 1` + `root`). Returns `true` if the request was queued, `false` if the path is empty, the file does not exist, the JSON does not parse or the structure is not a v1 scene (the reason goes to the Log) |
 
-La carga **no ocurre en la llamada**: el binding solo deja la petición en un buzón
-y la ejecuta el dueño de la escena al frame siguiente, fuera del tick de scripts.
-Cargar en mitad de un `Update` destruiría el GameObject que está ejecutando ese
-mismo script. Consecuencias prácticas:
+The load **does not happen in the call**: the binding only leaves the request in a mailbox
+and the scene's owner runs it on the next frame, outside the script tick. Loading in the
+middle of an `Update` would destroy the GameObject that is running that very script.
+Practical consequences:
 
-- Tras llamar, la escena vieja **muere entera**, tu script incluido. Trátala como
-  la última línea útil: no toques `self` ni guardes referencias después.
-- El `bool` es el resultado de la **validación**, no de la carga. El desenlace de
-  la carga llega un frame más tarde y sale en el Log (`Escena cargada: ...` /
-  `Error al cargar escena: ...`).
-- Si un frame deja varias peticiones, **gana la última** y las demás se descartan.
-- Solo en **Play Mode**. En Edit Mode se ignora con un aviso en el Log Console.
-- La ruta es relativa al directorio de trabajo (la raíz del proyecto en el editor;
-  la carpeta del ejecutable en el juego exportado, que fija su CWD ahí).
+- After the call, the old scene **dies entirely**, your script included. Treat it as the
+  last useful line: do not touch `self` or keep references afterwards.
+- The `bool` is the result of the **validation**, not of the load. The outcome of the load
+  arrives a frame later and shows in the Log (`Scene loaded: ...` /
+  `Error loading scene: ...`).
+- If a frame leaves several requests, **the last one wins** and the rest are discarded.
+- Only in **Play Mode**. In Edit Mode it is ignored with a warning in the Log Console.
+- The path is relative to the working directory (the project root in the editor; the
+  executable's folder in the exported game, which sets its CWD there).
 
 ```lua
 function test:Update(dt)
@@ -632,40 +614,39 @@ function test:Update(dt)
 end
 ```
 
-Ojo con las mayúsculas: la tabla es `DonTopo`. Escribir `Dontopo` da
-`attempt to index a nil value` y el componente queda con `hasError`, o sea sin
-recibir más callbacks hasta el hot reload o Stop.
+Mind the capitalization: the table is `DonTopo`. Writing `Dontopo` gives
+`attempt to index a nil value` and the component is left with `hasError`, that is, without
+receiving more callbacks until a hot reload or Stop.
 
-## Globales
+## Globals
 
-| Función | Descripción |
+| Function | Description |
 | --- | --- |
-| `DestroyGameObject(entity)` | Destruye el GameObject y todo su sub-árbol durante Play: llama `OnDestroy` en sus scripts, libera los meshes de GPU y suelta colliders/audio (sale de todos los managers). Diferido al final del frame — llamarlo dentro de `Update` es seguro. `entity` puede ser `self.entity` (auto-destrucción) u otra entity. Error Lua si la entity ya fue destruida |
+| `DestroyGameObject(entity)` | Destroys the GameObject and its whole subtree during Play: calls `OnDestroy` on its scripts, frees the GPU meshes and releases colliders/audio (it leaves every manager). Deferred to the end of the frame, so calling it inside `Update` is safe. `entity` can be `self.entity` (self-destruction) or another entity. Lua error if the entity was already destroyed |
 
 ## Colliders — BoxCollider / SphereCollider / CapsuleCollider / PlaneCollider
 
-Obtenidos vía `entity:GetComponent("...Collider")`. Todos lanzan error Lua
-si el componente ya no existe en el GameObject.
+Obtained through `entity:GetComponent("...Collider")`. All of them raise a Lua error if
+the component no longer exists on the GameObject.
 
-La **forma** va en métodos, porque en Lua no hay tipo vector:
+The **shape** goes through methods, because Lua has no vector type:
 
-| Componente | Métodos de forma |
+| Component | Shape methods |
 | --- | --- |
 | `BoxCollider` | `GetHalfExtents/SetHalfExtents(Vec3)`, `GetCenter/SetCenter(Vec3)` |
 | `SphereCollider` | `GetRadius/SetRadius(float)`, `GetCenter/SetCenter(Vec3)` |
 | `CapsuleCollider` | `GetRadius/SetRadius(float)`, `GetHalfHeight/SetHalfHeight(float)`, `GetCenter/SetCenter(Vec3)` |
 | `PlaneCollider` | `GetCenter/SetCenter(Vec3)` |
 
-Los **cuatro** llevan además estas cinco propiedades (escalares, así que son campos,
-no métodos):
+All **four** also carry these five properties (scalars, so they are fields, not methods):
 
-| Propiedad | Descripción |
+| Property | Description |
 | --- | --- |
-| `staticFriction` | Fricción estática. Cada collider tiene su **propio** material de PhysX, así que dos objetos de la misma escena pueden deslizar distinto |
-| `dynamicFriction` | Fricción dinámica |
-| `bounciness` | Restitución |
-| `isTrigger` | `true` = solapa sin colisionar y dispara los `OnTrigger*`. La escritura pasa por el PhysicsManager, no por el collider a secas, para que la contabilidad de `OnTriggerEnter`/`Stay`/`Exit` no se descuadre; fuera de Play no hay escena viva de PhysX y la escritura no hace nada, en silencio |
-| `layer` | Capa de colisión, `0..31` (ver [Capas de colisión](#capas-de-colisión)) |
+| `staticFriction` | Static friction. Each collider has its **own** PhysX material, so two objects in the same scene can slide differently |
+| `dynamicFriction` | Dynamic friction |
+| `bounciness` | Restitution |
+| `isTrigger` | `true` = overlaps without colliding and fires the `OnTrigger*` callbacks. The write goes through the PhysicsManager, not the bare collider, so the `OnTriggerEnter`/`Stay`/`Exit` bookkeeping does not get out of step; outside Play there is no live PhysX scene and the write silently does nothing |
+| `layer` | Collision layer, `0..31` (see [Collision layers](#collision-layers)) |
 
 ```lua
 local col = self.entity:GetComponent("BoxCollider")
@@ -676,148 +657,147 @@ col.isTrigger       = false
 col.layer           = 3
 ```
 
-La **gravedad y la dinámica no viven aquí**: son del `Rigidbody`. Un collider sin
-Rigidbody es un actor estático.
+**Gravity and dynamics do not live here**: they belong to the `Rigidbody`. A collider
+without a Rigidbody is a static actor.
 
 ## Rigidbody
 
-`entity:GetComponent("Rigidbody")`. Los mismos campos que edita el panel Properties.
+`entity:GetComponent("Rigidbody")`. The same fields the Properties panel edits.
 
-| Propiedad | Descripción |
+| Property | Description |
 | --- | --- |
-| `mass` | Masa |
-| `useGravity` | Si le afecta la gravedad de la escena |
-| `isKinematic` | Kinemático: lo mueves tú, la física no lo empuja |
-| `drag` / `angularDrag` | Amortiguación lineal y angular |
-| `constraints` | **Bitmask** de ejes congelados (ver `RigidbodyConstraints`) |
-| `ccd` | Detección continua de colisión |
-| `interpolate` | Suavizado visual entre pasos fijos |
-| `velocity` / `angularVelocity` | `Vec3`, lectura y escritura |
+| `mass` | Mass |
+| `useGravity` | Whether the scene's gravity affects it |
+| `isKinematic` | Kinematic: you move it, physics does not push it |
+| `drag` / `angularDrag` | Linear and angular damping |
+| `constraints` | **Bitmask** of frozen axes (see `RigidbodyConstraints`) |
+| `ccd` | Continuous collision detection |
+| `interpolate` | Visual smoothing between fixed steps |
+| `velocity` / `angularVelocity` | `Vec3`, read and write |
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `rb:AddForce(x, y, z [, modo])` | Tres floats sueltos, **no** un `Vec3`. `modo` opcional, de `ForceMode` |
-| `rb:AddTorque(x, y, z [, modo])` | Ídem |
-| `rb:AddImpulse(x, y, z)` | Impulso instantáneo dependiente de la masa (equivale a `AddForce` con `ForceMode.Impulse`) |
+| `rb:AddForce(x, y, z [, mode])` | Three separate floats, **not** a `Vec3`. Optional `mode`, from `ForceMode` |
+| `rb:AddTorque(x, y, z [, mode])` | Same |
+| `rb:AddImpulse(x, y, z)` | Instantaneous, mass-dependent impulse (equivalent to `AddForce` with `ForceMode.Impulse`) |
 
-`RigidbodyConstraints` es una tabla de constantes enteras con `None`,
-`FreezePositionX/Y/Z` y `FreezeRotationX/Y/Z`, que se combinan con el OR bit a bit de
-Lua 5.4. Los bits que caen fuera de esos seis se **enmascaran** en vez de lanzar, así
-que un OR de más nunca tumba el script.
+`RigidbodyConstraints` is a table of integer constants with `None`, `FreezePositionX/Y/Z`
+and `FreezeRotationX/Y/Z`, combined with Lua 5.4's bitwise OR. Bits outside those six are
+**masked out** instead of raising, so an extra OR never brings down the script.
 
-`ForceMode` es el cuarto argumento opcional de `AddForce`/`AddTorque`:
+`ForceMode` is the optional fourth argument of `AddForce`/`AddTorque`:
 
-| Modo | Qué hace |
+| Mode | What it does |
 | --- | --- |
-| `ForceMode.Force` | Continuo, depende de la masa y del dt. **Es el default**, o sea que las llamadas de tres argumentos se comportan exactamente igual que siempre |
-| `ForceMode.Acceleration` | Continuo, ignora la masa |
-| `ForceMode.Impulse` | Instantáneo, depende de la masa — lo mismo que `AddImpulse` |
-| `ForceMode.VelocityChange` | Instantáneo, ignora la masa |
+| `ForceMode.Force` | Continuous, depends on mass and dt. **It is the default**, so three-argument calls behave exactly as always |
+| `ForceMode.Acceleration` | Continuous, ignores mass |
+| `ForceMode.Impulse` | Instantaneous, depends on mass; the same as `AddImpulse` |
+| `ForceMode.VelocityChange` | Instantaneous, ignores mass |
 
-Un modo fuera de esos cuatro se avisa por el Log Console y **la fuerza se descarta**,
-en vez de lanzar: un índice mal calculado no debe tumbar la partida. Los valores no
-finitos (un `0/0` en un script) se rechazan igual, con su aviso.
+A mode outside those four is reported in the Log Console and **the force is discarded**,
+instead of raising: a miscomputed index should not bring down the game. Non-finite values
+(a `0/0` in a script) are rejected the same way, with their warning.
 
-### ccd e interpolate
+### ccd and interpolate
 
-Dos booleanos **independientes** entre sí y `false` por defecto, así que ninguna
-escena existente cambia de comportamiento.
+Two booleans, **independent** of each other and `false` by default, so no existing scene
+changes behavior.
 
-`ccd` enciende la detección continua de colisión: PhysX barre el recorrido del cuerpo
-dentro del paso fijo en vez de probar solo la pose inicial y la final, que es lo que
-evita que un proyectil rápido se cuele a través de geometría fina. Cuesta CPU, y
-**PhysX no lo soporta en cuerpos kinemáticos**: ponerlo ahí conserva tu intención,
-pero el flag solo llega al actor mientras el cuerpo no sea kinemático.
+`ccd` turns on continuous collision detection: PhysX sweeps the body's path within the
+fixed step instead of testing only the start and end poses, which is what keeps a fast
+projectile from slipping through thin geometry. It costs CPU, and **PhysX does not support
+it on kinematic bodies**: setting it there keeps your intent, but the flag only reaches the
+actor while the body is not kinematic.
 
-`interpolate` suaviza la pose **visible** entre pasos fijos (el render va un paso de
-física por detrás). No cambia la simulación en absoluto, así que raycasts, overlaps y
-triggers siguen viendo la pose real.
+`interpolate` smooths the **visible** pose between fixed steps (the render runs one physics
+step behind). It does not change the simulation at all, so raycasts, overlaps and triggers
+keep seeing the real pose.
 
 ```lua
-function Bala:Start()
+function Bullet:Start()
     local rb = self.entity:GetComponent("Rigidbody")
-    rb.ccd = true             -- proyectil rápido: que no atraviese la pared
-    rb.interpolate = true     -- y que se vea suave entre pasos fijos
+    rb.ccd = true             -- fast projectile: keep it from going through the wall
+    rb.interpolate = true     -- and make it look smooth between fixed steps
 end
 ```
 
 ```lua
--- Scripts/Caja.lua
-Caja = {}
+-- Scripts/Crate.lua
+Crate = {}
 
-function Caja:Start()
+function Crate:Start()
     local rb = self.entity:GetComponent("Rigidbody")
     rb.mass       = 3.0
     rb.useGravity = true
     rb.drag       = 0.1
     rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotationX
 
-    -- las capas 3 y 7 dejan de chocar, en toda la escena y en los dos sentidos
+    -- layers 3 and 7 stop colliding, across the whole scene and in both directions
     Physics.SetLayerCollision(3, 7, false)
 end
 
-function Caja:Update(dt)
+function Crate:Update(dt)
     local rb = self.entity:GetComponent("Rigidbody")
     rb:AddForce(0, 500 * dt, 0)
-    rb:AddForce(0, 8, 0, ForceMode.VelocityChange)   -- salto instantáneo, sin mirar la masa
+    rb:AddForce(0, 8, 0, ForceMode.VelocityChange)   -- instant jump, regardless of mass
 end
 ```
 
 ## AudioClip
 
-La pista se asigna desde el editor (Properties → Audio → Browse o drag-drop
-de un asset) o vía `entity:AddComponent("AudioClip", path)`.
+The track is assigned from the editor (Properties → Audio → Browse or drag-and-drop of an
+asset) or through `entity:AddComponent("AudioClip", path)`.
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `clip:Play()` / `clip:Stop()` | `Play()` reproduce en la posición mundial actual del GameObject: **reinicia** el clip y corta la voz anterior del mismo clip, como el `AudioSource.Play()` de Unity. `Stop()` descarta la posición de reproducción |
-| `clip:PlayOneShot()` | **Se solapa** en vez de cortar: dos pasos o dos disparos seguidos ya no se pisan. La voz que dispara queda fuera de alcance después — `Stop()`, `SetVolume()` e `IsPlaying()` no la ven, y no sigue al objeto. Solo para clips cortos, nunca en loop |
-| `clip:Pause()` / `clip:Resume()` | Conservan la posición de reproducción, al contrario que `Stop()` |
-| `clip:IsPlaying()` / `clip:IsPaused()` | Una voz **pausada sigue contando como reproduciéndose**, igual que en FMOD y en Unity: `IsPaused()` es lo que las distingue |
-| `clip:SetVolume(v)` / `GetVolume()` | Volumen del clip, recortado a `[0, 1]`. Se MULTIPLICA con el del bus y el master, no los sustituye. Seguro de llamar en `Update`: sólo escribe en el canal |
-| `clip:SetPitch(p)` / `GetPitch()` | Pitch, recortado a `[0.5, 2]`. `2.0` es una octava arriba y el doble de velocidad. Para FMOD el 0 no es "silencio", de ahí el suelo. Seguro en `Update` |
-| `clip:SetLoop(b)` / `GetLoop()` | **Recarga el sonido** (el loop va horneado en el modo de FMOD) y corta lo que estuviera sonando. Es configuración, no una llamada por frame |
-| `clip:SetIs3D(b)` / `GetIs3D()` | Cambia entre 2D y 3D. Mismo aviso que `SetLoop`: recarga el sonido |
-| `clip:SetMinDistance(d)` / `GetMinDistance()` | Atenuación 3D, recortado a `[0.1, 50]`. Más cerca que esto suena a volumen pleno |
-| `clip:SetMaxDistance(d)` / `GetMaxDistance()` | Recortado a `[1, 1000]`, nunca por debajo del min. Barato: no recarga |
-| `clip:SetPlayOnAwake(b)` / `GetPlayOnAwake()` | Si entrar en Play arranca el clip solo |
-| `clip:SetBus(name)` / `GetBus()` | Bus de salida: `"master"`, `"music"` o `"sfx"` (default). Solo afecta a la **siguiente** reproducción — el grupo se elige al arrancar la voz. Un nombre desconocido avisa y no cambia nada |
-| `clip:SetLoadMode(name)` / `GetLoadMode()` | `"sample"` (descomprimido en RAM, varias voces a la vez) o `"stream"` (se lee de disco, memoria mínima, pero **una sola voz cada vez**). Stream para música, sample para efectos. **Recarga el sonido** y corta lo que sonara |
-| `clip:SetRolloff(name)` / `GetRolloff()` | Forma de la caída entre min y max: `"inverse"` (default, la más realista), `"linear"` (silencio exacto en max) o `"linearSquare"`. **Recarga el sonido** |
-| `clip:SetSpread(deg)` / `GetSpread()` | Apertura estéreo de una fuente 3D, `[0, 360]`. Con 0 sigue siendo un punto |
-| `clip:SetStereoPan(p)` / `GetStereoPan()` | Pan manual `[-1, 1]`, **solo clips 2D** — en 3D lo decide la posición |
-| `clip:SetDopplerLevel(l)` / `GetDopplerLevel()` | Cuánto dobla el pitch la velocidad relativa, `[0, 5]`. **0 por defecto**, y solo actúa en Play: en Edit Mode no se calculan velocidades |
-| `clip:SetMute(b)` / `GetMute()` | Silencia **sin perder el volumen** — al desmutear vuelve el que había, sin que el script tenga que recordarlo. Al contrario que `Pause`, esto **sí** se serializa: un objeto puede empezar mudo. Un clip muteado tampoco dispara `PlayOneShot` |
-| `clip:GetTime()` / `clip:SetTime(sec)` | Posición de reproducción en segundos. `GetTime()` devuelve **-1** cuando no suena nada — 0 significaría "al principio del clip", que es otra respuesta. `SetTime` mueve una reproducción en curso; no arranca ninguna |
-| `clip:GetPath()` | La ruta del asset desde el que se cargó |
+| `clip:Play()` / `clip:Stop()` | `Play()` plays at the GameObject's current world position: it **restarts** the clip and cuts the previous voice of the same clip, like Unity's `AudioSource.Play()`. `Stop()` discards the playback position |
+| `clip:PlayOneShot()` | **Overlaps** instead of cutting: two footsteps or two shots in a row no longer step on each other. The voice it fires is out of reach afterwards: `Stop()`, `SetVolume()` and `IsPlaying()` do not see it, and it does not follow the object. Short clips only, never looping |
+| `clip:Pause()` / `clip:Resume()` | Keep the playback position, unlike `Stop()` |
+| `clip:IsPlaying()` / `clip:IsPaused()` | A **paused voice still counts as playing**, as in FMOD and Unity: `IsPaused()` is what tells them apart |
+| `clip:SetVolume(v)` / `GetVolume()` | Clip volume, clamped to `[0, 1]`. It MULTIPLIES with the bus and master volumes, it does not replace them. Safe to call in `Update`: it only writes to the channel |
+| `clip:SetPitch(p)` / `GetPitch()` | Pitch, clamped to `[0.5, 2]`. `2.0` is one octave up and double speed. For FMOD 0 is not "silence", hence the floor. Safe in `Update` |
+| `clip:SetLoop(b)` / `GetLoop()` | **Reloads the sound** (the loop is baked into the FMOD mode) and cuts whatever was playing. It is configuration, not a per-frame call |
+| `clip:SetIs3D(b)` / `GetIs3D()` | Switches between 2D and 3D. Same warning as `SetLoop`: it reloads the sound |
+| `clip:SetMinDistance(d)` / `GetMinDistance()` | 3D attenuation, clamped to `[0.1, 50]`. Closer than this plays at full volume |
+| `clip:SetMaxDistance(d)` / `GetMaxDistance()` | Clamped to `[1, 1000]`, never below min. Cheap: no reload |
+| `clip:SetPlayOnAwake(b)` / `GetPlayOnAwake()` | Whether entering Play starts the clip by itself |
+| `clip:SetBus(name)` / `GetBus()` | Output bus: `"master"`, `"music"` or `"sfx"` (default). Only affects the **next** playback: the group is chosen when the voice starts. An unknown name warns and changes nothing |
+| `clip:SetLoadMode(name)` / `GetLoadMode()` | `"sample"` (decompressed into RAM, several voices at once) or `"stream"` (read from disk, minimal memory, but **one voice at a time**). Stream for music, sample for effects. **Reloads the sound** and cuts whatever was playing |
+| `clip:SetRolloff(name)` / `GetRolloff()` | Shape of the falloff between min and max: `"inverse"` (default, the most realistic), `"linear"` (exact silence at max) or `"linearSquare"`. **Reloads the sound** |
+| `clip:SetSpread(deg)` / `GetSpread()` | Stereo spread of a 3D source, `[0, 360]`. At 0 it is still a point |
+| `clip:SetStereoPan(p)` / `GetStereoPan()` | Manual pan `[-1, 1]`, **2D clips only**; in 3D the position decides it |
+| `clip:SetDopplerLevel(l)` / `GetDopplerLevel()` | How much the relative velocity bends the pitch, `[0, 5]`. **0 by default**, and it only acts in Play: velocities are not computed in Edit Mode |
+| `clip:SetMute(b)` / `GetMute()` | Mutes **without losing the volume**: unmuting brings back the previous one, without the script having to remember it. Unlike `Pause`, this **is** serialized: an object can start muted. A muted clip does not fire `PlayOneShot` either |
+| `clip:GetTime()` / `clip:SetTime(sec)` | Playback position in seconds. `GetTime()` returns **-1** when nothing is playing; 0 would mean "at the start of the clip", which is a different answer. `SetTime` moves a playback in progress; it does not start one |
+| `clip:GetPath()` | The path of the asset it was loaded from |
 
-`SetVolume`, `SetPitch`, `SetMinDistance` y `SetMaxDistance` rechazan los valores no
-finitos (un `0/0` en un script) y lo dicen en el Log, en vez de dejar que un `NaN`
-llegue al fichero de escena.
+`SetVolume`, `SetPitch`, `SetMinDistance` and `SetMaxDistance` reject non-finite values
+(a `0/0` in a script) and say so in the Log, instead of letting a `NaN` reach the scene
+file.
 
-Un clip 3D **sigue a su GameObject**: la posición se empuja a la voz viva cada frame,
-así que la atenuación y el paneo acompañan a un objeto en movimiento.
+A 3D clip **follows its GameObject**: the position is pushed to the live voice every
+frame, so attenuation and panning follow a moving object.
 
-Una escena sin **Audio Listener** reproduce sus clips igualmente: se oyen desde la
-cámara, y el log lo dice una vez por Play.
+A scene without an **Audio Listener** still plays its clips: they are heard from the
+camera, and the log says so once per Play.
 
-Ver `Scripts/AudioFade.lua` para un fade completo.
+See `Scripts/AudioFade.lua` for a complete fade.
 
 ```lua
-function Motor:Start()
+function Engine:Start()
     self.clip = self.entity:GetComponent("AudioClip")
     if self.clip then
-        self.clip:SetIs3D(true)          -- configuración: fuera del Update
+        self.clip:SetIs3D(true)          -- configuration: outside Update
         self.clip:SetMinDistance(5)
         self.clip:SetMaxDistance(300)
         self.clip:Play()
     end
 end
 
-function Motor:Update(dt)
+function Engine:Update(dt)
     if not self.clip then return end
-    -- El tono sube con la velocidad; volumen y pitch sí se pueden mover por frame
-    self.clip:SetPitch(1.0 + self.acelerador * 0.8)
+    -- The pitch rises with the speed; volume and pitch can be changed every frame
+    self.clip:SetPitch(1.0 + self.throttle * 0.8)
 
     if Input.IsKeyPressed(Key.P) then
         if self.clip:IsPaused() then self.clip:Resume() else self.clip:Pause() end
@@ -841,125 +821,122 @@ function AudioTest:Update(dt)
 end
 ```
 
-## Audio — mezcla global
+## Audio — global mix
 
-La tabla `Audio` es lo que conduciría un menú de opciones. No cuelga de ningún
+The `Audio` table is what an options menu would drive. It does not hang from any
 GameObject.
 
-| Función | Descripción |
+| Function | Description |
 | --- | --- |
-| `Audio.SetBusVolume(name, v)` | `name` es `"master"`, `"music"` o `"sfx"`; `v` se recorta a `[0, 1]`. El master escala a los otros dos |
-| `Audio.GetBusVolume(name)` | Devuelve 1.0 cuando no hay dispositivo de audio, para que una máquina muda no se lea como "volumen a cero" |
-| `Audio.PlayClipAtPoint(path, x, y, z [, volume, pitch, bus])` | Un one-shot 3D en una posición del mundo, **sin GameObject de por medio** — para un impacto o una explosión cuyo emisor muere en ese mismo frame. El sonido queda cacheado tras el primer uso |
-| `Audio.Preload(path)` | Carga y retiene un clip sin reproducirlo. Merece la pena llamarlo en `Start()`: FMOD carga en diferido, así que el **primer** `PlayClipAtPoint` de una ruta nueva es muy probable que no se oiga. Idempotente |
-| `Audio.SetBusEffect(bus, effect, amount)` | Cuelga un DSP de un bus entero: `"lowPass"`, `"highPass"`, `"echo"` o `"reverb"`. `amount` va de `[0, 1]` — el motor lo mapea a las unidades reales de cada efecto, así que los scripts nunca tocan Hz ni ms. Idempotente: llamarlo cada frame ajusta el mismo DSP en vez de apilar copias |
-| `Audio.ClearBusEffect(bus [, effect])` | Quita un efecto, o **todos** los de ese bus si se omite el segundo argumento — que es lo que quieres al salir del agua o al cerrar el menú de pausa |
-| `Audio.SetPaused(b)` / `Audio.IsPaused()` | Congela **todo** lo que esté sonando, conservando las posiciones: lo que quiere un menú de pausa. Actúa sobre el grupo master, así que también pilla las voces sueltas de `PlayOneShot`, que no se pueden alcanzar de ninguna otra forma. Ojo: el motor no tiene pausa de simulación — esto calla el audio, no para la escena |
+| `Audio.SetBusVolume(name, v)` | `name` is `"master"`, `"music"` or `"sfx"`; `v` is clamped to `[0, 1]`. Master scales the other two |
+| `Audio.GetBusVolume(name)` | Returns 1.0 when there is no audio device, so a silent machine does not read as "volume at zero" |
+| `Audio.PlayClipAtPoint(path, x, y, z [, volume, pitch, bus])` | A 3D one-shot at a world position, **with no GameObject involved**: for an impact or an explosion whose emitter dies that same frame. The sound stays cached after the first use |
+| `Audio.Preload(path)` | Loads and keeps a clip without playing it. Worth calling in `Start()`: FMOD loads lazily, so the **first** `PlayClipAtPoint` of a new path is very likely not to be heard. Idempotent |
+| `Audio.SetBusEffect(bus, effect, amount)` | Hangs a DSP on a whole bus: `"lowPass"`, `"highPass"`, `"echo"` or `"reverb"`. `amount` goes from `[0, 1]`; the engine maps it to each effect's real units, so scripts never touch Hz or ms. Idempotent: calling it every frame adjusts the same DSP instead of stacking copies |
+| `Audio.ClearBusEffect(bus [, effect])` | Removes one effect, or **all** of that bus's effects if the second argument is omitted, which is what you want when leaving the water or closing the pause menu |
+| `Audio.SetPaused(b)` / `Audio.IsPaused()` | Freezes **everything** that is playing, keeping the positions: what a pause menu wants. It acts on the master group, so it also catches the loose `PlayOneShot` voices, which cannot be reached any other way. Note: the engine has no simulation pause; this silences the audio, it does not stop the scene |
 
-Los tres volúmenes se guardan en el `project.json` y se restauran al abrir el
-proyecto; el editor los expone en **View → Master / Music / SFX Volume**. Los efectos
-son solo de runtime y **a propósito no se serializan**: modelan un estado temporal
-del juego, no una propiedad de la escena.
+The three volumes are saved in `project.json` and restored when the project opens; the
+editor exposes them in **View → Master / Music / SFX Volume**. The effects are
+runtime-only and **deliberately not serialized**: they model a temporary game state, not a
+property of the scene.
 
 ```lua
--- Todo suena amortiguado bajo el agua
+-- Everything sounds muffled underwater
 function Player:OnEnterWater()
     Audio.SetBusEffect("master", "lowPass", 0.15)
     Audio.SetBusEffect("master", "reverb", 0.4)
 end
 
 function Player:OnExitWater()
-    Audio.ClearBusEffect("master")   -- sin segundo argumento: todos
+    Audio.ClearBusEffect("master")   -- no second argument: all of them
 end
 ```
 
 ## ReverbZone
 
-Esferas de ambiente: dentro de una, todo se oye con esa reverberación. Varias por
-escena no dan problema — FMOD mezcla las que se solapan y funde entre min y max él
-solo. Se añade desde el inspector (**Add → Reverb Zone**, con su propio gizmo de
-alambre) o desde un script con `entity:AddComponent("ReverbZone")`; se obtiene con
-`entity:GetComponent("ReverbZone")`. Una por GameObject.
+Ambience spheres: inside one, everything is heard with that reverb. Several per scene are
+no problem: FMOD blends the ones that overlap and fades between min and max by itself.
+It is added from the inspector (**Add → Reverb Zone**, with its own wireframe gizmo) or
+from a script with `entity:AddComponent("ReverbZone")`; it is obtained with
+`entity:GetComponent("ReverbZone")`. One per GameObject.
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `z:SetPreset(name)` / `z:GetPreset()` | Uno de los presets de FMOD: `"cave"`, `"bathroom"`, `"hangar"`, `"underwater"`, `"forest"`… Un nombre desconocido avisa y conserva el anterior |
-| `z:SetMinDistance(d)` / `z:GetMinDistance()` | Reverberación plena dentro de min. Recortado a `[0.1, 5000]` |
-| `z:SetMaxDistance(d)` / `z:GetMaxDistance()` | Se va apagando hasta max, y más allá nada. Recortado a `[1, 10000]` |
-| `z:SetEnabled(b)` / `z:GetEnabled()` | Deshabilitada sigue reservada pero muda, así que encenderla y apagarla no cuesta nada |
+| `z:SetPreset(name)` / `z:GetPreset()` | One of FMOD's presets: `"cave"`, `"bathroom"`, `"hangar"`, `"underwater"`, `"forest"`… An unknown name warns and keeps the previous one |
+| `z:SetMinDistance(d)` / `z:GetMinDistance()` | Full reverb inside min. Clamped to `[0.1, 5000]` |
+| `z:SetMaxDistance(d)` / `z:GetMaxDistance()` | It fades out up to max, and beyond that nothing. Clamped to `[1, 10000]` |
+| `z:SetEnabled(b)` / `z:GetEnabled()` | Disabled, it stays reserved but silent, so turning it on and off costs nothing |
 
-La posición sale del Transform del GameObject.
+The position comes from the GameObject's Transform.
 
 ## Animator
 
-`entity:GetComponent("Animator")`. Los parámetros no son propiedades: se
-declaran en el grafo (panel Animator) y se leen y escriben **por nombre**. Un
-nombre no declarado, o de otro tipo, se ignora en el setter y devuelve el valor
-neutro en el getter — nunca lanza por un **nombre** malo. Lo que sí lanza es que el
-GameObject haya perdido su Animator entre el `GetComponent` y la llamada.
+`entity:GetComponent("Animator")`. Parameters are not properties: they are declared in the
+graph (Animator panel) and read and written **by name**. An undeclared name, or one of
+another type, is ignored by the setter and returns the neutral value in the getter; it
+never throws because of a bad **name**. What does throw is the GameObject having lost its
+Animator between the `GetComponent` and the call.
 
-| Método | Descripción |
+| Method | Description |
 | --- | --- |
-| `a:SetBool(n, v)` / `a:GetBool(n)` | Parámetro `bool` |
-| `a:SetTrigger(n)` | Arma un `trigger`; lo consume la transición que dispara |
-| `a:ResetTrigger(n)` | Desarma un `trigger` que todavía no se ha consumido |
-| `a:Play(estado, [capa])` | Entra ya en ese estado (de la capa `capa`, 0 = base por defecto), sin mezcla y con el tiempo a 0 (también si ya estaba en él). `false` si no existe, con aviso en el log |
-| `a:CrossFade(estado, segundos, [capa])` | Mezcla hacia ese estado (de la capa `capa`, 0 = base) durante `segundos`; con 0, igual que `Play`. `false` si no existe, con aviso |
-| `a:SetSpeed(v)` / `a:GetSpeed()` | Velocidad global del Animator (1 = normal, 0 = congelado; negativo se acota a 0, NaN/Inf se ignora con aviso). No se guarda en la escena. La velocidad por estado se edita en el grafo y se conduce con `SetFloat` sobre su parámetro multiplicador |
-| `a:GetNormalizedTime([capa])` | Tiempo del estado actual (de la capa, 0 = base) normalizado: 1 = una vuelta, y en loop sigue creciendo (2.5 = dos vueltas y media). 0 si el clip no tiene duración |
-| `a:SetInt(n, v)` / `a:GetInt(n)` | Parámetro `int` |
-| `a:SetFloat(n, v)` / `a:GetFloat(n)` | Parámetro `float` (NaN/Inf se ignora con aviso) |
-| `a:GetState([capa])` | Nombre del estado activo de la capa (0 = base), `""` si el grafo está vacío o la capa no existe |
-| `a:IsBlending([capa])` | `true` mientras dura un cross-fade en la capa (0 = base) |
-| `a:SetLayerWeight(capa, peso)` | Peso 0..1 de una capa superior; la base (0) vale siempre 1 y no cambia. Una capa que no existe se ignora; NaN/Inf se ignora con aviso |
-| `a:GetLayerWeight(capa)` | Peso de la capa; 1 en la base, 0 si no existe |
-| `a:GetLayerCount()` | Número de capas, base incluida |
-| `a:SetIkWeight(nombre, peso)` | Peso 0..1 de una restricción de IK. Un nombre que no existe se ignora; NaN/Inf se ignora con aviso |
-| `a:GetIkWeight(nombre)` | Peso de la restricción; 0 si no existe |
-| `a:SetIkTarget(nombre, entidad)` | Objetivo de la IK. Con `nil` se quita, y la restricción deja de aplicarse |
-| `a:SetIkPole(nombre, entidad)` | Pole de una IK de dos huesos: hacia dónde apunta el codo o la rodilla. `nil` lo quita |
-| `a:GetIkCount()` | Número de restricciones de IK del Animator |
-| `a:GetBlendWeight()` | 0 = solo el estado que se apaga, 1 = solo el nuevo. Vale 1 si no hay mezcla |
-| `a:GetPreviousState()` | Nombre del estado que se apaga, `""` si no hay mezcla |
-| `a:GetPoseWeight()` | El peso que va de verdad a la GPU: el del cross-fade si lo hay, si no el del blend por parámetro, y 1 si no hay mezcla |
+| `a:SetBool(n, v)` / `a:GetBool(n)` | `bool` parameter |
+| `a:SetTrigger(n)` | Arms a `trigger`; the transition that fires consumes it |
+| `a:ResetTrigger(n)` | Disarms a `trigger` that has not been consumed yet |
+| `a:Play(state, [layer])` | Enters that state now (of layer `layer`, 0 = base by default), without blending and with time at 0 (also if it was already in it). `false` if it does not exist, with a warning in the log |
+| `a:CrossFade(state, seconds, [layer])` | Blends into that state (of layer `layer`, 0 = base) over `seconds`; with 0, the same as `Play`. `false` if it does not exist, with a warning |
+| `a:SetSpeed(v)` / `a:GetSpeed()` | The Animator's global speed (1 = normal, 0 = frozen; negative is clamped to 0, NaN/Inf is ignored with a warning). Not saved in the scene. The per-state speed is edited in the graph and driven with `SetFloat` on its multiplier parameter |
+| `a:GetNormalizedTime([layer])` | Normalized time of the current state (of the layer, 0 = base): 1 = one loop, and it keeps growing when looping (2.5 = two and a half loops). 0 if the clip has no duration |
+| `a:SetInt(n, v)` / `a:GetInt(n)` | `int` parameter |
+| `a:SetFloat(n, v)` / `a:GetFloat(n)` | `float` parameter (NaN/Inf is ignored with a warning) |
+| `a:GetState([layer])` | Name of the layer's active state (0 = base), `""` if the graph is empty or the layer does not exist |
+| `a:IsBlending([layer])` | `true` while a cross-fade lasts on the layer (0 = base) |
+| `a:SetLayerWeight(layer, weight)` | Weight 0..1 of an upper layer; the base (0) is always 1 and does not change. A layer that does not exist is ignored; NaN/Inf is ignored with a warning |
+| `a:GetLayerWeight(layer)` | Weight of the layer; 1 for the base, 0 if it does not exist |
+| `a:GetLayerCount()` | Number of layers, base included |
+| `a:SetIkWeight(name, weight)` | Weight 0..1 of an IK constraint. A name that does not exist is ignored; NaN/Inf is ignored with a warning |
+| `a:GetIkWeight(name)` | Weight of the constraint; 0 if it does not exist |
+| `a:SetIkTarget(name, entity)` | Target of the IK. With `nil` it is removed, and the constraint stops applying |
+| `a:SetIkPole(name, entity)` | Pole of a two-bone IK: where the elbow or knee points. `nil` removes it |
+| `a:GetIkCount()` | Number of the Animator's IK constraints |
+| `a:GetBlendWeight()` | 0 = only the state fading out, 1 = only the new one. 1 if there is no blend |
+| `a:GetPreviousState()` | Name of the state fading out, `""` if there is no blend |
+| `a:GetPoseWeight()` | The weight that really goes to the GPU: the cross-fade's if there is one, otherwise the parameter blend's, and 1 if there is no blend |
 
 ### Cross-fade
 
-Cada transición tiene su **duración de mezcla en segundos**, que se edita en el
-panel Animator: clic derecho sobre el link → `cross-fade (s)`. Con 0 la
-transición es un corte instantáneo, que es el comportamiento de siempre y el que
-traen las escenas guardadas antes de que el campo existiera.
+Each transition has its **blend duration in seconds**, edited in the Animator panel:
+right-click the link → `cross-fade (s)`. With 0 the transition is an instant cut, which is
+the long-standing behavior and the one scenes saved before the field existed carry.
 
-Durante la mezcla los dos estados siguen animándose, cada uno con su propio
-`ticksPerSecond` y su propio loop, y la pose que llega a la GPU es la
-interpolación de los dos. Si una segunda transición dispara con una mezcla aún en
-vuelo, la anterior se corta: solo hay dos clips en juego a la vez.
+During the blend both states keep animating, each with its own `ticksPerSecond` and its
+own loop, and the pose that reaches the GPU is the interpolation of the two. If a second
+transition fires with a blend still in flight, the previous one is cut: only two clips are
+in play at a time.
 
-Los cuatro accesores de arriba son de **lectura**: la duración es autoría del
-grafo, igual que las condiciones de una transición.
+The four accessors above are **read-only**: the duration is authored in the graph, like a
+transition's conditions.
 
-### Blend de dos clips por parámetro
+### Two-clip blend by parameter
 
-Un estado puede llevar **un segundo clip** y mezclarlo con el suyo según un
-parámetro `float` — el típico walk/run conducido por la velocidad. Se configura
-en el nodo del panel Animator: `blend` (el segundo clip), `by` (el parámetro
-float) y `min` / `max`, el rango del parámetro que se remapea a peso 0..1. Fuera
-de ese rango el peso se clampa, no extrapola.
+A state can carry **a second clip** and blend it with its own according to a `float`
+parameter: the typical walk/run driven by speed. It is set up on the node in the Animator
+panel: `blend` (the second clip), `by` (the float parameter) and `min` / `max`, the range
+of the parameter remapped to weight 0..1. Outside that range the weight is clamped, it does
+not extrapolate.
 
-Desde Lua **se conduce con `SetFloat`** sobre ese parámetro; el peso resultante
-se lee con `GetPoseWeight()`.
+From Lua **it is driven with `SetFloat`** on that parameter; the resulting weight is read
+with `GetPoseWeight()`.
 
-Los dos clips se muestrean en la **misma fase normalizada**, no en el mismo
-tiempo absoluto: un walk de 40 ticks y un run de 100 se quedarían desfasados y
-las piernas patinarían.
+Both clips are sampled at the **same normalized phase**, not at the same absolute time: a
+40-tick walk and a 100-tick run would drift out of phase and the legs would skate.
 
-Dos límites que conviene saber, porque en el push constant solo caben dos clips:
+Two limits worth knowing, because only two clips fit in the push constant:
 
-- **Un cross-fade en vuelo manda sobre el blend del estado.** Mientras dura la
-  transición cada lado aporta su clip primario; el segundo clip vuelve a entrar
-  al terminar la mezcla.
-- Un `blend` cuyo clip no exista en el modelo, o un `by` no declarado, dejan el
-  estado como uno normal (un solo clip) en vez de mezclar contra basura.
+- **A cross-fade in flight wins over the state's blend.** While the transition lasts each
+  side contributes its primary clip; the second clip comes back in when the blend ends.
+- A `blend` whose clip does not exist in the model, or an undeclared `by`, leave the state
+  as a normal one (a single clip) instead of blending against garbage.
 
 ```lua
 Locomotion = {}
@@ -969,9 +946,9 @@ function Locomotion:Update(dt)
     if not a then return end
     local rb = self.entity:GetComponent("Rigidbody")
     if not rb then return end
-    -- Vec3 no tiene Length(): la velocidad horizontal, a mano
+    -- The horizontal speed, by hand: Length() would include the vertical component
     local v = rb.velocity
-    -- El estado "Locomotion" mezcla Walk y Run con blendMin 1.5 / blendMax 6.5
+    -- The "Locomotion" state blends Walk and Run with blendMin 1.5 / blendMax 6.5
     a:SetFloat("speed", math.sqrt(v.x * v.x + v.z * v.z))
 end
 ```
@@ -983,38 +960,36 @@ function Fade:Update(dt)
     local a = self.entity:GetComponent("Animator")
     if not a then return end
     a:SetBool("running", Input.IsKeyDown(Key.W))
-    -- Silencia los pasos mientras el personaje aún está entrando en "Run"
+    -- Mute the footsteps while the character is still entering "Run"
     if a:IsBlending() and a:GetBlendWeight() < 0.5 then return end
 end
 ```
 
 ## UI — Canvas / Button / Text / ProgressBar / Layout / Panel / Image / Slider / Checkbox / Toggle / Scrollbar / InputField / Dropdown / ScrollView
 
-Los catorce se obtienen con `entity:GetCanvas()`, `entity:GetPanel()`,
+All fourteen are obtained with `entity:GetCanvas()`, `entity:GetPanel()`,
 `entity:GetImage()`, `entity:GetText()`, `entity:GetButton()`, `entity:GetSlider()`,
 `entity:GetCheckbox()`, `entity:GetToggle()`, `entity:GetScrollbar()`,
 `entity:GetProgressBar()`, `entity:GetInputField()`, `entity:GetDropdown()`,
-`entity:GetScrollView()` y `entity:GetLayout()` (o `GetComponent("Button")`, etc.),
-y los `Add*`/`Remove*` correspondientes los crean y los quitan.
-Devuelven `nil` si el componente no está; el wrapper resuelve el componente **en
-cada acceso**, así que usarlo después de quitarlo da error de Lua, no memoria
-liberada.
+`entity:GetScrollView()` and `entity:GetLayout()` (or `GetComponent("Button")`, etc.),
+and the matching `Add*`/`Remove*` create and remove them. They return `nil` if the
+component is not there; the wrapper resolves the component **on every access**, so using it
+after removing it gives a Lua error, not freed memory.
 
-**Escalares, strings, booleanos y enums son propiedades** (`b.text = "Jugar"`).
-**Los vectores son métodos** (`b:SetSize(200, 48)`, `local w, h = b:GetSize()`),
-porque en Lua solo hay `Vec3`: los getters devuelven 2 o 4 valores. Un valor
-NaN/Inf se ignora con un aviso en el Log, igual que en `Transform.SetPosition`.
+**Scalars, strings, booleans and enums are properties** (`b.text = "Play"`).
+**Vectors are methods** (`b:SetSize(200, 48)`, `local w, h = b:GetSize()`), because Lua only
+has `Vec3`: the getters return 2 or 4 values. A NaN/Inf value is ignored with a warning in
+the Log, as in `Transform.SetPosition`.
 
-Los enums viajan como tablas de constantes enteras:
+Enums travel as tables of integer constants:
 
-| Tabla | Valores |
+| Table | Values |
 | --- | --- |
 | `UiScaleMode` | `ConstantPixelSize`, `ScaleWithScreenSize`, `ConstantPhysicalSize` |
 | `UiScreenMatch` | `MatchWidthOrHeight`, `Expand`, `Shrink` |
 | `UiCanvasRenderMode` | `ScreenSpace`, `World` |
 | `UiBillboard` | `None`, `YawOnly`, `Full` |
 | `UiTextAlign` | `Left`, `Center`, `Right`, `Justify` |
-| `UiTextVAlign` | `Top`, `Middle`, `Bottom` |
 | `UiTextVAlign` | `Top`, `Middle`, `Bottom` |
 | `UiTextOverflow` | `Overflow`, `Clip`, `Ellipsis` |
 | `UiProgressFillDirection` | `LeftToRight`, `RightToLeft`, `BottomToTop`, `TopToBottom` |
@@ -1031,139 +1006,136 @@ Los enums viajan como tablas de constantes enteras:
 
 ### Canvas
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
 | `c.scaleMode` | `UiScaleMode.*` |
-| `c.scaleFactor` | Multiplica a los tres modos |
+| `c.scaleFactor` | Multiplies all three modes |
 | `c.screenMatch` | `UiScreenMatch.*` |
-| `c.matchWidthOrHeight` | 0 = ancho, 1 = alto (solo `ScaleWithScreenSize`) |
-| `c.screenDpi` / `c.fallbackDpi` / `c.referenceDpi` | DPI real (0 = desconocido), el que se usa si no se sabe, y el de referencia de `ConstantPhysicalSize` |
-| `c.aspectRatio` | 0 = apagado |
-| `c:GetReferenceResolution()` / `c:SetReferenceResolution(w, h)` | Resolución de referencia |
-| `c:GetSafeArea()` / `c:SetSafeArea(l, t, r, b)` | Insets en píxeles reales |
-| `c.renderMode` | `UiCanvasRenderMode.*`. En `World` el canvas se coloca EN LA ESCENA y se ignoran `scaleMode`, `screenMatch`, `matchWidthOrHeight`, los tres DPI, `safeArea` y `aspectRatio` |
-| `c.worldScale` | Solo `World`. Unidades de mundo por PÍXEL de canvas |
-| `c.billboard` | Solo `World`. `UiBillboard.*`: `YawOnly` gira solo en la vertical, `Full` encara del todo a la cámara |
-| `c.depthTest` | Solo `World`. A `false` se dibuja siempre encima, atravesando paredes |
+| `c.matchWidthOrHeight` | 0 = width, 1 = height (`ScaleWithScreenSize` only) |
+| `c.screenDpi` / `c.fallbackDpi` / `c.referenceDpi` | Real DPI (0 = unknown), the one used when it is unknown, and the reference one for `ConstantPhysicalSize` |
+| `c.aspectRatio` | 0 = off |
+| `c:GetReferenceResolution()` / `c:SetReferenceResolution(w, h)` | Reference resolution |
+| `c:GetSafeArea()` / `c:SetSafeArea(l, t, r, b)` | Insets in real pixels |
+| `c.renderMode` | `UiCanvasRenderMode.*`. In `World` the canvas is placed IN THE SCENE and `scaleMode`, `screenMatch`, `matchWidthOrHeight`, the three DPI fields, `safeArea` and `aspectRatio` are ignored |
+| `c.worldScale` | `World` only. World units per canvas PIXEL |
+| `c.billboard` | `World` only. `UiBillboard.*`: `YawOnly` only turns around the vertical, `Full` faces the camera completely |
+| `c.depthTest` | `World` only. When `false` it is always drawn on top, through walls |
 
-**Varios canvas de pantalla a la vez.** Una escena puede tener los que quiera
-(un HUD y un menú de pausa encima, por ejemplo) y **todos** reciben el input.
-Cuando dos se solapan hay que repartirlo, y el reparto es este:
+**Several screen canvases at once.** A scene can have as many as it wants (a HUD and a
+pause menu on top, for example) and **all** of them receive input. When two overlap the
+input has to be shared out, and this is how:
 
-- **El ratón, a UNO solo:** el de **más arriba** que tenga algo bajo el cursor.
-  Arriba = el último que se dibuja, o sea el que va más abajo en la jerarquía de
-  la escena. Es el mismo criterio que usa el clic del viewport del editor para
-  seleccionar, así que se selecciona lo que se ve encima.
-- **Los de debajo NO se quedan pegados:** reciben el ratón *fuera*, así que
-  sueltan el hover, emiten su `MouseExit` y sus botones vuelven a `Normal`.
-  Siguen animando y fundiendo colores con normalidad.
-- **Un arrastre no se corta.** Mientras un botón del ratón siga bajado, el
-  canvas donde empezó conserva el puntero aunque el cursor pase por encima de
-  otro. Es lo que permite arrastrar un slider hasta el borde de la pantalla.
-- **El teclado y el mando siguen al FOCO, no al cursor:** van al canvas que
-  tiene el foco, así que escribir en un campo sigue llegando aunque el ratón se
-  pasee por otro canvas. El foco se mueve al **clicar**, y solo lo tiene un
-  canvas a la vez: en cuanto otro lo coge, el anterior lo suelta. El Tab y las
-  flechas dan la vuelta *dentro* del canvas que lo tiene y **no saltan** al
-  siguiente canvas.
-- **Cambiarle `renderMode` a un canvas le suelta el input.** Ponerlo a `World`
-  lo saca del reparto (un canvas de mundo no se puede clicar), así que si se
-  hace a media pulsación se le sueltan el hover, la pulsación y el foco —con su
-  `MouseExit` y su `Blur`—, y no se queda con una captura huérfana que al volver
-  le robaría el ratón al canvas de encima.
+- **The mouse goes to ONE only:** the **topmost** one that has something under the cursor.
+  Top = the last one drawn, that is, the one lowest in the scene hierarchy. It is the same
+  criterion the editor viewport's click uses to select, so what is on top is what gets
+  selected.
+- **The ones below do NOT get stuck:** they receive the mouse *outside*, so they drop the
+  hover, emit their `MouseExit` and their buttons go back to `Normal`. They keep animating
+  and fading colors normally.
+- **A drag is not cut.** While a mouse button stays down, the canvas where it started keeps
+  the pointer even if the cursor passes over another one. That is what lets you drag a
+  slider to the edge of the screen.
+- **Keyboard and gamepad follow FOCUS, not the cursor:** they go to the canvas that has
+  focus, so typing into a field keeps arriving even if the mouse wanders over another
+  canvas. Focus moves on **click**, and only one canvas has it at a time: as soon as
+  another takes it, the previous one lets go. Tab and the arrows wrap around *inside* the
+  canvas that has it and **do not jump** to the next canvas.
+- **Changing a canvas's `renderMode` releases its input.** Setting it to `World` takes it
+  out of the sharing (a world canvas cannot be clicked), so if it happens mid-press its
+  hover, press and focus are released (with their `MouseExit` and `Blur`), and it is not
+  left with an orphan capture that, on coming back, would steal the mouse from the canvas
+  on top.
 
-**Dos limitaciones del modo `World`.** No son bugs: salen del sitio donde se
-graba el canvas, y conviene tenerlas escritas antes de tropezar con ellas.
+**Two limitations of `World` mode.** They are not bugs: they come from where the canvas is
+recorded, and it is worth having them written down before tripping over them.
 
-- **Un canvas de mundo NO se puede clicar**, ni en el juego ni en el viewport
-  del editor. El hit test de la UI trabaja en píxeles de pantalla y un canvas de
-  mundo está *proyectado*: puede salir rotado, en perspectiva o partido por el
-  borde. Se selecciona desde el Hierarchy, igual que el contenedor de un
-  `Layout`. Al seleccionarlo, el editor pinta el cuadrilátero de su plano sobre
-  el viewport —con una marca en su esquina (0,0)—, que es lo que enseña dónde
-  está y con qué inclinación; si alguna de sus cuatro esquinas queda detrás de
-  la cámara, no se dibuja nada. Los widgets de dentro se seleccionan igual, desde
-  el Hierarchy, y su gizmo también sale proyectado sobre el cartel, inclinado con
-  él y con los ejes X/Y del pivot en la orientación que tienen ahí.
-- **`clipChildren` NO recorta en un canvas de mundo.** El scissor va en píxeles
-  de canvas y se mapea 1:1 al framebuffer; con el canvas proyectado no hay
-  rectángulo alineado a los ejes que lo represente, así que los canvas de mundo
-  se graban con el scissor a todo el framebuffer. Lo que sí se respeta es un
-  clip que ya se quedó vacío: ese nodo no emite nada.
+- **A world canvas can NOT be clicked**, neither in the game nor in the editor viewport.
+  The UI hit test works in screen pixels and a world canvas is *projected*: it can come out
+  rotated, in perspective or cut by the edge. It is selected from the Hierarchy, like a
+  `Layout`'s container. When selected, the editor draws its plane's quadrilateral over the
+  viewport (with a mark on its (0,0) corner), which shows where it is and how it is tilted;
+  if any of its four corners is behind the camera, nothing is drawn. The widgets inside are
+  selected the same way, from the Hierarchy, and their gizmo is also projected onto the
+  sign, tilted with it and with the pivot's X/Y axes in the orientation they have there.
+- **`clipChildren` does NOT clip in a world canvas.** The scissor is in canvas pixels and
+  maps 1:1 to the framebuffer; with the canvas projected there is no axis-aligned rectangle
+  to represent it, so world canvases are recorded with the scissor covering the whole
+  framebuffer. What is respected is a clip that has already become empty: that node emits
+  nothing.
 
 ### Button
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `b.visible` | Se dibuja o no |
-| `b.atlasPath` / `b.sprite` | PNG del atlas y nombre del sprite base (vacíos = color plano) |
-| `b.interactable` | `false` fuerza el estado `Disabled` |
-| `b.selected` | Estado `Selected` sostenido |
+| `b.visible` | Drawn or not |
+| `b.atlasPath` / `b.sprite` | Atlas PNG and name of the base sprite (empty = flat color) |
+| `b.interactable` | `false` forces the `Disabled` state |
+| `b.selected` | Sustained `Selected` state |
 | `b.transition` | `UiButtonTransition.*` |
-| `b.normalSprite` / `hoverSprite` / `pressedSprite` / `disabledSprite` / `selectedSprite` | Nombres dentro del MISMO atlas |
-| `b.fadeDuration` | Segundos del fundido de `Animation` |
-| `b.text` / `b.fontPath` / `b.fontSize` / `b.textAlign` / `b.textVAlign` | Etiqueta (hijo `Text` que monta el sync); `fontPath` vacío = fuente por defecto. `textAlign` es `UiTextAlign.*` y `textVAlign` es `UiTextVAlign.*` |
-| `b.sprite`, `b.normalSprite`, … | **Nombre de un sub-rect del atlas**, no una ruta. Los define el Sprite Editor del editor y viven en `<atlas>.sprites.json`; un nombre que no esté en ese fichero dibuja la imagen entera |
-| `b:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect, en píxeles y anclas normalizadas |
-| `b:GetColor/SetColor(r,g,b,a)` | Color base |
-| `b:GetNormalColor/SetNormalColor`, `GetHoverColor/SetHoverColor`, `GetPressedColor/SetPressedColor`, `GetDisabledColor/SetDisabledColor`, `GetSelectedColor/SetSelectedColor` | Los 5 colores de estado |
-| `b:GetTextColor/SetTextColor(r,g,b,a)` | Color de la etiqueta |
-| `b:GetState()` | `UiButtonState.*` resuelto por el último input (solo lectura) |
-| `b:OnClick(fn)` / `b:OnDoubleClick(fn)` | Registra el callback; pasar `nil` lo quita |
+| `b.normalSprite` / `hoverSprite` / `pressedSprite` / `disabledSprite` / `selectedSprite` | Names within the SAME atlas |
+| `b.fadeDuration` | Seconds of the `Animation` fade |
+| `b.text` / `b.fontPath` / `b.fontSize` / `b.textAlign` / `b.textVAlign` | Label (a `Text` child the sync builds); empty `fontPath` = default font. `textAlign` is `UiTextAlign.*` and `textVAlign` is `UiTextVAlign.*` |
+| `b.sprite`, `b.normalSprite`, … | **Name of a sub-rect of the atlas**, not a path. They are defined by the editor's Sprite Editor and live in `<atlas>.sprites.json`; a name that is not in that file draws the whole image |
+| `b:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect, in pixels and normalized anchors |
+| `b:GetColor/SetColor(r,g,b,a)` | Base color |
+| `b:GetNormalColor/SetNormalColor`, `GetHoverColor/SetHoverColor`, `GetPressedColor/SetPressedColor`, `GetDisabledColor/SetDisabledColor`, `GetSelectedColor/SetSelectedColor` | The 5 state colors |
+| `b:GetTextColor/SetTextColor(r,g,b,a)` | Label color |
+| `b:GetState()` | `UiButtonState.*` resolved by the last input (read-only) |
+| `b:OnClick(fn)` / `b:OnDoubleClick(fn)` | Registers the callback; passing `nil` removes it |
 
 ### Text
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `t.visible`, `t.text`, `t.fontPath`, `t.fontSize` | Lo básico; `fontPath` vacío = fuente por defecto |
-| `t.outlineWidth` | 0 = sin contorno |
-| `t.align` / `t.vAlign` / `t.overflow` / `t.wordWrap` | `UiTextAlign.*` (horizontal), `UiTextVAlign.*` (vertical), `UiTextOverflow.*`, salto de línea |
-| `t.boldStrength` / `t.italicSkew` | Negrita y cursiva simuladas |
+| `t.visible`, `t.text`, `t.fontPath`, `t.fontSize` | The basics; empty `fontPath` = default font |
+| `t.outlineWidth` | 0 = no outline |
+| `t.align` / `t.vAlign` / `t.overflow` / `t.wordWrap` | `UiTextAlign.*` (horizontal), `UiTextVAlign.*` (vertical), `UiTextOverflow.*`, word wrap |
+| `t.boldStrength` / `t.italicSkew` | Simulated bold and italic |
 | `t:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
-| `t:GetColor/SetColor(r,g,b,a)` | Relleno del glifo |
-| `t:GetOutlineColor/SetOutlineColor(r,g,b,a)` | Contorno |
-| `t:GetShadowOffset/SetShadowOffset(x,y)`, `t:GetShadowColor/SetShadowColor(r,g,b,a)` | Sombra (offset 0,0 = sin sombra) |
+| `t:GetColor/SetColor(r,g,b,a)` | Glyph fill |
+| `t:GetOutlineColor/SetOutlineColor(r,g,b,a)` | Outline |
+| `t:GetShadowOffset/SetShadowOffset(x,y)`, `t:GetShadowColor/SetShadowColor(r,g,b,a)` | Shadow (offset 0,0 = no shadow) |
 
-El atlas de una fuente se hornea con ASCII, el suplemento Latin-1 completo
-(`á é í ó ú ü ñ Ñ ¿ ¡ « » º ª`), `…` y `€`. Un carácter fuera de eso —o que la
-fuente elegida no traiga— no se dibuja **ni deja hueco**: si falta una letra,
-mira primero si el TTF la tiene.
+A font's atlas is baked with ASCII, the complete Latin-1 supplement
+(`á é í ó ú ü ñ Ñ ¿ ¡ « » º ª`), `…` and `€`. A character outside that (or one the chosen
+font does not carry) is not drawn **and leaves no gap**: if a letter is missing, first
+check whether the TTF has it.
 
 ### ProgressBar
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `p.visible` | Se dibuja o no |
-| `p.value` / `p.minValue` / `p.maxValue` | Sin clamp: el rango lo normaliza el dibujado |
+| `p.visible` | Drawn or not |
+| `p.value` / `p.minValue` / `p.maxValue` | No clamp: drawing normalizes the range |
 | `p.fillDirection` | `UiProgressFillDirection.*` |
-| `p.atlasPath` / `p.backgroundPath` / `p.fillPath` | Imagen compartida (fallback), del fondo y del relleno |
+| `p.atlasPath` / `p.backgroundPath` / `p.fillPath` | Shared image (fallback), background's and fill's |
 | `p:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
-| `p:GetColor/SetColor(r,g,b,a)` / `p:GetFillColor/SetFillColor(r,g,b,a)` | Color del fondo y del relleno |
-| `p:GetNormalizedValue()` | El `0..1` ya acotado que usa el dibujado (rango degenerado = 0) |
+| `p:GetColor/SetColor(r,g,b,a)` / `p:GetFillColor/SetFillColor(r,g,b,a)` | Background and fill color |
+| `p:GetNormalizedValue()` | The already-clamped `0..1` that drawing uses (degenerate range = 0) |
 
 ### Layout
 
-Coloca a los **hijos** del GameObject. No dibuja nada: sin otro componente de UI
-en el objeto, monta un contenedor propio (un rect que agrupa y recorta); con un
-`Button`, `Text` o `ProgressBar` al lado, escribe sobre el nodo de aquel y el
-**rect lo manda aquel** (`position`, `size`, anclas y pivote de aquí no se leen).
+Places the GameObject's **children**. It draws nothing: without another UI component on the
+object, it builds a container of its own (a rect that groups and clips); with a `Button`,
+`Text` or `ProgressBar` next to it, it writes onto that one's node and **that one drives the
+rect** (`position`, `size`, anchors and pivot from here are not read).
 
-Tampoco recibe clics: un grupo que no pinta no puede comerse el ratón de lo que
-tenga detrás. En el editor se selecciona desde el Hierarchy.
+It does not receive clicks either: a group that paints nothing cannot swallow the mouse from
+what is behind it. In the editor it is selected from the Hierarchy.
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `l.mode` | `UiLayoutMode.None` / `Horizontal` / `Vertical` / `Grid`. `None` = solo agrupa y recorta |
-| `l.crossAlign` | `UiCrossAlign.Start` / `Center` / `End`. Eje TRANSVERSAL; el `Grid` no la usa |
-| `l.paddingLeft` / `paddingRight` / `paddingTop` / `paddingBottom` | Margen interior del contenedor |
-| `l.columns` | Solo `Grid`. `0` = las que quepan en el ancho |
-| `l.fitWidth` / `l.fitHeight` | Content size fitter: ese eje del `Size` pasa a ser la extensión de los hijos + padding |
-| `l.ignoreLayout` | Este objeto se ancla por su cuenta y NO ocupa hueco en el layout de su padre |
-| `l.clipChildren` | Recorta a los descendientes contra este rect (se **interseca** con el recorte del padre) |
-| `l.visible` | Se resuelve o no (un contenedor invisible esconde su subárbol) |
-| `l:GetSpacing/SetSpacing(x,y)` | Hueco entre celdas: `x` entre columnas, `y` entre filas |
-| `l:GetCellSize/SetCellSize(x,y)` | Solo `Grid`: la celda, que se le impone a cada hijo |
-| `l:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect del contenedor (solo si es suyo) |
+| `l.mode` | `UiLayoutMode.None` / `Horizontal` / `Vertical` / `Grid`. `None` = only groups and clips |
+| `l.crossAlign` | `UiCrossAlign.Start` / `Center` / `End`. CROSS axis; `Grid` does not use it |
+| `l.paddingLeft` / `paddingRight` / `paddingTop` / `paddingBottom` | The container's inner margin |
+| `l.columns` | `Grid` only. `0` = as many as fit in the width |
+| `l.fitWidth` / `l.fitHeight` | Content size fitter: that `Size` axis becomes the extent of the children + padding |
+| `l.ignoreLayout` | This object anchors on its own and does NOT take a slot in its parent's layout |
+| `l.clipChildren` | Clips the descendants against this rect (**intersected** with the parent's clip) |
+| `l.visible` | Resolved or not (an invisible container hides its subtree) |
+| `l:GetSpacing/SetSpacing(x,y)` | Gap between cells: `x` between columns, `y` between rows |
+| `l:GetCellSize/SetCellSize(x,y)` | `Grid` only: the cell, imposed on every child |
+| `l:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Container rect (only if it is its own) |
 
 ```lua
 local menu = self.entity:GetLayout() or self.entity:AddLayout()
@@ -1175,147 +1147,144 @@ menu:SetSize(240, 300)
 
 ### Panel
 
-El rectángulo de fondo: sin atlas es un quad de color plano, con atlas el sprite
-estirado al rect. No tiene campos propios más allá del rect, el color y el
-sprite — el `Panel` del núcleo tampoco los tiene.
+The background rectangle: without an atlas it is a flat color quad, with an atlas the sprite
+stretched to the rect. It has no fields of its own beyond the rect, the color and the sprite;
+the core's `Panel` does not have them either.
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `p.visible` | Se dibuja o no |
-| `p.raycastTarget` | A `false` deja pasar el ratón a lo que tenga detrás. Un fondo a pantalla completa con esto a `true` se come **todos** los clics, y no hay nada que lo delate a la vista |
-| `p.atlasPath` | Imagen del panel. Vacía = color plano |
-| `p.sprite` | Nombre del sub-rect dentro del atlas. Vacío = la imagen entera |
+| `p.visible` | Drawn or not |
+| `p.raycastTarget` | When `false` it lets the mouse through to whatever is behind it. A full-screen background with this `true` swallows **all** clicks, and nothing on screen gives it away |
+| `p.atlasPath` | The panel's image. Empty = flat color |
+| `p.sprite` | Name of the sub-rect within the atlas. Empty = the whole image |
 | `p:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
-| `p:GetColor/SetColor(r,g,b,a)` | Color (tinte si hay sprite) |
+| `p:GetColor/SetColor(r,g,b,a)` | Color (tint if there is a sprite) |
 
 ### Image
 
-El sprite con sus cuatro modos de reparto dentro del rect. Los cuatro se
-resuelven en CPU dentro del batcher (N quads del mismo atlas y el mismo
-scissor): ni un shader ni un pipeline de más.
+The sprite with its four ways of filling the rect. All four are resolved on the CPU inside
+the batcher (N quads from the same atlas and the same scissor): not a single extra shader or
+pipeline.
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `i.visible` / `i.raycastTarget` | Igual que en el `Panel` |
-| `i.atlasPath` / `i.sprite` | Imagen y nombre del sub-rect |
+| `i.visible` / `i.raycastTarget` | Same as in the `Panel` |
+| `i.atlasPath` / `i.sprite` | Image and sub-rect name |
 | `i.mode` | `UiImageMode.Normal` / `Tiled` / `Sliced` / `Filled` |
-| `i.borderLeft` / `borderRight` / `borderTop` / `borderBottom` | Solo `Sliced`. Píxeles **del sprite**, no del rect: escalar el elemento no los mueve |
-| `i.fillCenter` | Solo `Sliced`. A `false` salen 8 quads en vez de 9: es lo que quiere un marco que deja ver lo de detrás |
-| `i.maxTiles` | Solo `Tiled`. Tope duro de quads; pasado el tope el elemento se dibuja como `Normal` en vez de reventar el buffer de vértices |
-| `i.fillDirection` | Solo `Filled`. `UiFillDirection.Horizontal` / `Vertical` |
-| `i.fillOrigin` | Solo `Filled`. `UiFillOrigin.Start` / `End`. `Start` es izquierda en `Horizontal` y arriba en `Vertical` |
-| `i.fillAmount` | Solo `Filled`. `0..1`; a `0` no se emite ni un quad |
+| `i.borderLeft` / `borderRight` / `borderTop` / `borderBottom` | `Sliced` only. Pixels **of the sprite**, not of the rect: scaling the element does not move them |
+| `i.fillCenter` | `Sliced` only. When `false` you get 8 quads instead of 9: what a frame that shows what is behind it wants |
+| `i.maxTiles` | `Tiled` only. Hard quad cap; past the cap the element is drawn as `Normal` instead of blowing up the vertex buffer |
+| `i.fillDirection` | `Filled` only. `UiFillDirection.Horizontal` / `Vertical` |
+| `i.fillOrigin` | `Filled` only. `UiFillOrigin.Start` / `End`. `Start` is left in `Horizontal` and top in `Vertical` |
+| `i.fillAmount` | `Filled` only. `0..1`; at `0` not a single quad is emitted |
 | `i:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
-| `i:GetColor/SetColor(r,g,b,a)` | Tinte del sprite (se multiplica) |
+| `i:GetColor/SetColor(r,g,b,a)` | Sprite tint (multiplied) |
 
 ```lua
--- Marco de 9-slice que no deforma las esquinas al estirarse
-local marco = self.entity:GetImage() or self.entity:AddImage()
-marco.atlasPath = "assets/ui/frames.png"
-marco.sprite = "ventana"
-marco.mode = UiImageMode.Sliced
-marco.borderLeft, marco.borderRight = 12, 12
-marco.borderTop, marco.borderBottom = 12, 12
-marco.fillCenter = false
-marco:SetSize(400, 260)
+-- 9-slice frame that does not distort its corners when stretched
+local frame = self.entity:GetImage() or self.entity:AddImage()
+frame.atlasPath = "assets/ui/frames.png"
+frame.sprite = "window"
+frame.mode = UiImageMode.Sliced
+frame.borderLeft, frame.borderRight = 12, 12
+frame.borderTop, frame.borderBottom = 12, 12
+frame.fillCenter = false
+frame:SetSize(400, 260)
 ```
 
-### Slider / Checkbox / Toggle / Scrollbar — los interactivos
+### Slider / Checkbox / Toggle / Scrollbar — the interactive ones
 
-Los cuatro tienen algo que los demás no: **el jugador los mueve**, y lo que mueve
-se escribe **en el componente**, no en el nodo del canvas. O sea que leer
-`s.value` o `c.isOn` da el valor de verdad sin sondear nada, se serializa con la
-escena y se ve en el inspector mientras el juego corre.
+These four have something the rest do not: **the player moves them**, and what they move is
+written **into the component**, not into the canvas node. So reading `s.value` or `c.isOn`
+gives the real value without polling anything, it is serialized with the scene and it shows
+in the inspector while the game runs.
 
-Los cuatro llevan `interactable` (a `false` se dibujan igual pero no se dejan
-tocar) y `OnValueChanged(fn)`, que llama a `fn` con el valor nuevo **solo cuando
-cambia**. Pasar `nil` lo quita. Igual que `Button:OnClick`, el dueño del callback
-es el componente, así que registrar una vez en `Start` basta: sobrevive a las
-reconstrucciones del árbol de UI.
+All four carry `interactable` (when `false` they are drawn the same but cannot be touched)
+and `OnValueChanged(fn)`, which calls `fn` with the new value **only when it changes**.
+Passing `nil` removes it. As with `Button:OnClick`, the owner of the callback is the
+component, so registering once in `Start` is enough: it survives rebuilds of the UI tree.
 
 #### Slider
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `s.value` / `s.minValue` / `s.maxValue` | El rango. Sin clamp al escribir a mano; el arrastre sí acota |
-| `s.wholeNumbers` | Redondea el valor que se **escribe**, no solo el que se dibuja |
+| `s.value` / `s.minValue` / `s.maxValue` | The range. No clamp when written by hand; dragging does clamp |
+| `s.wholeNumbers` | Rounds the value that is **written**, not just the one drawn |
 | `s.direction` | `UiSliderDirection.*` |
-| `s.handleSize` | Largo del asa **en el eje del recorrido**, en px. Se descuenta del recorrido para que no se salga por las puntas. A `0` el recorrido es el rect entero |
+| `s.handleSize` | Handle length **along the travel axis**, in px. It is subtracted from the travel so it does not stick out of the ends. At `0` the travel is the whole rect |
 | `s.interactable` / `s.visible` | |
-| `s.atlasPath` / `s.backgroundSprite` / `s.fillSprite` / `s.handleSprite` | Un atlas, tres nombres de sub-rect |
-| `s:GetColor/SetColor`, `GetFillColor/SetFillColor`, `GetHandleColor/SetHandleColor` | Pista, relleno y asa |
+| `s.atlasPath` / `s.backgroundSprite` / `s.fillSprite` / `s.handleSprite` | One atlas, three sub-rect names |
+| `s:GetColor/SetColor`, `GetFillColor/SetFillColor`, `GetHandleColor/SetHandleColor` | Track, fill and handle |
 | `s:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
-| `s:GetNormalizedValue()` | El `0..1` ya acotado (rango degenerado = 0) |
-| `s:OnValueChanged(fn)` | `fn(nuevoValor)` |
+| `s:GetNormalizedValue()` | The already-clamped `0..1` (degenerate range = 0) |
+| `s:OnValueChanged(fn)` | `fn(newValue)` |
 
-La **pista entera** es zona de clic, no solo el asa: un click salta el valor a
-donde esté el cursor, como en Unity. El arrastre sigue al ratón aunque salga del
-rect.
+The **whole track** is a click zone, not only the handle: a click jumps the value to where
+the cursor is, as in Unity. The drag follows the mouse even when it leaves the rect.
 
 #### Checkbox
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `c.isOn` | El valor. Un click lo invierte |
-| `c.checkPadding` | Px que la marca se mete hacia dentro de la caja por los cuatro lados. Uno que no cabe deja la marca a cero, nunca un rect del revés |
+| `c.isOn` | The value. A click toggles it |
+| `c.checkPadding` | Px the checkmark is inset into the box on all four sides. One that does not fit leaves the checkmark at zero, never an inverted rect |
 | `c.interactable` / `c.visible` | |
 | `c.atlasPath` / `c.backgroundSprite` / `c.checkmarkSprite` | |
-| `c:GetColor/SetColor` / `c:GetCheckColor/SetCheckColor` | Caja y marca |
+| `c:GetColor/SetColor` / `c:GetCheckColor/SetCheckColor` | Box and checkmark |
 | `c:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
-| `c:OnValueChanged(fn)` | `fn(nuevoValor)` |
+| `c:OnValueChanged(fn)` | `fn(newValue)` |
 
-**No lleva etiqueta de texto**: el `Text` es su propio componente y cabe en el
-mismo GameObject (son nodos hermanos), así que meter aquí una copia de los campos
-del texto sería mantener dos.
+**It has no text label**: `Text` is its own component and fits on the same GameObject (they
+are sibling nodes), so putting a copy of the text fields here would mean maintaining two.
 
 #### Toggle
 
-Guarda el mismo dato que el `Checkbox` (un bool) y aun así es otro componente:
-lo que cambia no es el dato sino los **campos** — la casilla tiene padding y
-color de marca, el interruptor tiene dos colores de pista y el tamaño del mando.
+It stores the same data as the `Checkbox` (a bool) and is still a different component: what
+changes is not the data but the **fields**; the checkbox has padding and a checkmark color,
+the switch has two track colors and the knob size.
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `t.isOn` | El valor. Un click lo invierte |
-| `t.knobSize` / `t.knobPadding` | El mando se acota a lo que quede entre paddings: uno más grande que la pista asomaría por el borde |
+| `t.isOn` | The value. A click toggles it |
+| `t.knobSize` / `t.knobPadding` | The knob is clamped to what is left between paddings: one bigger than the track would stick out of the edge |
 | `t.interactable` / `t.visible` | |
 | `t.atlasPath` / `t.backgroundSprite` / `t.knobSprite` | |
-| `t:GetOffColor/SetOffColor` / `t:GetOnColor/SetOnColor` | La pista **no tiene un color suelto**: se pinta con uno u otro según el estado |
+| `t:GetOffColor/SetOffColor` / `t:GetOnColor/SetOnColor` | The track **has no color of its own**: it is painted with one or the other depending on the state |
 | `t:GetKnobColor/SetKnobColor` | |
 | `t:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
-| `t:OnValueChanged(fn)` | `fn(nuevoValor)` |
+| `t:OnValueChanged(fn)` | `fn(newValue)` |
 
 #### Scrollbar
 
-Se parece al `Slider` pero no es lo mismo: el asa tiene tamaño **variable** (la
-fracción del contenido que se ve) y el valor va siempre en `0..1` — no hay rango
-propio porque quien lo interpreta es lo que se desplaza, no la barra.
+It looks like the `Slider` but it is not the same: the handle has a **variable** size (the
+fraction of the content that is visible) and the value is always in `0..1`; there is no range
+of its own because what scrolls interprets it, not the bar.
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
 | `s.value` | `0..1` |
-| `s.handleFraction` | Fracción del canal que ocupa el asa. `1` = el contenido cabe entero y no hay nada que desplazar |
+| `s.handleFraction` | Fraction of the channel taken by the handle. `1` = the content fits entirely and there is nothing to scroll |
 | `s.direction` | `UiScrollbarDirection.*` |
-| `s.numberOfSteps` | Paradas discretas. `0` y `1` = continuo: enganchar a una sola parada dejaría la barra muerta en un sitio |
-| `s.scrollStep` | Cuánto mueve la rueda por muesca, en fracción del recorrido |
+| `s.numberOfSteps` | Discrete stops. `0` and `1` = continuous: snapping to a single stop would leave the bar stuck in one place |
+| `s.scrollStep` | How much the wheel moves per notch, as a fraction of the travel |
 | `s.interactable` / `s.visible` | |
 | `s.atlasPath` / `s.backgroundSprite` / `s.handleSprite` | |
-| `s:GetColor/SetColor` / `s:GetHandleColor/SetHandleColor` | Canal y asa |
+| `s:GetColor/SetColor` / `s:GetHandleColor/SetHandleColor` | Channel and handle |
 | `s:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
-| `s:SnapValue(v)` | El mismo enganche a paradas que aplica el arrastre |
-| `s:OnValueChanged(fn)` | `fn(nuevoValor)` |
+| `s:SnapValue(v)` | The same snapping to stops that dragging applies |
+| `s:OnValueChanged(fn)` | `fn(newValue)` |
 
-La **rueda del ratón** encima de la barra también la mueve, y el evento se
-consume ahí: si siguiera burbujeando, un contenedor que la envolviera se
-desplazaría a la vez y el contenido saltaría el doble por muesca.
+The **mouse wheel** over the bar also moves it, and the event is consumed there: if it kept
+bubbling, a container wrapping it would scroll at the same time and the content would jump
+twice per notch.
 
 ```lua
-function Opciones:Start()
+function Options:Start()
     local vol = self.entity:GetSlider()
     vol.minValue, vol.maxValue = 0, 100
     vol.wholeNumbers = true
     vol:OnValueChanged(function(v)
-        Log.Info("Volumen: " .. v)
+        Log.Info("Volume: " .. v)
     end)
 end
 ```
@@ -1324,203 +1293,193 @@ end
 
 #### InputField
 
-El único widget en el que escribe el **jugador**. Para que existiera hubo que
-darle al canvas algo que no tenía: un canal de **caracteres**. `UiKey` nombra
-teclas físicas con significado propio (`Tab`, `Enter`, flechas) y una `a` no es
-una de esas — sale del layout del teclado y de las muertas —, así que el core
-ganó `UiInputState.chars` y `UiElement::onTextInput`. Es infraestructura del
-canvas, no de este componente: cualquier cosa futura que reciba texto (una
-consola, un chat, un buscador) usa la misma.
+The only widget the **player** types into. For it to exist, the canvas needed something it
+did not have: a **character** channel. `UiKey` names physical keys with a meaning of their own
+(`Tab`, `Enter`, arrows) and an `a` is not one of them (it comes from the keyboard layout and
+dead keys), so the core gained `UiInputState.chars` and `UiElement::onTextInput`. It is canvas
+infrastructure, not this component's: anything in the future that receives text (a console, a
+chat, a search box) uses the same one.
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `f.text` | El texto de verdad, en UTF-8. En `Password` se guarda **tal cual**: lo que cambia es lo que se enseña |
-| `f.placeholder` | Lo que se ve con el campo vacío, con su propio color |
-| `f.interactable` | A `false` ni siquiera toma el foco |
-| `f.readOnly` | Toma el foco y deja mover el cursor, pero no cambiar el texto |
-| `f.characterLimit` | Cuenta **caracteres**, no bytes. `0` = sin límite |
-| `f.contentType` | `UiInputContentType.*`. Filtra lo que se puede **teclear**, no lo que se dibuja |
-| `f.passwordChar` | Con qué se enmascara. Vacío cae al asterisco |
+| `f.text` | The real text, in UTF-8. With `Password` it is stored **as is**: what changes is what is shown |
+| `f.placeholder` | What is shown when the field is empty, with its own color |
+| `f.interactable` | When `false` it does not even take focus |
+| `f.readOnly` | Takes focus and lets the cursor move, but not change the text |
+| `f.characterLimit` | Counts **characters**, not bytes. `0` = no limit |
+| `f.contentType` | `UiInputContentType.*`. Filters what can be **typed**, not what is drawn |
+| `f.passwordChar` | What it is masked with. Empty falls back to the asterisk |
 | `f.fontPath` / `f.fontSize` / `f.align` / `f.padding` | |
-| `f.caretWidth` / `f.caretBlinkRate` | Segundos por medio ciclo; `0` = fijo |
+| `f.caretWidth` / `f.caretBlinkRate` | Seconds per half cycle; `0` = steady |
 | `f.atlasPath` / `f.backgroundSprite` | |
 | `f:GetColor/SetColor`, `GetTextColor/SetTextColor`, `GetPlaceholderColor/SetPlaceholderColor`, `GetCaretColor/SetCaretColor` | |
 | `f:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
-| `f:GetDisplayText()` | Lo que se **dibuja**: el placeholder si está vacío, o la máscara si es `Password`. Nunca la contraseña |
-| `f:GetCaretPos()` / `f:SetCaretPos(n)` | Posición del cursor en **caracteres**, `0` = antes del primero. Se acota al escribirla |
-| `f:OnValueChanged(fn)` | `fn(textoNuevo)`, en cada tecla que cambia el texto |
-| `f:OnEndEdit(fn)` | `fn(texto)` al pulsar Enter o al perder el foco. Es donde valida un formulario, no en cada tecla |
+| `f:GetDisplayText()` | What is **drawn**: the placeholder if it is empty, or the mask for `Password`. Never the password |
+| `f:GetCaretPos()` / `f:SetCaretPos(n)` | Cursor position in **characters**, `0` = before the first one. Clamped when written |
+| `f:OnValueChanged(fn)` | `fn(newText)`, on every key that changes the text |
+| `f:OnEndEdit(fn)` | `fn(text)` when Enter is pressed or focus is lost. That is where a form validates, not on every key |
 
-`Left` y `Right` mueven el cursor y **consumen** la tecla: si no, la navegación
-direccional del canvas se llevaría el foco a otro widget en mitad de una
-palabra. `Up` y `Down` no se consumen, así que se puede salir del campo con el
-mando.
+`Left` and `Right` move the cursor and **consume** the key: otherwise the canvas's directional
+navigation would take focus to another widget in the middle of a word. `Up` and `Down` are not
+consumed, so you can leave the field with the gamepad.
 
 #### Dropdown
 
-El único cuyo subárbol **cambia de forma** con los datos: una opción más es un
-nodo más. Añadir o quitar opciones reconstruye el árbol de UI; abrir y cerrar
-no (la lista existe siempre y solo se apaga).
+The only one whose subtree **changes shape** with the data: one more option is one more node.
+Adding or removing options rebuilds the UI tree; opening and closing does not (the list always
+exists and is only switched off).
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `d.value` | Índice **0-based** de la elegida, igual que en C++ y en el inspector |
-| `d.isOpen` | Estado vivo. **No se serializa**: una escena no puede abrirse con la lista tapando el menú |
-| `d.itemHeight` / `d.maxVisibleItems` | `0` = todas |
+| `d.value` | **0-based** index of the selected one, as in C++ and in the inspector |
+| `d.isOpen` | Live state. **Not serialized**: a scene cannot open with the list covering the menu |
+| `d.itemHeight` / `d.maxVisibleItems` | `0` = all |
 | `d.interactable` / `d.visible` | |
 | `d.fontPath` / `d.fontSize` / `d.padding` | |
 | `d.atlasPath` / `d.backgroundSprite` / `d.arrowSprite` / `d.itemSprite` | |
 | `d:GetColor/SetColor`, `GetListColor/SetListColor`, `GetItemColor/SetItemColor`, `GetItemSelectedColor/SetItemSelectedColor`, `GetArrowColor/SetArrowColor`, `GetTextColor/SetTextColor` | |
 | `d:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
-| `d:GetOptionCount()` | Cuántas hay |
-| `d:GetOption(i)` | La opción `i`, con índice **1-based** (lo natural en Lua). Fuera de rango devuelve cadena vacía |
-| `d:GetSelectedLabel()` | El texto de la elegida, o vacío si el índice no apunta a ninguna |
-| `d:SetOptions(tabla)` | Reemplaza la lista. Lo que no sea cadena se descarta, entrada a entrada |
+| `d:GetOptionCount()` | How many there are |
+| `d:GetOption(i)` | Option `i`, with a **1-based** index (the natural one in Lua). Out of range returns an empty string |
+| `d:GetSelectedLabel()` | The selected one's text, or empty if the index points to none |
+| `d:SetOptions(table)` | Replaces the list. Anything that is not a string is discarded, entry by entry |
 | `d:AddOption(s)` / `d:ClearOptions()` | |
-| `d:OnValueChanged(fn)` | `fn(indice)` (0-based), solo cuando cambia |
+| `d:OnValueChanged(fn)` | `fn(index)` (0-based), only when it changes |
 
-**Ojo con los dos índices**: `d.value` es 0-based (es el campo del componente) y
-`d:GetOption(i)` es 1-based (es una tabla de Lua). Para leer la elegida sin
-pensarlo, `d:GetSelectedLabel()`.
+**Mind the two indices**: `d.value` is 0-based (it is the component's field) and
+`d:GetOption(i)` is 1-based (it is a Lua table). To read the selected one without thinking
+about it, use `d:GetSelectedLabel()`.
 
 #### ScrollView
 
-| Propiedad / Método | Descripción |
+| Property / Method | Description |
 | --- | --- |
-| `v.horizontal` / `v.vertical` | Un eje apagado no se mueve aunque el contenido sea más grande |
-| `v.scrollSensitivity` | **Píxeles** que mueve la rueda por muesca (no fracción: una lista de 50 filas y otra de 5 quieren el mismo recorrido por muesca) |
+| `v.horizontal` / `v.vertical` | A disabled axis does not move even if the content is bigger |
+| `v.scrollSensitivity` | **Pixels** the wheel moves per notch (not a fraction: a 50-row list and a 5-row one want the same travel per notch) |
 | `v.visible` | |
 | `v.atlasPath` / `v.backgroundSprite` | |
-| `v:GetContentSize/SetContentSize(x,y)` | Tamaño del área desplazable. Es un **campo**, no algo medido de los hijos |
-| `v:GetNormalizedPosition/SetNormalizedPosition(x,y)` | `0` = principio, `1` = final, por eje |
-| `v:GetScrollRange()` | Cuánto se puede desplazar por eje, en píxeles. Un eje apagado da `0` |
-| `v:GetContentOffset()` | Dónde está el contenido dentro del viewport. Siempre `<= 0` |
-| `v:GetPosition/SetPosition`, `GetSize/SetSize`, ... | Rect del **viewport** |
-| `v:OnValueChanged(fn)` | `fn(x, y)` con la posición normalizada de los dos ejes |
+| `v:GetContentSize/SetContentSize(x,y)` | Size of the scrollable area. It is a **field**, not something measured from the children |
+| `v:GetNormalizedPosition/SetNormalizedPosition(x,y)` | `0` = start, `1` = end, per axis |
+| `v:GetScrollRange()` | How far it can scroll per axis, in pixels. A disabled axis gives `0` |
+| `v:GetContentOffset()` | Where the content is inside the viewport. Always `<= 0` |
+| `v:GetPosition/SetPosition`, `GetSize/SetSize`, ... | Rect of the **viewport** |
+| `v:OnValueChanged(fn)` | `fn(x, y)` with the normalized position of both axes |
 
-**Los hijos del GameObject cuelgan del contenido**, no del viewport: por eso
-desplazarse los arrastra. El viewport recorta (`clipChildren`), así que lo que
-se salga no se dibuja.
+**The GameObject's children hang from the content**, not from the viewport: that is why
+scrolling drags them. The viewport clips (`clipChildren`), so whatever sticks out is not drawn.
 
-**No tiene referencia a un Scrollbar.** Enlazarlos es una línea de script; una
-referencia entre componentes de la escena habría que serializarla y mantenerla
-viva en el clone, el undo y el borrado.
+**It has no reference to a Scrollbar.** Linking them is one line of script; a reference between
+scene components would have to be serialized and kept alive through clone, undo and delete.
 
 ```lua
-function Opciones:Start()
-    local barra = Scene.Find("BarraLateral"):GetScrollbar()
-    local lista = self.entity:GetScrollView()
-    barra:OnValueChanged(function(v)
-        local x = select(1, lista:GetNormalizedPosition())
-        lista:SetNormalizedPosition(x, v)
+function Options:Start()
+    local bar  = Scene.Find("SideBar"):GetScrollbar()
+    local list = self.entity:GetScrollView()
+    bar:OnValueChanged(function(v)
+        local x = select(1, list:GetNormalizedPosition())
+        list:SetNormalizedPosition(x, v)
     end)
 
-    local nombre = Scene.Find("CampoNombre"):GetInputField()
-    nombre.contentType = UiInputContentType.Alphanumeric
-    nombre.characterLimit = 16
-    nombre:OnEndEdit(function(t) Log.Info("Jugador: " .. t) end)
+    local name = Scene.Find("NameField"):GetInputField()
+    name.contentType = UiInputContentType.Alphanumeric
+    name.characterLimit = 16
+    name:OnEndEdit(function(t) Log.Info("Player: " .. t) end)
 end
 ```
 
-### Callbacks del Button: qué los mata y qué no
+### Button callbacks: what kills them and what does not
 
-El callback lo guarda el **componente**, no el nodo del canvas, y el sync lo
-vuelve a enganchar cada vez que reconstruye la raíz — cosa que pasa al añadir o
-quitar cualquier widget de la escena. O sea: registrar una vez en `Start` basta,
-sobrevive a las reconstrucciones.
+The callback is kept by the **component**, not the canvas node, and the sync hooks it up again
+every time it rebuilds the root, which happens when any widget in the scene is added or
+removed. So registering once in `Start` is enough: it survives rebuilds.
 
-Se invalidan (dejan de dispararse, sin error ni crash) cuando:
+They are invalidated (they stop firing, with no error or crash) when:
 
-- se **recarga en caliente** el script — el código que lo registró ya no existe;
-  vuelve a engancharlo el `Start` del script recargado,
-- se **para el Play** — las instancias se destruyen,
-- se **quita el componente** o muere el GameObject.
+- the script is **hot reloaded**: the code that registered it no longer exists; the reloaded
+  script's `Start` hooks it up again,
+- **Play stops**: the instances are destroyed,
+- the **component is removed** or the GameObject dies.
 
-Un error dentro del callback se registra en el Log Console (`[Lua][ERROR]
-Button.OnClick: ...`) y no tumba el frame ni al resto de scripts.
+An error inside the callback is logged in the Log Console (`[Lua][ERROR]
+Button.OnClick: ...`) and does not bring down the frame or the rest of the scripts.
 
-### Dos cosas que confunden
+### Two confusing things
 
-1. **Los setters escriben en el componente, no en el nodo vivo.** El sync vuelca
-   el componente sobre el árbol del canvas cada frame, así que escribir al nodo
-   directamente no serviría de nada. Escribir una ruta de atlas o de fuente **no
-   carga nada en ese instante**: la carga es del sync.
-2. **En el editor el ratón solo entra en Play y con el cursor sobre la imagen del
-   viewport** (como en Unity, en edición un botón no se ilumina). Las coordenadas
-   son píxeles del canvas desde la esquina superior izquierda de esa imagen.
+1. **Setters write to the component, not to the live node.** The sync dumps the component onto
+   the canvas tree every frame, so writing to the node directly would be useless. Writing an
+   atlas or font path **loads nothing at that moment**: loading is the sync's job.
+2. **In the editor the mouse only gets in during Play and with the cursor over the viewport
+   image** (as in Unity, a button does not light up while editing). The coordinates are canvas
+   pixels from the top-left corner of that image.
 
 ```lua
--- Scripts/BotonDemo.lua
-BotonDemo = {}
+-- Scripts/ButtonDemo.lua
+ButtonDemo = {}
 
-function BotonDemo:Start()
+function ButtonDemo:Start()
     local b = self.entity:GetButton()
     if b == nil then
-        print("este GameObject no tiene Button")
+        print("this GameObject has no Button")
         return
     end
 
-    b.text = "Jugar"
+    b.text = "Play"
     b.transition = UiButtonTransition.Animation
     b:SetSize(220, 48)
     b:SetNormalColor(0.1, 0.5, 0.9, 1)
     b:SetHoverColor(0.2, 0.7, 1.0, 1)
 
-    self.vidas = 3
+    self.lives = 3
     b:OnClick(function()
-        self.vidas = self.vidas - 1
-        local barra = self.entity:GetProgressBar() or self.entity:AddProgressBar()
-        barra.minValue, barra.maxValue = 0, 3
-        barra.value = self.vidas
-        print("quedan " .. self.vidas)
+        self.lives = self.lives - 1
+        local bar = self.entity:GetProgressBar() or self.entity:AddProgressBar()
+        bar.minValue, bar.maxValue = 0, 3
+        bar.value = self.lives
+        print(self.lives .. " left")
     end)
 end
 ```
 
-### Autocompletado en el Script Editor
+### Autocomplete in the Script Editor
 
-Toda esta API está en la lista de identificadores del Script Editor: al teclear
-`Canvas.`, `Button:`, `Text.`, `ProgressBar:`, `Entity:Get`, `Physics.`, `Audio.`,
-`ReverbZone:`, `Input.`, `RigidbodyConstraints.`, `ForceMode.` o cualquiera de las
-tablas de enums de UI (`UiScaleMode.`, `UiScreenMatch.`, `UiCanvasRenderMode.`,
-`UiBillboard.`, `UiTextAlign.`, `UiTextOverflow.`, `UiProgressFillDirection.`,
-`UiLayoutMode.`, `UiCrossAlign.`, `UiImageMode.`, `UiFillDirection.`,
-`UiFillOrigin.`, `UiSliderDirection.`, `UiScrollbarDirection.`,
-`UiInputContentType.`, `UiTextVAlign.`, `UiButtonTransition.`, `UiButtonState.`)
-salen las sugerencias. Propiedades con `.`, métodos con `:`, igual que el resto
-de la lista.
+This whole API is in the Script Editor's identifier list: typing `Canvas.`, `Button:`,
+`Text.`, `ProgressBar:`, `Entity:Get`, `Physics.`, `Audio.`, `ReverbZone:`, `Input.`,
+`RigidbodyConstraints.`, `ForceMode.` or any of the UI enum tables (`UiScaleMode.`,
+`UiScreenMatch.`, `UiCanvasRenderMode.`, `UiBillboard.`, `UiTextAlign.`, `UiTextOverflow.`,
+`UiProgressFillDirection.`, `UiLayoutMode.`, `UiCrossAlign.`, `UiImageMode.`,
+`UiFillDirection.`, `UiFillOrigin.`, `UiSliderDirection.`, `UiScrollbarDirection.`,
+`UiInputContentType.`, `UiTextVAlign.`, `UiButtonTransition.`, `UiButtonState.`) brings up the
+suggestions. Properties with `.`, methods with `:`, like the rest of the list.
 
-**No hace falta escribir el nombre del tipo.** El filtro también busca por
-nombre de **miembro**, que es lo que hace falta cuando se llama a través de una
-variable, que es lo normal en código real:
+**You do not need to type the type's name.** The filter also searches by **member** name,
+which is what you need when calling through a variable, which is the normal case in real code:
 
 ```lua
 local t = self.entity:GetTransform()
-t:GetPos      -- sugiere Transform:GetPosition
+t:GetPos      -- suggests Transform:GetPosition
 ```
 
-Al aceptar, se conserva el `t:` escrito y solo se completa el miembro: nunca
-queda un `t:Transform:GetPosition`. El separador se respeta — con `.` solo salen
-propiedades y con `:` solo métodos —, así que la sugerencia siempre compila.
+On accepting, the typed `t:` is kept and only the member is completed: you never end up with a
+`t:Transform:GetPosition`. The separator is respected (with `.` only properties show and with
+`:` only methods), so the suggestion always compiles.
 
-El orden es: primero lo que empieza por lo escrito entero, después lo hallado
-por miembro; a igualdad, lo más corto, y a igualdad de longitud, alfabético.
+The order is: first what starts with the whole typed text, then what was found by member; on a
+tie, the shortest, and on equal length, alphabetical.
 
-El popup enseña la **firma** de cada entrada al lado del nombre (`(pos: Vec3)`,
-`() -> number`…) y una línea de descripción de la seleccionada. El símbolo que
-no tenga firma anotada sale igual, solo que sin ella.
+The popup shows each entry's **signature** next to its name (`(pos: Vec3)`, `() -> number`…)
+and a one-line description of the selected one. A symbol without an annotated signature still
+shows, just without it.
 
-Se abre solo al escribir dos caracteres, y también justo al teclear un `.` o un
-`:` —que es cuando se quiere ver qué hay dentro del receptor—. `Escape` lo
-descarta hasta que se cambia de palabra.
+It opens by itself after two typed characters, and also right when typing a `.` or a `:`, which
+is when you want to see what is inside the receiver. `Escape` dismisses it until the word
+changes.
 
-## Ejemplos existentes
+## Existing examples
 
-`Scripts/Mover.lua` (Input + Transform), `Scripts/Rotator.lua` (rotación
-continua), `Scripts/AudioTest.lua` (AudioClip Play/Stop/Loop),
-`Scripts/AudioFade.lua` (AudioClip SetVolume/GetVolume por frame),
-`Scripts/TriggerProbe.lua` (cuenta entradas y salidas de un trigger),
-`Scripts/TriggerTest.lua` (se autodestruye en el Enter),
-`Scripts/PushMe.lua` (AddForce/AddImpulse sobre el Rigidbody, o sea la forma que
-**sí** colisiona), `Scripts/DeleteGameObject.lua` (autodestrucción en `Start`),
-`Scripts/Test.lua` (plantilla vacía).
+`Scripts/Mover.lua` (Input + Transform), `Scripts/Rotator.lua` (continuous rotation),
+`Scripts/AudioTest.lua` (AudioClip Play/Stop/Loop), `Scripts/AudioFade.lua` (AudioClip
+SetVolume/GetVolume per frame), `Scripts/TriggerProbe.lua` (counts a trigger's entries and
+exits), `Scripts/TriggerTest.lua` (destroys itself on Enter), `Scripts/PushMe.lua`
+(AddForce/AddImpulse on the Rigidbody, which is the way that **does** collide),
+`Scripts/DeleteGameObject.lua` (self-destruction in `Start`), `Scripts/Test.lua` (empty
+template).
