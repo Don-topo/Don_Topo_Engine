@@ -119,17 +119,17 @@ struct SceneUbo {
     float       ambientIntensity;
 };
 
-static_assert(offsetof(SceneUbo, view) == 0, "UBO: view debe ir en c0");
-static_assert(offsetof(SceneUbo, proj) == 64, "UBO: proj debe ir en c4");
-static_assert(offsetof(SceneUbo, lightSpaceMatrix) == 128, "UBO: lightSpaceMatrix debe ir en c8");
-static_assert(offsetof(SceneUbo, cascadeSplits) == 896, "UBO: cascadeSplits debe ir en c56");
-static_assert(offsetof(SceneUbo, lights) == 912, "UBO: lights debe ir en c57");
+static_assert(offsetof(SceneUbo, view) == 0, "UBO: view must be at c0");
+static_assert(offsetof(SceneUbo, proj) == 64, "UBO: proj must be at c4");
+static_assert(offsetof(SceneUbo, lightSpaceMatrix) == 128, "UBO: lightSpaceMatrix must be at c8");
+static_assert(offsetof(SceneUbo, cascadeSplits) == 896, "UBO: cascadeSplits must be at c56");
+static_assert(offsetof(SceneUbo, lights) == 912, "UBO: lights must be at c57");
 // Los tres de detras del array se movieron 3072 bytes al pasar MAX_LIGHTS de 16
 // a 64 (48 luces mas x 64 bytes): 1936 -> 5008, 1952 -> 5024, 1956 -> 5028.
-static_assert(offsetof(SceneUbo, viewPos) == 5008, "UBO: viewPos debe ir en c313");
-static_assert(offsetof(SceneUbo, numLights) == 5024, "UBO: numLights debe ir en c314");
+static_assert(offsetof(SceneUbo, viewPos) == 5008, "UBO: viewPos must be at c313");
+static_assert(offsetof(SceneUbo, numLights) == 5024, "UBO: numLights must be at c314");
 static_assert(offsetof(SceneUbo, ambientIntensity) == 5028,
-              "UBO: ambientIntensity va pegado a numLights");
+              "UBO: ambientIntensity sits right after numLights");
 // Los offsets de arriba son números fijos A PROPÓSITO: describen el layout que
 // declaran los packoffset del HLSL, que no salen de este fichero. Calcularlos a
 // partir de MAX_LIGHTS los haría seguir al array y dejarían de cazar justo el
@@ -139,9 +139,9 @@ static_assert(offsetof(SceneUbo, ambientIntensity) == 5028,
 // que hay que tocar los seis GLSL, el HLSL traducido y los tres offsets de
 // arriba EN LA MISMA commit. Sin él, el UBO se leería desplazado y en silencio.
 static_assert(MAX_LIGHTS == 64,
-              "MAX_LIGHTS ha cambiado: ajusta los offsets de arriba y el "
-              "#define de shaders/lights_config.glsl, o el shader leerá el "
-              "bloque desplazado");
+              "MAX_LIGHTS changed: adjust the offsets above and the "
+              "#define in shaders/lights_config.glsl, or the shader will read a "
+              "shifted block");
 
 // Push constants de triangle.vert/pbr.frag: mat4 + 2 float + vec2 = 80 bytes.
 struct PushData {
@@ -150,7 +150,7 @@ struct PushData {
     float     roughness;
     glm::vec2 flags;  // x: 1 = coger el model del SSBO de instancias
 };
-static_assert(sizeof(PushData) == 80, "PushData debe ocupar 80 bytes (20 root constants)");
+static_assert(sizeof(PushData) == 80, "PushData must take 80 bytes (20 root constants)");
 
 // Push constants de los tres compute de animación. Los tres comparten bloque de
 // 16 bytes; en bone_hierarchy y skinning el cuarto campo no se lee.
@@ -166,7 +166,7 @@ struct ComputePush {
     uint32_t ikBlockOffset;     // en uints: copia del bloque de IK del frame
     uint32_t flags;             // bit 0: la jerarquía escribe solo mundo
 };
-static_assert(sizeof(ComputePush) == 24, "ComputePush: espejo de SkinningPass::Push y de los 4 .comp");
+static_assert(sizeof(ComputePush) == 24, "ComputePush: mirror of SkinningPass::Push and of the 4 .comp shaders");
 
 // Medio flotante a mano: los neutros del IBL son cuatro texels y no compensa
 // arrastrar DirectXMath por ellos. Vale para valores normales y pequeños, que
@@ -276,7 +276,7 @@ struct BloomPush {
     float radius;    // solo lo usa el upsample
     int   prefilter; // != 0 solo en el primer nivel del downsample
 };
-static_assert(sizeof(BloomPush) == 24, "BloomPush debe ocupar 24 bytes");
+static_assert(sizeof(BloomPush) == 24, "BloomPush must take 24 bytes");
 
 // Reparto del heap de descriptores. Los tres primeros tienen que ir seguidos
 // porque el shader de malla los pide como t1..t3, y sceneHdr/bloomMip0 también
@@ -411,7 +411,7 @@ struct SsaoPush {
     float     intensity;
     float     power;
 };
-static_assert(sizeof(SsaoPush) == 40, "SsaoPush debe ocupar 40 bytes");
+static_assert(sizeof(SsaoPush) == 40, "SsaoPush must take 40 bytes");
 
 // Push de ssr.comp y ssr_resolve.comp, que comparten bloque igual que los dos
 // del SSAO.
@@ -425,7 +425,7 @@ struct SsrPush {
     float     edgeFade;
     float     intensity;
 };
-static_assert(sizeof(SsrPush) == 48, "SsrPush debe ocupar 48 bytes");
+static_assert(sizeof(SsrPush) == 48, "SsrPush must take 48 bytes");
 
 // Push de taa.frag: la reproyección al frame anterior y el peso del historial.
 struct TaaPush {
@@ -434,7 +434,7 @@ struct TaaPush {
     float     feedback;
     int32_t   historyValid;
 };
-static_assert(sizeof(TaaPush) == 80, "TaaPush debe ocupar 80 bytes");
+static_assert(sizeof(TaaPush) == 80, "TaaPush must take 80 bytes");
 
 // Push de motion_blur.comp: la misma reproyección que el TAA más los tres
 // ajustes del efecto.
@@ -445,7 +445,7 @@ struct MotionBlurPush {
     float     maxRadius;  // tope de la estela, en píxeles
     int32_t   samples;
 };
-static_assert(sizeof(MotionBlurPush) == 84, "MotionBlurPush debe ocupar 84 bytes");
+static_assert(sizeof(MotionBlurPush) == 84, "MotionBlurPush must take 84 bytes");
 
 // Niebla volumétrica: push propio de 128 bytes.
 struct FogPush {
@@ -455,7 +455,7 @@ struct FogPush {
     glm::vec4 scatterBaseHeight;  // rgb = scattering ya multiplicado por la luz, a = altura ref.
     glm::vec4 gStepsRes;          // x = anisotropía, y = pasos, zw = resolución
 };
-static_assert(sizeof(FogPush) == 128, "FogPush debe ocupar 128 bytes");
+static_assert(sizeof(FogPush) == 128, "FogPush must take 128 bytes");
 
 // FXAA: vec2 + 3 float = 20 bytes.
 struct FxaaPush {
@@ -464,7 +464,7 @@ struct FxaaPush {
     float edgeThreshold;
     float edgeThresholdMin;
 };
-static_assert(sizeof(FxaaPush) == 20, "FxaaPush debe ocupar 20 bytes");
+static_assert(sizeof(FxaaPush) == 20, "FxaaPush must take 20 bytes");
 
 // Push de ssaa_resolve.frag: el inverso del tamaño de la imagen GRANDE (la
 // fuente) y cuántas muestras por eje hay que promediar.
@@ -472,7 +472,7 @@ struct SsaaPush {
     float invSrc[2];
     int   taps;
 };
-static_assert(sizeof(SsaaPush) == 12, "SsaaPush debe ocupar 12 bytes");
+static_assert(sizeof(SsaaPush) == 12, "SsaaPush must take 12 bytes");
 
 // Stride del vértice que escribe skinning.comp: 5 vec4 (pos, color, uv, normal,
 // tangent). No hay struct C++ equivalente en el motor, se usa el tamaño literal.
@@ -490,17 +490,17 @@ std::vector<char> readBinaryFile(const std::string& path)
 {
     std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in.is_open())
-        throw std::runtime_error("D3D12: no se pudo abrir '" + path + "'");
+        throw std::runtime_error("D3D12: could not open '" + path + "'");
 
     const std::streamsize size = in.tellg();
     if (size <= 0)
-        throw std::runtime_error("D3D12: '" + path + "' está vacío");
+        throw std::runtime_error("D3D12: '" + path + "' is empty");
 
     std::vector<char> data(static_cast<size_t>(size));
     in.seekg(0);
     in.read(data.data(), size);
     if (!in)
-        throw std::runtime_error("D3D12: lectura incompleta de '" + path + "'");
+        throw std::runtime_error("D3D12: incomplete read of '" + path + "'");
     return data;
 }
 
@@ -542,8 +542,8 @@ constexpr UINT kRtvSplash      = kRtvProbeFace + kRtvProbeFaces;
 constexpr UINT kRtvCount       = kRtvSplash + kFrameCount;
 
 static_assert(kRtvCount == 2 * kFrameCount + 12,
-              "El reparto del heap de RTV ha cambiado: revisa que nadie sume "
-              "offsets a mano y que kRtvCount siga cubriendo el ultimo indice");
+              "The RTV heap layout changed: check that nobody adds "
+              "offsets by hand and that kRtvCount still covers the last index");
 
 std::string hresultToString(HRESULT hr)
 {
@@ -611,7 +611,7 @@ void throwIfFailed(HRESULT hr, const char* step)
         // que nadie le pregunte nada.
         if (esPerdidaDeDevice(hr) && g_volcarDeviceRemoved)
             g_volcarDeviceRemoved(step, hr);
-        throw std::runtime_error(std::string("D3D12: ") + step + " falló (HRESULT " +
+        throw std::runtime_error(std::string("D3D12: ") + step + " failed (HRESULT " +
                                  hresultToString(hr) + ")");
     }
 }
@@ -1906,12 +1906,12 @@ void D3D12Renderer::Impl::drainInfoQueue()
             continue;
         const char* gravedad = "INFO";
         switch (msg->Severity) {
-            case D3D12_MESSAGE_SEVERITY_CORRUPTION: gravedad = "CORRUPCION"; break;
+            case D3D12_MESSAGE_SEVERITY_CORRUPTION: gravedad = "CORRUPTION"; break;
             case D3D12_MESSAGE_SEVERITY_ERROR:      gravedad = "ERROR";      break;
-            case D3D12_MESSAGE_SEVERITY_WARNING:    gravedad = "AVISO";      break;
+            case D3D12_MESSAGE_SEVERITY_WARNING:    gravedad = "WARNING";      break;
             default: break;
         }
-        diagLog(std::string("[capa ") + gravedad + " id=" + std::to_string(msg->ID) + "] " +
+        diagLog(std::string("[layer ") + gravedad + " id=" + std::to_string(msg->ID) + "] " +
                 std::string(msg->pDescription, msg->DescriptionByteLength > 0
                                                    ? msg->DescriptionByteLength - 1
                                                    : 0));
@@ -1926,24 +1926,24 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
         return;
     deviceRemovedVolcado = true;
 
-    diagLog("==================== DEVICE PERDIDO ====================");
-    diagLog(std::string("Detectado en: ") + (donde ? donde : "?") + "  HRESULT " +
+    diagLog("==================== DEVICE LOST ====================");
+    diagLog(std::string("Detected at: ") + (donde ? donde : "?") + "  HRESULT " +
             hresultToString(hr));
 
     if (!device) {
-        diagLog("No hay device al que preguntar.");
+        diagLog("There is no device to ask.");
         return;
     }
 
     const HRESULT motivo = device->GetDeviceRemovedReason();
     diagLog(std::string("GetDeviceRemovedReason() = ") + hresultToString(motivo) + " (" +
-            (motivo == DXGI_ERROR_DEVICE_HUNG            ? "DEVICE_HUNG: la GPU no respondió (TDR)"
+            (motivo == DXGI_ERROR_DEVICE_HUNG            ? "DEVICE_HUNG: the GPU did not respond (TDR)"
              : motivo == DXGI_ERROR_DEVICE_REMOVED       ? "DEVICE_REMOVED"
-             : motivo == DXGI_ERROR_DEVICE_RESET         ? "DEVICE_RESET: reinicio del dispositivo"
+             : motivo == DXGI_ERROR_DEVICE_RESET         ? "DEVICE_RESET: device reset"
              : motivo == DXGI_ERROR_DRIVER_INTERNAL_ERROR ? "DRIVER_INTERNAL_ERROR"
-             : motivo == DXGI_ERROR_INVALID_CALL         ? "INVALID_CALL: la app pidió algo ilegal"
-             : motivo == S_OK                            ? "S_OK: el device NO está perdido"
-                                                         : "otro") +
+             : motivo == DXGI_ERROR_INVALID_CALL         ? "INVALID_CALL: the app asked for something illegal"
+             : motivo == S_OK                            ? "S_OK: the device is NOT lost"
+                                                         : "other") +
             ")");
 
     // Lo que la capa de depuración tuviera guardado: suele explicar el porqué
@@ -1970,11 +1970,11 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
                     continue;
                 ++listas;
                 diagLog(std::string("Command list '") +
-                        (nodo->pCommandListDebugNameA ? nodo->pCommandListDebugNameA : "(sin nombre)") +
-                        "' en cola '" +
-                        (nodo->pCommandQueueDebugNameA ? nodo->pCommandQueueDebugNameA : "(sin nombre)") +
-                        "': completadas " + std::to_string(hechas) + " de " +
-                        std::to_string(total) + " operaciones.");
+                        (nodo->pCommandListDebugNameA ? nodo->pCommandListDebugNameA : "(unnamed)") +
+                        "' on queue '" +
+                        (nodo->pCommandQueueDebugNameA ? nodo->pCommandQueueDebugNameA : "(unnamed)") +
+                        "': completed " + std::to_string(hechas) + " of " +
+                        std::to_string(total) + " operations.");
                 // Ventana alrededor del corte: lo justo para ver qué venía
                 // antes y qué se quedó sin ejecutar.
                 const UINT desde = hechas > 12 ? hechas - 12 : 0;
@@ -1995,18 +1995,18 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
                 }
             }
             if (listas == 0)
-                diagLog("Ninguna command list quedó a medias: la GPU terminó todo lo enviado.");
+                diagLog("No command list was left half-done: the GPU finished everything submitted.");
         } else {
-            diagLog("GetAutoBreadcrumbsOutput1 falló: DRED no llegó a activarse.");
+            diagLog("GetAutoBreadcrumbsOutput1 failed: DRED never got enabled.");
         }
 #else
         // Sin migas, pero dicho en voz alta: quien lea este log en Release tiene
         // que saber que la lista de operaciones NO falta por un fallo, sino
         // porque no se graba (ver el comentario de init), y que reproducirlo en
         // Debug le da el comando exacto.
-        diagLog("Auto-breadcrumbs no disponibles: en Release no se graban (cuestan un "
-                "WriteBufferImmediate por comando). Repetir esto en Debug da la "
-                "operación exacta que se quedó a medias.");
+        diagLog("Auto-breadcrumbs not available: they are not recorded in Release (they cost a "
+                "WriteBufferImmediate per command). Repeating this in Debug gives the "
+                "exact operation that was left half-done.");
 #endif
 
         // El fallo de página SÍ va en las dos: no cuesta por frame y es lo que
@@ -2017,18 +2017,18 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
             char va[32] = {};
             std::snprintf(va, sizeof(va), "0x%llX",
                           static_cast<unsigned long long>(fallo.PageFaultVA));
-            diagLog(std::string("--- Fallo de página en la VA de GPU ") + va + " ---");
+            diagLog(std::string("--- Page fault at GPU VA ") + va + " ---");
             auto listar = [](const char* titulo, const D3D12_DRED_ALLOCATION_NODE* n) {
                 for (int i = 0; n != nullptr && i < 8; n = n->pNext, ++i)
                     diagLog(std::string(titulo) + ": " +
-                            (n->ObjectNameA ? n->ObjectNameA : "(sin nombre)"));
+                            (n->ObjectNameA ? n->ObjectNameA : "(unnamed)"));
             };
-            listar("  objeto VIVO en esa dirección", fallo.pHeadExistingAllocationNode);
-            listar("  objeto LIBERADO hace poco ahí", fallo.pHeadRecentFreedAllocationNode);
+            listar("  LIVE object at that address", fallo.pHeadExistingAllocationNode);
+            listar("  object RECENTLY FREED there", fallo.pHeadRecentFreedAllocationNode);
         }
     } else {
-        diagLog("El device no expone ID3D12DeviceRemovedExtendedData1: ni migas ni "
-                "fallo de página.");
+        diagLog("The device does not expose ID3D12DeviceRemovedExtendedData1: no breadcrumbs and no "
+                "page fault.");
     }
     diagLog("========================================================");
 }
@@ -2044,7 +2044,7 @@ void D3D12Renderer::Impl::notarDeviceLost(const char* donde, HRESULT hr)
     // Se registra SIEMPRE, aunque ya estuviera marcado: el sitio donde se
     // detecta la segunda vez dice por dónde siguió el motor tras el primer
     // fallo, que es justo lo que hoy no se ve.
-    std::string linea = std::string("FALLO IRRECUPERABLE en ") + (donde ? donde : "?") +
+    std::string linea = std::string("UNRECOVERABLE FAILURE at ") + (donde ? donde : "?") +
                         ": HRESULT " + hresultToString(hr);
     if (FAILED(motivo) && motivo != hr)
         linea += " (GetDeviceRemovedReason: " + hresultToString(motivo) + ")";
@@ -2067,9 +2067,9 @@ void D3D12Renderer::Impl::notarDeviceLost(const char* donde, HRESULT hr)
 void D3D12Renderer::Impl::notarFrameDescartado(const char* donde, HRESULT hr)
 {
     ++framesDescartadosSeguidos;
-    diagLog(std::string("Frame descartado en ") + (donde ? donde : "?") + ": HRESULT " +
-            hresultToString(hr) + " (" + std::to_string(framesDescartadosSeguidos) + " de " +
-            std::to_string(kMaxFramesDescartados) + " seguidos).");
+    diagLog(std::string("Frame discarded at ") + (donde ? donde : "?") + ": HRESULT " +
+            hresultToString(hr) + " (" + std::to_string(framesDescartadosSeguidos) + " of " +
+            std::to_string(kMaxFramesDescartados) + " in a row).");
     drainInfoQueue();
 
     if (framesDescartadosSeguidos >= kMaxFramesDescartados)
@@ -2099,10 +2099,10 @@ void D3D12Renderer::Impl::waitForGpu()
             // tieso sin decir una palabra. Cada tramo que vence deja escrito el
             // motivo. 5 s son dos veces el TDR por defecto (2 s).
             while (WaitForSingleObjectEx(fenceEvent, 5000, FALSE) == WAIT_TIMEOUT) {
-                diagLog("waitForGpu: el fence sigue sin señalarse (esperado " +
-                        std::to_string(target) + ", completado " +
+                diagLog("waitForGpu: the fence is still not signaled (expected " +
+                        std::to_string(target) + ", completed " +
                         std::to_string(fence->GetCompletedValue()) + ").");
-                dumpDeviceRemoved("waitForGpu (el fence no avanza)",
+                dumpDeviceRemoved("waitForGpu (the fence does not advance)",
                                   device ? device->GetDeviceRemovedReason() : E_FAIL);
             }
         }
@@ -2222,10 +2222,10 @@ void D3D12Renderer::Impl::moveToNextFrame()
             // largo, pero un fence que no avanza deja rastro en vez de congelar
             // el bucle de frame en silencio.
             while (WaitForSingleObjectEx(fenceEvent, 5000, FALSE) == WAIT_TIMEOUT) {
-                diagLog("moveToNextFrame: el fence sigue sin señalarse (esperado " +
-                        std::to_string(fenceValues[frameIndex]) + ", completado " +
+                diagLog("moveToNextFrame: the fence is still not signaled (expected " +
+                        std::to_string(fenceValues[frameIndex]) + ", completed " +
                         std::to_string(fence->GetCompletedValue()) + ").");
-                dumpDeviceRemoved("moveToNextFrame (el fence no avanza)",
+                dumpDeviceRemoved("moveToNextFrame (the fence does not advance)",
                                   device ? device->GetDeviceRemovedReason() : E_FAIL);
             }
         }
@@ -2375,11 +2375,11 @@ void D3D12Renderer::Impl::ensureDebugLineBuffer(size_t vertexCount)
     allocDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
     throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
                                             nullptr, &debugLinesAllocation, IID_NULL, nullptr),
-                  "D3D12MA::Allocator::CreateResource(lineas de depuracion)");
+                  "D3D12MA::Allocator::CreateResource(debug lines)");
 
     const D3D12_RANGE noRead{0, 0};
     throwIfFailed(debugLinesAllocation->GetResource()->Map(0, &noRead, &debugLinesMapped),
-                  "ID3D12Resource::Map(lineas de depuracion)");
+                  "ID3D12Resource::Map(debug lines)");
 
     debugLinesCapacity = newCapacity;
     debugLinesView.BufferLocation = debugLinesAllocation->GetResource()->GetGPUVirtualAddress();
@@ -2413,7 +2413,7 @@ void D3D12Renderer::Impl::createGizmoPipeline()
         if (errorBlob)
             detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                           errorBlob->GetBufferSize());
-        throw std::runtime_error("D3D12: D3D12SerializeRootSignature falló (HRESULT " +
+        throw std::runtime_error("D3D12: D3D12SerializeRootSignature failed (HRESULT " +
                                  hresultToString(hr) + ") " + detail);
     }
 
@@ -2530,7 +2530,7 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
     throwIfFailed(allocator->CreateResource(&defaultDesc, &texDesc,
                                             D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
                                             &destination, IID_NULL, nullptr),
-                  "D3D12MA::Allocator::CreateResource(textura)");
+                  "D3D12MA::Allocator::CreateResource(texture)");
 
     // El staging no se escribe fila a fila como en memoria: cada fila va
     // alineada a D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, y cada slice del array es
@@ -2561,7 +2561,7 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
                                            &staging, IID_NULL, nullptr);
     if (FAILED(hr)) {
         destination->Release();
-        throwIfFailed(hr, "D3D12MA::Allocator::CreateResource(staging de textura)");
+        throwIfFailed(hr, "D3D12MA::Allocator::CreateResource(texture staging)");
     }
 
     uint8_t*          mapped = nullptr;
@@ -2570,7 +2570,7 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
     if (FAILED(hr)) {
         staging->Release();
         destination->Release();
-        throwIfFailed(hr, "ID3D12Resource::Map(staging de textura)");
+        throwIfFailed(hr, "ID3D12Resource::Map(texture staging)");
     }
 
     // Subrecurso i = nivel + slice * mipLevels. El nivel 0 sale de `pixels`
@@ -2592,9 +2592,9 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
     }
     staging->GetResource()->Unmap(0, nullptr);
 
-    throwIfFailed(allocators[frameIndex]->Reset(), "ID3D12CommandAllocator::Reset(textura)");
+    throwIfFailed(allocators[frameIndex]->Reset(), "ID3D12CommandAllocator::Reset(texture)");
     throwIfFailed(commandList->Reset(allocators[frameIndex].Get(), nullptr),
-                  "ID3D12GraphicsCommandList::Reset(textura)");
+                  "ID3D12GraphicsCommandList::Reset(texture)");
 
     for (UINT i = 0; i < subresources; ++i) {
         D3D12_TEXTURE_COPY_LOCATION dst{};
@@ -2618,7 +2618,7 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
     toShader.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     commandList->ResourceBarrier(1, &toShader);
 
-    throwIfFailed(commandList->Close(), "ID3D12GraphicsCommandList::Close(textura)");
+    throwIfFailed(commandList->Close(), "ID3D12GraphicsCommandList::Close(texture)");
     ID3D12CommandList* lists[] = {commandList.Get()};
     queue->ExecuteCommandLists(1, lists);
     waitForGpu();
@@ -2934,14 +2934,14 @@ void D3D12Renderer::Impl::createMeshPipeline()
         if (errorBlob)
             detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                           errorBlob->GetBufferSize());
-        throw std::runtime_error("D3D12: root signature de malla (HRESULT " +
+        throw std::runtime_error("D3D12: mesh root signature (HRESULT " +
                                  hresultToString(hr) + ") " + detail);
     }
 
     throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
                                               serialized->GetBufferSize(),
                                               IID_PPV_ARGS(&meshRootSignature)),
-                  "ID3D12Device::CreateRootSignature(malla)");
+                  "ID3D12Device::CreateRootSignature(mesh)");
 
     const std::vector<char> vertexShader = readBinaryFile("shaders/triangle.vert.dxil");
     const std::vector<char> pixelShader  = readBinaryFile("shaders/pbr.frag.dxil");
@@ -2994,7 +2994,7 @@ void D3D12Renderer::Impl::createMeshPipeline()
     wireDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
     wireDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     throwIfFailed(device->CreateGraphicsPipelineState(&wireDesc, IID_PPV_ARGS(&meshWirePipeline)),
-                  "ID3D12Device::CreateGraphicsPipelineState(malla en alambre)");
+                  "ID3D12Device::CreateGraphicsPipelineState(wireframe mesh)");
 
     // El contorno: mismos vértices, otro par de shaders y la cara CONTRARIA
     // descartada.
@@ -3012,7 +3012,7 @@ void D3D12Renderer::Impl::createMeshPipeline()
         outlineDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
         throwIfFailed(device->CreateGraphicsPipelineState(&outlineDesc,
                                                           IID_PPV_ARGS(&outlinePipeline)),
-                      "ID3D12Device::CreateGraphicsPipelineState(contorno)");
+                      "ID3D12Device::CreateGraphicsPipelineState(outline)");
 
         // El mismo, pero contra el target LDR: ahí es donde se dibuja de
         // verdad, DESPUÉS del tone mapping, para que su naranja llegue plano en
@@ -3023,11 +3023,11 @@ void D3D12Renderer::Impl::createMeshPipeline()
         outlineDesc.DepthStencilState.DepthWriteMask    = D3D12_DEPTH_WRITE_MASK_ZERO;
         throwIfFailed(device->CreateGraphicsPipelineState(&outlineDesc,
                                                           IID_PPV_ARGS(&outlineLdrPipeline)),
-                      "ID3D12Device::CreateGraphicsPipelineState(contorno sobre LDR)");
+                      "ID3D12Device::CreateGraphicsPipelineState(outline over LDR)");
     }
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&meshPipeline)),
-                  "ID3D12Device::CreateGraphicsPipelineState(malla)");
+                  "ID3D12Device::CreateGraphicsPipelineState(mesh)");
 }
 
 void D3D12Renderer::Impl::createMeshResources()
@@ -3285,7 +3285,7 @@ void D3D12Renderer::Impl::createSkinningPipelines()
             if (errorBlob)
                 detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                               errorBlob->GetBufferSize());
-            throw std::runtime_error(std::string("D3D12: root signature de ") + what +
+            throw std::runtime_error(std::string("D3D12: root signature of ") + what +
                                      " (HRESULT " + hresultToString(hr) + ") " + detail);
         }
         throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
@@ -3396,7 +3396,7 @@ void D3D12Renderer::Impl::createSkinningPipelines()
     wireDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     throwIfFailed(device->CreateGraphicsPipelineState(&wireDesc,
                                                       IID_PPV_ARGS(&skinnedMeshWirePipeline)),
-                  "ID3D12Device::CreateGraphicsPipelineState(skinned en alambre)");
+                  "ID3D12Device::CreateGraphicsPipelineState(wireframe skinned)");
 
     {
         // El contorno del personaje va sobre los vértices que deja el skinning,
@@ -3414,7 +3414,7 @@ void D3D12Renderer::Impl::createSkinningPipelines()
         outlineDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
         throwIfFailed(device->CreateGraphicsPipelineState(&outlineDesc,
                                                           IID_PPV_ARGS(&outlineSkinnedPipeline)),
-                      "ID3D12Device::CreateGraphicsPipelineState(contorno skinned)");
+                      "ID3D12Device::CreateGraphicsPipelineState(skinned outline)");
 
         // Variante sobre el target LDR, por lo mismo que la de la malla.
         outlineDesc.RTVFormats[0]                    = kLdrFormat;
@@ -3423,7 +3423,7 @@ void D3D12Renderer::Impl::createSkinningPipelines()
         throwIfFailed(
             device->CreateGraphicsPipelineState(&outlineDesc,
                                                 IID_PPV_ARGS(&outlineSkinnedLdrPipeline)),
-            "ID3D12Device::CreateGraphicsPipelineState(contorno skinned sobre LDR)");
+            "ID3D12Device::CreateGraphicsPipelineState(skinned outline over LDR)");
     }
 }
 
@@ -3498,19 +3498,19 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
         allocDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
         throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
                                                 nullptr, &object.poseBlock, IID_NULL, nullptr),
-                      "D3D12MA::Allocator::CreateResource(bloque de pose)");
+                      "D3D12MA::Allocator::CreateResource(pose block)");
         object.poseBlock->GetResource()->SetName(L"skinning pose block");
         const D3D12_RANGE noRead{0, 0};
         throwIfFailed(object.poseBlock->GetResource()->Map(0, &noRead, &object.poseBlockMapped),
-                      "ID3D12Resource::Map(bloque de pose)");
+                      "ID3D12Resource::Map(pose block)");
 
         desc.Width = static_cast<UINT64>(kFrameCount) * ikBlockUints() * sizeof(uint32_t);
         throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
                                                 nullptr, &object.ikBlock, IID_NULL, nullptr),
-                      "D3D12MA::Allocator::CreateResource(bloque de IK)");
+                      "D3D12MA::Allocator::CreateResource(IK block)");
         object.ikBlock->GetResource()->SetName(L"skinning ik block");
         throwIfFailed(object.ikBlock->GetResource()->Map(0, &noRead, &object.ikBlockMapped),
-                      "ID3D12Resource::Map(bloque de IK)");
+                      "ID3D12Resource::Map(IK block)");
     }
     object.outputVerts = createStorageBuffer(
         static_cast<UINT64>(object.vertexCount) * kSkinnedOutputStride,
@@ -3681,12 +3681,12 @@ void D3D12Renderer::Impl::ensureSkinnedInstanceBuffer(size_t count)
     throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
                                             nullptr, &skinnedInstanceAllocations[frameIndex],
                                             IID_NULL, nullptr),
-                  "D3D12MA::Allocator::CreateResource(instancias de personajes)");
+                  "D3D12MA::Allocator::CreateResource(character instances)");
 
     const D3D12_RANGE noRead{0, 0};
     throwIfFailed(skinnedInstanceAllocations[frameIndex]->GetResource()->Map(
                       0, &noRead, &skinnedInstanceMapped[frameIndex]),
-                  "ID3D12Resource::Map(instancias de personajes)");
+                  "ID3D12Resource::Map(character instances)");
     skinnedInstanceCapacity[frameIndex] = newCapacity;
 }
 
@@ -3712,7 +3712,7 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
     // alguien se saltó el release; se avisa y no se libera nada a ciegas.
     if (skinnedTextures.size() != 0)
         diagLog("[D3D12] " + std::to_string(skinnedTextures.size()) +
-                " texturas de personaje sin soltar al cerrar");
+                " character textures not released at shutdown");
     skinnedSlots.clear();
     freeSkinnedSrv.clear();
     nextSkinnedSlot = 0;
@@ -4061,7 +4061,7 @@ void D3D12Renderer::Impl::createHdrTargets()
         throwIfFailed(allocator->CreateResource(&allocDesc, &msDesc,
                                                 D3D12_RESOURCE_STATE_RENDER_TARGET, &msClear,
                                                 &hdrMsAllocation, IID_NULL, nullptr),
-                      "D3D12MA::Allocator::CreateResource(HDR multimuestra)");
+                      "D3D12MA::Allocator::CreateResource(multisampled HDR)");
 
         D3D12_CPU_DESCRIPTOR_HANDLE msRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
         msRtv.ptr += static_cast<SIZE_T>(kRtvSceneMsaa) * rtvSize;
@@ -4076,7 +4076,7 @@ void D3D12Renderer::Impl::createHdrTargets()
         throwIfFailed(allocator->CreateResource(&allocDesc, &msDesc,
                                                 D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear,
                                                 &depthMsAllocation, IID_NULL, nullptr),
-                      "D3D12MA::Allocator::CreateResource(profundidad multimuestra)");
+                      "D3D12MA::Allocator::CreateResource(multisampled depth)");
 
         D3D12_DEPTH_STENCIL_VIEW_DESC msDsv{};
         msDsv.Format        = DXGI_FORMAT_D32_FLOAT;
@@ -4140,7 +4140,7 @@ void D3D12Renderer::Impl::createHdrTargets()
         throwIfFailed(allocator->CreateResource(&allocDesc, &desc,
                                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear,
                                                 &taaHistoryAllocations[i], IID_NULL, nullptr),
-                      "D3D12MA::Allocator::CreateResource(historial del TAA)");
+                      "D3D12MA::Allocator::CreateResource(TAA history)");
 
         D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
         rtv.ptr += static_cast<SIZE_T>(kRtvTaaHistory + i) * rtvSize;
@@ -4326,7 +4326,7 @@ void D3D12Renderer::Impl::createBloomPipelines()
             if (errorBlob)
                 detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                               errorBlob->GetBufferSize());
-            throw std::runtime_error(std::string("D3D12: root signature de ") + what + " (HRESULT " +
+            throw std::runtime_error(std::string("D3D12: root signature of ") + what + " (HRESULT " +
                                      hresultToString(hr) + ") " + detail);
         }
         throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
@@ -4387,7 +4387,7 @@ void D3D12Renderer::Impl::createBloomPipelines()
     compositeDesc.pParameters       = compositeParams;
     compositeDesc.NumStaticSamplers = _countof(compositeSamplers);
     compositeDesc.pStaticSamplers   = compositeSamplers;
-    serializeAndCreate(compositeDesc, compositeRootSignature, "composición");
+    serializeAndCreate(compositeDesc, compositeRootSignature, "composite");
 
     // fullscreen.vert genera el triángulo desde el índice de vértice: sin
     // vertex buffer y sin input layout.
@@ -4416,7 +4416,7 @@ void D3D12Renderer::Impl::createBloomPipelines()
     psoDesc.DepthStencilState.StencilEnable = FALSE;
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&compositePipeline)),
-                  "ID3D12Device::CreateGraphicsPipelineState(composición)");
+                  "ID3D12Device::CreateGraphicsPipelineState(composite)");
 }
 
 void D3D12Renderer::Impl::createNeutralIblCubes()
@@ -4601,7 +4601,7 @@ void D3D12Renderer::Impl::precomputeIbl()
             if (errorBlob)
                 detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                               errorBlob->GetBufferSize());
-            throw std::runtime_error("D3D12: root signature del IBL (HRESULT " +
+            throw std::runtime_error("D3D12: IBL root signature (HRESULT " +
                                      hresultToString(hr) + ") " + detail);
         }
         throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
@@ -4877,13 +4877,13 @@ void D3D12Renderer::Impl::createSkyboxPipelineOnly()
         if (errorBlob)
             detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                           errorBlob->GetBufferSize());
-        throw std::runtime_error("D3D12: root signature del cielo (HRESULT " +
+        throw std::runtime_error("D3D12: sky root signature (HRESULT " +
                                  hresultToString(hr) + ") " + detail);
     }
     throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
                                               serialized->GetBufferSize(),
                                               IID_PPV_ARGS(&skyboxRootSignature)),
-                  "ID3D12Device::CreateRootSignature(cielo)");
+                  "ID3D12Device::CreateRootSignature(sky)");
 
     const std::vector<char> vertexShader = readBinaryFile("shaders/skybox.vert.dxil");
     const std::vector<char> pixelShader  = readBinaryFile("shaders/skybox.frag.dxil");
@@ -4917,7 +4917,7 @@ void D3D12Renderer::Impl::createSkyboxPipelineOnly()
     psoDesc.DepthStencilState.StencilEnable  = FALSE;
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&skyboxPipeline)),
-                  "ID3D12Device::CreateGraphicsPipelineState(cielo)");
+                  "ID3D12Device::CreateGraphicsPipelineState(sky)");
 }
 
 UINT D3D12Renderer::Impl::desiredSampleCount() const
@@ -4997,13 +4997,13 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
         // Todavia no hay pase de sombras: se cogera el tamano al crearlo. NO se
         // limpia lo pendiente, para que se aplique en cuanto exista.
         diagLog("shadow: resize a " + std::to_string(pendingShadowMapSize) +
-                " aplazado, todavia no hay mapa.");
+                " deferred, there is no map yet.");
         return;
     }
 
     diagLog("shadow: resize " + std::to_string(shadowMapSize) + " -> " +
             std::to_string(pendingShadowMapSize) + " (" + std::to_string(objects.size()) +
-            " objetos, " + std::to_string(skinnedObjects.size()) + " personajes).");
+            " objects, " + std::to_string(skinnedObjects.size()) + " characters).");
 
     // El mapa puede estar en el frame anterior. Es un ajuste de calidad que se
     // toca de uvas a peras, asi que esperar sale mas barato que llevar borrado
@@ -5067,9 +5067,9 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
     // Del recurso, no de la variable: si esto no dice lo que se pidio, el que
     // esta mal es el CreateResource de arriba y no el camino que llega hasta el.
     const D3D12_RESOURCE_DESC hecho = shadowMapArrayAllocation->GetResource()->GetDesc();
-    diagLog("shadow: mapa reconstruido, " + std::to_string(hecho.Width) + "x" +
+    diagLog("shadow: map rebuilt, " + std::to_string(hecho.Width) + "x" +
             std::to_string(hecho.Height) + ", " + std::to_string(hecho.DepthOrArraySize) +
-            " capas.");
+            " layers.");
 }
 
 void D3D12Renderer::Impl::applyPendingSampleCount()
@@ -5150,7 +5150,7 @@ void D3D12Renderer::Impl::createForwardPlusPipelines()
         if (errorBlob)
             detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                           errorBlob->GetBufferSize());
-        throw std::runtime_error("D3D12: root signature del culling (HRESULT " +
+        throw std::runtime_error("D3D12: culling root signature (HRESULT " +
                                  hresultToString(hr) + ") " + detail);
     }
     throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
@@ -5466,7 +5466,7 @@ void D3D12Renderer::Impl::createTaaPipeline()
         if (errorBlob)
             detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                           errorBlob->GetBufferSize());
-        throw std::runtime_error("D3D12: root signature del TAA (HRESULT " + hresultToString(hr) +
+        throw std::runtime_error("D3D12: TAA root signature (HRESULT " + hresultToString(hr) +
                                  ") " + detail);
     }
     throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
@@ -5649,7 +5649,7 @@ void D3D12Renderer::Impl::createSsrPipelines()
         if (errorBlob)
             detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                           errorBlob->GetBufferSize());
-        throw std::runtime_error("D3D12: root signature del SSR (HRESULT " + hresultToString(hr) +
+        throw std::runtime_error("D3D12: SSR root signature (HRESULT " + hresultToString(hr) +
                                  ") " + detail);
     }
     throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
@@ -5824,7 +5824,7 @@ void D3D12Renderer::Impl::createMotionBlurPipeline()
         if (errorBlob)
             detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                           errorBlob->GetBufferSize());
-        throw std::runtime_error("D3D12: root signature del motion blur (HRESULT " +
+        throw std::runtime_error("D3D12: motion blur root signature (HRESULT " +
                                  hresultToString(hr) + ") " + detail);
     }
     throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
@@ -5921,7 +5921,7 @@ void D3D12Renderer::Impl::createSsaoPipelines()
             if (errorBlob)
                 detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                               errorBlob->GetBufferSize());
-            throw std::runtime_error(std::string("D3D12: root signature de ") + what + " (HRESULT " +
+            throw std::runtime_error(std::string("D3D12: root signature of ") + what + " (HRESULT " +
                                      hresultToString(hr) + ") " + detail);
         }
         throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
@@ -5947,7 +5947,7 @@ void D3D12Renderer::Impl::createSsaoPipelines()
         rootDesc.NumParameters = _countof(params);
         rootDesc.pParameters   = params;
         rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-        serialize(rootDesc, depthPrepassRootSignature, "pre-pase de profundidad");
+        serialize(rootDesc, depthPrepassRootSignature, "depth prepass");
     }
 
     const std::vector<char> prepassVs = readBinaryFile("shaders/depth_prepass.vert.dxil");
@@ -5978,10 +5978,10 @@ void D3D12Renderer::Impl::createSsaoPipelines()
     psoDesc.DepthStencilState.DepthFunc           = D3D12_COMPARISON_FUNC_LESS;
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&depthPrepassPipeline)),
-                  "ID3D12Device::CreateGraphicsPipelineState(pre-pase)");
+                  "ID3D12Device::CreateGraphicsPipelineState(prepass)");
     throwIfFailed(
         device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&depthPrepassSkinnedPipeline)),
-        "ID3D12Device::CreateGraphicsPipelineState(pre-pase skinned)");
+        "ID3D12Device::CreateGraphicsPipelineState(skinned prepass)");
 
     // ── Los dos compute ───────────────────────────────────────────────────
     {
@@ -6074,7 +6074,7 @@ void D3D12Renderer::Impl::createSsaoTargets()
         throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_DEPTH_WRITE,
                                                 &clearValue, &prepassDepthAllocation, IID_NULL,
                                                 nullptr),
-                      "D3D12MA::Allocator::CreateResource(profundidad del pre-pase)");
+                      "D3D12MA::Allocator::CreateResource(prepass depth)");
 
         D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
         dsvDesc.Format        = DXGI_FORMAT_D32_FLOAT;
@@ -6367,7 +6367,7 @@ void D3D12Renderer::Impl::createFogAndFxaaPipelines()
             if (errorBlob)
                 detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                               errorBlob->GetBufferSize());
-            throw std::runtime_error(std::string("D3D12: root signature de ") + what + " (HRESULT " +
+            throw std::runtime_error(std::string("D3D12: root signature of ") + what + " (HRESULT " +
                                      hresultToString(hr) + ") " + detail);
         }
         throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
@@ -6436,7 +6436,7 @@ void D3D12Renderer::Impl::createFogAndFxaaPipelines()
     fogDesc.pParameters       = fogParams;
     fogDesc.NumStaticSamplers = _countof(fogSamplers);
     fogDesc.pStaticSamplers   = fogSamplers;
-    serializeAndCreate(fogDesc, fogRootSignature, "niebla");
+    serializeAndCreate(fogDesc, fogRootSignature, "fog");
 
     {
         const std::vector<char>           shader = readBinaryFile("shaders/fog.comp.dxil");
@@ -6444,7 +6444,7 @@ void D3D12Renderer::Impl::createFogAndFxaaPipelines()
         desc.pRootSignature = fogRootSignature.Get();
         desc.CS             = {shader.data(), shader.size()};
         throwIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&fogPipeline)),
-                      "ID3D12Device::CreateComputePipelineState(niebla)");
+                      "ID3D12Device::CreateComputePipelineState(fog)");
     }
 
     // ── FXAA ────────────────────────────────────────────────────────────────
@@ -6729,11 +6729,11 @@ void D3D12Renderer::Impl::createUiWorldPipelines()
 
     psoDesc.DepthStencilState.DepthEnable = TRUE;
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&uiWorldPipelineDepth)),
-                  "ID3D12Device::CreateGraphicsPipelineState(UI mundo con depth)");
+                  "ID3D12Device::CreateGraphicsPipelineState(world UI with depth)");
 
     psoDesc.DepthStencilState.DepthEnable = FALSE;
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&uiWorldPipelineNoDepth)),
-                  "ID3D12Device::CreateGraphicsPipelineState(UI mundo sin depth)");
+                  "ID3D12Device::CreateGraphicsPipelineState(world UI without depth)");
 }
 
 bool D3D12Renderer::Impl::createProbeResources(GpuProbe& probe)
@@ -7307,8 +7307,8 @@ bool D3D12Renderer::Impl::registerUiAtlas(UiTextureAtlas& atlas)
     // Nombre para que el JSON de D3D12MA (y ReportLiveObjects) lo distinga.
     texture->SetName(L"UiAtlas");
     diagLog("registerUiAtlas: atlas " + std::to_string(atlas.width()) + "x" +
-            std::to_string(atlas.height()) + " en el slot " + std::to_string(slot) +
-            (atlas.sourceIsSrgb() ? " (sRGB, sprites)" : " (lineal, fuente)"));
+            std::to_string(atlas.height()) + " in slot " + std::to_string(slot) +
+            (atlas.sourceIsSrgb() ? " (sRGB, sprites)" : " (linear, font)"));
     uiAtlasTextures.push_back(texture);
     uiAtlasSrv[&atlas] = slot;
     ++uiNextAtlasSlot;
@@ -7347,8 +7347,8 @@ bool D3D12Renderer::Impl::ensureThumbAtlas()
         return false;
     }
     thumbAtlas->SetName(L"ThumbnailAtlas");
-    diagLog("ensureThumbAtlas: atlas de miniaturas " + std::to_string(kThumbAtlasSize) + "x" +
-            std::to_string(kThumbAtlasSize) + " en el slot " + std::to_string(kSrvThumbAtlas));
+    diagLog("ensureThumbAtlas: thumbnail atlas " + std::to_string(kThumbAtlasSize) + "x" +
+            std::to_string(kThumbAtlasSize) + " in slot " + std::to_string(kSrvThumbAtlas));
     return true;
 }
 
@@ -7388,14 +7388,14 @@ bool D3D12Renderer::Impl::uploadThumbnailTiles(const ThumbnailTile* tiles, size_
         throwIfFailed(allocator->CreateResource(&uploadDesc, &bufferDesc,
                                                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                                 &staging, IID_NULL, nullptr),
-                      "D3D12MA::Allocator::CreateResource(staging de miniaturas)");
+                      "D3D12MA::Allocator::CreateResource(thumbnail staging)");
 
         uint8_t*          mapped = nullptr;
         const D3D12_RANGE noRead{0, 0};
         HRESULT hr = staging->GetResource()->Map(0, &noRead, reinterpret_cast<void**>(&mapped));
         if (FAILED(hr)) {
             staging->Release();
-            throwIfFailed(hr, "ID3D12Resource::Map(staging de miniaturas)");
+            throwIfFailed(hr, "ID3D12Resource::Map(thumbnail staging)");
         }
         for (size_t i = 0; i < count; ++i)
             std::memcpy(mapped + i * kTileBytes, tiles[i].rgba, kTileBytes);
@@ -7403,9 +7403,9 @@ bool D3D12Renderer::Impl::uploadThumbnailTiles(const ThumbnailTile* tiles, size_
 
         // Mismo camino que uploadTexture: una lista, una espera. Las N casillas
         // comparten las dos barreras y la espera.
-        throwIfFailed(allocators[frameIndex]->Reset(), "ID3D12CommandAllocator::Reset(miniaturas)");
+        throwIfFailed(allocators[frameIndex]->Reset(), "ID3D12CommandAllocator::Reset(thumbnails)");
         throwIfFailed(commandList->Reset(allocators[frameIndex].Get(), nullptr),
-                      "ID3D12GraphicsCommandList::Reset(miniaturas)");
+                      "ID3D12GraphicsCommandList::Reset(thumbnails)");
 
         D3D12_RESOURCE_BARRIER toCopy{};
         toCopy.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -7442,7 +7442,7 @@ bool D3D12Renderer::Impl::uploadThumbnailTiles(const ThumbnailTile* tiles, size_
         toShader.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         commandList->ResourceBarrier(1, &toShader);
 
-        throwIfFailed(commandList->Close(), "ID3D12GraphicsCommandList::Close(miniaturas)");
+        throwIfFailed(commandList->Close(), "ID3D12GraphicsCommandList::Close(thumbnails)");
         ID3D12CommandList* lists[] = {commandList.Get()};
         queue->ExecuteCommandLists(1, lists);
         waitForGpu();
@@ -8261,13 +8261,13 @@ void D3D12Renderer::Impl::createShadowResources()
         if (errorBlob)
             detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
                           errorBlob->GetBufferSize());
-        throw std::runtime_error("D3D12: root signature de sombras (HRESULT " +
+        throw std::runtime_error("D3D12: shadow root signature (HRESULT " +
                                  hresultToString(hr) + ") " + detail);
     }
     throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
                                               serialized->GetBufferSize(),
                                               IID_PPV_ARGS(&shadowRootSignature)),
-                  "ID3D12Device::CreateRootSignature(sombras)");
+                  "ID3D12Device::CreateRootSignature(shadows)");
 
     const std::vector<char> shadowVs = readBinaryFile("shaders/shadow.vert.dxil");
 
@@ -8312,7 +8312,7 @@ void D3D12Renderer::Impl::createShadowResources()
 
         (void)stride;  // el stride va en la vista del vertex buffer, no en el PSO
         throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&out)),
-                      "ID3D12Device::CreateGraphicsPipelineState(sombras)");
+                      "ID3D12Device::CreateGraphicsPipelineState(shadows)");
     };
 
     buildShadowPipeline(sizeof(Vertex), shadowPipeline);
@@ -8497,12 +8497,12 @@ void D3D12Renderer::Impl::ensureSceneInstanceBuffer(size_t count)
                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                             &sceneInstanceAllocations[frameIndex], IID_NULL,
                                             nullptr),
-                  "D3D12MA::Allocator::CreateResource(instancias de escena)");
+                  "D3D12MA::Allocator::CreateResource(scene instances)");
 
     const D3D12_RANGE noRead{0, 0};
     throwIfFailed(sceneInstanceAllocations[frameIndex]->GetResource()->Map(
                       0, &noRead, &sceneInstanceMapped[frameIndex]),
-                  "ID3D12Resource::Map(instancias de escena)");
+                  "ID3D12Resource::Map(scene instances)");
     sceneInstanceCapacity[frameIndex] = newCapacity;
 }
 
@@ -8877,11 +8877,11 @@ void D3D12Renderer::init(Window& window)
 
     GLFWwindow* glfwWindow = window.getNativeWindow();
     if (glfwWindow == nullptr)
-        throw std::runtime_error("D3D12: la ventana no está inicializada");
+        throw std::runtime_error("D3D12: the window is not initialized");
 
     d.hwnd = glfwGetWin32Window(glfwWindow);
     if (d.hwnd == nullptr)
-        throw std::runtime_error("D3D12: glfwGetWin32Window no devolvió un HWND");
+        throw std::runtime_error("D3D12: glfwGetWin32Window did not return an HWND");
 
     int fbWidth = 0, fbHeight = 0;
     glfwGetFramebufferSize(glfwWindow, &fbWidth, &fbHeight);
@@ -8934,13 +8934,13 @@ void D3D12Renderer::init(Window& window)
             dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
 #ifndef NDEBUG
             dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-            diagLog("DRED activado (auto-breadcrumbs + page fault).");
+            diagLog("DRED enabled (auto-breadcrumbs + page fault).");
 #else
-            diagLog("DRED activado (solo page fault; las migas cuestan por frame "
-                    "y van solo en Debug).");
+            diagLog("DRED enabled (page fault only; breadcrumbs cost per frame "
+                    "and are Debug only).");
 #endif
         } else {
-            diagLog("DRED NO disponible en este sistema.");
+            diagLog("DRED NOT available on this system.");
         }
     }
 
@@ -8990,7 +8990,7 @@ void D3D12Renderer::init(Window& window)
     }
 
     if (!adapter)
-        throw std::runtime_error("D3D12: ningún adaptador hardware soporta FEATURE_LEVEL_11_0");
+        throw std::runtime_error("D3D12: no hardware adapter supports FEATURE_LEVEL_11_0");
 
     throwIfFailed(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d.device)),
                   "D3D12CreateDevice");
@@ -9000,7 +9000,7 @@ void D3D12Renderer::init(Window& window)
     // lo lee nadie. Solo existe si la capa está activa (Debug + Graphics
     // Tools); si no, el QueryInterface falla y aquí no pasa nada.
     if (SUCCEEDED(d.device->QueryInterface(IID_PPV_ARGS(&d.infoQueue))))
-        diagLog("Cola de mensajes de la capa de depuración redirigida a este fichero.");
+        diagLog("Debug layer message queue redirected to this file.");
 
     // El gancho para throwIfFailed, que es una función libre y no tiene device.
     // Va sobre una estática de traducción porque no hay más de un D3D12Renderer
@@ -9128,7 +9128,7 @@ void D3D12Renderer::init(Window& window)
     prepassDsvDesc.NumDescriptors = 1;
     prepassDsvDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     throwIfFailed(d.device->CreateDescriptorHeap(&prepassDsvDesc, IID_PPV_ARGS(&d.prepassDsvHeap)),
-                  "ID3D12Device::CreateDescriptorHeap(DSV del pre-pase)");
+                  "ID3D12Device::CreateDescriptorHeap(prepass DSV)");
     d.createSsaoPipelines();
     d.createSsaoTargets();
 
@@ -9519,7 +9519,7 @@ void D3D12Renderer::drawFrame()
     // tiene el Present de más abajo: seguir dibujando sobre un fence roto solo
     // entierra el error de verdad, que ya está en d3d12_diag.log.
     if (d.deviceLost) {
-        throw std::runtime_error(std::string("D3D12: device perdido en ") +
+        throw std::runtime_error(std::string("D3D12: device lost at ") +
                                  (d.deviceLostDonde ? d.deviceLostDonde : "?") + " (HRESULT " +
                                  hresultToString(d.deviceLostHr) + ")");
     }
@@ -9873,7 +9873,7 @@ void D3D12Renderer::drawFrame()
         // El volcado ANTES de lanzar: la excepción se lleva el proceso por
         // delante y con él el device, que es a quien hay que preguntarle.
         d.dumpDeviceRemoved("IDXGISwapChain3::Present", presentHr);
-        throw std::runtime_error("D3D12: device perdido durante Present (HRESULT " +
+        throw std::runtime_error("D3D12: device lost during Present (HRESULT " +
                                  hresultToString(presentHr) + ")");
     }
 
@@ -10891,9 +10891,9 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
     // esta función: son no-ops, el usuario ha pedido un cambio de material y no
     // va a ver ninguno, y sin una línea no queda ni rastro de por qué.
     if (object.slotFree || object.pendingRelease) {
-        diagLog("rebuildStaticMesh: el hueco " + std::to_string(index) +
-                (object.slotFree ? " está libre" : " es de un dueño ya retirado") +
-                ", así que no hay a quién cambiarle el material; no se toca nada.");
+        diagLog("rebuildStaticMesh: slot " + std::to_string(index) +
+                (object.slotFree ? " is free" : " belongs to an owner already retired") +
+                ", so there is nobody to change the material on; nothing is touched.");
         return;
     }
     if (object.srvBase == kSrvBaseColor) {
@@ -10901,11 +10901,11 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         // los neutros globales y no tiene bloque de descriptores propio que
         // escribir. En Vulkan el mismo cambio SÍ se ve, así que sin esta línea
         // la diferencia entre backends no tiene explicación por ningún lado.
-        diagLog("rebuildStaticMesh: el objeto " + std::to_string(index) +
-                " no tiene bloque de descriptores propio (pasado el límite de " +
+        diagLog("rebuildStaticMesh: object " + std::to_string(index) +
+                " has no descriptor block of its own (past the limit of " +
                 std::to_string(kMaxObjectSlots) +
-                " huecos), así que dibuja con los neutros globales y su material no se puede "
-                "cambiar en este backend.");
+                " slots), so it draws with the global neutral ones and its material cannot be "
+                "changed on this backend.");
         return;
     }
 
@@ -10923,9 +10923,9 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
     const bool comparte = !object.ownsGpu || object.sharedRefs > 1;
     if (comparte && (mesh.vertices.empty() || mesh.indices.empty())) {
         // Sin una línea aquí, el usuario cambia la textura y no pasa nada.
-        diagLog("rebuildStaticMesh: el objeto " + std::to_string(index) +
-                " comparte malla y el mesh llega sin geometría, así que no puede separarse "
-                "del grupo; se queda como estaba.");
+        diagLog("rebuildStaticMesh: object " + std::to_string(index) +
+                " shares a mesh and the mesh arrives without geometry, so it cannot be split "
+                "from the group; it stays as it was.");
         return;
     }
 
@@ -10993,9 +10993,9 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
             // contabilidad está rota. Se sale sin tocar NADA —ni la variante de
             // material ni la GPU—, pero queda escrito, que es justo lo que uno
             // querría ver el día que pase.
-            diagLog("rebuildStaticMesh: el objeto " + std::to_string(index) + " dice tener " +
+            diagLog("rebuildStaticMesh: object " + std::to_string(index) + " claims to have " +
                     std::to_string(object.sharedRefs) +
-                    " referencias a su malla pero no aparece ningún duplicado; no se toca nada.");
+                    " references to its mesh but no duplicate shows up; nothing is touched.");
             return;
         }
     }
@@ -11125,10 +11125,10 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
                                     prefijoGeometria(object.sharedKey) ==
                                         prefijoGeometria(nuevaClave));
         if (!claveHonesta)
-            diagLog("rebuildStaticMesh: al objeto " + std::to_string(index) +
-                    " le llega un mesh con otra geometría (el contrato dice que por aquí no se "
-                    "cambia). Se le cambia solo el material y sale del mapa de dedup: sigue "
-                    "dibujando la geometría que tiene en VRAM.");
+            diagLog("rebuildStaticMesh: object " + std::to_string(index) +
+                    " receives a mesh with different geometry (the contract says it does not "
+                    "change here). Only its material is changed and it leaves the dedup map: it keeps "
+                    "drawing the geometry it has in VRAM.");
     } catch (...) {
         for (D3D12MA::Allocation* nueva :
              {nuevosVertices, nuevosIndices, nuevoColor, nuevaNormal, nuevoOrm})
@@ -11150,9 +11150,9 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
                              slot + 1);
         d.createTexture2DSrv(d.metalRoughAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
                              slot + 3);
-        diagLog("rebuildStaticMesh: una subida del objeto " + std::to_string(index) +
-                " ha lanzado; se sueltan las allocations a medio hacer y sus tres huecos de "
-                "textura vuelven a los neutros globales.");
+        diagLog("rebuildStaticMesh: an upload of object " + std::to_string(index) +
+                " threw; the half-made allocations are released and its three texture "
+                "slots go back to the global neutral ones.");
         throw;
     }
 
@@ -11847,14 +11847,14 @@ void D3D12Renderer::shutdown()
     if (!d.initialized)
         return;
 
-    diagLog("shutdown(): empieza.");
+    diagLog("shutdown(): starting.");
     // El estado del device ANTES de esperar a nadie: si ya está perdido, la
     // espera de abajo no va a terminar nunca y el motivo hay que preguntarlo
     // ahora, no después.
     if (d.device) {
         const HRESULT motivo = d.device->GetDeviceRemovedReason();
         if (motivo != S_OK)
-            d.dumpDeviceRemoved("shutdown (device ya perdido al entrar)", motivo);
+            d.dumpDeviceRemoved("shutdown (device already lost on entry)", motivo);
     }
 
     // Nada se libera con trabajo en vuelo: soltar un render target que la GPU
@@ -12147,7 +12147,7 @@ void D3D12Renderer::shutdown()
         WCHAR* stats = nullptr;
         d.allocator->BuildStatsString(&stats, TRUE);
         if (stats) {
-            diagLog("--- estado de D3D12MA antes de Release() ---");
+            diagLog("--- D3D12MA state before Release() ---");
             diagLog(narrow(stats));
             diagLog("--------------------------------------------");
             d.allocator->FreeStatsString(stats);
@@ -12186,7 +12186,7 @@ void D3D12Renderer::shutdown()
     d.adapter.Reset();
     d.factory.Reset();
     d.initialized = false;
-    diagLog("shutdown(): terminado sin incidencias.");
+    diagLog("shutdown(): finished without incidents.");
 
 #ifndef NDEBUG
     // Con el device ya soltado, lo que siga vivo es una fuga nuestra. Sale por
