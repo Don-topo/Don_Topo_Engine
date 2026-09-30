@@ -188,7 +188,14 @@ PrefabTemplate {
    `onAssetsLoaded`), pumped by `PrefabLibrary::pump()` once per frame.
 4. A skinned mesh with external animation sources → second job applies the animation config on the
    worker, so `meshMatchesAnimationConfig` is true at `Instantiate` time and the mesh is **shared**.
-5. `Ready` → host callback registers the template meshes with the Renderer once (textures and
+   The worker also converts the file JSON to **memory form** (absolute paths, via
+   `resolveStoredPaths`, the counterpart of `storeRelativePaths`; a test ties both to
+   `nodeFromJson`/`nodeToJson`), so neither `Instantiate` nor override detection calls
+   `filesystem::relative` / `weakly_canonical`.
+5. On `Ready` (main thread) the template warms its audio clips once (`createAudioClipComponent`,
+   kept alive by the template), so the sidecar is read there and `Instantiate` hits the
+   AudioManager sound cache.
+6. `Ready` → host callback registers the template meshes with the Renderer once (textures and
    geometry into the shared caches / B6), so the GPU registration of every `Instantiate` also hits
    the caches.
 
