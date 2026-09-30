@@ -1051,7 +1051,7 @@ static void test_release_package_bundles_msvc_crt()
                                          exportPlatformFor(platform::Os::Windows));
     CHECK(r2.ok);
     bool avisaCrt = std::any_of(r2.messages.begin(), r2.messages.end(), [](const std::string& m) {
-        return m.find("CRT de MSVC") != std::string::npos &&
+        return m.find("MSVC CRT") != std::string::npos &&
                m.find("next to the editor") != std::string::npos;
     });
 #ifdef NDEBUG
