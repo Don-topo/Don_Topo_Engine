@@ -1,15 +1,39 @@
 // Tests of the prefab system (spec docs/superpowers/specs/2026-09-30-prefabs-design.md).
+#include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Core/PrefabOverrides.h"
+#include "DonTopo/Core/Scene.h"
+#include "DonTopo/Physics/PhysicsManager.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <nlohmann/json.hpp>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 namespace {
 int g_failures = 0;
 #define CHECK(cond, msg) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL: %s (%s:%d)\n", (msg), __FILE__, __LINE__); \
     ++g_failures; } } while (0)
+
+// A single PhysicsManager for the whole file: PxFoundation is unique per process.
+DonTopo::PhysicsManager& physics()
+{
+    static DonTopo::PhysicsManager p;
+    static bool inited = (p.init(), true);
+    (void)inited;
+    return p;
+}
+
+DonTopo::AudioManager& audio()
+{
+    static DonTopo::AudioManager a;
+    static bool inited = (a.init(), true);
+    (void)inited;
+    return a;
+}
 
 nlohmann::json mat4Json(const glm::mat4& m)
 {
@@ -102,10 +126,95 @@ void testOverridesJsonRoundTrip()
     CHECK(back.size() == 2 && back[1].value.is_null() && back[0].path == "/light/intensity",
           "overrides survive json");
 }
+
+void testLinkFieldsRoundTrip()
+{
+    DonTopo::Scene s;
+    auto* a = s.addGameObject("Enemy");
+    auto* b = s.addGameObject("Lamp", a);
+    a->prefabNode = 1; b->prefabNode = 2;
+    a->prefabLink = std::make_shared<DonTopo::PrefabLink>();
+    a->prefabLink->path = "Prefabs/Enemy.prefab";
+    a->prefabLink->overrides = { {2, "/light/intensity", 3.5} };
+    auto j = s.toJson();
+    DonTopo::Scene t;
+    CHECK(t.fromJson(j, physics(), audio()), "loads");
+    auto* a2 = t.getRoot().children[0].get();
+    CHECK(a2->prefabNode == 1 && a2->prefabLink && a2->prefabLink->path == "Prefabs/Enemy.prefab",
+          "root link survives");
+    CHECK(a2->prefabLink && a2->prefabLink->overrides.size() == 1, "overrides survive");
+    CHECK(a2->children[0]->prefabNode == 2 && !a2->children[0]->prefabLink, "child only has prefabNode");
+    CHECK(t.toJson() == j, "second save identical");
+}
+
+void testScenesWithoutPrefabsByteIdentical()
+{
+    int checked = 0;
+    // Every .scene / scene-shaped .json under assets/ that has "version" and "root".
+    for (auto& e : std::filesystem::recursive_directory_iterator("assets")) {
+        auto ext = e.path().extension().string();
+        if (ext != ".scene" && ext != ".json") continue;
+        std::ifstream in(e.path(), std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(in)), {});
+        auto j = nlohmann::json::parse(bytes, nullptr, false);
+        if (j.is_discarded() || !j.is_object() || !j.contains("root") || !j.contains("version")) continue;
+        DonTopo::Scene a, b;
+        if (!a.fromJson(j, physics(), audio())) continue;
+        ++checked;
+        auto first = a.toJson().dump();
+        // A node NAME may legally contain "prefab": check the keys, not the word.
+        CHECK(first.find("\"prefab\":") == std::string::npos &&
+              first.find("\"prefabNode\":") == std::string::npos,
+              "no prefab keys appear in old scenes");
+        CHECK(b.fromJson(a.toJson(), physics(), audio()) && b.toJson().dump() == first,
+              "old scene re-saves identical");
+    }
+    std::printf("scenes checked for prefab byte-identity: %d\n", checked);
+}
+
+void testMalformedPrefabLoadsUnlinked()
+{
+    DonTopo::Scene s;
+    s.addGameObject("Enemy");
+    auto j = s.toJson();
+    auto& node = j["root"]["children"][0];
+    node["prefab"] = 5;             // not an object
+    node["prefabNode"] = "x";       // not an unsigned number
+    DonTopo::Scene t;
+    CHECK(t.fromJson(j, physics(), audio()), "malformed link still loads");
+    auto* n = t.getRoot().children[0].get();
+    CHECK(!n->prefabLink && n->prefabNode == 0, "malformed link loads unlinked");
+    bool warned = false;
+    for (auto& w : t.lastWarnings())
+        if (w.find("prefab: malformed") != std::string::npos) warned = true;
+    CHECK(warned, "malformed prefab produces a warning");
+}
+
+void testCloneKeepsLinkWithFreshIds()
+{
+    DonTopo::Scene s;
+    auto* a = s.addGameObject("Enemy");
+    a->prefabNode = 1;
+    a->prefabLink = std::make_shared<DonTopo::PrefabLink>();
+    a->prefabLink->path = "Prefabs/Enemy.prefab";
+    a->prefabLink->overrides = { {1, "/light/intensity", 3.5} };
+    auto* c = s.cloneGameObject(a, nullptr, physics(), audio());
+    CHECK(c != nullptr, "clone created");
+    if (!c) return;
+    CHECK(c->prefabLink && c->prefabLink != a->prefabLink, "clone link is a deep copy");
+    CHECK(c->prefabLink && c->prefabLink->path == a->prefabLink->path &&
+          c->prefabLink->overrides.size() == 1, "clone link has the same content");
+    CHECK(c->prefabNode == a->prefabNode, "prefabNode equal");
+    CHECK(c->id != a->id, "ids differ");
+}
 } // namespace
 
 int main()
 {
+    testLinkFieldsRoundTrip();
+    testScenesWithoutPrefabsByteIdentical();
+    testMalformedPrefabLoadsUnlinked();
+    testCloneKeepsLinkWithFreshIds();
     testDiffDetectsLeafChange();
     testDiffIgnoresIdsAndRootPose();
     testDiffSmallRotationAndQuatSign();

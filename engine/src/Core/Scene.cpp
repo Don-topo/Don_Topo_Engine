@@ -7,6 +7,7 @@
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/AnimatorSerialization.h"
 #include "DonTopo/Core/PropertyTracks.h"
+#include "DonTopo/Core/PrefabOverrides.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
@@ -1761,6 +1762,15 @@ namespace
             j["scripts"] = std::move(arr);
         }
 
+        // Prefab link, written only when present: a scene with no prefabs serializes
+        // byte for byte as before. Right before "children" so the older keys keep
+        // their order.
+        if (node.prefabNode != 0)
+            j["prefabNode"] = node.prefabNode;
+        if (node.prefabLink)
+            j["prefab"] = { {"path", node.prefabLink->path},
+                            {"overrides", DonTopo::overridesToJson(node.prefabLink->overrides)} };
+
         j["children"] = nlohmann::json::array();
         for (const auto& child : node.children)
             j["children"].push_back(nodeToJson(*child, assetRoot, carryOverrideBaseline, shareProcedural));
@@ -3372,6 +3382,30 @@ namespace
             auto listener = std::make_shared<AudioListenerComponent>();
             listener->setEnabled(j["audioListener"].value("enabled", true));
             node->setAudioListener(std::move(listener));
+        }
+        // Prefab link, read tolerantly: a malformed field must not lose the object.
+        // The link loads unlinked (with a warning) instead of failing the scene.
+        if (auto it = j.find("prefabNode"); it != j.end() && it->is_number_unsigned())
+            node->prefabNode = it->get<uint64_t>();
+        if (auto it = j.find("prefab"); it != j.end())
+        {
+            if (it->is_object() && it->contains("path") && (*it)["path"].is_string())
+            {
+                auto link = std::make_shared<DonTopo::PrefabLink>();
+                link->path = (*it)["path"].get<std::string>();
+                std::vector<std::string> linkWarnings;
+                if (auto ov = it->find("overrides"); ov != it->end())
+                    link->overrides = DonTopo::overridesFromJson(*ov, &linkWarnings);
+                if (warnings)
+                    for (auto& w : linkWarnings)
+                        warnings->push_back("node '" + node->name + "'.prefab: " + w);
+                node->prefabLink = std::move(link);
+            }
+            else if (warnings)
+            {
+                warnings->push_back("node '" + node->name +
+                                    "'.prefab: malformed, the object loads unlinked");
+            }
         }
         if (j.contains("scripts"))
         {

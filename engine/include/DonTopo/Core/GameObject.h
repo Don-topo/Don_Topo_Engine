@@ -27,6 +27,7 @@ namespace DonTopo
     struct Mesh;
     struct SkinnedMesh;
     struct Material;
+    struct PrefabLink;   // PrefabOverrides.h; only the .cpp files need it complete
     class Collider;
     class BoxCollider;
     class SphereCollider;
@@ -142,6 +143,16 @@ namespace DonTopo
             // destructor does NOT cancel anything — the pump already discards the results
             // whose targetId does not exist.
             uint64_t pendingMeshJob = 0;
+
+            // Prefab link (spec 2026-09-30-prefabs-design.md §2.2). prefabNode is the
+            // prefab-LOCAL id of the node this one comes from (0 = not part of a
+            // prefab instance). prefabLink exists only on the instance ROOT: the
+            // .prefab path plus the overrides. A shared_ptr to an incomplete type,
+            // like the components: the out-of-line destructor is where it must be
+            // complete. A clone gets its own PrefabLink (it travels through JSON),
+            // never the same pointer.
+            uint64_t prefabNode = 0;
+            std::shared_ptr<PrefabLink> prefabLink;
 
             explicit GameObject(std::string name = "");
             ~GameObject();
