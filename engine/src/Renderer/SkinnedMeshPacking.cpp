@@ -1,4 +1,5 @@
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
+#include <cstring>
 #include <vector>
 
 namespace DonTopo
@@ -97,5 +98,44 @@ namespace DonTopo
         if (out.scale.empty()) out.scale.push_back({});
 
         return out;
+    }
+
+    namespace
+    {
+        uint64_t hashWords(const void* data, size_t bytes, uint64_t h)
+        {
+            const auto* p = static_cast<const unsigned char*>(data);
+            size_t i = 0;
+            for (; i + 8 <= bytes; i += 8)
+            {
+                uint64_t w;
+                std::memcpy(&w, p + i, 8);
+                h = (h ^ w) * 1099511628211ull;
+                h ^= h >> 29;
+            }
+            for (; i < bytes; ++i) h = (h ^ p[i]) * 1099511628211ull;
+            return h;
+        }
+
+        template <typename T>
+        void hashVec(const std::vector<T>& v, uint64_t& h, std::string& sizes)
+        {
+            h = hashWords(v.data(), v.size() * sizeof(T), h);
+            sizes += std::to_string(v.size());
+            sizes += ',';
+        }
+    }
+
+    std::string skinnedGeometryKey(const SkinnedMesh& mesh, const PackedClips& packed)
+    {
+        uint64_t h = 1469598103934665603ull;
+        std::string sizes;
+        hashVec(mesh.skinnedVertices, h, sizes);
+        hashVec(mesh.indices, h, sizes);
+        hashVec(packed.pos, h, sizes);
+        hashVec(packed.rot, h, sizes);
+        hashVec(packed.scale, h, sizes);
+        hashVec(packed.boneInfos, h, sizes);
+        return "skgeo:" + sizes + std::to_string(h);
     }
 }

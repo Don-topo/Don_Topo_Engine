@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 #include <vector>
 #include "DonTopo/Renderer/SkinnedMesh.h"
 
@@ -30,6 +31,12 @@ namespace DonTopo
     // Renderer::addSkinnedMesh this packing could only be tested with a
     // live VkDevice, that is, it could not be tested.
     PackedClips packSkinnedClips(const SkinnedMesh& mesh);
+
+    // Content key of the read-only GPU buffers of a character (B6): input
+    // vertices, indices and the packed clips. Two clones of the same model give
+    // the same key and share those buffers. Hashed 8 bytes at a time: FNV byte by
+    // byte over the ~13 MB of a real character cost ~10 ms per spawn.
+    std::string skinnedGeometryKey(const SkinnedMesh& mesh, const PackedClips& packed);
 
     // Clip blocks that the BoneInfos SSBO carries. Never 0: without animations a
     // block is packed anyway, so clip 0 is always valid.
