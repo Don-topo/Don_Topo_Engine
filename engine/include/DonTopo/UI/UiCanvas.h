@@ -1,18 +1,18 @@
 #pragma once
 
-// Jerarquía de la UI de juego, al estilo Unity: Canvas -> Panel -> hijos.
+// Game UI hierarchy, Unity style: Canvas -> Panel -> children.
 //
-// Todo en PÍXELES y con el origen (0,0) arriba a la izquierda, +X a la derecha
-// y +Y hacia abajo. La posición de un nodo es relativa a la esquina superior
-// izquierda de su padre, y la escala del padre se acumula en el hijo.
+// Everything in PIXELS and with the origin (0,0) at the top left, +X to the right
+// and +Y downward. A node's position is relative to its parent's top-left
+// corner, and the parent's scale accumulates in the child.
 //
-// UiElement es la base de TODOS los widgets: los tipos concretos (Panel, Image,
-// Button, ...) viven en UiWidgets.h y de momento no añaden ni un campo ni un
-// comportamiento propio, solo su typeName(). Un panel es un elemento sin atlas
-// (color plano) y una imagen es el mismo elemento con atlas y sprite.
+// UiElement is the base of ALL the widgets: the concrete types (Panel, Image,
+// Button, ...) live in UiWidgets.h and for now add neither a field nor a
+// behavior of their own, only their typeName(). A panel is an element without an atlas
+// (flat color) and an image is the same element with atlas and sprite.
 //
-// Esto vive en DonTopoCore, no en el editor: el juego exportado dibuja el mismo
-// canvas con el mismo código.
+// This lives in DonTopoCore, not in the editor: the exported game draws the same
+// canvas with the same code.
 
 #include "DonTopo/UI/UiSpriteBatch.h"
 
@@ -33,10 +33,10 @@ namespace DonTopo
     struct Button;
     class  UiElement;
 
-    // ── Eventos ─────────────────────────────────────────────────────────────
-    // Todo el sistema de input es CPU pura y DETERMINISTA: no consulta reloj ni
-    // ventana. El tiempo y el estado del ratón ENTRAN por parámetro, así que la
-    // misma secuencia de UiInputState da siempre la misma secuencia de eventos.
+    // ── Events ──────────────────────────────────────────────────────────────
+    // The whole input system is pure, DETERMINISTIC CPU: it does not query a clock or a
+    // window. The time and the mouse state COME IN as parameters, so the
+    // same sequence of UiInputState always gives the same sequence of events.
 
     enum class UiMouseButton : uint32_t
     {
@@ -46,8 +46,8 @@ namespace DonTopo
         Count  = 3
     };
 
-    // Solo las teclas que la UI necesita distinguir. El texto que se escribe no
-    // pasa por aquí: eso es otra fase.
+    // Only the keys the UI needs to tell apart. Typed text does not
+    // go through here: that is another phase.
     enum class UiKey : uint32_t
     {
         None = 0,
@@ -59,42 +59,42 @@ namespace DonTopo
         Up,
         Down,
 
-        // Edicion de texto. Van al final a proposito: los valores de las de
-        // arriba no se mueven, asi que nada de lo ya guardado o mapeado cambia
-        // de significado.
+        // Text editing. They go at the end on purpose: the values of the ones
+        // above do not move, so nothing already stored or mapped changes
+        // meaning.
         Backspace,
         Delete,
         Home,
         End
     };
 
-    // Lo rellena el CALLER (GLFW, el editor, un test). El Core no conoce ni
-    // GLFW ni ImGui: aquí solo entran números.
+    // Filled in by the CALLER (GLFW, the editor, a test). The Core knows neither
+    // GLFW nor ImGui: only numbers come in here.
     struct UiInputState
     {
-        glm::vec2 mousePos{0.0f, 0.0f};       // px, mismo espacio que el canvas
-        bool      mouseDown[3] = {false, false, false};   // estado SOSTENIDO por botón
-        float     scrollDelta  = 0.0f;        // + hacia arriba; 0 = no hubo rueda
+        glm::vec2 mousePos{0.0f, 0.0f};       // px, same space as the canvas
+        bool      mouseDown[3] = {false, false, false};   // HELD state per button
+        float     scrollDelta  = 0.0f;        // + is up; 0 = there was no wheel
 
-        // Teclas pulsadas ESTE frame (flanco, no sostenido): repetir una tecla
-        // frame a frame es cosa del caller, no del canvas.
+        // Keys pressed THIS frame (edge, not held): repeating a key
+        // frame by frame is up to the caller, not the canvas.
         std::vector<UiKey> keys;
 
-        // CARACTERES tecleados este frame, en codepoints Unicode y en orden.
-        // Es un canal APARTE de `keys` y no una tecla mas porque no son lo
-        // mismo: UiKey nombra teclas fisicas con significado propio (Tab,
-        // Enter, flechas), y una 'a' no es una tecla nombrada — sale del layout
-        // del teclado, de las muertas y del metodo de entrada, cosa que el core
-        // no sabe ni tiene por que saber. Lo rellena el caller (GLFW via
-        // UiInputBridge, el editor, un test), igual que la posicion del raton.
+        // CHARACTERS typed this frame, in Unicode codepoints and in order.
+        // It is a SEPARATE channel from `keys` and not one more key because they are not
+        // the same thing: UiKey names physical keys with a meaning of their own (Tab,
+        // Enter, arrows), and an 'a' is not a named key. It comes from the keyboard
+        // layout, dead keys and the input method, which the core neither knows nor
+        // has any reason to know. The caller fills it in (GLFW via
+        // UiInputBridge, the editor, a test), just like the mouse position.
         std::vector<uint32_t> chars;
 
         bool shift = false;
         bool ctrl  = false;
         bool alt   = false;
 
-        // Segundos. Solo se compara consigo mismo (doble click), así que el
-        // origen da igual mientras sea monótono.
+        // Seconds. It is only compared with itself (double click), so the
+        // origin does not matter as long as it is monotonic.
         float timeSeconds = 0.0f;
     };
 
@@ -115,8 +115,8 @@ namespace DonTopo
         Focus,
         Blur,
         KeyDown,
-        // Un caracter tecleado. Distinto de KeyDown por lo mismo que `chars` es
-        // distinto de `keys`: aqui lo que llega es texto, no una tecla.
+        // A typed character. Different from KeyDown for the same reason `chars` is
+        // different from `keys`: what arrives here is text, not a key.
         TextInput
     };
 
@@ -124,19 +124,19 @@ namespace DonTopo
     {
         UiEventType type = UiEventType::MouseMove;
 
-        // Dónde SE ORIGINÓ el evento. No cambia al burbujear: un padre que
-        // recibe el click de un hijo sigue viendo al hijo aquí.
+        // Where the event ORIGINATED. It does not change when bubbling: a parent that
+        // receives a child's click still sees the child here.
         UiElement* target = nullptr;
 
         glm::vec2 mousePos{0.0f, 0.0f};
-        glm::vec2 delta{0.0f, 0.0f};       // movimiento respecto al frame anterior
-        glm::vec2 dragStart{0.0f, 0.0f};   // dónde bajó el botón que arrastra
+        glm::vec2 delta{0.0f, 0.0f};       // movement relative to the previous frame
+        glm::vec2 dragStart{0.0f, 0.0f};   // where the dragging button went down
 
         UiMouseButton button = UiMouseButton::Left;
         float scrollDelta = 0.0f;
 
         UiKey key = UiKey::None;
-        // Solo lo rellena TextInput: el codepoint Unicode del caracter.
+        // Only TextInput fills it in: the character's Unicode codepoint.
         uint32_t codepoint = 0;
         bool  shift = false;
         bool  ctrl  = false;
@@ -144,19 +144,19 @@ namespace DonTopo
 
         float time = 0.0f;
 
-        // Quién empezó el arrastre. Solo lo rellenan DragBegin/Drag/DragEnd/Drop,
-        // y en un Drop puede NO ser el mismo que target.
+        // Who started the drag. Only DragBegin/Drag/DragEnd/Drop fill it in,
+        // and in a Drop it may NOT be the same as target.
         UiElement* dragSource = nullptr;
 
-        // Mientras siga false el evento sigue subiendo al padre. Ponerlo a true
-        // corta la burbuja ahí mismo.
+        // While it stays false the event keeps going up to the parent. Setting it to true
+        // cuts the bubble right there.
         bool consumed = false;
     };
 
     using UiEventHandler = std::function<void(UiEvent&)>;
 
-    // Auto-layout: con un modo distinto de None el contenedor COLOCA a sus
-    // hijos y estos dejan de anclarse por su cuenta.
+    // Auto-layout: with a mode other than None the container PLACES its
+    // children and they stop anchoring on their own.
     enum class UiLayoutMode
     {
         None,
@@ -165,8 +165,8 @@ namespace DonTopo
         Grid
     };
 
-    // Alineación en el eje TRANSVERSAL al del layout (la Y de un Horizontal y la
-    // X de un Vertical). El Grid no la usa: la celda ya fija las dos.
+    // Alignment on the axis TRANSVERSE to the layout's (the Y of a Horizontal and the
+    // X of a Vertical). The Grid does not use it: the cell already fixes both.
     enum class UiCrossAlign
     {
         Start,
@@ -174,10 +174,10 @@ namespace DonTopo
         End
     };
 
-    // ── Animación de propiedades ────────────────────────────────────────────
-    // Propiedad que anima el elemento. UNA a la vez: no es un sistema de
-    // pistas, es un campo. Fade escribe opacity, y NO hay un modo "Opacity"
-    // aparte: la opacidad SE ANIMA CON Fade.
+    // ── Property animation ──────────────────────────────────────────────────
+    // Property the element animates. ONE at a time: it is not a track
+    // system, it is a field. Fade writes opacity, and there is NO separate "Opacity"
+    // mode: opacity IS ANIMATED WITH Fade.
     enum class UiAnim
     {
         None,
@@ -185,12 +185,12 @@ namespace DonTopo
         Scale,      // scale        <- .xy
         Move,       // position     <- .xy
         Rotation,   // rotation     <- .x (radianes)
-        Color       // color        <- los 4 canales
+        Color       // color        <- all 4 channels
     };
 
-    // Todas son funciones PURAS de t en [0,1] con f(0)=0 y f(1)=1 exactos.
-    // Bounce y Elastic no son monótonas y Elastic se pasa de 1 a mitad de
-    // camino: eso es lo que hacen, no un fallo que haya que recortar.
+    // All of them are PURE functions of t in [0,1] with EXACT f(0)=0 and f(1)=1.
+    // Bounce and Elastic are not monotonic and Elastic overshoots 1 halfway:
+    // that is what they do, not a failure that has to be clipped.
     enum class UiAnimCurve
     {
         Linear,
@@ -202,9 +202,9 @@ namespace DonTopo
 
     enum class UiAnimLoop
     {
-        Once,       // al llegar al final se queda en animTo y se para
-        Loop,       // vuelve a empezar en animFrom
-        PingPong    // vuelve por donde vino
+        Once,       // on reaching the end it stays at animTo and stops
+        Loop,       // starts over at animFrom
+        PingPong    // goes back the way it came
     };
 
     class UiElement
@@ -213,51 +213,51 @@ namespace DonTopo
         explicit UiElement(std::string nodeName = {}) : name(std::move(nodeName)) {}
         virtual ~UiElement() = default;
 
-        // Identidad del tipo sin RTTI ni enum paralelo: cada derivado devuelve
-        // su literal y no hay nada más que mantener sincronizado.
+        // Type identity without RTTI or a parallel enum: each derived class returns
+        // its literal and there is nothing else to keep in sync.
         virtual const char* typeName() const { return "UiElement"; }
 
-        // Widgets que emiten algo que NO es un único quad propio. El batcher los
-        // pregunta por aquí, no con dynamic_cast: la identidad de tipo en este
-        // árbol va sin RTTI, y un enum paralelo sería otra cosa que mantener.
+        // Widgets that emit something that is NOT a single quad of their own. The batcher
+        // asks them here, not with dynamic_cast: type identity in this
+        // tree goes without RTTI, and a parallel enum would be another thing to maintain.
         virtual const Text* asText() const { return nullptr; }
 
-        // Un Image puede emitir N quads (Tiled, Sliced, Filled), todos con el
-        // MISMO atlas y el MISMO scissor, así que ninguno parte el lote.
+        // An Image can emit N quads (Tiled, Sliced, Filled), all with the
+        // SAME atlas and the SAME scissor, so none of them splits the batch.
         virtual const Image* asImage() const { return nullptr; }
 
-        // El Button NO lo mira el batcher: lo mira updateInput, que necesita
-        // ESCRIBIR en él (color, sprite, estado), de ahí la versión no const.
+        // The Button is NOT looked at by the batcher: it is looked at by updateInput, which needs to
+        // WRITE into it (color, sprite, state), hence the non-const version.
         virtual Button*       asButton()       { return nullptr; }
         virtual const Button* asButton() const { return nullptr; }
 
         std::string name;
 
-        glm::vec2 position{0.0f, 0.0f};   // px, relativa al ancla dentro del padre
-        glm::vec2 size{0.0f, 0.0f};       // px, antes de la escala heredada
+        glm::vec2 position{0.0f, 0.0f};   // px, relative to the anchor inside the parent
+        glm::vec2 size{0.0f, 0.0f};       // px, before the inherited scale
         glm::vec2 scale{1.0f, 1.0f};
         glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
 
-        // Normalizados 0..1 sobre el rect DEL PADRE. IGUALES en un eje = punto
-        // de ancla: position cuenta desde ahí y pivot es el punto DE ESTE
-        // elemento que cae encima ({0,0} y {0,0} = esquina superior izquierda
-        // contra esquina superior izquierda). DISTINTOS en un eje = ESTIRADO en
-        // ese eje: mandan los márgenes y se ignoran size y pivot de ese eje.
+        // Normalized 0..1 over the PARENT's rect. EQUAL on an axis = anchor
+        // point: position counts from there and pivot is the point OF THIS
+        // element that lands on top ({0,0} and {0,0} = top-left corner
+        // against top-left corner). DIFFERENT on an axis = STRETCHED on
+        // that axis: the margins rule and size and pivot of that axis are ignored.
         glm::vec2 anchorMin{0.0f, 0.0f};
         glm::vec2 anchorMax{0.0f, 0.0f};
         glm::vec2 pivot{0.0f, 0.0f};
 
-        // Píxeles hacia DENTRO desde el borde correspondiente del padre. Solo
-        // los lee el eje estirado; en un eje anclado a un punto no pintan nada.
+        // Pixels INWARD from the parent's corresponding edge. Only
+        // the stretched axis reads them; on an axis anchored to a point they do nothing.
         float marginLeft   = 0.0f;
         float marginRight  = 0.0f;
         float marginTop    = 0.0f;
         float marginBottom = 0.0f;
 
         // ── Auto-layout ─────────────────────────────────────────────────────
-        // Con mode != None este elemento coloca a sus hijos y de ellos se
-        // ignoran anchorMin/Max, márgenes y position. Horizontal y Vertical
-        // respetan el size del hijo (por su scale); Grid lo fuerza a cellSize.
+        // With mode != None this element places its children and for them
+        // anchorMin/Max, margins and position are ignored. Horizontal and Vertical
+        // respect the child's size (by its scale); Grid forces it to cellSize.
         UiLayoutMode layoutMode = UiLayoutMode::None;
 
         float paddingLeft   = 0.0f;
@@ -265,123 +265,123 @@ namespace DonTopo
         float paddingTop    = 0.0f;
         float paddingBottom = 0.0f;
 
-        glm::vec2 spacing{0.0f, 0.0f};    // hueco entre celdas: .x entre columnas, .y entre filas
+        glm::vec2 spacing{0.0f, 0.0f};    // gap between cells: .x between columns, .y between rows
         glm::vec2 cellSize{0.0f, 0.0f};   // solo Grid
-        uint32_t  columns = 0;            // solo Grid; 0 = las que quepan en el ancho
+        uint32_t  columns = 0;            // Grid only; 0 = as many as fit in the width
 
         UiCrossAlign crossAlign = UiCrossAlign::Start;
 
-        // Este hijo NO ocupa hueco en el layout del padre: se ancla por su
-        // cuenta, como si el padre no tuviera layout.
+        // This child does NOT take a slot in the parent's layout: it anchors on its
+        // own, as if the parent had no layout.
         bool ignoreLayout = false;
 
-        // Content size fitter: ese eje del size pasa a ser la extensión de los
-        // hijos COLOCADOS más el padding. Sin layoutMode no hay colocación, así
-        // que sin él no hacen nada.
+        // Content size fitter: that axis of size becomes the extent of the
+        // PLACED children plus the padding. Without layoutMode there is no placement, so
+        // without it they do nothing.
         bool fitWidth  = false;
         bool fitHeight = false;
 
-        // Radianes, en sentido horario en pantalla (+Y va hacia abajo). Rota
-        // las 4 esquinas de lo que emite ESTE elemento alrededor de su pivot;
-        // no se hereda a los descendientes.
-        // El scissor de clipChildren sigue siendo el AABB SIN rotar: la
-        // máscara de un elemento rotado recorta por su rectángulo derecho, que
-        // es lo único que un VkRect2D sabe expresar.
-        // A 0.0f no se toca ni una coordenada: los vértices salen bit a bit
-        // como salían antes de que la rotación se aplicara.
+        // Radians, clockwise on screen (+Y goes down). It rotates
+        // the 4 corners of what THIS element emits around its pivot;
+        // it is not inherited by descendants.
+        // The clipChildren scissor is still the UNROTATED AABB: the
+        // mask of a rotated element clips by its upright rectangle, which
+        // is the only thing a VkRect2D can express.
+        // At 0.0f not a single coordinate is touched: the vertices come out bit for bit
+        // as they did before the rotation was applied.
         float rotation = 0.0f;
 
-        // Se multiplica por la del padre por todo el árbol y acaba en el alfa
-        // del color del vértice.
+        // It is multiplied by the parent's all through the tree and ends up in the alpha
+        // of the vertex color.
         float opacity = 1.0f;
 
         bool visible  = true;
-        // Solo para el input: NO afecta al dibujado. Un elemento deshabilitado
-        // (y su subárbol) queda fuera del recorrido del foco y de la navegación.
+        // Input only: it does NOT affect drawing. A disabled element
+        // (and its subtree) is left out of the focus and navigation traversal.
         bool enabled  = true;
-        // Un elemento puede ser solo un contenedor (agrupa y recorta) sin pintar.
+        // An element can be just a container (groups and clips) without painting.
         bool drawable = true;
 
         const UiTextureAtlas* atlas = nullptr;
         std::string sprite;
 
-        // Recorta A ESTE ELEMENTO y a sus descendientes contra su propio rect.
-        // El scissor resultante es la INTERSECCIÓN con el que ya venía del
-        // padre, nunca un reemplazo.
+        // Clips THIS ELEMENT and its descendants against its own rect.
+        // The resulting scissor is the INTERSECTION with the one that already came from the
+        // parent, never a replacement.
         bool clipChildren = false;
 
-        // ── Máscara rectangular ─────────────────────────────────────────────
-        // Todo esto MODULA a clipChildren y nada más: sin clipChildren ninguno
-        // de estos campos hace absolutamente nada, así que un árbol que no los
-        // toca sale con los mismos vértices y los mismos lotes de siempre.
+        // ── Rectangular mask ────────────────────────────────────────────────
+        // All of this MODULATES clipChildren and nothing else: without clipChildren none
+        // of these fields does anything at all, so a tree that does not
+        // touch them comes out with the same vertices and the same batches as always.
 
-        // Píxeles de pantalla que el rect de recorte se mete hacia DENTRO del
-        // rect del elemento, cada uno por su lado. Insets que se cruzan dan una
-        // máscara VACÍA (width/height a 0), nunca negativa.
+        // Screen pixels that the clip rect is inset INWARD from the
+        // element's rect, each on its own side. Insets that cross give an EMPTY
+        // mask (width/height at 0), never a negative one.
         float maskInsetLeft   = 0.0f;
         float maskInsetRight  = 0.0f;
         float maskInsetTop    = 0.0f;
         float maskInsetBottom = 0.0f;
 
-        // A false el elemento se dibuja ENTERO con el scissor que heredó y la
-        // máscara solo recorta a sus descendientes: es lo que deja el marco de
-        // una ventana fuera de su propia máscara. A true (por defecto) el
-        // comportamiento es el de siempre: se recorta él también.
+        // When false the element is drawn WHOLE with the scissor it inherited and the
+        // mask only clips its descendants: it is what leaves a window's frame
+        // outside its own mask. When true (default) the behavior is the
+        // usual: it is clipped too.
         bool maskSelf = true;
 
-        // Apaga la máscara sin sacar el elemento del árbol: con false el nodo
-        // se comporta como si no tuviera clipChildren.
+        // Turns the mask off without taking the element out of the tree: with false the node
+        // behaves as if it had no clipChildren.
         bool maskEnabled = true;
 
-        // ── Animación ───────────────────────────────────────────────────────
-        // Todo en CPU y determinista. Quien mueve esto es UiCanvas::updateInput
-        // y NADIE más: un canvas que no llama a updateInput no anima ni un
-        // píxel, y con anim a None estos campos no escriben nada, así que un
-        // árbol que no los toca sale con los mismos vértices de siempre.
+        // ── Animation ───────────────────────────────────────────────────────
+        // All CPU and deterministic. What moves this is UiCanvas::updateInput
+        // and NOBODY else: a canvas that does not call updateInput animates not one
+        // pixel, and with anim at None these fields write nothing, so a
+        // tree that does not touch them comes out with the same vertices as always.
         UiAnim      anim      = UiAnim::None;
         UiAnimCurve animCurve = UiAnimCurve::Linear;
 
-        // Un vec4 para las cinco propiedades: cubre los 4 canales de Color y le
-        // sobran componentes para las vec2 (Scale, Move) y para el float
-        // (Fade, Rotation). Lo que no lee el modo no se mira.
+        // One vec4 for the five properties: it covers the 4 channels of Color and has
+        // components to spare for the vec2 (Scale, Move) and for the float
+        // (Fade, Rotation). What the mode does not read is not looked at.
         glm::vec4 animFrom{0.0f, 0.0f, 0.0f, 0.0f};
         glm::vec4 animTo  {0.0f, 0.0f, 0.0f, 0.0f};
 
-        float      animDuration = 1.0f;             // segundos; <= 0 no avanza
+        float      animDuration = 1.0f;             // seconds; <= 0 does not advance
         UiAnimLoop animLoop     = UiAnimLoop::Once;
-        bool       animPlaying  = false;            // a false CONGELA: ni se avanza ni se escribe
+        bool       animPlaying  = false;            // when false it FREEZES: neither advanced nor written
 
-        // Segundos ya recorridos. Lo lleva updateInput sumando el DELTA entre
-        // frames de UiInputState::timeSeconds; no se acumula ningún dt de
-        // fuera, y por eso pedir el mismo instante dos veces da lo mismo.
+        // Seconds already elapsed. updateInput carries it by adding the DELTA between
+        // frames of UiInputState::timeSeconds; no outside dt is accumulated,
+        // and that is why asking for the same instant twice gives the same result.
         float animTime = 0.0f;
 
         // ── Input ───────────────────────────────────────────────────────────
-        // Nada de esto afecta al dibujado: quien no llame a UiCanvas::updateInput
-        // no ve ni un cambio en los vértices ni en los lotes.
+        // None of this affects drawing: whoever does not call UiCanvas::updateInput
+        // sees not a single change in the vertices or in the batches.
 
-        // A false el elemento es INVISIBLE PARA EL RATÓN, pero sus hijos no: el
-        // hit test los sigue probando (es un contenedor que deja pasar).
+        // When false the element is INVISIBLE TO THE MOUSE, but its children are not: the
+        // hit test keeps testing them (it is a container that lets things through).
         bool raycastTarget = true;
 
-        // Puede tomar el foco con un Down encima y entra en el recorrido del Tab.
+        // It can take focus with a Down on top of it and enters the Tab traversal.
         bool focusable = false;
 
-        // ESTADO, no evento: lo mantiene updateInput y de él se DERIVAN
-        // MouseEnter y MouseExit comparando el hit de este frame con el anterior.
+        // STATE, not an event: updateInput maintains it and MouseEnter and MouseExit are
+        // DERIVED from it by comparing this frame's hit with the previous one's.
         bool hovered = false;
         bool focused = false;
 
-        // Overrides de la navegación direccional (mando). Nulos por defecto:
-        // manda la geometría. Puestos MANDAN sobre ella, aunque apunten al lado
-        // contrario. El destino tiene que ser focusable o el foco no se mueve.
+        // Directional navigation overrides (gamepad). Null by default:
+        // geometry rules. When set they RULE over it, even if they point to the
+        // opposite side. The target has to be focusable or the focus does not move.
         UiElement* navUp    = nullptr;
         UiElement* navDown  = nullptr;
         UiElement* navLeft  = nullptr;
         UiElement* navRight = nullptr;
 
-        // Handlers. TODOS nulos por defecto: un canvas sin handlers no hace nada
-        // al recibir input, solo mueve su estado interno.
+        // Handlers. ALL null by default: a canvas without handlers does nothing
+        // on receiving input, it only moves its internal state.
         UiEventHandler onMouseMove;
         UiEventHandler onMouseEnter;
         UiEventHandler onMouseExit;
@@ -399,35 +399,35 @@ namespace DonTopo
         UiEventHandler onKeyDown;
         UiEventHandler onTextInput;
 
-        // ── Rect resuelto por el último buildDrawData ───────────────────────
-        // El layout ya calcula estos tres valores por nodo; el input los REUSA
-        // en vez de volver a medir el árbol (medirlo dos veces con dos códigos
-        // distintos es la forma de que diverjan). rectValid queda a false en los
-        // nodos que el emisor no llegó a visitar: invisibles y recortados a cero.
+        // ── Rect resolved by the last buildDrawData ─────────────────────────
+        // The layout already computes these three values per node; the input REUSES them
+        // instead of measuring the tree again (measuring it twice with two different
+        // pieces of code is the way to make them diverge). rectValid stays false on
+        // the nodes the emitter never got to visit: invisible and clipped to zero.
         mutable glm::vec2 screenPos{0.0f, 0.0f};
         mutable glm::vec2 screenSize{0.0f, 0.0f};
         mutable UiScissor screenScissor{};
         mutable bool      rectValid = false;
 
         // ── Dirty flags ─────────────────────────────────────────────────────
-        // Qué ha cambiado en este nodo desde el último buildDrawData. Un nodo
-        // sin ni un bit encendido NO se vuelve a emitir: se copian tal cual los
-        // vértices que dejó la vez anterior. TODO nace sucio, así que un árbol
-        // recién montado se emite entero igual que siempre.
+        // What has changed in this node since the last buildDrawData. A node
+        // without a single bit on is NOT emitted again: the vertices left by the
+        // previous time are copied as they are. EVERYTHING is born dirty, so a freshly
+        // assembled tree is emitted whole just like always.
         //
-        //   Transform  posición, escala, rotación heredada y OPACIDAD: todo lo
-        //              que mueve o atenúa también a los descendientes.
-        //   Layout     anclas, márgenes, padding, spacing, modo de layout,
-        //              tamaño, fitters: lo que recoloca el subárbol.
-        //   Material   color, sprite, atlas: solo cambia lo que este nodo pinta.
-        //   Vertex     la geometría del quad propio (rotación propia, insets del
-        //              sliced, texto): tampoco sale del nodo.
+        //   Transform  position, scale, inherited rotation and OPACITY: everything
+        //              that also moves or dims the descendants.
+        //   Layout     anchors, margins, padding, spacing, layout mode,
+        //              size, fitters: what repositions the subtree.
+        //   Material   color, sprite, atlas: only what this node paints changes.
+        //   Vertex     the geometry of the node's own quad (own rotation, sliced
+        //              insets, text): it does not leave the node either.
         //
-        // Transform y Layout SUBEN por la cadena de padres (un hijo que crece
-        // puede cambiar la medida del padre con fitter) y BAJAN a todos los
-        // descendientes (mueven sus rects). Material y Vertex se quedan donde
-        // están. Esa asimetría es justo lo que hace que mover una hoja NO
-        // reemita a sus hermanos.
+        // Transform and Layout GO UP the parent chain (a child that grows
+        // can change the parent's size with a fitter) and GO DOWN to all
+        // the descendants (they move their rects). Material and Vertex stay where
+        // they are. That asymmetry is exactly what makes moving a leaf NOT
+        // re-emit its siblings.
         enum : uint32_t
         {
             DirtyTransform = 1u << 0,
@@ -439,10 +439,10 @@ namespace DonTopo
 
         mutable uint32_t dirty = DirtyAll;
 
-        // ÚNICO modo de ensuciar. Los campos siguen siendo públicos y se tocan a
-        // pelo: quien los toque llama a esto justo después, con lo que ha tocado
-        // y nada más. Es const porque el emisor y el input trabajan sobre
-        // referencias const y el estado sucio no es estado observable del árbol.
+        // The ONLY way to dirty. The fields are still public and are touched
+        // bare: whoever touches them calls this right after, with what they touched
+        // and nothing more. It is const because the emitter and the input work on
+        // const references and the dirty state is not observable state of the tree.
         void markDirty(uint32_t flags) const
         {
             dirty |= flags;
@@ -450,19 +450,19 @@ namespace DonTopo
             const uint32_t prop = flags & (DirtyTransform | DirtyLayout);
             if (prop == 0) return;
 
-            // Arriba: solo la cadena de padres, sin volver a bajar por ellos (si
-            // bajara, mover una hoja ensuciaría a todos sus hermanos).
+            // Upward: only the parent chain, without going back down through them (if it
+            // went down, moving a leaf would dirty all its siblings).
             for (const UiElement* p = m_parent; p != nullptr; p = p->m_parent)
                 p->dirty |= prop;
 
             markSubtreeDirty(prop);
         }
 
-        // ── Caché de emisión ────────────────────────────────────────────────
-        // Lo que este nodo emitió en el último build, troceado en los mismos
-        // tramos (atlas + scissor) con los que se cortaron los lotes. Los
-        // índices van RELATIVOS al primer vértice del nodo: al recolocarlos se
-        // les suma la base de destino y salen los mismos uint16 de siempre.
+        // ── Emission cache ──────────────────────────────────────────────────
+        // What this node emitted in the last build, split into the same
+        // spans (atlas + scissor) with which the batches were cut. The
+        // indices are RELATIVE to the node's first vertex: when relocating them the
+        // destination base is added and the same uint16 as always come out.
         struct CacheSegment
         {
             const UiTextureAtlas* atlas = nullptr;
@@ -476,10 +476,10 @@ namespace DonTopo
         mutable std::vector<CacheSegment> cacheSegments;
         mutable bool                      cacheValid = false;
 
-        // Colocación resuelta del nodo. Se reutiliza cuando ni Transform ni
-        // Layout están sucios: cambiar SOLO el color no vuelve a calcular ni un
-        // rect. Está en unidades de mundo (lo que ven los hijos) y en píxeles
-        // (lo que ve el emisor).
+        // Resolved placement of the node. It is reused when neither Transform nor
+        // Layout is dirty: changing ONLY the color does not recompute even one
+        // rect. It is in world units (what the children see) and in pixels
+        // (what the emitter sees).
         mutable glm::vec2 cacheWorldPos{0.0f, 0.0f};
         mutable glm::vec2 cacheWorldSize{0.0f, 0.0f};
         mutable glm::vec2 cacheWorldScale{1.0f, 1.0f};
@@ -489,30 +489,30 @@ namespace DonTopo
         mutable UiScissor cacheSelfScissor{};
         mutable UiScissor cacheChildScissor{};
         mutable float     cacheOpacity   = 1.0f;
-        mutable bool      cacheSelfCulled = false;   // máscara propia vacía
+        mutable bool      cacheSelfCulled = false;   // own mask empty
         mutable bool      cacheGeomValid  = false;
 
-        // Cuántas veces ha REEMITIDO este nodo. Solo para medir: nadie lo lee
-        // dentro del motor. Sube en el build que reconstruye sus vértices y no
-        // en el que se los copia de la caché.
+        // How many times this node has RE-EMITTED. Only for measuring: nobody reads it
+        // inside the engine. It goes up in the build that rebuilds its vertices and not
+        // in the one that copies them from the cache.
         mutable uint32_t rebuildCount = 0;
 
         UiElement*       parent()       { return m_parent; }
         const UiElement* parent() const { return m_parent; }
 
-        // Único modo de crear hijos: el árbol es dueño de ellos y devuelve el
-        // tipo concreto, no la base.
+        // The only way to create children: the tree owns them and returns the concrete
+        // type, not the base.
         template <class T = UiElement>
         T& add(std::string childName = {})
         {
             static_assert(std::is_base_of<UiElement, T>::value,
                           "A canvas child must derive from UiElement");
             m_children.push_back(std::make_unique<T>(std::move(childName)));
-            // El padre se cablea AQUÍ y en ningún otro sitio: es lo que permite
-            // que un evento burbujee sin que el canvas lleve un mapa aparte.
+            // The parent is wired HERE and nowhere else: it is what allows an
+            // event to bubble without the canvas keeping a separate map.
             m_children.back()->m_parent = this;
-            // Un hijo de más cambia la medida y el reparto del padre: sin esto
-            // el layout se quedaría con el del árbol anterior.
+            // An extra child changes the parent's size and distribution: without this
+            // the layout would keep the previous tree's.
             markDirty(DirtyLayout);
             return static_cast<T&>(*m_children.back());
         }
@@ -536,11 +536,11 @@ namespace DonTopo
         }
 
         std::vector<std::unique_ptr<UiElement>> m_children;
-        UiElement* m_parent = nullptr;   // nullptr solo en la raíz del canvas
+        UiElement* m_parent = nullptr;   // nullptr only at the canvas root
     };
 
-    // Direcciones de navegación del foco. Next/Previous recorren el árbol;
-    // las otras cuatro se resuelven por geometría.
+    // Focus navigation directions. Next/Previous walk the tree;
+    // the other four are resolved by geometry.
     enum class UiNavDir : uint32_t
     {
         Next,
@@ -551,27 +551,27 @@ namespace DonTopo
         Down
     };
 
-    // ── Resolución del canvas ───────────────────────────────────────────────
-    // Cómo se convierte el árbol (que se resuelve SIEMPRE en unidades de
-    // referencia) a los píxeles del render. Todo CPU y determinista: vale igual
-    // en el editor en Play y en el juego exportado.
+    // ── Canvas resolution ───────────────────────────────────────────────────
+    // How the tree (which is ALWAYS resolved in reference units) is converted
+    // to the render's pixels. All CPU and deterministic: it is equally valid
+    // in the editor in Play and in the exported game.
     enum class UiScaleMode : uint32_t
     {
-        ConstantPixelSize,     // 1 unidad = 1 píxel (por scaleFactor)
-        ScaleWithScreenSize,   // la escala sale del área útil contra la referencia
-        ConstantPhysicalSize   // la escala sale del DPI
+        ConstantPixelSize,     // 1 unit = 1 pixel (times scaleFactor)
+        ScaleWithScreenSize,   // the scale comes from the usable area against the reference
+        ConstantPhysicalSize   // the scale comes from the DPI
     };
 
-    // Cómo se combinan el ratio en X y el ratio en Y en ScaleWithScreenSize.
+    // How the X ratio and the Y ratio are combined in ScaleWithScreenSize.
     enum class UiScreenMatch : uint32_t
     {
-        MatchWidthOrHeight,   // lerp logarítmico entre los dos, por matchWidthOrHeight
-        Expand,               // el MENOR: nada se sale, pueden sobrar márgenes
-        Shrink                // el MAYOR: no sobra nada, puede salirse
+        MatchWidthOrHeight,   // logarithmic lerp between the two, by matchWidthOrHeight
+        Expand,               // the SMALLER: nothing sticks out, margins may be left over
+        Shrink                // the LARGER: nothing is left over, it may stick out
     };
 
-    // Insets del safe area, en PÍXELES REALES del render (no en unidades de
-    // referencia): quien los rellena los recibe así del SO.
+    // Safe area insets, in REAL render PIXELS (not in reference
+    // units): whoever fills them in receives them that way from the OS.
     struct UiSafeArea
     {
         float left   = 0.0f;
@@ -591,137 +591,137 @@ namespace DonTopo
         bool visible() const { return m_visible; }
         void setVisible(bool v) { m_visible = v; }
 
-        // Vacía la jerarquía. El canvas vuelve a costar cero.
+        // Empties the hierarchy. The canvas costs zero again.
         void clear();
 
-        // width/height son el tamaño del render en píxeles: fijan el scissor
-        // raíz y la ortográfica.
+        // width/height are the render's size in pixels: they fix the root scissor
+        // and the orthographic.
         void buildDrawData(uint32_t width, uint32_t height, UiDrawData& out) const;
 
-        // ── Resolución ──────────────────────────────────────────────────────
-        // El área útil sale SIEMPRE en este orden: (a) el render entero, (b) se
-        // le restan los insets del safe area, (c) si aspectRatio > 0 se recorta
-        // CENTRADO a esa relación. De ahí sale una escala ÚNICA y UNIFORME, y
-        // esa escala entra una sola vez, al pasar el rect de cada nodo de
-        // unidades de referencia a píxeles. El scissor raíz es el área útil:
-        // lo que cae en las barras o en el inset NO se dibuja.
+        // ── Resolution ──────────────────────────────────────────────────────
+        // The usable area ALWAYS comes out in this order: (a) the whole render, (b) the
+        // safe area insets are subtracted, (c) if aspectRatio > 0 it is clipped
+        // CENTERED to that ratio. From that comes a SINGLE, UNIFORM scale, and
+        // that scale enters only once, when each node's rect goes from
+        // reference units to pixels. The root scissor is the usable area:
+        // what falls in the bars or in the inset is NOT drawn.
         UiScaleMode   scaleMode           = UiScaleMode::ConstantPixelSize;
-        float         scaleFactor         = 1.0f;               // multiplica a los tres modos
+        float         scaleFactor         = 1.0f;               // multiplies all three modes
         glm::vec2     referenceResolution{1920.0f, 1080.0f};    // ScaleWithScreenSize
         UiScreenMatch screenMatch         = UiScreenMatch::MatchWidthOrHeight;
-        float         matchWidthOrHeight  = 0.5f;               // 0 = ancho, 1 = alto (se clampa)
-        float         screenDpi           = 0.0f;               // 0 = desconocido
-        float         fallbackDpi         = 96.0f;              // el que se usa si no se sabe
+        float         matchWidthOrHeight  = 0.5f;               // 0 = width, 1 = height (clamped)
+        float         screenDpi           = 0.0f;               // 0 = unknown
+        float         fallbackDpi         = 96.0f;              // the one used if it is not known
         float         referenceDpi        = 96.0f;              // ConstantPhysicalSize
-        UiSafeArea    safeArea{};                               // en píxeles reales
-        float         aspectRatio         = 0.0f;               // 0 = apagado (16/9 = 1.777…)
+        UiSafeArea    safeArea{};                               // in real pixels
+        float         aspectRatio         = 0.0f;               // 0 = off (16/9 = 1.777…)
 
-        // Lo que dejó el último buildDrawData. Solo lectura: para poder probarlo
-        // y para que el editor lo pueda enseñar algún día.
+        // What the last buildDrawData left. Read-only: so it can be tested
+        // and so the editor can show it some day.
         float     uiScale()       const { return m_uiScale; }
         glm::vec2 uiOrigin()      const { return m_uiOrigin; }
         glm::vec2 referenceSize() const { return m_referenceSize; }
 
-        // Cuántos nodos REEMITIERON sus vértices en el último buildDrawData. Los
-        // demás se copiaron de su caché. Es la única medida honesta de lo que se
-        // está ahorrando: no depende del reloj ni de la máquina.
+        // How many nodes RE-EMITTED their vertices in the last buildDrawData. The
+        // rest were copied from their cache. It is the only honest measure of what is
+        // being saved: it does not depend on the clock or the machine.
         uint32_t rebuiltNodes() const { return m_rebuiltNodes; }
 
-        // El reloj del último updateInput. Lo necesita quien anime FUERA del
-        // canvas y tenga que ir a compás con lo que anima dentro: el parpadeo
-        // del cursor de un campo de texto es el primer caso. Tener un reloj
-        // propio ahí seria uno que se separa de este en cuanto los dos avancen
-        // por caminos distintos.
+        // The clock of the last updateInput. It is needed by whoever animates OUTSIDE the
+        // canvas and has to keep in step with what is animated inside: the blinking
+        // of a text field's caret is the first case. Having a clock of its
+        // own there would be one that drifts from this one as soon as the two advance
+        // by different paths.
         float lastTimeSeconds() const { return m_lastTime; }
 
         // ── Input ───────────────────────────────────────────────────────────
-        // ÚNICO punto de entrada. Va DESPUÉS del layout, o sea después de un
-        // buildDrawData: reutiliza los rects que ese dejó en cada elemento y no
-        // vuelve a medir nada. Sin buildDrawData previo no hay rects y el hit
-        // test no encuentra a nadie (no es un fallo: es un canvas sin colocar).
+        // The ONLY entry point. It goes AFTER the layout, that is after a
+        // buildDrawData: it reuses the rects that one left in each element and does not
+        // measure anything again. Without a previous buildDrawData there are no rects and the hit
+        // test finds nobody (it is not a failure: it is an unplaced canvas).
         void updateInput(const UiInputState& input);
 
-        // Umbrales, aquí y no escondidos en constantes del .cpp: un juego con el
-        // ratón y otro con un mando no quieren los mismos números.
-        float doubleClickTime     = 0.35f;   // s entre los dos clicks
-        float doubleClickDistance = 8.0f;    // px entre los dos clicks
-        float dragThreshold       = 5.0f;    // px desde el Down para que sea arrastre
+        // Thresholds, here and not hidden in constants of the .cpp: a game with the
+        // mouse and another with a gamepad do not want the same numbers.
+        float doubleClickTime     = 0.35f;   // s between the two clicks
+        float doubleClickDistance = 8.0f;    // px between the two clicks
+        float dragThreshold       = 5.0f;    // px from the Down for it to be a drag
 
-        // Elemento bajo el cursor en el último updateInput.
+        // Element under the cursor in the last updateInput.
         UiElement* hovered() const { return m_hovered; }
 
-        // ¿Hay un botón del ratón BAJADO sobre un elemento de este canvas y sin
-        // soltar todavía? Es la captura del puntero: mientras dure, el cursor
-        // puede irse fuera del widget (y hasta encima de OTRO canvas) sin que el
-        // arrastre se corte, que es como se comporta un slider de toda la vida.
-        // Lo lee dispatchUiInput para repartir el ratón entre varios canvas.
+        // Is there a mouse button DOWN on an element of this canvas and not
+        // released yet? It is the pointer capture: while it lasts, the cursor
+        // can leave the widget (even over ANOTHER canvas) without the
+        // drag being cut, which is how a slider has always behaved.
+        // dispatchUiInput reads it to distribute the mouse among several canvases.
         bool pointerCaptured() const
         {
             return m_pressTarget[0] != nullptr || m_pressTarget[1] != nullptr ||
                    m_pressTarget[2] != nullptr;
         }
 
-        // Suelta el hover, la captura del puntero y el foco de este canvas, con
-        // su MouseExit y su Blur — igual que si el ratón se hubiera ido fuera y
-        // el foco a otra parte. NO toca el árbol ni las animaciones.
+        // Releases this canvas's hover, pointer capture and focus, with
+        // their MouseExit and Blur, just as if the mouse had gone outside and
+        // the focus elsewhere. It does NOT touch the tree or the animations.
         //
-        // Lo llama quien saca el canvas del reparto de input a media pulsación:
-        // hoy, cambiarle `renderMode` a World (es escribible desde Lua). Un
-        // canvas que se va con un botón bajado nunca ve el MouseUp y se queda con
-        // `m_pressTarget`: al volver entraría con pointerCaptured() en true SIN
-        // ningún botón bajado, se llevaría el ratón en el paso 1 de
-        // dispatchUiInput y emitiría un MouseUp/Click que nadie pidió. Y sin
-        // soltar el hover se quedaría además PEGADO en el último que vio, que es
-        // el mismo fallo que dispatchUiInput evita para los que pierden el
-        // puntero — aquí no puede evitarlo porque el canvas ya no está en su
-        // lista.
+        // It is called by whoever takes the canvas out of the input distribution in the middle of a press:
+        // today, changing its `renderMode` to World (it is writable from Lua). A
+        // canvas that leaves with a button down never sees the MouseUp and keeps
+        // `m_pressTarget`: when coming back it would enter with pointerCaptured() true WITHOUT
+        // any button down, would take the mouse in step 1 of
+        // dispatchUiInput and would emit a MouseUp/Click that nobody asked for. And without
+        // releasing the hover it would also stay STUCK on the last one it saw, which is
+        // the same failure dispatchUiInput avoids for those that lose the
+        // pointer; here it cannot avoid it because the canvas is no longer in its
+        // list.
         void releaseInput();
 
-        // Uno solo por canvas. setFocus emite Blur en el viejo y Focus en el
-        // nuevo, EN ESE ORDEN. Ignora los que no son focusable (nullptr sí vale:
-        // es soltar el foco).
+        // Only one per canvas. setFocus emits Blur on the old one and Focus on the
+        // new one, IN THAT ORDER. It ignores those that are not focusable (nullptr is fine:
+        // it means releasing the focus).
         UiElement* focused() const { return m_focused; }
         void       setFocus(UiElement* element);
 
-        // Mueve el foco. Devuelve si CAMBIÓ. Aquí no entra ni el teclado ni el
-        // mando: quien los lea llama a esto. CPU pura y determinista, así que
-        // vale igual en el editor en Play y en el juego exportado.
+        // Moves the focus. Returns whether it CHANGED. Neither the keyboard nor the
+        // gamepad come in here: whoever reads them calls this. Pure, deterministic CPU, so it
+        // is equally valid in the editor in Play and in the exported game.
         //
-        // Next/Previous recorren el MISMO orden que el Tab (pre-orden del árbol,
-        // saltando lo no focusable, lo invisible y lo deshabilitado) y DAN LA
-        // VUELTA. Left/Right/Up/Down salen de los rects que dejó el último
-        // buildDrawData: sin un buildDrawData previo no hay geometría y la
-        // direccional no encuentra a nadie (igual que el hit test), mientras que
-        // Next/Previous siguen funcionando. La direccional NO da la vuelta.
+        // Next/Previous walk the SAME order as Tab (tree pre-order,
+        // skipping what is not focusable, invisible or disabled) and WRAP
+        // AROUND. Left/Right/Up/Down come from the rects left by the last
+        // buildDrawData: without a previous buildDrawData there is no geometry and the
+        // directional one finds nobody (just like the hit test), while
+        // Next/Previous keep working. The directional one does NOT wrap around.
         //
-        // Sin foco previo, cualquier dirección entra por el primer focusable en
-        // pre-orden. Sin candidato el foco no se mueve y devuelve false.
+        // Without a previous focus, any direction enters through the first focusable in
+        // pre-order. Without a candidate the focus does not move and it returns false.
         bool navigate(UiNavDir dir);
 
-        // ── Navegación por teclado y mando ──────────────────────────────────
-        // Con esto encendido, una tecla que NADIE haya consumido mueve el foco
-        // (flechas) o activa el elemento enfocado (Enter), igual que el Tab y el
-        // Escape ya hacían. Se apaga para un juego que quiera leer las flechas
-        // por su cuenta sin que el canvas se le adelante.
+        // ── Keyboard and gamepad navigation ─────────────────────────────────
+        // With this on, a key that NOBODY has consumed moves the focus
+        // (arrows) or activates the focused element (Enter), just as Tab and
+        // Escape already did. It is turned off for a game that wants to read the arrows
+        // on its own without the canvas getting ahead of it.
         bool keyboardNavigation = true;
 
-        // Dispara el Click del elemento con foco, como si lo hubieran pulsado
-        // con el ratón encima. Es lo que permite jugar con MANDO: sin esto el
-        // foco se podía mover pero no se podía pulsar nada.
+        // Fires the focused element's Click, as if it had been pressed
+        // with the mouse on top. It is what allows playing with a GAMEPAD: without this the
+        // focus could be moved but nothing could be pressed.
         //
-        // Devuelve si llegó a emitirse. No lo hace sin foco, ni sobre un
-        // elemento invisible o deshabilitado, ni sobre un botón que no sea
-        // interactable — las mismas reglas que se le aplican al ratón.
+        // It returns whether it got to be emitted. It does not without focus, nor on an
+        // invisible or disabled element, nor on a button that is not
+        // interactable: the same rules applied to the mouse.
         bool submitFocused();
 
-        // Qué elemento cae bajo un punto, con las mismas reglas que usa el input:
-        // pre-orden INVERSO (gana lo último dibujado), respetando visible, el
-        // scissor heredado y raycastTarget.
+        // Which element falls under a point, with the same rules the input uses:
+        // REVERSE pre-order (the last drawn wins), respecting visible, the
+        // inherited scissor and raycastTarget.
         UiElement* hitTest(const glm::vec2& point) const;
 
     private:
-        // El único que resuelve la escala es el emisor, y buildDrawData es
-        // const: por eso los tres resultados son mutable y él es amigo.
+        // The only one that resolves the scale is the emitter, and buildDrawData is
+        // const: that is why the three results are mutable and it is a friend.
         friend class UiSpriteBatch;
 
         void dispatch(UiElement* target, UiEvent& event, UiEventHandler UiElement::* slot) const;
@@ -730,21 +730,21 @@ namespace DonTopo
         UiElement m_root{"Canvas"};
         bool   m_visible = true;
 
-        // Resultado del último buildDrawData. Neutros mientras no haya habido
-        // ninguno: escala 1, sin desplazamiento y sin área.
+        // Result of the last buildDrawData. Neutral while there has been
+        // none: scale 1, no offset and no area.
         mutable float     m_uiScale = 1.0f;
         mutable glm::vec2 m_uiOrigin{0.0f, 0.0f};
         mutable glm::vec2 m_referenceSize{0.0f, 0.0f};
 
-        // Resolución del build anterior. Si cualquiera de estos cambia, la
-        // colocación de TODOS los nodos cambia y la caché entera sobra.
+        // Resolution of the previous build. If any of these changes, the
+        // placement of ALL the nodes changes and the whole cache is useless.
         mutable uint32_t m_lastWidth  = 0;
         mutable uint32_t m_lastHeight = 0;
 
         mutable uint32_t m_rebuiltNodes = 0;
 
-        // Estado del input entre frames. Todo puntero aquí apunta DENTRO de
-        // m_root, así que clear() los tiene que soltar.
+        // Input state between frames. Every pointer here points INSIDE
+        // m_root, so clear() has to release them.
         UiElement* m_hovered = nullptr;
         UiElement* m_focused = nullptr;
 
@@ -756,66 +756,66 @@ namespace DonTopo
         glm::vec2  m_lastMousePos{0.0f, 0.0f};
         bool       m_hasLastMouse = false;
 
-        // Primer click de un posible doble.
+        // First click of a possible double.
         UiElement* m_lastClickTarget = nullptr;
         glm::vec2  m_lastClickPos{0.0f, 0.0f};
         float      m_lastClickTime = 0.0f;
 
-        // Reloj de las animaciones. El avance es el DELTA contra el frame
-        // anterior; sin frame anterior (el primer updateInput) no hay avance,
-        // que es lo que impide que un timeSeconds grande de arranque se coma
-        // una animación entera en el primer frame.
+        // Animation clock. The advance is the DELTA against the previous frame;
+        // without a previous frame (the first updateInput) there is no advance,
+        // which is what keeps a large starting timeSeconds from eating
+        // a whole animation in the first frame.
         float m_lastTime    = 0.0f;
         bool  m_hasLastTime = false;
     };
 
-    // Dónde se deja el ratón de un canvas que NO tiene el puntero este frame.
-    // Un punto que no cae dentro de ningún rect imaginable: el hit test de ese
-    // canvas devuelve nullptr y su hover se limpia solo, con su MouseExit y con
-    // sus colores de estado de vuelta a Normal. No vale con "no llamarle": un
-    // canvas al que se le deja de dar input se queda PEGADO en el último hover
-    // que vio, para siempre.
+    // Where the mouse of a canvas that does NOT have the pointer this frame is left.
+    // A point that falls inside no imaginable rect: that canvas's hit test
+    // returns nullptr and its hover clears itself, with its MouseExit and with
+    // its state colors back to Normal. "Not calling it" is not enough: a
+    // canvas that stops being given input stays STUCK on the last hover
+    // it saw, forever.
     inline glm::vec2 uiPointerAway() { return glm::vec2(-1.0e6f, -1.0e6f); }
 
-    // Reparte UN estado de input entre TODOS los canvas de pantalla de la
-    // escena. `canvases` va en orden de PRIORIDAD: el de más arriba primero (o
-    // sea, el ÚLTIMO que se dibuja, que es el que el usuario ve encima).
+    // Distributes ONE input state among ALL the scene's screen canvases.
+    // `canvases` goes in PRIORITY order: the topmost first (that is, the
+    // LAST one drawn, which is the one the user sees on top).
     //
-    // Llamar a updateInput con el mismo estado en los N canvas NO vale: dos
-    // canvas solapados dejarían LOS DOS un widget en hover y un clic activaría
-    // dos botones a la vez. El reparto es:
+    // Calling updateInput with the same state on the N canvases is NOT valid: two
+    // overlapping canvases would leave BOTH with a widget in hover and a click would activate
+    // two buttons at once. The distribution is:
     //
-    //   - RATÓN a UNO solo. Se lo queda el que tenga la captura del puntero
-    //     (un botón bajado sin soltar, o sea un arrastre en curso); si no hay
-    //     ninguno, el primero de la lista que tenga algo bajo el cursor. Los
-    //     demás reciben el ratón en uiPointerAway() y con los botones sueltos,
-    //     que es lo que les limpia el hover en vez de dejárselo pegado.
-    //   - TECLADO y MANDO a UNO solo, y NO tiene por qué ser el mismo: el foco
-    //     no lo mueve el cursor. Las teclas van al primer canvas de la lista
-    //     que TENGA foco, así que escribir en un campo de texto sigue llegando
-    //     aunque el ratón se pasee por encima de otro canvas. Si ninguno tiene
-    //     foco van al de más arriba (hoy eso no se nota: updateInput ignora las
-    //     teclas sin foco).
-    //   - El FOCO no salta solo entre canvas: se mueve al clicar. El Tab y las
-    //     flechas dan la vuelta DENTRO del canvas que lo tiene, como siempre.
-    //     Cuando el canvas que tiene el puntero coge foco, los demás lo sueltan,
-    //     que es lo que impide dos anillos de foco a la vez.
+    //   - MOUSE to ONE only. It goes to the one that has the pointer capture
+    //     (a button held down and not released, that is a drag in progress); if there is
+    //     none, the first in the list with something under the cursor. The
+    //     others receive the mouse in uiPointerAway() and with the buttons released,
+    //     which is what clears their hover instead of leaving it stuck.
+    //   - KEYBOARD and GAMEPAD to ONE only, and it does NOT have to be the same: the focus
+    //     is not moved by the cursor. The keys go to the first canvas in the list
+    //     that HAS focus, so typing in a text field keeps arriving
+    //     even if the mouse wanders over another canvas. If none has
+    //     focus they go to the topmost (today that is not noticeable: updateInput ignores
+    //     keys without focus).
+    //   - The FOCUS does not jump between canvases on its own: it moves on click. Tab and the
+    //     arrows wrap around INSIDE the canvas that has it, as always.
+    //     When the canvas that has the pointer takes focus, the others release it,
+    //     which is what prevents two focus rings at once.
     //
-    // Todos los canvas reciben updateInput, incluidos los que no ven nada: es
-    // ahí donde corren sus animaciones y el fundido de color de sus botones.
+    // All the canvases receive updateInput, including those that see nothing: it is
+    // there that their animations and their buttons' color fade run.
     void dispatchUiInput(const std::vector<UiCanvas*>& canvases, const UiInputState& input);
 
-    // Nodo vivo por NOMBRE en TODO el subárbol de `node`, o nullptr si no hay
-    // ninguno. Recorrido COMPLETO y no solo los hijos directos: desde que el
-    // sync respeta la jerarquía de la escena, el nodo de un widget anidado
-    // cuelga del de su padre, y buscarlo a un solo nivel dejaría sin
-    // encontrar nada que no fuera de primer nivel.
+    // Live node by NAME in the WHOLE subtree of `node`, or nullptr if there is
+    // none. FULL traversal and not just the direct children: since the
+    // sync respects the scene hierarchy, a nested widget's node
+    // hangs from its parent's, and looking it up at a single level would leave
+    // anything not at first level unfound.
     //
-    // Vivía como función local (findUiNodeNamed) en ViewportPanel.cpp, que
-    // solo miraba el canvas de pantalla. Se mueve aquí, libre, para que la
-    // use también el Renderer (findUiNode, que recorre TODOS los canvas de
-    // la escena, no solo el de pantalla) sin que el editor y el motor tengan
-    // cada uno su copia.
+    // It lived as a local function (findUiNodeNamed) in ViewportPanel.cpp, which
+    // only looked at the screen canvas. It is moved here, free, so that the
+    // Renderer also uses it (findUiNode, which walks ALL the scene's canvases,
+    // not just the screen one) without the editor and the engine each having
+    // their own copy.
     inline const UiElement* findUiNodeIn(const UiElement& node, const std::string& wanted)
     {
         for (const auto& child : node.children())

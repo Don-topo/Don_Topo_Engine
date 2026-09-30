@@ -13,36 +13,36 @@
 
 namespace DonTopo
 {
-    // Un botón de la UI 2D como componente de GameObject, con el MISMO contrato
-    // que CanvasComponent: SOLO DATOS. No guarda ni un UiElement ni el atlas ni
-    // la fuente — el árbol vivo lo sigue teniendo el Renderer
-    // (Renderer::uiCanvas()), y quien dibuja lo reconstruye/actualiza cada frame
-    // con syncUiWidgets(). Así lo que se ve en Play y en el juego exportado sale
-    // de la ESCENA y no de un árbol cableado a mano.
+    // A 2D UI button as a GameObject component, with the SAME contract
+    // as CanvasComponent: DATA ONLY. It stores neither a UiElement nor the atlas nor
+    // the font. The live tree is still held by the Renderer
+    // (Renderer::uiCanvas()), and whoever draws rebuilds/updates it every frame
+    // with syncUiWidgets(). This way what is seen in Play and in the exported game comes
+    // from the SCENE and not from a hand-wired tree.
     //
-    // Los nombres, los defaults y el significado son EXACTAMENTE los del núcleo:
-    //   - el bloque de rect y el de sprite son de UiElement (UiCanvas.h),
-    //   - el bloque de estados es de Button (UiWidgets.h),
-    //   - el bloque de texto es de Text (UiWidgets.h), porque Button NO tiene
-    //     texto: la etiqueta es un HIJO Text que monta el sync.
-    // Este componente no interpreta ni clampa nada.
+    // The names, defaults and meaning are EXACTLY those of the core:
+    //   - the rect block and the sprite block belong to UiElement (UiCanvas.h),
+    //   - the states block belongs to Button (UiWidgets.h),
+    //   - the text block belongs to Text (UiWidgets.h), because Button has NO
+    //     text: the label is a Text CHILD that the sync assembles.
+    // This component neither interprets nor clamps anything.
     //
-    // Las dos rutas (atlasPath, fontPath) son lo ÚNICO que no es un campo del
-    // núcleo: el núcleo guarda punteros a recursos de GPU, que no se serializan.
-    // Las resuelve el sync contra el Renderer, no el componente.
-    // Lo que un botón tiene EN VIVO y no se serializa: los callbacks que le haya
-    // enganchado un script y el estado que resolvió el último updateInput.
+    // The two paths (atlasPath, fontPath) are the ONLY thing that is not a core
+    // field: the core stores pointers to GPU resources, which are not serialized.
+    // The sync resolves them against the Renderer, not the component.
+    // What a button has LIVE and is not serialized: the callbacks a script has
+    // hooked onto it and the state resolved by the last updateInput.
     //
-    // Vive aquí y no en el nodo del canvas a propósito: el nodo lo destruye
-    // clearChildren() cada vez que syncUiWidgets reconstruye la raíz (o sea, al
-    // añadir o quitar CUALQUIER widget de la escena), así que un handler
-    // enganchado directamente al nodo desaparecería sin avisar. El dueño es el
-    // componente —que vive lo que vive el GameObject— y el sync se limita a
-    // reinstalar en el nodo un handler que apunta aquí con un weak_ptr.
+    // It lives here and not in the canvas node on purpose: the node is destroyed by
+    // clearChildren() every time syncUiWidgets rebuilds the root (that is, when
+    // adding or removing ANY widget in the scene), so a handler
+    // hooked directly to the node would disappear without warning. The owner is the
+    // component (which lives as long as the GameObject does) and the sync just
+    // reinstalls on the node a handler that points here with a weak_ptr.
     //
-    // `state` es el camino de vuelta: el nodo lo escribe, el componente lo
-    // publica. Sin esto un script no podría leer el estado del botón, que solo
-    // existe en el árbol vivo.
+    // `state` is the way back: the node writes it, the component
+    // publishes it. Without this a script could not read the button's state, which only
+    // exists in the live tree.
     struct UiButtonRuntime
     {
         std::function<void()> onClick;
@@ -50,15 +50,15 @@ namespace DonTopo
         UiButtonState         state = UiButtonState::Normal;
     };
 
-    // El hueco del runtime dentro del componente. Es un tipo propio y no un
-    // shared_ptr suelto por las DOS reglas que tiene que romper respecto a la
-    // copia por defecto:
-    //   - copiar un componente (duplicar un GameObject, o la copia que el sync
-    //     guarda como snapshot) NO comparte los callbacks: cada copia estrena
-    //     los suyos, o el clon dispararía el callback del original;
-    //   - comparar dos componentes IGNORA este campo: el sync usa operator==
-    //     para saber si hay que volcar el nodo, y ni un callback ni el estado
-    //     vivo son datos que volcar.
+    // The runtime slot inside the component. It is its own type and not a loose
+    // shared_ptr because of the TWO rules it has to break relative to the default
+    // copy:
+    //   - copying a component (duplicating a GameObject, or the copy the sync
+    //     keeps as a snapshot) does NOT share the callbacks: each copy gets
+    //     its own, or the clone would fire the original's callback;
+    //   - comparing two components IGNORES this field: the sync uses operator==
+    //     to know whether to dump the node, and neither a callback nor the live state
+    //     is data to dump.
     struct UiCallbackSlot
     {
         std::shared_ptr<UiButtonRuntime> ptr = std::make_shared<UiButtonRuntime>();
@@ -79,17 +79,17 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};   // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};   // px, relative to the anchor
             glm::vec2 size{160.0f, 40.0f};    // px
             glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
             bool      visible = true;
 
-            // Ruta del atlas (PNG) y nombre del sprite base dentro de él. Vacías
-            // = botón de color plano, que es lo que dibuja UiElement sin atlas.
+            // Atlas path (PNG) and name of the base sprite inside it. Empty
+            // = flat-color button, which is what UiElement draws without an atlas.
             std::string atlasPath;
             std::string sprite;
 
-            // --- Estados (Button) ---------------------------------------------
+            // --- States (Button) ----------------------------------------------
             bool               interactable = true;
             bool               selected     = false;
             UiButtonTransition transition   = UiButtonTransition::ColorTint;
@@ -100,37 +100,37 @@ namespace DonTopo
             glm::vec4 disabledColor{1.0f, 1.0f, 1.0f, 1.0f};
             glm::vec4 selectedColor{1.0f, 1.0f, 1.0f, 1.0f};
 
-            // Nombres del MISMO atlas del botón. Uno vacío deja el sprite como
-            // esté (es el contrato de Button, no una decisión de aquí).
+            // Names from the button's SAME atlas. An empty one leaves the sprite as
+            // it is (that is Button's contract, not a decision made here).
             std::string normalSprite;
             std::string hoverSprite;
             std::string pressedSprite;
             std::string disabledSprite;
             std::string selectedSprite;
 
-            float fadeDuration = 0.1f;   // segundos del fundido de Animation
+            float fadeDuration = 0.1f;   // seconds of the Animation fade
 
-            // --- Etiqueta (hijo Text) -----------------------------------------
+            // --- Label (Text child) -------------------------------------------
             std::string text;
-            std::string fontPath;                        // TTF; vacía = sin texto
+            std::string fontPath;                        // TTF; empty = no text
             float       fontSize = 16.0f;
             glm::vec4   textColor{1.0f, 1.0f, 1.0f, 1.0f};
             UiTextAlign textAlign = UiTextAlign::Center;
-            // A lo alto va CENTRADA por defecto, al revés que un Text suelto:
-            // una etiqueta pegada al borde de arriba del botón es lo que hacía
-            // que "textAlign: Center" no pareciera centrar nada. Sigue siendo
-            // elegible por si alguien quiere la etiqueta arriba o abajo.
+            // Vertically it is CENTERED by default, unlike a standalone Text:
+            // a label stuck to the top edge of the button is what made
+            // "textAlign: Center" look like it centered nothing. It is still
+            // selectable in case someone wants the label at the top or bottom.
             UiTextVAlign textVAlign = UiTextVAlign::Middle;
 
-            // --- Vivo (NO se serializa) ---------------------------------------
-            // Callbacks de script y estado resuelto. Fuera de toJson/fromJson,
-            // fuera de operator== y fuera de applyTo: no es un dato de la escena.
+            // --- Live (NOT serialized) ----------------------------------------
+            // Script callbacks and resolved state. Outside toJson/fromJson,
+            // outside operator== and outside applyTo: it is not scene data.
             UiCallbackSlot callbacks;
 
-            // Vuelca el rect y los estados en el botón vivo. NO toca ni el atlas
-            // (es un puntero a GPU: lo resuelve el sync) ni los campos que
-            // escribe el propio canvas (state, fadeFrom, fadeStartTime,
-            // stateReady): pisarlos cada frame mataría el fundido.
+            // Dumps the rect and the states into the live button. Does NOT touch either the atlas
+            // (it is a GPU pointer: the sync resolves it) or the fields
+            // the canvas itself writes (state, fadeFrom, fadeStartTime,
+            // stateReady): overwriting them every frame would kill the fade.
             void applyTo(Button& b) const
             {
                 b.anchorMin    = anchorMin;
@@ -138,16 +138,16 @@ namespace DonTopo
                 b.pivot        = pivot;
                 b.position     = position;
                 b.size         = size;
-                // El tinte BASE, no el color que se pinta: ese lo resuelve el
-                // canvas multiplicando el del estado por este. Escribirlo en
-                // b.color no servía de nada — el primer updateInput lo pisaba, y
-                // por eso el campo "Color" del editor no hacía absolutamente
-                // nada en un botón.
+                // The BASE tint, not the color that is painted: the canvas resolves that
+                // by multiplying the state's color by this one. Writing it into
+                // b.color was useless: the first updateInput overwrote it, and
+                // that is why the editor's "Color" field did absolutely
+                // nothing on a button.
                 b.baseColor    = color;
-                // Valor de partida para el frame anterior al primer updateInput:
-                // sin él, un botón recién creado se pinta blanco un frame. Sale
-                // del normalColor DEL COMPONENTE, que es el que se va a volcar
-                // unas líneas más abajo; el del nodo todavía es el de antes.
+                // Starting value for the frame before the first updateInput:
+                // without it, a newly created button is painted white for one frame. It comes
+                // from the COMPONENT's normalColor, which is the one that will be dumped
+                // a few lines below; the node's is still the old one.
                 b.color        = color * normalColor;
                 b.visible      = visible;
                 b.sprite       = sprite;
@@ -171,9 +171,9 @@ namespace DonTopo
                 b.fadeDuration = fadeDuration;
             }
 
-            // La etiqueta ocupa el rect ENTERO del botón (anclada a las cuatro
-            // esquinas, sin márgenes): así el texto sigue al botón al cambiarle
-            // el tamaño sin un segundo juego de campos que mantener.
+            // The label takes the button's WHOLE rect (anchored to all four
+            // corners, no margins): this way the text follows the button when its
+            // size changes without a second set of fields to maintain.
             void applyToLabel(Text& t) const
             {
                 t.anchorMin = glm::vec2(0.0f, 0.0f);
@@ -187,18 +187,18 @@ namespace DonTopo
                 t.vAlign    = textVAlign;
                 t.visible   = visible;
 
-                // Y NO intercepta el ratón. El hit test prueba a los hijos
-                // antes que al padre, así que una etiqueta que cubre el rect
-                // entero se quedaría con el hover y el botón no saldría nunca
-                // de Normal: los cinco colores de estado no harían nada. El
-                // click sí funcionaría (los eventos burbujean del hijo al
-                // padre), que es lo que hace el fallo tan difícil de ver.
+                // And it does NOT intercept the mouse. The hit test tries the children
+                // before the parent, so a label covering the whole rect
+                // would keep the hover and the button would never leave
+                // Normal: the five state colors would do nothing. The
+                // click would work (events bubble from child to
+                // parent), which is what makes the bug so hard to see.
                 t.raycastTarget = false;
             }
 
-            // El sync lo usa para saber si hay algo que volcar: sin esto habría
-            // que ensuciar el nodo TODOS los frames, que es justo lo que la
-            // caché de vértices del canvas existe para evitar.
+            // The sync uses it to know whether there is anything to dump: without this the
+            // node would have to be dirtied EVERY frame, which is exactly what the
+            // canvas's vertex cache exists to avoid.
             bool operator==(const ButtonComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -221,33 +221,33 @@ namespace DonTopo
             bool operator!=(const ButtonComponent& o) const { return !(*this == o); }
     };
 
-    // Fuente que se usa cuando el botón tiene texto y NADIE ha puesto una ruta.
-    // Un texto sin fuente no se dibuja (el emisor cae al quad de la base), así
-    // que sin este fallback escribir en el campo Text no se vería hasta buscar
-    // un TTF a mano.
+    // Font used when the button has text and NOBODY has set a path.
+    // A text without a font is not drawn (the emitter falls back to the base quad), so
+    // without this fallback typing in the Text field would not show until a TTF
+    // was looked up by hand.
     //
-    // Va DENTRO del proyecto y no a una fuente del sistema a propósito: el juego
-    // exportado se lleva los assets del proyecto, no los de la máquina que
-    // exportó, y una ruta tipo C:/Windows/Fonts/... deja el texto invisible en
-    // cualquier otro PC. Relativa al directorio de trabajo, igual que el resto
-    // de assets. El exportador la empaqueta cuando algún botón tiene texto sin
-    // fuente propia (GameExporter::collectSceneAssets).
+    // It goes INSIDE the project and not to a system font on purpose: the exported
+    // game takes the project's assets, not those of the machine that
+    // exported, and a path like C:/Windows/Fonts/... leaves the text invisible on
+    // any other PC. Relative to the working directory, like the rest
+    // of the assets. The exporter packs it when any button has text without its
+    // own font (GameExporter::collectSceneAssets).
     inline constexpr const char* kDefaultUiFontPath =
         "assets/DancingScript-VariableFont_wght.ttf";
 
-    // Nombre del nodo vivo de un botón dentro del canvas. Es la ÚNICA forma de
-    // volver del árbol de UI al GameObject (el árbol no guarda punteros a la
-    // escena), así que la convención vive aquí y no repetida en cada caller:
-    // la usa el sync para crear los nodos y el editor para el gizmo y el
-    // picking. La etiqueta cuelga como "<nombre>/Label".
+    // Name of a button's live node inside the canvas. It is the ONLY way to
+    // get back from the UI tree to the GameObject (the tree holds no pointers to the
+    // scene), so the convention lives here and is not repeated in every caller:
+    // the sync uses it to create the nodes and the editor for the gizmo and
+    // picking. The label hangs as "<name>/Label".
     inline std::string uiButtonNodeName(uint64_t ownerId)
     {
         return "go:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiButtonNodeName, tolerante con el sufijo "/Label" (el hit
-    // test devuelve el nodo más profundo, que puede ser la etiqueta). Devuelve
-    // 0 si el nombre no es de un botón: 0 no es un id válido de GameObject.
+    // Inverse of uiButtonNodeName, tolerant of the "/Label" suffix (the hit
+    // test returns the deepest node, which can be the label). Returns
+    // 0 if the name is not a button's: 0 is not a valid GameObject id.
     inline uint64_t uiButtonOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("go:", 0) != 0) return 0;
@@ -262,8 +262,8 @@ namespace DonTopo
         return id;
     }
 
-    // El sync y su caché NO viven aquí: la raíz del canvas se reconstruye con
-    // clearChildren(), así que hay UN solo sync dueño de todos los widgets
-    // (syncUiWidgets en TextComponent.h). Dos syncs sobre la misma raíz se
-    // borrarían los nodos el uno al otro cada vez que uno reconstruyera.
+    // The sync and its cache do NOT live here: the canvas root is rebuilt with
+    // clearChildren(), so there is ONE single sync that owns all the widgets
+    // (syncUiWidgets in TextComponent.h). Two syncs over the same root would
+    // delete each other's nodes every time one of them rebuilt.
 }

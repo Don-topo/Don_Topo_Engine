@@ -1,43 +1,43 @@
 #pragma once
 
-// Pegamento entre el input del juego (teclado y mando, o sea GLFW) y lo que
-// UiCanvas entiende.
+// Glue between the game input (keyboard and gamepad, that is GLFW) and what
+// UiCanvas understands.
 //
-// Vive FUERA de UiCanvas a propósito: el canvas es CPU pura y determinista y no
-// conoce ni GLFW ni Input, que es justo lo que permite probarlo sin ventana. Lo
-// que falta sin esto es todo lo que no sea el ratón — el foco, el Tab, las
-// flechas y el botón de aceptar del mando quedaban implementados y probados
-// pero nadie los alimentaba, así que un juego de mando no podía ni moverse por
-// un menú.
+// It lives OUTSIDE UiCanvas on purpose: the canvas is pure, deterministic CPU and
+// knows neither GLFW nor Input, which is exactly what allows testing it without a window. What
+// is missing without this is everything that is not the mouse: focus, Tab,
+// the arrows and the gamepad's accept button were implemented and tested
+// but nobody fed them, so a gamepad game could not even move through
+// a menu.
 
 #include "DonTopo/UI/UiCanvas.h"
 
 namespace DonTopo
 {
-    // Rellena keys (FLANCOS de este frame, no teclas mantenidas) y los tres
-    // modificadores. No toca ni el ratón ni el tiempo: de eso se encarga quien
-    // llama, que es el único que sabe en qué espacio está su cursor.
+    // Fills keys (EDGES of this frame, not held keys) and the three
+    // modifiers. It touches neither the mouse nor the time: that is up to the caller,
+    // who is the only one that knows what space its cursor is in.
     //
-    // Teclado: Tab, Enter (también el del teclado numérico), Escape y flechas.
-    // Mando: la cruceta y el stick izquierdo mueven, A acepta y B cancela — el
-    // mismo reparto que espera cualquiera que haya tocado un menú de consola.
+    // Keyboard: Tab, Enter (also the numpad one), Escape and arrows.
+    // Gamepad: the d-pad and the left stick move, A accepts and B cancels, the
+    // same layout anyone who has used a console menu expects.
     void fillUiInputKeys(UiInputState& out);
 
-    // Un caracter tecleado, en codepoint Unicode. Lo llama el callback de
-    // caracteres de GLFW (glfwSetCharCallback) y lo VACIA fillUiInputKeys en el
-    // frame siguiente.
+    // A typed character, as a Unicode codepoint. It is called by GLFW's
+    // character callback (glfwSetCharCallback) and fillUiInputKeys DRAINS it on the
+    // next frame.
     //
-    // Hace falta un acumulador porque GLFW da los caracteres SOLO por callback:
-    // no hay un "que se ha tecleado ahora" que consultar, igual que pasa con la
-    // rueda del raton. Leerlo sin vaciarlo repetiria el texto para siempre.
+    // An accumulator is needed because GLFW gives characters ONLY through a callback:
+    // there is no "what was just typed" to query, same as with the
+    // mouse wheel. Reading it without draining it would repeat the text forever.
     //
-    // Quien llama decide CUANDO empujar: en el editor solo durante Play y con
-    // ImGui sin el foco de texto, o escribir en un campo del inspector acabaria
-    // tambien dentro del InputField del juego.
+    // The caller decides WHEN to push: in the editor only during Play and with
+    // ImGui without text focus, or typing in an inspector field would end up
+    // inside the game's InputField too.
     void pushUiInputChar(uint32_t codepoint);
 
-    // Tira lo acumulado sin entregarlo. Para el frame en el que quien llama NO
-    // va a consumir el texto: sin esto, lo tecleado mientras la UI del juego
-    // estaba apagada saldria de golpe al encenderla.
+    // Discards what has accumulated without delivering it. For the frame in which the caller will NOT
+    // consume the text: without this, what was typed while the game UI
+    // was off would come out all at once when it is turned on.
     void discardUiInputChars();
 }

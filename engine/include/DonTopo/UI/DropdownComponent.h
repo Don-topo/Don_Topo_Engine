@@ -13,8 +13,8 @@ namespace DonTopo
 {
     class DropdownComponent;
 
-    // Lo que un desplegable tiene EN VIVO y no se serializa. Mismo papel y
-    // mismos motivos que UiButtonRuntime.
+    // What a dropdown has LIVE and is not serialized. Same role and
+    // same reasons as UiButtonRuntime.
     struct UiDropdownRuntime
     {
         std::function<void(int)> onValueChanged;
@@ -34,17 +34,17 @@ namespace DonTopo
         bool operator==(const UiDropdownCallbackSlot&) const { return true; }
     };
 
-    // Un desplegable de la UI 2D como componente de GameObject, con el MISMO
-    // contrato que el resto: SOLO DATOS. El Dropdown del núcleo (UiWidgets.h) es
-    // un stub SIN campos, así que el widget se monta por COMPOSICIÓN: la caja es
-    // el nodo raíz (de tipo Dropdown) y de ella cuelgan la etiqueta, la flecha y
-    // la lista, con una fila por opción.
+    // A 2D UI dropdown as a GameObject component, with the SAME
+    // contract as the rest: DATA ONLY. The core Dropdown (UiWidgets.h) is
+    // a stub with NO fields, so the widget is assembled by COMPOSITION: the box is
+    // the root node (of type Dropdown) and the label, the arrow and
+    // the list hang from it, with one row per option.
     //
-    // Es el único cuyo subárbol CAMBIA DE FORMA con los datos: una opción más es
-    // un nodo más, así que el sync tiene que reconstruir cuando cambia el NÚMERO
-    // de opciones (no cuando cambia su texto). Abrir y cerrar NO cambia la forma
-    // —la lista existe siempre y solo se apaga—, que es lo que evita reconstruir
-    // el canvas entero en cada click.
+    // It is the only one whose subtree CHANGES SHAPE with the data: one more option is
+    // one more node, so the sync has to rebuild when the NUMBER
+    // of options changes (not when their text changes). Opening and closing does NOT change the shape
+    // (the list always exists and is only turned off), which is what avoids rebuilding
+    // the whole canvas on every click.
     class DropdownComponent
     {
         public:
@@ -52,31 +52,31 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};    // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};    // px, relative to the anchor
             glm::vec2 size{200.0f, 32.0f};     // px
-            glm::vec4 color{0.2f, 0.2f, 0.2f, 1.0f};   // color de la CAJA
+            glm::vec4 color{0.2f, 0.2f, 0.2f, 1.0f};   // color of the BOX
             bool      visible = true;
 
             bool interactable = true;
 
-            // --- Opciones -------------------------------------------------------
+            // --- Options --------------------------------------------------------
             std::vector<std::string> options;
 
-            // Índice de la seleccionada. Sin clamp AQUÍ a propósito (el
-            // componente no interpreta nada, mismo criterio que el resto): quien
-            // LEE es el que aguanta un índice fuera de rango, y para eso está
-            // selectedLabel().
+            // Index of the selected one. No clamp HERE on purpose (the
+            // component interprets nothing, same criterion as the rest): whoever
+            // READS is the one that copes with an out-of-range index, and that is what
+            // selectedLabel() is for.
             int value = 0;
 
-            // Estado VIVO: si se guardara, una escena podría abrirse con la lista
-            // desplegada tapando el menú. Entra en operator== —que es lo que hace
-            // que el sync vuelva a volcar al abrir— pero NO en el JSON.
+            // LIVE state: if it were stored, a scene could open with the list
+            // dropped down covering the menu. It goes into operator== (which is what
+            // makes the sync dump again on opening) but NOT into the JSON.
             bool isOpen = false;
 
-            // --- Lista ----------------------------------------------------------
+            // --- List -----------------------------------------------------------
             float    itemHeight      = 24.0f;
-            // 0 = todas. El alto de la lista se acota a esto para que un combo de
-            // cincuenta idiomas no ocupe tres pantallas.
+            // 0 = all. The height of the list is bounded to this so a combo of
+            // fifty languages does not take up three screens.
             uint32_t maxVisibleItems = 6;
 
             glm::vec4 listColor{0.12f, 0.12f, 0.12f, 1.0f};
@@ -84,8 +84,8 @@ namespace DonTopo
             glm::vec4 itemSelectedColor{0.25f, 0.45f, 0.7f, 1.0f};
             glm::vec4 arrowColor{1.0f, 1.0f, 1.0f, 1.0f};
 
-            // --- Texto ----------------------------------------------------------
-            std::string fontPath;   // TTF; vacía = la fuente por defecto
+            // --- Text -----------------------------------------------------------
+            std::string fontPath;   // TTF; empty = the default font
             float       fontSize = 16.0f;
             glm::vec4   textColor{1.0f, 1.0f, 1.0f, 1.0f};
             float       padding  = 6.0f;
@@ -96,20 +96,20 @@ namespace DonTopo
             std::string arrowSprite;
             std::string itemSprite;
 
-            // --- Runtime (no se serializa) --------------------------------------
+            // --- Runtime (not serialized) ---------------------------------------
             UiDropdownCallbackSlot callbacks;
 
-            // Texto de la opción elegida, o vacío si el índice no apunta a
-            // ninguna. Un índice fuera de rango no es un fallo del que haya que
-            // salir: una escena editada a mano puede traer value 99 con dos
-            // opciones, y eso no puede reventar.
+            // Text of the chosen option, or empty if the index does not point to
+            // any. An out-of-range index is not a failure worth bailing out
+            // of: a hand-edited scene can carry value 99 with two
+            // options, and that must not blow up.
             std::string selectedLabel() const
             {
                 if (value < 0 || value >= (int)options.size()) return std::string();
                 return options[(size_t)value];
             }
 
-            // Filas que se enseñan de golpe.
+            // Rows that are shown at once.
             int visibleItemCount() const
             {
                 const int total = (int)options.size();
@@ -119,8 +119,8 @@ namespace DonTopo
 
             float listHeight() const { return itemHeight * (float)visibleItemCount(); }
 
-            // Vuelca el rect y la caja en el nodo vivo. NO toca `atlas` (es un
-            // puntero a GPU: lo resuelve el sync).
+            // Dumps the rect and the box into the live node. Does NOT touch `atlas` (it is a
+            // GPU pointer: the sync resolves it).
             void applyTo(Dropdown& d) const
             {
                 d.anchorMin = anchorMin;
@@ -140,7 +140,7 @@ namespace DonTopo
                 t.anchorMax = glm::vec2(0.0f);
                 t.pivot     = glm::vec2(0.0f);
                 t.position  = glm::vec2(padding, 0.0f);
-                // Deja sitio a la flecha por la derecha.
+                // Leaves room for the arrow on the right.
                 t.size      = glm::vec2(std::max(size.x - 2.0f * padding - size.y, 0.0f), size.y);
                 t.text      = selectedLabel();
                 t.fontSize  = fontSize;
@@ -151,9 +151,9 @@ namespace DonTopo
                 t.raycastTarget = false;
             }
 
-            // La flecha es un cuadrado pegado al borde derecho. Sin sprite es un
-            // quad de color: no se dibuja un triángulo porque el batcher emite
-            // quads y una flecha de verdad es arte, no geometría.
+            // The arrow is a square stuck to the right edge. Without a sprite it is a
+            // color quad: no triangle is drawn because the batcher emits
+            // quads and a real arrow is art, not geometry.
             void applyToArrow(UiElement& a) const
             {
                 const float lado = std::max(size.y * 0.4f, 0.0f);
@@ -170,7 +170,7 @@ namespace DonTopo
                 a.raycastTarget = false;
             }
 
-            // La lista cuelga JUSTO DEBAJO de la caja.
+            // The list hangs RIGHT BELOW the box.
             void applyToList(UiElement& l) const
             {
                 l.anchorMin = glm::vec2(0.0f);
@@ -181,11 +181,11 @@ namespace DonTopo
                 l.color     = listColor;
                 l.visible   = isOpen;
                 l.drawable  = listHeight() > 0.0f;
-                // Recorta a las filas que no quepan en maxVisibleItems.
+                // Clips to the rows that do not fit in maxVisibleItems.
                 l.clipChildren  = true;
-                // La lista en sí no recibe el ratón: lo reciben las filas. Así un
-                // click en el hueco sobrante no elige nada en vez de elegir la
-                // fila que hubiera debajo.
+                // The list itself does not receive the mouse: the rows do. This way a
+                // click in the leftover gap selects nothing instead of selecting the
+                // row that would be underneath.
                 l.raycastTarget = false;
             }
 
@@ -213,12 +213,12 @@ namespace DonTopo
                 etiqueta.vAlign    = UiTextVAlign::Middle;
                 etiqueta.overflow  = UiTextOverflow::Ellipsis;
                 etiqueta.visible   = true;
-                // La etiqueta NO recibe el ratón o se comería el click de su
-                // propia fila: el hit test devuelve el nodo más profundo.
+                // The label does NOT receive the mouse or it would swallow the click of its
+                // own row: the hit test returns the deepest node.
                 etiqueta.raycastTarget = false;
             }
 
-            // El sync lo usa para saber si hay algo que volcar.
+            // The sync uses it to know whether there is anything to dump.
             bool operator==(const DropdownComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -237,15 +237,15 @@ namespace DonTopo
             bool operator!=(const DropdownComponent& o) const { return !(*this == o); }
     };
 
-    // Nombre del nodo vivo de un Dropdown dentro del canvas.
+    // Name of a Dropdown's live node inside the canvas.
     inline std::string uiDropdownNodeName(uint64_t ownerId)
     {
         return "drp:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiDropdownNodeName. Devuelve 0 si el nombre no es de un
-    // desplegable. El corte por '/' hace que la etiqueta, la flecha, la lista y
-    // sus filas devuelvan también a su dueño.
+    // Inverse of uiDropdownNodeName. Returns 0 if the name is not a
+    // dropdown's. Cutting at '/' makes the label, the arrow, the list and
+    // its rows also return their owner.
     inline uint64_t uiDropdownOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("drp:", 0) != 0) return 0;

@@ -6,67 +6,67 @@
 
 namespace DonTopo
 {
-    // Dónde se dibuja el canvas. ScreenSpace es lo de siempre: una ortográfica en
-    // píxeles de salida, encima de todo. World lo coloca EN LA ESCENA, con la
-    // perspectiva de la cámara y tapado por la geometría que tenga delante.
+    // Where the canvas is drawn. ScreenSpace is the usual: an orthographic in
+    // output pixels, on top of everything. World places it IN THE SCENE, with the
+    // camera's perspective and covered by any geometry in front of it.
     enum class UiCanvasRenderMode { ScreenSpace, World };
 
-    // Cómo se orienta un canvas de mundo respecto a la cámara. YawOnly gira solo
-    // alrededor de la vertical del mundo: es lo que quiere una barra de vida, que no
-    // debe tumbarse al mirar desde arriba. Full lo encara del todo, que es lo que
-    // quiere un icono.
+    // How a world canvas is oriented relative to the camera. YawOnly rotates only
+    // around the world's vertical: it is what a health bar wants, which
+    // must not tip over when viewed from above. Full faces it completely, which is what
+    // an icon wants.
     enum class UiBillboard { None, YawOnly, Full };
 
-    // Los ajustes de RESOLUCIÓN de la UI 2D como componente de GameObject: un
-    // GameObject con Canvas es el único sitio del que cuelga la UI. No guarda el
-    // árbol de widgets ni un UiCanvas propio — el canvas vivo lo sigue teniendo
-    // el Renderer (Renderer::uiCanvas()), y quien dibuja copia estos campos ahí
-    // cada frame con applyTo, igual que las luces se recolectan cada frame. Así
-    // lo que se ve en Play y en el juego exportado sale de la ESCENA y no de un
-    // canvas cableado a mano.
+    // The RESOLUTION settings of the 2D UI as a GameObject component: a
+    // GameObject with Canvas is the only place the UI hangs from. It stores neither the
+    // widget tree nor a UiCanvas of its own. The live canvas is still held by
+    // the Renderer (Renderer::uiCanvas()), and whoever draws copies these fields there
+    // every frame with applyTo, just as lights are collected every frame. This way
+    // what is seen in Play and in the exported game comes from the SCENE and not from a
+    // hand-wired canvas.
     //
-    // Los nombres, los defaults y el significado son EXACTAMENTE los de UiCanvas:
-    // este componente no interpreta ni clampa nada (de eso ya se encarga UiCanvas
-    // al resolver el área útil). Campos públicos por lo mismo: es el mismo POD.
+    // The names, defaults and meaning are EXACTLY those of UiCanvas:
+    // this component neither interprets nor clamps anything (UiCanvas already takes care of that
+    // when resolving the usable area). Public fields for the same reason: it is the same POD.
     class CanvasComponent
     {
         public:
             UiScaleMode   scaleMode           = UiScaleMode::ConstantPixelSize;
-            float         scaleFactor         = 1.0f;               // multiplica a los tres modos
+            float         scaleFactor         = 1.0f;               // multiplies all three modes
             glm::vec2     referenceResolution{1920.0f, 1080.0f};    // ScaleWithScreenSize
             UiScreenMatch screenMatch         = UiScreenMatch::MatchWidthOrHeight;
-            float         matchWidthOrHeight  = 0.5f;               // 0 = ancho, 1 = alto
-            float         screenDpi           = 0.0f;               // 0 = desconocido
-            float         fallbackDpi         = 96.0f;              // el que se usa si no se sabe
+            float         matchWidthOrHeight  = 0.5f;               // 0 = width, 1 = height
+            float         screenDpi           = 0.0f;               // 0 = unknown
+            float         fallbackDpi         = 96.0f;              // the one used if it is not known
             float         referenceDpi        = 96.0f;              // ConstantPhysicalSize
-            UiSafeArea    safeArea{};                               // en píxeles reales
-            float         aspectRatio         = 0.0f;               // 0 = apagado
+            UiSafeArea    safeArea{};                               // in real pixels
+            float         aspectRatio         = 0.0f;               // 0 = off
 
-            // --- Modo de dibujado ---------------------------------------------
+            // --- Draw mode ----------------------------------------------------
             UiCanvasRenderMode renderMode = UiCanvasRenderMode::ScreenSpace;
 
-            // --- Solo World ----------------------------------------------------
-            // En modo World el área útil es EXACTAMENTE referenceResolution: no
-            // hay pantalla a la que ajustarse, así que scaleMode, screenMatch,
-            // matchWidthOrHeight, los tres DPI, safeArea y aspectRatio NO SE
-            // LEEN. No se esconden en el editor: se documenta el matiz.
-            float       worldScale = 0.001f;   // unidades de mundo por PÍXEL de canvas
+            // --- World only ----------------------------------------------------
+            // In World mode the usable area is EXACTLY referenceResolution: there is
+            // no screen to adjust to, so scaleMode, screenMatch,
+            // matchWidthOrHeight, the three DPIs, safeArea and aspectRatio ARE NOT
+            // READ. They are not hidden in the editor: the nuance is documented.
+            float       worldScale = 0.001f;   // world units per canvas PIXEL
             UiBillboard billboard  = UiBillboard::None;
-            // A false el canvas se dibuja siempre encima, atravesando paredes: es
-            // lo que quiere una barra de vida que no debe perderse de vista.
+            // When false the canvas is always drawn on top, going through walls: it is
+            // what a health bar that must not be lost from sight wants.
             bool        depthTest  = true;
 
-            // Vuelca los campos en el canvas vivo. No toca ni el árbol ni la
-            // visibilidad: solo la resolución.
+            // Dumps the fields into the live canvas. It touches neither the tree nor
+            // the visibility: only the resolution.
             void applyTo(UiCanvas& canvas) const
             {
                 if (renderMode == UiCanvasRenderMode::World)
                 {
-                    // Un canvas de mundo no se ajusta a ninguna pantalla: su área
-                    // útil es su resolución de referencia y punto. Volcar aquí el
-                    // scaleMode o el safe area haría que el cartel cambiara de
-                    // tamaño al redimensionar la ventana, que es justo lo que un
-                    // objeto del mundo NO debe hacer.
+                    // A world canvas does not adjust to any screen: its usable area
+                    // is its reference resolution and that is it. Dumping the
+                    // scaleMode or the safe area here would make the sign change
+                    // size when resizing the window, which is exactly what a
+                    // world object must NOT do.
                     canvas.scaleMode           = UiScaleMode::ConstantPixelSize;
                     canvas.scaleFactor         = 1.0f;
                     canvas.referenceResolution = referenceResolution;
@@ -93,30 +93,30 @@ namespace DonTopo
             }
     };
 
-    // Matriz de MODELO de un canvas de mundo: de píxeles del canvas a unidades
-    // del mundo. Función libre y no método a propósito — necesita la vista de la
-    // cámara para el billboard, y el componente no tiene por qué saber de
-    // cámaras. Aquí y no en el Renderer para poder probarla sin GPU.
+    // MODEL matrix of a world canvas: from canvas pixels to world
+    // units. A free function and deliberately not a method: it needs the camera's view
+    // for the billboard, and the component has no reason to know about
+    // cameras. Here and not in the Renderer so it can be tested without GPU.
     //
-    // El canvas crece hacia ABAJO y el mundo hacia ARRIBA, así que la Y va
-    // NEGADA. Y el canvas se centra en el objeto: su píxel (w/2, h/2) cae
-    // exactamente en la posición del GameObject.
+    // The canvas grows DOWNWARD and the world UPWARD, so the Y is
+    // NEGATED. And the canvas is centered on the object: its pixel (w/2, h/2) falls
+    // exactly on the GameObject's position.
     inline glm::mat4 uiWorldCanvasMatrix(const CanvasComponent& c, glm::vec2 canvasSize,
                                          const glm::mat4& worldTransform, const glm::mat4& view)
     {
         const float s = c.worldScale;
 
-        // Base del objeto: su transform, o una que mire a la cámara si hay
-        // billboard. La POSICIÓN siempre sale del transform; lo que el billboard
-        // sustituye es la rotación (y con ella la escala del objeto, que en un
-        // canvas encarado no significa nada).
+        // Base of the object: its transform, or one that faces the camera if there is a
+        // billboard. The POSITION always comes from the transform; what the billboard
+        // replaces is the rotation (and with it the object's scale, which on a
+        // facing canvas means nothing).
         glm::mat4 base = worldTransform;
         if (c.billboard != UiBillboard::None)
         {
             const glm::vec3 pos = glm::vec3(worldTransform[3]);
 
-            // Los ejes de la CÁMARA salen de la inversa de la vista: las filas de
-            // la parte rotacional de `view` son sus ejes en el mundo.
+            // The CAMERA's axes come from the inverse of the view: the rows of
+            // the rotational part of `view` are its axes in the world.
             const glm::vec3 camDerecha = glm::vec3(view[0][0], view[1][0], view[2][0]);
             const glm::vec3 camArriba  = glm::vec3(view[0][1], view[1][1], view[2][1]);
             const glm::vec3 camAtras   = glm::vec3(view[0][2], view[1][2], view[2][2]);
@@ -128,13 +128,13 @@ namespace DonTopo
                 arriba   = camArriba;
                 adelante = camAtras;
             }
-            else   // YawOnly: gira solo alrededor de la vertical del MUNDO
+            else   // YawOnly: rotates only around the WORLD's vertical
             {
                 arriba = glm::vec3(0.0f, 1.0f, 0.0f);
-                // Proyectar el "hacia atrás" de la cámara sobre el plano
-                // horizontal. Mirando en vertical justa el vector se anula: en ese
-                // caso vale cualquier orientación, y se coge una fija en vez de
-                // normalizar un cero (que daría NaN y borraría el canvas entero).
+                // Project the camera's "backward" onto the horizontal
+                // plane. Looking straight up or down the vector vanishes: in that
+                // case any orientation works, and a fixed one is taken instead of
+                // normalizing a zero (which would give NaN and erase the whole canvas).
                 glm::vec3 plano(camAtras.x, 0.0f, camAtras.z);
                 const float largo2 = glm::dot(plano, plano);
                 adelante = (largo2 > 1e-8f) ? plano * glm::inversesqrt(largo2)
@@ -149,7 +149,7 @@ namespace DonTopo
             base[3] = glm::vec4(pos,      1.0f);
         }
 
-        // Píxeles -> unidades, con la Y negada, y centrado.
+        // Pixels -> units, with the Y negated, and centered.
         glm::mat4 local(1.0f);
         local[0][0] =  s;
         local[1][1] = -s;

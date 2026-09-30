@@ -8,10 +8,10 @@
 
 namespace DonTopo
 {
-    // Adapter que engancha los callbacks de trigger del módulo de física a la
-    // cola de ScriptManager. Uno por collider registrado en onPlayStart;
-    // captura el GameObject dueño del collider trigger. `e.other` es el owner
-    // opaco (void*) del otro collider = GameObject* (lo setea el editor/carga).
+    // Adapter that hooks the physics module's trigger callbacks to the
+    // ScriptManager queue. One per collider registered in onPlayStart;
+    // it captures the GameObject that owns the trigger collider. `e.other` is the opaque
+    // owner (void*) of the other collider = GameObject* (set by the editor/loading).
     class ScriptTriggerListener : public ITriggerListener
     {
     public:
@@ -36,10 +36,10 @@ namespace DonTopo
         GameObject*    m_owner;
     };
 
-    // Gemelo del anterior para pares NO-trigger. Mismo owner, misma cola: lo
-    // único que cambia es que el evento se marca como ContactKind::Collision,
-    // así que hereda tal cual el modelo de reentrada (snapshot en
-    // drainTriggerQueue) y el orden respecto a Update.
+    // Twin of the previous one for NON-trigger pairs. Same owner, same queue: the
+    // only thing that changes is that the event is marked as ContactKind::Collision,
+    // so it inherits the reentrancy model as is (snapshot in
+    // drainTriggerQueue) and the order relative to Update.
     class ScriptCollisionListener : public ICollisionListener
     {
     public:
@@ -69,8 +69,8 @@ namespace DonTopo
 
     void ScriptManager::init(const std::string& scriptsDir)
     {
-        // Solo libs sin acceso a proceso/filesystem: los scripts de gameplay
-        // no necesitan io/os, y así un script no puede tocar disco.
+        // Only libs without process/filesystem access: gameplay scripts
+        // do not need io/os, and this way a script cannot touch disk.
         m_lua.open_libraries(sol::lib::base, sol::lib::math,
                              sol::lib::string, sol::lib::table);
 
@@ -99,8 +99,8 @@ namespace DonTopo
         {
             sol::error err = result;
             m_compileErrors[className] = err.what();
-            // Si nunca llegó a registrarse, guardamos su mtime pa poder
-            // reintentar la carga cuando el archivo cambie.
+            // If it never got registered, we store its mtime so we can
+            // retry the load when the file changes.
             if (!m_registry.count(className))
             {
                 std::error_code ec;
@@ -158,7 +158,7 @@ namespace DonTopo
             {
                 case sol::type::number:
                 {
-                    // lua_isinteger distingue 5 (integer) de 5.0 (float)
+                    // lua_isinteger distinguishes 5 (integer) from 5.0 (float)
                     value.push(m_lua.lua_state());
                     p.isInteger = lua_isinteger(m_lua.lua_state(), -1) != 0;
                     lua_pop(m_lua.lua_state(), 1);
@@ -172,7 +172,7 @@ namespace DonTopo
                     p.defaultValue = value.as<std::string>();
                     break;
                 default:
-                    continue; // funciones/tablas anidadas: no son props
+                    continue; // nested functions/tables: they are not props
             }
             props.push_back(std::move(p));
         }
@@ -190,8 +190,8 @@ namespace DonTopo
         const ScriptClass& cls = it->second;
         sol::table inst = m_lua.create_table();
 
-        // Copia de props a la instancia: cada instancia tiene las suyas,
-        // editar una no toca las demás. Funciones se heredan vía metatable.
+        // Copy of props to the instance: each instance has its own,
+        // editing one does not touch the others. Functions are inherited via metatable.
         for (const ScriptProp& p : cls.props)
         {
             const ScriptValue* v = &p.defaultValue;
@@ -233,7 +233,7 @@ namespace DonTopo
         comp.instance = createInstance(comp.scriptName, values);
         comp.started  = false;
         comp.hasError = false;
-        if (!comp.instance.valid()) return;   // clase no registrada (missing)
+        if (!comp.instance.valid()) return;   // class not registered (missing)
 
         comp.instance["entity"] = LuaEntity{ comp.owner, this };
 
@@ -309,8 +309,8 @@ namespace DonTopo
 
     void ScriptManager::deliverAnimationEvents()
     {
-        // Primero se recogen y luego se llama: un callback puede instanciar o
-        // destruir objetos, y eso no debe pasar con el traverse abierto.
+        // First they are collected and then called: a callback can instantiate or
+        // destroy objects, and that must not happen with the traverse open.
         std::vector<GameObject*> conEventos;
         m_scene->traverse([&](GameObject* go) {
             const auto& anim = go->getAnimator();
@@ -320,7 +320,7 @@ namespace DonTopo
         for (GameObject* go : conEventos)
         {
             if (!isAlive(go) || !go->getAnimator()) continue;
-            // Copia: un callback puede tocar el Animator (Play, CrossFade).
+            // Copy: a callback can touch the Animator (Play, CrossFade).
             const std::vector<std::string> nombres = go->getAnimator()->firedEvents();
             std::vector<ScriptComponent*> scripts;
             for (auto& s : go->getScripts()) scripts.push_back(s.get());
@@ -356,9 +356,9 @@ namespace DonTopo
             m_triggerListeners.push_back(std::move(listener));
             m_triggerListenerColliders.push_back(collider); // shared -> weak
 
-            // El mismo collider lleva los dos adapters: cuál dispara lo decide
-            // PhysX según sea trigger o no, y eso puede cambiar en mitad de
-            // Play (col.isTrigger desde Lua).
+            // The same collider carries both adapters: which one fires is decided by
+            // PhysX depending on whether it is a trigger or not, and that can change in the middle of
+            // Play (col.isTrigger from Lua).
             auto collisionListener = std::make_unique<ScriptCollisionListener>(this, go);
             collider->addCollisionListener(collisionListener.get());
             m_collisionListeners.push_back(std::move(collisionListener));
@@ -368,9 +368,9 @@ namespace DonTopo
 
     void ScriptManager::clearTriggerListeners()
     {
-        // Desregistra de los colliders todavía vivos (onPlayStop corre ANTES de
-        // que el restore de la escena destruya/recree los colliders de Play);
-        // los ya expirados se ignoran (su lista de listeners murió con ellos).
+        // Unregisters from the colliders that are still alive (onPlayStop runs BEFORE
+        // the scene restore destroys/recreates the Play colliders);
+        // the already-expired ones are ignored (their listener list died with them).
         for (size_t i = 0; i < m_triggerListeners.size(); ++i)
         {
             if (auto collider = m_triggerListenerColliders[i].lock())
@@ -391,17 +391,17 @@ namespace DonTopo
     void ScriptManager::drainTriggerQueue()
     {
         if (m_triggerQueue.empty()) return;
-        // Snapshot: un callback puede encolar más triggers o mutar la escena;
-        // se procesa lo de este frame y lo reentrante queda pal siguiente.
+        // Snapshot: a callback can queue more triggers or mutate the scene;
+        // this frame's are processed and the reentrant ones are left for the next.
         std::vector<QueuedTrigger> batch;
         batch.swap(m_triggerQueue);
 
         for (const QueuedTrigger& t : batch)
         {
             if (!isAlive(t.owner)) continue;
-            // Snapshot de los scripts del owner: un callback puede
-            // Add/RemoveComponent (el remove va diferido, así que los punteros
-            // siguen válidos este frame).
+            // Snapshot of the owner's scripts: a callback can
+            // Add/RemoveComponent (the remove is deferred, so the pointers
+            // stay valid this frame).
             std::vector<ScriptComponent*> scripts;
             for (auto& s : t.owner->getScripts()) scripts.push_back(s.get());
 
@@ -409,9 +409,9 @@ namespace DonTopo
             {
                 if (t.kind == ContactKind::Collision)
                 {
-                    // Sin flag cacheado en ScriptComponent (ver
-                    // callOptionalCallback): el sondeo lo hace la propia
-                    // llamada.
+                    // No cached flag in ScriptComponent (see
+                    // callOptionalCallback): the call itself
+                    // does the probing.
                     switch (t.phase)
                     {
                         case TriggerPhase::Enter:
@@ -453,15 +453,15 @@ namespace DonTopo
     {
         m_playing = true;
         m_fixedAccumulator = 0.0f;
-        // Time.time cuenta desde este instante: un segundo Play tras un Stop
-        // empieza de cero, no continúa donde lo dejó la partida anterior.
+        // Time.time counts from this instant: a second Play after a Stop
+        // starts from zero, it does not continue where the previous session left off.
         ScriptBindings::resetTime(*this);
         m_destroyQueue.clear();
         rebuildAliveSet();
 
         auto comps = collectComponents();
         for (auto* c : comps) instantiateComponent(*c);
-        // Two-pass como Unity: todos los Awake antes del primer Start.
+        // Two-pass like Unity: all the Awake before the first Start.
         for (auto* c : comps) if (c->hasAwake) callCallback(*c, "Awake", nullptr);
         for (auto* c : comps)
         {
@@ -469,16 +469,16 @@ namespace DonTopo
             c->started = true;
         }
 
-        // Colliders ya vivos aquí (Play no los recrea al arrancar): registra
-        // el listener de triggers en cada uno.
+        // Colliders already alive here (Play does not recreate them on start): registers
+        // the trigger listener on each one.
         registerTriggerListeners();
     }
 
     void ScriptManager::invalidateScriptCallbacks()
     {
-        // Renovar el testigo deja fuera de juego a todos los callbacks ya
-        // registrados (los guardan como weak_ptr) SIN tocar el componente que
-        // los tiene: el std::function sigue ahí, pero no llama a nada.
+        // Renewing the witness takes all the already registered callbacks out of play
+        // (they hold it as a weak_ptr) WITHOUT touching the component that
+        // holds them: the std::function is still there, but it calls nothing.
         m_callbackEpoch = std::make_shared<char>(0);
         ScriptBindings::clearUiCallbacks(*this);
     }
@@ -486,8 +486,8 @@ namespace DonTopo
     void ScriptManager::onPlayStop()
     {
         clearTriggerListeners();
-        // Las instancias se destruyen a continuación: un callback que sobreviva
-        // al Stop llamaría a un método de un objeto que ya hizo OnDestroy.
+        // The instances are destroyed next: a callback that survives
+        // the Stop would call a method of an object that already did OnDestroy.
         invalidateScriptCallbacks();
         auto comps = collectComponents();
         for (auto* c : comps) callOnDestroy(*c);
@@ -505,19 +505,19 @@ namespace DonTopo
     void ScriptManager::update(float dt)
     {
         if (!m_playing || !m_scene) return;
-        // Antes de cualquier callback: Awake y Start de los componentes nuevos
-        // ya deben ver el Time de ESTE frame, no el del anterior.
+        // Before any callback: the Awake and Start of new components
+        // must already see THIS frame's Time, not the previous one's.
         ScriptBindings::tickTime(*this, dt);
         rebuildAliveSet();
 
-        // Snapshot de punteros: los scripts pueden añadir componentes en
-        // mitad del frame (se recogen el frame siguiente); los borrados van
-        // SIEMPRE por colas diferidas, así que ningún puntero del snapshot
-        // muere durante la iteración.
+        // Snapshot of pointers: scripts can add components in the
+        // middle of the frame (they are picked up the next frame); deletions ALWAYS go
+        // through deferred queues, so no pointer in the snapshot
+        // dies during the iteration.
         auto comps = collectComponents();
 
-        // Comps añadidos después de Play (Instantiate, AddComponent, editor):
-        // Awake (si no vino ya de Instantiate: instance inválida) + Start.
+        // Comps added after Play (Instantiate, AddComponent, editor):
+        // Awake (if it did not already come from Instantiate: invalid instance) + Start.
         for (auto* c : comps)
         {
             if (c->started) continue;
@@ -530,14 +530,14 @@ namespace DonTopo
             c->started = true;
         }
 
-        // Triggers y colisiones encolados por el paso de física de este frame
-        // (physics.stepSimulation corre antes que scriptManager.update en el
-        // loop principal): OnTrigger*/OnCollision* antes de Update, cercano al
-        // orden de Unity (callbacks de física preceden a Update).
+        // Triggers and collisions queued by this frame's physics step
+        // (physics.stepSimulation runs before scriptManager.update in the
+        // main loop): OnTrigger*/OnCollision* before Update, close to Unity's
+        // order (physics callbacks precede Update).
         drainTriggerQueue();
 
-        // Eventos del Animator del último avance (applySkinnedFrame): uno por
-        // frame de cada lado, así que cada tanda se entrega una vez.
+        // Animator events from the last advance (applySkinnedFrame): one per
+        // frame on each side, so each batch is delivered once.
         deliverAnimationEvents();
 
         for (auto* c : comps) if (c->hasUpdate) callCallback(*c, "Update", &dt);
@@ -552,9 +552,9 @@ namespace DonTopo
 
         for (auto* c : comps) if (c->hasLateUpdate) callCallback(*c, "LateUpdate", nullptr);
 
-        // RemoveComponent("Script:X") diferidos.
-        // Snapshot antes de llamar a Lua — un callback puede añadir
-        // componentes/entities y invalidar la iteración en vivo.
+        // Deferred RemoveComponent("Script:X").
+        // Snapshot before calling Lua: a callback can add
+        // components/entities and invalidate the live iteration.
         std::vector<ScriptComponent*> toRemove;
         m_scene->traverse([&](GameObject* go) {
             for (auto& s : go->getScripts())
@@ -569,25 +569,25 @@ namespace DonTopo
                 scripts.end());
         });
 
-        // Cola de destroy de entities (Scene.Destroy) — tras LateUpdate
-        // La cola se mueve a un local antes de iterar: un OnDestroy puede
-        // llamar Scene.Destroy y hacer push_back sobre m_destroyQueue en
-        // plena iteración (UB con range-for sobre el propio vector). Lo
-        // encolado reentrante se procesa el frame siguiente.
+        // Entity destroy queue (Scene.Destroy), after LateUpdate.
+        // The queue is moved to a local before iterating: an OnDestroy can
+        // call Scene.Destroy and push_back onto m_destroyQueue in the
+        // middle of the iteration (UB with a range-for over the vector itself). What is
+        // queued reentrantly is processed the next frame.
         std::vector<GameObject*> queue;
         queue.swap(m_destroyQueue);
         for (GameObject* go : queue)
         {
-            if (!isAlive(go)) continue;   // destruido dos veces o hijo de otro destruido
-            // Snapshot antes de llamar a Lua — un callback puede añadir
-            // componentes/entities y invalidar la iteración en vivo.
+            if (!isAlive(go)) continue;   // destroyed twice or child of another destroyed one
+            // Snapshot before calling Lua: a callback can add
+            // components/entities and invalidate the live iteration.
             std::vector<ScriptComponent*> subtreeScripts;
             go->traverse([&](GameObject* n) {
                 for (auto& s : n->getScripts()) subtreeScripts.push_back(s.get());
             });
             for (ScriptComponent* s : subtreeScripts) callOnDestroy(*s);
-            // La GPU y la seleccion las suelta ahora Scene::removeGameObject via
-            // su oyente: un solo sitio para los tres llamantes.
+            // The GPU and the selection are now released by Scene::removeGameObject via
+            // its listener: a single place for the three callers.
             m_scene->removeGameObject(go);
             rebuildAliveSet();
         }
@@ -600,7 +600,7 @@ namespace DonTopo
 
         std::error_code ec;
 
-        // 1) Cambios en scripts registrados
+        // 1) Changes in registered scripts
         std::vector<std::string> changed;
         for (auto& [name, cls] : m_registry)
         {
@@ -612,26 +612,26 @@ namespace DonTopo
         {
             const std::filesystem::path path = m_registry[name].path;
             log("Script '" + name + "' changed on disk, reloading");
-            // Actualiza mtime siempre (aunque compile mal, pa no reintentar
-            // en bucle el mismo contenido roto).
+            // Always update mtime (even if it compiles badly, so as not to retry
+            // the same broken content in a loop).
             m_registry[name].mtime = std::filesystem::last_write_time(path, ec);
             if (!loadScript(path))
-                continue;   // error logueado; instancias viejas siguen corriendo
+                continue;   // error logged; old instances keep running
 
-            // El código que registró los callbacks de UI ya no existe: los que
-            // quedaran enganchados apuntan a la clase vieja. Se invalidan aquí
-            // y los vuelve a enganchar el script recargado en su Start.
+            // The code that registered the UI callbacks no longer exists: any that
+            // remained hooked point to the old class. They are invalidated here
+            // and the reloaded script hooks them again in its Start.
             invalidateScriptCallbacks();
 
             if (!m_playing || !m_scene) continue;
-            // El editor pudo borrar entities este mismo frame.
+            // The editor may have deleted entities this same frame.
             rebuildAliveSet();
 
-            // Reinstancia los comps vivos de esta clase preservando el valor
-            // actual de las props serializables (spec: estado no
-            // serializable se pierde).
-            // Snapshot antes de llamar a Lua — un callback puede añadir
-            // componentes/entities y invalidar la iteración en vivo.
+            // Reinstantiates the live comps of this class preserving the current
+            // value of the serializable props (spec: non-serializable
+            // state is lost).
+            // Snapshot before calling Lua: a callback can add
+            // components/entities and invalidate the live iteration.
             std::vector<ScriptComponent*> toReinstantiate;
             m_scene->traverse([&](GameObject* go) {
                 for (auto& s : go->getScripts())
@@ -656,8 +656,8 @@ namespace DonTopo
             }
         }
 
-        // 1b) Reintento de scripts que fallaron su primera carga si su
-        // archivo cambió — los ya registrados se cubren arriba.
+        // 1b) Retry of scripts that failed their first load if their
+        // file changed; those already registered are covered above.
         std::vector<std::string> retryErrored;
         for (auto& [name, entry] : m_erroredScripts)
         {
@@ -672,7 +672,7 @@ namespace DonTopo
             loadScript(path);
         }
 
-        // 2) Scripts nuevos en la carpeta
+        // 2) New scripts in the folder
         if (std::filesystem::is_directory(m_scriptsDir, ec))
         {
             for (const auto& entry : std::filesystem::recursive_directory_iterator(m_scriptsDir, ec))

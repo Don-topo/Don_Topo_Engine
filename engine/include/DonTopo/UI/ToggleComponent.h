@@ -12,8 +12,8 @@ namespace DonTopo
 {
     class ToggleComponent;
 
-    // Lo que un interruptor tiene EN VIVO y no se serializa. Mismo papel y
-    // mismos motivos que UiButtonRuntime y UiCheckboxRuntime.
+    // What a switch has LIVE and is not serialized. Same role and
+    // same reasons as UiButtonRuntime and UiCheckboxRuntime.
     struct UiToggleRuntime
     {
         std::function<void(bool)> onValueChanged;
@@ -33,18 +33,18 @@ namespace DonTopo
         bool operator==(const UiToggleCallbackSlot&) const { return true; }
     };
 
-    // Un interruptor deslizante de la UI 2D como componente de GameObject, con
-    // el MISMO contrato que el resto: SOLO DATOS. El Toggle del núcleo
-    // (UiWidgets.h) es un stub SIN campos, así que el widget se monta por
-    // COMPOSICIÓN: la pista es el nodo raíz (de tipo Toggle) y el mando cuelga
-    // de ella.
+    // A sliding switch of the 2D UI as a GameObject component, with
+    // the SAME contract as the rest: DATA ONLY. The core Toggle
+    // (UiWidgets.h) is a stub with NO fields, so the widget is assembled by
+    // COMPOSITION: the track is the root node (of type Toggle) and the knob hangs
+    // from it.
     //
-    // Guarda el MISMO dato que el Checkbox (un bool) y aun así son dos
-    // componentes y no uno con un enum de estilo: lo que cambia no es el dato
-    // sino los CAMPOS. La casilla tiene un padding de marca y un color de marca;
-    // el interruptor tiene dos colores de pista (encendido y apagado) y el
-    // tamaño del mando. Con un solo componente, la mitad de los campos del
-    // inspector no harían nada según el estilo elegido.
+    // It stores the SAME datum as the Checkbox (a bool) and yet they are two
+    // components and not one with a style enum: what changes is not the datum
+    // but the FIELDS. The box has a checkmark padding and a checkmark color;
+    // the switch has two track colors (on and off) and the
+    // knob size. With a single component, half of the inspector fields
+    // would do nothing depending on the chosen style.
     class ToggleComponent
     {
         public:
@@ -52,28 +52,28 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};    // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};    // px, relative to the anchor
             glm::vec2 size{56.0f, 28.0f};      // px
             bool      visible = true;
 
             bool interactable = true;
 
-            // --- Valor ---------------------------------------------------------
+            // --- Value ---------------------------------------------------------
             bool isOn = false;
 
-            // --- Colores --------------------------------------------------------
-            // La pista NO usa UiElement::color como campo propio: lo escribe el
-            // sync con el color del estado, igual que hace el canvas con el
-            // Button. Tener los dos sería tener un campo que el primer volcado
-            // pisa y que parece no hacer nada.
+            // --- Colors ---------------------------------------------------------
+            // The track does NOT use UiElement::color as a field of its own: the
+            // sync writes it with the state's color, just as the canvas does with the
+            // Button. Having both would mean a field that the first dump
+            // overwrites and that seems to do nothing.
             glm::vec4 offColor{0.3f, 0.3f, 0.3f, 1.0f};
             glm::vec4 onColor{0.25f, 0.7f, 1.0f, 1.0f};
             glm::vec4 knobColor{1.0f, 1.0f, 1.0f, 1.0f};
 
-            // --- Mando ----------------------------------------------------------
-            // Lado del mando en px. Se acota a lo que quede entre paddings: uno
-            // más grande que la pista asomaría por el borde sin que nada lo
-            // dijera.
+            // --- Knob -----------------------------------------------------------
+            // Side of the knob in px. It is bounded to what fits between the paddings: one
+            // bigger than the track would peek out over the edge with nothing
+            // saying so.
             float knobSize    = 20.0f;
             float knobPadding = 4.0f;
 
@@ -82,20 +82,20 @@ namespace DonTopo
             std::string backgroundSprite;
             std::string knobSprite;
 
-            // --- Runtime (no se serializa) --------------------------------------
+            // --- Runtime (not serialized) ---------------------------------------
             UiToggleCallbackSlot callbacks;
 
-            // El color de la pista según el estado. Aquí y no en el sync para
-            // poder probarlo sin canvas ni GPU.
+            // The track color according to the state. Here and not in the sync so it can
+            // be tested without canvas or GPU.
             glm::vec4 trackColor() const { return isOn ? onColor : offColor; }
 
-            // Rect del MANDO en coordenadas de la pista, pegado a un extremo o al
-            // otro y siempre dentro del padding.
+            // Rect of the KNOB in track coordinates, stuck to one end or the
+            // other and always inside the padding.
             void knobRect(glm::vec2& outPos, glm::vec2& outSize) const
             {
                 const float p = std::max(knobPadding, 0.0f);
-                // Lo que queda de pista entre los dos paddings. Un padding que no
-                // cabe da cero, nunca negativo.
+                // What is left of the track between the two paddings. A padding that does not
+                // fit gives zero, never negative.
                 const float dispW = std::max(size.x - 2.0f * p, 0.0f);
                 const float dispH = std::max(size.y - 2.0f * p, 0.0f);
 
@@ -108,8 +108,8 @@ namespace DonTopo
                 outSize = glm::vec2(w, h);
             }
 
-            // Vuelca el rect y la pista en el nodo vivo. NO toca `atlas` (es un
-            // puntero a GPU: lo resuelve el sync).
+            // Dumps the rect and the track into the live node. Does NOT touch `atlas` (it is a
+            // GPU pointer: the sync resolves it).
             void applyTo(Toggle& t) const
             {
                 t.anchorMin = anchorMin;
@@ -137,12 +137,12 @@ namespace DonTopo
                 k.sprite    = knobSprite;
                 k.visible   = true;
                 k.drawable  = (sz.x > 0.0f && sz.y > 0.0f);
-                // El mando no recibe el ratón: el hit test devuelve el nodo MÁS
-                // PROFUNDO y se comería el click de la pista.
+                // The knob does not receive the mouse: the hit test returns the DEEPEST
+                // node and it would swallow the track's click.
                 k.raycastTarget = false;
             }
 
-            // El sync lo usa para saber si hay algo que volcar.
+            // The sync uses it to know whether there is anything to dump.
             bool operator==(const ToggleComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -158,16 +158,16 @@ namespace DonTopo
             bool operator!=(const ToggleComponent& o) const { return !(*this == o); }
     };
 
-    // Nombre del nodo vivo de un Toggle dentro del canvas. Prefijo DISTINTO al
-    // de los demás, por lo de siempre.
+    // Name of a Toggle's live node inside the canvas. DIFFERENT prefix from
+    // the others, for the usual reason.
     inline std::string uiToggleNodeName(uint64_t ownerId)
     {
         return "tgl:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiToggleNodeName. Devuelve 0 si el nombre no es de un
-    // interruptor. El corte por '/' hace que el nodo del mando devuelva también
-    // a su dueño.
+    // Inverse of uiToggleNodeName. Returns 0 if the name is not a
+    // switch's. Cutting at '/' makes the knob node also return
+    // its owner.
     inline uint64_t uiToggleOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("tgl:", 0) != 0) return 0;

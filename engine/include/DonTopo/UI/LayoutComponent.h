@@ -7,45 +7,45 @@
 
 namespace DonTopo
 {
-    // El auto-layout de la UI 2D como componente de GameObject, con el MISMO
-    // contrato que CanvasComponent, ButtonComponent, TextComponent y
-    // ProgressBarComponent: SOLO DATOS. El árbol vivo lo tiene el Renderer
-    // (Renderer::uiCanvas()) y lo monta/actualiza syncUiWidgets() cada frame.
+    // The 2D UI auto-layout as a GameObject component, with the SAME
+    // contract as CanvasComponent, ButtonComponent, TextComponent and
+    // ProgressBarComponent: DATA ONLY. The live tree is held by the Renderer
+    // (Renderer::uiCanvas()) and syncUiWidgets() builds/updates it every frame.
     //
-    // El solver NO está aquí: vive en UiElement (layoutMode, padding, spacing,
-    // cellSize, columns, crossAlign, fitWidth/fitHeight, ignoreLayout) y lo
-    // resuelve UiSpriteBatch::build. Este componente es la capa de escena que
-    // faltaba para poder usarlo: ni una rama nueva en el batcher.
+    // The solver is NOT here: it lives in UiElement (layoutMode, padding, spacing,
+    // cellSize, columns, crossAlign, fitWidth/fitHeight, ignoreLayout) and is
+    // solved by UiSpriteBatch::build. This component is the scene layer that
+    // was missing to be able to use it: not a single new branch in the batcher.
     //
-    // Hace los dos papeles que en Unity van en componentes distintos:
-    //   - CONTENEDOR (LayoutGroup): mode/padding/spacing/cellSize/columns/
-    //     crossAlign/fitWidth/fitHeight COLOCAN a los hijos del GameObject.
-    //   - HIJO (LayoutElement): ignoreLayout saca a ESTE GameObject del layout
-    //     de su padre. Van juntos porque son dos campos, no dos sistemas: un
-    //     componente aparte solo para un bool sería una entrada más en el menú
-    //     de Add sin nada que la justifique.
+    // It plays the two roles that in Unity go in separate components:
+    //   - CONTAINER (LayoutGroup): mode/padding/spacing/cellSize/columns/
+    //     crossAlign/fitWidth/fitHeight PLACE the GameObject's children.
+    //   - CHILD (LayoutElement): ignoreLayout takes THIS GameObject out of its
+    //     parent's layout. They go together because they are two fields, not two systems: a
+    //     separate component just for a bool would be one more entry in the Add
+    //     menu with nothing to justify it.
     //
-    // El rect (anchorMin/Max, pivot, position, size) SOLO se usa cuando el
-    // GameObject no tiene ningún otro componente de UI: ahí el sync monta un
-    // contenedor no dibujable y este componente es su dueño. Con un Button, una
-    // ProgressBar o un Text en el mismo GameObject el rect lo manda AQUEL —
-    // dos dueños del mismo rect es un conflicto sin ganador — y de aquí solo
-    // viajan los campos de layout.
+    // The rect (anchorMin/Max, pivot, position, size) is ONLY used when the
+    // GameObject has no other UI component: there the sync assembles a
+    // non-drawable container and this component is its owner. With a Button, a
+    // ProgressBar or a Text on the same GameObject, THAT one rules the rect
+    // (two owners of the same rect is a conflict with no winner) and only the layout
+    // fields travel from here.
     class LayoutComponent
     {
         public:
-            // --- Rect (solo si el contenedor es de este componente) -----------
+            // --- Rect (only if the container belongs to this component) -------
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};      // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};      // px, relative to the anchor
             glm::vec2 size{200.0f, 200.0f};      // px
             bool      visible = true;
 
-            // --- Contenedor ----------------------------------------------------
-            // Vertical y no None por defecto: un componente recién añadido que no
-            // hace NADA parece un bug del editor. Con None el contenedor sigue
-            // siendo un rect que agrupa y recorta, que también es un uso válido.
+            // --- Container -----------------------------------------------------
+            // Vertical and not None by default: a newly added component that does
+            // NOTHING looks like an editor bug. With None the container is still
+            // a rect that groups and clips, which is also a valid use.
             UiLayoutMode mode = UiLayoutMode::Vertical;
 
             float paddingLeft   = 0.0f;
@@ -53,28 +53,28 @@ namespace DonTopo
             float paddingTop    = 0.0f;
             float paddingBottom = 0.0f;
 
-            glm::vec2 spacing{0.0f, 0.0f};     // .x entre columnas, .y entre filas
+            glm::vec2 spacing{0.0f, 0.0f};     // .x between columns, .y between rows
             glm::vec2 cellSize{100.0f, 100.0f};  // solo Grid
-            uint32_t  columns = 0;             // solo Grid; 0 = las que quepan
+            uint32_t  columns = 0;             // Grid only; 0 = as many as fit
 
             UiCrossAlign crossAlign = UiCrossAlign::Start;
 
-            // Content size fitter: ese eje del size pasa a ser la extensión de
-            // los hijos colocados más el padding.
+            // Content size fitter: that axis of size becomes the extent of
+            // the placed children plus the padding.
             bool fitWidth  = false;
             bool fitHeight = false;
 
-            // --- Como hijo del layout de OTRO ----------------------------------
+            // --- As a child of ANOTHER's layout --------------------------------
             bool ignoreLayout = false;
 
-            // --- Recorte -------------------------------------------------------
-            // Recorta a los descendientes contra el rect del contenedor. La
-            // intersección con el scissor heredado la hace el batcher.
+            // --- Clipping ------------------------------------------------------
+            // Clips the descendants against the container's rect. The
+            // intersection with the inherited scissor is done by the batcher.
             bool clipChildren = false;
 
-            // Vuelca los campos de layout en el nodo vivo. `ownsRect` a false es
-            // el caso de compartir nodo con otro componente de UI: ese manda el
-            // rect y aquí no se toca ni una de sus cuatro esquinas.
+            // Dumps the layout fields into the live node. `ownsRect` false is
+            // the case of sharing a node with another UI component: that one rules the
+            // rect and not one of its four corners is touched here.
             void applyTo(UiElement& e, bool ownsRect) const
             {
                 if (ownsRect)
@@ -85,15 +85,15 @@ namespace DonTopo
                     e.position  = position;
                     e.size      = size;
                     e.visible   = visible;
-                    // Un contenedor agrupa y recorta, pero no pinta: sin esto
-                    // saldría un quad de color liso TAPANDO a sus hijos.
+                    // A container groups and clips, but does not paint: without this a
+                    // flat color quad would come out COVERING its children.
                     e.drawable  = false;
-                    // Y tampoco recibe el ratón. El hit test NO mira drawable,
-                    // solo raycastTarget: sin esto, un grupo que únicamente
-                    // coloca se comería los clics de todo lo que quedara detrás
-                    // —y como no pinta nada, no habría forma de ver por qué—.
-                    // A cambio, en el editor el contenedor se selecciona desde
-                    // el Hierarchy y no clicando en el viewport.
+                    // And it does not receive the mouse either. The hit test does NOT look at drawable,
+                    // only raycastTarget: without this, a group that only
+                    // places would swallow the clicks of everything behind it
+                    // (and since it paints nothing, there would be no way to see why).
+                    // In exchange, in the editor the container is selected from
+                    // the Hierarchy and not by clicking in the viewport.
                     e.raycastTarget = false;
                 }
 
@@ -112,9 +112,9 @@ namespace DonTopo
                 e.clipChildren  = clipChildren;
             }
 
-            // El sync lo usa para saber si hay algo que volcar: sin esto habría
-            // que ensuciar el nodo TODOS los frames, que es justo lo que la
-            // caché de vértices del canvas existe para evitar.
+            // The sync uses it to know whether there is anything to dump: without this the
+            // node would have to be dirtied EVERY frame, which is exactly what the
+            // canvas's vertex cache exists to avoid.
             bool operator==(const LayoutComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -131,18 +131,18 @@ namespace DonTopo
             bool operator!=(const LayoutComponent& o) const { return !(*this == o); }
     };
 
-    // Nombre del nodo vivo del contenedor dentro del canvas. Prefijo DISTINTO al
-    // del botón ("go:"), el texto ("txt:") y la barra ("bar:") por lo mismo que
-    // aquellos entre sí: un GameObject puede llevar varios componentes de UI a la
-    // vez, y dos nodos con el mismo nombre harían que el gizmo y el picking
-    // cogieran el que no toca.
+    // Name of the container's live node inside the canvas. DIFFERENT prefix from
+    // the button's ("go:"), the text's ("txt:") and the bar's ("bar:") for the same reason as
+    // those differ among themselves: a GameObject can carry several UI components at
+    // once, and two nodes with the same name would make the gizmo and picking
+    // grab the wrong one.
     inline std::string uiLayoutNodeName(uint64_t ownerId)
     {
         return "lay:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiLayoutNodeName. Devuelve 0 si el nombre no es de un
-    // contenedor: 0 no es un id válido de GameObject.
+    // Inverse of uiLayoutNodeName. Returns 0 if the name is not a
+    // container's: 0 is not a valid GameObject id.
     inline uint64_t uiLayoutOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("lay:", 0) != 0) return 0;

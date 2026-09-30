@@ -5,10 +5,10 @@
 
 namespace DonTopo {
 
-// Compila (no ejecuta) source en un lua_State descartable, cerrado siempre
-// antes de retornar. nullopt si compila sin error. Si falla: {línea,
-// mensaje} parseados del formato de error de Lua
-// ([string "..."]:LINE: mensaje).
+// Compiles (does not run) source in a throwaway lua_State, always closed
+// before returning. nullopt if it compiles without error. On failure: {line,
+// message} parsed from Lua's error format
+// ([string "..."]:LINE: message).
 std::optional<std::pair<int, std::string>> checkLuaSyntax(const std::string& source);
 
 } // namespace DonTopo

@@ -9,8 +9,8 @@ namespace DonTopo {
 
 namespace {
 
-// Comparación sin distinguir mayúsculas: quien escribe 'transform:' espera las
-// mismas sugerencias que quien escribe 'Transform:'.
+// Case-insensitive comparison: whoever types 'transform:' expects the
+// same suggestions as whoever types 'Transform:'.
 bool startsWithCaseInsensitive(const std::string& value, const std::string& prefix)
 {
     if (value.size() < prefix.size())
@@ -20,8 +20,8 @@ bool startsWithCaseInsensitive(const std::string& value, const std::string& pref
                                      std::tolower(static_cast<unsigned char>(b)); });
 }
 
-// Base estática: lo que registra ScriptBindings. Las acciones del panel Input
-// Actions no van aquí — cambian en caliente, las publica el editor.
+// Static base: what ScriptBindings registers. The actions of the Input
+// Actions panel do not go here; they change live, the editor publishes them.
 const std::vector<std::string>& baseSymbols()
 {
     static const std::vector<std::string> symbols = {
@@ -32,25 +32,25 @@ const std::vector<std::string>& baseSymbols()
 
         // Globals
         "print",
-        // DestroyGameObject(entity) — destruye el GameObject y su subtree en
-        // Play (diferido a fin de frame). Ver Scene / README.
+        // DestroyGameObject(entity) — destroys the GameObject and its subtree in
+        // Play (deferred to end of frame). See Scene / README.
         "DestroyGameObject",
 
-        // self — instancia del script (parámetro implícito de las funciones
-        // Script:Método). 'self.entity' es el único campo inyectado por
-        // ScriptManager para todo script (ver ScriptManager.cpp); el resto
-        // de campos son los definidos por el propio script (no listables).
+        // self — script instance (implicit parameter of the
+        // Script:Method functions). 'self.entity' is the only field injected by
+        // ScriptManager for every script (see ScriptManager.cpp); the rest
+        // of the fields are those defined by the script itself (not listable).
         "self", "self.entity",
 
-        // Callbacks de lifecycle — los define el script (function Script:Nombre)
-        // y el motor los llama en Play Mode (ver ScriptManager). Awake/Start una
-        // vez; Update/LateUpdate cada frame; FixedUpdate a paso fijo; OnDestroy
-        // al destruir; OnTrigger* cuando otro collider entra/permanece/sale de
-        // un collider Is Trigger (reciben la Entity que lo provocó);
-        // OnCollision* lo mismo para colisiones DE VERDAD (ninguno de los dos
-        // colliders es trigger), en los dos objetos del par; OnAnimationEvent
-        // recibe el nombre del evento cuando el Animator del objeto lo cruza
-        // (solo en Play).
+        // Lifecycle callbacks — defined by the script (function Script:Name)
+        // and called by the engine in Play Mode (see ScriptManager). Awake/Start once;
+        // Update/LateUpdate every frame; FixedUpdate at a fixed step; OnDestroy
+        // on destroy; OnTrigger* when another collider enters/stays/exits
+        // an Is Trigger collider (they receive the Entity that caused it);
+        // OnCollision* the same for REAL collisions (neither of the two
+        // colliders is a trigger), on both objects of the pair; OnAnimationEvent
+        // receives the event name when the object's Animator crosses it
+        // (Play only).
         "Awake", "Start", "Update", "FixedUpdate", "LateUpdate", "OnDestroy",
         "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit",
         "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit",
@@ -62,8 +62,8 @@ const std::vector<std::string>& baseSymbols()
         // Input / Key / MouseButton
         "Input.IsKeyDown", "Input.IsKeyPressed", "Input.IsKeyReleased",
         "Input.IsMouseButtonDown",
-        // Acciones con nombre del panel Input Actions. Los snippets con el
-        // nombre concreto de cada acción los publica el editor aparte
+        // Named actions of the Input Actions panel. The snippets with each
+        // action's concrete name are published separately by the editor
         // (setLuaApiActionSymbols).
         "Input.IsActionDown", "Input.IsActionPressed", "Input.IsActionReleased",
         "Key.Space", "Key.Enter", "Key.Escape", "Key.Tab",
@@ -76,8 +76,8 @@ const std::vector<std::string>& baseSymbols()
         "Key.Num0", "Key.Num1", "Key.Num2", "Key.Num3", "Key.Num4",
         "Key.Num5", "Key.Num6", "Key.Num7", "Key.Num8", "Key.Num9",
         "MouseButton.Left", "MouseButton.Right", "MouseButton.Middle",
-        // Mando crudo. Lo normal es usar acciones con nombre; esto es para
-        // cuando el script quiere un botón concreto. Sin mando: siempre false.
+        // Raw gamepad. The normal thing is to use named actions; this is for
+        // when the script wants a specific button. Without a gamepad: always false.
         "Input.IsPadButtonDown", "Input.IsPadButtonPressed",
         "Input.IsPadAxisDown", "Input.IsPadAxisPressed",
         "PadButton.A", "PadButton.B", "PadButton.X", "PadButton.Y",
@@ -86,8 +86,8 @@ const std::vector<std::string>& baseSymbols()
         "PadButton.LeftThumb", "PadButton.RightThumb",
         "PadButton.DpadUp", "PadButton.DpadRight",
         "PadButton.DpadDown", "PadButton.DpadLeft",
-        // Un eje son DOS bindings (una dirección cada uno): estas constantes ya
-        // vienen compuestas, y PadAxis.Code(eje, negativo) compone cualquier otra.
+        // An axis is TWO bindings (one direction each): these constants already
+        // come composed, and PadAxis.Code(axis, negative) composes any other.
         "PadAxis.Code",
         "PadAxis.LeftStickUp", "PadAxis.LeftStickDown",
         "PadAxis.LeftStickLeft", "PadAxis.LeftStickRight",
@@ -97,17 +97,17 @@ const std::vector<std::string>& baseSymbols()
 
         // Entity
         "Entity.name", "Entity:IsValid", "Entity:GetTransform",
-        // Oculta la malla sin destruir el objeto: sigue vivo y colisionando.
+        // Hides the mesh without destroying the object: it stays alive and colliding.
         "Entity.meshVisible",
-        // Luz y cámara de juego, con los mismos atajos que los de UI.
+        // Game light and camera, with the same shortcuts as the UI ones.
         "Entity:GetLight", "Entity:AddLight", "Entity:RemoveLight",
         "Entity:GetCamera", "Entity:AddCamera", "Entity:RemoveCamera",
         "Entity:GetLayout", "Entity:AddLayout", "Entity:RemoveLayout",
         "Entity:GetParent", "Entity:SetParent",
         "Entity:GetChildren", "Entity:GetComponent",
         "Entity:AddComponent", "Entity:RemoveComponent",
-        // UI: atajos con nombre para cada componente de UI (registerUi).
-        // Los Get* devuelven nil si el componente no está.
+        // UI: named shortcuts for each UI component (registerUi).
+        // The Get* return nil if the component is not there.
         "Entity:GetCanvas", "Entity:GetButton", "Entity:GetText", "Entity:GetProgressBar",
         "Entity:AddCanvas", "Entity:AddButton", "Entity:AddText", "Entity:AddProgressBar",
         "Entity:RemoveCanvas", "Entity:RemoveButton", "Entity:RemoveText",
@@ -127,8 +127,8 @@ const std::vector<std::string>& baseSymbols()
         "Transform:GetRotation", "Transform:SetRotation",
         "Transform:GetScale", "Transform:SetScale",
         "Transform:GetWorldPosition", "Transform:Translate", "Transform:Rotate",
-        // Posición de mundo y ejes del objeto (ya normalizados). La convención
-        // es la de la cámara: se mira hacia -Z local.
+        // World position and axes of the object (already normalized). The convention
+        // is the camera's: it looks toward local -Z.
         "Transform:SetWorldPosition",
         "Transform:GetForward", "Transform:GetRight", "Transform:GetUp",
         "Transform:LookAt",
@@ -143,7 +143,7 @@ const std::vector<std::string>& baseSymbols()
         "Camera.near", "Camera.far",
         "CameraProjection.Perspective", "CameraProjection.Orthographic",
 
-        // Colliders (la gravedad/dinámica vive ahora en Rigidbody)
+        // Colliders (gravity/dynamics now live in Rigidbody)
         "BoxCollider:GetHalfExtents", "BoxCollider:SetHalfExtents",
         "BoxCollider:GetCenter", "BoxCollider:SetCenter",
         "SphereCollider:GetRadius", "SphereCollider:SetRadius",
@@ -152,29 +152,29 @@ const std::vector<std::string>& baseSymbols()
         "CapsuleCollider:GetHalfHeight", "CapsuleCollider:SetHalfHeight",
         "CapsuleCollider:GetCenter", "CapsuleCollider:SetCenter",
         "PlaneCollider:GetCenter", "PlaneCollider:SetCenter",
-        // Material de física por collider (propiedades, como en Rigidbody)
+        // Physics material per collider (properties, as in Rigidbody)
         "BoxCollider.staticFriction", "BoxCollider.dynamicFriction", "BoxCollider.bounciness",
         "SphereCollider.staticFriction", "SphereCollider.dynamicFriction", "SphereCollider.bounciness",
         "CapsuleCollider.staticFriction", "CapsuleCollider.dynamicFriction", "CapsuleCollider.bounciness",
         "PlaneCollider.staticFriction", "PlaneCollider.dynamicFriction", "PlaneCollider.bounciness",
-        // Is Trigger por collider (solapa sin colisionar y dispara OnTrigger*).
-        // El setter es no-op fuera de Play, donde no hay PhysicsManager.
+        // Is Trigger per collider (overlaps without colliding and fires OnTrigger*).
+        // The setter is a no-op outside Play, where there is no PhysicsManager.
         "BoxCollider.isTrigger", "SphereCollider.isTrigger",
         "CapsuleCollider.isTrigger", "PlaneCollider.isTrigger",
-        // Capa de colisión por collider (0-31). Con quién colisiona cada capa lo
-        // dice la matriz global: Physics.SetLayerCollision / GetLayerCollision.
+        // Collision layer per collider (0-31). What each layer collides with is
+        // given by the global matrix: Physics.SetLayerCollision / GetLayerCollision.
         "BoxCollider.layer", "SphereCollider.layer",
         "CapsuleCollider.layer", "PlaneCollider.layer",
 
-        // Rigidbody (dinámica estilo Unity; GetComponent("Rigidbody"))
+        // Rigidbody (Unity-style dynamics; GetComponent("Rigidbody"))
         "Rigidbody.mass", "Rigidbody.useGravity", "Rigidbody.isKinematic",
         "Rigidbody.drag", "Rigidbody.angularDrag",
-        // Bitmask de ejes congelados: se compone con OR de las constantes de
-        // la tabla RigidbodyConstraints (de abajo).
+        // Bitmask of frozen axes: composed with OR of the constants in
+        // the RigidbodyConstraints table (below).
         "Rigidbody.constraints",
-        // Detección continua (contra el túnel de cuerpos rápidos) e
-        // interpolación visual de la pose entre pasos fijos. Ambas false por
-        // defecto e independientes entre sí.
+        // Continuous detection (against fast bodies tunneling) and
+        // visual interpolation of the pose between fixed steps. Both false by
+        // default and independent of each other.
         "Rigidbody.ccd", "Rigidbody.interpolate",
         "Rigidbody.velocity", "Rigidbody.angularVelocity",
         "Rigidbody:AddForce", "Rigidbody:AddTorque", "Rigidbody:AddImpulse",
@@ -183,11 +183,11 @@ const std::vector<std::string>& baseSymbols()
         "RigidbodyConstraints.FreezePositionZ",
         "RigidbodyConstraints.FreezeRotationX", "RigidbodyConstraints.FreezeRotationY",
         "RigidbodyConstraints.FreezeRotationZ",
-        // Modo opcional (4º argumento) de AddForce/AddTorque. Sin él, Force.
+        // Optional mode (4th argument) of AddForce/AddTorque. Without it, Force.
         "ForceMode.Force", "ForceMode.Acceleration",
         "ForceMode.Impulse", "ForceMode.VelocityChange",
 
-        // Animator (máquina de estados; GetComponent("Animator"))
+        // Animator (state machine; GetComponent("Animator"))
         "Animator:SetBool", "Animator:GetBool", "Animator:SetTrigger",
         "Animator:SetInt", "Animator:GetInt", "Animator:SetFloat", "Animator:GetFloat",
         "Animator:GetState", "Animator:IsBlending", "Animator:GetBlendWeight",
@@ -218,12 +218,12 @@ const std::vector<std::string>& baseSymbols()
         "AudioClip:GetTime", "AudioClip:SetTime",
         "AudioClip:GetPath",
 
-        // Audio global (volumenes por bus: "master", "music", "sfx")
+        // Global audio (volumes per bus: "master", "music", "sfx")
         "Audio.SetBusVolume", "Audio.GetBusVolume",
-        // Sonido posicional sin GameObject. Preload evita que el primer disparo
-        // se pierda por la carga diferida de FMOD.
+        // Positional sound without a GameObject. Preload prevents the first shot
+        // from being lost to FMOD's deferred loading.
         "Audio.PlayClipAtPoint", "Audio.Preload",
-        // Efectos por bus: lowPass, highPass, echo, reverb.
+        // Effects per bus: lowPass, highPass, echo, reverb.
         "Audio.SetBusEffect", "Audio.ClearBusEffect",
         "Audio.SetPaused", "Audio.IsPaused",
 
@@ -239,7 +239,7 @@ const std::vector<std::string>& baseSymbols()
         "Canvas.referenceDpi", "Canvas.aspectRatio",
         "Canvas.renderMode", "Canvas.worldScale", "Canvas.billboard", "Canvas.depthTest",
         "Canvas:GetReferenceResolution", "Canvas:SetReferenceResolution",
-        // SafeArea son cuatro insets sueltos: left, top, right, bottom.
+        // SafeArea is four loose insets: left, top, right, bottom.
         "Canvas:GetSafeArea", "Canvas:SetSafeArea",
 
         // UI 2D — Button (Entity:GetButton / Entity:AddButton)
@@ -261,8 +261,8 @@ const std::vector<std::string>& baseSymbols()
         "Button:GetDisabledColor", "Button:SetDisabledColor",
         "Button:GetSelectedColor", "Button:SetSelectedColor",
         "Button:GetTextColor", "Button:SetTextColor",
-        // GetState devuelve un UiButtonState; OnClick/OnDoubleClick registran
-        // la función Lua que llama el canvas.
+        // GetState returns a UiButtonState; OnClick/OnDoubleClick register
+        // the Lua function that the canvas calls.
         "Button:GetState", "Button:OnClick", "Button:OnDoubleClick",
 
         // UI 2D — Text (Entity:GetText / Entity:AddText)
@@ -290,10 +290,10 @@ const std::vector<std::string>& baseSymbols()
         "ProgressBar:GetSize", "ProgressBar:SetSize",
         "ProgressBar:GetColor", "ProgressBar:SetColor",
         "ProgressBar:GetFillColor", "ProgressBar:SetFillColor",
-        // El 0..1 ya acotado que usa el sync para el rect del relleno.
+        // The already-bounded 0..1 that the sync uses for the fill rect.
         "ProgressBar:GetNormalizedValue",
 
-        // UI 2D — Layout (el contenedor que coloca a los hijos)
+        // 2D UI — Layout (the container that places the children)
         "Layout.visible", "Layout.mode", "Layout.crossAlign",
         "Layout.paddingLeft", "Layout.paddingRight", "Layout.paddingTop",
         "Layout.paddingBottom", "Layout.columns",
@@ -308,7 +308,7 @@ const std::vector<std::string>& baseSymbols()
         "Layout:GetCellSize", "Layout:SetCellSize",
 
 
-        // UI 2D — Slider (widget interactivo)
+        // 2D UI — Slider (interactive widget)
         "Slider.visible", "Slider.interactable", "Slider.value",
         "Slider.minValue", "Slider.maxValue", "Slider.wholeNumbers",
         "Slider.direction", "Slider.handleSize", "Slider.atlasPath",
@@ -323,7 +323,7 @@ const std::vector<std::string>& baseSymbols()
         "Slider:GetHandleColor", "Slider:SetHandleColor",
         "Slider:GetNormalizedValue", "Slider:OnValueChanged",
 
-        // UI 2D — Checkbox (widget interactivo)
+        // 2D UI — Checkbox (interactive widget)
         "Checkbox.visible", "Checkbox.interactable", "Checkbox.isOn",
         "Checkbox.checkPadding", "Checkbox.atlasPath",
         "Checkbox.backgroundSprite", "Checkbox.checkmarkSprite",
@@ -336,7 +336,7 @@ const std::vector<std::string>& baseSymbols()
         "Checkbox:GetCheckColor", "Checkbox:SetCheckColor",
         "Checkbox:OnValueChanged",
 
-        // UI 2D — Toggle (widget interactivo)
+        // 2D UI — Toggle (interactive widget)
         "Toggle.visible", "Toggle.interactable", "Toggle.isOn",
         "Toggle.knobSize", "Toggle.knobPadding", "Toggle.atlasPath",
         "Toggle.backgroundSprite", "Toggle.knobSprite",
@@ -350,7 +350,7 @@ const std::vector<std::string>& baseSymbols()
         "Toggle:GetKnobColor", "Toggle:SetKnobColor",
         "Toggle:OnValueChanged",
 
-        // UI 2D — Scrollbar (widget interactivo)
+        // 2D UI — Scrollbar (interactive widget)
         "Scrollbar.visible", "Scrollbar.interactable", "Scrollbar.value",
         "Scrollbar.handleFraction", "Scrollbar.direction",
         "Scrollbar.numberOfSteps", "Scrollbar.scrollStep",
@@ -421,7 +421,7 @@ const std::vector<std::string>& baseSymbols()
         "ScrollView:GetScrollRange", "ScrollView:GetContentOffset",
         "ScrollView:OnValueChanged",
 
-        // UI 2D — Panel (el rectángulo de fondo)
+        // 2D UI — Panel (the background rectangle)
         "Panel.visible", "Panel.raycastTarget", "Panel.atlasPath", "Panel.sprite",
         "Panel:GetAnchorMin", "Panel:SetAnchorMin",
         "Panel:GetAnchorMax", "Panel:SetAnchorMax",
@@ -430,7 +430,7 @@ const std::vector<std::string>& baseSymbols()
         "Panel:GetSize", "Panel:SetSize",
         "Panel:GetColor", "Panel:SetColor",
 
-        // UI 2D — Image (sprite con Normal/Tiled/Sliced/Filled)
+        // 2D UI — Image (sprite with Normal/Tiled/Sliced/Filled)
         "Image.visible", "Image.raycastTarget", "Image.atlasPath", "Image.sprite",
         "Image.mode", "Image.borderLeft", "Image.borderRight", "Image.borderTop",
         "Image.borderBottom", "Image.fillCenter", "Image.maxTiles",
@@ -442,7 +442,7 @@ const std::vector<std::string>& baseSymbols()
         "Image:GetSize", "Image:SetSize",
         "Image:GetColor", "Image:SetColor",
 
-        // UI 2D — enums (tablas de enteros que registra registerUi)
+        // 2D UI — enums (integer tables that registerUi registers)
         "UiScaleMode.ConstantPixelSize", "UiScaleMode.ScaleWithScreenSize",
         "UiScaleMode.ConstantPhysicalSize",
         "UiScreenMatch.MatchWidthOrHeight", "UiScreenMatch.Expand",
@@ -451,8 +451,8 @@ const std::vector<std::string>& baseSymbols()
         "UiBillboard.None", "UiBillboard.YawOnly", "UiBillboard.Full",
         "UiTextAlign.Left", "UiTextAlign.Center", "UiTextAlign.Right",
         "UiTextAlign.Justify",
-        // Vertical: la registra registerUi como cualquier otra y llevaba desde
-        // entonces fuera de esta lista (el README lo documentaba como ausencia).
+        // Vertical: registerUi registers it like any other and it had been
+        // missing from this list since then (the README documented it as an absence).
         "UiTextVAlign.Top", "UiTextVAlign.Middle", "UiTextVAlign.Bottom",
         "UiTextOverflow.Overflow", "UiTextOverflow.Clip", "UiTextOverflow.Ellipsis",
         "UiProgressFillDirection.LeftToRight", "UiProgressFillDirection.RightToLeft",
@@ -479,62 +479,62 @@ const std::vector<std::string>& baseSymbols()
         // Scene
         "Scene.Find", "Scene.CreateGameObject", "Scene.Destroy", "Scene.Instantiate",
 
-        // Physics — consultas de rayo (nil / false si no hay escena de física,
-        // es decir fuera de Play). Los nombres sueltos son los campos de la
-        // tabla 'options' y los de la tabla que devuelve Raycast.
-        // RaycastAll devuelve un array de esas mismas tablas (vacío si no hay
-        // impactos, nunca nil), ordenado por distancia.
+        // Physics — ray queries (nil / false if there is no physics scene,
+        // that is outside Play). The loose names are the fields of the
+        // 'options' table and those of the table that Raycast returns.
+        // RaycastAll returns an array of those same tables (empty if there are no
+        // hits, never nil), sorted by distance.
         "Physics.Raycast", "Physics.RaycastAll", "Physics.RaycastHit",
         "hitTriggers", "static", "dynamic", "ignore",
         "entity", "point", "normal", "distance",
 
-        // Physics — barrido y solapes, mismos filtros ('options') que el rayo.
-        // SphereCast devuelve la misma tabla de impacto que Raycast; los dos
-        // Overlap devuelven un array de Entity (vacío si nada solapa, nunca
-        // nil): un solape no tiene punto, normal ni distancia.
+        // Physics — sweep and overlaps, same filters ('options') as the ray.
+        // SphereCast returns the same hit table as Raycast; both
+        // Overlap return an array of Entity (empty if nothing overlaps, never
+        // nil): an overlap has no point, normal or distance.
         "Physics.SphereCast", "Physics.OverlapSphere", "Physics.OverlapBox",
 
-        // Physics — matriz de capas de colisión (32x32, simétrica). Índice
-        // fuera de [0,31]: error de Lua.
+        // Physics — collision layer matrix (32x32, symmetric). Index
+        // out of [0,31]: Lua error.
         "Physics.SetLayerCollision", "Physics.GetLayerCollision",
 
-        // Motor (cambio de escena en runtime)
+        // Engine (scene change at runtime)
         "DonTopo.loadScene",
 
         // Vec3
         "Vec3.new",
-        // Campos y álgebra. Los métodos van con ':' porque operan sobre una
-        // instancia: 'v:Length()', 'a:Dot(b)'.
+        // Fields and algebra. The methods use ':' because they operate on an
+        // instance: 'v:Length()', 'a:Dot(b)'.
         "Vec3.x", "Vec3.y", "Vec3.z",
         "Vec3:Length", "Vec3:Normalized", "Vec3:Dot", "Vec3:Cross",
         "Vec3:Distance", "Vec3:Lerp",
 
-        // Time — reloj de los scripts. Se reinicia en cada Play.
+        // Time — the scripts' clock. It restarts on every Play.
         "Time.deltaTime", "Time.fixedDeltaTime", "Time.time", "Time.frameCount",
     };
     return symbols;
 }
 
 // ---------------------------------------------------------------------------
-// Firmas y documentación
+// Signatures and documentation
 //
-// Tabla SEPARADA de la lista de símbolos a propósito. La lista de arriba sigue
-// siendo la autoridad sobre qué existe —es la que hay que tocar al añadir un
-// binding, y la regla del proyecto no cambia—; esto es solo texto de ayuda.
-// Un símbolo sin entrada aquí sale en el popup igual, sin firma: nunca
-// desaparece por no estar documentado.
+// Table SEPARATE from the symbol list on purpose. The list above remains
+// the authority on what exists (it is the one to touch when adding a
+// binding, and the project rule does not change); this is only help text.
+// A symbol without an entry here shows up in the popup all the same, without a signature: it never
+// disappears for not being documented.
 //
-// Las familias mecánicas de la UI (los diez accessors de rect que repiten los
-// catorce widgets) se generan en bucle en vez de escribirse ciento cuarenta
-// veces: el texto sería idéntico y copiarlo solo garantiza que un día uno de
-// los catorce se quede sin actualizar.
+// The mechanical UI families (the ten rect accessors that the
+// fourteen widgets repeat) are generated in a loop instead of being written one hundred
+// and forty times: the text would be identical and copying it only guarantees that one day one of
+// the fourteen is left without being updated.
 // ---------------------------------------------------------------------------
 
 struct DocEntry { const char* signature; const char* doc; };
 
 void addRectAccessors(std::unordered_map<std::string, DocEntry>& out, const std::string& type)
 {
-    // Los pares de un rect llegan y salen como DOS números sueltos, no como un
+    // The pairs of a rect come in and go out as TWO loose numbers, not as a
     // Vec3: 'local x, y = b:GetSize()'.
     out[type + ":GetAnchorMin"] = { "() -> x, y", "Bottom-left anchor, as a fraction of the parent (0..1)." };
     out[type + ":SetAnchorMin"] = { "(x, y)", "Sets the bottom-left anchor, as a fraction of the parent (0..1)." };
@@ -718,13 +718,13 @@ const std::unordered_map<std::string, DocEntry>& docTable()
             {"Audio.IsPaused", {"() -> boolean", "Whether audio is paused globally."}},
         };
 
-        // Los catorce widgets comparten rect; el color de fondo también.
+        // The fourteen widgets share the rect; the background color too.
         for (const char* type : {"Button", "Text", "ProgressBar", "Layout", "Panel",
                                  "Image", "Slider", "Checkbox", "Toggle", "Scrollbar",
                                  "InputField", "Dropdown", "ScrollView"})
         {
             addRectAccessors(t, type);
-            // Toggle es el único sin color de fondo: tiene OffColor y OnColor.
+            // Toggle is the only one without a background color: it has OffColor and OnColor.
             if (std::string(type) != "Toggle")
                 addColorAccessor(t, type, "Color", "Background color (rgba 0..1).");
         }
@@ -733,9 +733,9 @@ const std::unordered_map<std::string, DocEntry>& docTable()
     return table;
 }
 
-// Snippets por acción publicados por el editor; vacío en el runtime exportado.
+// Per-action snippets published by the editor; empty in the exported runtime.
 std::vector<std::string> g_actionSymbols;
-// base + dinámicas; se reconstruye solo cuando cambian las dinámicas.
+// base + dynamic; it is rebuilt only when the dynamic ones change.
 std::vector<std::string> g_combined;
 bool g_combinedDirty = true;
 
@@ -773,22 +773,22 @@ std::vector<LuaApiMatch> luaApiMatches(const std::string& fragment, std::size_t 
     std::vector<LuaApiMatch> out;
     if (fragment.empty()) return out;
 
-    // El fragmento se parte por el ÚLTIMO separador: "Entity:GetT" -> receptor
-    // "Entity", separador ':', miembro "GetT". Sin separador, todo es miembro.
+    // The fragment is split at the LAST separator: "Entity:GetT" -> receiver
+    // "Entity", separator ':', member "GetT". Without a separator, everything is member.
     const std::size_t sep = fragment.find_last_of(".:");
     const bool hasSeparator = (sep != std::string::npos);
     const std::string receiver = hasSeparator ? fragment.substr(0, sep) : std::string();
     const char separator = hasSeparator ? fragment[sep] : '\0';
     const std::string member = hasSeparator ? fragment.substr(sep + 1) : fragment;
-    // Dónde empieza a sustituirse cuando el receptor NO es un tipo conocido:
-    // justo después del separador, para conservar lo que el usuario escribió.
+    // Where the replacement starts when the receiver is NOT a known type:
+    // right after the separator, to keep what the user wrote.
     const std::size_t memberOffset = hasSeparator ? sep + 1 : 0;
 
-    // Rango 0: el símbolo entero empieza por lo escrito. Es lo que había antes
-    // y lo que un usuario espera al teclear el nombre del tipo.
-    // Rango 1: el receptor es una variable local ("t:Get"), así que se busca
-    // por el nombre del MIEMBRO en cualquier tipo. Sin esto, el caso normal
-    // —llamar a través de una variable— no ofrecía nada.
+    // Rank 0: the whole symbol starts with what was typed. It is what there was before
+    // and what a user expects when typing the type name.
+    // Rank 1: the receiver is a local variable ("t:Get"), so it is searched
+    // by the MEMBER name in any type. Without this, the normal case
+    // (calling through a variable) offered nothing.
     struct Scored { int rank; const std::string* symbol; std::size_t offset; };
     std::vector<Scored> scored;
 
@@ -800,27 +800,27 @@ std::vector<LuaApiMatch> luaApiMatches(const std::string& fragment, std::size_t 
             continue;
         }
 
-        // Para el rango 1 hace falta partir el símbolo por SU separador y
-        // comparar solo la parte del miembro. Un símbolo sin separador (una
-        // keyword de Lua, un global) no tiene miembro que ofrecer aquí.
+        // For rank 1 the symbol has to be split at ITS separator and only the
+        // member part compared. A symbol without a separator (a Lua
+        // keyword, a global) has no member to offer here.
         const std::size_t symSep = symbol.find_last_of(".:");
         if (symSep == std::string::npos) continue;
-        // El separador tiene que coincidir: '.' es propiedad y ':' es método,
-        // y ofrecer un método donde se escribió un punto sería una sugerencia
-        // que no compila.
+        // The separator has to match: '.' is a property and ':' is a method,
+        // and offering a method where a dot was typed would be a suggestion
+        // that does not compile.
         if (hasSeparator && symbol[symSep] != separator) continue;
-        // Sin nada escrito después del separador ("t:") no hay miembro que
-        // filtrar: se ofrecen todos los del separador pedido.
+        // With nothing typed after the separator ("t:") there is no member to
+        // filter: all those of the requested separator are offered.
         if (!member.empty() &&
             !startsWithCaseInsensitive(symbol.substr(symSep + 1), member)) continue;
-        // Sin separador en lo escrito, esto es teclear "Get" a pelo: vale como
-        // búsqueda por miembro, pero se sustituye el fragmento entero.
+        // Without a separator in what was typed, this is typing "Get" bare: it counts as a
+        // member search, but the whole fragment is replaced.
         scored.push_back({1, &symbol, hasSeparator ? memberOffset : 0});
     }
 
-    // Orden total y determinista: rango, luego longitud (lo más corto suele ser
-    // lo más general), luego alfabético. Sin el desempate por nombre el orden
-    // dependería del de la tabla y un test no podría fijarlo.
+    // Total, deterministic order: rank, then length (the shortest is usually
+    // the most general), then alphabetical. Without the name tie-break the order
+    // would depend on the table's and a test could not pin it down.
     std::stable_sort(scored.begin(), scored.end(), [](const Scored& a, const Scored& b) {
         if (a.rank != b.rank) return a.rank < b.rank;
         if (a.symbol->size() != b.symbol->size()) return a.symbol->size() < b.symbol->size();
@@ -834,8 +834,8 @@ std::vector<LuaApiMatch> luaApiMatches(const std::string& fragment, std::size_t 
         m.symbol = *s.symbol;
         luaApiDoc(m.symbol, m.signature, m.doc);
         m.replaceOffset = s.offset;
-        // Con offset se conserva el receptor escrito por el usuario y solo se
-        // escribe el miembro; sin él, se sustituye el fragmento entero.
+        // With an offset the receiver written by the user is kept and only the
+        // member is written; without it, the whole fragment is replaced.
         m.insert = (s.offset == 0) ? m.symbol
                                    : m.symbol.substr(m.symbol.find_last_of(".:") + 1);
         out.push_back(std::move(m));

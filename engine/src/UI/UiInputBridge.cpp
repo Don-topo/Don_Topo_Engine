@@ -8,9 +8,9 @@ namespace DonTopo
 {
     namespace
     {
-        // Una tecla y su equivalente en el canvas. isKeyPressed es el FLANCO:
-        // repetir una tecla mantenida es cosa de quien la lea, no del canvas
-        // (mantener la flecha no debe recorrer el menú a 60 saltos por segundo).
+        // A key and its canvas equivalent. isKeyPressed is the EDGE: repeating
+        // a held key is up to whoever reads it, not the canvas
+        // (holding the arrow must not step through the menu at 60 jumps per second).
         struct Atajo
         {
             int   glfwKey;
@@ -41,20 +41,20 @@ namespace DonTopo
             { GLFW_GAMEPAD_BUTTON_B,          UiKey::Escape },
         };
 
-        // Caracteres acumulados desde el ultimo fillUiInputKeys. Un solo hilo:
-        // los callbacks de GLFW corren dentro de pollEvents, en el principal.
+        // Characters accumulated since the last fillUiInputKeys. Single thread:
+        // the GLFW callbacks run inside pollEvents, on the main thread.
         std::vector<uint32_t> g_chars;
 
-        // Tope duro. Nadie teclea 256 caracteres en un frame; si el buffer llega
-        // ahi es que quien llama no lo esta vaciando, y crecer sin limite
-        // convertiria un fallo de cableado en una fuga de memoria.
+        // Hard cap. Nobody types 256 characters in one frame; if the buffer gets
+        // there, the caller is not draining it, and growing without limit
+        // would turn a wiring fault into a memory leak.
         constexpr size_t kMaxChars = 256;
 
         void empuja(UiInputState& out, UiKey key)
         {
-            // La misma tecla por dos vías (la cruceta y el stick, o los dos
-            // Enter) es UN solo evento: si no, un menú daría dos saltos por
-            // pulsación en cuanto alguien use las dos manos.
+            // The same key through two paths (the d-pad and the stick, or both
+            // Enter keys) is ONE event: otherwise a menu would jump twice per
+            // press as soon as someone uses both hands.
             for (UiKey k : out.keys)
                 if (k == key) return;
             out.keys.push_back(key);
@@ -74,8 +74,8 @@ namespace DonTopo
 
     void fillUiInputKeys(UiInputState& out)
     {
-        // Los caracteres se MUEVEN y el acumulador queda vacio: si se leyeran
-        // sin vaciar, lo tecleado se repetiria en todos los frames siguientes.
+        // The characters are MOVED and the accumulator is left empty: if they were read
+        // without draining, what was typed would repeat on every following frame.
         out.chars.insert(out.chars.end(), g_chars.begin(), g_chars.end());
         g_chars.clear();
 
@@ -85,9 +85,9 @@ namespace DonTopo
         for (const Atajo& a : kBotonesPad)
             if (Input::isPadButtonPressed(a.glfwKey)) empuja(out, a.uiKey);
 
-        // Stick izquierdo: los ejes ya vienen digitalizados con histéresis, así
-        // que se leen igual que un botón. El eje Y de GLFW crece hacia ABAJO,
-        // que es la misma convención que la Y del canvas.
+        // Left stick: the axes already arrive digitized with hysteresis, so
+        // they are read like a button. GLFW's Y axis grows DOWNWARD,
+        // which is the same convention as the canvas Y.
         if (Input::isPadAxisPressed(Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_X, true)))
             empuja(out, UiKey::Left);
         if (Input::isPadAxisPressed(Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_X, false)))

@@ -1,22 +1,22 @@
 #pragma once
 
-// Lote de sprites 2D de la UI de juego.
+// 2D sprite batch of the game UI.
 //
-// Dos mitades bien separadas:
-//   - build(): CPU pura. Recorre la jerarquía del canvas y saca vértices,
-//     índices y lotes. No toca Vulkan, y es lo que ejercitan los tests.
-//   - el resto: sube esos datos a los buffers del frame en vuelo y graba los
-//     draws DENTRO del pass de composición del Renderer (LDR, ya tonemapeado).
+// Two well-separated halves:
+//   - build(): pure CPU. It walks the canvas hierarchy and produces vertices,
+//     indices and batches. It does not touch Vulkan, and is what the tests exercise.
+//   - the rest: uploads that data to the in-flight frame's buffers and records the
+//     draws INSIDE the Renderer's composition pass (LDR, already tonemapped).
 //
-// El lote rompe al cambiar de atlas o de scissor, que son los dos únicos
-// estados que el draw no puede llevar por vértice.
+// The batch breaks on a change of atlas or scissor, which are the only two
+// states that the draw cannot carry per vertex.
 
 #include "DonTopo/UI/UiTextureAtlas.h"
 
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
 
-#include <cstddef>   // offsetof: la red del layout del push constant
+#include <cstddef>   // offsetof: the safety net of the push constant layout
 #include <cstdint>
 #include <vector>
 
@@ -26,22 +26,22 @@ namespace DonTopo
     class GpuResources;
     class UiCanvas;
 
-    // Posición en PÍXELES de pantalla, con (0,0) arriba a la izquierda: la
-    // proyección ortográfica del vertex shader es quien la lleva a NDC.
+    // Position in screen PIXELS, with (0,0) at the top left: the vertex shader's
+    // orthographic projection is what takes it to NDC.
     struct UiVertex
     {
         glm::vec2 pos{0.0f};
         glm::vec2 uv{0.0f};
         glm::vec4 color{1.0f};
 
-        // Todo lo que distingue un quad de texto de uno de sprite viaja POR
-        // VÉRTICE, no por pipeline ni por descriptor: así el texto cae en el
-        // mismo lote que el panel que tiene detrás.
-        //   params.x = modo: 0 = sprite/color plano, 1 = MSDF
-        //   params.y = screenPxRange YA escalado al tamaño de este quad
-        //   params.z = grosor del outline en píxeles de pantalla
-        //   effect   = color del outline (con la opacidad del árbol ya aplicada)
-        // Con params.x = 0 el shader hace literalmente lo de siempre.
+        // Everything that tells a text quad apart from a sprite one travels PER
+        // VERTEX, not per pipeline or per descriptor: this way the text falls in the
+        // same batch as the panel behind it.
+        //   params.x = mode: 0 = sprite/flat color, 1 = MSDF
+        //   params.y = screenPxRange ALREADY scaled to this quad's size
+        //   params.z = outline thickness in screen pixels
+        //   effect   = outline color (with the tree's opacity already applied)
+        // With params.x = 0 the shader does literally what it always did.
         glm::vec4 params{0.0f};
         glm::vec4 effect{0.0f};
     };
@@ -61,15 +61,15 @@ namespace DonTopo
         bool operator!=(const UiScissor& o) const { return !(*this == o); }
     };
 
-    // Bump allocator puro: aparta `count` elementos a partir de `cursor`,
-    // avanza el cursor y devuelve DÓNDE empezaba. Es la aritmética que separa
-    // el offset de escritura de un canvas dentro del buffer COMPARTIDO del
-    // frame (N canvas, un solo VkBuffer). Sin esto — o bindeando siempre en el
-    // offset 0, que es lo que hacía con un canvas único — el draw de cada
-    // canvas pisa al anterior, y como la GPU lee el buffer al EJECUTAR y no al
-    // GRABAR, los N draws del frame salen todos con la geometría del ÚLTIMO,
-    // sin que ninguna capa de validación lo diga. Se extrae aparte y libre de
-    // Vulkan justo para poder probar esta cuenta sin GPU (ui_batch_tests.cpp).
+    // Pure bump allocator: sets aside `count` elements starting at `cursor`,
+    // advances the cursor and returns WHERE it started. It is the arithmetic that separates
+    // a canvas's write offset inside the frame's SHARED buffer
+    // (N canvases, a single VkBuffer). Without this (or by always binding at
+    // offset 0, which is what it did with a single canvas) each canvas's draw
+    // overwrites the previous one, and since the GPU reads the buffer at EXECUTE and not at
+    // RECORD, the frame's N draws all come out with the LAST one's geometry,
+    // without any validation layer saying so. It is extracted separately and free of
+    // Vulkan precisely so this arithmetic can be tested without a GPU (ui_batch_tests.cpp).
     inline uint32_t bumpUiCursor(uint32_t& cursor, uint32_t count)
     {
         const uint32_t at = cursor;
@@ -77,54 +77,54 @@ namespace DonTopo
         return at;
     }
 
-    // Guarda de capacidad: ¿cabe [base, base+count) dentro de `capacity`?
-    // record() la comprueba antes de CADA memcpy. La invariante "beginFrame()
-    // se llamó este frame, exactamente una vez, con el total exacto" no la
-    // impone el tipo — hoy la sostiene que hay un único llamador (Renderer).
-    // En cuanto exista un segundo (los canvas de mundo, en el pase de escena,
-    // en otro bucle), un record() sin su beginFrame, uno llamado dos veces, o
-    // un total que se quedó corto, escribiría FUERA de la memoria mapeada:
-    // una escritura de HOST que ninguna capa de validación ve — no hay
-    // device lost, no hay error de Vulkan, solo corrupción silenciosa. Mejor
-    // no dibujar ese canvas que corromper el buffer. Suma en 64 bits porque
-    // `base + count` en 32 bits podría desbordar cerca de UINT32_MAX (nunca
-    // pasa con tamaños reales de UI, pero la guarda no depende de que nadie
-    // se acuerde de eso).
+    // Capacity guard: does [base, base+count) fit inside `capacity`?
+    // record() checks it before EVERY memcpy. The invariant "beginFrame()
+    // was called this frame, exactly once, with the exact total" is not
+    // enforced by the type; today it is upheld by there being a single caller (Renderer).
+    // As soon as there is a second one (the world canvases, in the scene pass,
+    // in another loop), a record() without its beginFrame, one called twice, or
+    // a total that came up short, would write OUTSIDE the mapped memory:
+    // a HOST write that no validation layer sees: there is no
+    // device lost, no Vulkan error, only silent corruption. Better
+    // not to draw that canvas than to corrupt the buffer. It sums in 64 bits because
+    // `base + count` in 32 bits could overflow near UINT32_MAX (it never
+    // happens with real UI sizes, but the guard does not depend on anyone
+    // remembering that).
     inline bool uiCursorFits(uint32_t base, uint32_t count, uint32_t capacity)
     {
         return (uint64_t)base + (uint64_t)count <= (uint64_t)capacity;
     }
 
-    // El bloque de push constants de ui.vert/ui.frag, en C++. Tiene que decir
-    // EXACTAMENTE lo mismo que el `layout(push_constant) uniform Push` de los
-    // dos shaders: un desajuste de offset entre CPU y GPU no da error de
-    // compilacion, ni de enlazado, ni aviso de ninguna capa de validacion —
-    // solo un flag con basura y colores mal. Los static_assert de abajo son la
-    // unica red que hay por el lado de la CPU; por el de la GPU, `spirv-dis
-    // shaders/ui.frag.spv | grep MemberDecorate` tiene que enseñar Offset 0
-    // para la mat4 y Offset 64 para el int.
+    // The push constants block of ui.vert/ui.frag, in C++. It has to say
+    // EXACTLY the same as the `layout(push_constant) uniform Push` of the
+    // two shaders: an offset mismatch between CPU and GPU gives no compile
+    // error, no link error, and no warning from any validation layer,
+    // only a flag with garbage and wrong colors. The static_asserts below are the
+    // only safety net on the CPU side; on the GPU side, `spirv-dis
+    // shaders/ui.frag.spv | grep MemberDecorate` has to show Offset 0
+    // for the mat4 and Offset 64 for the int.
     struct UiPushConstants
     {
         glm::mat4 transform{1.0f};
-        // 0 = el destino es SRGB y el hardware codifica al escribir (el pase de
-        // UI). 1 = el destino es HDR LINEAL (el pase de escena) y ui.frag
-        // deshace la gamma a mano, o el color sale lavado.
+        // 0 = the target is SRGB and the hardware encodes on write (the UI
+        // pass). 1 = the target is LINEAR HDR (the scene pass) and ui.frag
+        // undoes the gamma by hand, or the color comes out washed out.
         int32_t   linearOutput = 0;
     };
     static_assert(offsetof(UiPushConstants, transform)    == 0,  "ui.vert expects the mat4 at offset 0");
     static_assert(offsetof(UiPushConstants, linearOutput) == 64, "ui.frag expects the flag at offset 64");
 
-    // Lo que se empuja de verdad: hasta el ultimo byte util, sin el relleno de
-    // alineacion que sizeof(UiPushConstants) mete detras (glm::mat4 alinea a 16,
-    // asi que sizeof serian 80 y los 12 ultimos bytes serian basura sin
-    // inicializar).
+    // What is really pushed: up to the last useful byte, without the alignment
+    // padding that sizeof(UiPushConstants) adds at the end (glm::mat4 aligns to 16,
+    // so sizeof would be 80 and the last 12 bytes would be uninitialized
+    // garbage).
     constexpr uint32_t kUiPushConstantSize = 68;
 
     struct UiBatch
     {
-        // nullptr = textura blanca de 1x1 del propio UiSpriteBatch (paneles de
-        // color plano). Es también la clave de agrupado: dos nodos con el mismo
-        // puntero y el mismo scissor caen en el mismo lote.
+        // nullptr = UiSpriteBatch's own 1x1 white texture (flat-color panels).
+        // It is also the grouping key: two nodes with the same
+        // pointer and the same scissor fall in the same batch.
         const UiTextureAtlas* atlas = nullptr;
         UiScissor scissor{};
         uint32_t  firstIndex = 0;
@@ -149,7 +149,7 @@ namespace DonTopo
     class UiSpriteBatch
     {
     public:
-        static constexpr int kFrames = 2;   // los mismos MAX_FRAMES del Renderer
+        static constexpr int kFrames = 2;   // the same MAX_FRAMES as the Renderer
 
         // --- CPU ---------------------------------------------------------------
         static void build(const UiCanvas& canvas, uint32_t width, uint32_t height, UiDrawData& out);
@@ -158,109 +158,109 @@ namespace DonTopo
         void init(GpuDevice& gpu, GpuResources& res, VkRenderPass renderPass, VkSampleCountFlagBits samples);
         void recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples);
 
-        // Las DOS variantes de canvas de MUNDO, compiladas contra el renderpass
-        // de la ESCENA (no el de UI): una con test de profundidad —para que una
-        // pared tape el cartel— y otra sin el —para lo que va siempre encima,
-        // como una barra de vida—.
+        // The TWO variants of WORLD canvas, compiled against the SCENE's
+        // renderpass (not the UI one): one with a depth test (so that a
+        // wall covers the sign) and another without it (for what always goes on top,
+        // like a health bar).
         //
-        // Sirve tambien de "recreate": si ya habia pipelines de mundo, los
-        // destruye antes de compilar los nuevos. Y hay que llamarla CADA VEZ que
-        // el Renderer recrea `scenePass` o cambia `samples` (el cambio de AA):
-        // un pipeline compilado contra un VkRenderPass ya destruido no da error
-        // de validacion, se manifiesta como DEVICE LOST al usarlo.
+        // It also serves as "recreate": if there were already world pipelines, it
+        // destroys them before compiling the new ones. And it has to be called EVERY TIME
+        // the Renderer recreates `scenePass` or changes `samples` (the AA change):
+        // a pipeline compiled against an already destroyed VkRenderPass gives no validation
+        // error, it shows up as DEVICE LOST when used.
         //
-        // Sin init() previo (headless sin UI, o sin pipeline layout) no hace
-        // nada: no hay layout contra el que compilar.
+        // Without a prior init() (headless without UI, or without a pipeline layout) it does
+        // nothing: there is no layout to compile against.
         void initWorldPipelines(GpuDevice& gpu, VkRenderPass scenePass, VkSampleCountFlagBits samples);
 
         void shutdown(GpuDevice& gpu);
 
-        // Reserva y escribe el descriptor set del atlas. Sin esto el atlas se
-        // dibujaría con el set de otro, que es un fallo mudo.
+        // Reserves and writes the atlas's descriptor set. Without this the atlas would be
+        // drawn with another's set, which is a silent failure.
         bool registerAtlas(GpuDevice& gpu, UiTextureAtlas& atlas);
 
-        // El sampler con el que se muestrean los atlas. Lo necesita el editor
-        // para enseñar uno en un ImGui::Image: la vista la tiene el atlas, pero
-        // el sampler es de aquí.
+        // The sampler the atlases are sampled with. The editor needs it
+        // to show one in an ImGui::Image: the atlas has the view, but
+        // the sampler is from here.
         VkSampler sampler() const { return m_sampler; }
 
-        // UNA vez por FRAME, antes del PRIMER record/recordWorld de ese frame —
-        // y como los canvas de MUNDO se graban en el pase de ESCENA, que corre
-        // ANTES del pase de UI, "antes del primero" significa antes del pase de
-        // escena, no dentro del de UI.
+        // ONCE per FRAME, before the FIRST record/recordWorld of that frame,
+        // and since WORLD canvases are recorded in the SCENE pass, which runs
+        // BEFORE the UI pass, "before the first" means before the scene
+        // pass, not inside the UI one.
         //
-        // Los totales son el ACUMULADO de TODOS los canvas del frame, de mundo
-        // Y de pantalla, en un solo buffer compartido. Por qué no vale
-        // dimensionar por pase, ni por canvas:
-        //   - Si el buffer creciera a mitad de frame, el bind ya grabado de un
-        //     canvas anterior apuntaría a un VkBuffer destruido (ensureBuffers
-        //     recrea el handle al crecer).
-        //   - Si se llamara una segunda vez para el pase de UI, reiniciaría los
-        //     cursores y los canvas de pantalla PISARÍAN los vértices de los de
-        //     mundo, que la GPU todavía no ha leído: lee el buffer al EJECUTAR,
-        //     no al grabar.
-        //   - Si no se llamara antes del pase de escena, los canvas de mundo
-        //     llegarían a record() con la capacidad del frame ANTERIOR (o 0) y
-        //     la guarda uiCursorFits los descartaría EN SILENCIO: ni un error,
-        //     ni un aviso de validación, ni un canvas en pantalla.
-        // La guarda uiCursorFits evita la corrupción de memoria; no reemplaza
-        // llamar bien a esto. Con totales a 0 no toca ningún buffer y solo
-        // reinicia los cursores.
+        // The totals are the ACCUMULATED amount of ALL the frame's canvases, world
+        // AND screen, in a single shared buffer. Why sizing
+        // per pass or per canvas does not work:
+        //   - If the buffer grew in the middle of a frame, the already-recorded bind of an
+        //     earlier canvas would point to a destroyed VkBuffer (ensureBuffers
+        //     recreates the handle when growing).
+        //   - If it were called a second time for the UI pass, it would reset the
+        //     cursors and the screen canvases would OVERWRITE the world ones' vertices,
+        //     which the GPU has not read yet: it reads the buffer at EXECUTE,
+        //     not at RECORD.
+        //   - If it were not called before the scene pass, the world canvases
+        //     would reach record() with the PREVIOUS frame's capacity (or 0) and
+        //     the uiCursorFits guard would discard them SILENTLY: not an error,
+        //     not a validation warning, not a canvas on screen.
+        // The uiCursorFits guard prevents memory corruption; it does not replace
+        // calling this correctly. With totals at 0 it touches no buffer and only
+        // resets the cursors.
         void beginFrame(GpuDevice& gpu, int frame, uint32_t totalVertices, uint32_t totalIndices);
 
-        // Con datos vacíos no graba ni un comando ni toca ningún buffer.
+        // With empty data it records not a single command and touches no buffer.
         //
-        // canvasExtent es el espacio en el que se CONSTRUYÓ el UiDrawData (los
-        // píxeles de salida, los mismos en los que llega el ratón) y fbExtent el
-        // del framebuffer que se graba. Con SSAA no coinciden: la ortográfica
-        // sale del primero y los scissor se escalan al segundo, que es el único
-        // espacio que entiende un VkRect2D. Iguales, sale lo de siempre.
+        // canvasExtent is the space in which the UiDrawData was BUILT (the output
+        // pixels, the same ones the mouse arrives in) and fbExtent that of the
+        // framebuffer being recorded. With SSAA they do not match: the orthographic
+        // comes from the first and the scissors are scaled to the second, which is the only
+        // space a VkRect2D understands. When equal, it comes out as usual.
         //
-        // Escribe en el SIGUIENTE hueco libre del buffer del frame (avanzando
-        // el cursor que dejó beginFrame) y no siempre en el offset 0: con un
-        // solo canvas por frame daba igual, pero con N, bindear siempre en 0
-        // haría que cada llamada pisara los vértices de la anterior.
+        // It writes at the NEXT free slot of the frame's buffer (advancing
+        // the cursor that beginFrame left) and not always at offset 0: with a
+        // single canvas per frame it made no difference, but with N, always binding at 0
+        // would make each call overwrite the previous one's vertices.
         //
-        // transform es proj*view*model ya multiplicada: para un canvas de
-        // pantalla es la ortográfica de siempre, y para uno de mundo (tarea
-        // posterior) llevará también la cámara y la matriz del canvas. Quien
-        // llama decide cuál es; record() ya no calcula ninguna.
+        // transform is proj*view*model already multiplied: for a screen
+        // canvas it is the usual orthographic, and for a world one (later
+        // task) it will also carry the camera and the canvas matrix. The caller
+        // decides which it is; record() no longer computes any.
         void record(GpuDevice& gpu, VkCommandBuffer cmd, const UiDrawData& data,
                     const glm::mat4& transform,
                     VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame);
 
-        // Igual que record(), pero DENTRO del pase de escena y con la variante
-        // de mundo del pipeline. Tres diferencias, todas obligatorias:
+        // Same as record(), but INSIDE the scene pass and with the world
+        // variant of the pipeline. Three differences, all mandatory:
         //
-        //   1. `transform` es proj*view*model, no una ortográfica: el canvas
-        //      sale con perspectiva y lo tapa la geometría que tenga delante.
-        //   2. `depthTest` elige pipeline: true = lo tapa una pared; false =
-        //      siempre encima. La ESCRITURA de profundidad va apagada en las
-        //      dos (ver createPipeline).
-        //   3. El scissor se pone a TODO el framebuffer y NO se recorta por
-        //      lote. LIMITACIÓN CONOCIDA: `clipChildren` no recorta en un canvas
-        //      de mundo. El scissor del batcher está en píxeles de canvas y un
-        //      VkRect2D solo entiende píxeles de framebuffer; en pantalla el
-        //      mapeo es una escala, pero un canvas de mundo está PROYECTADO
-        //      (puede salir rotado, en perspectiva o partido por el borde) y no
-        //      hay rectángulo alineado a los ejes que lo represente. Recortar
-        //      con el rect sin proyectar taparía trozos que sí se ven.
+        //   1. `transform` is proj*view*model, not an orthographic: the canvas
+        //      comes out with perspective and geometry in front of it covers it.
+        //   2. `depthTest` chooses the pipeline: true = a wall covers it; false =
+        //      always on top. Depth WRITING is off in
+        //      both (see createPipeline).
+        //   3. The scissor is set to the WHOLE framebuffer and is NOT clipped per
+        //      batch. KNOWN LIMITATION: `clipChildren` does not clip in a world
+        //      canvas. The batcher's scissor is in canvas pixels and a
+        //      VkRect2D only understands framebuffer pixels; on screen the
+        //      mapping is a scale, but a world canvas is PROJECTED
+        //      (it can come out rotated, in perspective or split by the edge) and there is
+        //      no axis-aligned rectangle that represents it. Clipping
+        //      with the unprojected rect would cover pieces that are visible.
         //
-        // Comparte los buffers y los cursores del frame con record(): el mismo
-        // beginFrame() dimensiona para los dos.
+        // It shares the frame's buffers and cursors with record(): the same
+        // beginFrame() sizes for both.
         void recordWorld(GpuDevice& gpu, VkCommandBuffer cmd, const UiDrawData& data,
                          const glm::mat4& transform, bool depthTest,
                          VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame);
 
     private:
-        // `depthTest` solo lo enciende la variante de mundo ocluida; la de
-        // pantalla y la de mundo-siempre-encima van las dos a false.
+        // `depthTest` is only turned on by the occluded world variant; the
+        // screen one and the world-always-on-top one both go to false.
         void createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples,
                             bool depthTest, VkPipeline& out);
 
-        // El cuerpo comun de record() y recordWorld(): la sub-asignacion, la
-        // guarda de capacidad, los memcpy y el bucle de lotes. Uno solo para que
-        // la guarda uiCursorFits no pueda quedarse en una de las dos rutas.
+        // The common body of record() and recordWorld(): the sub-allocation, the
+        // capacity guard, the memcpy and the batch loop. A single one so that
+        // the uiCursorFits guard cannot be left on only one of the two paths.
         void recordInto(VkCommandBuffer cmd, const UiDrawData& data, const glm::mat4& transform,
                         VkPipeline pipeline, bool linearOutput, bool scissorCompleto,
                         VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame);
@@ -273,23 +273,23 @@ namespace DonTopo
         VkPipeline            m_pipeline   = VK_NULL_HANDLE;
         VkSampler             m_sampler    = VK_NULL_HANDLE;
 
-        // Las dos variantes de MUNDO. Comparten m_layout y m_descLayout con la
-        // de pantalla — lo unico que cambia es el renderpass contra el que se
-        // compilan (el de la escena), sus muestras y el test de profundidad.
-        VkPipeline m_worldPipelineDepth   = VK_NULL_HANDLE;   // lo tapa la geometria
-        VkPipeline m_worldPipelineNoDepth = VK_NULL_HANDLE;   // siempre encima
+        // The two WORLD variants. They share m_layout and m_descLayout with the
+        // screen one; the only thing that changes is the renderpass they are
+        // compiled against (the scene's), their samples and the depth test.
+        VkPipeline m_worldPipelineDepth   = VK_NULL_HANDLE;   // geometry covers it
+        VkPipeline m_worldPipelineNoDepth = VK_NULL_HANDLE;   // always on top
 
-        // Blanco de 1x1 para los nodos sin atlas: multiplicar por (1,1,1,1) deja
-        // el color del vértice tal cual, así que un panel plano no necesita ni
-        // pipeline aparte ni rama en el shader.
+        // 1x1 white for nodes without an atlas: multiplying by (1,1,1,1) leaves
+        // the vertex color as is, so a flat panel needs neither a separate
+        // pipeline nor a branch in the shader.
         VkImage         m_whiteImage  = VK_NULL_HANDLE;
         VkDeviceMemory  m_whiteMemory = VK_NULL_HANDLE;
         VkImageView     m_whiteView   = VK_NULL_HANDLE;
         VkDescriptorSet m_whiteSet    = VK_NULL_HANDLE;
 
-        // Un par de buffers por frame en vuelo, con mapeo persistente y
-        // crecimiento por duplicación, igual que el SSBO de instancias. Se crean
-        // en el PRIMER frame con algo que dibujar, no en init.
+        // A pair of buffers per in-flight frame, with persistent mapping and
+        // growth by doubling, just like the instance SSBO. They are created
+        // on the FIRST frame with something to draw, not in init.
         VkBuffer       m_vertexBuffers[kFrames]  = {};
         VkDeviceMemory m_vertexMemory[kFrames]   = {};
         void*          m_vertexMapped[kFrames]   = {};
@@ -300,9 +300,9 @@ namespace DonTopo
         void*          m_indexMapped[kFrames]   = {};
         uint32_t       m_indexCapacity[kFrames] = {};
 
-        // Cursores de sub-asignación DENTRO del buffer del frame en curso.
-        // beginFrame() los pone a 0; cada record() avanza el suyo con
-        // bumpUiCursor y escribe a partir de donde lo dejó el anterior.
+        // Sub-allocation cursors INSIDE the current frame's buffer.
+        // beginFrame() sets them to 0; each record() advances its own with
+        // bumpUiCursor and writes starting where the previous one left off.
         uint32_t m_frameVertexCursor[kFrames] = {};
         uint32_t m_frameIndexCursor[kFrames]  = {};
     };

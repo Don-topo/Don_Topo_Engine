@@ -13,9 +13,9 @@ namespace DonTopo
 {
     class ScrollbarComponent;
 
-    // Eje y sentido del recorrido. Enum PROPIO del componente, como el de la
-    // ProgressBar y el del Slider: cada widget declara el suyo en vez de
-    // compartir uno, para que un cambio en la barra no arrastre al slider.
+    // Axis and direction of travel. The component's OWN enum, like ProgressBar's
+    // and Slider's: each widget declares its own instead of
+    // sharing one, so a change in the bar does not drag the slider along.
     enum class UiScrollbarDirection
     {
         LeftToRight,
@@ -24,8 +24,8 @@ namespace DonTopo
         BottomToTop
     };
 
-    // Lo que una barra tiene EN VIVO y no se serializa. Mismo papel y mismos
-    // motivos que UiButtonRuntime y UiSliderRuntime.
+    // What a bar has LIVE and is not serialized. Same role and same
+    // reasons as UiButtonRuntime and UiSliderRuntime.
     struct UiScrollbarRuntime
     {
         std::function<void(float)> onValueChanged;
@@ -45,16 +45,16 @@ namespace DonTopo
         bool operator==(const UiScrollbarCallbackSlot&) const { return true; }
     };
 
-    // Una barra de scroll de la UI 2D como componente de GameObject, con el
-    // MISMO contrato que el resto: SOLO DATOS. El Scrollbar del núcleo
-    // (UiWidgets.h) es un stub SIN campos, así que el widget se monta por
-    // COMPOSICIÓN: el canal es el nodo raíz (de tipo Scrollbar) y el asa cuelga
-    // de él.
+    // A 2D UI scroll bar as a GameObject component, with the
+    // SAME contract as the rest: DATA ONLY. The core Scrollbar
+    // (UiWidgets.h) is a stub with NO fields, so the widget is assembled by
+    // COMPOSITION: the channel is the root node (of type Scrollbar) and the handle hangs
+    // from it.
     //
-    // Se parece al Slider pero NO es el mismo widget: aquí el asa tiene tamaño
-    // VARIABLE (la fracción del contenido que se ve) y el valor va siempre en
-    // 0..1 — no hay rango propio porque quien lo interpreta es lo que se
-    // desplaza, no la barra.
+    // It looks like the Slider but is NOT the same widget: here the handle has a
+    // VARIABLE size (the fraction of the content that is visible) and the value is always
+    // 0..1. There is no range of its own because whatever is scrolled interprets it,
+    // not the bar.
     class ScrollbarComponent
     {
         public:
@@ -62,36 +62,36 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};    // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};    // px, relative to the anchor
             glm::vec2 size{20.0f, 200.0f};     // px
-            glm::vec4 color{0.15f, 0.15f, 0.15f, 1.0f};   // color del CANAL
+            glm::vec4 color{0.15f, 0.15f, 0.15f, 1.0f};   // color of the CHANNEL
             bool      visible = true;
 
             bool interactable = true;
 
-            // --- Valor ---------------------------------------------------------
-            // Siempre 0..1. El clamp lo hace quien escribe (snapValue y el
-            // handler del sync), no el campo: el componente no interpreta nada,
-            // igual que el resto.
+            // --- Value ---------------------------------------------------------
+            // Always 0..1. Whoever writes does the clamp (snapValue and the
+            // sync's handler), not the field: the component interprets nothing,
+            // like the rest.
             float value = 0.0f;
 
-            // Fracción del canal que ocupa el asa: 1 = el contenido cabe entero
-            // (no hay nada que desplazar), 0 = un asa de grosor nulo.
+            // Fraction of the channel that the handle occupies: 1 = the whole content fits
+            // (there is nothing to scroll), 0 = a handle of zero thickness.
             float handleFraction = 0.25f;
 
             UiScrollbarDirection direction = UiScrollbarDirection::TopToBottom;
 
-            // Paradas discretas. 0 y 1 = continuo: enganchar a una sola parada
-            // dejaría la barra muerta en un sitio. Con N >= 2 hay N paradas
-            // repartidas por todo el recorrido (0, 1/(N-1), ..., 1), como Unity.
+            // Discrete stops. 0 and 1 = continuous: snapping to a single stop
+            // would leave the bar dead in one place. With N >= 2 there are N stops
+            // spread over the whole travel (0, 1/(N-1), ..., 1), like Unity.
             uint32_t numberOfSteps = 0;
 
-            // --- Asa ------------------------------------------------------------
+            // --- Handle ---------------------------------------------------------
             glm::vec4 handleColor{0.6f, 0.6f, 0.6f, 1.0f};
 
-            // Cuánto mueve la rueda del ratón por muesca, en fracción del
-            // recorrido. Campo y no constante escondida: una lista larga y un
-            // selector de tres opciones no quieren el mismo paso.
+            // How much the mouse wheel moves per notch, as a fraction of the
+            // travel. A field and not a hidden constant: a long list and a
+            // three-option selector do not want the same step.
             float scrollStep = 0.1f;
 
             // --- Sprites --------------------------------------------------------
@@ -99,7 +99,7 @@ namespace DonTopo
             std::string backgroundSprite;
             std::string handleSprite;
 
-            // --- Runtime (no se serializa) --------------------------------------
+            // --- Runtime (not serialized) ---------------------------------------
             UiScrollbarCallbackSlot callbacks;
 
             bool isVertical() const
@@ -108,9 +108,9 @@ namespace DonTopo
                        direction == UiScrollbarDirection::BottomToTop;
             }
 
-            // Sentido invertido respecto al crecimiento natural del eje. La Y del
-            // canvas crece hacia ABAJO, así que TopToBottom (0 arriba) es el
-            // natural en vertical y BottomToTop el invertido.
+            // Direction inverted relative to the axis's natural growth. The canvas Y
+            // grows DOWNWARD, so TopToBottom (0 at the top) is the
+            // natural one vertically and BottomToTop the inverted one.
             bool isReversed() const
             {
                 return direction == UiScrollbarDirection::RightToLeft ||
@@ -119,7 +119,7 @@ namespace DonTopo
 
             float clampedFraction() const { return std::clamp(handleFraction, 0.0f, 1.0f); }
 
-            // Engancha un valor a las paradas discretas y lo acota a [0,1].
+            // Snaps a value to the discrete stops and bounds it to [0,1].
             float snapValue(float v) const
             {
                 const float c = std::clamp(v, 0.0f, 1.0f);
@@ -128,10 +128,10 @@ namespace DonTopo
                 return std::round(c * pasos) / pasos;
             }
 
-            // De un punto EN COORDENADAS DEL RECT (px desde su esquina superior
-            // izquierda) al valor. rectSize entra aparte y no se lee de `size`
-            // porque el input trabaja en píxeles de PANTALLA, que llevan aplicada
-            // la escala del canvas; la fracción del asa sí es unitless.
+            // From a point IN RECT COORDINATES (px from its top-left
+            // corner) to the value. rectSize comes in separately and is not read from `size`
+            // because the input works in SCREEN pixels, which have the canvas
+            // scale applied; the handle fraction is unitless.
             float valueFromLocal(glm::vec2 local, glm::vec2 rectSize) const
             {
                 const float largo = isVertical() ? rectSize.y : rectSize.x;
@@ -141,15 +141,15 @@ namespace DonTopo
                 const float util = largo * (1.0f - frac);
                 const float p    = (isVertical() ? local.y : local.x) - largo * frac * 0.5f;
 
-                // Asa tan grande como el canal: no hay recorrido y dividir daría
-                // un infinito.
+                // Handle as large as the channel: there is no travel and dividing would give
+                // an infinity.
                 float t = (util > 0.0f) ? (p / util) : 0.0f;
                 t = std::clamp(t, 0.0f, 1.0f);
                 return snapValue(isReversed() ? (1.0f - t) : t);
             }
 
-            // Rect del ASA en coordenadas del canal, ya acotado para que no se
-            // salga por ninguna punta.
+            // Rect of the HANDLE in channel coordinates, already bounded so it does not
+            // stick out at either end.
             void handleRect(glm::vec2& outPos, glm::vec2& outSize) const
             {
                 const float frac = clampedFraction();
@@ -170,8 +170,8 @@ namespace DonTopo
                 }
             }
 
-            // Vuelca el rect y el canal en el nodo vivo. NO toca `atlas` (es un
-            // puntero a GPU: lo resuelve el sync).
+            // Dumps the rect and the channel into the live node. Does NOT touch `atlas` (it is a
+            // GPU pointer: the sync resolves it).
             void applyTo(Scrollbar& s) const
             {
                 s.anchorMin = anchorMin;
@@ -202,7 +202,7 @@ namespace DonTopo
                 h.raycastTarget = false;
             }
 
-            // El sync lo usa para saber si hay algo que volcar.
+            // The sync uses it to know whether there is anything to dump.
             bool operator==(const ScrollbarComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -218,15 +218,15 @@ namespace DonTopo
             bool operator!=(const ScrollbarComponent& o) const { return !(*this == o); }
     };
 
-    // Nombre del nodo vivo de un Scrollbar dentro del canvas. Prefijo DISTINTO
-    // al de los demás, por lo de siempre.
+    // Name of a Scrollbar's live node inside the canvas. DIFFERENT prefix
+    // from the others, for the usual reason.
     inline std::string uiScrollbarNodeName(uint64_t ownerId)
     {
         return "scr:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiScrollbarNodeName. Devuelve 0 si el nombre no es de una barra.
-    // El corte por '/' hace que el nodo del asa devuelva también a su dueño.
+    // Inverse of uiScrollbarNodeName. Returns 0 if the name is not a bar's.
+    // Cutting at '/' makes the handle node also return its owner.
     inline uint64_t uiScrollbarOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("scr:", 0) != 0) return 0;

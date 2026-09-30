@@ -32,9 +32,9 @@ namespace DonTopo
 
     std::string UiTextureAtlas::spriteSheetPathFor(const std::string& imagePath)
     {
-        // El punto tiene que ser POSTERIOR al último separador: en
-        // "v1.2/hoja.png" el primer punto es de un directorio, y cortar por él
-        // dejaría el sidecar en otro sitio.
+        // The dot has to come AFTER the last separator: in
+        // "v1.2/hoja.png" the first dot belongs to a directory, and cutting there
+        // would leave the sidecar somewhere else.
         const size_t slash = imagePath.find_last_of("/\\");
         const size_t dot   = imagePath.find_last_of('.');
 
@@ -67,9 +67,9 @@ namespace DonTopo
             return false;
         }
 
-        // Se monta aparte y se cambia al final: si algo revienta a mitad, el
-        // atlas se queda con los sprites que ya tenía en vez de con una lista
-        // trunca, que dibujaría la imagen entera y parecería un fallo de arte.
+        // It is built separately and swapped in at the end: if something blows up midway, the
+        // atlas keeps the sprites it already had instead of a truncated
+        // list, which would draw the whole image and look like an art bug.
         std::unordered_map<std::string, UiSpriteRect> leidos;
 
         for (const auto& entry : j["sprites"].items())
@@ -84,8 +84,8 @@ namespace DonTopo
             rect.width  = v.value("w", 0.0f);
             rect.height = v.value("h", 0.0f);
 
-            // Un rect de área nula o negativa da UVs degeneradas y un quad
-            // invisible, sin un solo error por ningún lado: fuera.
+            // A rect with zero or negative area gives degenerate UVs and an invisible
+            // quad, without a single error anywhere: out.
             if (!(rect.width > 0.0f) || !(rect.height > 0.0f))
             {
                 std::printf("[UI] sprite '%s' with an invalid size in %s: ignored\n",
@@ -107,8 +107,8 @@ namespace DonTopo
         if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path(), ec);
 
         nlohmann::json sprites = nlohmann::json::object();
-        // Ordenados por nombre: así el fichero no cambia de orden entre
-        // guardados y el diff enseña lo que de verdad se ha tocado.
+        // Sorted by name: this way the file does not change order between
+        // saves and the diff shows what was really touched.
         for (const std::string& name : spriteNames())
         {
             const UiSpriteRect& r = m_sprites.at(name);
@@ -154,8 +154,8 @@ namespace DonTopo
             return false;
         }
 
-        // Un atlas de sprites es COLOR: va en sRGB. El de una fuente no pasa por
-        // aquí, lo hornea UiFont y lo declara UNORM.
+        // A sprite atlas is COLOR: it goes in sRGB. A font's atlas does not go through
+        // here; UiFont bakes it and declares it UNORM.
         setSourcePixels(data, (uint32_t)w, (uint32_t)h, /*srgb=*/true);
         stbi_image_free(data);
         return true;
@@ -172,9 +172,9 @@ namespace DonTopo
 
     bool UiTextureAtlas::loadFromFile(GpuDevice& gpu, GpuResources& res, const std::string& path)
     {
-        // El tamaño se lee ANTES de subir nada: sin él las UVs saldrían de un
-        // atlas de 0x0 y todos los sprites degenerarían al rect completo, que es
-        // exactamente el fallo que no da ningún error.
+        // The size is read BEFORE uploading anything: without it the UVs would come out of an
+        // atlas of 0x0 and every sprite would degenerate to the full rect, which is
+        // exactly the failure that gives no error.
         int w = 0, h = 0, channels = 0;
         if (!stbi_info(path.c_str(), &w, &h, &channels) || w <= 0 || h <= 0)
         {
@@ -197,13 +197,13 @@ namespace DonTopo
 
         destroy(gpu);
 
-        // Sin lote: este camino es sincrono a proposito —el atlas tiene que
-        // estar listo antes de dibujar el primer glifo—, y con el helper es UNA
-        // espera en vez de las tres que costaba escribirlo aqui a mano.
+        // No batch: this path is deliberately synchronous (the atlas has to be
+        // ready before drawing the first glyph), and with the helper it is ONE
+        // wait instead of the three it cost to write it here by hand.
         res.uploadPixelsToImage(rgba, width, height, format, m_image, m_memory);
 
-        // La vista se declara con el MISMO formato con el que se subió: es aquí
-        // donde un atlas de fuente se queda en UNORM.
+        // The view is declared with the SAME format it was uploaded with: this is where
+        // a font atlas stays UNORM.
         res.createTextureImageView(m_image, m_view, format);
         setSize(width, height);
         return true;

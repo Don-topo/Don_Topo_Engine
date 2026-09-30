@@ -14,26 +14,26 @@ namespace DonTopo
 {
     class InputFieldComponent;
 
-    // Qué se deja teclear. El filtro va donde se ESCRIBE, no donde se dibuja:
-    // filtrando solo la pintura, el componente guardaría basura y un script la
-    // leería tal cual.
+    // What is allowed to be typed. The filter goes where it is WRITTEN, not where it is drawn:
+    // if only the painting were filtered, the component would store garbage and a script would
+    // read it as is.
     enum class UiInputContentType
     {
-        Standard,        // cualquier carácter imprimible
-        IntegerNumber,   // dígitos y un signo al principio
-        DecimalNumber,   // lo anterior más UN separador decimal
-        Alphanumeric,    // letras y dígitos, sin espacios ni puntuación
-        Password         // se guarda tal cual y se ENSEÑA enmascarado
+        Standard,        // any printable character
+        IntegerNumber,   // digits and a sign at the start
+        DecimalNumber,   // the above plus ONE decimal separator
+        Alphanumeric,    // letters and digits, no spaces or punctuation
+        Password         // stored as is and SHOWN masked
     };
 
-    // Lo que un campo tiene EN VIVO y no se serializa. Mismo papel y mismos
-    // motivos que UiButtonRuntime: el nodo del canvas lo destruye clearChildren()
-    // en cada reconstrucción, así que el dueño del callback es el COMPONENTE.
+    // What a field has LIVE and is not serialized. Same role and same
+    // reasons as UiButtonRuntime: the canvas node is destroyed by clearChildren()
+    // on every rebuild, so the owner of the callback is the COMPONENT.
     struct UiInputFieldRuntime
     {
         std::function<void(const std::string&)> onValueChanged;
-        // Al confirmar (Enter) o al perder el foco. Es el momento en el que un
-        // formulario valida, no cada tecla.
+        // On confirm (Enter) or on losing focus. It is the moment at which a
+        // form validates, not every key.
         std::function<void(const std::string&)> onEndEdit;
         InputFieldComponent*                    owner = nullptr;
     };
@@ -51,18 +51,18 @@ namespace DonTopo
         bool operator==(const UiInputFieldCallbackSlot&) const { return true; }
     };
 
-    // Un campo de texto de la UI 2D como componente de GameObject, con el MISMO
-    // contrato que el resto: SOLO DATOS. El InputField del núcleo (UiWidgets.h)
-    // es un stub SIN campos, así que el widget se monta por COMPOSICIÓN: la caja
-    // es el nodo raíz (de tipo InputField) y de ella cuelgan el texto y el
-    // cursor.
+    // A 2D UI text field as a GameObject component, with the SAME
+    // contract as the rest: DATA ONLY. The core InputField (UiWidgets.h)
+    // is a stub with NO fields, so the widget is assembled by COMPOSITION: the box
+    // is the root node (of type InputField) and the text and the
+    // caret hang from it.
     //
-    // Es el único widget que necesitaba algo que el core NO tenía: un canal de
-    // CARACTERES. UiKey nombra teclas físicas con significado propio (Tab, Enter,
-    // flechas) y una 'a' no es una de esas: sale del layout del teclado y de las
-    // muertas. Por eso se añadió UiInputState::chars + UiElement::onTextInput,
-    // que es infraestructura del canvas y no de este componente — cualquier cosa
-    // futura que reciba texto (una consola, un chat, un buscador) usa la misma.
+    // It is the only widget that needed something the core did NOT have: a
+    // CHARACTER channel. UiKey names physical keys with a meaning of their own (Tab, Enter,
+    // arrows) and an 'a' is not one of those: it comes from the keyboard layout and from
+    // dead keys. That is why UiInputState::chars + UiElement::onTextInput were added,
+    // which is canvas infrastructure and not this component's: anything
+    // future that receives text (a console, a chat, a search box) uses the same one.
     class InputFieldComponent
     {
         public:
@@ -70,70 +70,70 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};    // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};    // px, relative to the anchor
             glm::vec2 size{200.0f, 32.0f};     // px
-            glm::vec4 color{0.15f, 0.15f, 0.15f, 1.0f};   // color de la CAJA
+            glm::vec4 color{0.15f, 0.15f, 0.15f, 1.0f};   // color of the BOX
             bool      visible = true;
 
-            // A false ni siquiera toma el foco. readOnly SÍ lo toma y deja mover
-            // el cursor, pero no cambiar el texto: es lo que quiere un campo de
-            // "copia esto de aquí".
+            // When false it does not even take focus. readOnly DOES take it and lets the
+            // caret move, but not the text change: it is what a "copy this from
+            // here" field wants.
             bool interactable = true;
             bool readOnly     = false;
 
-            // --- Texto ----------------------------------------------------------
-            // UTF-8, igual que TextComponent. El cursor se cuenta en CODEPOINTS
-            // (ver caretPos).
+            // --- Text -----------------------------------------------------------
+            // UTF-8, same as TextComponent. The caret is counted in CODEPOINTS
+            // (see caretPos).
             std::string text;
             std::string placeholder;
 
-            std::string fontPath;   // TTF; vacía = la fuente por defecto
+            std::string fontPath;   // TTF; empty = the default font
             float       fontSize = 16.0f;
             glm::vec4   textColor{1.0f, 1.0f, 1.0f, 1.0f};
             glm::vec4   placeholderColor{0.6f, 0.6f, 0.6f, 1.0f};
             UiTextAlign align = UiTextAlign::Left;
 
-            // Píxeles que el texto y el cursor se meten hacia dentro de la caja
-            // por izquierda y derecha.
+            // Pixels that the text and the caret are inset into the box
+            // on the left and right.
             float padding = 6.0f;
 
-            // 0 = sin límite. Cuenta CARACTERES, no bytes: con UTF-8 un límite en
-            // bytes daría un máximo distinto según lo que se escriba.
+            // 0 = no limit. It counts CHARACTERS, not bytes: with UTF-8 a limit in
+            // bytes would give a different maximum depending on what is typed.
             uint32_t characterLimit = 0;
 
             UiInputContentType contentType = UiInputContentType::Standard;
 
-            // Con qué se enmascara en Password. Vacío cae al asterisco: un campo
-            // de contraseña que no enseña NADA parece roto.
+            // What is used to mask in Password. Empty falls back to the asterisk: a password
+            // field that shows NOTHING looks broken.
             std::string passwordChar = "*";
 
             // --- Cursor ---------------------------------------------------------
             glm::vec4 caretColor{1.0f, 1.0f, 1.0f, 1.0f};
             float     caretWidth     = 1.0f;
-            float     caretBlinkRate = 0.5f;   // segundos por medio ciclo; 0 = fijo
+            float     caretBlinkRate = 0.5f;   // seconds per half cycle; 0 = fixed
 
-            // Posición del cursor en CODEPOINTS desde el principio. NO se
-            // serializa (un campo cargado empieza con el cursor donde lo ponga el
-            // sync), pero SÍ entra en operator==: es lo que hace que el sync
-            // vuelva a colocar el nodo del cursor cuando se mueve.
+            // Caret position in CODEPOINTS from the start. It is NOT
+            // serialized (a loaded field starts with the caret wherever the
+            // sync puts it), but it DOES go into operator==: this is what makes the sync
+            // place the caret node again when it moves.
             int caretPos = 0;
 
             // --- Sprites --------------------------------------------------------
             std::string atlasPath;
             std::string backgroundSprite;
 
-            // --- Runtime (no se serializa) --------------------------------------
+            // --- Runtime (not serialized) ---------------------------------------
             UiInputFieldCallbackSlot callbacks;
 
-            // --- Utilidades de texto --------------------------------------------
+            // --- Text utilities -------------------------------------------------
             std::vector<uint32_t> codepoints() const { return UiFont::decodeUtf8(text); }
             int codepointCount() const { return (int)UiFont::decodeUtf8(text).size(); }
 
             bool isShowingPlaceholder() const { return text.empty(); }
 
-            // Lo que se DIBUJA. En Password devuelve un símbolo por CARÁCTER (no
-            // por byte) y nunca la contraseña: guardar el enmascarado sería
-            // perderla.
+            // What is DRAWN. In Password it returns one symbol per CHARACTER (not
+            // per byte) and never the password: storing the masked version would
+            // lose it.
             std::string displayText() const
             {
                 if (text.empty()) return placeholder;
@@ -147,13 +147,13 @@ namespace DonTopo
                 return out;
             }
 
-            // ¿Se deja teclear este carácter? El signo y el separador decimal
-            // dependen de lo que YA hay y de dónde está el cursor, así que esto
-            // no es una tabla: "1-2" no es un entero y "1.5.5" no es un decimal.
+            // Is this character allowed to be typed? The sign and the decimal separator
+            // depend on what is ALREADY there and where the caret is, so this
+            // is not a table: "1-2" is not an integer and "1.5.5" is not a decimal.
             bool accepts(uint32_t cp) const
             {
-                // Los de control NUNCA: un '\n' o un tabulador dentro de una
-                // línea no se ve y desplaza todo lo que venga detrás.
+                // Control characters NEVER: a '\n' or a tab inside a
+                // line is not visible and shifts everything that comes after it.
                 if (cp < 0x20u || cp == 0x7Fu) return false;
 
                 const bool digito = (cp >= '0' && cp <= '9');
@@ -162,19 +162,19 @@ namespace DonTopo
                 {
                     case UiInputContentType::IntegerNumber:
                         if (digito) return true;
-                        // El signo solo pegado al principio.
+                        // The sign only stuck to the start.
                         return (cp == '-' || cp == '+') && caretPos == 0 && !hasSign();
 
                     case UiInputContentType::DecimalNumber:
                         if (digito) return true;
                         if (cp == '-' || cp == '+') return caretPos == 0 && !hasSign();
-                        // UN solo separador decimal.
+                        // A single decimal separator.
                         return (cp == '.' || cp == ',') && !hasDecimalSeparator();
 
                     case UiInputContentType::Alphanumeric:
-                        // Solo ASCII a propósito: "alfanumérico" fuera del ASCII
-                        // no tiene una respuesta única (¿la eñe? ¿los ideogramas?)
-                        // y adivinarla sería peor que no ofrecer el modo.
+                        // ASCII only on purpose: "alphanumeric" outside ASCII
+                        // has no single answer (the eñe? ideograms?)
+                        // and guessing it would be worse than not offering the mode.
                         return digito || (cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z');
 
                     default:
@@ -182,8 +182,8 @@ namespace DonTopo
                 }
             }
 
-            // Mete el carácter en el cursor. false = no se aceptó (filtro, límite
-            // o solo lectura) y NADA cambió.
+            // Puts the character at the caret. false = it was not accepted (filter, limit
+            // or read-only) and NOTHING changed.
             bool insertCodepoint(uint32_t cp)
             {
                 if (readOnly) return false;
@@ -230,8 +230,8 @@ namespace DonTopo
             void caretHome() { caretPos = 0; }
             void caretEnd()  { caretPos = codepointCount(); }
 
-            // Vuelca el rect y la caja en el nodo vivo. NO toca `atlas` (es un
-            // puntero a GPU: lo resuelve el sync).
+            // Dumps the rect and the box into the live node. Does NOT touch `atlas` (it is a
+            // GPU pointer: the sync resolves it).
             void applyTo(InputField& f) const
             {
                 f.anchorMin = anchorMin;
@@ -243,14 +243,14 @@ namespace DonTopo
                 f.visible   = visible;
                 f.sprite    = backgroundSprite;
                 f.raycastTarget = true;
-                // Sin foco no hay donde escribir. A false ni se enfoca con el
-                // ratón ni entra en el recorrido del Tab, que es exactamente lo
-                // que quiere un campo deshabilitado.
+                // Without focus there is nowhere to type. When false it is neither focused with the
+                // mouse nor part of the Tab traversal, which is exactly what
+                // a disabled field wants.
                 f.focusable = interactable;
             }
 
-            // El nodo del texto. La fuente la resuelve el sync (es un recurso de
-            // GPU), y el color sale de si hay texto o placeholder.
+            // The text node. The font is resolved by the sync (it is a GPU
+            // resource), and the color depends on whether there is text or a placeholder.
             void applyToText(Text& t) const
             {
                 t.anchorMin = glm::vec2(0.0f);
@@ -263,18 +263,18 @@ namespace DonTopo
                 t.color     = isShowingPlaceholder() ? placeholderColor : textColor;
                 t.align     = align;
                 t.vAlign    = UiTextVAlign::Middle;
-                // Lo que no cabe se recorta contra el rect del texto: sin esto,
-                // escribir de más se sale de la caja y pinta por encima de lo que
-                // haya al lado.
+                // What does not fit is clipped against the text rect: without this,
+                // typing too much sticks out of the box and paints over whatever is
+                // next to it.
                 t.overflow  = UiTextOverflow::Clip;
                 t.wordWrap  = false;
                 t.visible   = true;
                 t.raycastTarget = false;
             }
 
-            // El cursor. `x` en píxeles desde el borde izquierdo del rect lo mide
-            // el sync con la fuente resuelta: el componente no sabe de métricas.
-            // `mostrar` es el foco más la fase del parpadeo.
+            // The caret. `x` in pixels from the left edge of the rect is measured by the
+            // sync with the resolved font: the component knows nothing about metrics.
+            // `mostrar` is the focus plus the blink phase.
             void applyToCaret(UiElement& c, float x, bool mostrar) const
             {
                 c.anchorMin = glm::vec2(0.0f);
@@ -284,14 +284,14 @@ namespace DonTopo
                 c.size      = glm::vec2(std::max(caretWidth, 0.0f), size.y * 0.7f);
                 c.color     = caretColor;
                 c.visible   = true;
-                // Existe SIEMPRE aunque no se vea: si apareciera y desapareciera
-                // cambiaría la forma del subárbol y habría que reconstruir la
-                // raíz del canvas en cada parpadeo.
+                // It ALWAYS exists even if it is not seen: if it appeared and disappeared
+                // it would change the shape of the subtree and the canvas root would have to be
+                // rebuilt on every blink.
                 c.drawable  = mostrar && c.size.x > 0.0f && c.size.y > 0.0f;
                 c.raycastTarget = false;
             }
 
-            // El sync lo usa para saber si hay algo que volcar.
+            // The sync uses it to know whether there is anything to dump.
             bool operator==(const InputFieldComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -322,17 +322,17 @@ namespace DonTopo
                        text.find(',') != std::string::npos;
             }
 
-            // Codepoints -> UTF-8. UiFont trae el camino de ida (decodeUtf8) pero
-            // no el de vuelta: hasta ahora nadie CONSTRUÍA texto, solo lo leía.
+            // Codepoints -> UTF-8. UiFont has the way there (decodeUtf8) but
+            // not the way back: until now nobody BUILT text, only read it.
             static std::string encodeUtf8(const std::vector<uint32_t>& cps)
             {
                 std::string out;
                 out.reserve(cps.size());
                 for (uint32_t cp : cps)
                 {
-                    // Los sustitutos y lo que pase de U+10FFFF no son codepoints
-                    // válidos: se cambian por U+FFFD en vez de emitir bytes que
-                    // ningún decodificador aceptaría.
+                    // Surrogates and anything above U+10FFFF are not valid
+                    // codepoints: they are replaced by U+FFFD instead of emitting bytes that
+                    // no decoder would accept.
                     if (cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu)) cp = 0xFFFDu;
 
                     if (cp < 0x80u)
@@ -362,15 +362,15 @@ namespace DonTopo
             }
     };
 
-    // Nombre del nodo vivo de un InputField dentro del canvas. Prefijo DISTINTO
-    // al de los demás, por lo de siempre.
+    // Name of an InputField's live node inside the canvas. DIFFERENT prefix
+    // from the others, for the usual reason.
     inline std::string uiInputFieldNodeName(uint64_t ownerId)
     {
         return "inp:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiInputFieldNodeName. Devuelve 0 si el nombre no es de un campo.
-    // El corte por '/' hace que el texto y el cursor devuelvan también a su dueño.
+    // Inverse of uiInputFieldNodeName. Returns 0 if the name is not a field's.
+    // Cutting at '/' makes the text and the caret also return their owner.
     inline uint64_t uiInputFieldOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("inp:", 0) != 0) return 0;

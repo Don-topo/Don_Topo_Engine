@@ -6,8 +6,8 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
-// FT_Load_Sfnt_Table y los TTAG_*: es por donde se lee GPOS en crudo, que es
-// donde las fuentes modernas llevan el kerning.
+// FT_Load_Sfnt_Table and the TTAG_*: this is how GPOS is read raw, which is
+// where modern fonts carry the kerning.
 #include FT_TRUETYPE_TABLES_H
 #include FT_TRUETYPE_TAGS_H
 
@@ -32,14 +32,14 @@ namespace DonTopo
             return ((uint64_t)left << 32) | (uint64_t)right;
         }
 
-        // FreeType da las coordenadas en 26.6 (1/64 de píxel) una vez fijado el
-        // tamaño en píxeles, así que dividir por 64 las deja YA en píxeles de
-        // horneado: las métricas y el contorno salen en la misma unidad.
+        // FreeType gives coordinates in 26.6 (1/64 of a pixel) once the size in
+        // pixels is set, so dividing by 64 leaves them ALREADY in bake pixels:
+        // the metrics and the outline come out in the same unit.
         constexpr double kFt26_6 = 1.0 / 64.0;
 
-        // ── Contorno de FreeType -> Shape de msdfgen ────────────────────────
-        // Es lo único que aportaba la mitad "ext" de msdfgen, que aquí no se
-        // compila porque busca FreeType en el sistema.
+        // ── FreeType outline -> msdfgen Shape ───────────────────────────────
+        // It is the only thing the "ext" half of msdfgen provided, which is not
+        // compiled here because it looks for FreeType on the system.
         struct OutlineSink
         {
             msdfgen::Shape*   shape   = nullptr;
@@ -55,8 +55,8 @@ namespace DonTopo
         int outlineMoveTo(const FT_Vector* to, void* user)
         {
             OutlineSink* sink = (OutlineSink*)user;
-            // Un contorno de un solo punto no aporta ni una arista: msdfgen lo
-            // trataría como un contorno vacío y edgeColoringSimple lo cuenta.
+            // A single-point contour contributes not even one edge: msdfgen would
+            // treat it as an empty contour and edgeColoringSimple counts it.
             if (!(sink->contour && sink->contour->edges.empty()))
                 sink->contour = &sink->shape->addContour();
             sink->current = toPoint(to);
@@ -100,27 +100,27 @@ namespace DonTopo
             return 0;
         }
 
-        // El mismo redondeo que usa msdfgen al volcar a 8 bits.
+        // The same rounding msdfgen uses when dumping to 8 bits.
         uint8_t toByte(float v)
         {
             const int i = (int)(v * 256.0f);
             return (uint8_t)std::min(std::max(i, 0), 255);
         }
 
-        // ── Caché en disco ───────────────────────────────────────────────────
-        // Formato propio y sin comprimir: lo que se guarda es exactamente lo que
-        // deja el horneado, y leerlo tiene que costar lo que cuesta leer 4 MB.
-        // La versión sube cada vez que cambie cualquier campo: una entrada de
-        // otra versión se descarta y se vuelve a hornear, nunca se interpreta.
+        // ── Disk cache ───────────────────────────────────────────────────────
+        // Own format, uncompressed: what is saved is exactly what the bake
+        // leaves, and reading it has to cost what reading 4 MB costs.
+        // The version goes up every time any field changes: an entry from
+        // another version is discarded and rebaked, never interpreted.
         constexpr uint32_t kCacheMagic   = 0x544E4644u;   // "DFNT"
-        // 2: el kerning pasó a salir también de GPOS. Una entrada de la v1 se
-        // horneó cuando el kerning de una fuente moderna era SIEMPRE cero, así
-        // que reutilizarla dejaría el texto sin kerning para siempre.
+        // 2: kerning now also comes from GPOS. A v1 entry was baked when the
+        // kerning of a modern font was ALWAYS zero, so reusing it would
+        // leave the text without kerning forever.
         constexpr uint32_t kCacheVersion = 2u;
 
-        // Topes de cordura al leer. Un fichero corrupto puede traer cualquier
-        // número, y sin esto una reserva de gigabytes tumbaría el editor antes
-        // de que llegara a fallar la comprobación de tamaño.
+        // Sanity caps when reading. A corrupt file can carry any
+        // number, and without this a reservation of gigabytes would take the editor down before
+        // the size check got a chance to fail.
         constexpr uint32_t kMaxAtlasSide  = 8192u;
         constexpr uint32_t kMaxGlyphs     = 200000u;
         constexpr uint32_t kMaxKernPairs  = 4000000u;
@@ -136,9 +136,9 @@ namespace DonTopo
             return hash;
         }
 
-        // Nombre del fichero: hash de TODO lo que define el horneado. Dos
-        // configuraciones distintas de la misma fuente son dos entradas, así que
-        // cambiar el tamaño de horneado no invalida la que ya había.
+        // File name: hash of EVERYTHING that defines the bake. Two different
+        // configurations of the same font are two entries, so
+        // changing the bake size does not invalidate the one that already existed.
         std::string cacheFileName(const std::string& path, float bakePx, float pixelRange,
                                   const std::vector<UiCodepointRange>& ranges)
         {
@@ -157,9 +157,9 @@ namespace DonTopo
             return buf;
         }
 
-        // Tamaño y fecha del TTF: es lo que distingue "la misma fuente" de "otra
-        // fuente en la misma ruta". Sin fichero devuelve false y entonces no hay
-        // nada que cachear ni que cargar.
+        // Size and date of the TTF: it is what tells "the same font" apart from "another
+        // font at the same path". Without a file it returns false and then there is
+        // nothing to cache or load.
         bool fontStamp(const std::string& path, uint64_t& size, uint64_t& mtime)
         {
             std::error_code ec;
@@ -179,27 +179,27 @@ namespace DonTopo
             out.write((const char*)&value, sizeof(T));
         }
 
-        // Campo a campo y con tipos de tamaño fijo: nada de volcar structs, que
-        // arrastrarían el padding del compilador al fichero.
+        // Field by field and with fixed-size types: no dumping structs, which
+        // would drag the compiler's padding into the file.
         template <class T>
         bool getPod(std::istream& in, T& value)
         {
             return (bool)in.read((char*)&value, sizeof(T));
         }
 
-        // ── Kerning de GPOS ──────────────────────────────────────────────────
-        // FT_Get_Kerning solo lee la tabla 'kern' CLÁSICA, y las fuentes
-        // modernas (la del proyecto incluida) llevan los pares en GPOS. Sin esto
-        // el kerning del motor existe, está probado y no se aplica jamás: todos
-        // los pares valen 0 y las letras salen sueltas.
+        // ── GPOS kerning ─────────────────────────────────────────────────────
+        // FT_Get_Kerning only reads the CLASSIC 'kern' table, and modern
+        // fonts (the project's included) carry the pairs in GPOS. Without this
+        // the engine's kerning exists, is tested and is never applied: all
+        // the pairs are 0 and the letters come out loose.
         //
-        // Se lee el subconjunto que cubre el kerning de verdad: la feature
-        // 'kern', sus lookups de tipo 2 (PairPos) en los dos formatos, y el
-        // tipo 9 (Extension) que los envuelve. Lo demás —marcas, cursivas,
-        // contextuales— no es kerning de pares y no se toca.
+        // The subset that really covers kerning is read: the 'kern'
+        // feature, its type 2 lookups (PairPos) in both formats, and the
+        // type 9 (Extension) that wraps them. The rest (marks, italics,
+        // contextual) is not pair kerning and is not touched.
         //
-        // Todo el parseo va por un lector con límites: una fuente rota o
-        // recortada tiene que dar cero pares, no leer fuera del buffer.
+        // All the parsing goes through a bounds-checked reader: a broken or
+        // truncated font has to give zero pairs, not read outside the buffer.
         struct BeReader
         {
             const uint8_t* data = nullptr;
@@ -220,8 +220,8 @@ namespace DonTopo
             }
         };
 
-        // Cuántos bytes ocupa un ValueRecord según su formato: es un mapa de
-        // bits y cada bit presente añade un int16.
+        // How many bytes a ValueRecord takes according to its format: it is a bit
+        // map and each present bit adds an int16.
         int valueSize(uint16_t format)
         {
             int n = 0;
@@ -230,9 +230,9 @@ namespace DonTopo
             return n * 2;
         }
 
-        // XAdvance del ValueRecord, que es lo único que este motor modela: un
-        // desplazamiento escalar en X entre dos glyphs. El bit 0x0004 es
-        // XAdvance y va tras XPlacement (0x0001) e YPlacement (0x0002).
+        // XAdvance of the ValueRecord, which is the only thing this engine models: a
+        // scalar offset in X between two glyphs. Bit 0x0004 is
+        // XAdvance and goes after XPlacement (0x0001) and YPlacement (0x0002).
         int16_t valueXAdvance(const BeReader& r, size_t off, uint16_t format)
         {
             if (!(format & 0x0004)) return 0;
@@ -242,8 +242,8 @@ namespace DonTopo
             return r.s16(cursor);
         }
 
-        // Glyphs cubiertos por una tabla Coverage, en ORDEN de índice de
-        // cobertura: es ese orden el que indexa los PairSets.
+        // Glyphs covered by a Coverage table, in coverage-index ORDER:
+        // it is that order that indexes the PairSets.
         void readCoverage(const BeReader& r, size_t off, std::vector<uint16_t>& out)
         {
             out.clear();
@@ -263,15 +263,15 @@ namespace DonTopo
                     const uint16_t first = r.u16(rec);
                     const uint16_t last  = r.u16(rec + 2);
                     if (last < first) continue;
-                    // Un rango absurdo en una fuente rota podría pedir 65k
-                    // entradas por rango; el tope de glyphs reales lo acota.
+                    // An absurd range in a broken font could ask for 65k
+                    // entries per range; the real glyph cap bounds it.
                     for (uint32_t g = first; g <= last; ++g) out.push_back((uint16_t)g);
                 }
             }
         }
 
-        // Clase de un glyph dentro de una ClassDef. La 0 es "el resto", que es
-        // una clase con todo el derecho a tener kerning propio.
+        // Class of a glyph inside a ClassDef. 0 is "the rest", which is
+        // a class with every right to have its own kerning.
         uint16_t classOf(const BeReader& r, size_t off, uint16_t glyph)
         {
             const uint16_t format = r.u16(off);
@@ -294,16 +294,16 @@ namespace DonTopo
             return 0;
         }
 
-        // Clave de un par de glyphs. Los índices son de la FUENTE, no
-        // codepoints: la traducción a codepoint la hace quien llama.
+        // Key of a glyph pair. The indices are the FONT's, not
+        // codepoints: the translation to codepoint is done by the caller.
         uint64_t pairKey(uint16_t left, uint16_t right)
         {
             return ((uint64_t)left << 16) | (uint64_t)right;
         }
 
-        // Una subtabla PairPos, de los dos formatos. Solo se guardan los pares
-        // en los que AMBOS glyphs están horneados: el resto no se va a dibujar
-        // nunca y llenaría el mapa de entradas muertas.
+        // A PairPos subtable, of both formats. Only the pairs in which BOTH glyphs
+        // are baked are stored: the rest will never be drawn
+        // and would fill the map with dead entries.
         void readPairPos(const BeReader& r, size_t off,
                          const std::unordered_set<uint16_t>& wanted,
                          std::unordered_map<uint64_t, int16_t>& out)
@@ -352,8 +352,8 @@ namespace DonTopo
             const size_t recSize = (size_t)(v1Size + v2Size);
             const size_t matrix  = off + 16;
 
-            // La clase de cada glyph se resuelve UNA vez: mirarla dentro del
-            // bucle de pares sería recorrer los rangos N² veces.
+            // Each glyph's class is resolved ONCE: looking it up inside the
+            // pair loop would walk the ranges N² times.
             std::unordered_map<uint16_t, uint16_t> claseIzq, claseDer;
             for (uint16_t g : wanted)
             {
@@ -361,8 +361,8 @@ namespace DonTopo
                 claseDer[g] = classOf(r, class2Off, g);
             }
 
-            // La cobertura decide QUÉ glyphs participan como primero del par;
-            // la clase 0 sí cuenta, pero solo para los cubiertos.
+            // The coverage decides WHICH glyphs take part as first of the pair;
+            // class 0 does count, but only for the covered ones.
             std::unordered_set<uint16_t> cubiertos(coverage.begin(), coverage.end());
 
             for (uint16_t left : wanted)
@@ -383,7 +383,7 @@ namespace DonTopo
             }
         }
 
-        // Recorre la tabla GPOS entera y saca los pares de la feature 'kern'.
+        // Walks the whole GPOS table and extracts the pairs of the 'kern' feature.
         void collectGposKerning(const uint8_t* data, size_t size,
                                 const std::unordered_set<uint16_t>& wanted,
                                 std::unordered_map<uint64_t, int16_t>& out)
@@ -395,9 +395,9 @@ namespace DonTopo
             const size_t lookupList  = r.u16(8);
             if (featureList == 0 || lookupList == 0) return;
 
-            // Qué lookups usa 'kern'. Puede haber varias features con ese tag
-            // (una por script/idioma) y compartir lookups, así que se acumulan
-            // en un conjunto.
+            // Which lookups 'kern' uses. There can be several features with that tag
+            // (one per script/language) and they can share lookups, so they are accumulated
+            // in a set.
             std::unordered_set<uint16_t> lookups;
             const uint16_t featureCount = r.u16(featureList);
             for (uint16_t i = 0; i < featureCount; ++i)
@@ -425,9 +425,9 @@ namespace DonTopo
 
                     if (type == 2) { readPairPos(r, sub, wanted, out); continue; }
 
-                    // Tipo 9: envoltorio para saltar el límite de 16 bits de los
-                    // offsets. Dentro puede haber cualquier tipo; solo interesa
-                    // el 2, y NO se anida (el formato lo prohíbe).
+                    // Type 9: wrapper to get around the 16-bit limit of the
+                    // offsets. Any type can be inside; only type 2
+                    // matters, and it is NOT nested (the format forbids it).
                     if (type == 9 && r.u16(sub) == 1 && r.u16(sub + 2) == 2)
                         readPairPos(r, sub + r.u32(sub + 4), wanted, out);
                 }
@@ -439,9 +439,9 @@ namespace DonTopo
             uint32_t       codepoint = 0;
             msdfgen::Shape shape;
             bool     hasShape = false;
-            uint32_t width    = 0;   // tamaño del bitmap MSDF, ya con el margen
+            uint32_t width    = 0;   // size of the MSDF bitmap, already with the margin
             uint32_t height   = 0;
-            double   translateX = 0.0;   // lleva el contorno dentro del bitmap
+            double   translateX = 0.0;   // brings the outline inside the bitmap
             double   translateY = 0.0;
             UiGlyph  metrics{};
         };
@@ -496,8 +496,8 @@ namespace DonTopo
 
     void UiFont::decodeUtf8(const std::string& text, std::vector<uint32_t>& out)
     {
-        // El vector es de quien llama y se REUTILIZA: el batcher decodifica cada
-        // texto en cada frame y no puede permitirse una asignacion por etiqueta.
+        // The vector belongs to the caller and is REUSED: the batcher decodes each
+        // text every frame and cannot afford one allocation per label.
         out.clear();
         out.reserve(text.size());
 
@@ -516,9 +516,9 @@ namespace DonTopo
             else if ((c & 0xF8) == 0xF0) { cp = c & 0x07u; extra = 3; }
             else
             {
-                // Byte de continuación suelto o cabecera inválida: se consume
-                // UNO y se sigue, que es lo que evita que el resto de la cadena
-                // se desplace.
+                // Stray continuation byte or invalid header: ONE is consumed
+                // and decoding goes on, which is what keeps the rest of the string
+                // from shifting.
                 out.push_back(0xFFFDu);
                 ++p;
                 continue;
@@ -557,8 +557,8 @@ namespace DonTopo
         return out;
     }
 
-    // Relativo al directorio de trabajo, que es de donde ya cuelgan los assets.
-    // Un solo sitio para todas las fuentes del proyecto.
+    // Relative to the working directory, which is where the assets already hang from.
+    // A single place for all the project's fonts.
     static std::string& cacheDirStorage()
     {
         static std::string dir = ".dt-cache/fonts";
@@ -587,9 +587,9 @@ namespace DonTopo
         if (!getPod(in, magic) || !getPod(in, version)) return false;
         if (magic != kCacheMagic || version != kCacheVersion) return false;
 
-        // El TTF de la firma tiene que ser EL MISMO fichero: cambiarlo por otro
-        // en la misma ruta deja el hash igual y el atlas viejo sería de otra
-        // fuente. Aquí es donde se caza.
+        // The signature's TTF has to be THE SAME file: swapping it for another
+        // at the same path leaves the hash the same and the old atlas would belong to another
+        // font. This is where it gets caught.
         uint64_t size = 0, mtime = 0;
         float    px = 0.0f, range = 0.0f;
         uint32_t rangeCount = 0;
@@ -613,9 +613,9 @@ namespace DonTopo
         if (atlasW == 0 || atlasH == 0 || atlasW > kMaxAtlasSide || atlasH > kMaxAtlasSide) return false;
         if (glyphCount == 0 || glyphCount > kMaxGlyphs) return false;
 
-        // Nada se escribe en la fuente hasta que TODO se ha leído bien: una
-        // entrada a medias dejaría glyphs sin atlas y el texto saldría con
-        // cuadros de basura en vez de rehornearse.
+        // Nothing is written to the font until EVERYTHING has been read correctly: a
+        // half entry would leave glyphs without an atlas and the text would come out with
+        // garbage boxes instead of being rebaked.
         std::unordered_map<uint32_t, UiGlyph> glyphs;
         glyphs.reserve(glyphCount);
         for (uint32_t i = 0; i < glyphCount; ++i)
@@ -654,7 +654,7 @@ namespace DonTopo
         m_ascent     = ascent;
         m_descent    = descent;
         m_lineHeight = lineHeight;
-        // UNORM igual que al hornear: son distancias, no color.
+        // UNORM just like when baking: they are distances, not color.
         m_atlas.setSourcePixels(pixels.data(), atlasW, atlasH, /*srgb=*/false);
         return true;
     }
@@ -675,8 +675,8 @@ namespace DonTopo
         const std::filesystem::path file =
             std::filesystem::path(cacheDirStorage()) /
             cacheFileName(path, bakePx, m_pixelRange, ranges);
-        // Temporal + rename: si el proceso muere a media escritura, lo que queda
-        // es un .tmp que nadie lee, no media entrada con el magic correcto.
+        // Temporary + rename: if the process dies mid-write, what is left
+        // is a .tmp that nobody reads, not half an entry with the right magic.
         const std::filesystem::path temp = file.string() + ".tmp";
 
         {
@@ -731,8 +731,8 @@ namespace DonTopo
         std::filesystem::rename(temp, file, ec);
         if (ec)
         {
-            // Windows no renombra encima de un fichero abierto por otro: se
-            // borra el temporal y se sigue con el atlas ya horneado en memoria.
+            // Windows does not rename over a file opened by another: the
+            // temporary is deleted and we go on with the atlas already baked in memory.
             std::filesystem::remove(temp, ec);
             return false;
         }
@@ -744,8 +744,8 @@ namespace DonTopo
     {
         if (loadFromCache(path, bakePx, ranges)) return true;
         if (!bakeFromFile(path, bakePx, ranges, threads)) return false;
-        // Guardar es best-effort: un disco lleno o de solo lectura no puede
-        // convertir un horneado bueno en un fallo.
+        // Saving is best-effort: a full or read-only disk cannot
+        // turn a good bake into a failure.
         saveToCache(path, bakePx, ranges);
         return true;
     }
@@ -772,9 +772,9 @@ namespace DonTopo
 
         FT_Set_Pixel_Sizes(face, 0, (FT_UInt)std::lround(bakePx));
 
-        // Margen a cada lado del contorno para que quepa la banda del campo de
-        // distancia entera. Sin él los bordes se cortan y el outline del shader
-        // se come el glyph.
+        // Margin on each side of the outline so that the whole distance field band
+        // fits. Without it the edges get cut and the shader's outline
+        // eats the glyph.
         const int padding = (int)std::ceil(m_pixelRange) + 1;
 
         size_t total = 0;
@@ -787,9 +787,9 @@ namespace DonTopo
         for (const UiCodepointRange& range : ranges)
         for (uint32_t cp = range.first; cp <= range.last; ++cp)
         {
-            // El codepoint que la fuente NO trae se salta aquí: FT_Load_Char
-            // cargaría el .notdef (índice 0) y meteríamos una cajita vacía en el
-            // atlas por cada hueco del rango.
+            // The codepoint that the font does NOT have is skipped here: FT_Load_Char
+            // would load .notdef (index 0) and we would put an empty little box in the
+            // atlas for every gap in the range.
             if (FT_Get_Char_Index(face, cp) == 0) continue;
             if (FT_Load_Char(face, cp, FT_LOAD_NO_BITMAP) != 0) continue;
 
@@ -827,8 +827,8 @@ namespace DonTopo
                 entry.metrics.rect.width  = (float)entry.width;
                 entry.metrics.rect.height = (float)entry.height;
                 entry.metrics.bearingX    = (float)left;
-                // El bitmap llega hasta `top` por encima de la línea base, y el
-                // canvas mide hacia abajo: por eso el batcher lo resta.
+                // The bitmap reaches `top` above the baseline, and the
+                // canvas measures downward: that is why the batcher subtracts it.
                 entry.metrics.bearingY    = (float)top;
             }
 
@@ -842,9 +842,9 @@ namespace DonTopo
             return false;
         }
 
-        // ── Empaquetado por estanterías ──────────────────────────────────────
-        // Todos los glyphs de un cuerpo miden parecido, así que una estantería
-        // simple desperdicia poco y no hace falta nada más elaborado.
+        // ── Shelf packing ────────────────────────────────────────────────────
+        // All the glyphs of a size are similar in height, so a simple shelf
+        // wastes little and nothing more elaborate is needed.
         uint32_t atlasSide = 64;
         bool packed = false;
 
@@ -884,26 +884,26 @@ namespace DonTopo
             return false;
         }
 
-        // ── Horneado ─────────────────────────────────────────────────────────
+        // ── Baking ───────────────────────────────────────────────────────────
         std::vector<uint8_t> pixels((size_t)atlasSide * atlasSide * 4, 0);
 
-        // Cada glyph es independiente: su Shape ya está coloreado, su bitmap es
-        // local y el empaquetado le dio un rect DISJUNTO del atlas, así que dos
-        // hilos nunca escriben el mismo byte de `pixels`. El reparto va por
-        // índice atómico y no por bloques porque los glyphs no miden lo mismo:
-        // con bloques, el hilo que pilla las mayúsculas acaba el último.
+        // Each glyph is independent: its Shape is already colored, its bitmap is
+        // local and the packing gave it a DISJOINT rect of the atlas, so two
+        // threads never write the same byte of `pixels`. The split goes by atomic
+        // index and not by blocks because glyphs are not the same size:
+        // with blocks, the thread that gets the capitals finishes last.
         //
-        // El default NO es "todos los hilos": con el CRT de depuración cada
-        // asignación pasa por un heap con cerrojo global, y msdfgen asigna por
-        // glyph, así que ahí el paralelismo va HACIA ATRÁS. Medido con la fuente
-        // por defecto a 48 px (20 hilos lógicos), en ms:
+        // The default is NOT "all the threads": with the debug CRT each
+        // allocation goes through a heap with a global lock, and msdfgen allocates per
+        // glyph, so there parallelism goes BACKWARDS. Measured with the default
+        // font at 48 px (20 logical threads), in ms:
         //
-        //   hilos      1      2      4      8     16
+        //   threads    1      2      4      8     16
         //   Debug   2829   2463   6959  14339  17835
         //   Release  808    409    237    144    114
         //
-        // De ahí los dos defaults: 2 en Debug (lo único que gana algo) y los del
-        // hardware en Release. Un número explícito manda sobre esto.
+        // Hence the two defaults: 2 in Debug (the only one that gains anything) and the
+        // hardware's in Release. An explicit number overrides this.
         unsigned nThreads = threads;
         if (nThreads == 0)
         {
@@ -911,7 +911,7 @@ namespace DonTopo
             nThreads = 2;
 #else
             nThreads = std::thread::hardware_concurrency();
-            if (nThreads > 16) nThreads = 16;   // pasado ahí la curva ya es plana
+            if (nThreads > 16) nThreads = 16;   // past that the curve is already flat
 #endif
             if (nThreads == 0) nThreads = 1;
         }
@@ -934,9 +934,9 @@ namespace DonTopo
 
             for (uint32_t y = 0; y < g.height; ++y)
             {
-                // msdfgen tiene el origen ABAJO y el atlas arriba: la fila se
-                // voltea al copiar, que es lo que hace que las UVs de v0 = borde
-                // superior sigan valiendo.
+                // msdfgen has the origin at the BOTTOM and the atlas at the top: the row is
+                // flipped when copying, which is what keeps the UVs with v0 = top
+                // edge valid.
                 const float* row = msdf((int)0, (int)(g.height - 1 - y));
                 uint8_t* dst = &pixels[(((size_t)(oy + y) * atlasSide) + ox) * 4];
                 for (uint32_t x = 0; x < g.width; ++x)
@@ -955,8 +955,8 @@ namespace DonTopo
             {
                 const size_t i = siguiente.fetch_add(1);
                 if (i >= baked.size()) return;
-                // El glyph sin contorno (el espacio) no tiene bitmap que generar,
-                // solo avance: se cuenta igual para no descuadrar el reparto.
+                // A glyph without an outline (the space) has no bitmap to generate,
+                // only an advance: it is counted all the same so as not to throw the split off.
                 if (baked[i].hasShape) horneaUno(baked[i]);
             }
         };
@@ -967,7 +967,7 @@ namespace DonTopo
         }
         else
         {
-            // El hilo que llama también trabaja: con N hilos se lanzan N-1.
+            // The calling thread also works: with N threads, N-1 are launched.
             std::vector<std::thread> pool;
             pool.reserve(nThreads - 1);
             for (unsigned t = 1; t < nThreads; ++t) pool.emplace_back(trabaja);
@@ -975,7 +975,7 @@ namespace DonTopo
             for (std::thread& th : pool) th.join();
         }
 
-        // ── Métricas ─────────────────────────────────────────────────────────
+        // ── Metrics ──────────────────────────────────────────────────────────
         m_glyphs.clear();
         m_kerning.clear();
         m_bakeSize = bakePx;
@@ -986,9 +986,9 @@ namespace DonTopo
         for (const BakedGlyph& g : baked)
             m_glyphs[g.codepoint] = g.metrics;
 
-        // Índice de glyph -> codepoint, para traducir de vuelta lo que digan las
-        // tablas (que hablan de glyphs, no de caracteres). Se calcula una vez:
-        // el bucle de antes llamaba a FT_Get_Char_Index N² veces.
+        // Glyph index -> codepoint, to translate back what the tables say (they
+        // speak of glyphs, not characters). It is computed once: the earlier
+        // loop called FT_Get_Char_Index N² times.
         std::unordered_map<uint16_t, uint32_t> aCodepoint;
         std::unordered_set<uint16_t>           indices;
         aCodepoint.reserve(baked.size());
@@ -997,13 +997,13 @@ namespace DonTopo
         {
             const FT_UInt gi = FT_Get_Char_Index(face, g.codepoint);
             if (gi == 0 || gi > 0xFFFFu) continue;
-            // Un glyph puede tener varios codepoints (alias): se queda el
-            // PRIMERO, que con los rangos ordenados es el de menor valor.
+            // A glyph can have several codepoints (aliases): the FIRST is kept,
+            // which with the ranges sorted is the one with the lowest value.
             aCodepoint.emplace((uint16_t)gi, g.codepoint);
             indices.insert((uint16_t)gi);
         }
 
-        // (a) La tabla 'kern' clásica, que es lo único que sabe leer FreeType.
+        // (a) The classic 'kern' table, which is the only thing FreeType can read.
         if (FT_HAS_KERNING(face))
         {
             for (uint16_t li : indices)
@@ -1012,15 +1012,15 @@ namespace DonTopo
                 {
                     FT_Vector delta{};
                     if (FT_Get_Kerning(face, li, ri, FT_KERNING_DEFAULT, &delta) != 0) continue;
-                    if (delta.x == 0) continue;   // el par ausente ya vale 0
+                    if (delta.x == 0) continue;   // the absent pair is already 0
                     setKerning(aCodepoint[li], aCodepoint[ri], (float)((double)delta.x * kFt26_6));
                 }
             }
         }
 
-        // (b) GPOS, que es donde lo llevan las fuentes modernas — la del propio
-        // proyecto entre ellas. Sin esto, FT_HAS_KERNING es false y el kerning
-        // del motor no se aplica jamás.
+        // (b) GPOS, which is where modern fonts carry it (the project's own
+        // among them). Without this, FT_HAS_KERNING is false and the engine's
+        // kerning is never applied.
         {
             FT_ULong len = 0;
             if (FT_Load_Sfnt_Table(face, TTAG_GPOS, 0, nullptr, &len) == 0 && len > 0)
@@ -1039,10 +1039,10 @@ namespace DonTopo
                         const auto itR = aCodepoint.find(ri);
                         if (itL == aCodepoint.end() || itR == aCodepoint.end()) continue;
 
-                        // De unidades de DISEÑO a píxeles de horneado: x_scale es
-                        // el 16.16 que FreeType fijó con FT_Set_Pixel_Sizes, y el
-                        // resultado sale en 26.6. Sin esta conversión el valor
-                        // saldría en cientos y separaría media palabra.
+                        // From DESIGN units to bake pixels: x_scale is
+                        // the 16.16 that FreeType set with FT_Set_Pixel_Sizes, and the
+                        // result comes out in 26.6. Without this conversion the value
+                        // would come out in the hundreds and separate half a word.
                         const FT_Pos px = FT_MulFix(entry.second, face->size->metrics.x_scale);
                         setKerning(itL->second, itR->second, (float)((double)px * kFt26_6));
                     }
@@ -1053,8 +1053,8 @@ namespace DonTopo
         FT_Done_Face(face);
         FT_Done_FreeType(library);
 
-        // UNORM, NUNCA SRGB: el MSDF son distancias y el sampler tiene que
-        // devolverlas tal cual. Aqui solo se guardan; sube quien pueda.
+        // UNORM, NEVER SRGB: the MSDF is distances and the sampler has to
+        // return them as they are. Here they are only stored; whoever can uploads them.
         m_atlas.setSourcePixels(pixels.data(), atlasSide, atlasSide, /*srgb=*/false);
         return true;
     }
@@ -1062,7 +1062,7 @@ namespace DonTopo
     bool UiFont::loadFromFile(GpuDevice& gpu, GpuResources& res, const std::string& path,
                               float bakePx, const std::vector<UiCodepointRange>& ranges)
     {
-        // Con caché: el horneado solo ocurre la primera vez de todas.
+        // With cache: the bake only happens the very first time.
         if (!bakeFromFileCached(path, bakePx, ranges))
             return false;
 
