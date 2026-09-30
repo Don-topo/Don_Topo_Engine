@@ -2,27 +2,27 @@
 
 namespace DonTopo
 {
-    // Reflection Probe: sonda que captura el entorno desde la posición de su
-    // GameObject y sustituye al IBL global (irradiancia + prefiltrado) en los
-    // objetos que caen dentro de su radio de influencia.
+    // Reflection Probe: a probe that captures the environment from the position of its
+    // GameObject and replaces the global IBL (irradiance + prefilter) on the
+    // objects that fall inside its radius of influence.
     //
-    // NO guarda posición: la da el worldTransform del GameObject dueño, igual
-    // que CameraComponent — mover el objeto mueve la sonda. Tampoco guarda el
-    // cubemap: ése vive en el Renderer (recurso GPU) y se reconstruye con un
-    // bake, que es un EVENTO y nunca un pass del frame.
+    // It does NOT store position: it is given by the worldTransform of the owner GameObject, just
+    // like CameraComponent — moving the object moves the probe. It does not store the
+    // cubemap either: that lives in the Renderer (GPU resource) and is rebuilt with a
+    // bake, which is an EVENT and never a frame pass.
     //
-    // Data pura: sin Vulkan y sin conocer GameObject, misma regla que
-    // CameraComponent y Rigidbody (la dependencia va Core -> resto).
+    // Pure data: no Vulkan and no knowledge of GameObject, same rule as
+    // CameraComponent and Rigidbody (the dependency goes Core -> the rest).
     //
-    // Header-only a propósito: son dos floats con clamp, y así no hace falta
-    // añadir un .cpp a la lista de fuentes de DonTopoCore.
+    // Header-only on purpose: they are two floats with clamp, and this way there is no need to
+    // add a .cpp to the DonTopoCore source list.
     class ReflectionProbeComponent
     {
         public:
             ReflectionProbeComponent() = default;
 
-            // Los clamps viven aquí (y no en la UI) pa que un .scene editado a
-            // mano tampoco pueda instalar una sonda degenerada.
+            // The clamps live here (and not in the UI) so that a hand-edited .scene
+            // cannot install a degenerate probe either.
             float getRadius() const { return m_radius; }
             void  setRadius(float r)
             {
@@ -31,10 +31,10 @@ namespace DonTopo
                 m_radius = r;
             }
 
-            // Peso del entorno capturado. Se hornea en el propio cubemap durante
-            // el bake (push constant de los dos .comp de convolución), no llega
-            // por el bloque UBO: ése lo declaran 5 shaders y std140 desplazaría
-            // en silencio todo lo que va detrás.
+            // Weight of the captured environment. It is baked into the cubemap itself during
+            // the bake (push constant of the two convolution .comp files), it does not arrive
+            // through the UBO block: that one is declared by 5 shaders and std140 would silently shift
+            // everything that comes after it.
             float getIntensity() const { return m_intensity; }
             void  setIntensity(float i)
             {
@@ -44,8 +44,8 @@ namespace DonTopo
             }
 
         private:
-            // Defaults a la escala de este repo (primitivas de 50 unidades, la
-            // cámara del sandbox a z=300), no a los de Unity.
+            // Defaults to this repo's scale (50-unit primitives, the
+            // sandbox camera at z=300), not Unity's.
             float m_radius    = 300.0f;
             float m_intensity = 1.0f;
     };

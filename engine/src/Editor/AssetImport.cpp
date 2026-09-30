@@ -50,7 +50,7 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
     if (!std::filesystem::is_regular_file(source, ec) || ec)
         return { AssetImportResult::RejectedCopyFailed, {}, "The source is not a file", source };
 
-    // "" / "x.png" es un path relativo: copiaria al CWD del proceso.
+    // "" / "x.png" is a relative path: it would copy into the process CWD.
     if (destDir.empty())
         return { AssetImportResult::RejectedCopyFailed, {}, "The destination folder is empty", source };
 
@@ -67,17 +67,17 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
             return { AssetImportResult::RejectedNameConflict, {}, "", source };
         return { AssetImportResult::RejectedCopyFailed, {}, ec.message(), source };
     }
-    // Si el origen traia ajustes de importacion, viajan con la copia. Un fallo
-    // aqui no deshace la importacion: el asset ya esta; se avisa en el mensaje.
+    // If the source had import settings, they travel with the copy. A failure here
+    // does not undo the import: the asset is already there; it is reported in the message.
     std::string warnings;
     std::string sidecarError;
     if (!copyImportSidecar(source, dest, &sidecarError))
         warnings = "could not copy the .import.json: " + sidecarError;
 
-    // Un modelo lee otros ficheros (.mtl y sus texturas, .bin e imagenes de un
-    // .gltf) en rutas relativas a su carpeta: se copian con la misma ruta, o la
-    // copia del proyecto no carga o sale sin material. Uno que ya existe en el
-    // destino no se pisa (puede ser de otro modelo) y se avisa.
+    // A model reads other files (.mtl and its textures, .bin and images of a
+    // .gltf) at paths relative to its folder: they are copied with the same path, or the
+    // project copy fails to load or comes out without material. One that already exists
+    // at the destination is not overwritten (it may belong to another model) and a warning is issued.
     if (ModelLoader::isSupportedModelExtension(source.extension().string()))
     {
         for (const std::string& rel : ModelLoader::modelCompanionFiles(source.string()))
@@ -85,7 +85,7 @@ AssetImportOutcome importExternalAsset(const std::filesystem::path& source,
             const std::filesystem::path from = source.parent_path() / std::filesystem::path(rel);
             const std::filesystem::path to   = dest.parent_path() / std::filesystem::path(rel);
             std::error_code cec;
-            if (!std::filesystem::is_regular_file(from, cec)) continue;   // referenciado pero ausente: el loader lo dira
+            if (!std::filesystem::is_regular_file(from, cec)) continue;   // referenced but missing: the loader will report it
             std::filesystem::create_directories(to.parent_path(), cec);
             if (!std::filesystem::copy_file(from, to, cec))
             {

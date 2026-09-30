@@ -53,16 +53,16 @@ namespace DonTopo::ScriptBindings
         using DonTopo::GameObject;
         using DonTopo::LuaEntity;
 
-        // Buzón de DonTopo.loadScene (ver ScriptBindings.h). Una sola casilla:
-        // dos peticiones en el mismo frame -> gana la última. Vive aquí y no en
-        // ScriptManager porque el consumidor (EditorUI / runtime) solo necesita
-        // la ruta, no la VM. Un único hilo lo toca: el de los scripts y el del
-        // bucle de frame son el mismo.
+        // Mailbox for DonTopo.loadScene (see ScriptBindings.h). A single slot:
+        // two requests in the same frame -> the last one wins. It lives here and not in
+        // ScriptManager because the consumer (EditorUI / runtime) only needs
+        // the path, not the VM. Only one thread touches it: the scripts thread and the
+        // frame loop thread are the same.
         std::string g_pendingSceneLoad;
         bool        g_hasPendingSceneLoad = false;
 
-        // Deref validado: entity muerta -> excepción C++ que sol2 convierte en
-        // error Lua (capturado por la protected_function del callback).
+        // Validated deref: dead entity -> C++ exception that sol2 turns into a
+        // Lua error (caught by the callback's protected_function).
         GameObject* deref(const LuaEntity& e)
         {
             if (!e.go || !e.mgr || !e.mgr->isAlive(e.go))
@@ -70,25 +70,25 @@ namespace DonTopo::ScriptBindings
             return e.go;
         }
 
-        // std::clamp(NaN, lo, hi) devuelve NaN: toda comparación con NaN es
-        // falsa, así que el clamp de rango (p.ej. el [0,1] de volume) no lo
-        // detiene. Los infinitos SÍ se clampan bien (clamp(+inf,0,1) == 1.0),
-        // así que el peligroso de verdad es el NaN, no el infinito: un NaN se
-        // cuela hasta el JSON de la escena (nlohmann lo serializa como
-        // "null"), y al releer ese "null" con .get<float>() nlohmann lanza
-        // json::exception, lo que hacía fallar Scene::fromJson ENTERO por un
-        // solo campo corrupto. Se ataja aquí, en el punto de entrada desde
-        // Lua: se ignora el valor (se deja el anterior) y se avisa por el Log
-        // Console, sin lanzar error de Lua — un cálculo roto en un script
-        // (p.ej. un 0/0) no debe matar la partida.
+        // std::clamp(NaN, lo, hi) returns NaN: every comparison with NaN is
+        // false, so the range clamp (e.g. the [0,1] of volume) does not
+        // stop it. Infinities DO clamp fine (clamp(+inf,0,1) == 1.0),
+        // so the truly dangerous one is NaN, not infinity: a NaN sneaks
+        // into the scene JSON (nlohmann serializes it as
+        // "null"), and when that "null" is read back with .get<float>() nlohmann throws
+        // json::exception, which made the WHOLE Scene::fromJson fail because of a
+        // single corrupt field. It is stopped here, at the entry point from
+        // Lua: the value is ignored (the previous one is kept) and a warning goes to the Log
+        // Console, without raising a Lua error: a broken computation in a script
+        // (e.g. a 0/0) must not kill the game.
         //
-        // IMPORTANTE en cada call-site: llamar a ensureFinite DESPUÉS de
-        // deref() y de cualquier has*Collider()/hasAudioClip()/hasRigidbody(),
-        // nunca antes. Si no, una entity ya destruida con un NaN de regalo
-        // (deadEntity:GetTransform():SetPosition(Vec3(0/0,0,0))) se limita a
-        // avisar del NaN y hacer return, cuando el bug real y más grave —
-        // use-after-destroy — debería seguir lanzando error de Lua como
-        // siempre (hallazgo 4 del review de este fix).
+        // IMPORTANT at every call site: call ensureFinite AFTER
+        // deref() and after any has*Collider()/hasAudioClip()/hasRigidbody(),
+        // never before. Otherwise an already destroyed entity with a NaN as a gift
+        // (deadEntity:GetTransform():SetPosition(Vec3(0/0,0,0))) just
+        // warns about the NaN and returns, when the real and more serious bug,
+        // use-after-destroy, should keep raising a Lua error
+        // as always (finding 4 of this fix's review).
         bool ensureFinite(ScriptManager& mgr, const char* metodo, float v)
         {
             if (std::isfinite(v)) return true;
@@ -105,11 +105,11 @@ namespace DonTopo::ScriptBindings
             return false;
         }
 
-        // Modo de fuerza opcional de AddForce/AddTorque. Llega de Lua como un
-        // entero (tabla ForceMode) y se valida contra el rango del enum de
-        // Rigidbody.h. Fuera de rango NO lanza: mismo canal que ensureFinite —
-        // aviso por el Log Console y la llamada se ignora entera. Ausente
-        // (llamada de tres argumentos) es siempre válido y vale Force.
+        // Optional force mode of AddForce/AddTorque. It arrives from Lua as an
+        // integer (ForceMode table) and is validated against the range of the enum in
+        // Rigidbody.h. Out of range does NOT throw: same channel as ensureFinite,
+        // a warning through the Log Console and the whole call is ignored. Absent
+        // (three-argument call) is always valid and means Force.
         constexpr int kForceModeMax = static_cast<int>(ForceMode::VelocityChange);
 
         bool ensureForceMode(ScriptManager& mgr, const char* metodo, const sol::optional<int>& mode)
@@ -122,8 +122,8 @@ namespace DonTopo::ScriptBindings
             return false;
         }
 
-        // Solo se llama tras un ensureForceMode en verde, así que el valor ya
-        // está dentro del enum.
+        // Only called after a successful ensureForceMode, so the value is already
+        // inside the enum.
         ForceMode toForceMode(const sol::optional<int>& mode)
         {
             return mode ? static_cast<ForceMode>(*mode) : ForceMode::Force;
@@ -155,17 +155,17 @@ namespace DonTopo::ScriptBindings
         struct LuaDropdown { LuaEntity e; };
         struct LuaScrollView { LuaEntity e; };
 
-        // Descompone localTransform en T/R/S (grados pa Lua). La extracción de
-        // ángulos usa extractEulerAngleXYZ — el inverso exacto del
-        // eulerAngleXYZ de recomposeLocal; mezclar convenciones (p.ej.
-        // glm::eulerAngles sobre el quat) corrompe la rotación en cualquier
-        // objeto rotado en más de un eje.
+        // Decomposes localTransform into T/R/S (degrees for Lua). The angle extraction
+        // uses extractEulerAngleXYZ, the exact inverse of the eulerAngleXYZ in
+        // recomposeLocal; mixing conventions (e.g.
+        // glm::eulerAngles on the quat) corrupts the rotation on any
+        // object rotated on more than one axis.
         void decomposeLocal(GameObject* go, glm::vec3& pos, glm::vec3& eulerDeg, glm::vec3& scale)
         {
             glm::quat rot;
-            // Sin mirar lo que devuelve decompose, una escala 0 dejaba las tres
-            // salidas SIN INICIALIZAR y Lua leia basura por Transform.position,
-            // .rotation y .scale.
+            // Without checking what decompose returns, a scale of 0 left the three
+            // outputs UNINITIALIZED and Lua read garbage through Transform.position,
+            // .rotation and .scale.
             decomposeTransform(go->localTransform, &pos, &rot, &scale);
             glm::mat4 rotOnly = glm::mat4_cast(rot);
             float t1 = 0.0f, t2 = 0.0f, t3 = 0.0f;
@@ -173,11 +173,11 @@ namespace DonTopo::ScriptBindings
             eulerDeg = glm::degrees(glm::vec3(t1, t2, t3));
         }
 
-        // Normaliza una columna del worldTransform. Un objeto con escala 0 en
-        // ese eje deja la columna a cero y normalize() devolvería NaN, que
-        // desde Lua viaja a un setter y de ahí al JSON de la escena: con escala
-        // degenerada se devuelve el eje canónico, que al menos es una dirección
-        // válida.
+        // Normalizes a column of the worldTransform. An object with scale 0 on
+        // that axis leaves the column at zero and normalize() would return NaN, which
+        // travels from Lua to a setter and from there to the scene JSON: with a
+        // degenerate scale the canonical axis is returned, which is at least a valid
+        // direction.
         glm::vec3 safeAxis(const glm::vec3& column, const glm::vec3& fallback)
         {
             const float len = glm::length(column);
@@ -205,13 +205,13 @@ namespace DonTopo::ScriptBindings
                 "x", &glm::vec3::x,
                 "y", &glm::vec3::y,
                 "z", &glm::vec3::z,
-                // Álgebra que antes había que escribir a mano con math.sqrt.
-                // Todas devuelven valores nuevos: ninguna muta el receptor, así
-                // que 'local d = a:Normalized()' deja 'a' intacto.
+                // Algebra that previously had to be written by hand with math.sqrt.
+                // All of them return new values: none mutates the receiver, so
+                // 'local d = a:Normalized()' leaves 'a' intact.
                 "Length", [](const glm::vec3& v) { return glm::length(v); },
-                // Vector de longitud 1. El vector cero no tiene dirección: se
-                // devuelve cero tal cual en vez de un NaN, que se colaría hasta
-                // el JSON de la escena (ver ensureFinite).
+                // Unit length vector. The zero vector has no direction: zero is
+                // returned as is instead of a NaN, which would sneak into
+                // the scene JSON (see ensureFinite).
                 "Normalized", [](const glm::vec3& v) {
                     const float len = glm::length(v);
                     return len > 0.0f ? v / len : glm::vec3(0.0f);
@@ -219,8 +219,8 @@ namespace DonTopo::ScriptBindings
                 "Dot", [](const glm::vec3& a, const glm::vec3& b) { return glm::dot(a, b); },
                 "Cross", [](const glm::vec3& a, const glm::vec3& b) { return glm::cross(a, b); },
                 "Distance", [](const glm::vec3& a, const glm::vec3& b) { return glm::length(b - a); },
-                // Interpolación lineal SIN acotar t: con t fuera de [0,1]
-                // extrapola, igual que glm::mix y a diferencia de Unity.
+                // Linear interpolation WITHOUT clamping t: with t outside [0,1]
+                // it extrapolates, like glm::mix and unlike Unity.
                 "Lerp", [](const glm::vec3& a, const glm::vec3& b, float t) {
                     return a + (b - a) * t;
                 },
@@ -228,22 +228,22 @@ namespace DonTopo::ScriptBindings
                     [](const glm::vec3& a, const glm::vec3& b) { return a + b; },
                 sol::meta_function::subtraction,
                     [](const glm::vec3& a, const glm::vec3& b) { return a - b; },
-                // Lua prueba el __mul del operando IZQUIERDO y, si no le vale,
-                // el del derecho — pero con los argumentos en el orden escrito.
-                // Sin la segunda sobrecarga, '2 * v' llegaba aquí como
-                // (float, vec3) y reventaba con un error de tipos.
+                // Lua tries the __mul of the LEFT operand and, if that does not fit,
+                // the one of the right operand, but with the arguments in the written order.
+                // Without the second overload, '2 * v' arrived here as
+                // (float, vec3) and blew up with a type error.
                 sol::meta_function::multiplication, sol::overload(
                     [](const glm::vec3& v, float s) { return v * s; },
                     [](float s, const glm::vec3& v) { return v * s; }),
-                // Dividir por cero da inf/NaN, que ensureFinite ataja en cuanto
-                // el resultado intenta entrar en un setter del motor.
+                // Dividing by zero gives inf/NaN, which ensureFinite stops as soon as
+                // the result tries to enter an engine setter.
                 sol::meta_function::division,
                     [](const glm::vec3& v, float s) { return v / s; },
                 sol::meta_function::unary_minus,
                     [](const glm::vec3& v) { return -v; },
-                // Igualdad exacta componente a componente. Lua solo llama a
-                // __eq cuando los dos operandos son del mismo tipo, así que
-                // 'v == nil' sigue siendo false sin pasar por aquí.
+                // Exact component-wise equality. Lua only calls
+                // __eq when both operands are of the same type, so
+                // 'v == nil' is still false without going through here.
                 sol::meta_function::equal_to,
                     [](const glm::vec3& a, const glm::vec3& b) { return a == b; },
                 sol::meta_function::to_string,
@@ -260,9 +260,9 @@ namespace DonTopo::ScriptBindings
             logTable["Info"]  = [&mgr](const std::string& m) { mgr.log("[Lua] " + m); };
             logTable["Warn"]  = [&mgr](const std::string& m) { mgr.log("[Lua][WARN] " + m); };
             logTable["Error"] = [&mgr](const std::string& m) { mgr.log("[Lua][ERROR] " + m); };
-            // print nativo -> mismo destino que Log.Info. Cada argumento pasa
-            // por el tostring de Lua (maneja números, nil, tablas y el
-            // metamétodo __tostring), igual que el print nativo.
+            // native print -> same destination as Log.Info. Each argument goes through
+            // Lua's tostring (it handles numbers, nil, tables and the
+            // __tostring metamethod), like the native print.
             lua["print"] = [&mgr](sol::variadic_args args) {
                 sol::state_view lua(args.lua_state());
                 sol::protected_function tostring = lua["tostring"];
@@ -280,12 +280,12 @@ namespace DonTopo::ScriptBindings
             };
         }
 
-        // DonTopo.loadScene(path) -> bool. NO carga: valida y encola (ver el
-        // buzón arriba). El bool es el resultado de la validación —fichero
-        // legible, JSON parseable, estructura de escena v1—, la misma que hace
-        // EditorUI::loadSceneFile antes de tocar GPU; el desenlace de la carga
-        // en sí llega un frame después y no puede devolverse aquí. Nada de
-        // excepciones hacia Lua: readJson ya devuelve optional.
+        // DonTopo.loadScene(path) -> bool. It does NOT load: it validates and enqueues (see the
+        // mailbox above). The bool is the result of the validation (readable file,
+        // parseable JSON, v1 scene structure), the same one EditorUI::loadSceneFile does
+        // before touching the GPU; the outcome of the load itself arrives one frame
+        // later and cannot be returned here. No exceptions towards Lua: readJson
+        // already returns an optional.
         void registerEngineTable(ScriptManager& mgr)
         {
             sol::state& lua = mgr.lua();
@@ -307,17 +307,17 @@ namespace DonTopo::ScriptBindings
                     mgr.log("[Lua][ERROR] DonTopo.loadScene: could not read the scene '" + path + "'");
                     return false;
                 }
-                // Última petición del frame gana: se pisa la anterior sin avisar.
+                // Last request of the frame wins: the previous one is overwritten without warning.
                 g_pendingSceneLoad    = path;
                 g_hasPendingSceneLoad = true;
                 return true;
             };
         }
 
-        // Reloj de los scripts. Los tres valores acumulados viven aquí y no en
-        // la tabla Lua porque la tabla es escribible desde un script: si
-        // alguien hiciera Time.time = 0, el acumulador de C++ seguiría siendo
-        // el bueno y el frame siguiente restauraría el valor correcto.
+        // Script clock. The three accumulated values live here and not in the
+        // Lua table because the table is writable from a script: if
+        // someone did Time.time = 0, the C++ accumulator would still be
+        // the good one and the next frame would restore the correct value.
         float g_timeSincePlay = 0.0f;
         int   g_frameCount    = 0;
 
@@ -325,23 +325,23 @@ namespace DonTopo::ScriptBindings
         {
             sol::state& lua = mgr.lua();
             sol::table time = lua.create_named_table("Time");
-            // fixedDeltaTime es constante (el paso fijo de ScriptManager) y se
-            // escribe una sola vez; los otros tres los pisa tickTime.
+            // fixedDeltaTime is constant (ScriptManager's fixed step) and is
+            // written only once; the other three are overwritten by tickTime.
             time["fixedDeltaTime"] = ScriptManager::kFixedStep;
             time["deltaTime"]      = 0.0f;
             time["time"]           = 0.0f;
             time["frameCount"]     = 0;
         }
 
-        // Luz y cámara de juego. Los dos componentes existían en el core desde
-        // hace mucho y no llegaban a Lua: encender una luz, cambiarle el color
-        // o abrir el FOV eran cosas que solo se podían hacer a mano en el
-        // inspector. Ninguno de los dos guarda posición ni orientación —salen
-        // del worldTransform del GameObject—, así que aquí solo hay ajustes.
+        // Game light and camera. Both components existed in the core for a long
+        // time and did not reach Lua: turning on a light, changing its color
+        // or widening the FOV could only be done by hand in the
+        // inspector. Neither stores position or orientation (they come
+        // from the GameObject's worldTransform), so here there are only settings.
         //
-        // Todos los setters del core ya acotan (LightComponent.h,
-        // CameraComponent.cpp): no se repite el clamp aquí, pero sí el filtro
-        // de NaN, porque std::clamp(NaN,...) devuelve NaN y se colaría entero.
+        // All the core setters already clamp (LightComponent.h,
+        // CameraComponent.cpp): the clamp is not repeated here, but the NaN filter is,
+        // because std::clamp(NaN,...) returns NaN and it would sneak through entirely.
         void registerLighting(ScriptManager& mgr)
         {
             sol::state& lua = mgr.lua();
@@ -362,9 +362,9 @@ namespace DonTopo::ScriptBindings
             };
             lua.new_usertype<LuaLight>("Light",
                 sol::no_constructor,
-                // Tipo fuera del enum: se avisa y se ignora, mismo criterio que
-                // ForceMode. Un valor cualquiera viajaría a direction.w del UBO
-                // y el shader elegiría una rama que no existe.
+                // Type outside the enum: a warning is issued and it is ignored, same criterion as
+                // ForceMode. Any value would travel to direction.w of the UBO
+                // and the shader would pick a branch that does not exist.
                 "type", sol::property(
                     [lightOf](const LuaLight& c) { return static_cast<int>(lightOf(c)->getType()); },
                     [lightOf, &mgr](const LuaLight& c, int v) {
@@ -420,9 +420,9 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "Light.areaHeight", v)) return;
                         l->setAreaHeight(v);
                     }),
-                // El color va por método y no por propiedad porque es un Vec3:
-                // 'light.color.x = 1' sobre una propiedad escribiría en una
-                // COPIA temporal y se perdería sin avisar.
+                // The color goes through a method and not a property because it is a Vec3:
+                // 'light.color.x = 1' on a property would write to a temporary
+                // COPY and be lost without warning.
                 "GetColor", [lightOf](const LuaLight& c) { return lightOf(c)->getColor(); },
                 "SetColor", [lightOf, &mgr](const LuaLight& c, const glm::vec3& col) {
                     LightComponent* l = lightOf(c);
@@ -450,7 +450,7 @@ namespace DonTopo::ScriptBindings
                         }
                         cam->setMode(static_cast<CameraComponent::ProjectionMode>(v));
                     }),
-                // Solo lo usa el modo perspectiva; el ortográfico lo ignora.
+                // Only used by perspective mode; orthographic ignores it.
                 "fov", sol::property(
                     [camOf](const LuaCamera& c) { return camOf(c)->getFov(); },
                     [camOf, &mgr](const LuaCamera& c, float v) {
@@ -458,7 +458,7 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "Camera.fov", v)) return;
                         cam->setFov(v);
                     }),
-                // Semi-altura en unidades de mundo; solo lo usa el ortográfico.
+                // Half-height in world units; only used by orthographic.
                 "orthographicSize", sol::property(
                     [camOf](const LuaCamera& c) { return camOf(c)->getOrthographicSize(); },
                     [camOf, &mgr](const LuaCamera& c, float v) {
@@ -491,14 +491,14 @@ namespace DonTopo::ScriptBindings
             input["IsKeyReleased"]      = [](int k) { return Input::isKeyReleased(k); };
             input["IsMouseButtonDown"]  = [](int b) { return Input::isMouseButtonDown(b); };
 
-            // Acciones con nombre del panel Input Actions. Un nombre desconocido
-            // devuelve false y avisa UNA vez por nombre y sesión: la llamada
-            // típica vive en Update() y un aviso por frame ahogaría el Log.
+            // Named actions of the Input Actions panel. An unknown name
+            // returns false and warns ONCE per name and session: the typical call
+            // lives in Update() and a warning per frame would drown the Log.
             auto warned = std::make_shared<std::set<std::string>>();
             auto known  = [&mgr, warned](const std::string& name) {
-                const bool ok = Input::hasAction(name);   // fuerza la carga perezosa del mapa
-                // Avisos de la carga (bindings de mando ignorados): la lista se
-                // vacía al leerla, así que salen una sola vez.
+                const bool ok = Input::hasAction(name);   // forces the lazy load of the map
+                // Load warnings (ignored gamepad bindings): the list is
+                // emptied when read, so they come out only once.
                 for (const std::string& d : Input::takeActionDiagnostics())
                     mgr.log("[Lua][WARN] " + d);
                 if (!ok && warned->insert(name).second)
@@ -527,17 +527,17 @@ namespace DonTopo::ScriptBindings
             mb["Right"]  = GLFW_MOUSE_BUTTON_RIGHT;
             mb["Middle"] = GLFW_MOUSE_BUTTON_MIDDLE;
 
-            // Mando crudo. Lo normal es usar acciones con nombre (el panel
-            // Input Actions ya sabe de mando), pero el core expone el mando
-            // directo y el panel lo usa para capturar bindings: no capamos en
-            // Lua lo que el motor da. Sin mando conectado todo devuelve false,
-            // nunca error.
+            // Raw gamepad. The normal way is to use named actions (the Input
+            // Actions panel already knows about gamepads), but the core exposes the gamepad
+            // directly and the panel uses it to capture bindings: we do not cap in
+            // Lua what the engine gives. With no gamepad connected everything returns false,
+            // never an error.
             input["IsPadButtonDown"]    = [](int b) { return Input::isPadButtonDown(b); };
             input["IsPadButtonPressed"] = [](int b) { return Input::isPadButtonPressed(b); };
-            // Los ejes se consultan por CÓDIGO, no por eje: un eje son dos
-            // direcciones (arriba/abajo) y cada una vale como binding aparte.
-            // El código lo compone PadAxis.Code(eje, negativo) o, más cómodo,
-            // se lee de las constantes ya compuestas de la tabla PadAxis.
+            // Axes are queried by CODE, not by axis: an axis is two
+            // directions (up/down) and each one counts as a separate binding.
+            // The code is composed by PadAxis.Code(axis, negative) or, more conveniently,
+            // read from the precomposed constants of the PadAxis table.
             input["IsPadAxisDown"]      = [](int code) { return Input::isPadAxisDown(code); };
             input["IsPadAxisPressed"]   = [](int code) { return Input::isPadAxisPressed(code); };
 
@@ -556,9 +556,9 @@ namespace DonTopo::ScriptBindings
             pad["DpadDown"]  = GLFW_GAMEPAD_BUTTON_DPAD_DOWN;
             pad["DpadLeft"]  = GLFW_GAMEPAD_BUTTON_DPAD_LEFT;
 
-            // Códigos ya compuestos, uno por dirección. Los nombres describen
-            // hacia dónde se empuja, no el signo del eje: en GLFW el eje Y de
-            // los sticks crece hacia ABAJO, así que "Up" es el negativo.
+            // Precomposed codes, one per direction. The names describe
+            // which way it is pushed, not the sign of the axis: in GLFW the Y axis of
+            // the sticks grows DOWNWARDS, so "Up" is the negative one.
             sol::table axis = lua.create_named_table("PadAxis");
             axis["Code"] = [](int a, bool negative) { return Input::padAxisCode(a, negative); };
             axis["LeftStickRight"] = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_X, false);
@@ -569,8 +569,8 @@ namespace DonTopo::ScriptBindings
             axis["RightStickLeft"]  = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_X, true);
             axis["RightStickDown"]  = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_Y, false);
             axis["RightStickUp"]    = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_Y, true);
-            // Los gatillos son analógicos con reposo en -1: Input los
-            // renormaliza a [0,1], así que solo tienen dirección positiva.
+            // The triggers are analog with rest at -1: Input renormalizes
+            // them to [0,1], so they only have a positive direction.
             axis["LeftTrigger"]  = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER, false);
             axis["RightTrigger"] = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER, false);
         }
@@ -584,10 +584,10 @@ namespace DonTopo::ScriptBindings
                     glm::vec3 p, r, s; decomposeLocal(deref(t.e), p, r, s); return p;
                 },
                 "SetPosition", [&mgr](const LuaTransform& t, const glm::vec3& np) {
-                    // deref ANTES que ensureFinite: una entity destruida tiene
-                    // que dar el error de Lua de siempre (use-after-destroy,
-                    // el bug gordo), no un aviso de NaN silencioso que la deja
-                    // pasar (hallazgo 4 del review).
+                    // deref BEFORE ensureFinite: a destroyed entity has
+                    // to give the usual Lua error (use-after-destroy,
+                    // the big bug), not a silent NaN warning that lets it
+                    // through (finding 4 of the review).
                     GameObject* go = deref(t.e);
                     if (!ensureFinite(mgr, "Transform.SetPosition", np)) return;
                     glm::vec3 p, r, s; decomposeLocal(go, p, r, s);
@@ -615,12 +615,12 @@ namespace DonTopo::ScriptBindings
                     GameObject* go = deref(t.e);
                     return glm::vec3(go->worldTransform[3]);
                 },
-                // Coloca el objeto en una posición de MUNDO: convierte a local
-                // deshaciendo el worldTransform del padre. Sin padre es lo
-                // mismo que SetPosition. Un padre con escala 0 da una matriz
-                // singular y su inversa son infinitos: ensureFinite atrapa el
-                // resultado antes de escribirlo, que si no dejaría el objeto
-                // fuera del universo y sin vuelta atrás.
+                // Places the object at a WORLD position: converts to local
+                // by undoing the parent's worldTransform. Without a parent it is the
+                // same as SetPosition. A parent with scale 0 gives a singular matrix
+                // and its inverse is infinities: ensureFinite catches the
+                // result before writing it, since otherwise it would leave the object
+                // out of the universe with no way back.
                 "SetWorldPosition", [&mgr](const LuaTransform& t, const glm::vec3& wp) {
                     GameObject* go = deref(t.e);
                     if (!ensureFinite(mgr, "Transform.SetWorldPosition", wp)) return;
@@ -631,10 +631,10 @@ namespace DonTopo::ScriptBindings
                     glm::vec3 p, r, s; decomposeLocal(go, p, r, s);
                     recomposeLocal(go, local, r, s);
                 },
-                // Ejes del objeto en MUNDO, ya normalizados (un objeto escalado
-                // daría vectores más largos que 1 si se leyeran crudos). La
-                // convención es la de CameraComponent y glm::lookAt: se mira
-                // hacia -Z local, +Y es arriba y +X la derecha.
+                // Object axes in WORLD space, already normalized (a scaled object
+                // would give vectors longer than 1 if read raw). The
+                // convention is that of CameraComponent and glm::lookAt: it looks
+                // towards local -Z, +Y is up and +X is right.
                 "GetForward", [](const LuaTransform& t) {
                     GameObject* go = deref(t.e);
                     return safeAxis(-glm::vec3(go->worldTransform[2]), glm::vec3(0.0f, 0.0f, -1.0f));
@@ -647,13 +647,13 @@ namespace DonTopo::ScriptBindings
                     GameObject* go = deref(t.e);
                     return safeAxis(glm::vec3(go->worldTransform[1]), glm::vec3(0.0f, 1.0f, 0.0f));
                 },
-                // Orienta el objeto para que su forward (-Z) apunte al punto de
-                // mundo dado, conservando posición y escala. El up opcional
-                // (por defecto +Y) resuelve el giro sobrante alrededor del
-                // forward. Casos degenerados —mirarse a sí mismo, o un up
-                // paralelo al forward— no tienen respuesta: se avisa y se deja
-                // la rotación como estaba, en vez de instalar una matriz con
-                // NaN que arrastraría a los hijos.
+                // Orients the object so its forward (-Z) points at the given world
+                // point, keeping position and scale. The optional up
+                // (+Y by default) resolves the leftover twist around the
+                // forward. Degenerate cases (looking at itself, or an up
+                // parallel to the forward) have no answer: a warning is issued and the
+                // rotation is left as it was, instead of installing a matrix with
+                // NaN that would drag the children along.
                 "LookAt", [&mgr](const LuaTransform& t, const glm::vec3& target,
                                  sol::optional<glm::vec3> up) {
                     GameObject* go = deref(t.e);
@@ -677,10 +677,10 @@ namespace DonTopo::ScriptBindings
                                 "direction, rotation unchanged");
                         return;
                     }
-                    // lookAt devuelve una VIEW (mundo -> cámara); la pose del
-                    // objeto es su inversa. Se compone en mundo y, si hay
-                    // padre, se pasa a local: si no, un objeto con padre rotado
-                    // miraría a cualquier sitio menos al objetivo.
+                    // lookAt returns a VIEW (world -> camera); the object's pose
+                    // is its inverse. It is composed in world space and, if there is a
+                    // parent, converted to local: otherwise an object with a rotated parent
+                    // would look anywhere but at the target.
                     glm::mat4 world = glm::inverse(glm::lookAt(worldPos, target, upVec));
                     if (go->parent)
                         world = glm::inverse(go->parent->worldTransform) * world;
@@ -698,17 +698,17 @@ namespace DonTopo::ScriptBindings
                 },
                 "Rotate", [&mgr](const LuaTransform& t, const glm::vec3& dEuler) {
                     GameObject* go = deref(t.e);
-                    // Rotación incremental compuesta como quaternion, NUNCA
-                    // sumando eulers: extractEulerAngleXYZ acota el ángulo
-                    // medio a ±90°, y acumular sobre esa representación hace
-                    // que una rotación continua se "atasque" al llegar al
-                    // límite (gira y luego se queda casi quieta).
+                    // Incremental rotation composed as a quaternion, NEVER
+                    // by adding eulers: extractEulerAngleXYZ clamps the middle
+                    // angle to ±90°, and accumulating on that representation makes
+                    // a continuous rotation get "stuck" on reaching the
+                    // limit (it turns and then stays almost still).
                     if (!ensureFinite(mgr, "Transform.Rotate", dEuler)) return;
                     glm::vec3 scale, pos; glm::quat rot;
-                    // Aqui el descuido era el mas caro de los cuatro: con las
-                    // salidas sin inicializar, el localTransform se REESCRIBIA
-                    // con esa basura y el objeto quedaba destrozado para
-                    // siempre, no solo mal pintado.
+                    // Here the oversight was the most expensive of the four: with the
+                    // outputs uninitialized, the localTransform was REWRITTEN
+                    // with that garbage and the object was wrecked
+                    // forever, not just drawn wrong.
                     decomposeTransform(go->localTransform, &pos, &rot, &scale);
                     rot = rot * glm::quat(glm::radians(dEuler));
                     go->localTransform = glm::translate(glm::mat4(1.0f), pos) *
@@ -719,11 +719,11 @@ namespace DonTopo::ScriptBindings
                 });
         }
 
-        // Índice de capa de colisión válido, o error de Lua. Lo usan los cuatro
-        // colliders (.layer) y la matriz de Physics. Se lanza en vez de clampear
-        // a propósito: con un clamp el script creería estar filtrando por la
-        // capa que pidió cuando en realidad está en otra, y eso no se ve hasta
-        // que algo atraviesa algo.
+        // Valid collision layer index, or a Lua error. Used by the four
+        // colliders (.layer) and the Physics matrix. It throws instead of clamping
+        // on purpose: with a clamp the script would believe it is filtering by the
+        // layer it asked for when it is actually in another, and that is not visible until
+        // something goes through something.
         void requireLayer(const char* what, int layer)
         {
             if (!DonTopo::PhysicsManager::isValidLayer(layer))
@@ -759,9 +759,9 @@ namespace DonTopo::ScriptBindings
                     if (!ensureFinite(mgr, "BoxCollider.SetCenter", ctr)) return;
                     go->getBoxCollider()->setCenter(ctr);
                 },
-                // Material de física del collider. Propiedades (no Get/Set)
-                // igual que en Rigidbody. Como en mass: deref + has ANTES del
-                // guard de finitud.
+                // Physics material of the collider. Properties (not Get/Set)
+                // as in Rigidbody. As in mass: deref + has BEFORE the
+                // finiteness guard.
                 "staticFriction", sol::property(
                     [](const LuaBoxCollider& c) {
                         GameObject* go = deref(c.e);
@@ -798,9 +798,9 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "BoxCollider.bounciness", v)) return;
                         go->getBoxCollider()->setBounciness(v);
                     }),
-                // Capa de colisión (0-31). Con quién colisiona la decide la
-                // matriz global (Physics.SetLayerCollision). El setter reescribe
-                // el filtro de la shape, así que vale también en mitad de Play.
+                // Collision layer (0-31). What it collides with is decided by the
+                // global matrix (Physics.SetLayerCollision). The setter rewrites
+                // the shape's filter, so it also works in the middle of Play.
                 "layer", sol::property(
                     [](const LuaBoxCollider& c) {
                         GameObject* go = deref(c.e);
@@ -813,11 +813,11 @@ namespace DonTopo::ScriptBindings
                         requireLayer("BoxCollider.layer", v);
                         go->getBoxCollider()->setLayer(v);
                     }),
-                // Is Trigger. El setter NO toca el collider a pelo: pasa por
-                // PhysicsManager::setTrigger, que además del flip de flags da
-                // de alta/baja el collider en el registro de onTriggerStay.
-                // Fuera de Play no hay PhysicsManager (igual que en el raycast):
-                // no-op silencioso, no error de Lua.
+                // Is Trigger. The setter does NOT touch the collider directly: it goes through
+                // PhysicsManager::setTrigger, which besides the flag flip
+                // adds/removes the collider in the onTriggerStay registry.
+                // Outside Play there is no PhysicsManager (same as in the raycast):
+                // silent no-op, not a Lua error.
                 "isTrigger", sol::property(
                     [](const LuaBoxCollider& c) {
                         GameObject* go = deref(c.e);
@@ -856,7 +856,7 @@ namespace DonTopo::ScriptBindings
                     if (!ensureFinite(mgr, "SphereCollider.SetCenter", ctr)) return;
                     go->getSphereCollider()->setCenter(ctr);
                 },
-                // Material de física del collider; ver nota en BoxCollider.
+                // Physics material of the collider; see the note in BoxCollider.
                 "staticFriction", sol::property(
                     [](const LuaSphereCollider& c) {
                         GameObject* go = deref(c.e);
@@ -893,7 +893,7 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "SphereCollider.bounciness", v)) return;
                         go->getSphereCollider()->setBounciness(v);
                     }),
-                // Capa de colisión; ver nota en BoxCollider.
+                // Collision layer; see the note in BoxCollider.
                 "layer", sol::property(
                     [](const LuaSphereCollider& c) {
                         GameObject* go = deref(c.e);
@@ -906,7 +906,7 @@ namespace DonTopo::ScriptBindings
                         requireLayer("SphereCollider.layer", v);
                         go->getSphereCollider()->setLayer(v);
                     }),
-                // Is Trigger; ver nota en BoxCollider.
+                // Is Trigger; see the note in BoxCollider.
                 "isTrigger", sol::property(
                     [](const LuaSphereCollider& c) {
                         GameObject* go = deref(c.e);
@@ -956,7 +956,7 @@ namespace DonTopo::ScriptBindings
                     if (!ensureFinite(mgr, "CapsuleCollider.SetCenter", ctr)) return;
                     go->getCapsuleCollider()->setCenter(ctr);
                 },
-                // Material de física del collider; ver nota en BoxCollider.
+                // Physics material of the collider; see the note in BoxCollider.
                 "staticFriction", sol::property(
                     [](const LuaCapsuleCollider& c) {
                         GameObject* go = deref(c.e);
@@ -993,7 +993,7 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "CapsuleCollider.bounciness", v)) return;
                         go->getCapsuleCollider()->setBounciness(v);
                     }),
-                // Capa de colisión; ver nota en BoxCollider.
+                // Collision layer; see the note in BoxCollider.
                 "layer", sol::property(
                     [](const LuaCapsuleCollider& c) {
                         GameObject* go = deref(c.e);
@@ -1006,7 +1006,7 @@ namespace DonTopo::ScriptBindings
                         requireLayer("CapsuleCollider.layer", v);
                         go->getCapsuleCollider()->setLayer(v);
                     }),
-                // Is Trigger; ver nota en BoxCollider.
+                // Is Trigger; see the note in BoxCollider.
                 "isTrigger", sol::property(
                     [](const LuaCapsuleCollider& c) {
                         GameObject* go = deref(c.e);
@@ -1034,7 +1034,7 @@ namespace DonTopo::ScriptBindings
                     if (!ensureFinite(mgr, "PlaneCollider.SetCenter", ctr)) return;
                     go->getPlaneCollider()->setCenter(ctr);
                 },
-                // Material de física del collider; ver nota en BoxCollider.
+                // Physics material of the collider; see the note in BoxCollider.
                 "staticFriction", sol::property(
                     [](const LuaPlaneCollider& c) {
                         GameObject* go = deref(c.e);
@@ -1071,7 +1071,7 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "PlaneCollider.bounciness", v)) return;
                         go->getPlaneCollider()->setBounciness(v);
                     }),
-                // Capa de colisión; ver nota en BoxCollider.
+                // Collision layer; see the note in BoxCollider.
                 "layer", sol::property(
                     [](const LuaPlaneCollider& c) {
                         GameObject* go = deref(c.e);
@@ -1084,7 +1084,7 @@ namespace DonTopo::ScriptBindings
                         requireLayer("PlaneCollider.layer", v);
                         go->getPlaneCollider()->setLayer(v);
                     }),
-                // Is Trigger; ver nota en BoxCollider.
+                // Is Trigger; see the note in BoxCollider.
                 "isTrigger", sol::property(
                     [](const LuaPlaneCollider& c) {
                         GameObject* go = deref(c.e);
@@ -1111,11 +1111,11 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     go->getAudioClip()->stop();
                 },
-                // Se SOLAPA con lo que ya suene, al revés que Play, que corta la
-                // voz anterior del mismo clip. Es lo que hace que dos pasos o
-                // dos disparos seguidos no se pisen. La voz que dispara queda
-                // fuera de alcance: Stop, SetVolume e IsPlaying no la ven, y no
-                // sigue al objeto. Para clips cortos, nunca para loops.
+                // It OVERLAPS with whatever is already playing, unlike Play, which cuts the
+                // previous voice of the same clip. This is what keeps two footsteps or
+                // two consecutive shots from stepping on each other. The voice it fires is out
+                // of reach: Stop, SetVolume and IsPlaying do not see it, and it does not
+                // follow the object. For short clips, never for loops.
                 "PlayOneShot", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1153,10 +1153,10 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getPitch();
                 },
-                // Ojo: setIs3D RECARGA el sonido (unloadSound + loadSound
-                // porque is3D va horneado en el FMOD_MODE) y corta lo que
-                // estuviera sonando. Es configuración, no algo de llamar por
-                // frame — al revés que SetVolume/SetPitch.
+                // Careful: setIs3D RELOADS the sound (unloadSound + loadSound
+                // because is3D is baked into the FMOD_MODE) and cuts whatever was
+                // playing. It is configuration, not something to call per
+                // frame, unlike SetVolume/SetPitch.
                 "SetIs3D", [](const LuaAudioClip& c, bool b) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1167,11 +1167,11 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getIs3D();
                 },
-                // Distancias de atenuación 3D. Estaban en el componente y en el
-                // Inspector desde el principio, pero no en Lua: un script no
-                // podía, por ejemplo, ensanchar el radio de un motor al acelerar.
-                // Como SetVolume/SetPitch, no recargan el sonido. El clamp y el
-                // invariante min <= max los impone el componente.
+                // 3D attenuation distances. They were in the component and in the
+                // Inspector from the start, but not in Lua: a script could not,
+                // for example, widen an engine's radius when accelerating.
+                // Like SetVolume/SetPitch, they do not reload the sound. The clamp and the
+                // min <= max invariant are enforced by the component.
                 "SetMinDistance", [&mgr](const LuaAudioClip& c, float d) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1204,10 +1204,10 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getPlayOnAwake();
                 },
-                // Bus por NOMBRE ("master"/"music"/"sfx"), no por índice: es lo
-                // mismo que se guarda en la escena, y un número mágico en un
-                // script sería ilegible. Un nombre desconocido avisa y no
-                // cambia nada, en vez de caer a un bus arbitrario.
+                // Bus by NAME ("master"/"music"/"sfx"), not by index: it is the
+                // same thing that is stored in the scene, and a magic number in a
+                // script would be unreadable. An unknown name warns and does not
+                // change anything, instead of falling back to an arbitrary bus.
                 "SetBus", [&mgr](const LuaAudioClip& c, const std::string& name) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1225,9 +1225,9 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return std::string(audioBusToStr(go->getAudioClip()->getBus()));
                 },
-                // Modo de carga por nombre ("sample"/"stream"), como el bus.
-                // OJO: recarga el sonido y corta lo que suene. Es configuracion
-                // de arranque, no algo de llamar por frame.
+                // Load mode by name ("sample"/"stream"), like the bus.
+                // CAREFUL: it reloads the sound and cuts whatever is playing. It is startup
+                // configuration, not something to call per frame.
                 "SetLoadMode", [&mgr](const LuaAudioClip& c, const std::string& name) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1245,8 +1245,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return std::string(audioLoadModeToStr(go->getAudioClip()->getLoadMode()));
                 },
-                // Curva de atenuacion por nombre. Como SetLoadMode, RECARGA el
-                // sonido: es configuracion, no algo de tocar por frame.
+                // Attenuation curve by name. Like SetLoadMode, it RELOADS the
+                // sound: it is configuration, not something to touch per frame.
                 "SetRolloff", [&mgr](const LuaAudioClip& c, const std::string& name) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1264,9 +1264,9 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return std::string(audioRolloffToStr(go->getAudioClip()->getRolloff()));
                 },
-                // Las tres de la voz: no recargan, pero se leen al arrancar la
-                // reproduccion, asi que cambiarlas con algo sonando no se nota
-                // hasta el siguiente Play.
+                // The three of the voice: they do not reload, but they are read when playback
+                // starts, so changing them while something is playing has no effect
+                // until the next Play.
                 "SetSpread", [&mgr](const LuaAudioClip& c, float d) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1300,8 +1300,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getDopplerLevel();
                 },
-                // Mute: silencio sin perder el volumen. A diferencia de Pause,
-                // esto SI se serializa — un objeto puede nacer mudo.
+                // Mute: silence without losing the volume. Unlike Pause,
+                // this IS serialized, so an object can be born muted.
                 "SetMute", [](const LuaAudioClip& c, bool m) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1312,9 +1312,9 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getMute();
                 },
-                // Posicion de reproduccion en segundos. GetTime devuelve -1 si
-                // no hay nada sonando: 0 seria el principio del clip, que es
-                // una respuesta distinta.
+                // Playback position in seconds. GetTime returns -1 if
+                // nothing is playing: 0 would be the start of the clip, which is
+                // a different answer.
                 "GetTime", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1331,10 +1331,10 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->getPath();
                 },
-                // Estado de la VOZ, no del componente. IsPlaying sigue el
-                // criterio de FMOD y de Unity: una voz pausada cuenta como
-                // sonando, y IsPaused es lo que las separa. Sin esto un script
-                // no tenía forma de esperar a que un sonido terminara.
+                // State of the VOICE, not of the component. IsPlaying follows the
+                // criterion of FMOD and Unity: a paused voice counts as
+                // playing, and IsPaused is what tells them apart. Without this a script
+                // had no way to wait for a sound to finish.
                 "IsPlaying", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1345,7 +1345,7 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
                     return go->getAudioClip()->isPaused();
                 },
-                // Pause conserva la posición de reproducción; Stop la tira.
+                // Pause keeps the playback position; Stop discards it.
                 "Pause", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("The GameObject no longer has an AudioClip");
@@ -1357,13 +1357,13 @@ namespace DonTopo::ScriptBindings
                     go->getAudioClip()->resume();
                 });
 
-            // Rigidbody: dinámica estilo Unity. Propiedades (mass/useGravity/
+            // Rigidbody: Unity-style dynamics. Properties (mass/useGravity/
             // isKinematic/drag/angularDrag/constraints/velocity/angularVelocity)
-            // + métodos AddForce/AddTorque/AddImpulse. Se obtiene con
+            // + methods AddForce/AddTorque/AddImpulse. Obtained with
             // GetComponent("Rigidbody").
             //
-            // Los 6 bits válidos del bitmask de constraints (Rigidbody.h). Todo
-            // lo demás que llegue de Lua se recorta contra esta máscara.
+            // The 6 valid bits of the constraints bitmask (Rigidbody.h). Anything
+            // else that arrives from Lua is cut against this mask.
             constexpr uint32_t kRigidbodyConstraintsMask =
                 RB_FreezePositionX | RB_FreezePositionY | RB_FreezePositionZ |
                 RB_FreezeRotationX | RB_FreezeRotationY | RB_FreezeRotationZ;
@@ -1377,7 +1377,7 @@ namespace DonTopo::ScriptBindings
                 "mass", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getMass(); },
                     [rbOf, &mgr](const LuaRigidbody& c, float v) {
-                        Rigidbody* rb = rbOf(c); // deref + hasRigidbody ANTES del guard (hallazgo 4)
+                        Rigidbody* rb = rbOf(c); // deref + hasRigidbody BEFORE the guard (finding 4)
                         if (!ensureFinite(mgr, "Rigidbody.mass", v)) return;
                         rb->setMass(v);
                     }),
@@ -1401,19 +1401,19 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "Rigidbody.angularDrag", v)) return;
                         rb->setAngularDrag(v);
                     }),
-                // constraints es un BITMASK (tabla RigidbodyConstraints), no un
-                // float: nada de ensureFinite aquí. Los bits que no están
-                // definidos en Rigidbody.h se enmascaran en silencio en vez de
-                // lanzar — un OR de más no debe tumbar el script.
+                // constraints is a BITMASK (RigidbodyConstraints table), not a
+                // float: no ensureFinite here. Bits that are not
+                // defined in Rigidbody.h are masked out silently instead of
+                // throwing: an extra OR must not bring the script down.
                 "constraints", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getConstraints(); },
                     [rbOf](const LuaRigidbody& c, uint32_t v) {
                         Rigidbody* rb = rbOf(c);
                         rb->setConstraints(v & kRigidbodyConstraintsMask);
                     }),
-                // ccd/interpolate: dos booleanos independientes entre sí y
-                // apagados por defecto. Sin ensureFinite (no son floats) y sin
-                // enmascarar (no son bitmask): un bool de Lua es siempre válido.
+                // ccd/interpolate: two booleans independent of each other and
+                // off by default. No ensureFinite (they are not floats) and no
+                // masking (they are not a bitmask): a Lua bool is always valid.
                 "ccd", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getCcd(); },
                     [rbOf](const LuaRigidbody& c, bool v) { rbOf(c)->setCcd(v); }),
@@ -1434,11 +1434,11 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "Rigidbody.angularVelocity", v)) return;
                         rb->setAngularVelocity(v);
                     }),
-                // El 4º argumento (modo) es OPCIONAL: sin él se aplica
-                // ForceMode.Force, o sea lo mismo que hacían las llamadas de
-                // tres argumentos de siempre. Un modo fuera de rango se avisa
-                // por el Log y NO aplica fuerza, igual que un NaN: un índice
-                // mal calculado en un script no debe tumbar la partida.
+                // The 4th argument (mode) is OPTIONAL: without it ForceMode.Force
+                // is applied, that is, the same as the three-argument calls
+                // always did. An out-of-range mode is reported through the Log and applies
+                // NO force, like a NaN: a badly computed index in a script
+                // must not bring the game down.
                 "AddForce",   [rbOf, &mgr](const LuaRigidbody& c, float x, float y, float z, sol::optional<int> mode) {
                     Rigidbody* rb = rbOf(c);
                     glm::vec3 f(x, y, z);
@@ -1460,8 +1460,8 @@ namespace DonTopo::ScriptBindings
                     rb->addImpulse(f);
                 });
 
-            // Constantes del bitmask de Rigidbody.constraints. Se combinan con
-            // el OR bit a bit de Lua 5.3+ (rb.constraints = RigidbodyConstraints.
+            // Constants of the Rigidbody.constraints bitmask. They are combined with
+            // the bitwise OR of Lua 5.3+ (rb.constraints = RigidbodyConstraints.
             // FreezePositionX | RigidbodyConstraints.FreezeRotationY).
             sol::table rbc = lua.create_named_table("RigidbodyConstraints");
             rbc["None"]            = RB_None;
@@ -1472,25 +1472,25 @@ namespace DonTopo::ScriptBindings
             rbc["FreezeRotationY"] = RB_FreezeRotationY;
             rbc["FreezeRotationZ"] = RB_FreezeRotationZ;
 
-            // Modos de AddForce/AddTorque (4º argumento opcional). Los valores
-            // son los índices del enum ForceMode de Rigidbody.h, en ese orden.
+            // AddForce/AddTorque modes (optional 4th argument). The values
+            // are the indices of the ForceMode enum in Rigidbody.h, in that order.
             sol::table fm = lua.create_named_table("ForceMode");
             fm["Force"]          = static_cast<int>(ForceMode::Force);
             fm["Acceleration"]   = static_cast<int>(ForceMode::Acceleration);
             fm["Impulse"]        = static_cast<int>(ForceMode::Impulse);
             fm["VelocityChange"] = static_cast<int>(ForceMode::VelocityChange);
 
-            // Animator: máquina de estados de animación. Se obtiene con
-            // GetComponent("Animator"). Sin propiedades: los parámetros se
-            // declaran en el grafo y se consultan por nombre, no son campos.
+            // Animator: animation state machine. Obtained with
+            // GetComponent("Animator"). No properties: the parameters are
+            // declared in the graph and queried by name, they are not fields.
             auto animOf = [](const LuaAnimator& c) -> AnimatorComponent* {
                 GameObject* go = deref(c.e);
                 if (!go->hasAnimator()) throw std::runtime_error("The GameObject no longer has an Animator");
                 return go->getAnimator().get();
             };
-            // Capa opcional de las llamadas por capa: sin argumento, la base.
-            // Fuera de rango devuelve -1 y la llamada no hace nada (en vez de
-            // caer en otra capa, que es lo que haría el acotado del componente).
+            // Optional layer of the per-layer calls: with no argument, the base one.
+            // Out of range returns -1 and the call does nothing (instead of
+            // falling into another layer, which is what the component's clamping would do).
             auto capaDe = [](AnimatorComponent* a, sol::optional<int> capa) {
                 const int li = capa.value_or(0);
                 return (li >= 0 && li < a->layerCount()) ? li : -1;
@@ -1501,9 +1501,9 @@ namespace DonTopo::ScriptBindings
                 "GetBool",    [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getBool(n); },
                 "SetTrigger", [animOf](const LuaAnimator& c, const std::string& n) { animOf(c)->setTrigger(n); },
                 "ResetTrigger", [animOf](const LuaAnimator& c, const std::string& n) { animOf(c)->resetTrigger(n); },
-                // Control directo del grafo. Un estado que no existe devuelve
-                // false y deja aviso en el log, sin lanzar: igual que los
-                // parámetros, un nombre mal escrito no tumba el script.
+                // Direct control of the graph. A state that does not exist returns
+                // false and leaves a warning in the log, without throwing: like the
+                // parameters, a misspelled name does not bring the script down.
                 "Play", [animOf, capaDe, &mgr](const LuaAnimator& c, const std::string& estado, sol::optional<int> capa) {
                     AnimatorComponent* anim = animOf(c);
                     const int li = capaDe(anim, capa);
@@ -1527,8 +1527,8 @@ namespace DonTopo::ScriptBindings
                     const int li = capaDe(anim, capa);
                     return li < 0 ? 0.0f : anim->normalizedTime(li);
                 },
-                // Capas: el peso de las superiores se conduce desde aquí (la base
-                // vale siempre 1); modo y máscara son autoría del grafo.
+                // Layers: the weight of the upper ones is driven from here (the base
+                // is always 1); mode and mask are graph authoring.
                 "SetLayerWeight", [animOf, &mgr](const LuaAnimator& c, int capa, float peso) {
                     AnimatorComponent* anim = animOf(c);
                     if (!ensureFinite(mgr, "Animator.SetLayerWeight", peso)) return;
@@ -1539,8 +1539,8 @@ namespace DonTopo::ScriptBindings
                     return (capa >= 0 && capa < anim->layerCount()) ? anim->layerWeight(capa) : 0.0f;
                 },
                 "GetLayerCount", [animOf](const LuaAnimator& c) { return animOf(c)->layerCount(); },
-                // IK: el peso y los objetivos se conducen desde el juego; el
-                // hueso, el tipo y el eje son autoría del grafo (panel Animator).
+                // IK: the weight and the targets are driven from the game; the
+                // bone, the type and the axis are graph authoring (Animator panel).
                 "SetIkWeight", [animOf, &mgr](const LuaAnimator& c, const std::string& n, float peso) {
                     AnimatorComponent* anim = animOf(c);
                     if (!ensureFinite(mgr, "Animator.SetIkWeight", peso)) return;
@@ -1549,8 +1549,8 @@ namespace DonTopo::ScriptBindings
                 "GetIkWeight", [animOf](const LuaAnimator& c, const std::string& n) {
                     return animOf(c)->ikWeight(n);
                 },
-                // La entidad puede ser nil: así se quita el objetivo y la
-                // restricción deja de aplicarse.
+                // The entity can be nil: that removes the target and the
+                // constraint stops being applied.
                 "SetIkTarget", [animOf](const LuaAnimator& c, const std::string& n, sol::optional<LuaEntity> e) {
                     animOf(c)->setIkTarget(n, (e && e->go) ? e->go->id : 0);
                 },
@@ -1558,18 +1558,18 @@ namespace DonTopo::ScriptBindings
                     animOf(c)->setIkPole(n, (e && e->go) ? e->go->id : 0);
                 },
                 "GetIkCount", [animOf](const LuaAnimator& c) { return (int)animOf(c)->ikConstraints().size(); },
-                // Velocidad global del Animator (runtime, no se guarda). La
-                // velocidad por estado es autoría del grafo: se conduce con
-                // SetFloat sobre su parámetro multiplicador.
+                // Global speed of the Animator (runtime, not saved). The
+                // per-state speed is graph authoring: it is driven with
+                // SetFloat on its multiplier parameter.
                 "SetSpeed", [animOf, &mgr](const LuaAnimator& c, float v) {
                     AnimatorComponent* anim = animOf(c);
                     if (!ensureFinite(mgr, "Animator.SetSpeed", v)) return;
                     anim->setSpeed(v);
                 },
                 "GetSpeed", [animOf](const LuaAnimator& c) { return animOf(c)->speed(); },
-                // Numéricos: mismo contrato que los bools — un nombre no
-                // declarado (o de otro tipo) se ignora en el setter y devuelve 0
-                // en el getter, nunca lanza.
+                // Numeric: same contract as the bools. An undeclared name
+                // (or one of another type) is ignored in the setter and returns 0
+                // in the getter, it never throws.
                 "SetInt",     [animOf](const LuaAnimator& c, const std::string& n, int v) { animOf(c)->setInt(n, v); },
                 "GetInt",     [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getInt(n); },
                 "SetFloat",   [animOf, &mgr](const LuaAnimator& c, const std::string& n, float v) {
@@ -1583,9 +1583,9 @@ namespace DonTopo::ScriptBindings
                     const int li = capaDe(anim, capa);
                     return li < 0 ? std::string() : anim->currentStateName(li);
                 },
-                // Cross-fade en curso. Son de LECTURA: la duración de la mezcla
-                // es autoría del grafo (se edita en el panel Animator), igual
-                // que las condiciones de una transición.
+                // Cross-fade in progress. They are READ-ONLY: the blend duration
+                // is graph authoring (edited in the Animator panel), like
+                // the conditions of a transition.
                 "IsBlending",     [animOf, capaDe](const LuaAnimator& c, sol::optional<int> capa) {
                     AnimatorComponent* anim = animOf(c);
                     const int li = capaDe(anim, capa);
@@ -1593,25 +1593,25 @@ namespace DonTopo::ScriptBindings
                 },
                 "GetBlendWeight", [animOf](const LuaAnimator& c) { return animOf(c)->blendWeight(); },
                 "GetPreviousState", [animOf](const LuaAnimator& c) { return animOf(c)->previousStateName(); },
-                // El peso que acaba yendo a la GPU: el del cross-fade si hay
-                // uno en vuelo, si no el del blend por parámetro del estado, y
-                // 1 si no hay mezcla ninguna. El blend por parámetro se CONDUCE
-                // con SetFloat sobre su parámetro, así que aquí solo se lee.
+                // The weight that ends up going to the GPU: the cross-fade's if there is
+                // one in flight, otherwise the state's per-parameter blend, and
+                // 1 if there is no blend at all. The per-parameter blend is DRIVEN
+                // with SetFloat on its parameter, so here it is only read.
                 "GetPoseWeight", [animOf](const LuaAnimator& c) { return animOf(c)->poseWeight(); });
         }
 
-        // ── UI: Canvas, Button, Text y ProgressBar ──────────────────────────
+        // ── UI: Canvas, Button, Text and ProgressBar ──────────────────────────
         //
-        // Los cuatro son SOLO DATOS de la escena y quien los pinta es
-        // syncUiWidgets, que cada frame vuelca el componente sobre el nodo vivo
-        // del canvas. Por eso los setters escriben SIEMPRE en el componente y
-        // nunca en el nodo: una escritura al nodo la borraría el siguiente
-        // volcado. Tampoco se ensucia nada a mano — el sync compara con su
-        // propio snapshot y ya sabe qué ha cambiado.
+        // All four are scene DATA ONLY and whoever draws them is
+        // syncUiWidgets, which every frame dumps the component onto the live canvas
+        // node. That is why the setters ALWAYS write to the component and
+        // never to the node: a write to the node would be erased by the next
+        // dump. Nothing is marked dirty by hand either, since the sync compares with its
+        // own snapshot and already knows what has changed.
         //
-        // Resolución por acceso (deref + has*) igual que el resto de
-        // componentes: un wrapper guardado en una variable de Lua no puede
-        // quedarse con un puntero que otro frame haya liberado.
+        // Per-access resolution (deref + has*) like the rest of the
+        // components: a wrapper stored in a Lua variable cannot
+        // hold a pointer that another frame has freed.
         CanvasComponent* canvasOf(const LuaCanvas& c)
         {
             GameObject* go = deref(c.e);
@@ -1697,14 +1697,14 @@ namespace DonTopo::ScriptBindings
             return go->getScrollView().get();
         }
 
-        // Fábricas de accesores. Son plantillas y no una lista de lambdas a mano
-        // porque los cuatro componentes suman más de cien campos y escribir el
-        // par get/set de cada uno multiplicaría por diez las ocasiones de
-        // teclear el campo equivocado en un lado del par.
+        // Accessor factories. They are templates and not a hand-written list of lambdas
+        // because the four components add up to more than a hundred fields and writing the
+        // get/set pair of each one would multiply tenfold the chances of
+        // typing the wrong field on one side of the pair.
         //
-        // El resolutor entra como PUNTERO A FUNCIÓN (por eso los cuatro de
-        // arriba no capturan nada): así el accesor se puede copiar dentro de las
-        // lambdas sin arrastrar estado.
+        // The resolver comes in as a FUNCTION POINTER (that is why the four above
+        // capture nothing): this way the accessor can be copied inside the
+        // lambdas without dragging state along.
         template <class W, class Comp, class T>
         auto uiProp(Comp* (*res)(const W&), T Comp::*campo)
         {
@@ -1713,9 +1713,9 @@ namespace DonTopo::ScriptBindings
                 [res, campo](const W& w, T v) { res(w)->*campo = v; });
         }
 
-        // Igual, pero pasando por el filtro de NaN/Inf: un cálculo roto en un
-        // script no puede dejar un campo de la UI con un valor que reviente el
-        // layout (mismo contrato que Transform.SetPosition).
+        // Same, but going through the NaN/Inf filter: a broken computation in a
+        // script cannot leave a UI field with a value that blows up the
+        // layout (same contract as Transform.SetPosition).
         template <class W, class Comp>
         auto uiFloatProp(Comp* (*res)(const W&), float Comp::*campo,
                          ScriptManager* mgr, const char* nombre)
@@ -1729,10 +1729,10 @@ namespace DonTopo::ScriptBindings
                 });
         }
 
-        // Los enums viajan como ENTEROS (las tablas UiTextAlign, UiButtonState y
-        // compañía que registra registerUi). Un valor fuera de rango se ignora:
-        // convertirlo a enum sin más metería un valor imposible en el componente
-        // y el switch del sync caería en el default sin que nadie se enterase.
+        // Enums travel as INTEGERS (the UiTextAlign, UiButtonState and
+        // similar tables that registerUi registers). An out-of-range value is ignored:
+        // converting it to an enum as is would put an impossible value in the component
+        // and the sync's switch would fall into the default without anyone noticing.
         template <class W, class Comp, class E>
         auto uiEnumProp(Comp* (*res)(const W&), E Comp::*campo, int maximo)
         {
@@ -1745,10 +1745,10 @@ namespace DonTopo::ScriptBindings
                 });
         }
 
-        // Vectores como MÉTODOS y no como propiedades: en Lua no hay vec2 ni
-        // vec4 (solo Vec3), y devolver una tabla nueva por lectura haría basura
-        // en cada frame de cada script. Devuelven varios valores, que es la
-        // forma natural en Lua: local x, y = b:GetPosition().
+        // Vectors as METHODS and not as properties: in Lua there is no vec2 or
+        // vec4 (only Vec3), and returning a new table per read would create garbage
+        // on every frame of every script. They return multiple values, which is the
+        // natural form in Lua: local x, y = b:GetPosition().
         template <class W, class Comp>
         auto uiVec2Get(Comp* (*res)(const W&), glm::vec2 Comp::*campo)
         {
@@ -1787,14 +1787,14 @@ namespace DonTopo::ScriptBindings
             };
         }
 
-        // Las funciones Lua de los callbacks de UI viven en ESTA tabla del
-        // propio lua_State, referenciadas por una clave entera, y lo que se
-        // guarda en el componente es un std::function que va a buscarlas.
+        // The Lua functions of the UI callbacks live in THIS table of the
+        // lua_State itself, referenced by an integer key, and what is
+        // stored in the component is a std::function that goes to fetch them.
         //
-        // Guardar el sol::protected_function dentro del componente sería meter
-        // una referencia al registro de Lua en un objeto que SOBREVIVE al
-        // lua_State: su destructor haría luaL_unref sobre un estado ya cerrado.
-        // Así el componente no guarda nada de Lua.
+        // Storing the sol::protected_function inside the component would put
+        // a reference to the Lua registry in an object that OUTLIVES the
+        // lua_State: its destructor would do luaL_unref on an already closed state.
+        // This way the component stores nothing from Lua.
         constexpr const char* kUiCallbackTable = "__uiCallbacks";
         long long g_nextUiCallbackKey = 0;
 
@@ -1803,7 +1803,7 @@ namespace DonTopo::ScriptBindings
         {
             if (!fn.valid() || fn.get_type() != sol::type::function)
             {
-                destino = nullptr;   // pasar nil (o cualquier otra cosa) lo quita
+                destino = nullptr;   // passing nil (or anything else) removes it
                 return;
             }
 
@@ -1812,10 +1812,10 @@ namespace DonTopo::ScriptBindings
             const long long clave = ++g_nextUiCallbackKey;
             tabla[clave] = fn;
 
-            // La época es lo que impide llamar a un lua_State muerto: expira al
-            // destruirse el ScriptManager y al recargar en caliente un script.
-            // Se comprueba ANTES de tocar mgr, que para entonces también puede
-            // haber muerto.
+            // The epoch is what prevents calling a dead lua_State: it expires when
+            // the ScriptManager is destroyed and on hot-reloading a script.
+            // It is checked BEFORE touching mgr, which by then may also
+            // be dead.
             std::weak_ptr<char> epoca = mgr.callbackEpoch();
             ScriptManager* m = &mgr;
             const std::string etiqueta = nombre;
@@ -1827,9 +1827,9 @@ namespace DonTopo::ScriptBindings
                 sol::object f = tabla[clave];
                 if (f.get_type() != sol::type::function) return;
 
-                // protected_function: un error dentro del callback se registra
-                // y se sigue. Un botón con un script roto no puede tumbar el
-                // frame ni comerse el resto de la UI.
+                // protected_function: an error inside the callback is logged
+                // and execution continues. A button with a broken script cannot bring down the
+                // frame nor swallow the rest of the UI.
                 sol::protected_function pf = f;
                 sol::protected_function_result r = pf();
                 if (!r.valid())
@@ -1840,18 +1840,18 @@ namespace DonTopo::ScriptBindings
             };
         }
 
-        // Igual que setUiCallback pero para los handlers que traen un VALOR (el
-        // nuevo del slider, del checkbox, del toggle, de la barra). Es una
-        // plantilla aparte y no una generalizacion de aquella porque el
-        // OnClick/OnDoubleClick del Button no lleva argumento y su firma no
-        // tiene por que cambiar.
+        // Same as setUiCallback but for the handlers that carry a VALUE (the
+        // new one of the slider, checkbox, toggle, bar). It is a separate
+        // template and not a generalization of that one because the
+        // Button's OnClick/OnDoubleClick takes no argument and its signature has
+        // no reason to change.
         template <class... Args>
         void setUiValueCallback(ScriptManager& mgr, std::function<void(Args...)>& destino,
                                 const char* nombre, const sol::object& fn)
         {
             if (!fn.valid() || fn.get_type() != sol::type::function)
             {
-                destino = nullptr;   // pasar nil (o cualquier otra cosa) lo quita
+                destino = nullptr;   // passing nil (or anything else) removes it
                 return;
             }
 
@@ -1860,9 +1860,9 @@ namespace DonTopo::ScriptBindings
             const long long clave = ++g_nextUiCallbackKey;
             tabla[clave] = fn;
 
-            // Misma epoca que setUiCallback: es lo que impide llamar a un
-            // lua_State muerto tras destruir el ScriptManager o recargar en
-            // caliente. Se comprueba ANTES de tocar mgr.
+            // Same epoch as setUiCallback: it is what prevents calling a dead
+            // lua_State after destroying the ScriptManager or hot-reloading.
+            // It is checked BEFORE touching mgr.
             std::weak_ptr<char> epoca = mgr.callbackEpoch();
             ScriptManager* m = &mgr;
             const std::string etiqueta = nombre;
@@ -1890,9 +1890,9 @@ namespace DonTopo::ScriptBindings
 
             lua[kUiCallbackTable] = lua.create_table();
 
-            // Enums como tablas de enteros: son los MISMOS valores que el C++
-            // (el orden de los enum class), así que UiTextAlign.Center vale lo
-            // que UiTextAlign::Center.
+            // Enums as tables of integers: they are the SAME values as in C++
+            // (the order of the enum class), so UiTextAlign.Center is worth
+            // what UiTextAlign::Center is.
             lua["UiScaleMode"] = lua.create_table_with(
                 "ConstantPixelSize", 0, "ScaleWithScreenSize", 1, "ConstantPhysicalSize", 2);
             lua["UiScreenMatch"] = lua.create_table_with(
@@ -1946,8 +1946,8 @@ namespace DonTopo::ScriptBindings
                 "depthTest",  uiProp(canvasOf, &CanvasComponent::depthTest),
                 "GetReferenceResolution", uiVec2Get(canvasOf, &CanvasComponent::referenceResolution),
                 "SetReferenceResolution", uiVec2Set(canvasOf, &CanvasComponent::referenceResolution, &mgr, "Canvas.SetReferenceResolution"),
-                // El safe area son cuatro insets sueltos (no un vec4): se pasan
-                // en el mismo orden que los declara UiSafeArea.
+                // The safe area is four separate insets (not a vec4): they are passed
+                // in the same order in which UiSafeArea declares them.
                 "GetSafeArea", [](const LuaCanvas& c) {
                     const UiSafeArea& s = canvasOf(c)->safeArea;
                     return std::make_tuple(s.left, s.top, s.right, s.bottom);
@@ -2003,8 +2003,8 @@ namespace DonTopo::ScriptBindings
                 "SetSelectedColor", uiVec4Set(buttonOf, &ButtonComponent::selectedColor, &mgr, "Button.SetSelectedColor"),
                 "GetTextColor",     uiVec4Get(buttonOf, &ButtonComponent::textColor),
                 "SetTextColor",     uiVec4Set(buttonOf, &ButtonComponent::textColor, &mgr, "Button.SetTextColor"),
-                // Estado: lo escribe el canvas en el nodo vivo y el sync lo
-                // publica en el componente. Solo lectura, como en C++.
+                // State: the canvas writes it on the live node and the sync
+                // publishes it to the component. Read-only, as in C++.
                 "GetState", [](const LuaButton& b) {
                     return static_cast<int>(buttonOf(b)->callbacks.ptr->state);
                 },
@@ -2073,15 +2073,15 @@ namespace DonTopo::ScriptBindings
                 "SetColor",     uiVec4Set(barOf, &ProgressBarComponent::color, &mgr, "ProgressBar.SetColor"),
                 "GetFillColor", uiVec4Get(barOf, &ProgressBarComponent::fillColor),
                 "SetFillColor", uiVec4Set(barOf, &ProgressBarComponent::fillColor, &mgr, "ProgressBar.SetFillColor"),
-                // Lo mismo que normalizedValue() en C++: el 0..1 ya acotado que
-                // usa el sync para el rect del relleno.
+                // Same as normalizedValue() in C++: the already clamped 0..1 that
+                // the sync uses for the fill rect.
                 "GetNormalizedValue", [](const LuaProgressBar& b) {
                     return barOf(b)->normalizedValue();
                 });
 
             // ── Layout ──────────────────────────────────────────────────────
-            // El único de los cuatro que no dibuja: coloca. Por eso no tiene ni
-            // color ni sprite, y sí el modo, el padding y la celda.
+            // The only one of the four that does not draw: it positions. That is why it has neither
+            // color nor sprite, but does have the mode, the padding and the cell.
             lua.new_usertype<LuaLayout>("Layout",
                 sol::no_constructor,
                 "visible",       uiProp(layoutOf, &LayoutComponent::visible),
@@ -2091,8 +2091,8 @@ namespace DonTopo::ScriptBindings
                 "paddingRight",  uiFloatProp(layoutOf, &LayoutComponent::paddingRight, &mgr, "Layout.paddingRight"),
                 "paddingTop",    uiFloatProp(layoutOf, &LayoutComponent::paddingTop, &mgr, "Layout.paddingTop"),
                 "paddingBottom", uiFloatProp(layoutOf, &LayoutComponent::paddingBottom, &mgr, "Layout.paddingBottom"),
-                // columns es entero: sin el guardarraíl de NaN de uiFloatProp y
-                // sin decimales que redondear a espaldas del script.
+                // columns is an integer: without uiFloatProp's NaN guard rail and
+                // without decimals to round behind the script's back.
                 "columns",       uiProp(layoutOf, &LayoutComponent::columns),
                 "fitWidth",      uiProp(layoutOf, &LayoutComponent::fitWidth),
                 "fitHeight",     uiProp(layoutOf, &LayoutComponent::fitHeight),
@@ -2114,8 +2114,8 @@ namespace DonTopo::ScriptBindings
                 "SetCellSize",  uiVec2Set(layoutOf, &LayoutComponent::cellSize, &mgr, "Layout.SetCellSize"));
 
             // ── Panel ───────────────────────────────────────────────────────
-            // El rectángulo de fondo. Sin campos propios más allá del rect, el
-            // color y el sprite: el Panel del núcleo tampoco los tiene.
+            // The background rectangle. No fields of its own beyond the rect, the
+            // color and the sprite: the core's Panel does not have them either.
             lua.new_usertype<LuaPanel>("Panel",
                 sol::no_constructor,
                 "visible",       uiProp(panelOf, &PanelComponent::visible),
@@ -2136,9 +2136,9 @@ namespace DonTopo::ScriptBindings
                 "SetColor",     uiVec4Set(panelOf, &PanelComponent::color, &mgr, "Panel.SetColor"));
 
             // ── Image ───────────────────────────────────────────────────────
-            // Con los NUEVE campos propios del widget del núcleo: el modo, los
-            // cuatro bordes del 9-slice con su fillCenter, el tope de tiles y el
-            // bloque de Filled.
+            // With the NINE fields of the core widget's own: the mode, the
+            // four 9-slice borders with their fillCenter, the tile cap and the
+            // Filled block.
             lua.new_usertype<LuaImage>("Image",
                 sol::no_constructor,
                 "visible",       uiProp(imageOf, &ImageComponent::visible),
@@ -2151,8 +2151,8 @@ namespace DonTopo::ScriptBindings
                 "borderTop",     uiFloatProp(imageOf, &ImageComponent::borderTop, &mgr, "Image.borderTop"),
                 "borderBottom",  uiFloatProp(imageOf, &ImageComponent::borderBottom, &mgr, "Image.borderBottom"),
                 "fillCenter",    uiProp(imageOf, &ImageComponent::fillCenter),
-                // maxTiles es entero: sin el guardarraíl de NaN de uiFloatProp y
-                // sin decimales que redondear a espaldas del script.
+                // maxTiles is an integer: without uiFloatProp's NaN guard rail and
+                // without decimals to round behind the script's back.
                 "maxTiles",      uiProp(imageOf, &ImageComponent::maxTiles),
                 "fillDirection", uiEnumProp(imageOf, &ImageComponent::fillDirection, 1),
                 "fillOrigin",    uiEnumProp(imageOf, &ImageComponent::fillOrigin, 1),
@@ -2171,9 +2171,9 @@ namespace DonTopo::ScriptBindings
                 "SetColor",     uiVec4Set(imageOf, &ImageComponent::color, &mgr, "Image.SetColor"));
 
             // ── Slider ──────────────────────────────────────────────────────
-            // El primero de los interactivos: lo que el jugador mueve se escribe
-            // en el COMPONENTE, asi que leer `value` aqui da el valor de verdad
-            // sin sondear el nodo del canvas.
+            // The first of the interactive ones: what the player moves is written
+            // to the COMPONENT, so reading `value` here gives the real value
+            // without polling the canvas node.
             lua.new_usertype<LuaSlider>("Slider",
                 sol::no_constructor,
                 "visible",          uiProp(sliderOf, &SliderComponent::visible),
@@ -2204,7 +2204,7 @@ namespace DonTopo::ScriptBindings
                 "SetFillColor", uiVec4Set(sliderOf, &SliderComponent::fillColor, &mgr, "Slider.SetFillColor"),
                 "GetHandleColor", uiVec4Get(sliderOf, &SliderComponent::handleColor),
                 "SetHandleColor", uiVec4Set(sliderOf, &SliderComponent::handleColor, &mgr, "Slider.SetHandleColor"),
-                // Lo mismo que normalizedValue() en C++: el 0..1 ya acotado.
+                // Same as normalizedValue() in C++: the already clamped 0..1.
                 "GetNormalizedValue", [](const LuaSlider& s) {
                     return sliderOf(s)->normalizedValue();
                 },
@@ -2243,9 +2243,9 @@ namespace DonTopo::ScriptBindings
                 });
 
             // ── Toggle ──────────────────────────────────────────────────────
-            // Sin `color`: la pista la pinta el sync con offColor u onColor segun
-            // el estado, asi que un campo de color suelto seria uno que el primer
-            // volcado pisa y que parece no hacer nada.
+            // No `color`: the track is painted by the sync with offColor or onColor depending on
+            // the state, so a loose color field would be one that the first
+            // dump overwrites and that seems to do nothing.
             lua.new_usertype<LuaToggle>("Toggle",
                 sol::no_constructor,
                 "visible",          uiProp(toggleOf, &ToggleComponent::visible),
@@ -2285,8 +2285,8 @@ namespace DonTopo::ScriptBindings
                 "value",            uiFloatProp(scrollbarOf, &ScrollbarComponent::value, &mgr, "Scrollbar.value"),
                 "handleFraction",   uiFloatProp(scrollbarOf, &ScrollbarComponent::handleFraction, &mgr, "Scrollbar.handleFraction"),
                 "direction",        uiEnumProp(scrollbarOf, &ScrollbarComponent::direction, 3),
-                // numberOfSteps es entero: sin el guardarrail de NaN de
-                // uiFloatProp y sin decimales que redondear a espaldas del script.
+                // numberOfSteps is an integer: without uiFloatProp's NaN guard rail and
+                // without decimals to round behind the script's back.
                 "numberOfSteps",    uiProp(scrollbarOf, &ScrollbarComponent::numberOfSteps),
                 "scrollStep",       uiFloatProp(scrollbarOf, &ScrollbarComponent::scrollStep, &mgr, "Scrollbar.scrollStep"),
                 "atlasPath",        uiProp(scrollbarOf, &ScrollbarComponent::atlasPath),
@@ -2306,7 +2306,7 @@ namespace DonTopo::ScriptBindings
                 "SetColor",     uiVec4Set(scrollbarOf, &ScrollbarComponent::color, &mgr, "Scrollbar.SetColor"),
                 "GetHandleColor", uiVec4Get(scrollbarOf, &ScrollbarComponent::handleColor),
                 "SetHandleColor", uiVec4Set(scrollbarOf, &ScrollbarComponent::handleColor, &mgr, "Scrollbar.SetHandleColor"),
-                // El mismo enganche a paradas discretas que aplica el arrastre.
+                // The same snap to discrete stops that dragging applies.
                 "SnapValue", [](const LuaScrollbar& s, float v) {
                     return scrollbarOf(s)->snapValue(v);
                 },
@@ -2316,9 +2316,9 @@ namespace DonTopo::ScriptBindings
                 });
 
             // ── InputField ──────────────────────────────────────────────────
-            // El unico en el que el JUGADOR escribe. `text` es el texto de
-            // verdad: en Password se guarda tal cual y solo cambia lo que se
-            // ENSENA, que es lo que devuelve GetDisplayText.
+            // The only one in which the PLAYER types. `text` is the real text:
+            // in Password it is stored as is and only what is SHOWN changes,
+            // which is what GetDisplayText returns.
             lua.new_usertype<LuaInputField>("InputField",
                 sol::no_constructor,
                 "visible",          uiProp(inputFieldOf, &InputFieldComponent::visible),
@@ -2330,8 +2330,8 @@ namespace DonTopo::ScriptBindings
                 "fontSize",         uiFloatProp(inputFieldOf, &InputFieldComponent::fontSize, &mgr, "InputField.fontSize"),
                 "align",            uiEnumProp(inputFieldOf, &InputFieldComponent::align, 3),
                 "padding",          uiFloatProp(inputFieldOf, &InputFieldComponent::padding, &mgr, "InputField.padding"),
-                // characterLimit es entero: sin el guardarrail de NaN y sin
-                // decimales que redondear a espaldas del script.
+                // characterLimit is an integer: without the NaN guard rail and without
+                // decimals to round behind the script's back.
                 "characterLimit",   uiProp(inputFieldOf, &InputFieldComponent::characterLimit),
                 "contentType",      uiEnumProp(inputFieldOf, &InputFieldComponent::contentType, 4),
                 "passwordChar",     uiProp(inputFieldOf, &InputFieldComponent::passwordChar),
@@ -2357,14 +2357,14 @@ namespace DonTopo::ScriptBindings
                 "SetPlaceholderColor", uiVec4Set(inputFieldOf, &InputFieldComponent::placeholderColor, &mgr, "InputField.SetPlaceholderColor"),
                 "GetCaretColor", uiVec4Get(inputFieldOf, &InputFieldComponent::caretColor),
                 "SetCaretColor", uiVec4Set(inputFieldOf, &InputFieldComponent::caretColor, &mgr, "InputField.SetCaretColor"),
-                // Lo que se DIBUJA: el placeholder si esta vacio, o la mascara si
-                // es Password. Nunca la contrasena.
+                // What is DRAWN: the placeholder if empty, or the mask if
+                // it is Password. Never the password.
                 "GetDisplayText", [](const LuaInputField& f) {
                     return inputFieldOf(f)->displayText();
                 },
-                // Posicion del cursor en CARACTERES (no en bytes), 0 = antes del
-                // primero. Se acota al escribirla: un cursor fuera del texto
-                // partiria la cadena en el siguiente borrado.
+                // Cursor position in CHARACTERS (not bytes), 0 = before the
+                // first. It is clamped on write: a cursor outside the text would
+                // split the string on the next delete.
                 "GetCaretPos", [](const LuaInputField& f) {
                     return inputFieldOf(f)->caretPos;
                 },
@@ -2385,9 +2385,9 @@ namespace DonTopo::ScriptBindings
                 });
 
             // ── Dropdown ────────────────────────────────────────────────────
-            // Las opciones se leen y se escriben con indices 1-BASED, que es lo
-            // natural en Lua; `value` sigue siendo el indice 0-based del
-            // componente, igual que en C++ y que en el inspector.
+            // The options are read and written with 1-BASED indices, which is
+            // natural in Lua; `value` is still the 0-based index of the
+            // component, as in C++ and in the inspector.
             lua.new_usertype<LuaDropdown>("Dropdown",
                 sol::no_constructor,
                 "visible",          uiProp(dropdownOf, &DropdownComponent::visible),
@@ -2428,8 +2428,8 @@ namespace DonTopo::ScriptBindings
                 "GetOptionCount", [](const LuaDropdown& d) {
                     return (int)dropdownOf(d)->options.size();
                 },
-                // 1-based y fuera de rango devuelve cadena vacia: un indice malo
-                // no puede tumbar el script de un menu.
+                // 1-based and out of range returns an empty string: a bad index
+                // cannot bring down a menu's script.
                 "GetOption", [](const LuaDropdown& d, int i) {
                     DropdownComponent* c = dropdownOf(d);
                     if (i < 1 || i > (int)c->options.size()) return std::string();
@@ -2438,9 +2438,9 @@ namespace DonTopo::ScriptBindings
                 "GetSelectedLabel", [](const LuaDropdown& d) {
                     return dropdownOf(d)->selectedLabel();
                 },
-                // Reemplaza la lista entera. Lo que no sea cadena se DESCARTA en
-                // vez de tirar la tabla: perder el combo por una entrada mala
-                // seria peor que perder esa entrada.
+                // Replaces the whole list. Anything that is not a string is DISCARDED
+                // instead of throwing away the table: losing the combo because of one bad entry
+                // would be worse than losing that entry.
                 "SetOptions", [](const LuaDropdown& d, sol::table t) {
                     DropdownComponent* c = dropdownOf(d);
                     c->options.clear();
@@ -2463,10 +2463,10 @@ namespace DonTopo::ScriptBindings
                 });
 
             // ── ScrollView ──────────────────────────────────────────────────
-            // Sin referencia a un Scrollbar: enlazarlos es una linea de script
-            // (barra:OnValueChanged -> vista:SetNormalizedPosition), y una
-            // referencia entre componentes de la escena habria que serializarla
-            // y mantenerla viva en el clone, el undo y el borrado.
+            // No reference to a Scrollbar: linking them is one line of script
+            // (bar:OnValueChanged -> view:SetNormalizedPosition), and a
+            // reference between scene components would have to be serialized
+            // and kept alive across clone, undo and delete.
             lua.new_usertype<LuaScrollView>("ScrollView",
                 sol::no_constructor,
                 "visible",           uiProp(scrollViewOf, &ScrollViewComponent::visible),
@@ -2491,8 +2491,8 @@ namespace DonTopo::ScriptBindings
                 "SetContentSize", uiVec2Set(scrollViewOf, &ScrollViewComponent::contentSize, &mgr, "ScrollView.SetContentSize"),
                 "GetNormalizedPosition", uiVec2Get(scrollViewOf, &ScrollViewComponent::normalizedPosition),
                 "SetNormalizedPosition", uiVec2Set(scrollViewOf, &ScrollViewComponent::normalizedPosition, &mgr, "ScrollView.SetNormalizedPosition"),
-                // Cuanto se puede desplazar por eje, en pixeles. Un eje apagado
-                // da 0 aunque el contenido sea mas grande.
+                // How much it can scroll per axis, in pixels. A disabled axis
+                // gives 0 even if the content is larger.
                 "GetScrollRange", [](const LuaScrollView& v) {
                     const glm::vec2 r = scrollViewOf(v)->scrollRange();
                     return std::make_tuple(r.x, r.y);
@@ -2516,38 +2516,38 @@ namespace DonTopo::ScriptBindings
                 "name", sol::property(
                     [](const LuaEntity& e) { return deref(e)->name; },
                     [](const LuaEntity& e, const std::string& n) { deref(e)->name = n; }),
-                // Oculta o muestra la malla sin destruir nada: el objeto sigue
-                // vivo, sigue colisionando y sus scripts siguen corriendo, solo
-                // deja de dibujarse. Es el "SetActive de lo visible" que todo
-                // juego necesita y que hasta ahora solo se podía tocar desde el
-                // inspector. Un objeto sin malla acepta el flag igual (no es un
-                // error): si luego se le pone una, ya nace con esta visibilidad.
+                // Hides or shows the mesh without destroying anything: the object stays
+                // alive, keeps colliding and its scripts keep running, it just
+                // stops being drawn. It is the "SetActive of the visible" that every
+                // game needs and that until now could only be touched from the
+                // inspector. An object without a mesh accepts the flag anyway (it is not an
+                // error): if one is added later, it is born with this visibility.
                 "meshVisible", sol::property(
                     [](const LuaEntity& e) { return deref(e)->meshVisible; },
                     [](const LuaEntity& e, bool v) { deref(e)->meshVisible = v; }),
                 "IsValid", [](const LuaEntity& e) {
                     return e.go && e.mgr && e.mgr->isAlive(e.go);
                 },
-                // Luz y cámara: mismos atajos con nombre que la UI. Los Get
-                // devuelven nil si el componente no está —comprobarlo es lo
-                // primero que hace un script— y los Add son idempotentes.
-                // Cambia de padre. Sin argumento (o con nil) lo cuelga de la
-                // raíz de la escena. El segundo argumento decide qué se
-                // conserva —por defecto la pose de MUNDO, como el
-                // transform.parent de Unity: el objeto se queda donde está y lo
-                // que se recalcula es su transform local. Con false se conserva
-                // el LOCAL y el objeto salta con su padre nuevo, que es lo que
-                // hace arrastrar en la jerarquía del editor.
+                // Light and camera: same named shortcuts as the UI. The Gets
+                // return nil if the component is not there (checking it is the
+                // first thing a script does) and the Adds are idempotent.
+                // Changes parent. With no argument (or with nil) it hangs it from the
+                // scene root. The second argument decides what is
+                // kept: by default the WORLD pose, like Unity's
+                // transform.parent: the object stays where it is and what
+                // is recomputed is its local transform. With false the LOCAL is kept
+                // and the object jumps along with its new parent, which is what
+                // dragging in the editor hierarchy does.
                 //
-                // Devuelve false —sin tocar nada— si el destino está dentro del
-                // propio subárbol: eso desengancharía el subárbol del árbol.
+                // Returns false, touching nothing, if the destination is inside its
+                // own subtree: that would detach the subtree from the tree.
                 "SetParent", [&mgr](const LuaEntity& e, sol::optional<LuaEntity> parent,
                                     sol::optional<bool> keepWorld) -> bool {
                     GameObject* go = deref(e);
                     if (!mgr.scene()) return false;
-                    // deref del padre ANTES de nada: un padre ya destruido tiene
-                    // que dar error de Lua como en cualquier otro método, no un
-                    // false silencioso (mismo criterio que el hallazgo 4 de
+                    // deref of the parent BEFORE anything else: an already destroyed parent has
+                    // to give a Lua error like in any other method, not a silent
+                    // false (same criterion as finding 4 of
                     // ensureFinite).
                     GameObject* newParent = parent ? deref(*parent) : nullptr;
 
@@ -2566,11 +2566,11 @@ namespace DonTopo::ScriptBindings
                         const glm::mat4 padreMundo =
                             go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
                         const glm::mat4 nuevoLocal = glm::inverse(padreMundo) * mundoAntes;
-                        // Un padre con escala 0 da una matriz singular y su
-                        // inversa son infinitos. Se conserva el local que había
-                        // (el objeto salta, pero sigue siendo un transform
-                        // válido) en vez de hornear NaN en la matriz, que se
-                        // llevaría por delante a todos los hijos.
+                        // A parent with scale 0 gives a singular matrix and its
+                        // inverse is infinities. The existing local is kept
+                        // (the object jumps, but it is still a valid
+                        // transform) instead of baking NaN into the matrix, which
+                        // would take all the children down with it.
                         bool finito = true;
                         for (int c = 0; c < 4 && finito; ++c)
                             for (int r = 0; r < 4 && finito; ++r)
@@ -2582,9 +2582,9 @@ namespace DonTopo::ScriptBindings
                                     "degenerate transform, the local pose is kept");
                     }
 
-                    // Los world del subárbol se recalculan ya, no el frame que
-                    // viene: un script que llame a GetWorldPosition en la línea
-                    // siguiente leería la posición vieja.
+                    // The subtree's world matrices are recomputed right now, not on the next
+                    // frame: a script that calls GetWorldPosition on the next line
+                    // would read the old position.
                     go->updateWorldTransforms(
                         go->parent ? go->parent->worldTransform : glm::mat4(1.0f));
                     return true;
@@ -2613,11 +2613,11 @@ namespace DonTopo::ScriptBindings
                 },
                 "RemoveCamera", [](const LuaEntity& e) { deref(e)->setCameraComponent(nullptr); },
                 "GetTransform", [](const LuaEntity& e) { deref(e); return LuaTransform{e}; },
-                // UI: atajos con nombre para los cuatro componentes, además del
-                // GetComponent("Button") de siempre. El getter devuelve nil si
-                // el componente no está —comprobarlo es lo primero que hace un
-                // script de UI, y un error de Lua no vale como respuesta—, y el
-                // Add devuelve el wrapper, que ya está listo para encadenar.
+                // UI: named shortcuts for the four components, in addition to the usual
+                // GetComponent("Button"). The getter returns nil if
+                // the component is not there (checking it is the first thing a
+                // UI script does, and a Lua error is not acceptable as an answer), and the
+                // Add returns the wrapper, which is ready to chain.
                 "GetCanvas", [](const LuaEntity& e) -> sol::object {
                     GameObject* go = deref(e);
                     if (!go->hasCanvas()) return sol::nil;
@@ -2774,7 +2774,7 @@ namespace DonTopo::ScriptBindings
                 "RemoveImage",       [](const LuaEntity& e) { deref(e)->setImage(nullptr); },
                 "GetParent", [](const LuaEntity& e) -> sol::object {
                     GameObject* go = deref(e);
-                    if (!go->parent || !go->parent->parent) return sol::nil; // root no se expone
+                    if (!go->parent || !go->parent->parent) return sol::nil; // root is not exposed
                     return sol::make_object(e.mgr->lua(), LuaEntity{go->parent, e.mgr});
                 },
                 "GetChildren", [](const LuaEntity& e) {
@@ -2826,8 +2826,8 @@ namespace DonTopo::ScriptBindings
                     GameObject* go = deref(e);
                     auto* mgr = e.mgr;
                     sol::state_view lua(mgr->lua());
-                    // Mismos defaults que EditorUI::drawAddComponentButton;
-                    // colliders mutuamente excluyentes, misma regla que la UI.
+                    // Same defaults as EditorUI::drawAddComponentButton;
+                    // mutually exclusive colliders, same rule as the UI.
                     if (name == "BoxCollider" && !go->hasAnyCollider() && mgr->physics())
                     {
                         go->setBoxCollider(mgr->physics()->createBoxColliderComponent(
@@ -2859,10 +2859,10 @@ namespace DonTopo::ScriptBindings
                     }
                     if (name == "AudioClip" && !go->hasAudioClip() && mgr->audioManager() && arg)
                     {
-                        // Misma whitelist que el inspector y que la carga de
-                        // escena: sin ella, un path con cualquier extensión
-                        // creaba el componente igual y el fallo solo se notaba
-                        // como silencio (FMOD carga en diferido).
+                        // Same whitelist as the inspector and scene loading:
+                        // without it, a path with any extension still
+                        // created the component and the failure was only noticed
+                        // as silence (FMOD loads lazily).
                         std::string ext = std::filesystem::path(*arg).extension().string();
                         std::transform(ext.begin(), ext.end(), ext.begin(),
                                        [](unsigned char ch) { return (char)std::tolower(ch); });
@@ -2875,8 +2875,8 @@ namespace DonTopo::ScriptBindings
                         auto clip = mgr->audioManager()->createAudioClipComponent(*arg, false, false);
                         if (clip) { go->setAudioClip(std::move(clip)); return sol::make_object(lua, LuaAudioClip{e}); }
                     }
-                    // Rigidbody: necesita un collider que aporte la forma y que no
-                    // exista ya. attachRigidbody promociona el actor a dynamic.
+                    // Rigidbody: needs a collider that provides the shape and that does not
+                    // already exist. attachRigidbody promotes the actor to dynamic.
                     if (name == "Rigidbody" && go->hasAnyCollider() && !go->hasRigidbody() && mgr->physics())
                     {
                         auto rb = std::make_shared<Rigidbody>();
@@ -2884,11 +2884,11 @@ namespace DonTopo::ScriptBindings
                         if (auto col = go->anyCollider()) mgr->physics()->attachRigidbody(col, rb);
                         return sol::make_object(lua, LuaRigidbody{e});
                     }
-                    // Luz y cámara: datos puros, sin nada que resolver contra
-                    // los managers. La cámara NO comprueba que no haya otra en
-                    // la escena: el invariante de unicidad lo impone
-                    // Scene::findCamera quedándose con la primera, igual que
-                    // con el AudioListener.
+                    // Light and camera: pure data, nothing to resolve against
+                    // the managers. The camera does NOT check that there is no other one in
+                    // the scene: the uniqueness invariant is enforced by
+                    // Scene::findCamera by keeping the first one, same as
+                    // with the AudioListener.
                     if (name == "Light")
                     {
                         if (!go->hasLight()) go->setLight(std::make_shared<LightComponent>());
@@ -2900,11 +2900,11 @@ namespace DonTopo::ScriptBindings
                             go->setCameraComponent(std::make_shared<CameraComponent>());
                         return sol::make_object(lua, LuaCamera{e});
                     }
-                    // UI: sin dependencias que resolver (son SOLO datos) y sin
-                    // gate de exclusión — los cuatro conviven en el mismo
-                    // GameObject, igual que en el panel Properties. Pedir uno
-                    // que ya está devuelve el que hay, no lo reemplaza: el
-                    // Add del editor tampoco pisa lo que ya existe.
+                    // UI: no dependencies to resolve (they are DATA ONLY) and no
+                    // exclusion gate: all four coexist on the same
+                    // GameObject, as in the Properties panel. Asking for one
+                    // that is already there returns the existing one, it does not replace it: the
+                    // editor's Add does not overwrite what already exists either.
                     if (name == "Canvas")
                     {
                         if (!go->hasCanvas()) go->setCanvas(std::make_shared<CanvasComponent>());
@@ -2979,9 +2979,9 @@ namespace DonTopo::ScriptBindings
                     {
                         auto comp = std::make_unique<DonTopo::ScriptComponent>(name.substr(7), go);
                         go->addScript(std::move(comp));
-                        // La instanciación + Awake/Start del comp nuevo la
-                        // hace el lifecycle en el siguiente update (started
-                        // == false lo delata). Task 8.
+                        // The instantiation + Awake/Start of the new comp is
+                        // done by the lifecycle on the next update (started
+                        // == false gives it away). Task 8.
                         return sol::make_object(lua, true);
                     }
                     return sol::nil;
@@ -2996,9 +2996,9 @@ namespace DonTopo::ScriptBindings
                     else if (name == "ReverbZone")      go->setReverbZone(nullptr);
                     else if (name == "Light")           go->setLight(nullptr);
                     else if (name == "Camera")          go->setCameraComponent(nullptr);
-                    // Quitar un componente de UI se lleva por delante sus
-                    // callbacks: el runtime muere con el componente y el handler
-                    // del nodo, que solo tiene un weak_ptr, deja de disparar.
+                    // Removing a UI component takes its callbacks with it:
+                    // the runtime dies with the component and the node's handler,
+                    // which only has a weak_ptr, stops firing.
                     else if (name == "Canvas")          go->setCanvas(nullptr);
                     else if (name == "Button")          go->setButton(nullptr);
                     else if (name == "Text")            go->setText(nullptr);
@@ -3015,16 +3015,16 @@ namespace DonTopo::ScriptBindings
                     else if (name == "ScrollView")      go->setScrollView(nullptr);
                     else if (name == "Rigidbody")
                     {
-                        // Reconstruye el actor como static antes de soltar el Rigidbody.
+                        // Rebuilds the actor as static before releasing the Rigidbody.
                         if (auto col = go->anyCollider(); col && e.mgr && e.mgr->physics())
                             e.mgr->physics()->detachRigidbody(col);
                         go->setRigidbody(nullptr);
                     }
                     else if (name.rfind("Script:", 0) == 0)
                     {
-                        // Diferido: el lifecycle lo procesa al final del frame
-                        // (quitar en mitad de la iteración de Update rompería
-                        // el recorrido). Task 8.
+                        // Deferred: the lifecycle processes it at the end of the frame
+                        // (removing in the middle of the Update iteration would break
+                        // the traversal). Task 8.
                         const std::string scriptName = name.substr(7);
                         for (auto& s : go->getScripts())
                             if (s->scriptName == scriptName) s->pendingRemove = true;
@@ -3033,11 +3033,11 @@ namespace DonTopo::ScriptBindings
         }
 
 #ifdef DT_PHYSX_ENABLED
-        // El GameObject detrás de un actor de PhysX: userData del actor =
-        // Collider* (lo pone PhysicsManager al crear el collider) y el owner del
-        // collider = GameObject* (lo pone Scene al deserializar / el editor al
-        // añadirlo). Mismo camino que usa TriggerDispatcher para los callbacks
-        // de trigger. nullptr si el actor no cuelga de ningún GameObject.
+        // The GameObject behind a PhysX actor: actor userData =
+        // Collider* (set by PhysicsManager when creating the collider) and the
+        // collider's owner = GameObject* (set by Scene when deserializing / by the editor when
+        // adding it). Same path TriggerDispatcher uses for the trigger
+        // callbacks. nullptr if the actor does not hang from any GameObject.
         GameObject* actorOwner(const physx::PxRigidActor* actor)
         {
             if (!actor) return nullptr;
@@ -3045,10 +3045,10 @@ namespace DonTopo::ScriptBindings
             return col ? static_cast<GameObject*>(col->getOwner()) : nullptr;
         }
 
-        // Prefiltro de la consulta. Collider::applyTriggerFlag solo apaga
-        // eSIMULATION_SHAPE: la shape de un trigger conserva eSCENE_QUERY_SHAPE,
-        // así que sin este filtro un trigger bloquearía el rayo. Aquí se
-        // descarta también el actor del GameObject a ignorar.
+        // Query prefilter. Collider::applyTriggerFlag only turns off
+        // eSIMULATION_SHAPE: a trigger's shape keeps eSCENE_QUERY_SHAPE,
+        // so without this filter a trigger would block the ray. Here the
+        // actor of the GameObject to ignore is also discarded.
         class RaycastFilter : public physx::PxQueryFilterCallback
         {
         public:
@@ -3081,7 +3081,7 @@ namespace DonTopo::ScriptBindings
             GameObject* m_ignore;
         };
 
-        // Argumentos ya validados de Physics.Raycast / Physics.RaycastHit.
+        // Already validated arguments of Physics.Raycast / Physics.RaycastHit.
         struct RaycastArgs
         {
             glm::vec3   origin{ 0.0f };
@@ -3093,7 +3093,7 @@ namespace DonTopo::ScriptBindings
             GameObject* ignore       = nullptr;
         };
 
-        // Warn/argAt/given: los comparten todos los parseos de consulta.
+        // Warn/argAt/given: shared by all the query parsers.
         void queryWarn(ScriptManager& mgr, const char* fn, const std::string& m)
         {
             mgr.log(std::string("[Lua][WARN] Physics.") + fn + ": " + m);
@@ -3107,10 +3107,10 @@ namespace DonTopo::ScriptBindings
             return o.valid() && o.get_type() != sol::type::lua_nil;
         }
 
-        // Tabla 'options' común a TODAS las consultas (raycast, sweep y
-        // overlap): { hitTriggers, static, dynamic, ignore }. Ausente o nil =>
-        // se quedan los defaults de RaycastArgs. Las consultas sin rayo
-        // (overlaps) sólo usan estos cuatro campos de la struct.
+        // 'options' table common to ALL the queries (raycast, sweep and
+        // overlap): { hitTriggers, static, dynamic, ignore }. Absent or nil =>
+        // the RaycastArgs defaults stay. The queries without a ray
+        // (overlaps) only use these four fields of the struct.
         bool parseQueryOptions(ScriptManager& mgr, const char* fn,
                                const sol::object& oOpts, RaycastArgs& out)
         {
@@ -3158,9 +3158,9 @@ namespace DonTopo::ScriptBindings
             return true;
         }
 
-        // Lee los argumentos a mano (sol::variadic_args, no parámetros tipados)
-        // porque un tipo equivocado tiene que devolver nil y un aviso, no la
-        // excepción de conversión de sol2 que tumbaría el script.
+        // Reads the arguments by hand (sol::variadic_args, not typed parameters)
+        // because a wrong type has to return nil and a warning, not sol2's
+        // conversion exception, which would bring the script down.
         bool parseRaycastArgs(ScriptManager& mgr, const char* fn,
                               sol::variadic_args va, RaycastArgs& out)
         {
@@ -3186,7 +3186,7 @@ namespace DonTopo::ScriptBindings
                     warn("maxDistance must be a number");
                     return false;
                 }
-                // Ausente o <= 0 -> se queda el default de 1000.
+                // Absent or <= 0 -> the default of 1000 stays.
                 const float m = oMax.as<float>();
                 if (m > 0.0f) out.maxDistance = m;
             }
@@ -3194,9 +3194,9 @@ namespace DonTopo::ScriptBindings
             return parseQueryOptions(mgr, fn, argAt(3), out);
         }
 
-        // Lanza la consulta. false = sin impacto, sin PhysicsManager (fuera de
-        // Play), dirección degenerada o filtro que no deja ningún actor: en
-        // todos esos casos no se toca PhysX y hit se queda sin escribir.
+        // Launches the query. false = no hit, no PhysicsManager (outside
+        // Play), degenerate direction or a filter that leaves no actor: in
+        // all those cases PhysX is not touched and hit is left unwritten.
         bool doRaycast(ScriptManager& mgr, const RaycastArgs& a, physx::PxRaycastBuffer& hit)
         {
             PhysicsManager* pm = mgr.physics();
@@ -3205,8 +3205,8 @@ namespace DonTopo::ScriptBindings
             if (!std::isfinite(a.origin.x) || !std::isfinite(a.origin.y) || !std::isfinite(a.origin.z))
                 return false;
 
-            // PhysX exige dirección unitaria (con una sin normalizar la
-            // distancia sale escalada); longitud 0 o NaN -> nada que trazar.
+            // PhysX requires a unit direction (with an unnormalized one the
+            // distance comes out scaled); length 0 or NaN -> nothing to trace.
             const float len = glm::length(a.dir);
             if (!std::isfinite(len) || len <= 0.0f) return false;
             const glm::vec3 dir = a.dir / len;
@@ -3222,13 +3222,13 @@ namespace DonTopo::ScriptBindings
                                a.maxDistance, hit, filterData, &filter);
         }
 
-        // Techo de impactos de Physics.RaycastAll. PhysX trunca en silencio al
-        // llenarse el buffer (ver PxQueryReport.h: "Overflow does not trigger
-        // warnings or errors"), así que el binding lo detecta y avisa.
+        // Hit ceiling of Physics.RaycastAll. PhysX silently truncates when the
+        // buffer fills up (see PxQueryReport.h: "Overflow does not trigger
+        // warnings or errors"), so the binding detects it and warns.
         constexpr physx::PxU32 kRaycastAllMaxHits = 64;
 
-        // Misma consulta que doRaycast pero multi-hit; los touches salen
-        // ordenados por distancia (lo hace PhysicsManager::raycastAll).
+        // Same query as doRaycast but multi-hit; the touches come out
+        // sorted by distance (done by PhysicsManager::raycastAll).
         bool doRaycastAll(ScriptManager& mgr, const RaycastArgs& a,
                           physx::PxRaycastBufferN<kRaycastAllMaxHits>& hits)
         {
@@ -3253,10 +3253,10 @@ namespace DonTopo::ScriptBindings
                                   a.maxDistance, hits, filterData, &filter);
         }
 
-        // Forma de tabla de un impacto: { entity, point, normal, distance }.
-        // La comparten Physics.Raycast (un solo hit) y Physics.RaycastAll (uno
-        // por elemento del array), así no pueden divergir. entity se omite si el
-        // actor no cuelga de ningún GameObject.
+        // Table shape of a hit: { entity, point, normal, distance }.
+        // Shared by Physics.Raycast (a single hit) and Physics.RaycastAll (one
+        // per array element), so they cannot diverge. entity is omitted if the
+        // actor does not hang from any GameObject.
         sol::table makeHitTable(ScriptManager& mgr, const physx::PxRaycastHit& hit)
         {
             sol::table t = mgr.lua().create_table();
@@ -3268,8 +3268,8 @@ namespace DonTopo::ScriptBindings
             return t;
         }
 
-        // Filtros de la consulta comunes a sweeps y overlaps: los mismos que
-        // arma doRaycast (ePREFILTER + eSTATIC/eDYNAMIC según options).
+        // Query filters common to sweeps and overlaps: the same ones
+        // doRaycast builds (ePREFILTER + eSTATIC/eDYNAMIC according to options).
         physx::PxQueryFilterData queryFilterData(const RaycastArgs& a)
         {
             physx::PxQueryFilterData filterData;
@@ -3285,9 +3285,9 @@ namespace DonTopo::ScriptBindings
         }
 
         // Physics.SphereCast(origin, direction, radius, maxDistance [, options]).
-        // El radio va ANTES de maxDistance, así que el parseo del rayo no se
-        // puede reutilizar tal cual (los índices bailan); lo que sí se reutiliza
-        // es la tabla options.
+        // The radius goes BEFORE maxDistance, so the ray parsing cannot
+        // be reused as is (the indices shift); what is reused
+        // is the options table.
         bool parseSphereCastArgs(ScriptManager& mgr, sol::variadic_args va,
                                  RaycastArgs& out, float& radius)
         {
@@ -3304,16 +3304,16 @@ namespace DonTopo::ScriptBindings
             out.origin = oOrigin.as<glm::vec3>();
             out.dir    = oDir.as<glm::vec3>();
 
-            // queryGiven ANTES de get_type: sobre un sol::object sin lua_State
-            // (argumento que no se pasó) get_type deref un puntero nulo.
+            // queryGiven BEFORE get_type: on a sol::object without a lua_State
+            // (an argument that was not passed) get_type dereferences a null pointer.
             const sol::object oRadius = queryArgAt(va, 2);
             if (!queryGiven(oRadius) || oRadius.get_type() != sol::type::number)
             {
                 warn("radius must be a number");
                 return false;
             }
-            // PxSphereGeometry con radio <= 0 (o NaN) es geometría inválida:
-            // PhysX se queja por su canal de errores y la consulta no vale.
+            // PxSphereGeometry with radius <= 0 (or NaN) is invalid geometry:
+            // PhysX complains through its error channel and the query is not valid.
             const float r = oRadius.as<float>();
             if (!std::isfinite(r) || r <= 0.0f)
             {
@@ -3337,9 +3337,9 @@ namespace DonTopo::ScriptBindings
             return parseQueryOptions(mgr, fn, queryArgAt(va, 4), out);
         }
 
-        // Barrido de la esfera. Mismas salidas en falso que doRaycast (sin
-        // PhysicsManager, filtro que no deja actores, origen/dirección
-        // degenerados) y misma normalización de la dirección.
+        // Sphere sweep. Same false outputs as doRaycast (no
+        // PhysicsManager, a filter that leaves no actors, degenerate origin/direction)
+        // and the same direction normalization.
         bool doSphereCast(ScriptManager& mgr, const RaycastArgs& a, float radius,
                           physx::PxSweepBuffer& hit)
         {
@@ -3359,9 +3359,9 @@ namespace DonTopo::ScriptBindings
                                   radius, a.maxDistance, hit, filterData, &filter);
         }
 
-        // La tabla de impacto de un sweep tiene los mismos campos que la de un
-        // raycast, pero PxSweepHit y PxRaycastHit son tipos distintos: se
-        // rellena aparte (mismos nombres y mismo orden a propósito).
+        // A sweep's hit table has the same fields as a raycast's,
+        // but PxSweepHit and PxRaycastHit are different types: it is
+        // filled in separately (same names and same order on purpose).
         sol::table makeSweepHitTable(ScriptManager& mgr, const physx::PxSweepHit& hit)
         {
             sol::table t = mgr.lua().create_table();
@@ -3373,10 +3373,10 @@ namespace DonTopo::ScriptBindings
             return t;
         }
 
-        // Techo de solapes de Physics.OverlapSphere / OverlapBox. Igual que
-        // kRaycastAllMaxHits: PhysX trunca en silencio al llenarse el buffer
-        // (PxQueryReport.h, "Overflow does not trigger warnings or errors"), así
-        // que el binding lo detecta con getNbTouches() == getMaxNbTouches().
+        // Overlap ceiling of Physics.OverlapSphere / OverlapBox. Like
+        // kRaycastAllMaxHits: PhysX silently truncates when the buffer fills up
+        // (PxQueryReport.h, "Overflow does not trigger warnings or errors"), so
+        // the binding detects it with getNbTouches() == getMaxNbTouches().
         constexpr physx::PxU32 kOverlapMaxHits = 64;
 
         // Physics.OverlapSphere(center, radius [, options]).
@@ -3412,10 +3412,10 @@ namespace DonTopo::ScriptBindings
         }
 
         // Physics.OverlapBox(center, halfExtents [, rotation] [, options]).
-        // rotation son grados de Euler en un Vec3, misma convención que
-        // transform.rotation (eulerAngleXYZ). Como es opcional y va delante de
-        // options, el tercer argumento se desambigua por tipo: Vec3 => rotación,
-        // tabla => options.
+        // rotation is Euler degrees in a Vec3, same convention as
+        // transform.rotation (eulerAngleXYZ). Since it is optional and comes before
+        // options, the third argument is disambiguated by type: Vec3 => rotation,
+        // table => options.
         bool parseOverlapBoxArgs(ScriptManager& mgr, sol::variadic_args va,
                                  glm::vec3& center, glm::vec3& halfExtents,
                                  glm::vec3& eulerDeg, RaycastArgs& out)
@@ -3481,9 +3481,9 @@ namespace DonTopo::ScriptBindings
             if (!a.queryStatic && !a.queryDynamic) return false;
             if (!finite3(center)) return false;
 
-            // Misma composición que recomposeLocal (eulerAngleXYZ), para que
-            // pasarle transform.rotation de una entidad oriente la caja igual
-            // que está orientada esa entidad.
+            // Same composition as recomposeLocal (eulerAngleXYZ), so that
+            // passing it an entity's transform.rotation orients the box the same way
+            // that entity is oriented.
             const glm::quat q(glm::quat_cast(glm::eulerAngleXYZ(glm::radians(eulerDeg.x),
                                                                 glm::radians(eulerDeg.y),
                                                                 glm::radians(eulerDeg.z))));
@@ -3496,11 +3496,11 @@ namespace DonTopo::ScriptBindings
                                   hits, filterData, &filter);
         }
 
-        // Array 1-indexado de Entity con los solapes. Un overlap no tiene punto,
-        // normal ni distancia, así que no hay tabla de hit que devolver: sólo el
-        // GameObject. Los actores sin GameObject detrás se omiten (no hay nada
-        // que entregar a Lua) y un mismo GameObject sale UNA vez aunque solapen
-        // varias de sus shapes.
+        // 1-indexed Entity array with the overlaps. An overlap has no point,
+        // normal or distance, so there is no hit table to return: only the
+        // GameObject. Actors with no GameObject behind them are omitted (there is nothing
+        // to hand to Lua) and the same GameObject comes out ONCE even if several
+        // of its shapes overlap.
         sol::table makeOverlapArray(ScriptManager& mgr,
                                     const physx::PxOverlapBufferN<kOverlapMaxHits>& hits)
         {
@@ -3518,7 +3518,7 @@ namespace DonTopo::ScriptBindings
             return out;
         }
 
-        // Aviso compartido por los dos overlaps al llenarse el buffer.
+        // Warning shared by the two overlaps when the buffer fills up.
         void warnOverlapOverflow(ScriptManager& mgr, const char* fn,
                                  const physx::PxOverlapBufferN<kOverlapMaxHits>& hits)
         {
@@ -3532,13 +3532,13 @@ namespace DonTopo::ScriptBindings
         void registerPhysics(DonTopo::ScriptManager& mgr)
         {
             sol::state& lua = mgr.lua();
-            // Tabla global Audio: los mandos de volumen que el jugador espera
-            // en un menú de opciones. Existían en AudioManager desde el
-            // principio y no los llamaba NADIE — ni la UI ni los scripts—, así
-            // que un juego exportado no tenía forma de bajar el volumen.
+            // Global Audio table: the volume controls the player expects
+            // in an options menu. They existed in AudioManager from the
+            // start and NOBODY called them, neither the UI nor the scripts, so
+            // an exported game had no way to lower the volume.
             //
-            // Se pasan por nombre de bus, igual que AudioClip:SetBus, para no
-            // tener dos vocabularios distintos para lo mismo.
+            // They are passed by bus name, like AudioClip:SetBus, so as not to
+            // have two different vocabularies for the same thing.
             sol::table audio = lua.create_named_table("Audio");
 
             audio["SetBusVolume"] = [&mgr](const std::string& name, float v) {
@@ -3551,22 +3551,22 @@ namespace DonTopo::ScriptBindings
                              "' (use 'master', 'music' or 'sfx')");
                     return;
                 }
-                // Mismo trato que los setters del clip: un NaN aquí dejaría el
-                // volumen del grupo inutilizable para el resto de la partida, y
-                // no hay ningún .scene donde se note para depurarlo después.
+                // Same treatment as the clip setters: a NaN here would leave the group's
+                // volume unusable for the rest of the game, and
+                // there is no .scene where it would show up to debug it later.
                 if (!ensureFinite(mgr, "Audio.SetBusVolume", v)) return;
                 am->setBusVolume(bus, std::clamp(v, 0.0f, 1.0f));
             };
 
-            // Audio.PlayClipAtPoint(path, x, y, z [, volume, pitch, bus]) — un
-            // sonido en una posición del mundo SIN crear GameObject. Es el
-            // hueco que dejaba PlayOneShot: para un impacto o una explosión no
-            // hay ningún objeto al que colgarle el clip, y muchas veces el
-            // objeto que lo provoca se destruye en ese mismo frame.
+            // Audio.PlayClipAtPoint(path, x, y, z [, volume, pitch, bus]): a
+            // sound at a world position WITHOUT creating a GameObject. It is the
+            // gap PlayOneShot left: for an impact or an explosion there is
+            // no object to hang the clip on, and often the
+            // object that causes it is destroyed in that same frame.
             //
-            // El sonido queda retenido en la caché tras el primer uso. Ojo: por
-            // la carga diferida de FMOD, ese primer disparo casi seguro no se
-            // oye — Audio.Preload(path) en el Start es lo que lo arregla.
+            // The sound is kept in the cache after the first use. Careful: because of
+            // FMOD's lazy loading, that first shot almost surely is not
+            // heard; Audio.Preload(path) in Start is what fixes it.
             audio["PlayClipAtPoint"] = [&mgr](const std::string& path, float x, float y, float z,
                                                sol::optional<float> volume,
                                                sol::optional<float> pitch,
@@ -3614,10 +3614,10 @@ namespace DonTopo::ScriptBindings
                 am->preloadClip(path);
             };
 
-            // Efectos por bus: Audio.SetBusEffect("music", "lowPass", 0.2).
-            // Cuelgan de todo lo que salga por ese bus, que es el caso de uso
-            // real ("todo amortiguado bajo el agua"), y no por clip: un filtro
-            // por voz se paga por voz.
+            // Per-bus effects: Audio.SetBusEffect("music", "lowPass", 0.2).
+            // They apply to everything that goes out through that bus, which is the real use
+            // case ("everything muffled underwater"), and not per clip: a per-voice
+            // filter is paid for per voice.
             audio["SetBusEffect"] = [&mgr](const std::string& busName,
                                             const std::string& effectName, float amount) {
                 AudioManager* am = mgr.audioManager();
@@ -3649,8 +3649,8 @@ namespace DonTopo::ScriptBindings
                     mgr.log("[Lua][WARN] Audio.ClearBusEffect: unknown bus '" + busName + "'");
                     return;
                 }
-                // Sin segundo argumento se limpia el bus entero: es lo que se
-                // quiere al salir del agua o cerrar el menu de pausa.
+                // Without a second argument the whole bus is cleared: which is what is
+                // wanted when leaving the water or closing the pause menu.
                 if (!effectName) { am->clearBusEffects(bus); return; }
                 AudioEffect effect;
                 if (!audioEffectFromStr(*effectName, effect))
@@ -3662,9 +3662,9 @@ namespace DonTopo::ScriptBindings
                 am->clearBusEffect(bus, effect);
             };
 
-            // Pausa global: congela TODO lo que suena conservando la posicion.
-            // Es lo que quiere un menu de pausa. Ojo: el motor no tiene pausa de
-            // simulacion, asi que esto calla el audio pero la escena sigue.
+            // Global pause: freezes EVERYTHING that is playing, keeping the position.
+            // It is what a pause menu wants. Careful: the engine has no simulation
+            // pause, so this silences the audio but the scene keeps running.
             audio["SetPaused"] = [&mgr](bool paused) {
                 if (AudioManager* am = mgr.audioManager()) am->setAudioPaused(paused);
             };
@@ -3685,9 +3685,9 @@ namespace DonTopo::ScriptBindings
                 return am->getBusVolume(bus);
             };
 
-            // ReverbZone por GameObject: mismo patron que AudioClip, con el
-            // preset y los radios. La zona viva de FMOD la lleva AudioManager;
-            // aqui solo se tocan los datos, y el sync por frame hace el resto.
+            // ReverbZone per GameObject: same pattern as AudioClip, with the
+            // preset and the radii. The live FMOD zone is handled by AudioManager;
+            // here only the data is touched, and the per-frame sync does the rest.
             lua.new_usertype<LuaReverbZone>("ReverbZone",
                 sol::no_constructor,
                 "SetPreset", [&mgr](const LuaReverbZone& z, const std::string& name) {
@@ -3742,10 +3742,10 @@ namespace DonTopo::ScriptBindings
 
             sol::table physics = lua.create_named_table("Physics");
 
-            // Physics.Raycast(origin, direction, maxDistance, options) -> tabla
-            // { entity, point, normal, distance } o nil. entity es nil si el
-            // actor impactado no cuelga de ningún GameObject; el resto de
-            // campos vienen siempre.
+            // Physics.Raycast(origin, direction, maxDistance, options) -> table
+            // { entity, point, normal, distance } or nil. entity is nil if the
+            // hit actor does not hang from any GameObject; the rest of the
+            // fields are always there.
             physics["Raycast"] = [&mgr](sol::variadic_args va) -> sol::object {
 #ifdef DT_PHYSX_ENABLED
                 RaycastArgs args;
@@ -3762,11 +3762,11 @@ namespace DonTopo::ScriptBindings
             };
 
             // Physics.RaycastAll(origin, direction, maxDistance, options) ->
-            // tabla-array 1-indexada de impactos, cada uno con la MISMA forma
-            // que devuelve Physics.Raycast, ordenados por distancia ascendente.
-            // Siempre devuelve una tabla: sin impactos (o con argumentos
-            // inválidos, que además avisan) sale vacía, nunca nil, así el
-            // caller puede hacer ipairs/# sin comprobar antes.
+            // 1-indexed array table of hits, each one with the SAME shape
+            // that Physics.Raycast returns, sorted by ascending distance.
+            // It always returns a table: with no hits (or with invalid
+            // arguments, which also warn) it comes out empty, never nil, so the
+            // caller can do ipairs/# without checking first.
             physics["RaycastAll"] = [&mgr](sol::variadic_args va) -> sol::object {
                 sol::table out = mgr.lua().create_table();
 #ifdef DT_PHYSX_ENABLED
@@ -3781,9 +3781,9 @@ namespace DonTopo::ScriptBindings
                 for (physx::PxU32 i = 0; i < hits.getNbTouches(); ++i)
                     out[i + 1] = makeHitTable(mgr, hits.getTouch(i));
 
-                // PhysX no avisa del desbordamiento: los impactos que no
-                // cupieron se pierden y encima los descartados son arbitrarios
-                // (el orden llega sin ordenar), no "los más lejanos".
+                // PhysX does not warn about the overflow: the hits that did not
+                // fit are lost and on top of that the discarded ones are arbitrary
+                // (the order arrives unsorted), not "the farthest ones".
                 if (hits.getNbTouches() >= hits.getMaxNbTouches())
                     mgr.log("[Lua][WARN] Physics.RaycastAll: limit of " +
                             std::to_string(kRaycastAllMaxHits) +
@@ -3794,8 +3794,8 @@ namespace DonTopo::ScriptBindings
                 return sol::make_object(mgr.lua(), out);
             };
 
-            // Igual pero sin construir la tabla: para el "solo quiero saber si
-            // choca".
+            // Same but without building the table: for the "I just want to know if it
+            // hits".
             physics["RaycastHit"] = [&mgr](sol::variadic_args va) -> bool {
 #ifdef DT_PHYSX_ENABLED
                 RaycastArgs args;
@@ -3809,12 +3809,12 @@ namespace DonTopo::ScriptBindings
             };
 
             // Physics.SphereCast(origin, direction, radius, maxDistance,
-            // options) -> la MISMA tabla { entity, point, normal, distance } que
-            // Physics.Raycast, o nil si no toca nada. Es el raycast "con
-            // grosor": la esfera parte centrada en origin y barre a lo largo de
-            // direction. Si ya solapa algo en el origen, distance sale 0 y
-            // point/normal no significan nada (PhysX no calcula la separación
-            // sin eMTD).
+            // options) -> the SAME table { entity, point, normal, distance } as
+            // Physics.Raycast, or nil if it hits nothing. It is the raycast "with
+            // thickness": the sphere starts centered at origin and sweeps along
+            // direction. If it already overlaps something at the origin, distance is 0 and
+            // point/normal mean nothing (PhysX does not compute the separation
+            // without eMTD).
             physics["SphereCast"] = [&mgr](sol::variadic_args va) -> sol::object {
 #ifdef DT_PHYSX_ENABLED
                 RaycastArgs args;
@@ -3831,10 +3831,10 @@ namespace DonTopo::ScriptBindings
 #endif
             };
 
-            // Physics.OverlapSphere(center, radius, options) -> tabla-array
-            // 1-indexada de Entity (NO de tablas de impacto: un solape no tiene
-            // punto, normal ni distancia). Vacía si no solapa nada o si los
-            // argumentos son inválidos, nunca nil.
+            // Physics.OverlapSphere(center, radius, options) -> 1-indexed
+            // array table of Entity (NOT of hit tables: an overlap has no
+            // point, normal or distance). Empty if nothing overlaps or if the
+            // arguments are invalid, never nil.
             physics["OverlapSphere"] = [&mgr](sol::variadic_args va) -> sol::object {
 #ifdef DT_PHYSX_ENABLED
                 RaycastArgs args;
@@ -3857,9 +3857,9 @@ namespace DonTopo::ScriptBindings
             };
 
             // Physics.OverlapBox(center, halfExtents, rotation, options) ->
-            // igual que OverlapSphere pero con una caja orientada. rotation es
-            // opcional (Vec3 de grados Euler, misma convención que
-            // transform.rotation) y se distingue de options por el tipo.
+            // same as OverlapSphere but with an oriented box. rotation is
+            // optional (Vec3 of Euler degrees, same convention as
+            // transform.rotation) and is told apart from options by type.
             physics["OverlapBox"] = [&mgr](sol::variadic_args va) -> sol::object {
 #ifdef DT_PHYSX_ENABLED
                 RaycastArgs args;
@@ -3880,14 +3880,14 @@ namespace DonTopo::ScriptBindings
 #endif
             };
 
-            // Physics.SetLayerCollision(a, b, activo) / GetLayerCollision(a, b):
-            // matriz GLOBAL de 32x32, simétrica — activar (a,b) activa (b,a).
-            // El cambio se propaga a los colliders que ya estén en la escena, o
-            // sea que vale en mitad de una partida.
+            // Physics.SetLayerCollision(a, b, enabled) / GetLayerCollision(a, b):
+            // GLOBAL 32x32 matrix, symmetric: enabling (a,b) enables (b,a).
+            // The change propagates to the colliders already in the scene, that
+            // is, it works in the middle of a game.
             //
-            // Índice fuera de [0,31]: error de Lua (ver requireLayer). Fuera de
-            // Play no hay PhysicsManager: Set es no-op y Get devuelve true, que
-            // es lo que dice la matriz por defecto.
+            // Index outside [0,31]: Lua error (see requireLayer). Outside
+            // Play there is no PhysicsManager: Set is a no-op and Get returns true, which
+            // is what the default matrix says.
             physics["SetLayerCollision"] = [&mgr](int a, int b, bool enabled) {
                 requireLayer("Physics.SetLayerCollision", a);
                 requireLayer("Physics.SetLayerCollision", b);
@@ -3933,14 +3933,14 @@ namespace DonTopo::ScriptBindings
                 mgr.queueDestroy(deref(e));
             };
 
-            // Global estilo Unity Destroy(): destruye el GameObject y todo su
-            // subtree durante Play. Misma cola diferida que Scene.Destroy — el
-            // teardown (OnDestroy en scripts, liberación de GPU vía
-            // Scene::setOnNodeRemoved, destructor de GameObject que suelta colliders/
-            // audio y lo saca de los managers) lo procesa el lifecycle al final
-            // del frame. Diferido a propósito: destruir en mitad de Update
-            // rompería la iteración del lifecycle. deref valida que la entity
-            // siga viva (error Lua si ya fue destruida).
+            // Unity-style global Destroy(): destroys the GameObject and its whole
+            // subtree during Play. Same deferred queue as Scene.Destroy; the
+            // teardown (OnDestroy in scripts, GPU release via
+            // Scene::setOnNodeRemoved, GameObject destructor that releases colliders/
+            // audio and removes it from the managers) is processed by the lifecycle at the end
+            // of the frame. Deferred on purpose: destroying in the middle of Update
+            // would break the lifecycle iteration. deref validates that the entity
+            // is still alive (Lua error if it was already destroyed).
             lua["DestroyGameObject"] = [&mgr](const LuaEntity& e) {
                 mgr.queueDestroy(deref(e));
             };
@@ -3956,8 +3956,8 @@ namespace DonTopo::ScriptBindings
 
                 if (mgr.onInstantiated()) mgr.onInstantiated()(clone);
                 mgr.rebuildAliveSet();
-                // Los scripts del clon se instancian ya; Awake inmediato,
-                // Start lo dispara el lifecycle antes de su primer Update
+                // The clone's scripts are instantiated right away; Awake immediately,
+                // Start is fired by the lifecycle before its first Update
                 // (started == false).
                 clone->traverse([&mgr](GameObject* n) {
                     for (auto& s : n->getScripts())
@@ -3979,7 +3979,7 @@ namespace DonTopo::ScriptBindings
                 return sol::make_object(mgr.lua(), LuaEntity{clone, &mgr});
             };
         }
-    } // namespace (anónimo)
+    } // namespace (anonymous)
 
     bool takePendingSceneLoad(std::string& outPath)
     {
@@ -3992,17 +3992,17 @@ namespace DonTopo::ScriptBindings
 
     void clearUiCallbacks(ScriptManager& mgr)
     {
-        // Tabla nueva, no borrado entrada a entrada: las claves viejas ya no le
-        // sirven a nadie (los std::function que las guardaban están mudos por
-        // la época) y así el GC de Lua se lleva las funciones de golpe.
+        // A new table, not entry-by-entry deletion: the old keys are no longer useful to
+        // anyone (the std::functions that held them are mute because of the
+        // epoch) and this way Lua's GC takes the functions away all at once.
         mgr.lua()[kUiCallbackTable] = mgr.lua().create_table();
     }
 
     void tickTime(ScriptManager& mgr, float dt)
     {
-        // dt no finito (un frame degenerado, o un test que pasa un NaN) no debe
-        // envenenar el acumulado: se ignora el frame entero en vez de dejar
-        // Time.time en NaN para siempre.
+        // A non-finite dt (a degenerate frame, or a test that passes a NaN) must not
+        // poison the accumulated value: the whole frame is ignored instead of leaving
+        // Time.time at NaN forever.
         if (!std::isfinite(dt)) return;
         g_timeSincePlay += dt;
         ++g_frameCount;
@@ -4032,8 +4032,8 @@ namespace DonTopo::ScriptBindings
         registerInput(mgr);
         registerTransform(mgr);
         registerComponents(mgr);
-        registerLighting(mgr); // antes que Entity: GetLight/GetCamera devuelven estos tipos
-        registerUi(mgr);      // antes que Entity: sus getters devuelven estos tipos
+        registerLighting(mgr); // before Entity: GetLight/GetCamera return these types
+        registerUi(mgr);      // before Entity: its getters return these types
         registerEntity(mgr);
         registerScene(mgr);   // Task 7
         registerPhysics(mgr);

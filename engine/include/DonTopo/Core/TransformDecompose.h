@@ -6,54 +6,54 @@
 
 namespace DonTopo
 {
-    // Descomponer una matriz de transformación sin quedarse con basura cuando no
-    // se puede.
+    // Decompose a transformation matrix without ending up with garbage when it
+    // cannot be done.
     //
-    // `glm::decompose` devuelve **bool**, y ante una matriz singular —un eje a
-    // escala 0, que es lo que sale de escribir un 0 en Scale.Y del inspector—
-    // devuelve `false` **sin escribir ninguna de sus salidas**. Quien no mire
-    // ese retorno se queda con sus variables locales SIN INICIALIZAR: en Debug,
-    // el patrón 0xCDCDCDCD de la CRT, que como float es -1.07374e+08. En Release
-    // no hay patrón: es memoria de pila cualquiera, el mismo fallo sin un valor
-    // reconocible con el que atarlo.
+    // `glm::decompose` returns a **bool**, and for a singular matrix —one axis at
+    // scale 0, which is what comes from typing a 0 in Scale.Y of the inspector—
+    // it returns `false` **without writing any of its outputs**. Whoever does not look at
+    // that return is left with their UNINITIALIZED local variables: in Debug,
+    // the CRT 0xCDCDCDCD pattern, which as a float is -1.07374e+08. In Release
+    // there is no pattern: it is arbitrary stack memory, the same failure without a recognizable
+    // value to pin it on.
     //
-    // Eso ya costó un crash mudo del editor, una congelación al entrar en Play y
-    // objetos saltando a posiciones de 1e8 — tres síntomas de este único fallo,
-    // que fueron apareciendo de uno en uno según se arreglaba el anterior.
+    // That already cost a silent editor crash, a freeze on entering Play and
+    // objects jumping to positions of 1e8 — three symptoms of this single failure,
+    // which showed up one at a time as the previous one was fixed.
     //
-    // Casi nada hace falta descomponer, y por eso esto puede responder bien
-    // aunque `glm::decompose` se rinda:
+    // Almost nothing needs decomposing, and that is why this can answer correctly
+    // even if `glm::decompose` gives up:
     //
-    //  - La TRASLACIÓN es la cuarta columna, y lo sigue siendo con una matriz
-    //    singular.
-    //  - La ESCALA son las longitudes de las columnas. Con un eje a 0 da
-    //    (2, 0, 2), que es la respuesta correcta y no una aproximación.
-    //  - La ROTACIÓN es lo único que se pierde de verdad, y es que no existe: un
-    //    eje aplastado no define ninguna orientación. Identidad.
+    //  - The TRANSLATION is the fourth column, and it stays so with a singular
+    //    matrix.
+    //  - The SCALE is the lengths of the columns. With one axis at 0 it gives
+    //    (2, 0, 2), which is the correct answer and not an approximation.
+    //  - The ROTATION is the only thing really lost, and it is that it does not exist: a
+    //    flattened axis defines no orientation. Identity.
     //
-    // Devuelve lo que devolvió `glm::decompose`, por si al llamante le importa
-    // distinguir «rotación de verdad» de «no había ninguna que sacar». Las
-    // salidas son válidas en los dos casos.
+    // Returns what `glm::decompose` returned, in case the caller cares to
+    // tell apart a "real rotation" from "there was none to extract". The
+    // outputs are valid in both cases.
     inline bool decomposeTransform(const glm::mat4& m,
                                    glm::vec3* outPos   = nullptr,
                                    glm::quat* outRot   = nullptr,
                                    glm::vec3* outScale = nullptr)
     {
-        // De `glm::decompose` solo se usa la ROTACIÓN, y solo cuando dice que
-        // pudo. Las otras salidas se ignoran a propósito —la posición y la escala
-        // se sacan de la matriz, abajo—, así que da igual lo que deje escrito
-        // en ellas. Aun así van inicializadas: si algún día alguien las lee de
-        // aquí, que encuentre valores neutros y no memoria virgen.
+        // From `glm::decompose` only the ROTATION is used, and only when it says
+        // it could. The other outputs are ignored on purpose —position and scale
+        // are taken from the matrix, below—, so it does not matter what it leaves written
+        // in them. Even so they are initialized: if someday someone reads them from
+        // here, let them find neutral values and not virgin memory.
         glm::vec3 scale{1.0f}, translation{0.0f}, skew{0.0f};
         glm::vec4 perspective{0.0f};
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
         const bool ok = glm::decompose(m, scale, rotation, translation, skew, perspective);
 
-        // La rotación es la ÚNICA salida del decompose que sobrevive, así que es
-        // la única que hay que descartar cuando no pudo descomponer. Comprobado
-        // saboteando las dos mitades A LA VEZ —dejando basura en la variable y
-        // quitando este if—: el test se pone rojo en los cuatro componentes del
-        // cuaternión. Por separado no basta, y eso dice que las dos hacen falta.
+        // The rotation is the ONLY output of decompose that survives, so it is
+        // the only one that has to be discarded when it could not decompose. Checked
+        // by sabotaging both halves AT THE SAME TIME —leaving garbage in the variable and
+        // removing this if—: the test goes red on the four components of the
+        // quaternion. Separately it is not enough, and that says both are needed.
         if (!ok)
             rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 

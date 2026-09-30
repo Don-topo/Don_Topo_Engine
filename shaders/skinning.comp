@@ -26,12 +26,12 @@ layout(set=0, binding=7, std430) buffer OutputVerts          { OutputVertex data
 layout(push_constant) uniform PC {
     uint boneCount;
     uint vertexCount;
-    // --- Solo los lee bone_eval.comp (ver allí) ---
+    // --- Only read by bone_eval.comp (see there) ---
     uint rootMotionMode;
     uint poseBlockOffset;
     // --- bone_ik.comp y bone_hierarchy.comp ---
-    uint ikBlockOffset;   // en uints: copia del bloque de IK de este frame
-    uint flags;           // bit 0: la jerarquía escribe SOLO mundo (para bone_ik)
+    uint ikBlockOffset;   // in uints: copy of this frame's IK block
+    uint flags;           // bit 0: the hierarchy writes ONLY world (for bone_ik)
 } push;
 
 void main()
@@ -48,12 +48,12 @@ void main()
         float w = v.boneWeights[i];
         if (w > 0.0) { skin += w * finalBones.data[v.boneIndices[i]]; total += w; }
     }
-    // Vértice sin ningún hueso: `skin` sería mat4(0) y lo mandaría al ORIGEN,
-    // estirando la malla hasta allí. El cargador normaliza los pesos y escribe
-    // cuatro ceros cuando el FBX no pesa ese vértice (ModelLoader.cpp: el
-    // ternario de totalW), así que el dato puede llegar aquí perfectamente.
-    // Con identidad el vértice se queda donde está en espacio de modelo, que es
-    // lo que se ve como "esa parte no está animada" en vez de como un pincho.
+    // Vertex without any bone: `skin` would be mat4(0) and would send it to the ORIGIN,
+    // stretching the mesh all the way there. The loader normalizes the weights and writes
+    // four zeros when the FBX does not weight that vertex (ModelLoader.cpp: the
+    // totalW ternary), so the data can perfectly well arrive here.
+    // With identity the vertex stays where it is in model space, which is
+    // what is seen as "that part is not animated" instead of as a spike.
     if (total <= 0.0) skin = mat4(1.0);
 
     outputVerts.data[vi].pos     = skin * vec4(v.position.xyz, 1.0);

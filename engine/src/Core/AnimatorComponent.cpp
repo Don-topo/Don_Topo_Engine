@@ -11,21 +11,21 @@ namespace DonTopo
     int AnimatorComponent::addState(State s, int layer)
     {
         Layer& L = lay(layer);
-        // editorId estable pa el canvas del AnimatorPanel: nunca depende del
-        // índice en L.states (ver comentario del campo en el header). Un estado
-        // fresco (editor) llega con -1 y se le asigna aquí; uno copiado (redo de
-        // AnimatorComponentCommand) o cargado (Scene::animatorFromJson, que
-        // tampoco serializa editorId) también llega con -1 y cae en el mismo
-        // camino, asignándose en orden de carga/copia — estable dentro de la
-        // sesión, que es todo lo que el canvas necesita. Si ya trae un id (una
-        // copia de un estado que SÍ tenía uno asignado) se conserva, y el
-        // contador se adelanta pa que el siguiente addState nunca lo repita.
+        // Stable editorId for the AnimatorPanel canvas: it never depends on the
+        // index in L.states (see the field comment in the header). A fresh state
+        // (editor) arrives with -1 and is assigned one here; a copied one (redo of
+        // AnimatorComponentCommand) or loaded one (Scene::animatorFromJson, which
+        // does not serialize editorId either) also arrives with -1 and falls on the same
+        // path, being assigned in load/copy order — stable within the
+        // session, which is all the canvas needs. If it already brings an id (a
+        // copy of a state that DID have one assigned) it is kept, and the
+        // counter is advanced so that the next addState never repeats it.
         if (s.editorId < 0) s.editorId = m_nextEditorId++;
         else                m_nextEditorId = std::max(m_nextEditorId, s.editorId + 1);
 
         L.states.push_back(std::move(s));
-        // Primer estado añadido: entrada por defecto. Un grafo sin entrada no
-        // arranca, y obligar a marcarla a mano sería un pie en el que tropezar.
+        // First state added: default entry. A graph without an entry does not
+        // start, and forcing it to be marked by hand would be a trap to trip on.
         if (L.entryState < 0) L.entryState = 0;
         return (int)L.states.size() - 1;
     }
@@ -35,11 +35,11 @@ namespace DonTopo
     void AnimatorComponent::enterState(int idx, int layer)
     {
         Layer& L = lay(layer);
-        // Una caja no se reproduce: se entra en su hoja. Si la cadena está rota
-        // no se mueve nada, que es la garantía de que currentState nunca es una
-        // caja venga de donde venga (transición, Play de Lua o el editor).
-        // idx < 0 sigue significando "sin estado": lo usa removeState al vaciar
-        // la capa.
+        // A box is not played: its leaf is entered. If the chain is broken
+        // nothing moves, which is the guarantee that currentState is never a
+        // box wherever it comes from (transition, Lua Play or the editor).
+        // idx < 0 still means "no state": removeState uses it when emptying
+        // the layer.
         const int hoja = resolveEntryLeaf(idx, layer);
         if (idx >= 0 && hoja < 0) return;
         L.currentState = hoja;
@@ -53,36 +53,36 @@ namespace DonTopo
         Layer& L = lay(layer);
         if (idx < 0 || idx >= (int)L.states.size()) return;
 
-        // Los descendientes se van con la caja. Dejarlos sueltos en la raíz es
-        // crear huérfanos que nadie ha pedido, y el undo es un snapshot del
-        // grafo entero, así que deshacer los devuelve todos.
+        // Descendants go away with the box. Leaving them loose at the root is
+        // creating orphans nobody asked for, and undo is a snapshot of the
+        // whole graph, so undoing brings them all back.
         //
-        // La caja se relocaliza por editorId y NO por índice: borrar un
-        // descendiente que iba antes que ella la desplaza, y seguir con el
-        // índice viejo borraría a otro estado.
+        // The box is relocated by editorId and NOT by index: deleting a
+        // descendant that came before it shifts it, and continuing with the
+        // old index would delete another state.
         if (L.states[(size_t)idx].isSubMachine)
         {
             const int idCaja = L.states[(size_t)idx].editorId;
             for (;;)
             {
                 const int caja = stateIndexByEditorId(idCaja, layer);
-                if (caja < 0) return;               // ya no está: nada que borrar
+                if (caja < 0) return;               // it is no longer there: nothing to delete
                 int hijo = -1;
                 for (int i = 0; i < (int)L.states.size(); i++)
                     if (isDescendantOf(i, caja, layer)) { hijo = i; break; }
-                if (hijo < 0) { idx = caja; break; }   // no quedan descendientes
-                removeState(hijo, layer);              // recursivo: una caja hija se lleva los suyos
+                if (hijo < 0) { idx = caja; break; }   // no descendants left
+                removeState(hijo, layer);              // recursive: a child box takes its own with it
             }
         }
 
         L.states.erase(L.states.begin() + idx);
 
-        // La jerarquía se reindexa igual que las transiciones. `subEntry == idx`
-        // pasa al borrar el estado que era la entrada de su caja: la caja se
-        // queda vacía y deja de poder entrarse, que es lo correcto.
-        // `parent == idx` es defensivo y hoy INALCANZABLE —borrar una caja se
-        // lleva antes a sus descendientes—, así que ningún test lo cubre; está
-        // por si algún día se borra sin cascada.
+        // The hierarchy is reindexed just like the transitions. `subEntry == idx`
+        // happens when deleting the state that was the entry of its box: the box is
+        // left empty and can no longer be entered, which is correct.
+        // `parent == idx` is defensive and today UNREACHABLE —deleting a box
+        // takes its descendants first—, so no test covers it; it is there
+        // in case someday one is deleted without a cascade.
         for (auto& st : L.states)
         {
             if (st.parent   == idx) st.parent   = -1;
@@ -91,9 +91,9 @@ namespace DonTopo
             else if (st.subEntry > idx) st.subEntry--;
         }
 
-        // Las transiciones guardan índices: borrar un estado invalida las que lo
-        // tocan y desplaza las que apuntan por encima. Sin esto, borrar un nodo
-        // dejaría links apuntando a un estado distinto del que el usuario ve.
+        // Transitions store indices: deleting a state invalidates those that touch
+        // it and shifts those pointing above it. Without this, deleting a node
+        // would leave links pointing to a state different from the one the user sees.
         L.transitions.erase(
             std::remove_if(L.transitions.begin(), L.transitions.end(),
                 [idx](const Transition& t) { return t.fromState == idx || t.toState == idx; }),
@@ -107,14 +107,14 @@ namespace DonTopo
         if (L.entryState == idx)      L.entryState = L.states.empty() ? -1 : 0;
         else if (L.entryState > idx)  L.entryState--;
 
-        // El playhead se reindexa igual que las transiciones: borrar OTRO estado
-        // no tiene por qué mover al usuario de sitio. Sólo si se borra el actual
-        // hay que caer a la entrada, porque el actual ya no existe.
+        // The playhead is reindexed just like the transitions: deleting ANOTHER state
+        // need not move the user from their place. Only if the current one is deleted
+        // must it fall to the entry, because the current one no longer exists.
         //
-        // Antes esto era un reset() a secas, que además borraba todos los
-        // parámetros — y el AnimatorPanel llama aquí sin mirar si se está en
-        // Play, así que reordenar el grafo a mitad de partida se llevaba por
-        // delante los bool/trigger/int/float que el script venía escribiendo.
+        // Before this was a plain reset(), which also erased all the
+        // parameters — and the AnimatorPanel calls here without checking whether it is in
+        // Play, so reordering the graph in the middle of a game wiped out the
+        // bool/trigger/int/float that the script was writing.
         if (L.currentState == idx)
         {
             enterState(L.entryState, layer);
@@ -124,9 +124,9 @@ namespace DonTopo
             L.currentState--;
         }
 
-        // El cross-fade se corta siempre: el estado que se apagaba puede haberse
-        // ido o haberse reindexado, y mezclar contra un índice movido daría la
-        // pose de otro clip.
+        // The cross-fade is always cut: the state that was being turned off may have gone
+        // or been reindexed, and blending against a moved index would give the
+        // pose of another clip.
         L.prevState     = -1;
         L.prevAnimTime  = 0.0f;
         L.blendElapsed  = 0.0f;
@@ -147,8 +147,8 @@ namespace DonTopo
         Layer& L = lay(layer);
         if (idx < 0 || idx >= (int)L.states.size()) return;
         L.entryState = idx;
-        // Mueve el playhead a la entrada nueva (el preview del editor tiene que
-        // seguirla) pero sin borrar los parámetros: esto también corre en Play.
+        // Moves the playhead to the new entry (the editor preview has to
+        // follow it) but without erasing the parameters: this also runs in Play.
         resetPlayback();
     }
 
@@ -156,7 +156,7 @@ namespace DonTopo
     {
         if (name.empty()) return;
         for (const auto& p : m_parameters)
-            if (p.name == name) return;      // nombres únicos: se consultan por nombre
+            if (p.name == name) return;      // unique names: they are queried by name
         m_parameters.push_back({ std::move(name), type });
         const std::string& n = m_parameters.back().name;
         switch (type)
@@ -170,9 +170,9 @@ namespace DonTopo
 
     void AnimatorComponent::removeParameter(const std::string& name)
     {
-        // Nombre vacío == el que usan las condiciones AnimationFinished (ver
-        // Condition::paramName); si siguiéramos de largo, el bucle de abajo las
-        // borraría todas del grafo sin que el usuario lo pidiera.
+        // Empty name == the one used by the AnimationFinished conditions (see
+        // Condition::paramName); if we went on, the loop below would
+        // delete all of them from the graph without the user asking.
         if (name.empty()) return;
 
         m_parameters.erase(
@@ -186,18 +186,18 @@ namespace DonTopo
 
         for (auto& L : m_layers)
         {
-            // Las condiciones que lo usaban quedarían colgadas y no dispararían
-            // nunca: se van con él.
+            // The conditions that used it would be left dangling and would never
+            // fire: they go with it.
             for (auto& t : L.transitions)
                 t.conditions.erase(
                     std::remove_if(t.conditions.begin(), t.conditions.end(),
                         [&name](const Condition& c) { return c.paramName == name; }),
                     t.conditions.end());
 
-            // Una transición que se quedó sin condiciones (ésta era la única) no
-            // puede disparar nunca (conditionsMet exige al menos una), así que
-            // dejarla sería un link invisible y muerto en el canvas. Si conservó
-            // otras condiciones, sobrevive tal cual.
+            // A transition left without conditions (this was the only one) can
+            // never fire (conditionsMet requires at least one), so
+            // keeping it would be an invisible, dead link on the canvas. If it kept
+            // other conditions, it survives as is.
             L.transitions.erase(
                 std::remove_if(L.transitions.begin(), L.transitions.end(),
                     [](const Transition& t) { return t.conditions.empty(); }),
@@ -215,8 +215,8 @@ namespace DonTopo
 
     void AnimatorComponent::applyGraph(const Graph& g)
     {
-        // La IK y los clips de propiedades son diseño entero: entran tal cual
-        // (sus índices los rehacen rebindClips y bindProperties, como los
+        // IK and property clips are entirely design: they come in as is
+        // (their indices are rebuilt by rebindClips and bindProperties, like
         // clipIndex).
         m_ik            = g.ik;
         m_propertyClips = g.propertyClips;
@@ -246,9 +246,9 @@ namespace DonTopo
             }
         }
 
-        // Capas: la base y las del snapshot. Una capa que ya existía en ese
-        // índice conserva su playhead (casado por editorId, único en todo el
-        // componente) y su Any State en el canvas; una nueva arranca de cero.
+        // Layers: the base and those of the snapshot. A layer that already existed at that
+        // index keeps its playhead (matched by editorId, unique across the whole
+        // component) and its Any State on the canvas; a new one starts from zero.
         const int n = 1 + (int)g.extraLayers.size();
         if ((int)m_layers.size() > n) m_layers.resize((size_t)n);
         for (int li = 0; li < n; li++)
@@ -285,9 +285,9 @@ namespace DonTopo
                                             const std::vector<Transition>& transitions, int entryState)
     {
         Layer& L = m_layers[li];
-        // Identidades vivas ANTES de sustituir nada: tras copiar el grafo ya no
-        // se sabría qué editorId era el actual, cuál el que se apagaba, ni
-        // dónde estaba cada nodo en el canvas.
+        // Live identities BEFORE replacing anything: after copying the graph it would no longer
+        // be known which editorId was the current one, which the one being turned off, nor
+        // where each node was on the canvas.
         auto editorIdAt = [&L](int idx) {
             return (idx >= 0 && idx < (int)L.states.size()) ? L.states[idx].editorId : -1;
         };
@@ -300,9 +300,9 @@ namespace DonTopo
         L.transitions = transitions;
         L.entryState  = entryState;
 
-        // Dos pasadas: primero adelantar el contador con los ids que ya
-        // traen los estados, después repartir a los que llegan sin id (-1).
-        // Al revés, un estado sin id podría recibir uno que otro trae ya.
+        // Two passes: first advance the counter with the ids the states already
+        // bring, then hand out to those that arrive without an id (-1).
+        // The other way round, a state without an id could receive one that another already brings.
         for (auto& s : L.states)
         {
             if (s.editorId < 0) continue;
@@ -324,8 +324,8 @@ namespace DonTopo
 
         if (curId < 0)
         {
-            // No había playhead (grafo sin arrancar): update() lo pondrá en la
-            // entrada, igual que antes de aplicar nada.
+            // There was no playhead (graph not started): update() will put it at the
+            // entry, just as before applying anything.
             L.currentState = -1;
         }
         else if (cur >= 0)
@@ -339,7 +339,7 @@ namespace DonTopo
 
         if (L.frozenFade && cur >= 0)
         {
-            // La congelada no depende de índices del grafo: el fade sigue.
+            // The frozen one does not depend on graph indices: the fade continues.
         }
         else if (L.prevState >= 0 && cur >= 0 && prev >= 0)
         {
@@ -431,8 +431,8 @@ namespace DonTopo
                 for (const auto& c : t.conditions)
                 {
                     if (c.type != ConditionType::Float || c.paramName != n) continue;
-                    // Sin repetir: dos transiciones con el mismo umbral pintan
-                    // una sola línea.
+                    // Without repeats: two transitions with the same threshold draw
+                    // a single line.
                     bool visto = false;
                     for (int i = 0; i < cuantos; i++)
                         if (out[i] == c.threshold) { visto = true; break; }
@@ -462,8 +462,8 @@ namespace DonTopo
     float AnimatorComponent::blendWeight(int layer) const
     {
         const Layer& L = lay(layer);
-        // Sin mezcla el destino pesa el 100%: así el consumidor no necesita
-        // preguntar antes si hay cross-fade o no.
+        // Without a blend the target weighs 100%: this way the consumer does not need to
+        // ask beforehand whether there is a cross-fade or not.
         if ((L.prevState < 0 && !L.frozenFade) || L.blendDuration <= 0.0f) return 1.0f;
         const float w = L.blendElapsed / L.blendDuration;
         return w < 0.0f ? 0.0f : (w > 1.0f ? 1.0f : w);
@@ -481,21 +481,21 @@ namespace DonTopo
         const Layer& L = lay(layer);
         if (stateIdx < 0 || stateIdx >= (int)L.states.size()) return false;
         const State& st = L.states[stateIdx];
-        // Una entrada a -1 = el clip no existe en la malla (rebindClips ya
-        // avisó): mezclar contra ella leería otro clip o fuera del SSBO.
+        // An entry at -1 = the clip does not exist in the mesh (rebindClips already
+        // warned): blending against it would read another clip or outside the SSBO.
         bool alguna = false;
         for (const auto& e : st.blendEntries)
             if (e.clipIndex >= 0) { alguna = true; break; }
         if (!alguna) return false;
-        // Un parámetro no declarado devolvería 0.0f en getFloat y clavaría el
-        // peso en un extremo sin decir por qué; mejor no mezclar.
+        // An undeclared parameter would return 0.0f in getFloat and pin the
+        // weight at one extreme without saying why; better not to blend.
         return hasParam(st.blendParam, ParamType::Float);
     }
 
     AnimatorComponent::BlendPair AnimatorComponent::stateBlendPair(int stateIdx, float animTime, int layer) const
     {
         if (!stateBlends2D(stateIdx, layer)) return stateBlendPair1D(stateIdx, animTime, layer);
-        // 2D: la vista de dos clips son las dos muestras que más pesan.
+        // 2D: the two-clip view is the two samples that weigh the most.
         BlendSample bs[3];
         const int n = stateBlendSamples(stateIdx, animTime, bs, layer);
         int b = 0, a = -1;
@@ -526,9 +526,9 @@ namespace DonTopo
         }
         const State& st    = L.states[stateIdx];
         const float  phase = st.duration > 0.0f ? animTime / st.duration : 0.0f;
-        // Puntos: el principal primero (desempata), luego las entradas con clip.
+        // Points: the main one first (breaks ties), then the entries with a clip.
         std::vector<glm::vec2> pts;
-        std::vector<int>       quien;   // -1 principal, k entrada
+        std::vector<int>       quien;   // -1 main, k entry
         pts.push_back({ st.clipThreshold, st.clipThresholdY });
         quien.push_back(-1);
         for (int k = 0; k < (int)st.blendEntries.size(); k++)
@@ -562,10 +562,10 @@ namespace DonTopo
         const float  p     = getFloat(st.blendParam);
         const float  phase = st.duration > 0.0f ? animTime / st.duration : 0.0f;
 
-        // Vecino de abajo (mayor umbral <= p) y de arriba (menor umbral > p),
-        // sin ordenar ni asignar memoria. -1 es el principal, que se mira
-        // primero: la comparación ESTRICTA hace que con umbrales iguales se
-        // quede el primero visto.
+        // Lower neighbor (greater threshold <= p) and upper one (smaller threshold > p),
+        // without sorting or allocating memory. -1 is the main one, which is looked at
+        // first: the STRICT comparison makes the first one seen stay when
+        // thresholds are equal.
         const int kNinguno = -2;
         int   lo  = kNinguno, hi  = kNinguno;
         float loT = 0.0f,     hiT = 0.0f;
@@ -578,14 +578,14 @@ namespace DonTopo
             if (st.blendEntries[k].clipIndex >= 0)
                 considerar(k, st.blendEntries[k].threshold);
 
-        // Por debajo del primer umbral o por encima del último: solo el extremo.
+        // Below the first threshold or above the last one: only the extreme.
         if (lo == kNinguno) lo = hi;
         if (hi == kNinguno) hi = lo;
 
-        // Todos en la MISMA fase normalizada del principal: un walk de 40
-        // ticks y un run de 100 mezclados por tiempo absoluto se desincronizan
-        // y las piernas patinan; por fase, el pie de apoyo de uno cae sobre el
-        // del otro.
+        // All at the SAME normalized phase as the main one: a 40-tick walk
+        // and a 100-tick run blended by absolute time get out of sync
+        // and the legs skate; by phase, the planted foot of one lands on that
+        // of the other.
         auto clipDe   = [&](int k) { return k < 0 ? st.clipIndex : st.blendEntries[k].clipIndex; };
         auto tiempoDe = [&](int k) { return k < 0 ? animTime : phase * st.blendEntries[k].duration; };
         out.clipA  = clipDe(lo);
@@ -612,8 +612,8 @@ namespace DonTopo
             pl.mode      = li == 0 ? 0u : (uint32_t)L.mode;
             pl.freezeNow = L.freezePending;
             pl.mask      = (li == 0 || L.maskResolved.empty()) ? nullptr : &L.maskResolved;
-            // Una capa apagada no aporta muestras, pero sigue contando: el
-            // índice de capa de las demás no cambia.
+            // A turned-off layer contributes no samples, but it still counts: the
+            // layer index of the others does not change.
             if (li > 0 && pl.weight <= 0.0f) continue;
 
             int enCapa = 0;
@@ -622,8 +622,8 @@ namespace DonTopo
                 out.samples[out.count++] = { clip < 0 ? 0 : clip, time, w, li };
                 enCapa++;
             };
-            // Las muestras de blend de un estado (1D o 2D), con SU reloj,
-            // escaladas por el peso que ese estado tiene en el fade.
+            // The blend samples of a state (1D or 2D), with ITS clock,
+            // scaled by the weight that state has in the fade.
             auto addMuestras = [&](int stateIdx, float time, float scale) {
                 BlendSample bs[3];
                 const int n = stateBlendSamples(stateIdx, time, bs, li);
@@ -631,8 +631,8 @@ namespace DonTopo
             };
             if (L.currentState < 0 || L.currentState >= (int)L.states.size())
             {
-                // Sin estado: la base cae al clip 0 como siempre; una capa
-                // superior sin grafo no dice nada.
+                // Without a state: the base falls to clip 0 as always; an upper
+                // layer without a graph says nothing.
                 if (li == 0) add(0, L.animTime, 1.0f);
                 continue;
             }
@@ -644,7 +644,7 @@ namespace DonTopo
             }
             else if (blending(li) && L.prevState < (int)L.states.size())
             {
-                // El que sale aporta su pareja completa, no solo su principal (A3).
+                // The outgoing one contributes its whole pair, not just its main one (A3).
                 addMuestras(L.prevState, L.prevAnimTime, 1.0f - w);
                 addMuestras(L.currentState, L.animTime, w);
             }
@@ -692,11 +692,11 @@ namespace DonTopo
                                             "property clip '" + st.propertyClipName + "', which does not exist");
                     continue;
                 }
-                // Sin clip de malla resuelto, el reloj del estado sale del clip
-                // de propiedades: el Animator cuenta en TICKS, así que se le da
-                // un ritmo fijo y la duración en ticks que le corresponde. Con
-                // clip de malla manda ese, y el de propiedades se muestrea por
-                // la fase del estado.
+                // Without a resolved mesh clip, the state clock comes from the property
+                // clip: the Animator counts in TICKS, so it is given
+                // a fixed rate and the duration in ticks that corresponds. With a
+                // mesh clip that one rules, and the property one is sampled by
+                // the state phase.
                 if (st.clipIndex < 0)
                 {
                     st.ticksPerSecond = 30.0f;
@@ -709,8 +709,8 @@ namespace DonTopo
             {
                 if (tr.target == TrackTarget::Parameter)
                 {
-                    // Una curva no depende del objeto: depende de que el
-                    // parámetro exista y sea Float.
+                    // A curve does not depend on the object: it depends on the
+                    // parameter existing and being Float.
                     tr.resolved = !tr.parameterName.empty() && hasFloatParameter(tr.parameterName);
                     if (!tr.resolved && warnings)
                         warnings->push_back("Animator: the curve of clip '" + clip.name +
@@ -753,9 +753,9 @@ namespace DonTopo
     int AnimatorComponent::propertySamples(PropertySampleRef* out, int max) const
     {
         int n = 0;
-        // Mismo reparto que pose(): cada capa aporta su estado actual y, en un
-        // fade, también el que se apaga, con el peso de los dos multiplicado
-        // por el de la capa.
+        // Same split as pose(): each layer contributes its current state and, in a
+        // fade, also the one being turned off, with the weight of both multiplied
+        // by that of the layer.
         for (int li = 0; li < (int)m_layers.size(); li++)
         {
             const float capa = layerWeight(li);
@@ -764,8 +764,8 @@ namespace DonTopo
             const int m = layerPropertySamples(li, propias, kMaxPoseSamplesPerLayer);
             for (int k = 0; k < m && n < max; k++)
             {
-                // Aquí sí entra el peso de la capa: esto es lo que se APLICA al
-                // objeto. Las curvas (applyCurves) no lo usan.
+                // Here the layer weight does enter: this is what gets APPLIED to the
+                // object. The curves (applyCurves) do not use it.
                 propias[k].weight *= capa;
                 out[n++] = propias[k];
             }
@@ -779,9 +779,9 @@ namespace DonTopo
         const int n = layerPropertySamples(li, muestras, kMaxPoseSamplesPerLayer);
         if (n == 0) return;
 
-        // Los parámetros que escriben estas muestras, sin repetir: en un fade
-        // los dos clips pueden tocar el mismo, y hay que mezclarlos, no
-        // escribirlos dos veces.
+        // The parameters these samples write, without repeats: in a fade the
+        // two clips may touch the same one, and they have to be blended, not
+        // written twice.
         const std::string* nombres[kMaxPoseSamplesPerLayer * 8];
         int numNombres = 0;
         for (int k = 0; k < n; k++)
@@ -807,11 +807,11 @@ namespace DonTopo
                     if (tr.parameterName != nombre) continue;
                     aporta[m++] = { samplePropertyTrack(tr, muestras[k].time, getFloat(nombre)),
                                     muestras[k].weight };
-                    break;   // una pista por parámetro y clip: la primera manda
+                    break;   // one track per parameter and clip: the first one rules
                 }
-            // El peso de la CAPA no entra: una pose se mezcla, un parámetro se
-            // escribe. Si dos capas tienen curva para el mismo parámetro gana la
-            // última, porque update() las recorre en orden.
+            // The LAYER weight does not enter: a pose is blended, a parameter is
+            // written. If two layers have a curve for the same parameter the
+            // last one wins, because update() traverses them in order.
             if (m > 0) setFloat(nombre, blendScalarValues(aporta, m));
         }
     }
@@ -922,7 +922,7 @@ namespace DonTopo
     int AnimatorComponent::poseClipB() const
     {
         const Layer& L = m_layers[0];
-        // Cross-fade: el destino aporta su clip PRIMARIO (solo caben dos clips).
+        // Cross-fade: the target contributes its PRIMARY clip (only two clips fit).
         return blending() ? currentClipIndex() : stateBlendPair(L.currentState, L.animTime).clipB;
     }
 
@@ -941,8 +941,8 @@ namespace DonTopo
     uint32_t AnimatorComponent::poseRootMotionMode() const
     {
         const Layer& L = m_layers[0];
-        // Durante un cross-fade manda el estado DESTINO, que ES L.currentState
-        // (el que aporta poseClipB): no hay caso especial que escribir.
+        // During a cross-fade the TARGET state rules, which IS L.currentState
+        // (the one that contributes poseClipB): there is no special case to write.
         if (L.currentState < 0 || L.currentState >= (int)L.states.size()) return 0u;
         return (uint32_t)L.states[L.currentState].rootMotion;
     }
@@ -960,9 +960,9 @@ namespace DonTopo
         {
             Layer& L = m_layers[li];
             enterState(L.entryState, li);
-            // Corta cualquier cross-fade en vuelo: tras esto el estado previo
-            // puede ni existir (el editor acaba de reeditar el grafo), y mezclar
-            // contra él dejaría una pose imposible o un índice fuera de rango.
+            // Cuts any in-flight cross-fade: after this the previous state
+            // may not even exist (the editor has just re-edited the graph), and blending
+            // against it would leave an impossible pose or an out-of-range index.
             L.prevState     = -1;
             L.prevAnimTime  = 0.0f;
             L.blendElapsed  = 0.0f;
@@ -993,10 +993,10 @@ namespace DonTopo
         {
             for (auto& st : L.states)
             {
-                // Las entradas del blend se resuelven SIEMPRE, aunque el primario
-                // falle: los avisos son independientes y ver solo uno mandaría a
-                // buscar al sitio equivocado. Una entrada recién añadida en el
-                // editor todavía no tiene clip: no es un error, no avisa.
+                // The blend entries are ALWAYS resolved, even if the primary one
+                // fails: the warnings are independent and seeing only one would send you
+                // looking in the wrong place. An entry just added in the
+                // editor does not have a clip yet: it is not an error, it does not warn.
                 for (auto& e : st.blendEntries)
                 {
                     const int b = e.clipName.empty() ? -1 : findClip(e.clipName);
@@ -1019,11 +1019,11 @@ namespace DonTopo
                 st.clipIndex      = found;
                 st.duration       = mesh.animationClips[found].duration;
                 st.ticksPerSecond = mesh.animationClips[found].ticksPerSecond;
-                // st.loop NO se toca: es autoría del usuario, no un dato del FBX.
+                // st.loop is NOT touched: it is user authoring, not FBX data.
             }
         }
-        // Máscaras por nombre de hueso: un nombre que el esqueleto no tiene
-        // avisa, como un clip que no existe, y no marca nada.
+        // Masks by bone name: a name the skeleton does not have
+        // warns, like a clip that does not exist, and marks nothing.
         for (auto& L : m_layers)
         {
             L.maskResolved.clear();
@@ -1043,9 +1043,9 @@ namespace DonTopo
             }
         }
 
-        // Huesos de las restricciones de IK, por nombre como los clips. En
-        // TwoBone el hueso es el EXTREMO y la cadena son sus dos padres: sin
-        // ellos no se puede resolver, así que la restricción se apaga y avisa.
+        // Bones of the IK constraints, by name like the clips. In
+        // TwoBone the bone is the END and the chain is its two parents: without
+        // them it cannot be resolved, so the constraint is turned off and warns.
         for (auto& c : m_ik)
         {
             c.boneIndex = c.parentIndex = c.grandParentIndex = -1;
@@ -1085,8 +1085,8 @@ namespace DonTopo
         for (auto& L : m_layers)
         for (auto& st : L.states)
         {
-            // Un estado cuenta UNA vez aunque el rename le toque los dos clips:
-            // lo que se devuelve son estados afectados, no referencias.
+            // A state counts ONCE even if the rename touches both its clips:
+            // what is returned is affected states, not references.
             bool touched = false;
             if (st.clipName == oldName)      { st.clipName      = newName; touched = true; }
             for (auto& e : st.blendEntries)
@@ -1099,9 +1099,9 @@ namespace DonTopo
     bool AnimatorComponent::conditionsMet(const Transition& t, int layer) const
     {
         const Layer& L = lay(layer);
-        // Una transición sin condiciones dispararía el frame en que se crea y
-        // haría el grafo inusable. Unity cubre ese caso con exit time, que está
-        // fuera de alcance.
+        // A transition without conditions would fire on the frame it is created and
+        // make the graph unusable. Unity covers that case with exit time, which is
+        // out of scope.
         if (t.conditions.empty()) return false;
 
         for (const auto& c : t.conditions)
@@ -1118,9 +1118,9 @@ namespace DonTopo
                     if (!L.finished) return false;
                     break;
                 case ConditionType::Int:
-                    // El umbral vive en float (ver comentario en AnimatorPanel), así que
-                    // redondeamos en vez de truncar: un JSON editado a mano con
-                    // threshold: 2.9 debe evaluar como 3, no como 2 silenciosamente.
+                    // The threshold lives in float (see comment in AnimatorPanel), so we
+                    // round instead of truncating: a hand-edited JSON with
+                    // threshold: 2.9 must evaluate as 3, not silently as 2.
                     if (!evalCompare(getInt(c.paramName), c.compare, (int)std::lround(c.threshold))) return false;
                     break;
                 case ConditionType::Float:
@@ -1134,14 +1134,14 @@ namespace DonTopo
     bool AnimatorComponent::exitTimeCrossed(double n0, double n1, float exitTime)
     {
         const double e = exitTime;
-        // A partir de 1 cuenta vueltas acumuladas: listo en cualquier frame
-        // que ya las haya dado.
+        // From 1 on it counts accumulated loops: ready on any frame
+        // that has already completed them.
         if (e >= 1.0) return n1 >= e;
-        // Primer update tras entrar con exitTime 0: el inicio de la vuelta
-        // cero es un cruce, o no dispararía hasta la segunda.
+        // First update after entering with exitTime 0: the start of loop
+        // zero is a crossing, or it would not fire until the second.
         if (e == 0.0 && n0 == 0.0) return true;
-        // Por debajo de 1, en cada vuelta: ¿hay un entero k con
-        // n0 < k + e <= n1? Cubre también el dt que da la vuelta cruzando e.
+        // Below 1, on every loop: is there an integer k with
+        // n0 < k + e <= n1? It also covers the dt that wraps around crossing e.
         return std::floor(n1 - e) > std::floor(n0 - e);
     }
 
@@ -1151,18 +1151,18 @@ namespace DonTopo
         if (t.hasExitTime)
         {
             if (hasDuration && !exitTimeCrossed(n0, n1, t.exitTime)) return false;
-            // Solo por tiempo: no hace falta ninguna condición.
+            // By time only: no condition is needed.
             if (t.conditions.empty()) return true;
         }
-        // Sin exit time y sin condiciones, conditionsMet devuelve false: una
-        // transición así no dispara nunca, como siempre.
+        // Without exit time and without conditions, conditionsMet returns false: such a
+        // transition never fires, as always.
         return conditionsMet(t, layer);
     }
 
     void AnimatorComponent::consumeTriggers(const Transition& t)
     {
-        // Solo los de la transición que gana: un trigger que nadie consume sigue
-        // armado esperando (mismo comportamiento que Unity).
+        // Only those of the winning transition: a trigger that nobody consumes stays
+        // armed waiting (same behavior as Unity).
         for (const auto& c : t.conditions)
             if (c.type == ConditionType::Trigger)
                 m_triggers[c.paramName] = false;
@@ -1173,14 +1173,14 @@ namespace DonTopo
         float mult = st.speed;
         if (!st.speedParam.empty() && hasParam(st.speedParam, ParamType::Float))
             mult *= getFloat(st.speedParam);
-        // Negativo o NaN congela: !(x > 0) es true también para NaN.
+        // Negative or NaN freezes: !(x > 0) is true for NaN too.
         if (!(mult > 0.0f)) mult = 0.0f;
         return st.ticksPerSecond * mult;
     }
 
     void AnimatorComponent::setSpeed(float s)
     {
-        m_speed = (s > 0.0f) ? s : 0.0f;   // negativo o NaN -> 0
+        m_speed = (s > 0.0f) ? s : 0.0f;   // negative or NaN -> 0
     }
 
     void AnimatorComponent::advanceClock(const State& st, float rate, float& time, bool* finished, float dt)
@@ -1196,8 +1196,8 @@ namespace DonTopo
                 }
                 else
                 {
-                    // Clavado en el último frame, y así se queda en los updates
-                    // siguientes.
+                    // Pinned on the last frame, and it stays that way in the following
+                    // updates.
                     time = st.duration;
                     if (finished) *finished = true;
                 }
@@ -1205,13 +1205,13 @@ namespace DonTopo
         }
         else if (finished)
         {
-            // Un clip sin resolver (clipIndex == -1, duration a 0) o de
-            // duración cero real nunca entraría en el bloque de arriba y
-            // jamás pondría L.finished a true: una salida "animation finished"
-            // se quedaría esperando para siempre. Semánticamente un estado de
-            // duración 0 ya ha terminado en el instante en que entra, así que
-            // se reafirma finished cada frame (igual que el clamp de arriba lo
-            // reafirma en el último frame de un clip normal sin loop).
+            // An unresolved clip (clipIndex == -1, duration at 0) or one of
+            // real zero duration would never enter the block above and
+            // would never set L.finished to true: an "animation finished" exit
+            // would be left waiting forever. Semantically a state of
+            // duration 0 has already finished the instant it is entered, so
+            // finished is reasserted every frame (just as the clamp above
+            // reasserts it on the last frame of a normal non-loop clip).
             *finished = true;
         }
     }
@@ -1222,16 +1222,16 @@ namespace DonTopo
         const double dur = st.duration;
         for (const auto& ev : st.events)
         {
-            // Instantes k·dur + c, k >= 0, dentro de [ticks0, ticks1). El reloj
-            // acumulado no tiene wrap, así que cruzar el loop o saltarse ciclos
-            // enteros con un dt grande sale del mismo cálculo.
+            // Instants k·dur + c, k >= 0, within [ticks0, ticks1). The accumulated
+            // clock has no wrap, so crossing the loop or skipping whole cycles
+            // with a large dt comes out of the same computation.
             const double c    = (double)ev.time * dur;
             double       kMin = std::ceil((ticks0 - c) / dur);
             if (kMin < 0.0) kMin = 0.0;
             double       kMax = std::ceil((ticks1 - c) / dur) - 1.0;
             if (!st.loop) kMax = std::min(kMax, 0.0);
             if (kMax < kMin) continue;
-            // Tope: un hitch de varios segundos no debe llenar la lista.
+            // Cap: a hitch of several seconds must not fill the list.
             const double veces = std::min(kMax - kMin + 1.0, (double)kMaxEventCyclesPerUpdate);
             for (int i = 0; i < (int)veces; i++)
                 m_firedEvents.push_back(ev.name);
@@ -1242,8 +1242,8 @@ namespace DonTopo
     {
         Layer& L = m_layers[0];
         const State& st = L.states[L.currentState];
-        // En un fade la pose usa el clip PRIMARIO de cada lado (ver poseClipB):
-        // el movimiento sale de lo mismo que se ve.
+        // In a fade the pose uses the PRIMARY clip of each side (see poseClipB):
+        // the movement comes from the same thing that is seen.
         if (blending())
         {
             const float w = blendWeight();
@@ -1259,8 +1259,8 @@ namespace DonTopo
         }
         BlendSample bs[3];
         const int n = stateBlendSamples(L.currentState, L.animTime, bs);
-        // Cada clip va en la fase del principal: sus ticks acumulados son los
-        // del principal escalados a su duración.
+        // Each clip goes at the main one's phase: its accumulated ticks are those
+        // of the main one scaled to its duration.
         for (int i = 0; i < n; i++)
         {
             const double esc = st.duration > 0.0f ? (double)bs[i].duration / st.duration : 0.0;
@@ -1271,11 +1271,11 @@ namespace DonTopo
 
     void AnimatorComponent::update(float dt, bool evaluateTransitions)
     {
-        // Solo lo de ESTE update: se vacía antes de cualquier return.
+        // Only what is from THIS update: it is emptied before any return.
         m_firedEvents.clear();
         m_rootMotionSamples.clear();
-        // Velocidad global: escala el dt entero, cross-fade incluido, en
-        // todas las capas.
+        // Global speed: it scales the whole dt, cross-fade included, in
+        // all the layers.
         dt *= m_speed;
         std::vector<const Transition*> consumir;
         for (int li = 0; li < (int)m_layers.size(); li++)
@@ -1302,10 +1302,10 @@ namespace DonTopo
             L.stateTicks += (double)dt * ritmo;
         advanceClock(actual, ritmo, L.animTime, &L.finished, dt);
 
-        // Cross-fade en curso: el estado que se apaga sigue animándose con SU
-        // ritmo y SU loop mientras dura la mezcla. Congelarlo daría un salto
-        // visible justo al empezar la transición, que es lo contrario de lo que
-        // el cross-fade viene a resolver.
+        // Cross-fade in progress: the state being turned off keeps animating with ITS
+        // rate and ITS loop while the blend lasts. Freezing it would give a
+        // visible jump right at the start of the transition, which is the opposite of what
+        // the cross-fade comes to solve.
         if (L.prevState >= 0 || L.frozenFade)
         {
             if (L.prevState >= 0 && L.prevState < (int)L.states.size())
@@ -1318,8 +1318,8 @@ namespace DonTopo
             L.blendElapsed += dt;
             if (L.blendDuration <= 0.0f || L.blendElapsed >= L.blendDuration)
             {
-                // Mezcla terminada: el destino se queda solo. A partir de aquí
-                // blendWeight() vuelve a valer 1 por el camino de siempre.
+                // Blend finished: the target stays alone. From here on
+                // blendWeight() is 1 again through the usual path.
                 L.prevState     = -1;
                 L.prevAnimTime  = 0.0f;
                 L.blendElapsed  = 0.0f;
@@ -1329,50 +1329,50 @@ namespace DonTopo
             }
         }
 
-        // Curvas ANTES de las transiciones y antes del return de Edit: el valor
-        // de este frame condiciona las transiciones de este frame, y en el
-        // preview del editor el parámetro se ve moverse en el panel.
+        // Curves BEFORE the transitions and before the Edit return: this frame's
+        // value conditions this frame's transitions, and in the
+        // editor preview the parameter is seen moving in the panel.
         applyCurves(li);
 
         if (!evaluateTransitions) return;
 
-        // Eventos ANTES de las transiciones: si este update sale del estado,
-        // su tramo final ya ha disparado. Solo el estado actual; el que se
-        // apaga en un fade no, o las pisadas saldrían dobles.
-        // Una capa apagada no dispara: no se ve.
+        // Events BEFORE the transitions: if this update leaves the state,
+        // its final stretch has already fired. Only the current state; the one being
+        // turned off in a fade does not, or the footsteps would come out doubled.
+        // A turned-off layer does not fire: it is not seen.
         if (conDuracion && (li == 0 || L.weight > 0.0f))
             collectEvents(actual, ticks0, L.stateTicks);
 
-        // Root motion con el mismo tramo: también antes de las transiciones.
-        // Solo la base mueve el GameObject.
+        // Root motion with the same stretch: also before the transitions.
+        // Only the base moves the GameObject.
         if (li == 0 && conDuracion && actual.rootMotion == RootMotion::Apply)
             collectRootMotion(ticks0, prevTicks0);
 
         const double n0 = conDuracion ? ticks0 / actual.duration : 0.0;
         const double n1 = conDuracion ? L.stateTicks / actual.duration : 0.0;
 
-        // Primero Any State y después las del estado actual, cada grupo por
-        // orden de declaración: la primera lista, gana. Es la prioridad de
-        // Unity, y lo que espera quien viene de allí.
+        // First Any State and then those of the current state, each group in
+        // declaration order: the first one that is ready wins. It is Unity's
+        // priority, and what someone coming from there expects.
         const Transition* elegida = nullptr;
         for (const auto& t : L.transitions)
         {
             if (t.fromState != kAnyState) continue;
             if (t.toState < 0 || t.toState >= (int)L.states.size()) continue;
-            // Hacia el estado actual solo con el flag: con un bool, reentrar
-            // reiniciaría el estado cada frame.
+            // Toward the current state only with the flag: with a bool, re-entering
+            // would restart the state every frame.
             if (t.toState == L.currentState && !t.canTransitionToSelf) continue;
-            // Misma regla que abajo: una caja rota no dispara.
+            // Same rule as below: a broken box does not fire.
             if (resolveEntryLeaf(t.toState, li) < 0) continue;
             if (transitionReady(t, n0, n1, conDuracion, li)) { elegida = &t; break; }
         }
         if (!elegida)
         {
-            // Por NIVELES: primero las que salen de la hoja, luego las de su
-            // caja, luego las de la caja de arriba. Así una salida general de un
-            // bloque no le gana a una salida concreta de un estado solo porque
-            // se declarara antes. Any State ya se ha mirado arriba y sigue
-            // teniendo prioridad sobre todo esto.
+            // By LEVELS: first those leaving the leaf, then those of its
+            // box, then those of the box above. This way a general exit of a
+            // block does not beat a specific exit of a state just because
+            // it was declared earlier. Any State was already checked above and still
+            // has priority over all of this.
             int nivel = L.currentState;
             for (int pasos = 0; nivel >= 0 && nivel < (int)L.states.size() && !elegida &&
                                 pasos <= (int)L.states.size(); pasos++)
@@ -1381,8 +1381,8 @@ namespace DonTopo
                 {
                     if (t.fromState != nivel) continue;
                     if (t.toState < 0 || t.toState >= (int)L.states.size()) continue;
-                    // Entrar en una caja rota no dispara: mejor quedarse donde
-                    // se está que a medias en un estado que no existe.
+                    // Entering a broken box does not fire: better to stay where
+                    // one is than halfway into a state that does not exist.
                     if (resolveEntryLeaf(t.toState, li) < 0) continue;
                     if (transitionReady(t, n0, n1, conDuracion, li)) { elegida = &t; break; }
                 }
@@ -1393,7 +1393,7 @@ namespace DonTopo
 
         {
             consumir.push_back(elegida);
-            startTransitionTo(elegida->toState, elegida->duration, li);   // una por update
+            startTransitionTo(elegida->toState, elegida->duration, li);   // one per update
         }
     }
 
@@ -1404,9 +1404,9 @@ namespace DonTopo
         {
             if (fading(layer))
             {
-                // Interrupción: la mezcla en vuelo se CONGELA en vez de
-                // descartarse (A4). El backend copia la pose de pantalla a la
-                // congelada antes de evaluar (freezeNow) y el fade sale de ella.
+                // Interruption: the in-flight blend is FROZEN instead of
+                // being discarded (A4). The backend copies the on-screen pose to the
+                // frozen one before evaluating (freezeNow) and the fade starts from it.
                 L.frozenFade     = true;
                 L.freezePending  = true;
                 L.prevState      = -1;
@@ -1415,8 +1415,8 @@ namespace DonTopo
             }
             else
             {
-                // El estado que dejamos pasa a ser el que se apaga, con el
-                // tiempo que llevara.
+                // The state we leave becomes the one being turned off, with the
+                // time it had.
                 L.prevState      = L.currentState;
                 L.prevStateTicks = L.stateTicks;
                 L.prevAnimTime   = L.animTime;
@@ -1426,7 +1426,7 @@ namespace DonTopo
         }
         else
         {
-            // Corte seco: ni estado previo ni mezcla, el camino de siempre.
+            // Hard cut: neither previous state nor blend, the usual path.
             L.prevStateTicks = 0.0;
             L.prevState     = -1;
             L.prevAnimTime  = 0.0f;
@@ -1444,9 +1444,9 @@ namespace DonTopo
         const int n = (int)L.states.size();
         auto avisa = [&](const std::string& msg) { if (warnings) warnings->push_back(msg); };
 
-        // Transiciones con índices imposibles: se van. Acotarlas seria peor,
-        // porque dejaria un link apuntando a un estado que el usuario no eligio.
-        // kAnyState es un centinela, no un indice fuera de rango.
+        // Transitions with impossible indices: they go away. Clamping them would be worse,
+        // because it would leave a link pointing to a state the user did not choose.
+        // kAnyState is a sentinel, not an out-of-range index.
         const size_t antes = L.transitions.size();
         L.transitions.erase(
             std::remove_if(L.transitions.begin(), L.transitions.end(),
@@ -1468,9 +1468,9 @@ namespace DonTopo
                 avisa("animator.state." + st.name + ": parent out of range, left at the root");
                 st.parent = -1;
             }
-            // Su propia comprobacion de rango, no un `else` de la de arriba: una
-            // guarda que se apoya en otra deja de proteger en cuanto alguien
-            // toca la primera, y aqui eso es indexar fuera del vector.
+            // Its own range check, not an `else` of the one above: a
+            // guard that leans on another stops protecting as soon as someone
+            // touches the first, and here that means indexing outside the vector.
             if (st.parent >= 0 && st.parent < n && !L.states[(size_t)st.parent].isSubMachine)
             {
                 avisa("animator.state." + st.name + ": the parent is not a sub-state machine, left at the root");
@@ -1483,15 +1483,15 @@ namespace DonTopo
             }
         }
 
-        // La entrada de una caja tiene que ser HIJA suya: apuntar a otro sitio
-        // haria que entrar en la caja saliera de ella.
+        // The entry of a box has to be ITS child: pointing elsewhere
+        // would make entering the box exit from it.
         for (int i = 0; i < n; i++)
         {
             State& st = L.states[(size_t)i];
             if (st.subEntry < 0) continue;
             if (!st.isSubMachine)
             {
-                st.subEntry = -1;   // no es una caja: el campo no significa nada
+                st.subEntry = -1;   // it is not a box: the field means nothing
                 continue;
             }
             if (L.states[(size_t)st.subEntry].parent != i)
@@ -1501,9 +1501,9 @@ namespace DonTopo
             }
         }
 
-        // Ciclos de contencion: subir desde cada estado con un tope. Si se pasa,
-        // ese estado a la raiz; sin esto, isDescendantOf y resolveEntryLeaf
-        // tendrian que fiarse de su propio tope en cada frame.
+        // Containment cycles: climb from each state with a cap. If it is exceeded,
+        // that state goes to the root; without this, isDescendantOf and resolveEntryLeaf
+        // would have to trust their own cap on every frame.
         for (int i = 0; i < n; i++)
         {
             int p = L.states[(size_t)i].parent, pasos = 0;
@@ -1516,8 +1516,8 @@ namespace DonTopo
             }
         }
 
-        // Entrada de la capa y playhead: un indice imposible aqui deja la capa
-        // sin arrancar.
+        // Entry of the layer and playhead: an impossible index here leaves the layer
+        // unstarted.
         if (L.entryState < -1 || L.entryState >= n)
         {
             avisa("animator: layer entry out of range");
@@ -1532,8 +1532,8 @@ namespace DonTopo
         const Layer& L = lay(layer);
         if (maybeAncestor < 0 || state < 0 || state >= (int)L.states.size()) return false;
         int actual = L.states[(size_t)state].parent;
-        // El tope es el número de estados: un fichero con un ciclo de parent no
-        // puede colgar el motor.
+        // The cap is the number of states: a file with a parent cycle cannot
+        // hang the engine.
         for (int pasos = 0; actual >= 0 && actual < (int)L.states.size() && pasos <= (int)L.states.size(); pasos++)
         {
             if (actual == maybeAncestor) return true;
@@ -1553,7 +1553,7 @@ namespace DonTopo
             if (!st.isSubMachine) return actual;
             actual = st.subEntry;
         }
-        return -1;   // ciclo de subEntry
+        return -1;   // subEntry cycle
     }
 
     int AnimatorComponent::stateIndexByName(const std::string& name, int layer) const
@@ -1567,8 +1567,8 @@ namespace DonTopo
     bool AnimatorComponent::play(const std::string& stateName, int layer)
     {
         const int idx = stateIndexByName(stateName, layer);
-        // Una caja entra por su hoja; si la cadena está rota no hay a dónde ir,
-        // y eso es un false, como un nombre que no existe.
+        // A box is entered through its leaf; if the chain is broken there is nowhere to go,
+        // and that is a false, like a name that does not exist.
         if (idx < 0 || resolveEntryLeaf(idx, layer) < 0) return false;
         startTransitionTo(idx, 0.0f, layer);
         return true;
@@ -1578,9 +1578,9 @@ namespace DonTopo
     {
         Layer& L = lay(layer);
         const int idx = stateIndexByName(stateName, layer);
-        // Misma guarda que play: una caja rota no tiene hoja a la que entrar.
+        // Same guard as play: a broken box has no leaf to enter.
         if (idx < 0 || resolveEntryLeaf(idx, layer) < 0) return false;
-        // Sin estado actual no hay nada que apagar: se entra con corte.
+        // Without a current state there is nothing to turn off: it is entered with a cut.
         const bool hayActual = L.currentState >= 0 && L.currentState < (int)L.states.size();
         startTransitionTo(idx, hayActual ? seconds : 0.0f, layer);
         return true;

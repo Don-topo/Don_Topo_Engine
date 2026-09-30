@@ -1,18 +1,18 @@
 add_executable(Sandbox
     src/main.cpp
 )
-# Recurso de Windows (icono del .exe): no existe fuera de Windows.
+# Windows resource (the .exe icon): it does not exist outside Windows.
 if(WIN32)
     target_sources(Sandbox PRIVATE Sandbox.rc)
 endif()
 
-# DonTopoEditor arrastra DonTopoCore como PUBLIC.
+# DonTopoEditor pulls in DonTopoCore as PUBLIC.
 target_link_libraries(Sandbox
     PRIVATE
         DonTopoEditor
 )
 
-# Compilar shaders GLSL -> SPIR-V con glslc
+# Compile GLSL shaders -> SPIR-V with glslc
 find_program(GLSLC glslc HINTS $ENV{VULKAN_SDK}/Bin $ENV{VULKAN_SDK}/bin)
 
 set(SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders)
@@ -24,16 +24,16 @@ file(GLOB GLSL_SOURCES
     "${SHADER_SRC_DIR}/*.comp"
 )
 
-# Trozos de GLSL que se incluyen desde otros shaders. NO entran en el GLOB de
-# arriba —un .glsl no es una etapa y glslc no sabría con qué perfil compilarlo—,
-# pero sí tienen que estar en los DEPENDS: sin eso, editar uno de estos deja los
-# .spv que lo incluyen sin regenerar, y el sintoma es un shader que se comporta
-# como la version anterior sin que nada falle.
+# GLSL fragments included from other shaders. They do NOT go into the GLOB
+# above (a .glsl is not a stage and glslc would not know which profile to compile it
+# with), but they must be in DEPENDS: without that, editing one of them leaves the
+# .spv files that include it unregenerated, and the symptom is a shader that behaves
+# like the previous version with nothing failing.
 #
-# Existen porque la alternativa es copiar la misma funcion en varios shaders, y
-# eso ya salio mal: pbr.frag y fog.comp muestrean el MISMO shadow map, cada uno
-# tenia su copia del criterio, y cambiar uno y no el otro dejo el in-scattering
-# apuntando a un lado y el shadow map construido hacia otro (H65).
+# They exist because the alternative is copying the same function into several shaders,
+# and that already went wrong: pbr.frag and fog.comp sample the SAME shadow map, each
+# had its own copy of the criterion, and changing one and not the other left the
+# in-scattering pointing one way and the shadow map built the other (H65).
 file(GLOB GLSL_INCLUDES "${SHADER_SRC_DIR}/*.glsl")
 
 foreach(SHADER ${GLSL_SOURCES})
@@ -47,13 +47,13 @@ foreach(SHADER ${GLSL_SOURCES})
     )
     list(APPEND SPV_FILES ${SPV_OUT})
 
-    # Rama DX12: SPIR-V -> HLSL (spirv-cross) -> DXIL (dxc). Cuelga del .spv, no
-    # del .glsl, para no compilar el GLSL dos veces y para que el HLSL sea
-    # siempre traducción de EXACTAMENTE el mismo SPIR-V que usa Vulkan.
+    # DX12 branch: SPIR-V -> HLSL (spirv-cross) -> DXIL (dxc). It hangs off the .spv, not
+    # the .glsl, so the GLSL is not compiled twice and the HLSL is
+    # always a translation of EXACTLY the same SPIR-V Vulkan uses.
     #
-    # --shader-model 60 es el mínimo que mapea los descriptor sets de Vulkan a
-    # register spaces de HLSL (layout(set=N) -> space N); por debajo de 5.1 no
-    # hay spaces y la traducción de pbr.frag, con 8 sets, colisionaría.
+    # --shader-model 60 is the minimum that maps Vulkan's descriptor sets to
+    # HLSL register spaces (layout(set=N) -> space N); below 5.1 there are
+    # no spaces and the translation of pbr.frag, with 8 sets, would collide.
     if(DTE_ENABLE_D3D12)
         get_filename_component(SHADER_EXT ${SHADER} EXT)
         if(SHADER_EXT STREQUAL ".vert")
@@ -84,7 +84,7 @@ endforeach()
 add_custom_target(Shaders ALL DEPENDS ${SPV_FILES} ${DXIL_FILES})
 add_dependencies(Sandbox Shaders)
 
-# Copiar assets al lado del ejecutable
+# Copy assets next to the executable
 add_custom_command(TARGET Sandbox POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/assets
@@ -92,7 +92,7 @@ add_custom_command(TARGET Sandbox POST_BUILD
     COMMENT "Copying assets to output directory"
 )
 
-# Copiar los .spv compilados al lado del ejecutable y a la raíz del proyecto
+# Copy the compiled .spv files next to the executable and to the project root
 add_custom_command(TARGET Sandbox POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -104,8 +104,8 @@ add_custom_command(TARGET Sandbox POST_BUILD
     COMMENT "Copying compiled shaders to output directory and project shaders/"
 )
 
-# Los .dxil van a los mismos dos sitios que los .spv, para que el backend DX12
-# encuentre sus shaders con las mismas rutas relativas al directorio de trabajo.
+# The .dxil files go to the same two places as the .spv files, so the DX12 backend
+# finds its shaders with the same paths relative to the working directory.
 if(DTE_ENABLE_D3D12)
     add_custom_command(TARGET Sandbox POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT_DIR}
@@ -119,9 +119,9 @@ if(DTE_ENABLE_D3D12)
     )
 endif()
 
-# Sembrar imgui.ini por defecto (layout del editor) solo si el ejecutable
-# todavía no tiene uno propio — así un clone+build nuevo arranca con un
-# layout razonable, pero no se pisa el que el usuario ya haya personalizado.
+# Seed the default imgui.ini (editor layout) only if the executable
+# does not have its own yet: that way a fresh clone+build starts with a
+# reasonable layout, but the one the user has already customized is not overwritten.
 add_custom_command(TARGET Sandbox POST_BUILD
     COMMAND ${CMAKE_COMMAND}
         -DSRC=${CMAKE_SOURCE_DIR}/imgui.ini
@@ -130,19 +130,19 @@ add_custom_command(TARGET Sandbox POST_BUILD
     COMMENT "Seeding default imgui.ini layout (if missing)"
 )
 
-# CRT de MSVC junto al ejecutable del editor, para que GameExporter pueda
-# meterlo app-local en el juego exportado (el paquete es una carpeta que se
-# copia: en la maquina del jugador no hay instalador que registre el VC++
-# Redistributable). Mismo patron que fmod.dll: primero al lado del .exe, y el
-# exportador lo recoge de ahi.
+# MSVC CRT next to the editor executable, so GameExporter can put it
+# app-local into the exported game (the package is a folder that gets
+# copied: on the player's machine there is no installer to register the VC++
+# Redistributable). Same pattern as fmod.dll: first next to the .exe, and the
+# exporter picks it up from there.
 #
-# Solo en Release: el CRT de depuracion no es redistribuible, asi que en Debug
-# no se copia nada y GameExporter avisa en su lugar. Se comprueba
-# CMAKE_BUILD_TYPE porque los presets del repo usan Ninja (single-config).
+# Release only: the debug CRT is not redistributable, so in Debug
+# nothing is copied and GameExporter warns instead. CMAKE_BUILD_TYPE is checked
+# because the repo's presets use Ninja (single-config).
 #
-# _SKIP evita que esto añada reglas de install(); aqui solo interesa la lista de
-# DLL que resuelve InstallRequiredSystemLibraries — inventar rutas a
-# VC/Redist/... a mano se rompe con cada actualizacion de la toolchain.
+# _SKIP keeps this from adding install() rules; here we only want the list of
+# DLLs InstallRequiredSystemLibraries resolves. Making up paths to
+# VC/Redist/... by hand breaks with every toolchain update.
 if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP ON)
     include(InstallRequiredSystemLibraries)

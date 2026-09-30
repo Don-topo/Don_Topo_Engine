@@ -7,43 +7,43 @@ namespace DonTopo {
 class ScriptManager;
 class GameObject;
 
-// Handle ligero que los bindings pasan a Lua en vez de GameObject* crudo.
-// Todos los métodos validan mgr->isAlive(go) antes de tocar el puntero
-// (la validación llega con el lifecycle en Task 6/8).
+// Lightweight handle the bindings pass to Lua instead of a raw GameObject*.
+// All methods validate mgr->isAlive(go) before touching the pointer
+// (the validation arrives with the lifecycle in Task 6/8).
 struct LuaEntity {
     GameObject*    go  = nullptr;
     ScriptManager* mgr = nullptr;
 };
 
 namespace ScriptBindings {
-    // Registra la API completa (Vec3, Log, Input/Key, Entity, Transform,
-    // componentes, Scene) en la VM de mgr. Llamado una vez desde
+    // Registers the whole API (Vec3, Log, Input/Key, Entity, Transform,
+    // components, Scene) in mgr's VM. Called once from
     // ScriptManager::init.
     void registerAll(ScriptManager& mgr);
 
-    // Buzón de una sola casilla para DonTopo.loadScene: el binding NO carga la
-    // escena (destruiría el GameObject que está ejecutando el script en curso),
-    // solo deja aquí la ruta. Quien es dueño de la escena —EditorUI::draw en el
-    // editor, el bucle de frame en el runtime— la drena FUERA del tick de
-    // scripts y hace la carga. Si un frame deja varias peticiones gana la
-    // última: las anteriores se pisan al escribir.
-    // Devuelve true y rellena outPath si había petición pendiente (y la
-    // consume); false si no había ninguna.
+    // Single-slot mailbox for DonTopo.loadScene: the binding does NOT load the
+    // scene (it would destroy the GameObject running the current script),
+    // it only leaves the path here. Whoever owns the scene (EditorUI::draw in the
+    // editor, the frame loop in the runtime) drains it OUTSIDE the script tick
+    // and does the load. If a frame leaves several requests the
+    // last one wins: the earlier ones are overwritten on write.
+    // Returns true and fills outPath if there was a pending request (and
+    // consumes it); false if there was none.
     bool takePendingSceneLoad(std::string& outPath);
 
-    // Tabla Time: la escriben estas dos funciones, no el binding, porque sus
-    // valores cambian cada frame y una tabla Lua no puede tener propiedades
-    // calculadas sin un metatable por campo (más caro que reescribir cuatro
-    // números). Las llama ScriptManager: tick() una vez por Update, reset() al
-    // entrar en Play. Fuera de Play los valores se quedan congelados en los del
-    // último frame jugado, que es lo que un script vería igualmente.
+    // Time table: these two functions write it, not the binding, because its
+    // values change every frame and a Lua table cannot have
+    // computed properties without a metatable per field (more expensive than rewriting four
+    // numbers). ScriptManager calls them: tick() once per Update, reset() when
+    // entering Play. Outside Play the values stay frozen at those of the
+    // last frame played, which is what a script would see anyway.
     void tickTime(ScriptManager& mgr, float dt);
     void resetTime(ScriptManager& mgr);
 
-    // Vacía la tabla del lua_State donde viven las funciones Lua enganchadas a
-    // los botones. La llama ScriptManager::invalidateScriptCallbacks junto con
-    // el relevo de la época: la época deja mudos a los callbacks viejos y esto
-    // suelta las funciones para que el GC de Lua se las lleve.
+    // Empties the table in the lua_State where the Lua functions hooked to
+    // the buttons live. ScriptManager::invalidateScriptCallbacks calls it together with
+    // the epoch handover: the epoch mutes the old callbacks and this
+    // releases the functions so Lua's GC takes them away.
     void clearUiCallbacks(ScriptManager& mgr);
 }
 

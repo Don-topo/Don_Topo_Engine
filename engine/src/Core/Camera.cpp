@@ -17,8 +17,8 @@ namespace DonTopo
         float velocity = moveSpeed * deltaTime;
         glm::vec3 right = glm::normalize(glm::cross(m_front, m_up));
 
-        // Keyboard. Se puede apagar sin apagar el mando: el editor necesita
-        // W/E/R libres para los atajos del gizmo mientras no se esté volando.
+        // Keyboard. It can be turned off without turning off the gamepad: the editor needs
+        // W/E/R free for the gizmo shortcuts while not flying.
         if (keyboardEnabled)
         {
             if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) m_pos += m_front * velocity;

@@ -14,8 +14,8 @@ namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// Compartida por ssao.comp y ssao_blur.comp, que comparten pipeline
-// layout (el blur solo lee invRes).
+// Shared by ssao.comp and ssao_blur.comp, which share a pipeline
+// layout (the blur only reads invRes).
 struct SsaoPush {
     float projP00;
     float projP11;
@@ -37,7 +37,7 @@ void SsaoPass::markClearPending()
 
 void SsaoPass::createPipelines(const Context& ctx)
 {
-    // --- Compute: origen muestreado + destino como storage image ---------
+    // --- Compute: sampled source + destination as a storage image ---------
     VkDescriptorSetLayoutBinding ssaoBindings[2]{};
     ssaoBindings[0].binding         = 0;
     ssaoBindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -55,7 +55,7 @@ void SsaoPass::createPipelines(const Context& ctx)
     if (vkCreateDescriptorSetLayout(ctx.gpu.device(), &dsl, nullptr, &m_descLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create ssao descriptor set layout!");
 
-    // Dos sets por frame: oclusion (depth → AO) y blur (AO → AO suavizado).
+    // Two sets per frame: occlusion (depth → AO) and blur (AO → smoothed AO).
     const uint32_t ssaoSets = kFramesInFlight * 2;
     VkDescriptorPoolSize ssaoSizes[2]{};
     ssaoSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -105,8 +105,8 @@ void SsaoPass::createPipelines(const Context& ctx)
     makeSsaoPipeline("shaders/ssao.comp.spv",      m_pipeline);
     makeSsaoPipeline("shaders/ssao_blur.comp.spv", m_blurPipeline);
 
-    // Queries propias: timestampsSupported y timestampPeriod ya los
-    // resolvio createBloomPipelines, que corre antes.
+    // Own queries: timestampsSupported and timestampPeriod were already
+    // resolved by createBloomPipelines, which runs earlier.
     if (ctx.timestampsSupported)
     {
         VkQueryPoolCreateInfo qpi{};
@@ -138,8 +138,8 @@ void SsaoPass::createImages(const Context& ctx)
 {
     for (int f = 0; f < kFramesInFlight; f++)
     {
-        // AO crudo y AO emborronado. TRANSFER_DST en el segundo: con el
-        // efecto apagado se limpia a 1.0 en vez de calcularse.
+        // Raw AO and blurred AO. TRANSFER_DST on the second one: with the
+        // effect off it is cleared to 1.0 instead of being computed.
         ctx.res.createImage(
             ctx.renderExtent.width, ctx.renderExtent.height,
             kSsaoFormat, VK_IMAGE_TILING_OPTIMAL,
@@ -156,13 +156,13 @@ void SsaoPass::createImages(const Context& ctx)
             m_blurImage[f], m_blurMemory[f]);
         ctx.res.createTextureImageView(m_blurImage[f], m_blurView[f], kSsaoFormat);
 
-        // Recien creada: contenido indefinido y layout UNDEFINED. El clear la
-        // deja en 1.0 y en GENERAL, que es lo que declara el binding 7.
+        // Freshly created: undefined content and UNDEFINED layout. The clear leaves it
+        // at 1.0 and in GENERAL, which is what binding 7 declares.
         m_clearPending[f] = true;
     }
 
-    // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
-    // free, igual que en el bloom.
+    // The sets from the previous time point to already destroyed views: reset and not
+    // free, as in the bloom.
     vkResetDescriptorPool(ctx.gpu.device(), m_descPool, 0);
 
     for (int f = 0; f < kFramesInFlight; f++)
@@ -182,13 +182,13 @@ void SsaoPass::createImages(const Context& ctx)
         m_blurSets[f] = sets[1];
 
         VkDescriptorImageInfo infos[4]{};
-        // Oclusion: lee el depth del pre-pass, escribe el AO crudo.
+        // Occlusion: reads the pre-pass depth, writes the raw AO.
         infos[0].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         infos[0].imageView   = ctx.depthView[f];
         infos[0].sampler     = ctx.depthSampler;
         infos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         infos[1].imageView   = m_view[f];
-        // Blur: lee el AO crudo, escribe el que consume pbr.frag.
+        // Blur: reads the raw AO, writes the one that pbr.frag consumes.
         infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         infos[2].imageView   = m_view[f];
         infos[2].sampler     = ctx.depthSampler;
@@ -264,9 +264,9 @@ void SsaoPass::recordPreDepth(const Context& ctx, VkCommandBuffer cmd)
     if (!ctx.state.ssaoEnabled())
     {
         m_gpuMs = 0.0f;
-        // Apagado: ni oclusión ni blur. Solo queda dejar el mapa en la
-        // identidad, y eso pasa UNA vez por imagen (al crearla y al apagar el
-        // efecto), no cada frame.
+        // Off: neither occlusion nor blur. All that is left is to put the map at
+        // identity, and that happens ONCE per image (when creating it and when turning the
+        // effect off), not every frame.
         if (m_clearPending[ctx.currentFrame])
         {
             b.image         = m_blurImage[ctx.currentFrame];
@@ -293,8 +293,8 @@ void SsaoPass::recordPreDepth(const Context& ctx, VkCommandBuffer cmd)
         return;
     }
 
-    // Timestamps del slot: se leen los de hace dos frames, cuya fence ya
-    // esperó drawFrame, así que no bloquean a nadie.
+    // Slot's timestamps: the ones from two frames ago are read, whose fence was already
+    // awaited by drawFrame, so they do not block anyone.
     if (ctx.timestampsSupported && m_queryPending[ctx.currentFrame])
     {
         uint64_t stamps[2] = {};
@@ -331,15 +331,15 @@ void SsaoPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& 
     b.subresourceRange.baseArrayLayer = 0;
     b.subresourceRange.layerCount     = 1;
 
-    // ── Oclusión + blur ──────────────────────────────────────────────────
+    // ── Occlusion + blur ──────────────────────────────────────────────────
     SsaoPush push{};
-    // Los cuatro coeficientes de la proyección del frame: la misma con la que
-    // se acaba de grabar el depth, así que reconstruir y reproyectar es
-    // consistente.
+    // The four coefficients of the frame's projection: the same one the
+    // depth was just recorded with, so reconstructing and reprojecting is
+    // consistent.
     //
-    // Aquí va con el Y-flip de Vulkan dentro y el backend de DirectX 12 manda
-    // el signo contrario, y las dos imágenes salen iguales: el pase no sale de
-    // espacio de pantalla y el signo se cancela. Está explicado en ssao.comp.
+    // Here it goes with Vulkan's Y-flip inside and the DirectX 12 backend sends the
+    // opposite sign, and the two images come out equal: the pass does not leave
+    // screen space and the sign cancels out. It is explained in ssao.comp.
     push.projP00   = proj[0][0];
     push.projP11   = proj[1][1];
     push.projP22   = proj[2][2];
@@ -351,10 +351,10 @@ void SsaoPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& 
     push.intensity = ctx.state.ssaoIntensity();
     push.power     = ctx.state.ssaoPower();
 
-    // Las dos imágenes entran desde UNDEFINED: se reescriben enteras y el
-    // contenido del frame anterior no se reutiliza. GENERAL para las dos,
-    // que es el único layout válido a la vez para imageStore y para
-    // muestrear, igual que en la cadena del bloom.
+    // The two images enter from UNDEFINED: they are rewritten entirely and the
+    // previous frame's content is not reused. GENERAL for both,
+    // which is the only layout valid at once for imageStore and for
+    // sampling, as in the bloom chain.
     VkImageMemoryBarrier toGeneral[2] = { b, b };
     toGeneral[0].image         = m_image[ctx.currentFrame];
     toGeneral[1].image         = m_blurImage[ctx.currentFrame];
@@ -377,7 +377,7 @@ void SsaoPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& 
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(cmd, gx, gy, 1);
 
-    // Lo que acaba de escribir la oclusión lo lee el blur.
+    // What the occlusion has just written is read by the blur.
     b.image         = m_image[ctx.currentFrame];
     b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
     b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
@@ -392,7 +392,7 @@ void SsaoPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& 
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(cmd, gx, gy, 1);
 
-    // Y el resultado lo lee pbr.frag en el pass de escena.
+    // And the result is read by pbr.frag in the scene pass.
     b.image         = m_blurImage[ctx.currentFrame];
     b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;

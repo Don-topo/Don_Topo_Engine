@@ -1,7 +1,7 @@
-// Test headless de como ModelLoader lee los ajustes de importacion de un modelo
-// (escala, normales, tangentes, UVs, animaciones). Sin GPU. Desde la raiz del repo:
-// usa assets/modelAnimation.fbx, que el test copia a una carpeta temporal para
-// poner el sidecar sin ensuciar assets/.
+// Headless test of how ModelLoader reads a model's import settings
+// (scale, normals, tangents, UVs, animations). No GPU. From the repo root:
+// it uses assets/modelAnimation.fbx, which the test copies to a temporary folder to
+// place the sidecar without dirtying assets/.
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Core/ImportSettings.h"
 #include "gltf_fixtures.h"
@@ -46,19 +46,19 @@ static void writeSettings(const fs::path& asset, const ModelImportSettings& s)
     CHECK(saveModelImportSettings(asset, s, &err));
 }
 
-// Dos triangulos plegados que comparten la arista p1-p3. T1 esta en el plano XY
-// (normal +Z); T2 va inclinado (normal (1,-1,1)/sqrt3). En T1 la u crece a lo largo
-// de +Y, asi que su tangente correcta es (0,1,0) y NO el fallback (1,0,0). El
-// importador de OBJ desenrolla los vertices por cara: los indices 0-2 son T1
-// (p1,p2,p3) y los 3-5 son T2 (p1,p3,p4).
+// Two folded triangles that share the edge p1-p3. T1 is in the XY plane
+// (normal +Z); T2 is tilted (normal (1,-1,1)/sqrt3). In T1 u grows along
+// +Y, so its correct tangent is (0,1,0) and NOT the fallback (1,0,0). The
+// OBJ importer unrolls the vertices per face: indices 0-2 are T1
+// (p1,p2,p3) and 3-5 are T2 (p1,p3,p4).
 static const char* kFoldedObj =
     "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 1\n"
     "vt 0 0\nvt 0 1\nvt 1 1\nvt 1 0\n"
     "f 1/1 2/2 3/3\n"
     "f 1/1 3/3 4/4\n";
 
-// Lo mismo, pero el fichero TRAE normales (todas +Z, tambien las de T2, que son
-// "mentira"): sirve para probar que smooth/flat las regeneran.
+// The same, but the file CARRIES normals (all +Z, also those of T2, which are
+// "lies"): it serves to prove that smooth/flat regenerate them.
 static const char* kFoldedObjWithNormals =
     "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 1\n"
     "vt 0 0\nvt 0 1\nvt 1 1\nvt 1 0\n"
@@ -90,7 +90,7 @@ static bool foldedShape(const Mesh& m)
 
 static glm::vec3 kFaceNormal2 = glm::normalize(glm::vec3(1.0f, -1.0f, 1.0f));
 
-// Review Focus 4: sin sidecar, exactamente lo de antes.
+// Review Focus 4: without a sidecar, exactly what it was before.
 static void test_defaults_match_the_old_flags()
 {
     const fs::path obj = writeObj("dt_model_import_defaults", kFoldedObj);
@@ -102,9 +102,9 @@ static void test_defaults_match_the_old_flags()
     CHECK(p2 != nullptr);
     if (!p2) return;
     CHECK(p2->uv.y == 0.0f);                                     // FlipUVs: v = 1 - 1
-    CHECK(glm::length(p2->normal - glm::vec3(0, 0, 1)) < 1e-3f); // GenNormals: plana de T1
-    CHECK(std::abs(p2->tangent.y) > 0.9f);                       // CalcTangentSpace corrio
-    CHECK(vertexAt(m, 0, { 2, 0, 0 }) == nullptr);               // escala 1
+    CHECK(glm::length(p2->normal - glm::vec3(0, 0, 1)) < 1e-3f); // GenNormals: flat from T1
+    CHECK(std::abs(p2->tangent.y) > 0.9f);                       // CalcTangentSpace ran
+    CHECK(vertexAt(m, 0, { 2, 0, 0 }) == nullptr);               // scale 1
 }
 
 static void test_scale_multiplies_positions()
@@ -152,7 +152,7 @@ static void test_flat_normals_regenerate_even_when_the_file_has_them()
 {
     const fs::path obj = writeObj("dt_model_import_flat", kFoldedObjWithNormals);
 
-    // Por defecto (file) se respetan las del fichero: T2 sale con +Z.
+    // By default (file) the ones from the file are respected: T2 comes out with +Z.
     {
         const Mesh m = ModelLoader::load(obj.string());
         CHECK(foldedShape(m));
@@ -172,7 +172,7 @@ static void test_flat_normals_regenerate_even_when_the_file_has_them()
     const Vertex* t2 = vertexAt(m, 1, { 0, 1, 1 });
     CHECK(t1 != nullptr && t2 != nullptr);
     if (t1) CHECK(glm::length(t1->normal - glm::vec3(0, 0, 1)) < 1e-3f);
-    if (t2) CHECK(glm::dot(t2->normal, kFaceNormal2) > 0.99f);   // regenerada, ya no +Z
+    if (t2) CHECK(glm::dot(t2->normal, kFaceNormal2) > 0.99f);   // regenerated, no longer +Z
 }
 
 static void test_smooth_normals_average_the_shared_vertices()
@@ -186,8 +186,8 @@ static void test_smooth_normals_average_the_shared_vertices()
     CHECK(foldedShape(smooth));
     if (!foldedShape(smooth)) return;
 
-    // p1 esta en las dos caras: suave = misma normal en las dos copias, y ni
-    // la de T1 (+Z) ni la de T2.
+    // p1 is on both faces: smooth = same normal on both copies, and neither
+    // that of T1 (+Z) nor that of T2.
     const Vertex* a = vertexAt(smooth, 0, { 0, 0, 0 });
     const Vertex* b = vertexAt(smooth, 1, { 0, 0, 0 });
     CHECK(a != nullptr && b != nullptr);
@@ -196,7 +196,7 @@ static void test_smooth_normals_average_the_shared_vertices()
     CHECK(glm::dot(a->normal, glm::vec3(0, 0, 1)) < 0.999f);
     CHECK(glm::dot(a->normal, kFaceNormal2) < 0.999f);
 
-    // Planas: cada copia conserva la de SU cara.
+    // Flat: each copy keeps the one of ITS face.
     s.normals = NormalsMode::Flat;
     writeSettings(obj, s);
     const Mesh flat = ModelLoader::load(obj.string());
@@ -208,7 +208,7 @@ static void test_smooth_normals_average_the_shared_vertices()
     if (fa && fb) CHECK(glm::length(fa->normal - fb->normal) > 0.1f);
 }
 
-// Review Focus 1: un sidecar hostil nunca tumba la carga.
+// Review Focus 1: a hostile sidecar never takes the load down.
 static void test_hostile_sidecar_never_breaks_the_load()
 {
     const fs::path obj = writeObj("dt_model_import_hostile", kFoldedObj);
@@ -219,11 +219,11 @@ static void test_hostile_sidecar_never_breaks_the_load()
 
     writeText(importSidecarPath(obj), R"({"version":1,"type":"model","scale":0})");
     m = ModelLoader::load(obj.string());
-    CHECK(foldedShape(m) && vertexAt(m, 0, { 1, 0, 0 }) != nullptr);   // 0 -> 1, no colapsa
+    CHECK(foldedShape(m) && vertexAt(m, 0, { 1, 0, 0 }) != nullptr);   // 0 -> 1, does not collapse
 
     writeText(importSidecarPath(obj), R"({"version":1,"type":"model","scale":1e30})");
     m = ModelLoader::load(obj.string());
-    CHECK(foldedShape(m) && vertexAt(m, 0, { 1000, 0, 0 }) != nullptr);   // acotado a 1000
+    CHECK(foldedShape(m) && vertexAt(m, 0, { 1000, 0, 0 }) != nullptr);   // clamped to 1000
 }
 
 static void test_missing_model_still_throws()
@@ -234,7 +234,7 @@ static void test_missing_model_still_throws()
     CHECK(threw);
 }
 
-// ── Skinned: el personaje de prueba del repo, copiado a una carpeta temporal ──
+// ── Skinned: the repo's test character, copied to a temporary folder ──
 
 static fs::path copyCharacter(const char* dirName)
 {
@@ -253,7 +253,7 @@ static float maxAbsCoord(const SkinnedMesh& m)
     return r;
 }
 
-// |b - 2a| dentro de una tolerancia relativa: la razon, no un valor absoluto.
+// |b - 2a| within a relative tolerance: the ratio, not an absolute value.
 static bool doubled(float a, float b)
 {
     return std::abs(b - 2.0f * a) <= 1e-3f * std::max(1.0f, std::abs(a));
@@ -267,9 +267,9 @@ static const BoneKeyframe* firstPosKey(const std::vector<AnimationClip>& clips)
     return nullptr;
 }
 
-// Riesgo del spec: GlobalScale frente a las unidades propias del importador FBX.
-// Se comprueba la RAZON con y sin ajuste sobre el FBX real. Si esto falla no se
-// debilita el test: es el hallazgo que el spec dejo anotado.
+// Spec risk: GlobalScale versus the FBX importer's own units.
+// The RATIO is checked with and without the setting on the real FBX. If this fails the
+// test is not weakened: it is the finding that the spec left noted.
 static void test_skinned_scale_scales_geometry_bones_and_clips()
 {
     const fs::path fbx = copyCharacter("dt_model_import_skinned_scale");
@@ -285,7 +285,7 @@ static void test_skinned_scale_scales_geometry_bones_and_clips()
 
     CHECK(doubled(maxAbsCoord(base), maxAbsCoord(scaled)));
 
-    // Un hueso cuyo offset tenga traslacion apreciable: se duplica.
+    // A bone whose offset has noticeable translation: it is doubled.
     bool checkedBone = false;
     for (size_t i = 0; i < base.skeleton.inverseBindPose.size() &&
                        i < scaled.skeleton.inverseBindPose.size(); ++i)
@@ -299,7 +299,7 @@ static void test_skinned_scale_scales_geometry_bones_and_clips()
     }
     CHECK(checkedBone);
 
-    // La primera clave de traslacion de un clip: se duplica.
+    // The first translation key of a clip: it is doubled.
     const BoneKeyframe* k0 = firstPosKey(base.animationClips);
     const BoneKeyframe* k1 = firstPosKey(scaled.animationClips);
     CHECK(k0 != nullptr && k1 != nullptr);
@@ -311,7 +311,7 @@ static void test_import_animations_off_leaves_the_builtin_source_empty()
 {
     const fs::path fbx = copyCharacter("dt_model_import_anim_off");
     const SkinnedMesh base = ModelLoader::loadSkinned(fbx.string());
-    CHECK(!base.animationClips.empty());          // precondicion: el fixture trae clips
+    CHECK(!base.animationClips.empty());          // precondition: the fixture carries clips
 
     ModelImportSettings s;
     s.importAnimations = false;
@@ -324,11 +324,11 @@ static void test_import_animations_off_leaves_the_builtin_source_empty()
         CHECK(off.animationSources[0].builtin);
         CHECK(off.animationSources[0].clipNames.empty());
     }
-    CHECK(off.skinnedVertices.size() == base.skinnedVertices.size());   // la malla sigue
+    CHECK(off.skinnedVertices.size() == base.skinnedVertices.size());   // the mesh follows
 }
 
-// Cada FBX usa SU sidecar: los clips de una fuente externa se escalan con el del
-// propio fichero de animacion.
+// Each FBX uses ITS sidecar: the clips of an external source are scaled with that of the
+// animation file itself.
 static void test_animation_source_uses_its_own_scale()
 {
     const fs::path fbx = copyCharacter("dt_model_import_clip_scale");
@@ -349,11 +349,11 @@ static void test_animation_source_uses_its_own_scale()
                   doubled(copy0.value.z, k1->value.z));
 }
 
-// ── Preview para las miniaturas del Content Browser ──────────────────────────
+// ── Preview for the Content Browser thumbnails ──────────────────────────
 
 using Rgba = std::array<uint8_t, 4>;
 
-// TGA sin comprimir de 32 bits, origen arriba a la izquierda.
+// Uncompressed 32-bit TGA, origin at the top left.
 static void writeTga(const fs::path& p, int w, int h, const std::function<Rgba(int, int)>& pixel)
 {
     std::ofstream f(p, std::ios::binary);
@@ -385,12 +385,12 @@ static size_t previewTriangles(const ModelPreview& p)
 static bool hasDependency(const ModelPreview& p, const fs::path& dep)
 {
     for (const FileStamp& d : p.dependencies)
-        if (d.stamped && sameAssetPath(d.path, dep)) return true;   // selladas, no solo nombradas
+        if (d.stamped && sameAssetPath(d.path, dep)) return true;   // sealed, not just named
     return false;
 }
 
-// El preview pinta lo mismo que el motor: mismo numero de triangulos que loadAuto,
-// en un modelo estatico con textura y en un personaje con varias submallas.
+// The preview draws the same as the engine: same number of triangles as loadAuto,
+// in a static model with a texture and in a character with several submeshes.
 static void test_preview_matches_the_engine_triangle_count()
 {
     for (const char* file : { "assets/modelTexture.fbx", "assets/modelAnimation.fbx" })
@@ -402,15 +402,15 @@ static void test_preview_matches_the_engine_triangle_count()
         if (!engine) continue;
         CHECK(previewTriangles(preview) == engine->indices.size() / 3);
     }
-    // El personaje trae varias submallas: una parte por cada una.
+    // The character carries several submeshes: one part for each.
     const ModelPreview character = ModelLoader::loadPreview("assets/modelAnimation.fbx");
     CHECK(character.parts.size() > 1);
 
-    // Estatico con DOS mallas (dos grupos de OBJ, sin huesos): loadAuto (el
-    // objeto simple, sin repartir en hijos) solo pinta la primera, pero desde
-    // la Task 5 el preview trae TODAS las apariciones -- aqui 2, una por
-    // grupo -- igual que collectPieces/loadStatic: la miniatura ya no
-    // pretende igualar a un loadAuto que deliberadamente se queda corto.
+    // Static with TWO meshes (two OBJ groups, no bones): loadAuto (the
+    // simple object, not split into children) only draws the first one, but since
+    // Task 5 the preview brings ALL the occurrences (here 2, one per
+    // group), same as collectPieces/loadStatic: the thumbnail no longer
+    // pretends to match a loadAuto that deliberately falls short.
     const fs::path dir = makeDir("dt_model_preview_two_meshes");
     writeText(dir / "dos.obj",
               "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 5 0 0\nv 6 0 0\nv 5 1 0\n"
@@ -418,12 +418,12 @@ static void test_preview_matches_the_engine_triangle_count()
               "g b\nf 4 5 6\n");
     const std::shared_ptr<Mesh> twoEngine = ModelLoader::loadAuto((dir / "dos.obj").string());
     const ModelPreview twoPreview = ModelLoader::loadPreview((dir / "dos.obj").string());
-    CHECK(twoEngine && twoEngine->indices.size() == 3);      // precondicion: el motor pinta una
+    CHECK(twoEngine && twoEngine->indices.size() == 3);      // precondition: the engine draws one
     CHECK(twoPreview.parts.size() == 2);
     CHECK(previewTriangles(twoPreview) == 2);
 }
 
-// La textura embebida se reduce: lado mayor <= 256.
+// The embedded texture is downscaled: longest side <= 256.
 static void test_preview_texture_is_downscaled()
 {
     const ModelPreview p = ModelLoader::loadPreview("assets/modelTexture.fbx");
@@ -435,10 +435,10 @@ static void test_preview_texture_is_downscaled()
         CHECK(std::max(part.albedo.w, part.albedo.h) <= kPreviewMaxTexture);
         CHECK(part.albedo.rgba.size() == static_cast<size_t>(part.albedo.w) * part.albedo.h * 4);
     }
-    CHECK(textured);   // precondicion: el fixture trae textura
+    CHECK(textured);   // precondition: the fixture carries a texture
 }
 
-// Un FBX que solo trae animacion (Mixamo "without skin") no es un fallo.
+// An FBX that only carries animation (Mixamo "without skin") is not a failure.
 static void test_preview_animation_only_file()
 {
     const ModelPreview p = ModelLoader::loadPreview("assets/animatedCharacter/standing idle 01.fbx");
@@ -454,8 +454,8 @@ static void test_preview_garbage_and_missing_are_unreadable()
     CHECK(ModelLoader::loadPreview((dir / "no_existe.obj").string()).status == PreviewStatus::Unreadable);
 }
 
-// Textura externa: se lee, se reduce conservando la proporcion y es una dependencia.
-// El sidecar tambien lo es aunque todavia no exista.
+// External texture: it is read, downscaled preserving the proportion and is a dependency.
+// The sidecar is one too even though it does not exist yet.
 static void test_preview_external_texture_and_sidecar_are_dependencies()
 {
     const fs::path dir = makeDir("dt_model_preview_external");
@@ -476,12 +476,12 @@ static void test_preview_external_texture_and_sidecar_are_dependencies()
     if (!img.rgba.empty()) CHECK(img.rgba[0] == 255 && img.rgba[1] == 0 && img.rgba[2] == 0);
     CHECK(hasDependency(p, dir / "rojo.tga"));
     CHECK(hasDependency(p, importSidecarPath(obj)));
-    // Revision final, Important 2: cambiar map_Kd en el .mtl no toca el .obj; sin
-    // esto la miniatura no se regeneraria nunca.
+    // Final review, Important 2: changing map_Kd in the .mtl does not touch the .obj; without
+    // this the thumbnail would never be regenerated.
     CHECK(hasDependency(p, dir / "quad.mtl"));
 }
 
-// El sidecar cambia el aspecto: normals = flat regenera las normales del fichero.
+// The sidecar changes the look: normals = flat regenerates the normals from the file.
 static void test_preview_respects_the_normals_setting()
 {
     const fs::path obj = writeObj("dt_model_preview_normals", kFoldedObjWithNormals);
@@ -491,14 +491,14 @@ static void test_preview_respects_the_normals_setting()
                 if (glm::length(n - kFaceNormal2) < 1e-3f) return true;
         return false;
     };
-    CHECK(!hasTiltedNormal(ModelLoader::loadPreview(obj.string())));   // las del fichero: todas +Z
+    CHECK(!hasTiltedNormal(ModelLoader::loadPreview(obj.string())));   // those of the file: all +Z
     ModelImportSettings s;
     s.normals = NormalsMode::Flat;
     writeSettings(obj, s);
     CHECK(hasTiltedNormal(ModelLoader::loadPreview(obj.string())));
 }
 
-// Una textura enorme se rechaza por su CABECERA: 65535 x 65535 sin cuerpo.
+// A huge texture is rejected by its HEADER: 65535 x 65535 with no body.
 static void test_preview_image_rejects_huge_sources()
 {
     const fs::path dir = makeDir("dt_model_preview_huge");
@@ -512,8 +512,8 @@ static void test_preview_image_rejects_huge_sources()
     CHECK(ModelLoader::loadPreviewImage(dir / "no_existe.png").rgba.empty());
 }
 
-// La miniatura pinta TODAS las piezas en su sitio: el preview trae una parte por
-// aparicion, con la transformacion aplicada.
+// The thumbnail draws ALL the pieces in place: the preview brings one part per
+// occurrence, with the transformation applied.
 static void test_preview_draws_every_piece_in_place()
 {
     const fs::path dir = makeDir("dt_pieces_preview");
@@ -526,12 +526,12 @@ static void test_preview_draws_every_piece_in_place()
         for (const glm::vec3& v : part.positions) if (glm::length(v - q) < 1e-4f) return true;
         return false;
     };
-    CHECK(hasPos(p.parts[0], { 6, 0, 0 }));    // (1,0,0) de A trasladado 5 en X
-    CHECK(hasPos(p.parts[1], { 0, 2, 0 }));    // (0,1,0) de B escalado 2
-    CHECK(hasPos(p.parts[2], { 1, 0, -3 }));   // (1,0,0) de C trasladado -3 en Z
+    CHECK(hasPos(p.parts[0], { 6, 0, 0 }));    // (1,0,0) of A translated 5 in X
+    CHECK(hasPos(p.parts[1], { 0, 2, 0 }));    // (0,1,0) of B scaled 2
+    CHECK(hasPos(p.parts[2], { 1, 0, -3 }));   // (1,0,0) of C translated -3 in Z
 }
 
-// ── Formatos, texturas en subcarpeta y ficheros asociados ────────────────────
+// ── Formats, textures in a subfolder and associated files ────────────────────
 
 static void test_supported_model_extensions()
 {
@@ -549,11 +549,11 @@ static void test_resolve_texture_prefers_the_subfolder()
     const fs::path dir = makeDir("dt_resolve_sub");
     fs::create_directories(dir / "textures");
     writeText(dir / "textures" / "x.tga", "sub");
-    writeText(dir / "x.tga", "root");                         // homonima junto al modelo
+    writeText(dir / "x.tga", "root");                         // same-named one next to the model
     CHECK(sameAssetPath(ModelLoader::resolveModelTexture(dir, "textures/x.tga"), dir / "textures" / "x.tga"));
 }
 
-// Review Focus 3: lo de siempre (nombre suelto) sigue funcionando.
+// Review Focus 3: the usual case (bare name) still works.
 static void test_resolve_texture_falls_back_to_the_bare_name()
 {
     const fs::path dir = makeDir("dt_resolve_bare");
@@ -574,7 +574,7 @@ static void test_companions_of_obj()
     if (c.size() == 2) { CHECK(c[0] == "a.mtl"); CHECK(c[1] == "sub/b.mtl"); }
 }
 
-// Review Focus 5: %20 se decodifica; data:, absolutas y .. se ignoran.
+// Review Focus 5: %20 is decoded; data:, absolute paths and .. are ignored.
 static void test_companions_of_gltf()
 {
     const fs::path dir = makeDir("dt_companions_gltf");
@@ -616,7 +616,7 @@ static std::string base64(const std::vector<uint8_t>& in)
     return out;
 }
 
-// Un triangulo: 3 posiciones (36 bytes) + 3 UV (24 bytes) = 60 bytes.
+// One triangle: 3 positions (36 bytes) + 3 UVs (24 bytes) = 60 bytes.
 static std::vector<uint8_t> triangleBuffer()
 {
     const float data[15] = { 0, 0, 0,  1, 0, 0,  0, 1, 0,   0, 0,  1, 0,  0, 1 };
@@ -625,7 +625,7 @@ static std::vector<uint8_t> triangleBuffer()
     return b;
 }
 
-// bufferUri vacio = sin "uri" (el buffer va en el chunk BIN de un .glb).
+// empty bufferUri = no "uri" (the buffer goes in the BIN chunk of a .glb).
 static std::string triangleGltfJson(const std::string& bufferUri, const std::string& imageUri)
 {
     std::string j = R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
@@ -648,7 +648,7 @@ static void writeGlb(const fs::path& p)
 {
     std::string json = triangleGltfJson("", "");
     while (json.size() % 4) json += ' ';
-    const std::vector<uint8_t> bin = triangleBuffer();          // 60: ya multiplo de 4
+    const std::vector<uint8_t> bin = triangleBuffer();          // 60: already a multiple of 4
     std::ofstream f(p, std::ios::binary);
     auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
     u32(0x46546C67); u32(2); u32(static_cast<uint32_t>(12 + 8 + json.size() + 8 + bin.size()));
@@ -675,7 +675,7 @@ static void test_gltf_with_embedded_buffer_loads()
     catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
 }
 
-// Buffer externo y textura en subcarpeta: la textura se resuelve a textures/.
+// External buffer and texture in a subfolder: the texture is resolved to textures/.
 static void test_gltf_with_external_bin_and_subfolder_texture()
 {
     const fs::path dir = makeDir("dt_gltf_external");
@@ -713,7 +713,7 @@ static void test_glb_loads()
     catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
 }
 
-// Review Focus 1: sin su .bin, error limpio (no crash) y preview Unreadable.
+// Review Focus 1: without its .bin, a clean error (no crash) and an Unreadable preview.
 static void test_gltf_missing_bin_fails_cleanly()
 {
     const fs::path dir = makeDir("dt_gltf_missing_bin");
@@ -724,12 +724,12 @@ static void test_gltf_missing_bin_fails_cleanly()
     CHECK(threw);
     const ModelPreview p = ModelLoader::loadPreview((dir / "tri.gltf").string());
     CHECK(p.status == PreviewStatus::Unreadable);
-    CHECK(hasDependency(p, dir / "no_esta.bin"));      // vigilado: se regenera cuando aparezca
+    CHECK(hasDependency(p, dir / "no_esta.bin"));      // watched: it is regenerated when it shows up
 }
 
-// Revision final, Critical 1: las texturas que nombra el .mtl tambien son
-// asociados del .obj, con su ruta tal cual (el loader las resuelve respecto a la
-// carpeta del modelo). La opcion antes del nombre (-o, -s...) no cuenta.
+// Final review, Critical 1: the textures named by the .mtl are also
+// associated files of the .obj, with their path as is (the loader resolves them relative to the
+// model folder). The option before the name (-o, -s...) does not count.
 static void test_companions_of_obj_include_the_mtl_textures()
 {
     const fs::path dir = makeDir("dt_companions_obj_tex");
@@ -741,8 +741,8 @@ static void test_companions_of_obj_include_the_mtl_textures()
     if (c.size() == 3) { CHECK(c[0] == "mats/a.mtl"); CHECK(c[1] == "tex/c.png"); CHECK(c[2] == "n.png"); }
 }
 
-// Revision final, Important 2: Assimp NO decodifica %20 en la URI de la imagen;
-// el loader tiene que encontrar "rojo x.tga" igual.
+// Final review, Important 2: Assimp does NOT decode %20 in the image URI;
+// the loader has to find "rojo x.tga" all the same.
 static void test_gltf_texture_uri_with_spaces_loads()
 {
     const fs::path dir = makeDir("dt_gltf_spaces");
@@ -760,7 +760,7 @@ static void test_gltf_texture_uri_with_spaces_loads()
     catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
 }
 
-// ── Piezas de un modelo estatico ─────────────────────────────────────────────
+// ── Pieces of a static model ─────────────────────────────────────────────
 
 static bool nearMat(const glm::mat4& a, const glm::mat4& b)
 {
@@ -789,7 +789,7 @@ static void test_load_static_lists_every_piece()
         if (m.pieces.size() != 3) return;
         CHECK(m.pieces[0].piece == 0 && m.pieces[0].name == "A");
         CHECK(m.pieces[1].piece == 1 && m.pieces[1].name == "B");
-        CHECK(m.pieces[2].piece == 0 && m.pieces[2].name == "C");   // malla reutilizada
+        CHECK(m.pieces[2].piece == 0 && m.pieces[2].name == "C");   // reused mesh
         CHECK(nearMat(m.pieces[0].transform, glm::translate(glm::mat4(1.0f), glm::vec3(5, 0, 0))));
         CHECK(nearMat(m.pieces[1].transform, glm::scale(glm::mat4(1.0f), glm::vec3(2.0f))));
         CHECK(nearMat(m.pieces[2].transform, glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -3))));
@@ -805,7 +805,7 @@ static void test_load_piece_gives_that_mesh()
     {
         const Mesh b = ModelLoader::load((dir / "casa.gltf").string(), 1);
         CHECK(b.piece == 1);
-        CHECK(hasVertex(b, { 0, 0, 1 }) && !hasVertex(b, { 1, 0, 0 }));   // triangulo en YZ, sin transformar
+        CHECK(hasVertex(b, { 0, 0, 1 }) && !hasVertex(b, { 1, 0, 0 }));   // triangle in YZ, untransformed
         const Mesh a0 = ModelLoader::load((dir / "casa.gltf").string());
         const Mesh a1 = ModelLoader::load((dir / "casa.gltf").string(), 0);
         CHECK(a0.piece == 0 && a0.vertices.size() == a1.vertices.size() && hasVertex(a0, { 1, 0, 0 }));
@@ -818,7 +818,7 @@ static void test_load_piece_gives_that_mesh()
     CHECK(threw);
 }
 
-// Review Focus 5: una sola malla = una sola pieza (y el editor no crea hijos).
+// Review Focus 5: a single mesh = a single piece (and the editor does not create children).
 static void test_single_mesh_file_is_one_piece()
 {
     const fs::path obj = writeObj("dt_pieces_single", kFoldedObj);
@@ -827,7 +827,7 @@ static void test_single_mesh_file_is_one_piece()
     CHECK(m.pieces.size() == 1);
 }
 
-// La escala del sidecar lleva las piezas juntas: tambien multiplica la traslacion.
+// The sidecar scale carries the pieces along: it also multiplies the translation.
 static void test_sidecar_scale_moves_the_pieces_too()
 {
     const fs::path dir = makeDir("dt_pieces_scale");
@@ -842,10 +842,10 @@ static void test_sidecar_scale_moves_the_pieces_too()
     if (!m.meshes.empty()) CHECK(hasVertex(m.meshes[0], { 2, 0, 0 }));
 }
 
-// Review de la Task 1: hasTriangles nunca se ejercitaba en su rama false. Una
-// malla sin ningun triangulo (primitivo LINES) no debe generar pieza, aunque
-// SI aparezca en meshes (loadStatic construye una Mesh por cada malla del
-// fichero, con triangulos o sin ellos).
+// Task 1 review: hasTriangles was never exercised in its false branch. A
+// mesh with no triangle at all (LINES primitive) must not generate a piece, even though it
+// DOES appear in meshes (loadStatic builds one Mesh for each mesh of the
+// file, with triangles or without them).
 static void test_lineless_mesh_produces_no_piece()
 {
     const fs::path dir = makeDir("dt_pieces_no_triangles");
@@ -860,10 +860,10 @@ static void test_lineless_mesh_produces_no_piece()
     catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
 }
 
-// Review de la Task 1: con la raiz en identidad, un solo nivel de nodos no
-// distingue "padre * hijo" de "hijo * padre". Con dos niveles reales (A
-// trasladado, B escalado, colgando de A) la traslacion resultante SOLO
-// coincide con A*B si la composicion es la correcta.
+// Task 1 review: with the root at identity, a single level of nodes does not
+// tell "parent * child" apart from "child * parent". With two real levels (A
+// translated, B scaled, hanging from A) the resulting translation ONLY
+// matches A*B if the composition is correct.
 static void test_nested_node_transform_composes_parent_then_child()
 {
     const fs::path dir = makeDir("dt_pieces_nested");
@@ -880,9 +880,9 @@ static void test_nested_node_transform_composes_parent_then_child()
     catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
 }
 
-// Review final: un glTF con UN solo nodo de primer nivel no tiene raiz
-// sintetica -- ese nodo ES mRootNode y lleva la correccion de ejes/unidades del
-// autor. En glTF la raiz aporta su transformacion (solo FBX la descarta).
+// Final review: a glTF with ONE single first-level node has no synthetic
+// root; that node IS mRootNode and carries the author's axis/unit correction.
+// In glTF the root contributes its transform (only FBX discards it).
 static void test_gltf_single_root_node_transform_is_applied()
 {
     const fs::path dir = makeDir("dt_pieces_single_root");
@@ -899,10 +899,10 @@ static void test_gltf_single_root_node_transform_is_applied()
     catch (const std::exception& e) { std::printf("  %s\n", e.what()); CHECK(false); }
 }
 
-// Review final: una pieza con un eje casi aplastado (escala 1e-20) da una
-// matriz normal con 1e20; la longitud de la normal transformada desborda a inf
-// y `len > 1e-8f` la dejaba pasar: normal = tn / inf = vector cero. Toda normal
-// de la miniatura tiene que ser finita y unitaria.
+// Final review: a piece with an almost flattened axis (scale 1e-20) gives a
+// normal matrix with 1e20; the length of the transformed normal overflows to inf
+// and `len > 1e-8f` let it through: normal = tn / inf = zero vector. Every normal
+// of the thumbnail has to be finite and unit length.
 static void test_preview_normals_survive_a_flattened_piece()
 {
     const fs::path dir = makeDir("dt_pieces_flattened");

@@ -4,25 +4,25 @@
 
 namespace DonTopo {
 
-// Huecos libres de un vector de objetos de render.
+// Free slots of a vector of render objects.
 //
-// Los dos backends guardan sus objetos en un vector y anotan el indice dentro
-// del GameObject (`staticRenderIndex` / `skinnedRenderIndex`). Eso impide
-// COMPACTAR al borrar —mover una entrada dejaria a todos los demas apuntando a
-// otra malla—, asi que el hueco se queda ahi y el vector solo crece: un ciclo
-// Play/Stop sumaba ranuras para siempre (H19, H43). Con el pool, borrar
-// devuelve el indice y la siguiente alta lo reutiliza, con lo que los indices
-// ajenos siguen significando lo mismo.
+// Both backends keep their objects in a vector and record the index inside the
+// GameObject (`staticRenderIndex` / `skinnedRenderIndex`). That prevents
+// COMPACTING on delete (moving one entry would leave all the others pointing to
+// another mesh), so the hole stays there and the vector only grows: a
+// Play/Stop cycle added slots forever (H19, H43). With the pool, deleting
+// returns the index and the next add reuses it, so the indices of
+// others keep meaning the same thing.
 //
-// En D3D12 reciclar el indice recicla ademas su bloque de descriptores, porque
-// el bloque se deriva del indice (`kSrvObjects + indice * kSrvPerObject`).
+// In D3D12 recycling the index also recycles its descriptor block, because
+// the block is derived from the index (`kSrvObjects + index * kSrvPerObject`).
 //
-// Header-only y sin dependencias: lo usan los dos backends y sus tests.
+// Header-only and dependency-free: used by both backends and their tests.
 class SlotPool {
 public:
-    // Un hueco libre, o -1 si no hay: entonces el llamante crece su vector,
-    // que es lo que se hacia siempre antes de esto. LIFO — el ultimo liberado
-    // es el primero en volver.
+    // A free slot, or -1 if there is none: then the caller grows its vector,
+    // which is what was always done before this. LIFO: the last one freed
+    // is the first to come back.
     int acquire()
     {
         if (m_free.empty())
@@ -34,14 +34,14 @@ public:
         return slot;
     }
 
-    // Devuelve el hueco. Ignora los negativos (un *RenderIndex sin asignar) y
-    // los que YA estan libres.
+    // Returns the slot. Ignores negatives (an unassigned *RenderIndex) and
+    // those that are ALREADY free.
     //
-    // Ese segundo caso es la razon de llevar `m_isFree` y no solo la pila: un
-    // doble release —quitar un subarbol que ya se habia quitado— dejaria el
-    // mismo indice dos veces en la lista, y dos objetos nuevos acabarian
-    // compartiendo ranura y bloque de descriptores. No lo avisaria ni la capa
-    // de validacion: los dos indices son validos, solo que son el mismo.
+    // That second case is the reason for keeping `m_isFree` and not just the stack: a
+    // double release (removing a subtree that had already been removed) would leave the
+    // same index twice in the list, and two new objects would end up
+    // sharing a slot and a descriptor block. Not even the validation layer
+    // would warn about it: both indices are valid, they just are the same one.
     void release(int slot)
     {
         if (slot < 0)
@@ -55,8 +55,8 @@ public:
         m_free.push_back(slot);
     }
 
-    // Los vectores de objetos se han vaciado enteros (clearStaticMeshes, o el
-    // apagado): ningun hueco anterior sigue siendo valido.
+    // The object vectors have been emptied entirely (clearStaticMeshes, or
+    // shutdown): no previous slot is valid any more.
     void clear()
     {
         m_free.clear();
@@ -67,8 +67,8 @@ public:
 
 private:
     std::vector<int>  m_free;
-    // Indexado por hueco: true = esta en m_free. Solo para rechazar el doble
-    // release; crece hasta el indice mas alto que se haya liberado.
+    // Indexed by slot: true = it is in m_free. Only to reject the double
+    // release; it grows up to the highest index that has been freed.
     std::vector<bool> m_isFree;
 };
 

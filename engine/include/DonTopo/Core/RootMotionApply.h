@@ -5,10 +5,10 @@ namespace DonTopo
 {
     class GameObject;
 
-    // Aplica un delta de root motion (espacio de modelo del objeto) en mundo,
-    // solo en horizontal. Con Rigidbody dinámico, como velocidad en X y Z
-    // (conserva la Y: gravedad y saltos), para que la física colisione. Sin
-    // Rigidbody o con uno kinematic, sobre el transform: Scene::update ya
-    // empuja la pose de un kinematic a PhysX con setKinematicTarget.
+    // Applies a root motion delta (object model space) in world space,
+    // horizontal only. With a dynamic Rigidbody, as velocity in X and Z
+    // (it keeps Y: gravity and jumps), so that physics collides. Without a
+    // Rigidbody or with a kinematic one, on the transform: Scene::update already
+    // pushes the pose of a kinematic to PhysX with setKinematicTarget.
     void applyRootMotion(GameObject& go, const glm::vec3& deltaModel, float dt);
 }

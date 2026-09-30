@@ -15,9 +15,9 @@ void SelectionOutlinePass::crearPar(const Context& ctx,
                                     VkPipeline& relleno, VkPipeline& wireframe,
                                     const char* queSon)
 {
-    // Los dos shaders son los MISMOS para estaticas y con huesos: lo unico que
-    // cambia entre los dos pares es de donde salen las posiciones y las
-    // normales, y eso viaja en el vertex input.
+    // The two shaders are the SAME for static and bone meshes: the only thing that
+    // changes between the two pairs is where the positions and the
+    // normals come from, and that travels in the vertex input.
     VkShaderModule vert = loadShaderModule(ctx.gpu.device(), "shaders/outline.vert.spv");
     VkShaderModule frag = loadShaderModule(ctx.gpu.device(), "shaders/outline.frag.spv");
 
@@ -34,11 +34,11 @@ void SelectionOutlinePass::crearPar(const Context& ctx,
     VkPipelineRasterizationStateCreateInfo rs = rasterizacion;
     rs.cullMode = kCullMode;
 
-    // Solo posicion y normal: outline.vert no consume color, uv ni tangent, y
-    // declararlos hace saltar el aviso "Vertex attribute at location N not
-    // consumed by vertex shader" de la capa de validacion. Mismo binding y
-    // mismos offsets que el pipeline del que sale la plantilla — solo se
-    // describen menos atributos, el buffer que se bindea es el mismo.
+    // Only position and normal: outline.vert does not consume color, uv or tangent, and
+    // declaring them triggers the "Vertex attribute at location N not
+    // consumed by vertex shader" warning of the validation layer. Same binding and
+    // same offsets as the pipeline the template comes from (only fewer attributes
+    // are described, the buffer that is bound is the same).
     VkVertexInputAttributeDescription attrs[2]{};
     attrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, posOffset };
     attrs[1] = { 3, 0, VK_FORMAT_R32G32B32_SFLOAT, normalOffset };
@@ -52,10 +52,10 @@ void SelectionOutlinePass::crearPar(const Context& ctx,
     pci.pRasterizationState = &rs;
     pci.pVertexInputState   = &vi;
     pci.layout              = ctx.pipelineLayout;
-    // El contorno se dibuja en el pass de composicion (ya en LDR) y no en el de
-    // escena: por el pass HDR, el tonemap le cambiaria el naranja plano. Alli el
-    // skybox ya esta dibujado, asi que el depthWrite del casco deja de hacer
-    // falta para taparlo — se queda como venga en la plantilla, que no molesta.
+    // The outline is drawn in the composition pass (already in LDR) and not in the
+    // scene one: through the HDR pass, the tonemap would change its flat orange. There the
+    // skybox is already drawn, so the hull's depthWrite is no longer needed
+    // to cover it; it is left as it comes in the template, which does no harm.
     pci.renderPass          = ctx.compositeRenderPass;
 
     VkResult r = vkCreateGraphicsPipelines(ctx.gpu.device(), VK_NULL_HANDLE, 1, &pci,
@@ -76,8 +76,8 @@ void SelectionOutlinePass::crearPar(const Context& ctx,
 
     r = vkCreateGraphicsPipelines(ctx.gpu.device(), VK_NULL_HANDLE, 1, &pciWire,
                                   nullptr, &wireframe);
-    // Los modulos ya no hacen falta: los pipelines se quedan con lo suyo. Se
-    // sueltan ANTES de lanzar para no fugarlos en el camino de error.
+    // The modules are no longer needed: the pipelines keep what is theirs. They are
+    // released BEFORE throwing so as not to leak them on the error path.
     vkDestroyShaderModule(ctx.gpu.device(), vert, nullptr);
     vkDestroyShaderModule(ctx.gpu.device(), frag, nullptr);
     if (r != VK_SUCCESS)

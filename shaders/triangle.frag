@@ -11,19 +11,19 @@ layout(location = 0) out vec4 outColor;
 
 #include "lights_config.glsl"
 #include "shadow_config.glsl"
-// Huecos de matriz de sombra. Los 6 primeros son de la luz KEY (4 cascadas,
-// o 6 caras de cubemap, o 1 cara de foco); los 4 de detras son un foco
-// secundario cada uno. Mismo valor que SHADOW_MATRICES en
+// Shadow matrix slots. The first 6 belong to the KEY light (4 cascades,
+// or 6 cubemap faces, or 1 spot face); the 4 after them are one secondary
+// spot each. Same value as SHADOW_MATRICES in
 // UniformBufferObject.h.
-// Mismo layout que DonTopo::Light. direction.w = tipo (0 point, 1 spot,
-// 2 directional, 3 area); params = (range, cos interior, cos exterior, ancho).
+// Same layout as DonTopo::Light. direction.w = type (0 point, 1 spot,
+// 2 directional, 3 area); params = (range, inner cos, outer cos, width).
 struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };
 
 layout(set = 0, binding = 0) uniform UBO {
     mat4  view;
     mat4  proj;
     mat4  lightSpaceMatrix[SHADOW_MATRICES];
-    vec4  cascadeSplits;    // distancia (view space, positiva) hasta la que llega cada cascada
+    vec4  cascadeSplits;    // distance (view space, positive) that each cascade reaches
     Light lights[MAX_LIGHTS];
     vec4  viewPos;
     int   numLights;
@@ -33,14 +33,14 @@ layout(set = 0, binding = 1) uniform sampler2D texSampler;
 layout(set = 0, binding = 2) uniform sampler2D normalMap;
 layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowMap;
 
-// Direccion hacia la luz y atenuacion segun su tipo. Identica a la de pbr.frag:
-// si las dos dejan de coincidir, el mismo objeto se ve distinto segun tenga o no
-// material PBR.
+// Direction towards the light and attenuation according to its type. Identical to pbr.frag's:
+// if the two stop matching, the same object looks different depending on whether it has a
+// PBR material or not.
 float lightSample(int i, vec3 worldPos, out vec3 L)
 {
     int type = int(ubo.lights[i].direction.w + 0.5);
 
-    // Directional: sin posicion ni atenuacion, solo direccion.
+    // Directional: no position or attenuation, only direction.
     if (type == 2)
     {
         L = normalize(-ubo.lights[i].direction.xyz);
@@ -51,15 +51,15 @@ float lightSample(int i, vec3 worldPos, out vec3 L)
     float dist = length(toL);
     L = toL / max(dist, 1e-4);
 
-    // El area se aproxima como un point de radio = ancho/2.
+    // The area light is approximated as a point of radius = width/2.
     float range = (type == 3) ? max(ubo.lights[i].params.w * 0.5, 1e-4)
                               : max(ubo.lights[i].params.x, 1e-4);
-    // Misma ventana por radio que el binning de Forward+: fuera del rango da
-    // EXACTAMENTE 0, que es lo que permite descartar la luz sin que se note.
+    // Same radius window as the Forward+ binning: outside the range it gives
+    // EXACTLY 0, which is what allows discarding the light without it being noticeable.
     float w   = clamp(1.0 - (dist * dist) / (range * range), 0.0, 1.0);
     float att = w * w;
 
-    // Spot: cono suave entre el coseno interior y el exterior.
+    // Spot: soft cone between the inner and the outer cosine.
     if (type == 1)
     {
         float cosA = dot(normalize(ubo.lights[i].direction.xyz), -L);
@@ -68,8 +68,8 @@ float lightSample(int i, vec3 worldPos, out vec3 L)
     return att;
 }
 
-// Misma seleccion y mismo PCF que pbr.frag; ver alli el porque de reproyectar
-// desde la posicion de mundo en vez de traerla del vertex shader.
+// Same selection and same PCF as pbr.frag; see there why it reprojects
+// from the world position instead of bringing it from the vertex shader.
 int selectCascade(float viewDepth)
 {
     for (int i = 0; i < SHADOW_CASCADES; i++)
@@ -117,7 +117,7 @@ void main()
         float spec      = pow(max(dot(viewDir, reflDir), 0.0), 32.0);
         vec3 lightColor = ubo.lights[i].color.rgb * ubo.lights[i].color.a;
 
-        float s = (i == 0) ? shadow : 1.0; // solo key light proyecta sombra
+        float s = (i == 0) ? shadow : 1.0; // only the key light casts shadow
         result += att * s * (diff * texColor * lightColor + 0.3 * spec * lightColor);
     }
 

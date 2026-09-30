@@ -26,9 +26,9 @@ namespace DonTopo
 
     std::string makeSharedMeshKey(const Mesh& mesh)
     {
-        // Vertex no tiene padding (14 floats seguidos, todos alineados a 4), así
-        // que hashear sus bytes en crudo es determinista: no hay huecos sin
-        // inicializar que metan ruido.
+        // Vertex has no padding (14 consecutive floats, all 4-aligned), so
+        // hashing its raw bytes is deterministic: there are no uninitialized gaps
+        // that add noise.
         static_assert(sizeof(Vertex) == 14 * sizeof(float),
                       "makeSharedMeshKey hashes Vertex raw: if it gains padding, it must be hashed field by field");
 
@@ -46,21 +46,21 @@ namespace DonTopo
         if (!m.embeddedMetallicRoughness.empty())
             h = fnv1a(m.embeddedMetallicRoughness.data(), m.embeddedMetallicRoughness.size(), h);
 
-        // Los discriminantes exactos van en claro delante del hash: para que dos
-        // meshes DISTINTOS colisionen no basta con una colisión de FNV, tienen
-        // que coincidir además en tamaños y paths. Compartir dos mallas
-        // distintas sería corrupción visible, así que el coste de esta cadena de
-        // más está justificado.
+        // The exact discriminants go in the clear ahead of the hash: for two
+        // DIFFERENT meshes to collide an FNV collision is not enough, they
+        // must also match in sizes and paths. Sharing two different
+        // meshes would be a visible corruption, so the cost of this extra
+        // string is justified.
         //
-        // metallic y roughness ESTABAN aquí y se fueron a propósito: son por
-        // objeto (RenderObject) y viajan por push constant, así que no dicen
-        // nada sobre los recursos de GPU que esta clave nombra. Mientras
-        // estuvieron, cambiar un número obligaba a re-clavear el objeto y
-        // rehacer sus recursos —waitForGpu y tres texturas de vuelta—, que es
-        // exactamente por lo que los sliders no podían aplicar en vivo; y de
-        // paso dos cubos idénticos con distinto metallic no compartían VRAM.
-        // Lo que SÍ sigue aquí es la RUTA del mapa ORM, que nombra una textura
-        // de verdad.
+        // metallic and roughness WERE here and were removed on purpose: they are per
+        // object (RenderObject) and travel by push constant, so they say
+        // nothing about the GPU resources this key names. While
+        // they were here, changing a number forced re-keying the object and
+        // rebuilding its resources (waitForGpu and three textures back), which is
+        // exactly why the sliders could not apply live; and
+        // incidentally two identical cubes with different metallic did not share VRAM.
+        // What DOES remain here is the PATH of the ORM map, which names a real
+        // texture.
         char tail[64];
         std::snprintf(tail, sizeof(tail), "|%llu", (unsigned long long)h);
 
@@ -84,9 +84,9 @@ namespace DonTopo
         key += std::to_string(m.embeddedMetallicRoughness.size());
         key += tail;
 
-        // Ajustes de importacion de las tres texturas, AL FINAL (el prefijo de
-        // geometria que compara rebuildStaticMesh son los dos primeros campos) y
-        // solo si alguno no es el de siempre: las claves de hoy no cambian.
+        // Import settings of the three textures, AT THE END (the geometry
+        // prefix that rebuildStaticMesh compares is the first two fields) and
+        // only if any is not the usual one: today's keys do not change.
         const std::string ts0 = textureKeySuffix(m.texturePath);
         const std::string ts1 = textureKeySuffix(m.normalMapPath);
         const std::string ts2 = textureKeySuffix(m.metallicRoughnessPath);
@@ -127,8 +127,8 @@ namespace DonTopo
         e.key  = key;
         e.refs = 1;
         e.live = true;
-        // Después de marcar el slot vivo: si create lanza, release/destroyAll
-        // siguen viendo una entrada coherente que limpiar.
+        // After marking the slot alive: if create throws, release/destroyAll
+        // still see a consistent entry to clean up.
         create(e.gpu);
 
         m_byKey.emplace(key, index);
@@ -144,10 +144,10 @@ namespace DonTopo
 
         if (--e.refs > 0) return;
 
-        // Copia ANTES de vaciar: el slot vuelve al freelist ya, y un acquire de
-        // este mismo frame puede reutilizarlo mientras la destrucción de verdad
-        // sigue encolada. Capturar la entrada por referencia sería destruir los
-        // handles del inquilino nuevo.
+        // Copy BEFORE emptying: the slot goes back to the freelist right away, and an acquire of
+        // this same frame can reuse it while the real destruction
+        // is still queued. Capturing the entry by reference would destroy
+        // the new tenant's handles.
         const SharedGpuMesh snapshot = e.gpu;
 
         m_byKey.erase(e.key);
@@ -203,8 +203,8 @@ namespace DonTopo
 
     const std::string& SharedGpuMeshCache::keyOf(int index) const
     {
-        // Estática y no un temporal: se devuelve por referencia, así que tiene
-        // que sobrevivir a la llamada igual que la clave de una entrada viva.
+        // Static and not a temporary: it is returned by reference, so it has
+        // to outlive the call just like the key of a live entry.
         static const std::string kSinClave;
         if (index < 0 || index >= (int)m_entries.size()) return kSinClave;
         const Entry& e = m_entries[(size_t)index];

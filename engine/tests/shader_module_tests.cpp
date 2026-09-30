@@ -1,12 +1,11 @@
-// Test headless de readSpvFile, la lectura de un .spv compartida por los 16
-// ficheros que antes llevaban su propia copia (H11).
+// Headless test of readSpvFile, the .spv read shared by the 16 files that
+// used to carry their own copy (H11).
 //
-// Crear el VkShaderModule necesita device, asi que eso no se prueba aqui. Lo
-// que si se prueba es lo UNICO que la copia repetida no hacia y que era el
-// motivo de unificar: validar el tamano antes de pasarselo a Vulkan. `pCode` es
-// un `const uint32_t*`, asi que un fichero truncado —una compilacion de shaders
-// a medias, un .spv a medio escribir— hacia que vkCreateShaderModule leyera
-// fuera del buffer.
+// Creating the VkShaderModule needs a device, so that is not tested here. What
+// is tested is the ONE thing the repeated copy did not do and the reason for
+// unifying: validating the size before handing it to Vulkan. `pCode` is a
+// `const uint32_t*`, so a truncated file (a half-finished shader compilation, a
+// half-written .spv) made vkCreateShaderModule read outside the buffer.
 #include "DonTopo/Renderer/ShaderModule.h"
 
 #include <cstdio>
@@ -39,7 +38,7 @@ static bool lanza(const std::filesystem::path& p)
     }
 }
 
-// El caso de siempre: un .spv bien formado se lee entero.
+// The usual case: a well-formed .spv is read in full.
 static void test_lee_un_spv_valido()
 {
     const std::filesystem::path p = writeBytes("dt_test_ok.spv", 16);
@@ -54,9 +53,9 @@ static void test_lee_un_spv_valido()
     std::filesystem::remove(p);
 }
 
-// Un .spv truncado NO es un modulo valido: SPIR-V son palabras de 32 bits.
-// Antes esto llegaba tal cual a vkCreateShaderModule, que lee `codeSize` bytes
-// como uint32_t y se pasaba del final del vector.
+// A truncated .spv is NOT a valid module: SPIR-V is 32-bit words.
+// Before, this reached vkCreateShaderModule as is, which reads `codeSize` bytes
+// as uint32_t and ran past the end of the vector.
 static void test_tamano_no_multiplo_de_cuatro()
 {
     const std::filesystem::path p = writeBytes("dt_test_trunc.spv", 13);
@@ -64,7 +63,7 @@ static void test_tamano_no_multiplo_de_cuatro()
     std::filesystem::remove(p);
 }
 
-// Fichero de cero bytes: lo deja un build de shaders interrumpido a mitad.
+// Zero-byte file: left behind by a shader build interrupted halfway.
 static void test_fichero_vacio()
 {
     const std::filesystem::path p = writeBytes("dt_test_empty.spv", 0);
@@ -72,9 +71,9 @@ static void test_fichero_vacio()
     std::filesystem::remove(p);
 }
 
-// El que ya funcionaba, y que hay que conservar: el mensaje lleva la RUTA. Era
-// lo unico que distinguia a las cuatro variantes que habia sueltas por el
-// motor, y sin el, "failed to open shader" no dice cual.
+// The one that already worked, and that must be kept: the message carries the
+// PATH. It was the only thing that told apart the four variants scattered around
+// the engine, and without it, "failed to open shader" does not say which one.
 static void test_fichero_que_no_existe_nombra_la_ruta()
 {
     const std::string ruta = "shaders/no_existe_jamas.spv";

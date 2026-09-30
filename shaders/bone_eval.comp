@@ -3,9 +3,9 @@ layout(local_size_x = 64) in;
 
 struct PosKey  { vec4 timePad; vec4 value; };
 struct RotKey  { vec4 timePad; vec4 quat;  };
-// Layout std430, espejo de GpuBoneInfo (engine/include/DonTopo/Renderer/SkinnedMesh.h)
-// y del mismo struct en bone_hierarchy.comp. Los tres tienen que coincidir campo
-// a campo y en el mismo orden.
+// std430 layout, mirror of GpuBoneInfo (engine/include/DonTopo/Renderer/SkinnedMesh.h)
+// and of the same struct in bone_hierarchy.comp. The three have to match field
+// by field and in the same order.
 struct BoneInfo {
     int posOffset, posCount;
     int rotOffset, rotCount;
@@ -20,26 +20,26 @@ layout(set=0, binding=1, std430) readonly buffer RotKeys    { RotKey  data[]; } 
 layout(set=0, binding=2, std430) readonly buffer ScaleKeys  { PosKey  data[]; } scaleKeys;
 layout(set=0, binding=3, std430) readonly buffer BoneInfos  { BoneInfo data[]; } boneInfos;
 layout(set=0, binding=4, std430) buffer LocalXforms         { mat4 data[]; } localXforms;
-// Pose de cada CAPA en TRS, 3 vec4 por hueso (pos, rot, escala), un bloque de
-// boneCount por capa. escala.w = 0 marca "esta capa no anima el hueso". La de
-// una capa additive es su delta. La copia a frozenTrs al interrumpir un fade
-// es la pose congelada del siguiente, capa a capa.
+// Pose of each LAYER in TRS, 3 vec4 per bone (pos, rot, scale), one block of
+// boneCount per layer. scale.w = 0 marks "this layer does not animate the bone". That of
+// an additive layer is its delta. The copy to frozenTrs when interrupting a fade
+// is the next one's frozen pose, layer by layer.
 layout(set=0, binding=8, std430) buffer PoseTrs             { vec4 data[]; } poseTrs;
 layout(set=0, binding=9, std430) readonly buffer FrozenTrs  { vec4 data[]; } frozenTrs;
-// Bloque de pose (capas, muestras, máscaras), una copia por frame en vuelo.
-// Layout en engine/include/DonTopo/Renderer/PoseBlock.h.
+// Pose block (layers, samples, masks), one copy per frame in flight.
+// Layout in engine/include/DonTopo/Renderer/PoseBlock.h.
 layout(set=0, binding=10, std430) readonly buffer PoseBlock { uint data[]; } poseBlock;
 
 layout(push_constant) uniform PC {
     uint boneCount;
     uint vertexCount;
-    // --- Solo los lee bone_eval.comp ---
-    uint rootMotionMode;    // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
-    // Offset (en uints) de la copia de este frame del bloque de pose. El mismo
-    // bloque de 24 bytes en los cuatro .comp, en SkinningPass::Push y en
-    // ComputePush de D3D12.
+    // --- Only read by bone_eval.comp ---
+    uint rootMotionMode;    // 0 free, 1 root pinned to bind, 2 only X and Z
+    // Offset (in uints) of this frame's copy of the pose block. The same
+    // 24-byte block in the four .comp files, in SkinningPass::Push and in
+    // D3D12's ComputePush.
     uint poseBlockOffset;
-    // --- bone_ik.comp y bone_hierarchy.comp (ver allí) ---
+    // --- bone_ik.comp and bone_hierarchy.comp (see there) ---
     uint ikBlockOffset;
     uint flags;
 } push;
@@ -71,11 +71,11 @@ mat4 trs(vec3 t, vec4 q, vec3 s)
     );
 }
 
-// Muestrea el hueso descrito por info en el instante T. Sale por referencia
-// porque el cross-fade necesita las TRES componentes por separado para
-// mezclarlas antes de componer la matriz: mezclar dos matrices ya compuestas
-// interpola la rotación por sus columnas y deja poses torcidas en cuanto los
-// dos clips no miran casi al mismo sitio.
+// Samples the bone described by info at time T. It comes out by reference
+// because the cross-fade needs the THREE components separately in order to
+// blend them before composing the matrix: blending two already composed matrices
+// interpolates the rotation through its columns and leaves twisted poses as soon as the
+// two clips do not look almost at the same place.
 void sampleBone(BoneInfo info, float T, out vec3 pos, out vec4 rot, out vec3 scl)
 {
     pos = vec3(0.0);
@@ -113,10 +113,10 @@ void sampleBone(BoneInfo info, float T, out vec3 pos, out vec4 rot, out vec3 scl
     }
 }
 
-// Único punto de override de la raíz, sobre la posición ya mezclada.
-// rootMotionMode 1 clava toda la traslación a la de bind (el clip en el sitio);
-// 2 (root motion) clava solo X y Z, la Y se queda para que el vaivén del paso se
-// vea y el avance lo pone el GameObject. Cualquier otro hueso sale tal cual.
+// Single root override point, over the already blended position.
+// rootMotionMode 1 pins the whole translation to the bind one (the clip in place);
+// 2 (root motion) pins only X and Z, Y is kept so that the sway of the step is
+// visible and the advance is provided by the GameObject. Any other bone comes out as is.
 vec3 applyRootLock(BoneInfo info, vec3 pos)
 {
     if (info.parentIndex >= 0) return pos;
@@ -130,7 +130,7 @@ bool boneHasNoChannel(BoneInfo info)
     return info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0;
 }
 
-// Offsets del bloque de pose: los mismos que PoseBlock.h.
+// Offsets of the pose block: the same ones as PoseBlock.h.
 const uint kLayers  = 4u;
 const uint kSamples = 36u;
 const uint kMasks   = 228u;
@@ -142,9 +142,9 @@ vec4 qmul(vec4 a, vec4 b)
     return vec4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
 }
 
-// Inversa de trs(): escala = longitud de las columnas, rotación de las columnas
-// normalizadas. Solo para el bindLocal de un hueso que la base no anima y sobre
-// el que una capa sí actúa.
+// Inverse of trs(): scale = length of the columns, rotation from the normalized
+// columns. Only for the bindLocal of a bone that the base does not animate and
+// on which a layer does act.
 void decomposeTrs(mat4 m, out vec3 pos, out vec4 q, out vec3 scl)
 {
     pos = m[3].xyz;
@@ -174,13 +174,13 @@ void decomposeTrs(mat4 m, out vec3 pos, out vec4 q, out vec3 scl)
     q = normalize(q);
 }
 
-// La pose de la capa L para el hueso bi: suma ponderada de sus muestras y de
-// su congelada (posición y escala lineales, rotación con el signo alineado y
-// normalizada: nlerp). En additive cada muestra aporta su delta respecto al
-// primer fotograma de su clip, y la referencia del signo es la identidad.
-// Escribe la pose de la capa en poseTrs (lo que congela un fade). Devuelve
-// false si es override y ninguna muestra anima el hueso. Réplica en CPU:
-// capaTrs en animator_tests.cpp.
+// The pose of layer L for bone bi: weighted sum of its samples and of
+// its frozen one (position and scale linear, rotation with the sign aligned and
+// normalized: nlerp). In additive each sample contributes its delta with respect to the
+// first frame of its clip, and the sign reference is the identity.
+// It writes the layer's pose into poseTrs (what a fade freezes). It returns
+// false if it is override and no sample animates the bone. CPU replica:
+// capaTrs in animator_tests.cpp.
 bool evalCapa(uint L, bool additive, uint bi, out vec3 pos, out vec4 q, out vec3 scl)
 {
     pos = vec3(0.0);
@@ -202,8 +202,8 @@ bool evalCapa(uint L, bool additive, uint bi, out vec3 pos, out vec4 q, out vec3
         vec3 p = vec3(0.0);
         vec4 r = vec4(0.0, 0.0, 0.0, 1.0);
         vec3 s = vec3(1.0);
-        // Una muestra sin canal en este hueso aporta TRS identidad (en
-        // additive, delta identidad), como la mezcla de dos clips de siempre.
+        // A sample without a channel on this bone contributes identity TRS (in
+        // additive, identity delta), like the usual mix of two clips.
         if (!boneHasNoChannel(info))
         {
             sampleBone(info, t, p, r, s);
@@ -231,8 +231,8 @@ bool evalCapa(uint L, bool additive, uint bi, out vec3 pos, out vec4 q, out vec3
         vec4 fp = frozenTrs.data[base + 0u];
         vec4 fr = frozenTrs.data[base + 1u];
         vec4 fs = frozenTrs.data[base + 2u];
-        // Si el hueso congelado no lo animaba la capa, no entra: el resto se
-        // renormaliza.
+        // If the frozen bone was not animated by the layer, it does not enter: the rest is
+        // renormalized.
         if (fs.w != 0.0)
         {
             if (!hayRef) { ref = fr; hayRef = true; }
@@ -252,7 +252,7 @@ bool evalCapa(uint L, bool additive, uint bi, out vec3 pos, out vec4 q, out vec3
     }
     if (total <= 0.0)
     {
-        // Capa additive sin muestras: delta identidad (y no escala 0).
+        // Additive layer without samples: identity delta (and not scale 0).
         pos = vec3(0.0); q = vec4(0.0, 0.0, 0.0, 1.0); scl = vec3(1.0);
     }
     else
@@ -272,13 +272,13 @@ void main()
     uint bi = gl_GlobalInvocationID.x;
     if (bi >= push.boneCount) return;
 
-    // parentIndex y bindLocal son del esqueleto: iguales en todos los bloques.
+    // parentIndex and bindLocal belong to the skeleton: the same in all the blocks.
     uint     cb0   = pb(1u) > 0u ? pb(kSamples) : 0u;
     BoneInfo info0 = boneInfos.data[cb0 + bi];
 
-    // La base (capa 0), y cada capa encima, en orden, con m = peso x máscara:
-    // override mezcla hacia la capa, additive le suma su delta. Réplica en
-    // CPU: evalLayeredTrs en animator_tests.cpp.
+    // The base (layer 0), and each layer on top, in order, with m = weight x mask:
+    // override blends towards the layer, additive adds its delta to it. CPU
+    // replica: evalLayeredTrs in animator_tests.cpp.
     vec3 pos; vec4 q; vec3 scl;
     bool bind = !evalCapa(0u, false, bi, pos, q, scl);
     uint nL   = pb(0u);
@@ -289,7 +289,7 @@ void main()
         bool  additive = pb(o + 1u) == 1u;
         bool  mascara  = pb(o + 3u) != 0u;
         vec3 lp; vec4 lq; vec3 ls;
-        // Se evalúa siempre: su poseTrs es lo que congela un fade de la capa.
+        // It is always evaluated: its poseTrs is what a fade of the layer freezes.
         bool anima = evalCapa(L, additive, bi, lp, lq, ls);
         float m = peso * (mascara ? float(pb(kMasks + L * push.boneCount + bi)) : 1.0);
         if (m <= 0.0 || !anima) continue;
@@ -311,8 +311,8 @@ void main()
         }
     }
 
-    // Nada anima este hueso: conserva su local de bind pose (con la identidad
-    // colapsaría sobre su padre y arrastraría su cadena).
+    // Nothing animates this bone: it keeps its bind pose local (with the identity it
+    // would collapse onto its parent and drag its chain along).
     if (bind)
     {
         localXforms.data[bi] = info0.bindLocal;

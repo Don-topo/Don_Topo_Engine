@@ -1,10 +1,10 @@
-// Tests headless de AudioClipComponent: rangos de volume/pitch y su
-// serialización. Plain main + asserts, sin framework — coherente con
-// camera_tests.cpp y physics_tests.cpp.
+// Headless tests of AudioClipComponent: volume/pitch ranges and their
+// serialization. Plain main + asserts, no framework, consistent with
+// camera_tests.cpp and physics_tests.cpp.
 //
-// El componente se construye a pelo con m_audio = nullptr y soundId = -1:
-// así los setters ejercitan el clamp sin necesitar FMOD ni dispositivo de
-// audio. Mismo truco que usa exporter_tests.cpp.
+// The component is built bare with m_audio = nullptr and soundId = -1:
+// this way the setters exercise the clamp without needing FMOD or an audio
+// device. Same trick that exporter_tests.cpp uses.
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
@@ -40,26 +40,26 @@
 
 using namespace DonTopo;
 
-// Los bucles de espera de este fichero (los que aguardan a que FMOD termine de
-// cargar o de reportar un fallo) llevan topes GENEROSOS a proposito: salen en
-// cuanto se cumple la condicion, asi que un tope alto no ralentiza el caso
-// bueno, pero uno ajustado convierte la carga de la maquina en un rojo que no
-// es del codigo. Ya paso una vez, corriendo la suite entera del tiron.
+// The wait loops of this file (the ones that wait for FMOD to finish
+// loading or to report a failure) carry GENEROUS caps on purpose: they exit as
+// soon as the condition is met, so a high cap does not slow down the good case,
+// but a tight one turns machine load into a red that is not the code's
+// fault. It already happened once, running the whole suite in one go.
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
 static bool nearlyEqual(float a, float b, float eps = 0.0001f) { return std::fabs(a - b) < eps; }
 
-// createAudioClipComponent devuelve nullptr por DOS motivos distintos: FMOD
-// no disponible en la máquina (SKIP legítimo) o el exe se lanzó desde un
-// directorio donde no existe "assets/audio.mp3" (cwd equivocado). Sin
-// distinguirlos, el segundo caso da exit 0 con el test sin ejecutar: un falso
-// verde para un criterio de repo que es "exit code 0".
+// createAudioClipComponent returns nullptr for TWO different reasons: FMOD
+// not available on the machine (a legitimate SKIP) or the exe was launched from a
+// directory where "assets/audio.mp3" does not exist (wrong cwd). Without
+// telling them apart, the second case gives exit 0 with the test not run: a false
+// green for a repo criterion that is "exit code 0".
 //
-// El SKIP se decide por AudioManager::available() y NO por "existe el fichero":
-// antes, con FMOD compilado y sin dispositivo de salida, init() lanzaba y el
-// binario abortaba sin llegar nunca a imprimir este SKIP — el mensaje prometía
-// un camino que no existía. Ahora init() devuelve false y available() lo dice.
+// The SKIP is decided by AudioManager::available() and NOT by "the file exists":
+// before, with FMOD compiled in and no output device, init() threw and the
+// binary aborted without ever printing this SKIP; the message promised
+// a path that did not exist. Now init() returns false and available() says so.
 static bool checkAudioProbe(const AudioManager& am,
                              const std::shared_ptr<AudioClipComponent>& probe, const char* testName)
 {
@@ -82,11 +82,11 @@ static std::shared_ptr<AudioClipComponent> makeClip()
     return std::make_shared<AudioClipComponent>(nullptr, "assets/audio.mp3", -1, false, false);
 }
 
-// Un clip recién creado suena tal cual está grabado: sin atenuar y sin
-// alterar el tono. Si estos defaults cambiaran, toda escena guardada antes
-// de esta feature sonaría distinta al recargarla.
-// FMOD sin salida arranca "bien" y no suena nada: ese caso tiene que dar aviso,
-// y una salida real no.
+// A freshly created clip sounds exactly as recorded: not attenuated and without
+// altering the pitch. If these defaults changed, every scene saved before
+// this feature would sound different when reloaded.
+// FMOD without output starts "fine" and nothing sounds: that case has to give a warning,
+// and a real output must not.
 static void test_output_warning_only_without_output()
 {
 #ifdef DT_FMOD_ENABLED
@@ -118,8 +118,8 @@ static void test_volume_clamps_to_range()
     CHECK(nearlyEqual(clip->getVolume(), 1.0f));
 }
 
-// El mínimo NO es 0: un pitch de 0 pararía el sonido en seco en vez de
-// bajarlo, y FMOD no lo admite como "silencio".
+// The minimum is NOT 0: a pitch of 0 would stop the sound dead instead of
+// lowering it, and FMOD does not accept it as "silence".
 static void test_pitch_clamps_to_range()
 {
     auto clip = makeClip();
@@ -134,8 +134,8 @@ static void test_pitch_clamps_to_range()
     CHECK(nearlyEqual(clip->getPitch(), 2.0f));
 }
 
-// Sin AudioManager no hay canal al que empujar el valor. El setter tiene que
-// guardarlo igual y no tocar un puntero nulo.
+// Without an AudioManager there is no channel to push the value to. The setter has to
+// store it anyway and not touch a null pointer.
 static void test_setters_survive_without_manager()
 {
     auto clip = makeClip();
@@ -145,8 +145,8 @@ static void test_setters_survive_without_manager()
     CHECK(nearlyEqual(clip->getPitch(), 1.75f));
 }
 
-// El JSON tiene que llevar los dos campos: sin ellos, mover un slider y
-// guardar la escena no dejaría rastro.
+// The JSON has to carry both fields: without them, moving a slider and
+// saving the scene would leave no trace.
 static void test_tojson_emits_volume_and_pitch()
 {
     Scene scene("Test");
@@ -158,9 +158,9 @@ static void test_tojson_emits_volume_and_pitch()
 
     nlohmann::json j = scene.toJson();
     const nlohmann::json& node = j["root"]["children"][0];
-    // Ancla explícita: si el constructor de Scene algún día sembrara un hijo
-    // por defecto, este CHECK señala la causa real en vez de que los asserts
-    // de abajo fallen contra el nodo equivocado sin ninguna pista.
+    // Explicit anchor: if the Scene constructor ever seeded a default
+    // child, this CHECK points at the real cause instead of the asserts
+    // below failing against the wrong node with no clue.
     CHECK(node["name"] == "altavoz");
     CHECK(node.contains("audioClip"));
     if (!node.contains("audioClip")) return;
@@ -168,20 +168,20 @@ static void test_tojson_emits_volume_and_pitch()
     CHECK(nearlyEqual(node["audioClip"].value("pitch",  -1.0f), 1.5f));
 }
 
-// Round-trip completo por toJson/fromJson con valores NO neutros y, a
-// propósito, DISTINTOS entre sí (mismo patrón que
-// camera_tests.cpp:190-221, test_serialization_round_trip). 1.0/1.0 es a la
-// vez el neutro de fábrica del componente y el default con el que carga
-// Scene::fromJson cuando faltan las claves: un round-trip con esos valores
-// "pasaría" igual aunque nadie escribiera ni leyera nada (ver hallazgo 1 del
-// review — es justo lo que test_scene_without_volume_loads_neutral no podía
-// distinguir por sí solo). Que volume != pitch además destapa un cruce de
-// setters (setVolume(c.value("pitch",...)) o al revés): con valores iguales
-// el cruce pasaría desapercibido.
+// Full round-trip through toJson/fromJson with NON-neutral values and, on
+// purpose, DIFFERENT from each other (same pattern as
+// camera_tests.cpp:190-221, test_serialization_round_trip). 1.0/1.0 is at the
+// same time the component's factory neutral and the default that
+// Scene::fromJson loads with when the keys are missing: a round-trip with those values
+// would "pass" all the same even if nobody wrote or read anything (see finding 1 of the
+// review; it is exactly what test_scene_without_volume_loads_neutral could not
+// distinguish on its own). That volume != pitch also uncovers a swap of
+// setters (setVolume(c.value("pitch",...)) or vice versa): with equal values
+// the swap would go unnoticed.
 //
-// Necesita FMOD vivo, igual que el back-compat: Scene::fromJson crea el clip
-// con AudioManager::createAudioClipComponent, que sin sonido cargado
-// devuelve nullptr. Mismo SKIP si no hay FMOD disponible en la máquina.
+// It needs FMOD alive, same as the back-compat: Scene::fromJson creates the clip
+// with AudioManager::createAudioClipComponent, which without a loaded sound
+// returns nullptr. Same SKIP if FMOD is not available on the machine.
 static void test_volume_pitch_round_trip(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
@@ -205,24 +205,24 @@ static void test_volume_pitch_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(nearlyEqual(found->getAudioClip()->getPitch(),  1.5f));
 }
 
-// Back-compat: una escena guardada antes de esta feature no trae los campos y
-// tiene que cargar con los valores neutros. Es lo que se rompe si alguien
-// cambia el .value() de la carga por un .at().
+// Back-compat: a scene saved before this feature does not carry the fields and
+// has to load with the neutral values. It is what breaks if someone
+// changes the load's .value() to an .at().
 //
-// El JSON se construye a partir de scene.toJson() y no a mano: un literal
-// escrito a pelo ya se desincronizó una vez del formato real de
-// nodeFromJson/Scene::fromJson (le faltaba "version" y usaba
-// position/rotation/scale en vez de localTransform). Partir de toJson() y
-// borrar ahí las claves que queremos que falten es inmune a cambios de
-// esquema (mismo patrón que camera_tests.cpp:246-257). Los valores previos al
-// borrado son NO neutros a propósito: si erase() no quitara de verdad las
-// claves (o fromJson las leyera de otro lado), el test vería 0.25/1.5 en vez
-// del neutro 1.0/1.0 y fallaría igual.
+// The JSON is built from scene.toJson() and not by hand: a bare-written
+// literal already went out of sync once with the real format of
+// nodeFromJson/Scene::fromJson (it lacked "version" and used
+// position/rotation/scale instead of localTransform). Starting from toJson() and
+// deleting there the keys we want missing is immune to schema changes
+// (same pattern as camera_tests.cpp:246-257). The values before
+// deletion are NON-neutral on purpose: if erase() did not really remove the
+// keys (or fromJson read them from elsewhere), the test would see 0.25/1.5 instead of
+// the neutral 1.0/1.0 and would fail all the same.
 //
-// Necesita FMOD vivo: Scene::fromJson crea el clip con
-// AudioManager::createAudioClipComponent, que sin sonido cargado devuelve
-// nullptr. En una máquina sin dispositivo de audio el test se salta a sí
-// mismo en vez de dar un falso rojo.
+// It needs FMOD alive: Scene::fromJson creates the clip with
+// AudioManager::createAudioClipComponent, which without a loaded sound returns
+// nullptr. On a machine without an audio device the test skips
+// itself instead of giving a false red.
 static void test_scene_without_volume_loads_neutral(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
@@ -250,15 +250,15 @@ static void test_scene_without_volume_loads_neutral(PhysicsManager& pm, AudioMan
     CHECK(nearlyEqual(loadedGo->getAudioClip()->getPitch(),  1.0f));
 }
 
-// setVolume(NaN)/setPitch(NaN) tienen que dejar el valor anterior intacto.
-// El clamp por sí solo NO lo hacía: std::clamp(NaN, lo, hi) devuelve NaN
-// (toda comparación con NaN es falsa), así que antes de este fix un NaN
-// llegado desde un script Lua roto (un 0/0, por ejemplo) pasaba de largo el
-// clamp y se guardaba tal cual en m_volume/m_pitch — para acabar
-// serializado como "null" en el .scene y tumbar Scene::fromJson entero (ver
-// el resto de tests de este fichero). Este test ejercita el guard añadido
-// directamente en AudioClipComponent::setVolume/setPitch, sin pasar por
-// Lua ni por Scene.
+// setVolume(NaN)/setPitch(NaN) have to leave the previous value intact.
+// The clamp alone did NOT do it: std::clamp(NaN, lo, hi) returns NaN
+// (every comparison with NaN is false), so before this fix a NaN
+// coming from a broken Lua script (a 0/0, for example) slipped past the
+// clamp and was stored as is in m_volume/m_pitch, to end up
+// serialized as "null" in the .scene and bring down the whole Scene::fromJson (see
+// the rest of the tests in this file). This test exercises the guard added
+// directly in AudioClipComponent::setVolume/setPitch, without going through
+// Lua or Scene.
 static void test_setVolume_setPitch_reject_nan()
 {
     auto clip = makeClip();
@@ -273,15 +273,15 @@ static void test_setVolume_setPitch_reject_nan()
     CHECK(nearlyEqual(clip->getPitch(), 1.4f));
 }
 
-// EL TEST QUE IMPORTA: una escena cuyo JSON trae "volume": null (el mismo
-// "null" que nlohmann escribe al serializar un NaN, ver
-// AudioClipComponent::setVolume) tiene que cargar bien entera — no solo el
-// audioClip roto, sino el resto de sus campos (pitch) también — con el
-// clip cayendo al volumen neutro por defecto y un aviso en
-// Scene::lastWarnings() que nombra el campo. Antes de este fix,
-// Scene::fromJson devolvía false: json::exception (302, "type must be
-// number, but is null") escapaba de nodeFromJson y el catch de fromJson
-// tiraba la carga de TODA la escena por este único campo.
+// THE TEST THAT MATTERS: a scene whose JSON carries "volume": null (the same
+// "null" that nlohmann writes when serializing a NaN, see
+// AudioClipComponent::setVolume) has to load fine in full: not just the broken
+// audioClip, but the rest of its fields (pitch) too, with the
+// clip falling to the neutral default volume and a warning in
+// Scene::lastWarnings() that names the field. Before this fix,
+// Scene::fromJson returned false: json::exception (302, "type must be
+// number, but is null") escaped from nodeFromJson and fromJson's catch
+// dropped the load of the WHOLE scene because of this single field.
 static void test_scene_with_null_volume_loads_with_warning(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
@@ -296,7 +296,7 @@ static void test_scene_with_null_volume_loads_with_warning(PhysicsManager& pm, A
     nlohmann::json j = scene.toJson();
     nlohmann::json& audioClip = j["root"]["children"][0]["audioClip"];
     CHECK(audioClip.contains("volume"));
-    // Mete el null a mano: así es exactamente como llega un NaN serializado.
+    // Put the null in by hand: that is exactly how a serialized NaN arrives.
     audioClip["volume"] = nullptr;
 
     Scene loaded("Loaded");
@@ -304,8 +304,8 @@ static void test_scene_with_null_volume_loads_with_warning(PhysicsManager& pm, A
     GameObject* found = loaded.findById(go->id);
     CHECK(found != nullptr);
     if (!found || !found->hasAudioClip()) { CHECK(false); return; }
-    CHECK(nearlyEqual(found->getAudioClip()->getVolume(), 1.0f)); // default neutro
-    CHECK(nearlyEqual(found->getAudioClip()->getPitch(),  1.3f)); // el resto siguió cargando bien
+    CHECK(nearlyEqual(found->getAudioClip()->getVolume(), 1.0f)); // neutral default
+    CHECK(nearlyEqual(found->getAudioClip()->getPitch(),  1.3f)); // the rest kept loading fine
 
     bool warned = false;
     for (const auto& w : loaded.lastWarnings())
@@ -313,8 +313,8 @@ static void test_scene_with_null_volume_loads_with_warning(PhysicsManager& pm, A
     CHECK(warned);
 }
 
-// Compara componente a componente contra la identidad (evita depender de
-// que glm::mat4 tenga operator== disponible en este TU).
+// Compares component by component against the identity (avoids depending on
+// glm::mat4 having operator== available in this TU).
 static bool isIdentity(const glm::mat4& m)
 {
     const glm::mat4 id(1.0f);
@@ -324,13 +324,13 @@ static bool isIdentity(const glm::mat4& m)
     return true;
 }
 
-// Un localTransform con un null entre sus 16 floats (mismo origen que el
-// volume: un NaN serializado) no puede tumbar la escena entera. Diseño
-// elegido (documentado también en Scene.cpp junto a jsonToMat4): CUALQUIER
-// float corrupto de los 16 descarta la matriz entera y cae a la identidad
-// completa, no solo ese componente — una matriz "a medias" podría parecer
-// válida y tener la escala o la rotación rotas en silencio. No necesita
-// FMOD: el nodo no lleva audioClip.
+// A localTransform with a null among its 16 floats (same origin as the
+// volume one: a serialized NaN) cannot bring down the whole scene. Chosen
+// design (also documented in Scene.cpp next to jsonToMat4): ANY
+// corrupt float among the 16 discards the whole matrix and falls to the full
+// identity, not just that component; a "half" matrix could look
+// valid and have the scale or rotation silently broken. It does not need
+// FMOD: the node carries no audioClip.
 static void test_localTransform_null_element_loads_identity(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -341,7 +341,7 @@ static void test_localTransform_null_element_loads_identity(PhysicsManager& pm, 
     nlohmann::json& lt = j["root"]["children"][0]["localTransform"];
     CHECK(lt.is_array());
     CHECK(lt.size() == 16);
-    lt[5] = nullptr; // uno de los 16 floats corrupto (posición arbitraria)
+    lt[5] = nullptr; // one of the 16 floats corrupt (arbitrary position)
 
     Scene loaded("Loaded");
     CHECK(loaded.fromJson(j, pm, am));
@@ -356,14 +356,14 @@ static void test_localTransform_null_element_loads_identity(PhysicsManager& pm, 
     CHECK(warned);
 }
 
-// Hallazgo 1 del review: boxCollider.halfExtents lo escribe nodeToJson
-// SIEMPRE (nunca es opcional, a diferencia de volume/pitch/fov...) — si el
-// .scene lo pierde (merge mal resuelto, escritura truncada, edición a mano)
-// NO es back-compat legítima, es corrupción, y tiene que avisar nombrando el
-// campo y el objeto en vez de caer en un valor plausible sin ni un WARN.
-// Antes de este fix: caja de 25 unidades centrada en el origen, cero avisos,
-// el usuario la ve, no cuestiona nada, pulsa Guardar y las medidas originales
-// se pierden para siempre. No necesita FMOD (el nodo no lleva audioClip).
+// Review finding 1: boxCollider.halfExtents is ALWAYS written by nodeToJson
+// (it is never optional, unlike volume/pitch/fov...); if the
+// .scene loses it (badly resolved merge, truncated write, hand edit)
+// it is NOT legitimate back-compat, it is corruption, and it has to warn naming the
+// field and the object instead of falling to a plausible value without a single WARN.
+// Before this fix: a 25-unit box centered at the origin, zero warnings,
+// the user sees it, questions nothing, presses Save and the original measurements
+// are lost forever. It does not need FMOD (the node carries no audioClip).
 static void test_boxCollider_missing_halfExtents_warns(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -388,12 +388,12 @@ static void test_boxCollider_missing_halfExtents_warns(PhysicsManager& pm, Audio
     CHECK(warned);
 }
 
-// Hallazgo 2 del review: "center": null (la forma EXACTA que toma un NaN
-// serializado, ver el resto de este fichero) no puede caer en silencio a
-// (0,0,0). Antes de este fix, readArrayFloat trataba "no es un array" igual
-// que "índice fuera de rango" (los dos por la misma rama silenciosa): una
-// cápsula con center corrupto se movía al origen sin dejar ni rastro en el
-// Log — "la cápsula se ha movido sola", tal cual lo describe el review.
+// Review finding 2: "center": null (the EXACT form a serialized NaN takes,
+// see the rest of this file) cannot silently fall to
+// (0,0,0). Before this fix, readArrayFloat treated "is not an array" the same as
+// "index out of range" (both through the same silent branch): a
+// capsule with a corrupt center moved to the origin leaving no trace in the
+// Log: "the capsule moved by itself", exactly as the review describes it.
 static void test_capsuleCollider_null_center_warns(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -404,7 +404,7 @@ static void test_capsuleCollider_null_center_warns(PhysicsManager& pm, AudioMana
     nlohmann::json j = scene.toJson();
     nlohmann::json& cap = j["root"]["children"][0]["capsuleCollider"];
     CHECK(cap.contains("center"));
-    cap["center"] = nullptr; // así llega exactamente un NaN serializado
+    cap["center"] = nullptr; // that is exactly how a serialized NaN arrives
 
     Scene loaded("Loaded");
     CHECK(loaded.fromJson(j, pm, am));
@@ -418,16 +418,16 @@ static void test_capsuleCollider_null_center_warns(PhysicsManager& pm, AudioMana
     CHECK(warned);
 }
 
-// path/is3D/loop los escribe nodeToJson SIEMPRE. Hasta este fix se leían con
-// .at(): a un audioClip al que le faltara CUALQUIERA de los tres, nlohmann le
-// lanzaba una json::exception que subía hasta el catch de fromJson y tiraba la
-// carga de TODA la escena — un objeto ajeno, en otra rama del árbol, se perdía
-// por un campo de audio. Ahora la escena carga entera, el clip cae a su default
-// (2D) y el warning nombra el campo.
+// path/is3D/loop are ALWAYS written by nodeToJson. Until this fix they were read with
+// .at(): for an audioClip missing ANY of the three, nlohmann
+// threw a json::exception that went up to fromJson's catch and dropped the
+// load of the WHOLE scene; an unrelated object, on another branch of the tree, was lost
+// over an audio field. Now the scene loads in full, the clip falls to its default
+// (2D) and the warning names the field.
 //
-// El "loop" NO se borra a propósito: si el fix se hubiera aplicado solo a dos de
-// los tres campos, este test lo vería igual (el que falta basta para lanzar),
-// así que hay un test por campo abajo en lugar de uno que los borre a la vez.
+// "loop" is NOT deleted on purpose: if the fix had been applied to only two of
+// the three fields, this test would see it all the same (the missing one is enough to throw),
+// so there is one test per field below instead of one that deletes them all at once.
 static void test_scene_audioclip_missing_is3D_warns(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", /*is3D=*/true, false);
@@ -435,8 +435,8 @@ static void test_scene_audioclip_missing_is3D_warns(PhysicsManager& pm, AudioMan
 
     Scene scene("Test");
     GameObject* go    = scene.addGameObject("altavoz");
-    // Un segundo objeto, hermano y SIN audio: es el que demuestra el daño real
-    // del bug viejo. Con .at(), este nodo tampoco llegaba a cargarse.
+    // A second object, a sibling and WITHOUT audio: it is the one that shows the real damage
+    // of the old bug. With .at(), this node did not get loaded either.
     GameObject* otro  = scene.addGameObject("sin_audio");
     probe->setPitch(1.3f);
     go->setAudioClip(probe);
@@ -454,7 +454,7 @@ static void test_scene_audioclip_missing_is3D_warns(PhysicsManager& pm, AudioMan
     CHECK(found != nullptr);
     if (!found || !found->hasAudioClip()) { CHECK(false); return; }
     CHECK(found->getAudioClip()->getIs3D() == false);          // default
-    CHECK(nearlyEqual(found->getAudioClip()->getPitch(), 1.3f)); // el resto siguió cargando
+    CHECK(nearlyEqual(found->getAudioClip()->getPitch(), 1.3f)); // the rest kept loading
 
     bool warned = false;
     for (const auto& w : loaded.lastWarnings())
@@ -489,15 +489,15 @@ static void test_scene_audioclip_missing_loop_warns(PhysicsManager& pm, AudioMan
     CHECK(warned);
 }
 
-// Sin "path" no hay nada que cargar: el nodo se queda SIN clip (no con uno
-// apuntando a la cadena vacía) y el resto de la escena carga igual. No necesita
-// FMOD: nunca se llega a createAudioClipComponent.
+// Without "path" there is nothing to load: the node is left WITHOUT a clip (not with one
+// pointing to the empty string) and the rest of the scene loads all the same. It does not need
+// FMOD: createAudioClipComponent is never reached.
 static void test_scene_audioclip_missing_path_warns(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("altavoz");
-    // El bloque audioClip se inyecta a mano: construirlo con un clip real
-    // exigiría FMOD, y aquí el caso que importa es justo el que no lo usa.
+    // The audioClip block is injected by hand: building it with a real clip
+    // would require FMOD, and here the case that matters is exactly the one that does not use it.
     nlohmann::json j = scene.toJson();
     j["root"]["children"][0]["audioClip"] = { {"is3D", false}, {"loop", false},
                                               {"volume", 0.5f}, {"pitch", 1.0f} };
@@ -515,8 +515,8 @@ static void test_scene_audioclip_missing_path_warns(PhysicsManager& pm, AudioMan
     CHECK(warned);
 }
 
-// Un tipo equivocado (no solo la ausencia) tampoco puede tumbar la escena:
-// "is3D": "true" como cadena es lo que deja un .scene editado a mano.
+// A wrong type (not just absence) cannot bring down the scene either:
+// "is3D": "true" as a string is what a hand-edited .scene leaves.
 static void test_scene_audioclip_wrong_type_warns(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
@@ -527,7 +527,7 @@ static void test_scene_audioclip_wrong_type_warns(PhysicsManager& pm, AudioManag
     go->setAudioClip(probe);
 
     nlohmann::json j = scene.toJson();
-    j["root"]["children"][0]["audioClip"]["is3D"] = "true"; // cadena, no bool
+    j["root"]["children"][0]["audioClip"]["is3D"] = "true"; // string, not bool
 
     Scene loaded("Loaded");
     CHECK(loaded.fromJson(j, pm, am));
@@ -542,12 +542,12 @@ static void test_scene_audioclip_wrong_type_warns(PhysicsManager& pm, AudioManag
     CHECK(warned);
 }
 
-// init() dos veces no puede dejar huérfanos el System ni los ChannelGroup
-// anteriores. No hay forma de contar objetos FMOD desde aquí, así que lo que se
-// comprueba es el contrato observable: la segunda llamada devuelve true, el
-// manager sigue disponible y sigue cargando sonidos con el MISMO sistema (si el
-// segundo init hubiera creado uno nuevo, los soundId de antes apuntarían a
-// sonidos de un System ya sin dueño).
+// init() twice cannot leave the previous System or ChannelGroups orphaned.
+// There is no way to count FMOD objects from here, so what is checked is the
+// observable contract: the second call returns true, the manager is still
+// available and keeps loading sounds with the SAME system (if the
+// second init had created a new one, the earlier soundIds would point to
+// sounds of a System that no longer has an owner).
 static void test_init_is_reentrant(AudioManager& am)
 {
     if (!am.available())
@@ -558,19 +558,19 @@ static void test_init_is_reentrant(AudioManager& am)
     auto before = am.createAudioClipComponent("assets/audio.mp3", false, false);
     CHECK(before != nullptr);
 
-    CHECK(am.init());       // segunda llamada: no-op
+    CHECK(am.init());       // second call: no-op
     CHECK(am.available());
 
     auto after = am.createAudioClipComponent("assets/audio.mp3", false, false);
     CHECK(after != nullptr);
-    // El clip de antes del segundo init sigue siendo utilizable (su soundId no
-    // se quedó apuntando a un System huérfano).
+    // The clip from before the second init is still usable (its soundId did not
+    // end up pointing to an orphaned System).
     if (before) before->setVolume(0.5f);
     CHECK(before && nearlyEqual(before->getVolume(), 0.5f));
 }
 
-// Las distancias de atenuación tenían clamp y NINGÚN test: los rangos
-// ([0.1, 50] y [1, 1000]) solo estaban escritos en un comentario del header.
+// The attenuation distances had a clamp and NO test: the ranges
+// ([0.1, 50] and [1, 1000]) were only written in a header comment.
 static void test_distances_clamp_to_range()
 {
     auto clip = makeClip();
@@ -582,8 +582,8 @@ static void test_distances_clamp_to_range()
     clip->setMinDistance(999.0f);
     CHECK(nearlyEqual(clip->getMinDistance(), 50.0f));
 
-    // Tras el clamp de min a 50, max sigue en su default de 100: el invariante
-    // no se ha tenido que tocar todavía.
+    // After clamping min to 50, max is still at its default of 100: the invariant
+    // has not had to be touched yet.
     CHECK(nearlyEqual(clip->getMaxDistance(), 100.0f));
 
     clip->setMaxDistance(250.0f);
@@ -594,8 +594,8 @@ static void test_distances_clamp_to_range()
     CHECK(nearlyEqual(clip->getMaxDistance(), 1000.0f));
 }
 
-// NaN: mismo agujero que volume/pitch (std::clamp(NaN,...) devuelve NaN, así
-// que el clamp por sí solo no lo para) y acaba igual, como "null" en el .scene.
+// NaN: same hole as volume/pitch (std::clamp(NaN,...) returns NaN, so
+// the clamp alone does not stop it) and it ends up the same, as "null" in the .scene.
 static void test_distances_reject_nan()
 {
     auto clip = makeClip();
@@ -609,13 +609,13 @@ static void test_distances_reject_nan()
     CHECK(nearlyEqual(clip->getMaxDistance(), 80.0f));
 }
 
-// El invariante min <= max vive en el componente, no en la UI: un .scene
-// editado a mano tampoco puede instalar una atenuación invertida. Se ataca
-// desde los DOS setters: cada uno arrastra al otro, y probar solo uno dejaba la
-// mitad sin cubrir.
+// The min <= max invariant lives in the component, not in the UI: a hand-edited
+// .scene cannot install an inverted attenuation either. It is attacked
+// from BOTH setters: each one drags the other along, and testing only one left
+// half uncovered.
 static void test_min_max_invariant_from_both_setters()
 {
-    // max baja por debajo de min: min lo sigue.
+    // max drops below min: min follows it.
     auto a = makeClip();
     a->setMinDistance(40.0f);
     a->setMaxDistance(10.0f);
@@ -623,7 +623,7 @@ static void test_min_max_invariant_from_both_setters()
     CHECK(nearlyEqual(a->getMinDistance(), 10.0f));
     CHECK(a->getMinDistance() <= a->getMaxDistance());
 
-    // min sube por encima de max: max lo sigue.
+    // min rises above max: max follows it.
     auto b = makeClip();
     b->setMaxDistance(5.0f);
     b->setMinDistance(30.0f);
@@ -632,13 +632,13 @@ static void test_min_max_invariant_from_both_setters()
     CHECK(b->getMinDistance() <= b->getMaxDistance());
 }
 
-// Round-trip de TODOS los campos del audioClip a la vez, cada uno con un valor
-// distinto de su default Y distinto de los demás. Hasta ahora solo se probaban
-// volume y pitch: is3D, loop, playOnAwake, minDistance y maxDistance se
-// escribían en el JSON y nadie comprobaba que se leyeran de vuelta — borrar
-// cualquiera de esas cinco lecturas de Scene::nodeFromJson pasaba la suite
-// entera. Que los siete valores sean distintos entre sí destapa además un cruce
-// de campos (leer "minDistance" en el setter de max, por ejemplo).
+// Round-trip of ALL the audioClip fields at once, each with a value
+// different from its default AND different from the others. Until now only
+// volume and pitch were tested: is3D, loop, playOnAwake, minDistance and maxDistance were
+// written to the JSON and nobody checked that they were read back; deleting
+// any of those five reads in Scene::nodeFromJson passed the whole suite. That the
+// seven values are different from each other also uncovers a field swap
+// (reading "minDistance" into the max setter, for example).
 static void test_all_audioclip_fields_round_trip(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", /*is3D=*/true, /*loop=*/true);
@@ -671,16 +671,16 @@ static void test_all_audioclip_fields_round_trip(PhysicsManager& pm, AudioManage
     CHECK(c->getPath() == "assets/audio.mp3");
 }
 
-// EL TEST DE H2: un fichero que no existe se acepta sin rechistar y solo se
-// detecta consultando el estado DESPUÉS. Con FMOD_NONBLOCKING, createSound
-// devuelve FMOD_OK aunque el path sea basura, así que loadSound entrega un id
-// válido y createAudioClipComponent un componente entero — antes de este fix
-// eso era silencio absoluto: la rama de error de la UI y la de Scene::fromJson
-// no llegaban a ejecutarse nunca, y playSound se rendía sin decir nada.
+// THE H2 TEST: a file that does not exist is accepted without a murmur and is only
+// detected by querying the state AFTERWARDS. With FMOD_NONBLOCKING, createSound
+// returns FMOD_OK even if the path is garbage, so loadSound hands out a valid
+// id and createAudioClipComponent a whole component; before this fix
+// that was absolute silence: the UI error branch and that of Scene::fromJson
+// never got executed, and playSound gave up without saying anything.
 //
-// El fallo aparece en el hilo interno de FMOD unos frames más tarde, de ahí el
-// bucle con update(): no es una espera arbitraria, es el mismo pump por frame
-// que hacen el editor y el runtime.
+// The failure shows up on FMOD's internal thread a few frames later, hence the
+// loop with update(): it is not an arbitrary wait, it is the same per-frame pump
+// that the editor and the runtime do.
 static void test_missing_file_reports_load_failure(AudioManager& am)
 {
     if (!am.available())
@@ -692,8 +692,8 @@ static void test_missing_file_reports_load_failure(AudioManager& am)
     CHECK(!std::filesystem::exists(bogus));
 
     auto clip = am.createAudioClipComponent(bogus, false, false);
-    // Se crea IGUAL. Si algún día createSound empezara a fallar aquí, este
-    // CHECK lo delata en vez de que el test siga probando otra cosa.
+    // It is created ANYWAY. If createSound ever started failing here, this
+    // CHECK gives it away instead of the test going on to test something else.
     CHECK(clip != nullptr);
     if (!clip) return;
 
@@ -712,26 +712,26 @@ static void test_missing_file_reports_load_failure(AudioManager& am)
         if (p.find("__no_existe_este_audio__") != std::string::npos) reported = true;
     CHECK(reported);
 
-    // Y una sola vez: pollLoadFailures se llama en CADA frame, así que un
-    // sonido roto que se reportara siempre inundaría el Log Console.
+    // And only once: pollLoadFailures is called on EVERY frame, so a broken
+    // sound that was always reported would flood the Log Console.
     out.clear();
     am.pollLoadFailures(out);
     for (const auto& p : out)
         CHECK(p.find("__no_existe_este_audio__") == std::string::npos);
 }
 
-// El otro fallo de carga, y el más traicionero: el fichero EXISTE, tiene
-// extensión de audio, pasa la whitelist de la UI... y no es audio. Un asset
-// truncado por un merge o una descarga a medias entra por aquí. Se prueba
-// aparte del path inexistente porque el TIEMPO en detectarlo es distinto: el
-// path que no existe falla al instante (ni se llega a abrir), y este hay que
-// leerlo y descartarlo en el hilo interno de FMOD, lo que tarda decenas de ms
-// reales. Un solo test con el caso rápido daba por buena una espera que no
-// vale para el caso lento.
+// The other load failure, and the most treacherous: the file EXISTS, has an
+// audio extension, passes the UI whitelist... and is not audio. An asset
+// truncated by a merge or a half-finished download gets in through here. It is tested
+// apart from the nonexistent path because the TIME to detect it is different: the
+// path that does not exist fails instantly (it is not even opened), and this one has to be
+// read and discarded on FMOD's internal thread, which takes tens of real
+// ms. A single test with the fast case accepted a wait that is not
+// valid for the slow case.
 //
-// Los dos acaban saliendo por la MISMA rama de getSoundState (el valor de
-// retorno de getOpenState); no se ha conseguido provocar la rama de
-// FMOD_OPENSTATE_ERROR, y así está anotado allí.
+// Both end up leaving through the SAME branch of getSoundState (the return
+// value of getOpenState); it has not been possible to trigger the
+// FMOD_OPENSTATE_ERROR branch, and that is noted there.
 static void test_corrupt_file_reports_load_failure(AudioManager& am)
 {
     if (!am.available())
@@ -739,12 +739,12 @@ static void test_corrupt_file_reports_load_failure(AudioManager& am)
         std::printf("SKIP test_corrupt_file_reports_load_failure (FMOD no disponible)\n");
         return;
     }
-    // Nombre único por proceso. El temporal vive en un directorio compartido y
-    // con un nombre fijo dos instancias simultáneas del test se lo pisarían;
-    // esto es higiene, no el arreglo de un fallo concreto: intenté reproducir
-    // así un rojo intermitente que vi una vez en este binario y NO lo conseguí,
-    // ni con nombre fijo ni con cuatro instancias en paralelo. La causa de aquel
-    // fallo sigue sin identificar.
+    // Name unique per process. The temporary lives in a shared directory and
+    // with a fixed name two simultaneous instances of the test would step on each other;
+    // this is hygiene, not the fix for a specific failure: I tried to reproduce
+    // an intermittent red that I saw once in this binary and did NOT succeed,
+    // neither with a fixed name nor with four instances in parallel. The cause of that
+    // failure is still unidentified.
     const std::filesystem::path bogus =
         std::filesystem::temp_directory_path() /
         ("dt_audio_corrupto_" + std::to_string(
@@ -761,11 +761,11 @@ static void test_corrupt_file_reports_load_failure(AudioManager& am)
     auto clip = am.createAudioClipComponent(bogus.string(), false, false);
     CHECK(clip != nullptr);
 
-    // Con espera real entre vueltas, no solo iteraciones: el path inexistente
-    // falla al instante (el open ni llega a abrir), pero un fichero que SÍ
-    // existe hay que leerlo y descartarlo, y eso lo hace el hilo interno de
-    // FMOD a su ritmo. 2000 vueltas sin dormir se agotaban en milisegundos y el
-    // test daba un rojo que no era del código.
+    // With a real wait between turns, not just iterations: the nonexistent path
+    // fails instantly (the open does not even get to open), but a file that DOES
+    // exist has to be read and discarded, and FMOD's internal thread does that
+    // at its own pace. 2000 turns without sleeping ran out in milliseconds and the
+    // test gave a red that was not the code's.
     bool failed = false;
     if (clip)
         for (int i = 0; i < 600 && !failed; ++i)
@@ -783,39 +783,39 @@ static void test_corrupt_file_reports_load_failure(AudioManager& am)
         if (p.find("dt_audio_corrupto") != std::string::npos) reported = true;
     CHECK(reported);
 
-    // El clip se suelta antes de borrar el fichero: su destructor libera el
-    // FMOD::Sound, que hasta ese momento puede tener el fichero abierto.
+    // The clip is released before deleting the file: its destructor frees the
+    // FMOD::Sound, which until that moment may have the file open.
     clip.reset();
     std::error_code ec;
     std::filesystem::remove(bogus, ec);
 }
 
-// Seguimiento 3D por frame (H1). ALCANCE DE ESTE TEST: cubre que la ruta
-// existe y que aguanta los casos degenerados — clip sin AudioManager, soundId
-// inválido, clip 2D, nodo sin clip. Lo que NO puede cubrir es el efecto
-// audible: comprobar que la voz se ha movido de verdad exigiría exponer un
-// getter de la posición del canal que nadie más usaría, y eso es API de
-// producción escrita solo para un test. Que la atenuación y el paneo sigan al
-// objeto se verifica a mano en el editor, y así está anotado en el audit.
+// Per-frame 3D tracking (H1). SCOPE OF THIS TEST: it covers that the path
+// exists and that it withstands the degenerate cases: clip without AudioManager, invalid
+// soundId, 2D clip, node without a clip. What it CANNOT cover is the audible
+// effect: checking that the voice really moved would require exposing a
+// getter for the channel position that nobody else would use, and that is production API
+// written only for a test. That attenuation and panning follow the
+// object is verified by hand in the editor, and that is noted in the audit.
 static void test_updateSpatial_survives_degenerate_cases(AudioManager& am)
 {
-    // Sin manager y 2D: el gate por m_is3D corta antes de tocar nada.
+    // Without a manager and 2D: the m_is3D gate cuts before touching anything.
     auto orphan = makeClip();
     orphan->updateSpatial(glm::vec3(1.0f, 2.0f, 3.0f));
     CHECK(!orphan->getIs3D());
 
-    // Con manager y soundId inválido: es el estado en el que queda un clip cuyo
-    // reload() falló. Las guardas de rango de AudioManager tienen que absorberlo.
+    // With a manager and an invalid soundId: it is the state a clip is left in whose
+    // reload() failed. The AudioManager range guards have to absorb it.
     AudioClipComponent bad(&am, "no_existe.mp3", -1, /*is3D=*/true, /*loop=*/false);
     bad.updateSpatial(glm::vec3(5.0f, 0.0f, 0.0f));
     CHECK(bad.getIs3D());
 }
 
-// Scene::update tiene que recorrer el árbol entero sin tropezar con los nodos
-// que no llevan clip, y sin exigir que haya nada sonando. Es la llamada que
-// hace que el seguimiento ocurra: si alguien la borra de Scene::update, el
-// hallazgo H1 vuelve — este test no lo detectaría, pero deja la ruta escrita y
-// ejercitada.
+// Scene::update has to walk the whole tree without tripping on nodes
+// that carry no clip, and without requiring that anything is playing. It is the call
+// that makes the tracking happen: if someone deletes it from Scene::update, finding
+// H1 comes back; this test would not detect it, but it leaves the path written and
+// exercised.
 static void test_scene_updateAudioSpatial_walks_tree(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -831,19 +831,19 @@ static void test_scene_updateAudioSpatial_walks_tree(PhysicsManager& pm, AudioMa
     }
     scene.getRoot().updateWorldTransforms();
 
-    // Sin nada sonando: no-op limpio en todos los nodos.
+    // With nothing playing: clean no-op on all the nodes.
     scene.updateAudioSpatial();
-    // Y por la ruta real, la que corre en Play.
+    // And through the real path, the one that runs in Play.
     scene.update(0.016f);
     CHECK(scene.findById(vacio->id) != nullptr);
 }
 
-// H5: quitar un Audio Clip perdía volumen, pitch y las dos distancias para
-// siempre — Ctrl+Z no devolvía nada porque la baja no pasaba por el stack de
-// undo. El comando tiene que devolver el componente con los SIETE valores, no
-// uno recién creado con defaults. Los valores del snapshot son todos distintos
-// del default y distintos entre sí: con defaults, un comando que no restaurara
-// nada pasaría igual.
+// H5: removing an Audio Clip lost volume, pitch and the two distances
+// forever; Ctrl+Z gave nothing back because the removal did not go through the undo
+// stack. The command has to return the component with the SEVEN values, not
+// a fresh one with defaults. The snapshot values are all different
+// from the default and different from each other: with defaults, a command that restored
+// nothing would pass all the same.
 static void test_audioclip_command_restores_full_state(AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", /*is3D=*/true, /*loop=*/true);
@@ -879,16 +879,16 @@ static void test_audioclip_command_restores_full_state(AudioManager& am)
     CHECK(c->getPlayOnAwake() == true);
     CHECK(c->getPath() == "assets/audio.mp3");
 
-    // Y el redo vuelve a quitarlo: un comando que solo supiera deshacer dejaría
-    // el stack inconsistente en cuanto se rehiciera.
+    // And the redo removes it again: a command that only knew how to undo would leave
+    // the stack inconsistent as soon as it was redone.
     cmd.execute();
     CHECK(!go->hasAudioClip());
 }
 
-// El estado del listener es un solo bool, y es justo el que se puede perder:
-// quitar un listener DESHABILITADO y deshacer tiene que devolverlo
-// deshabilitado. Un comando que creara siempre uno por defecto pasaría
-// cualquier test que no mirara esto (el default es enabled = true).
+// The listener state is a single bool, and it is exactly the one that can get lost:
+// removing a DISABLED listener and undoing has to return it
+// disabled. A command that always created a default one would pass
+// any test that did not look at this (the default is enabled = true).
 static void test_audiolistener_command_preserves_disabled_state()
 {
     Scene scene("Test");
@@ -907,16 +907,16 @@ static void test_audiolistener_command_preserves_disabled_state()
     CHECK(go->getAudioListener()->getEnabled() == false);
 }
 
-// PlayOneShot dispara una voz SUELTA: no se registra en m_sfxChannels, así que
-// no corta la anterior y varios disparos se solapan. Eso no se puede oír desde
-// un test, pero sí tiene una consecuencia observable y exacta: después de un
-// PlayOneShot, isPlaying() sigue diciendo false, porque no hay canal guardado
-// al que preguntar. Si alguien "simplificara" playOneShot delegando en
-// playSound, ese CHECK se pondría en true y el solapamiento se habría perdido.
+// PlayOneShot fires a LOOSE voice: it is not registered in m_sfxChannels, so
+// it does not cut the previous one and several shots overlap. That cannot be heard from
+// a test, but it does have an observable and exact consequence: after a
+// PlayOneShot, isPlaying() still says false, because there is no stored channel
+// to ask. If someone "simplified" playOneShot by delegating to
+// playSound, that CHECK would turn true and the overlap would be lost.
 //
-// El play() previo no es decorado: es el control que demuestra que el sonido
-// llegó a cargar y que isPlaying() sabe decir true. Sin él, el aserto final
-// pasaría también con un sonido que nunca sonó.
+// The previous play() is not decoration: it is the control that shows that the sound
+// did get loaded and that isPlaying() knows how to say true. Without it, the final assert
+// would also pass with a sound that never played.
 static void test_playOneShot_does_not_register_a_channel(AudioManager& am)
 {
     if (!am.available())
@@ -931,11 +931,11 @@ static void test_playOneShot_does_not_register_a_channel(AudioManager& am)
     auto pump = [&am, &pos]() {
         am.update(pos, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     };
-    // FMOD no responde al instante en ninguna de las dos direcciones: la carga
-    // ocurre en su hilo interno y el efecto de un stop tampoco tiene por qué
-    // verse en la misma vuelta. Los dos asertos de "espera a que pase" van por
-    // esta ayuda con tope; hacerlos inmediatos daba un test intermitente, que
-    // es peor que no tenerlo.
+    // FMOD does not respond instantly in either direction: loading
+    // happens on its internal thread and the effect of a stop does not have to
+    // show up on the same turn either. The two "wait for it to happen" asserts go through
+    // this helper with a cap; making them immediate gave an intermittent test, which
+    // is worse than not having one.
     auto waitUntil = [&pump](const std::function<bool()>& cond) {
         for (int i = 0; i < 900; ++i)
         {
@@ -946,9 +946,9 @@ static void test_playOneShot_does_not_register_a_channel(AudioManager& am)
         return false;
     };
 
-    // Control: el sonido llega a cargar y a sonar, e isPlaying() sabe decir
-    // true. Sin esto, el aserto de abajo pasaría también con un clip que nunca
-    // sonó — que es justo el falso verde que hay que evitar.
+    // Control: the sound does get loaded and played, and isPlaying() knows how to say
+    // true. Without this, the assert below would also pass with a clip that never
+    // played, which is exactly the false green to avoid.
     const bool playing = waitUntil([&]() { clip->play(pos); return clip->isPlaying(); });
     CHECK(playing);
     if (!playing) return;
@@ -956,24 +956,24 @@ static void test_playOneShot_does_not_register_a_channel(AudioManager& am)
     clip->stop();
     CHECK(waitUntil([&]() { return !clip->isPlaying(); }));
 
-    // EL ASERTO QUE IMPORTA, y este sí es inmediato: no es una condición que
-    // FMOD deba alcanzar con el tiempo, es que playOneShot NO guarda el canal.
-    // isPlaying() pregunta por el canal guardado, así que tiene que seguir
-    // diciendo false en la misma vuelta, esté sonando la voz o no.
+    // THE ASSERT THAT MATTERS, and this one is immediate: it is not a condition that
+    // FMOD must reach over time, it is that playOneShot does NOT store the channel.
+    // isPlaying() asks about the stored channel, so it has to keep
+    // saying false on the same turn, whether the voice is sounding or not.
     clip->playOneShot(pos);
     pump();
     CHECK(!clip->isPlaying());
 
-    // Y no ha pisado la referencia: un play() posterior sigue registrando. Esto
-    // descarta que playOneShot deje m_sfxChannels en un estado que rompa la
-    // reproducción normal.
+    // And it has not clobbered the reference: a later play() still registers. This
+    // rules out playOneShot leaving m_sfxChannels in a state that breaks
+    // normal playback.
     CHECK(waitUntil([&]() { clip->play(pos); return clip->isPlaying(); }));
     clip->stop();
 }
 
-// El bus viaja al .scene por NOMBRE y vuelve. Se elige Music a propósito: no es
-// el default (Sfx), así que un fromJson que no leyera el campo daría Sfx y el
-// test lo vería.
+// The bus travels to the .scene by NAME and comes back. Music is chosen on purpose: it is not
+// the default (Sfx), so a fromJson that did not read the field would give Sfx and the
+// test would see it.
 static void test_bus_round_trip(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
@@ -985,9 +985,9 @@ static void test_bus_round_trip(PhysicsManager& pm, AudioManager& am)
     go->setAudioClip(probe);
 
     nlohmann::json j = scene.toJson();
-    // En el JSON tiene que estar el NOMBRE, no el índice del enum: si alguien
-    // lo cambiara a un entero, reordenar AudioBus movería el bus de todas las
-    // escenas guardadas sin que nadie se enterase.
+    // The NAME has to be in the JSON, not the enum index: if someone
+    // changed it to an integer, reordering AudioBus would move the bus of all the
+    // saved scenes without anybody noticing.
     CHECK(j["root"]["children"][0]["audioClip"]["bus"] == "music");
 
     Scene loaded("Loaded");
@@ -998,9 +998,9 @@ static void test_bus_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(found->getAudioClip()->getBus() == AudioBus::Music);
 }
 
-// Back-compat: una escena guardada antes de los buses no trae el campo y tiene
-// que cargar como Sfx, que es por donde salía TODO entonces — así suena igual.
-// Y sin warning: la ausencia aquí es legítima, no corrupción.
+// Back-compat: a scene saved before the buses does not carry the field and has
+// to load as Sfx, which is where EVERYTHING went out then, so it sounds the same.
+// And without a warning: the absence here is legitimate, not corruption.
 static void test_scene_without_bus_loads_sfx(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
@@ -1008,7 +1008,7 @@ static void test_scene_without_bus_loads_sfx(PhysicsManager& pm, AudioManager& a
 
     Scene scene("Test");
     GameObject* go = scene.addGameObject("altavoz");
-    probe->setBus(AudioBus::Master); // no neutro: si erase() fallara, se vería
+    probe->setBus(AudioBus::Master); // non-neutral: if erase() failed, it would show
     go->setAudioClip(probe);
 
     nlohmann::json j = scene.toJson();
@@ -1025,9 +1025,9 @@ static void test_scene_without_bus_loads_sfx(PhysicsManager& pm, AudioManager& a
         CHECK(w.find("bus") == std::string::npos);
 }
 
-// Un nombre que NO existe sí avisa: es corrupción o un proyecto de una versión
-// más nueva. Caer a sfx en silencio dejaría un clip sonando por el bus
-// equivocado sin ninguna pista de por qué.
+// A name that does NOT exist does warn: it is corruption or a project from a newer
+// version. Silently falling to sfx would leave a clip playing through the wrong bus
+// with no clue as to why.
 static void test_scene_with_unknown_bus_warns(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
@@ -1053,9 +1053,9 @@ static void test_scene_with_unknown_bus_warns(PhysicsManager& pm, AudioManager& 
     CHECK(warned);
 }
 
-// Los tres volúmenes son independientes: escribir uno no puede mover a los
-// otros dos. Con un solo bus probado, un getBusVolume que devolviera siempre el
-// del master pasaría igual.
+// The three volumes are independent: writing one cannot move the other
+// two. With only one bus tested, a getBusVolume that always returned the
+// master's would pass all the same.
 static void test_bus_volumes_are_independent(AudioManager& am)
 {
     if (!am.available())
@@ -1071,21 +1071,21 @@ static void test_bus_volumes_are_independent(AudioManager& am)
     CHECK(nearlyEqual(am.getBusVolume(AudioBus::Music),  0.4f));
     CHECK(nearlyEqual(am.getBusVolume(AudioBus::Sfx),    0.7f));
 
-    // Master escala a los otros dos, pero NO los reescribe: bajar el master no
-    // puede cambiar lo que el usuario tenga puesto en Music o en SFX.
+    // Master scales the other two, but does NOT rewrite them: lowering the master cannot
+    // change what the user has set in Music or in SFX.
     am.setBusVolume(AudioBus::Master, 0.5f);
     CHECK(nearlyEqual(am.getBusVolume(AudioBus::Music), 0.4f));
     CHECK(nearlyEqual(am.getBusVolume(AudioBus::Sfx),   0.7f));
 
-    // Se dejan neutros: los tests que van detrás reproducen sonidos y un bus a
-    // 0.2 heredado los dejaría prácticamente mudos sin explicación.
+    // They are left neutral: the tests that follow play sounds and an inherited bus at
+    // 0.2 would leave them practically mute with no explanation.
     am.setBusVolume(AudioBus::Music, 1.0f);
     am.setBusVolume(AudioBus::Sfx,   1.0f);
 }
 
-// H11: dos clips del MISMO fichero y el MISMO modo comparten un solo
-// FMOD::Sound. Antes, veinte objetos con el mismo disparo cargaban veinte
-// copias descomprimidas en RAM.
+// H11: two clips of the SAME file and the SAME mode share a single
+// FMOD::Sound. Before, twenty objects with the same shot loaded twenty
+// uncompressed copies in RAM.
 static void test_same_path_shares_one_sound(AudioManager& am)
 {
     if (!am.available())
@@ -1101,31 +1101,31 @@ static void test_same_path_shares_one_sound(AudioManager& am)
 
     auto b = am.createAudioClipComponent("assets/audio.mp3", /*is3D=*/false, /*loop=*/false);
     CHECK(b != nullptr);
-    // El aserto de H11: el segundo NO carga nada nuevo.
+    // The H11 assert: the second one does NOT load anything new.
     CHECK(am.loadedSoundCount() == before + 1);
 
-    // Pero el modo va horneado en el FMOD_MODE, así que el mismo fichero en 3D
-    // es OTRO sonido y no se puede compartir. Si la clave de la caché fuera solo
-    // el path, marcar "Is 3D?" en un clip se lo cambiaría a los demás.
+    // But the mode is baked into the FMOD_MODE, so the same file in 3D
+    // is ANOTHER sound and cannot be shared. If the cache key were only
+    // the path, ticking "Is 3D?" on one clip would change it for the others.
     auto c = am.createAudioClipComponent("assets/audio.mp3", /*is3D=*/true, /*loop=*/false);
     CHECK(c != nullptr);
     CHECK(am.loadedSoundCount() == before + 2);
 
-    // Refcount: soltar uno de los dos que comparten NO puede liberar el sonido,
-    // o el que queda se queda con un puntero muerto.
+    // Refcount: releasing one of the two that share CANNOT free the sound,
+    // or the one that remains is left with a dead pointer.
     a.reset();
     CHECK(am.loadedSoundCount() == before + 2);
-    CHECK(!b->hasLoadError()); // el superviviente sigue siendo utilizable
+    CHECK(!b->hasLoadError()); // the survivor is still usable
 
-    // Y al soltar el último sí se libera.
+    // And when the last one is released it is freed.
     b.reset();
     CHECK(am.loadedSoundCount() == before + 1);
     c.reset();
     CHECK(am.loadedSoundCount() == before);
 }
 
-// H10: los ids se reciclan. Antes, cada ciclo Play->Stop (que recrea la escena
-// entera) añadía una entrada por clip a unos vectores que solo crecían.
+// H10: ids are recycled. Before, each Play->Stop cycle (which recreates the entire
+// scene) added one entry per clip to vectors that only grew.
 static void test_sound_slots_are_recycled(AudioManager& am)
 {
     if (!am.available())
@@ -1134,15 +1134,15 @@ static void test_sound_slots_are_recycled(AudioManager& am)
         return;
     }
     const size_t before = am.loadedSoundCount();
-    // El recuento de SLOTS, no el de sonidos vivos: los dos son distintos y es
-    // justo la diferencia lo que prueba el reciclado. Sin reciclar, los sonidos
-    // vivos vuelven a cero igual (el slot queda a nullptr) pero el vector crece
-    // una entrada por vuelta — con loadedSoundCount solo, este test pasaba
-    // aunque no se reciclara nada.
+    // The count of SLOTS, not of live sounds: the two are different and it is
+    // exactly the difference that proves the recycling. Without recycling, the live
+    // sounds go back to zero all the same (the slot is left at nullptr) but the vector grows
+    // one entry per turn; with loadedSoundCount alone, this test passed
+    // even if nothing was recycled.
     const size_t slotsBefore = am.soundSlotCount();
 
-    // Diez ciclos de crear y soltar. Cada ciclo Play->Stop del editor recrea la
-    // escena entera, así que esto es lo que pasaba en una sesión normal.
+    // Ten cycles of create and release. Each Play->Stop cycle of the editor recreates the
+    // entire scene, so this is what happened in a normal session.
     for (int i = 0; i < 10; ++i)
     {
         auto clip = am.createAudioClipComponent("assets/audio.mp3", false, false);
@@ -1153,8 +1153,8 @@ static void test_sound_slots_are_recycled(AudioManager& am)
     }
     CHECK(am.soundSlotCount() == slotsBefore);
 
-    // El id reciclado tiene que quedar utilizable de verdad, no solo contado:
-    // un slot mal limpiado daría un clip que dice estar roto o que no suena.
+    // The recycled id has to be really usable, not just counted:
+    // a badly cleaned slot would give a clip that says it is broken or that does not sound.
     auto reused = am.createAudioClipComponent("assets/audio.mp3", false, false);
     CHECK(reused != nullptr);
     if (reused)
@@ -1164,9 +1164,9 @@ static void test_sound_slots_are_recycled(AudioManager& am)
     }
 }
 
-// El modo de carga viaja al .scene y vuelve, y NO comparte sonido con el mismo
-// fichero cargado del otro modo: un stream y una muestra descomprimida son dos
-// FMOD::Sound distintos, igual que pasa con is3D y loop.
+// The load mode travels to the .scene and back, and does NOT share a sound with the same
+// file loaded in the other mode: a stream and an uncompressed sample are two
+// distinct FMOD::Sound, just like with is3D and loop.
 static void test_load_mode_round_trip_and_cache(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false,
@@ -1174,19 +1174,19 @@ static void test_load_mode_round_trip_and_cache(PhysicsManager& pm, AudioManager
     if (!checkAudioProbe(am, probe, "test_load_mode_round_trip_and_cache")) return;
     CHECK(probe->getLoadMode() == AudioLoadMode::Stream);
 
-    // Que el modo LLEGUE a FMOD, no solo que el componente lo recuerde. Sin este
-    // par de asertos, borrar la línea que aplica FMOD_CREATESTREAM dejaba la
-    // feature entera sin efecto y la suite en verde: el modo se guardaba, se
-    // serializaba y se leía de vuelta igual.
+    // That the mode REACHES FMOD, not just that the component remembers it. Without this
+    // pair of asserts, deleting the line that applies FMOD_CREATESTREAM left the
+    // whole feature without effect and the suite green: the mode was stored,
+    // serialized and read back all the same.
     const int streamId = am.loadSound("assets/audio.mp3", false, true, AudioLoadMode::Stream);
     const int sampleId = am.loadSound("assets/audio.mp3", false, true, AudioLoadMode::Sample);
     CHECK(streamId >= 0);
     CHECK(sampleId >= 0);
-    // Hay que ESPERAR a que termine la carga: con FMOD_NONBLOCKING, getMode()
-    // no refleja todavía FMOD_CREATESTREAM mientras el sonido está en
-    // OPENSTATE_LOADING. Sin esta espera el aserto fallaba siempre — y de forma
-    // engañosa, porque también "fallaba" con el sabotaje puesto y parecía que lo
-    // estaba detectando.
+    // You have to WAIT for the load to finish: with FMOD_NONBLOCKING, getMode()
+    // does not yet reflect FMOD_CREATESTREAM while the sound is in
+    // OPENSTATE_LOADING. Without this wait the assert always failed, and in a
+    // misleading way, because it also "failed" with the sabotage in place and it looked like it
+    // was detecting it.
     for (int i = 0; i < 600 && am.getSoundState(streamId) == AudioManager::SoundLoadState::Loading; ++i)
     {
         am.update(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -1198,7 +1198,7 @@ static void test_load_mode_round_trip_and_cache(PhysicsManager& pm, AudioManager
     am.unloadSound(streamId);
     am.unloadSound(sampleId);
 
-    // Mismo fichero y mismos flags, pero cargado como Sample: sonido aparte.
+    // Same file and same flags, but loaded as Sample: a separate sound.
     const size_t before = am.loadedSoundCount();
     auto sample = am.createAudioClipComponent("assets/audio.mp3", false, false,
                                                AudioLoadMode::Sample);
@@ -1221,9 +1221,9 @@ static void test_load_mode_round_trip_and_cache(PhysicsManager& pm, AudioManager
     CHECK(found->getAudioClip()->getLoadMode() == AudioLoadMode::Stream);
 }
 
-// Back-compat: una escena anterior a esta feature no trae el campo y carga como
-// Sample, que es como se cargaba TODO entonces. Sin warning: la ausencia es
-// legítima. Un nombre desconocido sí avisa.
+// Back-compat: a scene prior to this feature does not carry the field and loads as
+// Sample, which is how EVERYTHING was loaded then. Without a warning: the absence is
+// legitimate. An unknown name does warn.
 static void test_load_mode_back_compat_and_unknown(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false,
@@ -1261,10 +1261,10 @@ static void test_load_mode_back_compat_and_unknown(PhysicsManager& pm, AudioMana
     }
 }
 
-// H16: la whitelist de extensiones vivía SOLO en la ruta de UI, así que un
-// .scene con cualquier extensión creaba el clip igual y —por la carga diferida
-// de FMOD— el único síntoma era el silencio. Ahora la carga de escena lo nombra
-// y descarta el clip, dejando cargar el resto.
+// H16: the extension whitelist lived ONLY in the UI path, so a
+// .scene with any extension created the clip all the same and, because of FMOD's
+// deferred load, the only symptom was silence. Now scene loading names it
+// and discards the clip, letting the rest load.
 static void test_scene_rejects_unsupported_extension(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1277,8 +1277,8 @@ static void test_scene_rejects_unsupported_extension(PhysicsManager& pm, AudioMa
 
     Scene loaded("Loaded");
     CHECK(loaded.fromJson(j, pm, am));
-    // El resto de la escena carga: descartar el clip no puede llevarse por
-    // delante a un objeto ajeno.
+    // The rest of the scene loads: discarding the clip cannot take an
+    // unrelated object with it.
     CHECK(loaded.findById(otro->id) != nullptr);
 
     GameObject* found = loaded.findById(go->id);
@@ -1291,8 +1291,8 @@ static void test_scene_rejects_unsupported_extension(PhysicsManager& pm, AudioMa
         if (w.find("unsupported") != std::string::npos) { warned = true; break; }
     CHECK(warned);
 
-    // Y el caso de control: la MISMA ruta con una extensión válida sí crea el
-    // clip. Sin esto, un filtro que rechazara siempre pasaría el test de arriba.
+    // And the control case: the SAME path with a valid extension does create the
+    // clip. Without this, a filter that always rejected would pass the test above.
     if (am.available())
     {
         nlohmann::json ok = scene.toJson();
@@ -1305,11 +1305,11 @@ static void test_scene_rejects_unsupported_extension(PhysicsManager& pm, AudioMa
     }
 }
 
-// PlayClipAtPoint retiene el sonido en la caché tras el primer uso, y las
-// llamadas siguientes NO vuelven a contar. Es la parte delicada: sin el
-// conjunto de retenidos, cada disparo subiría otra vez el refcount y el sonido
-// quedaría imposible de liberar (no fugaría memoria, pero el contador crecería
-// sin techo y el diagnóstico mentiría).
+// PlayClipAtPoint retains the sound in the cache after the first use, and the
+// following calls do NOT count again. It is the delicate part: without the
+// retained set, each shot would raise the refcount once more and the sound
+// would become impossible to free (it would not leak memory, but the counter would grow
+// without a ceiling and the diagnostics would lie).
 static void test_playClipAtPoint_pins_sound_once(AudioManager& am)
 {
     if (!am.available())
@@ -1322,35 +1322,35 @@ static void test_playClipAtPoint_pins_sound_once(AudioManager& am)
 
     am.playClipAtPoint("assets/audio.mp3", pos);
     const size_t afterFirst = am.loadedSoundCount();
-    // La primera vez sí carga: es un sonido 3D no-loop, distinto de los que
-    // usan los demás tests (que van en 2D).
+    // The first time it does load: it is a non-loop 3D sound, different from those
+    // used by the other tests (which go in 2D).
     CHECK(afterFirst == before + 1);
 
-    // Y diez disparos más no cargan nada nuevo.
+    // And ten more shots load nothing new.
     for (int i = 0; i < 10; ++i)
         am.playClipAtPoint("assets/audio.mp3", pos);
     CHECK(am.loadedSoundCount() == afterFirst);
 
-    // Preload de la misma ruta tampoco: es idempotente.
+    // Preload of the same path neither: it is idempotent.
     am.preloadClip("assets/audio.mp3");
     CHECK(am.loadedSoundCount() == afterFirst);
 
-    // El sonido retenido NO se puede soltar desde fuera: un AudioClipComponent
-    // que use esa misma ruta y modo comparte el slot, y al destruirse no puede
-    // llevarse por delante el sonido que playClipAtPoint mantiene vivo.
+    // The retained sound CANNOT be released from outside: an AudioClipComponent
+    // that uses that same path and mode shares the slot, and on being destroyed it cannot
+    // take away the sound that playClipAtPoint keeps alive.
     {
         auto clip = am.createAudioClipComponent("assets/audio.mp3", /*is3D=*/true, /*loop=*/false);
         CHECK(clip != nullptr);
-        CHECK(am.loadedSoundCount() == afterFirst); // comparte, no carga otro
+        CHECK(am.loadedSoundCount() == afterFirst); // shares, does not load another
     }
-    CHECK(am.loadedSoundCount() == afterFirst); // y sigue vivo tras destruirlo
+    CHECK(am.loadedSoundCount() == afterFirst); // and stays alive after destroying it
 
-    // Una ruta con extensión no soportada no carga nada (la whitelist vive en
-    // el binding de Lua, pero el motor tampoco debe crear un sonido de la nada).
+    // A path with an unsupported extension loads nothing (the whitelist lives in
+    // the Lua binding, but the engine must not create a sound out of nothing either).
     am.playClipAtPoint("assets/__no_existe__.mp3", pos);
-    // Sí sube: el path es válido como extensión aunque el fichero no exista —
-    // eso lo reporta pollLoadFailures, no esta ruta. Se comprueba que al menos
-    // no rompe nada y que el fallo se puede observar por el canal de siempre.
+    // It does go up: the path is valid as an extension even if the file does not exist;
+    // that is reported by pollLoadFailures, not this path. It is checked that at least
+    // it breaks nothing and that the failure can be observed through the usual channel.
     std::vector<std::string> failures;
     for (int i = 0; i < 600 && failures.empty(); ++i)
     {
@@ -1364,16 +1364,16 @@ static void test_playClipAtPoint_pins_sound_once(AudioManager& am)
     CHECK(reported);
 }
 
-// P12: rolloff, spread, paneo y doppler. Clamps y rechazo de no-finitos, con el
-// mismo criterio que volume/pitch — un NaN acabaría en el .scene como "null".
+// P12: rolloff, spread, panning and doppler. Clamps and rejection of non-finite values, with the
+// same criterion as volume/pitch: a NaN would end up in the .scene as "null".
 static void test_p12_props_clamp_and_reject_nan()
 {
     auto clip = makeClip();
     const float nan = std::numeric_limits<float>::quiet_NaN();
 
-    CHECK(nearlyEqual(clip->getSpread(), 0.0f));        // neutros por defecto:
-    CHECK(nearlyEqual(clip->getStereoPan(), 0.0f));     // una escena vieja suena
-    CHECK(nearlyEqual(clip->getDopplerLevel(), 0.0f));  // exactamente igual
+    CHECK(nearlyEqual(clip->getSpread(), 0.0f));        // neutral by default:
+    CHECK(nearlyEqual(clip->getStereoPan(), 0.0f));     // an old scene sounds
+    CHECK(nearlyEqual(clip->getDopplerLevel(), 0.0f));  // exactly the same
     CHECK(clip->getRolloff() == AudioRolloff::Inverse);
 
     clip->setSpread(90.0f);
@@ -1383,7 +1383,7 @@ static void test_p12_props_clamp_and_reject_nan()
     clip->setSpread(1000.0f);
     CHECK(nearlyEqual(clip->getSpread(), 360.0f));
     clip->setSpread(nan);
-    CHECK(nearlyEqual(clip->getSpread(), 360.0f)); // conserva el anterior
+    CHECK(nearlyEqual(clip->getSpread(), 360.0f)); // keeps the previous one
 
     clip->setStereoPan(-0.5f);
     CHECK(nearlyEqual(clip->getStereoPan(), -0.5f));
@@ -1404,10 +1404,10 @@ static void test_p12_props_clamp_and_reject_nan()
     CHECK(nearlyEqual(clip->getDopplerLevel(), 5.0f));
 }
 
-// Round-trip de los cuatro, y la caché los separa por rolloff: la curva va en el
-// FMOD_MODE, así que el mismo fichero con curva lineal es OTRO sonido. Si el
-// rolloff no entrara en la clave, cambiar la curva de un clip se la cambiaría a
-// todos los que compartan el fichero.
+// Round-trip of the four, and the cache separates them by rolloff: the curve goes in the
+// FMOD_MODE, so the same file with a linear curve is ANOTHER sound. If the
+// rolloff did not enter the key, changing one clip's curve would change it for
+// all those that share the file.
 static void test_p12_round_trip_and_cache(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", /*is3D=*/true, false);
@@ -1415,16 +1415,16 @@ static void test_p12_round_trip_and_cache(PhysicsManager& pm, AudioManager& am)
 
     probe->setRolloff(AudioRolloff::Linear);
 
-    // El rolloff tiene que entrar en la clave de la caché: va en el FMOD_MODE,
-    // así que el mismo fichero con dos curvas son dos sonidos. Sin esto,
-    // cambiar la curva de un clip se la cambiaría a todos los que compartan el
-    // fichero.
+    // The rolloff has to enter the cache key: it goes in the FMOD_MODE,
+    // so the same file with two curves is two sounds. Without this,
+    // changing a clip's curve would change it for all those that share the
+    // file.
     //
-    // Se mide con loadSound directo y con una combinación de flags que no usa
-    // ningún otro test (3D + loop): este binario comparte AudioManager entre
-    // tests y varios dejan sonidos retenidos —playClipAtPoint pinea justo
-    // 3D/no-loop/Sample/Inverse—, así que apoyarse en lo que haya cargado es
-    // atarse al orden de ejecución. Ya me pasó al escribir este test.
+    // It is measured with a direct loadSound and with a flag combination that no
+    // other test uses (3D + loop): this binary shares AudioManager among
+    // tests and several leave sounds retained (playClipAtPoint pins exactly
+    // 3D/no-loop/Sample/Inverse), so relying on whatever happens to be loaded
+    // is tying oneself to the execution order. It already happened to me when writing this test.
     {
         const size_t base = am.loadedSoundCount();
         const int inverse = am.loadSound("assets/audio.mp3", true, true,
@@ -1438,9 +1438,9 @@ static void test_p12_round_trip_and_cache(PhysicsManager& pm, AudioManager& am)
         CHECK(linear != inverse);
         CHECK(am.loadedSoundCount() == base + 2);
 
-        // Y que la curva LLEGUE a FMOD, no solo que el componente la recuerde.
-        // Hay que esperar a Ready: con FMOD_NONBLOCKING el modo no está
-        // completo mientras carga (la misma trampa que con CREATESTREAM).
+        // And that the curve REACHES FMOD, not just that the component remembers it.
+        // You have to wait for Ready: with FMOD_NONBLOCKING the mode is not
+        // complete while loading (the same trap as with CREATESTREAM).
         for (int i = 0; i < 600 && am.getSoundState(linear) == AudioManager::SoundLoadState::Loading; ++i)
         {
             am.update(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -1477,8 +1477,8 @@ static void test_p12_round_trip_and_cache(PhysicsManager& pm, AudioManager& am)
     CHECK(nearlyEqual(c->getDopplerLevel(), 3.0f));
 }
 
-// Back-compat: una escena anterior a P12 no trae ninguno de los cuatro campos y
-// tiene que cargar con los neutros, sin warnings.
+// Back-compat: a scene prior to P12 carries none of the four fields and
+// has to load with the neutral ones, without warnings.
 static void test_p12_back_compat(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", true, false);
@@ -1511,10 +1511,10 @@ static void test_p12_back_compat(PhysicsManager& pm, AudioManager& am)
     }
 }
 
-// P13: efectos DSP por bus. Lo que más importa aquí no es que el filtro suene
-// —eso no se puede medir headless— sino que los DSP se creen UNA vez y se
-// liberen: son recursos nativos de FMOD, y la fuga clásica de este tipo de API
-// es encadenar un DSP por frame mientras se mueve un slider.
+// P13: DSP effects per bus. What matters most here is not that the filter sounds
+// (that cannot be measured headless) but that the DSPs are created ONCE and
+// released: they are native FMOD resources, and the classic leak of this kind of API
+// is chaining one DSP per frame while a slider is moved.
 static void test_bus_effects_are_idempotent_and_released(AudioManager& am)
 {
     if (!am.available())
@@ -1529,39 +1529,39 @@ static void test_bus_effects_are_idempotent_and_released(AudioManager& am)
     CHECK(am.activeEffectCount() == 1);
     CHECK(am.hasBusEffect(AudioBus::Music, AudioEffect::LowPass));
 
-    // EL ASERTO QUE IMPORTA: cien reajustes seguidos —lo que hace un slider al
-    // arrastrarse— no pueden crear cien DSP.
+    // THE ASSERT THAT MATTERS: a hundred consecutive readjustments (what a slider does
+    // when dragged) cannot create a hundred DSPs.
     //
-    // Se mide preguntándole a FMOD cuántos DSP tiene el grupo, NO contando las
-    // entradas del mapa: si setBusEffect encadenara uno nuevo cada vez, la
-    // entrada nueva pisaría a la vieja y el mapa seguiría diciendo 1 mientras el
-    // grupo acumula cien DSP perdidos. Con activeEffectCount, este test pasaba
-    // con la idempotencia saboteada.
+    // It is measured by asking FMOD how many DSPs the group has, NOT by counting the
+    // map entries: if setBusEffect chained a new one every time, the new
+    // entry would overwrite the old one and the map would keep saying 1 while the
+    // group accumulates a hundred lost DSPs. With activeEffectCount, this test passed
+    // with the idempotence sabotaged.
     const size_t dspsWithOneEffect = am.busDspCount(AudioBus::Music);
     for (int i = 0; i < 100; ++i)
         am.setBusEffect(AudioBus::Music, AudioEffect::LowPass, i / 100.0f);
     CHECK(am.activeEffectCount() == 1);
     CHECK(am.busDspCount(AudioBus::Music) == dspsWithOneEffect);
 
-    // Efectos distintos y buses distintos sí son instancias distintas: un
-    // lowPass en Music y otro en SFX no se pisan.
+    // Different effects and different buses are different instances: a
+    // lowPass on Music and another on SFX do not step on each other.
     am.setBusEffect(AudioBus::Music, AudioEffect::Reverb, 0.5f);
     am.setBusEffect(AudioBus::Sfx,   AudioEffect::LowPass, 0.5f);
     CHECK(am.activeEffectCount() == 3);
     CHECK(am.hasBusEffect(AudioBus::Sfx, AudioEffect::LowPass));
     CHECK(!am.hasBusEffect(AudioBus::Sfx, AudioEffect::Reverb));
 
-    // Quitar uno solo deja los otros.
+    // Removing just one leaves the others.
     am.clearBusEffect(AudioBus::Music, AudioEffect::LowPass);
     CHECK(am.activeEffectCount() == 2);
     CHECK(!am.hasBusEffect(AudioBus::Music, AudioEffect::LowPass));
     CHECK(am.hasBusEffect(AudioBus::Music, AudioEffect::Reverb));
 
-    // Quitar algo que no está puesto es no-op, no un fallo.
+    // Removing something that is not set is a no-op, not a failure.
     am.clearBusEffect(AudioBus::Music, AudioEffect::LowPass);
     CHECK(am.activeEffectCount() == 2);
 
-    // Y el barrido por bus se lleva los suyos y solo los suyos.
+    // And the per-bus sweep takes its own and only its own.
     am.clearBusEffects(AudioBus::Music);
     CHECK(am.activeEffectCount() == 1);
     CHECK(am.hasBusEffect(AudioBus::Sfx, AudioEffect::LowPass));
@@ -1569,8 +1569,8 @@ static void test_bus_effects_are_idempotent_and_released(AudioManager& am)
     am.clearBusEffects(AudioBus::Sfx);
     CHECK(am.activeEffectCount() == 0);
 
-    // Los cuatro tipos se pueden crear: si alguno no existiera en esta versión
-    // de FMOD, createDSPByType fallaría y el contador lo diría.
+    // All four types can be created: if any did not exist in this version
+    // of FMOD, createDSPByType would fail and the counter would say so.
     am.setBusEffect(AudioBus::Master, AudioEffect::LowPass,  0.5f);
     am.setBusEffect(AudioBus::Master, AudioEffect::HighPass, 0.5f);
     am.setBusEffect(AudioBus::Master, AudioEffect::Echo,     0.5f);
@@ -1580,10 +1580,10 @@ static void test_bus_effects_are_idempotent_and_released(AudioManager& am)
     CHECK(am.activeEffectCount() == 0);
 }
 
-// Zonas de reverb: creación idempotente, round-trip por el .scene y —lo que
-// más importa— que la zona de un GameObject borrado se libere. Sin eso, su
-// reverb se seguiría aplicando a toda la escena para siempre y no habría forma
-// de quitarla.
+// Reverb zones: idempotent creation, round-trip through the .scene and (what
+// matters most) that the zone of a deleted GameObject is released. Without that, its
+// reverb would keep being applied to the whole scene forever and there would be no way
+// to remove it.
 static void test_reverb_zones(PhysicsManager& pm, AudioManager& am)
 {
     if (!am.available())
@@ -1610,26 +1610,26 @@ static void test_reverb_zones(PhysicsManager& pm, AudioManager& am)
     scene.syncReverbZones(am);
     CHECK(am.reverbZoneCount() == 2);
 
-    // Idempotente: cien frames no crean cien zonas.
+    // Idempotent: a hundred frames do not create a hundred zones.
     for (int i = 0; i < 100; ++i) scene.syncReverbZones(am);
     CHECK(am.reverbZoneCount() == 2);
 
-    // EL ASERTO QUE IMPORTA: quitar el componente libera su zona en el
-    // siguiente sync.
+    // THE ASSERT THAT MATTERS: removing the component releases its zone on the
+    // next sync.
     sala->setReverbZone(nullptr);
     scene.syncReverbZones(am);
     CHECK(am.reverbZoneCount() == 1);
 
-    // Y borrar el GameObject entero, también.
+    // And deleting the whole GameObject, too.
     scene.removeGameObject(cueva);
     scene.syncReverbZones(am);
     CHECK(am.reverbZoneCount() == 0);
 
-    // Un preset inventado no instala una zona con un ambiente cualquiera.
+    // A made-up preset does not install a zone with some arbitrary ambience.
     CHECK(!am.syncReverbZone(999, glm::vec3(0.0f), 10.0f, 100.0f, "catedral_submarina", true));
     CHECK(am.reverbZoneCount() == 0);
 
-    // Round-trip por la escena, con valores no neutros y distintos entre sí.
+    // Round-trip through the scene, with non-neutral values different from each other.
     Scene s2("RT");
     GameObject* go = s2.addGameObject("ambiente");
     auto z = std::make_shared<ReverbZoneComponent>();
@@ -1653,7 +1653,7 @@ static void test_reverb_zones(PhysicsManager& pm, AudioManager& am)
     CHECK(nearlyEqual(lz->getMaxDistance(), 777.0f));
     CHECK(lz->getEnabled() == false);
 
-    // Preset desconocido en el .scene: avisa y cae a "room".
+    // Unknown preset in the .scene: it warns and falls to "room".
     nlohmann::json bad = j;
     bad["root"]["children"][0]["reverbZone"]["preset"] = "cripta";
     Scene loadedBad("Bad");
@@ -1666,7 +1666,7 @@ static void test_reverb_zones(PhysicsManager& pm, AudioManager& am)
         if (w.find("preset") != std::string::npos) { warned = true; break; }
     CHECK(warned);
 
-    // Y el invariante min <= max, atacado desde los dos setters.
+    // And the min <= max invariant, attacked from the two setters.
     ReverbZoneComponent inv;
     inv.setMinDistance(400.0f);
     inv.setMaxDistance(50.0f);
@@ -1679,20 +1679,20 @@ static void test_reverb_zones(PhysicsManager& pm, AudioManager& am)
     am.clearReverbZones();
 }
 
-// Mute, tiempo de reproducción y pausa global: las tres filas "Ausente" del
-// audit que no estaban descartadas con criterio.
+// Mute, playback time and global pause: the three "Missing" rows of the
+// audit that had not been discarded with a criterion.
 //
-// El mute es lo único de los tres que se serializa: pausa y posición son
-// estado de la voz, y guardarlos haría que una escena recién cargada arrancara
-// a medias de un clip o en silencio sin que nadie lo hubiera pedido.
+// Mute is the only one of the three that is serialized: pause and position are
+// voice state, and saving them would make a freshly loaded scene start
+// halfway through a clip or in silence without anyone having asked for it.
 static void test_mute_time_and_global_pause(PhysicsManager& pm, AudioManager& am)
 {
-    // Parte sin FMOD: el estado del componente y su round-trip.
+    // Part without FMOD: the component state and its round-trip.
     auto solo = makeClip();
-    CHECK(solo->getMute() == false);   // neutro: una escena vieja no nace muda
+    CHECK(solo->getMute() == false);   // neutral: an old scene is not born mute
     solo->setMute(true);
     CHECK(solo->getMute() == true);
-    // Sin manager no hay voz a la que preguntar la posición.
+    // Without a manager there is no voice to ask the position of.
     CHECK(solo->getTime() < 0.0f);
 
     if (!am.available())
@@ -1701,7 +1701,7 @@ static void test_mute_time_and_global_pause(PhysicsManager& pm, AudioManager& am
         return;
     }
 
-    // Round-trip del mute por la escena, con el valor NO neutro.
+    // Round-trip of the mute through the scene, with the NON-neutral value.
     {
         auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
         if (!checkAudioProbe(am, probe, "test_mute_time_and_global_pause")) return;
@@ -1719,7 +1719,7 @@ static void test_mute_time_and_global_pause(PhysicsManager& pm, AudioManager& am
         if (!found || !found->hasAudioClip()) { CHECK(false); return; }
         CHECK(found->getAudioClip()->getMute() == true);
 
-        // Back-compat: sin el campo, no mudo y sin warning.
+        // Back-compat: without the field, not muted and without a warning.
         nlohmann::json old = j;
         old["root"]["children"][0]["audioClip"].erase("mute");
         Scene l2("Old");
@@ -1731,13 +1731,13 @@ static void test_mute_time_and_global_pause(PhysicsManager& pm, AudioManager& am
             CHECK(w.find("mute") == std::string::npos);
     }
 
-    // Posición de reproducción sobre una voz de verdad.
+    // Playback position on a real voice.
     {
         auto clip = am.createAudioClipComponent("assets/audio.mp3", false, /*loop=*/true);
         if (!clip) { CHECK(false); return; }
         const glm::vec3 pos(0.0f);
 
-        // Sin nada sonando: -1, que es distinto de "está en el segundo 0".
+        // With nothing playing: -1, which is different from "it is at second 0".
         CHECK(clip->getTime() < 0.0f);
 
         bool playing = false;
@@ -1751,19 +1751,19 @@ static void test_mute_time_and_global_pause(PhysicsManager& pm, AudioManager& am
         CHECK(playing);
         if (playing)
         {
-            CHECK(clip->getTime() >= 0.0f);   // ahora sí hay posición
+            CHECK(clip->getTime() >= 0.0f);   // now there is a position
             clip->setTime(1.0f);
             am.update(pos, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-            // Se comprueba un rango, no la igualdad: el mezclador sigue
-            // avanzando entre el salto y la lectura.
+            // A range is checked, not equality: the mixer keeps
+            // advancing between the seek and the read.
             const float t = clip->getTime();
             CHECK(t >= 0.9f && t <= 2.0f);
         }
         clip->stop();
     }
 
-    // Pausa global: es del master, así que también congela lo que salga por
-    // cualquier bus.
+    // Global pause: it is the master's, so it also freezes what comes out of
+    // any bus.
     CHECK(!am.isAudioPaused());
     am.setAudioPaused(true);
     CHECK(am.isAudioPaused());
@@ -1771,10 +1771,10 @@ static void test_mute_time_and_global_pause(PhysicsManager& pm, AudioManager& am
     CHECK(!am.isAudioPaused());
 }
 
-// ── Ajustes de importacion de audio (sidecar) ────────────────────────────────
+// ── Audio import settings (sidecar) ────────────────────────────────
 
-// WAV PCM 16 bit generado en el test: `channels` canales, silencio, `seconds`
-// de duracion. Sirve para probar ganancia y mono sin depender de un asset.
+// 16-bit PCM WAV generated in the test: `channels` channels, silence, `seconds`
+// of duration. It serves to test gain and mono without depending on an asset.
 static void writeWav(const std::filesystem::path& p, int channels, double seconds)
 {
     const uint32_t rate = 44100;
@@ -1820,14 +1820,14 @@ static void setGain(const std::filesystem::path& clip, float db, bool mono = fal
     CHECK(saveAudioImportSettings(clip, s, &err));
 }
 
-// Sin FMOD (o sin sonido) los getters son neutros.
+// Without FMOD (or without a sound) the getters are neutral.
 static void test_import_getters_are_neutral_without_a_sound(AudioManager& am)
 {
     CHECK(isDefault(am.getSoundImportSettings(-1)));
     CHECK(isDefault(am.getSoundImportSettings(123456)));
     CHECK(am.getChannelVolume(-1) < 0.0f);
     CHECK(am.getChannelVolume(123456) < 0.0f);
-    am.refreshImportSettings("no/existe.wav");           // no-op sin sonidos, sin lanzar
+    am.refreshImportSettings("no/existe.wav");           // no-op without sounds, without throwing
     am.refreshImportSettings("");
 }
 
@@ -1841,7 +1841,7 @@ static void test_import_gain_applies_and_refreshes(AudioManager& am)
     writeWav(b, 2, 3.0);
     setGain(a, -6.0f);                                   // factor 0.501187
 
-    // a como 2D y como 3D (flags distintos = dos sonidos), y b sin sidecar.
+    // a as 2D and as 3D (different flags = two sounds), and b without a sidecar.
     const int a2d = am.loadSound(a, false, true);
     const int a3d = am.loadSound(a, true, true);
     const int bId = am.loadSound(b, false, true);
@@ -1858,9 +1858,9 @@ static void test_import_gain_applies_and_refreshes(AudioManager& am)
     am.playSound(bId, {}, 0.8f);
     CHECK(nearlyEqual(am.getChannelVolume(a2d), 0.8f * 0.501187f, 1e-3f));
     CHECK(nearlyEqual(am.getChannelVolume(a3d), 0.8f * 0.501187f, 1e-3f));
-    CHECK(am.getChannelVolume(bId) == 0.8f);             // sin sidecar: EXACTO, como antes
+    CHECK(am.getChannelVolume(bId) == 0.8f);             // without a sidecar: EXACT, as before
 
-    // Review Focus 3: el refresco cambia los dos ids de a y NO el de b.
+    // Review Focus 3: the refresh changes both ids of a and NOT that of b.
     setGain(a, 6.0f);                                    // factor 1.995262
     am.refreshImportSettings(a);
     CHECK(am.getSoundImportSettings(a2d).gainDb == 6.0f);
@@ -1868,21 +1868,21 @@ static void test_import_gain_applies_and_refreshes(AudioManager& am)
     CHECK(nearlyEqual(am.getChannelVolume(a3d), 0.8f * 1.995262f, 1e-3f));
     CHECK(am.getChannelVolume(bId) == 0.8f);
 
-    // Review Focus 4: tras refrescar, un setChannelVolume del componente NO
-    // acumula la ganancia (no es volumenDelCanal x factor).
+    // Review Focus 4: after refreshing, a setChannelVolume of the component does NOT
+    // accumulate the gain (it is not channelVolume x factor).
     am.setChannelVolume(a2d, 0.5f);
     CHECK(nearlyEqual(am.getChannelVolume(a2d), 0.5f * 1.995262f, 1e-3f));
-    am.refreshImportSettings(a);                         // refrescar otra vez con el mismo sidecar
+    am.refreshImportSettings(a);                         // refresh again with the same sidecar
     CHECK(nearlyEqual(am.getChannelVolume(a2d), 0.5f * 1.995262f, 1e-3f));
 
-    // Review Focus 5: quitar el sidecar y refrescar devuelve el volumen limpio.
-    setGain(a, 0.0f);                                    // el defecto borra el fichero
+    // Review Focus 5: removing the sidecar and refreshing gives back the clean volume.
+    setGain(a, 0.0f);                                    // the default deletes the file
     CHECK(!std::filesystem::exists(importSidecarPath(a)));
     am.refreshImportSettings(a);
     CHECK(isDefault(am.getSoundImportSettings(a2d)));
     CHECK(am.getChannelVolume(a2d) == 0.5f);
 
-    // Un path distinto o inexistente no toca nada.
+    // A different or nonexistent path touches nothing.
     am.refreshImportSettings((d / "otra.wav").string());
     CHECK(am.getChannelVolume(bId) == 0.8f);
 
@@ -1890,7 +1890,7 @@ static void test_import_gain_applies_and_refreshes(AudioManager& am)
     am.unloadSound(a2d); am.unloadSound(a3d); am.unloadSound(bId);
 }
 
-// Review Focus 2: un slot reciclado no hereda ganancia ni volumen guardado.
+// Review Focus 2: a recycled slot does not inherit gain or saved volume.
 static void test_import_recycled_slot_does_not_inherit(AudioManager& am)
 {
     if (!am.available()) { std::printf("SKIP test_import_recycled_slot_does_not_inherit (FMOD no disponible)\n"); return; }
@@ -1906,22 +1906,22 @@ static void test_import_recycled_slot_does_not_inherit(AudioManager& am)
     am.playSound(idA, {}, 0.9f);
     CHECK(am.getSoundImportSettings(idA).gainDb == 12.0f);
     am.stopSound(idA);
-    am.unloadSound(idA);                                  // libera el slot
+    am.unloadSound(idA);                                  // frees the slot
 
-    const int idB = am.loadSound(b, false, true);         // sin sidecar: reutiliza el slot de a
+    const int idB = am.loadSound(b, false, true);         // without a sidecar: reuses a's slot
     if (idB < 0 || !waitReady(am, idB)) { CHECK(false); return; }
-    CHECK(idB == idA);                                    // el test ejercita el reciclado de verdad
+    CHECK(idB == idA);                                    // the test really exercises the recycling
     CHECK(isDefault(am.getSoundImportSettings(idB)));
     am.playSound(idB, {}, 0.7f);
     CHECK(am.getChannelVolume(idB) == 0.7f);
-    // refrescar b no le mete la ganancia de a.
+    // refreshing b does not put a's gain into it.
     am.refreshImportSettings(b);
     CHECK(am.getChannelVolume(idB) == 0.7f);
     am.stopSound(idB);
     am.unloadSound(idB);
 }
 
-// Sin FMOD el getter es neutro.
+// Without FMOD the getter is neutral.
 static void test_mono_getter_is_neutral_without_a_voice(AudioManager& am)
 {
     CHECK(!am.isVoiceForcedMono(-1));
@@ -1932,10 +1932,10 @@ static void test_import_force_mono_on_a_2d_stereo_voice(AudioManager& am)
 {
     if (!am.available()) { std::printf("SKIP test_import_force_mono_on_a_2d_stereo_voice (FMOD no disponible)\n"); return; }
     const auto d = audioTestDir("dt_audio_import_mono");
-    const std::string stereoMono = (d / "m.wav").string();   // estereo CON forceMono
-    const std::string stereoPlain = (d / "p.wav").string();  // estereo sin sidecar
-    const std::string oneCh = (d / "one.wav").string();      // un canal CON forceMono
-    const std::string stereo3d = (d / "s3d.wav").string();   // estereo CON forceMono, cargado 3D
+    const std::string stereoMono = (d / "m.wav").string();   // stereo WITH forceMono
+    const std::string stereoPlain = (d / "p.wav").string();  // stereo without a sidecar
+    const std::string oneCh = (d / "one.wav").string();      // one channel WITH forceMono
+    const std::string stereo3d = (d / "s3d.wav").string();   // stereo WITH forceMono, loaded 3D
     writeWav(stereoMono, 2, 3.0);
     writeWav(stereoPlain, 2, 3.0);
     writeWav(oneCh, 1, 3.0);
@@ -1956,20 +1956,20 @@ static void test_import_force_mono_on_a_2d_stereo_voice(AudioManager& am)
     am.playSound(p, {}, 1.0f);
     am.playSound(o, {}, 1.0f);
     am.playSound(s3, {}, 1.0f);
-    CHECK(am.isVoiceForcedMono(m));            // estereo 2D con el ajuste: mezclada a mono
-    CHECK(!am.isVoiceForcedMono(p));           // sin ajuste: matriz de fabrica
-    CHECK(!am.isVoiceForcedMono(o));           // Review Focus 6: un canal, no-op sin crash
-    CHECK(!am.isVoiceForcedMono(s3));          // Review Focus 6: 3D, no se toca
-    CHECK(am.isSoundPlaying(o));               // y sigue sonando
+    CHECK(am.isVoiceForcedMono(m));            // 2D stereo with the setting: mixed down to mono
+    CHECK(!am.isVoiceForcedMono(p));           // without the setting: factory matrix
+    CHECK(!am.isVoiceForcedMono(o));           // Review Focus 6: one channel, no-op without a crash
+    CHECK(!am.isVoiceForcedMono(s3));          // Review Focus 6: 3D, it is not touched
+    CHECK(am.isSoundPlaying(o));               // and it keeps playing
 
-    // Otra reproduccion de la misma voz conserva el mono (se aplica en cada arranque).
+    // Another playback of the same voice keeps the mono (it is applied on every start).
     am.stopSound(m);
     am.playSound(m, {}, 1.0f);
     CHECK(am.isVoiceForcedMono(m));
 
-    // Fix del review final: setPan de FMOD REEMPLAZA toda la matriz de mezcla, asi
-    // que con Stereo Pan != 0 el mono se perdia en silencio. Con paneo, la voz
-    // sigue siendo mono (la matriz lleva el paneo dentro).
+    // Final review fix: FMOD's setPan REPLACES the whole mix matrix, so
+    // with Stereo Pan != 0 the mono was silently lost. With panning, the voice
+    // is still mono (the matrix carries the panning inside).
     am.stopSound(m);
     am.playSound(m, {}, 1.0f, 1.0f, AudioBus::Sfx, 1.0f, 100.0f, 0.0f, /*stereoPan=*/-0.5f);
     CHECK(am.isVoiceForcedMono(m));
@@ -1981,9 +1981,9 @@ static void test_import_force_mono_on_a_2d_stereo_voice(AudioManager& am)
     am.unloadSound(m); am.unloadSound(p); am.unloadSound(o); am.unloadSound(s3);
 }
 
-// shutdown() vacia los vectores por sonido; los de ajustes de importacion tienen
-// que vaciarse con ellos. Si no, tras shutdown()+init() el sonido nuevo vuelve a
-// ser el id 0 pero m_soundImport conserva las entradas viejas y sus ajustes.
+// shutdown() empties the per-sound vectors; the import settings ones have
+// to be emptied along with them. Otherwise, after shutdown()+init() the new sound is again
+// id 0 but m_soundImport keeps the old entries and their settings.
 static void test_import_settings_do_not_survive_shutdown_and_init(AudioManager& am)
 {
     if (!am.available()) { std::printf("SKIP test_import_settings_do_not_survive_shutdown_and_init (FMOD no disponible)\n"); return; }
@@ -2003,10 +2003,10 @@ static void test_import_settings_do_not_survive_shutdown_and_init(AudioManager& 
     CHECK(am.getSoundImportSettings(idA).gainDb == 9.0f);
     am.unloadSound(idA);
 
-    am.shutdown();                                        // vuelve a vaciar todo
+    am.shutdown();                                        // empties everything again
     CHECK(am.init());
     if (!am.available()) return;
-    const int idB = am.loadSound(b, false, true);         // sin sidecar: id 0 otra vez
+    const int idB = am.loadSound(b, false, true);         // without a sidecar: id 0 again
     if (idB < 0 || !waitReady(am, idB)) { CHECK(false); return; }
     CHECK(idB == idA);
     CHECK(isDefault(am.getSoundImportSettings(idB)));
@@ -2016,9 +2016,9 @@ static void test_import_settings_do_not_survive_shutdown_and_init(AudioManager& 
     am.unloadSound(idB);
 }
 
-// Politica: la ganancia se multiplica en UN sitio. Si alguien vuelve a escribir
-// ch->setVolume(volume) en un camino de voz, ese camino ignora el sidecar en
-// silencio (los one-shots no se pueden observar desde un test, por eso el grep).
+// Policy: the gain is multiplied in ONE place. If someone writes
+// ch->setVolume(volume) again in a voice path, that path silently ignores the sidecar
+// (one-shots cannot be observed from a test, hence the grep).
 static void test_policy_gain_is_applied_only_in_voiceVolume()
 {
     std::ifstream in("engine/src/Audio/AudioManager.cpp", std::ios::binary);
@@ -2031,8 +2031,8 @@ static void test_policy_gain_is_applied_only_in_voiceVolume()
         for (size_t at = src.find(needle); at != std::string::npos; at = src.find(needle, at + needle.size())) ++n;
         return n;
     };
-    CHECK(countOf("setVolume(volume)") == 0);                 // ningun canal recibe el volumen a pelo
-    CHECK(countOf("voiceVolume(") >= 4);                      // definicion + 3 usos (mas el refresco)
+    CHECK(countOf("setVolume(volume)") == 0);                 // no channel receives the bare volume
+    CHECK(countOf("voiceVolume(") >= 4);                      // definition + 3 uses (plus the refresh)
 }
 
 int main()
@@ -2040,10 +2040,10 @@ int main()
     PhysicsManager pm;
     pm.init();
     AudioManager am;
-    // init() ya no lanza: sin dispositivo de salida devuelve false y los tests
-    // que necesitan FMOD se saltan solos por checkAudioProbe/available(). Antes
-    // la excepción escapaba de aquí y abortaba el binario, con lo que el SKIP
-    // que prometían esos tests no llegaba a imprimirse nunca.
+    // init() no longer throws: without an output device it returns false and the tests
+    // that need FMOD skip themselves via checkAudioProbe/available(). Before,
+    // the exception escaped from here and aborted the binary, so the SKIP
+    // those tests promised never got printed.
     if (!am.init())
         std::printf("AVISO: FMOD no disponible; los tests que lo necesitan se saltaran\n");
 

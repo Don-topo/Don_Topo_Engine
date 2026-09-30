@@ -1,8 +1,8 @@
 #pragma once
-// La maquinaria que convierte los componentes de UI de la escena en el árbol
-// vivo del canvas. Vivía en TextComponent.h por accidente histórico: el primer
-// widget que la necesitó fue el Text, y se quedó ahí. No tiene nada que ver con
-// el componente de texto.
+// The machinery that converts the scene's UI components into the canvas's
+// live tree. It lived in TextComponent.h by historical accident: the first
+// widget that needed it was Text, and it stayed there. It has nothing to do with
+// the text component.
 #include <algorithm>
 #include <cstdint>
 #include <memory>
@@ -34,15 +34,15 @@
 
 namespace DonTopo
 {
-    // Los widgets de UI de una escena, una lista por tipo y la jerarquía
-    // aplanada. Lo rellena Scene::collectUiWidgets y lo consume syncUiWidgets.
+    // A scene's UI widgets, one list per type and the flattened
+    // hierarchy. Filled in by Scene::collectUiWidgets and consumed by syncUiWidgets.
     //
-    // Una struct y no N parámetros sueltos porque los tipos de widget CRECEN:
-    // con una lista por parámetro, cada widget nuevo cambiaba la firma de las
-    // dos funciones y de sus ~76 puntos de llamada, y un parámetro opcional
-    // olvidado no daba error de compilación sino un widget que no aparecía.
-    // Aquí un campo nuevo no rompe a nadie, y lo que sí rompe (renombrar) lo
-    // caza el compilador.
+    // A struct and not N loose parameters because the widget types GROW:
+    // with one list per parameter, each new widget changed the signature of the
+    // two functions and of their ~76 call sites, and a forgotten optional parameter gave
+    // no compile error but a widget that did not show up.
+    // Here a new field breaks nobody, and what does break (renaming) is
+    // caught by the compiler.
     struct UiWidgetLists
     {
         std::vector<std::pair<uint64_t, const ButtonComponent*>>      buttons;
@@ -51,12 +51,12 @@ namespace DonTopo
         std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
         std::vector<std::pair<uint64_t, const PanelComponent*>>       panels;
         std::vector<std::pair<uint64_t, const ImageComponent*>>       images;
-        // NO const, al reves que los demas: el slider es interactivo y sus
-        // handlers escriben `value` EN EL COMPONENTE (que es lo que se
-        // serializa y lo que lee el editor), no en el nodo del canvas.
+        // NOT const, unlike the others: the slider is interactive and its
+        // handlers write `value` IN THE COMPONENT (which is what gets
+        // serialized and what the editor reads), not in the canvas node.
         std::vector<std::pair<uint64_t, SliderComponent*>>             sliders;
-        // Los tres tambien NO const, y por lo mismo: sus handlers escriben el
-        // valor EN EL COMPONENTE.
+        // The three also NOT const, for the same reason: their handlers write the
+        // value IN THE COMPONENT.
         std::vector<std::pair<uint64_t, CheckboxComponent*>>           checkboxes;
         std::vector<std::pair<uint64_t, ToggleComponent*>>             toggles;
         std::vector<std::pair<uint64_t, ScrollbarComponent*>>          scrollbars;
@@ -64,9 +64,9 @@ namespace DonTopo
         std::vector<std::pair<uint64_t, DropdownComponent*>>           dropdowns;
         std::vector<std::pair<uint64_t, ScrollViewComponent*>>         scrollViews;
 
-        // La JERARQUÍA de la escena aplanada a (id, id del padre), en PRE-ORDEN
-        // y con 0 para "cuelga de la raíz". VACÍA = sin jerarquía: todo cuelga
-        // de la raíz, que es lo que hacía el sync antes de que existiera.
+        // The scene's HIERARCHY flattened to (id, parent id), in PRE-ORDER
+        // and with 0 for "hangs from the root". EMPTY = no hierarchy: everything hangs
+        // from the root, which is what the sync did before it existed.
         std::vector<std::pair<uint64_t, uint64_t>> parents;
 
         void clear()
@@ -88,38 +88,38 @@ namespace DonTopo
         }
     };
 
-    // Un canvas de la escena con TODO lo que le cuelga. Es lo que
-    // Scene::collectCanvases produce y lo que el Renderer consume.
+    // A scene canvas with EVERYTHING that hangs from it. It is what
+    // Scene::collectCanvases produces and what the Renderer consumes.
     //
-    // Los widgets van agrupados POR CANVAS y no en un saco común: con un solo
-    // canvas daba igual, pero con dos, meterlos todos en el primero pinta el menú
-    // de pausa encima del HUD sin que nada lo diga.
+    // The widgets are grouped PER CANVAS and not in a common bag: with a single
+    // canvas it made no difference, but with two, putting them all in the first one paints the
+    // pause menu on top of the HUD without anything saying so.
     struct UiCanvasBinding
     {
-        uint64_t               ownerId = 0;         // GameObject del Canvas
+        uint64_t               ownerId = 0;         // the Canvas's GameObject
         const CanvasComponent* canvas  = nullptr;
-        // Del GameObject del canvas. Solo lo lee el modo World; en pantalla no
-        // significa nada (la UI de pantalla no está en el mundo).
+        // From the canvas's GameObject. Only World mode reads it; on screen it
+        // means nothing (screen UI is not in the world).
         glm::mat4               worldTransform{1.0f};
         UiWidgetLists           widgets;
     };
 
-    // Lo que el sync tiene que recordar ENTRE frames, todo junto y en manos de
-    // quien dibuja (una por bucle). Sin esto habría que recrear el árbol entero
-    // cada frame, que además de tirar la caché de vértices reiniciaría el
-    // fundido de cada botón en cada frame.
+    // What the sync has to remember BETWEEN frames, all together and in the hands of
+    // whoever draws (one per loop). Without this the whole tree would have to be recreated
+    // every frame, which besides throwing away the vertex cache would restart the
+    // fade of every button on every frame.
     //
-    // UNA sola caché para TODOS los widgets, y no una por tipo: la raíz del
-    // canvas se reconstruye con clearChildren(), así que quien la limpia tiene
-    // que ser dueño de todos sus hijos. Dos syncs independientes sobre la misma
-    // raíz se borrarían los nodos el uno al otro cada vez que uno reconstruyera.
+    // A SINGLE cache for ALL the widgets, and not one per type: the canvas
+    // root is rebuilt with clearChildren(), so whoever clears it
+    // has to own all its children. Two independent syncs over the same
+    // root would delete each other's nodes every time one of them rebuilt.
     struct UiWidgetSyncCache
     {
-        // Firma del último frame: los ids de GameObject que había, EN ORDEN. Si
-        // cambia (en cualquiera de las dos listas), el subárbol se reconstruye
-        // entero; si no, se actualiza en sitio. Se comparan las listas completas
-        // y no los tamaños porque dos cambios que se compensan (uno fuera, otro
-        // dentro) dejan el mismo tamaño.
+        // Signature of the last frame: the GameObject ids that there were, IN ORDER. If it
+        // changes (in any of the lists), the subtree is rebuilt
+        // whole; if not, it is updated in place. The complete lists are compared
+        // and not the sizes because two changes that compensate each other (one out, another
+        // in) leave the same size.
         std::vector<uint64_t> buttonIds;
         std::vector<uint64_t> barIds;
         std::vector<uint64_t> textIds;
@@ -134,48 +134,48 @@ namespace DonTopo
         std::vector<uint64_t> dropdownIds;
         std::vector<uint64_t> scrollViewIds;
 
-        // La jerarquía con la que se montó el árbol, aplanada a (id, padre) y en
-        // el mismo orden que llegó. Cambiarla mueve nodos de sitio, así que se
-        // compara igual que las tres listas: si no cuadra, se reconstruye.
+        // The hierarchy the tree was assembled with, flattened to (id, parent) and in
+        // the same order it arrived. Changing it moves nodes around, so it is
+        // compared like the three lists: if it does not match, it is rebuilt.
         std::vector<std::pair<uint64_t, uint64_t>> parents;
 
-        // Punteros a los nodos vivos, en el mismo orden que los ids. Son
-        // estables mientras nadie llame a clearChildren(): UiElement::add mueve
-        // los unique_ptr del vector, no los objetos apuntados.
+        // Pointers to the live nodes, in the same order as the ids. They are
+        // stable as long as nobody calls clearChildren(): UiElement::add moves
+        // the unique_ptrs of the vector, not the pointed-to objects.
         std::vector<Button*> buttonNodes;
-        std::vector<Text*>   buttonLabels;   // nullptr = ese botón no tiene etiqueta
+        std::vector<Text*>   buttonLabels;   // nullptr = that button has no label
         std::vector<Text*>   textNodes;
-        // La barra son SIEMPRE dos nodos: el fondo y el hijo del relleno. Que el
-        // del relleno exista aunque el valor sea 0 (con drawable a false) es lo
-        // que mantiene constante la FORMA del subárbol: si apareciera y
-        // desapareciera habría que reconstruir la raíz al cruzar el 0.
+        // The bar is ALWAYS two nodes: the background and the fill child. That the
+        // fill one exists even if the value is 0 (with drawable false) is what
+        // keeps the SHAPE of the subtree constant: if it appeared and
+        // disappeared the root would have to be rebuilt when crossing 0.
         std::vector<ProgressBar*> barNodes;
         std::vector<Panel*>       barFills;
 
-        // El nodo al que escribe cada layout: su contenedor propio si el
-        // GameObject no tiene ningún otro componente de UI, y si no el nodo de
-        // aquel. Con layoutOwnsRect a false ese nodo tiene OTRO dueño, así que
-        // de aquí solo salen los campos de layout y nunca el rect.
+        // The node each layout writes to: its own container if the
+        // GameObject has no other UI component, and otherwise that one's node.
+        // With layoutOwnsRect false that node has ANOTHER owner, so
+        // only the layout fields come from here and never the rect.
         std::vector<UiElement*> layoutNodes;
         std::vector<char>       layoutOwnsRect;
 
-        // Panel e Image: un nodo cada uno, sin hijos propios.
+        // Panel and Image: one node each, without children of their own.
         std::vector<Panel*> panelNodes;
         std::vector<Image*> imageNodes;
 
-        // El slider son SIEMPRE tres nodos: la pista y sus hijos relleno y asa.
-        // Que los tres existan pase lo que pase con el valor es lo que mantiene
-        // constante la FORMA del subarbol (mismo motivo que el relleno de la
-        // ProgressBar): si aparecieran y desaparecieran habria que reconstruir
-        // la raiz al cruzar los extremos.
+        // The slider is ALWAYS three nodes: the track and its fill and handle children.
+        // That all three exist no matter what happens to the value is what keeps the
+        // SHAPE of the subtree constant (same reason as the ProgressBar's
+        // fill): if they appeared and disappeared the root would have to be
+        // rebuilt when crossing the extremes.
         std::vector<Slider*>    sliderNodes;
         std::vector<UiElement*> sliderFills;
         std::vector<UiElement*> sliderHandles;
 
-        // Los otros tres interactivos son DOS nodos cada uno: el rect que recibe
-        // el raton y el hijo que ensena el estado (la marca, el mando, el asa).
-        // Que el hijo exista pase lo que pase con el valor es lo que mantiene
-        // constante la FORMA del subarbol.
+        // The other three interactive ones are TWO nodes each: the rect that receives
+        // the mouse and the child that shows the state (the mark, the knob, the handle).
+        // That the child exists no matter what happens to the value is what keeps the
+        // SHAPE of the subtree constant.
         std::vector<Checkbox*>  checkboxNodes;
         std::vector<UiElement*> checkboxChecks;
         std::vector<Toggle*>    toggleNodes;
@@ -183,15 +183,15 @@ namespace DonTopo
         std::vector<Scrollbar*> scrollbarNodes;
         std::vector<UiElement*> scrollbarHandles;
 
-        // El campo son tres nodos: la caja, el texto y el cursor.
+        // The field is three nodes: the box, the text and the caret.
         std::vector<InputField*> inputFieldNodes;
         std::vector<Text*>       inputFieldTexts;
         std::vector<UiElement*>  inputFieldCarets;
 
-        // El desplegable son cuatro mas DOS por opcion (la fila y su etiqueta).
-        // Es el unico cuyo subarbol cambia de FORMA con los datos, asi que la
-        // cuenta de opciones con la que se monto se guarda para saber cuando hay
-        // que reconstruir.
+        // The dropdown is four plus TWO per option (the row and its label).
+        // It is the only one whose subtree changes SHAPE with the data, so the
+        // count of options it was assembled with is stored to know when it has
+        // to be rebuilt.
         std::vector<Dropdown*>   dropdownNodes;
         std::vector<Text*>       dropdownLabels;
         std::vector<UiElement*>  dropdownArrows;
@@ -200,15 +200,15 @@ namespace DonTopo
         std::vector<std::vector<Text*>>      dropdownItemLabels;
         std::vector<size_t>      dropdownOptionCounts;
 
-        // La vista son dos: el viewport (que recorta y recibe la rueda) y el
-        // contenido (que se mueve y del que cuelgan los hijos de la escena).
+        // The view is two: the viewport (which clips and receives the wheel) and the
+        // content (which moves and from which the scene's children hang).
         std::vector<ScrollView*> scrollViewNodes;
         std::vector<UiElement*>  scrollViewContents;
 
-        // Copia de lo que se volcó la última vez, en el mismo orden. Lo que no
-        // ha cambiado no se vuelve a volcar NI se ensucia: escribir los campos
-        // sin ensuciar deja el nodo clavado (el canvas se copia los vértices
-        // cacheados), y ensuciar siempre tira la caché entera cada frame.
+        // Copy of what was dumped last time, in the same order. What has not
+        // changed is not dumped again NOR dirtied: writing the fields
+        // without dirtying leaves the node stuck (the canvas copies the cached
+        // vertices), and always dirtying throws away the whole cache every frame.
         std::vector<ButtonComponent>      buttonPrev;
         std::vector<TextComponent>        textPrev;
         std::vector<ProgressBarComponent> barPrev;
@@ -223,17 +223,17 @@ namespace DonTopo
         std::vector<DropdownComponent>    dropdownPrev;
         std::vector<ScrollViewComponent>  scrollViewPrev;
 
-        // Recursos de GPU por ruta. Sin esta caché una ruta de atlas cargaría un
-        // atlas NUEVO cada frame (Renderer::loadUiAtlas no cachea por ruta) y se
-        // comería la memoria de vídeo en segundos. Una ruta que falla se cachea
-        // como nullptr: reintentarla cada frame sería leer un fichero roto 60
-        // veces por segundo.
+        // GPU resources by path. Without this cache an atlas path would load a
+        // NEW atlas every frame (Renderer::loadUiAtlas does not cache by path) and would
+        // eat the video memory in seconds. A path that fails is cached
+        // as nullptr: retrying it every frame would be reading a broken file 60
+        // times per second.
         std::unordered_map<std::string, UiTextureAtlas*> atlases;
         std::unordered_map<std::string, UiFont*>         fonts;
     };
 
-    // Un canvas VIVO del Renderer: su árbol, su caché de sync y lo que hay que
-    // saber para dibujarlo. Uno por CanvasComponent de la escena.
+    // A LIVE canvas of the Renderer: its tree, its sync cache and what has to be
+    // known to draw it. One per CanvasComponent in the scene.
     struct UiCanvasSlot
     {
         uint64_t           ownerId = 0;
@@ -244,27 +244,27 @@ namespace DonTopo
         glm::mat4          model{1.0f};
         bool               depthTest = true;
 
-        // Copia POR VALOR del componente y del transform de su GameObject. No
-        // un puntero al componente de la escena: el slot vive ENTRE frames y la
-        // escena puede haber borrado ese GameObject.
+        // A copy BY VALUE of the component and of its GameObject's transform. Not
+        // a pointer to the scene's component: the slot lives BETWEEN frames and the
+        // scene may have deleted that GameObject.
         //
-        // Hacen falta porque la matriz de modelo (uiWorldCanvasMatrix) necesita
-        // la VISTA de la cámara para el billboard, y la vista solo se conoce en
-        // el momento de grabar, no en syncUiCanvases. Se copia el componente
-        // ENTERO y no solo worldScale/billboard a propósito: un campo de mundo
-        // nuevo en CanvasComponent llega solo, sin que nadie tenga que acordarse
-        // de añadirlo aquí (olvidarlo no daría error, solo un ajuste que no hace
-        // nada).
+        // They are needed because the model matrix (uiWorldCanvasMatrix) needs
+        // the camera's VIEW for the billboard, and the view is only known at
+        // record time, not in syncUiCanvases. The WHOLE component is copied
+        // and not just worldScale/billboard on purpose: a new world field
+        // in CanvasComponent arrives on its own, without anybody having to remember
+        // to add it here (forgetting it would give no error, only a setting that does
+        // nothing).
         CanvasComponent    component{};
         glm::mat4          worldTransform{1.0f};
-        // Distancia al ojo, para ordenar los de mundo de lejos a cerca.
+        // Distance to the eye, to sort the world ones from far to near.
         float              viewDepth = 0.0f;
     };
 
-    // Reordena `slots` para que casen uno a uno con `bindings`, emparejando por
-    // ownerId. Los slots que sobreviven CONSERVAN su árbol y su caché: sin esto,
-    // reordenar los canvas en la jerarquía reconstruiría árboles que no han
-    // cambiado, y eso se ve como un parpadeo.
+    // Reorders `slots` so that they match `bindings` one to one, pairing by
+    // ownerId. The slots that survive KEEP their tree and their cache: without this,
+    // reordering the canvases in the hierarchy would rebuild trees that have not
+    // changed, and that shows up as flicker.
     inline void matchUiCanvasSlots(const std::vector<UiCanvasBinding>& bindings,
                                    std::vector<std::unique_ptr<UiCanvasSlot>>& slots)
     {
@@ -280,7 +280,7 @@ namespace DonTopo
 
             if (it != slots.end())
             {
-                nuevos.push_back(std::move(*it));   // se lleva árbol y caché
+                nuevos.push_back(std::move(*it));   // takes the tree and cache along
             }
             else
             {
@@ -289,17 +289,17 @@ namespace DonTopo
                 nuevos.push_back(std::move(s));
             }
         }
-        // Lo que quede en `slots` es de canvas que ya no están: se destruye al
-        // salir del scope, y con ello su árbol y su caché.
+        // What remains in `slots` belongs to canvases that are no longer there: it is destroyed on
+        // leaving the scope, and with it its tree and its cache.
         slots = std::move(nuevos);
     }
 
-    // Los canvas de MUNDO en orden de pintado: de lejos a cerca. Van con alpha,
-    // así que pintarlos al revés mezcla mal. Contra la geometría manda el depth
-    // buffer; entre ellos, manda esto.
+    // The WORLD canvases in paint order: from far to near. They go with alpha,
+    // so painting them the other way round blends badly. Against the geometry the depth
+    // buffer rules; among themselves, this rules.
     //
-    // Los de PANTALLA no entran: esos van en su propio pase, sin profundidad y en
-    // el orden del árbol.
+    // The SCREEN ones do not come in: those go in their own pass, without depth and in
+    // tree order.
     inline void sortWorldCanvasesBackToFront(
         const std::vector<std::unique_ptr<UiCanvasSlot>>& slots,
         const glm::mat4& view, std::vector<UiCanvasSlot*>& out)
@@ -309,28 +309,28 @@ namespace DonTopo
         {
             if (!s || s->mode != UiCanvasRenderMode::World) continue;
             const glm::vec3 pos = glm::vec3(s->model[3]);
-            // +z hacia delante: la vista deja el ojo mirando a -Z, así que se
-            // niega para que "más grande" signifique "más lejos".
+            // +z forward: the view leaves the eye looking at -Z, so it is
+            // negated so that "bigger" means "farther".
             s->viewDepth = -(view * glm::vec4(pos, 1.0f)).z;
             out.push_back(s.get());
         }
         std::sort(out.begin(), out.end(),
                   [](const UiCanvasSlot* a, const UiCanvasSlot* b) {
-                      return a->viewDepth > b->viewDepth;   // lejos primero
+                      return a->viewDepth > b->viewDepth;   // far first
                   });
     }
 
-    // Los canvas de PANTALLA en orden de PRIORIDAD DE INPUT: el de más arriba
-    // primero. Arriba = el ÚLTIMO que se dibuja, porque el pase de UI recorre
-    // los slots en orden y cada canvas se pinta sobre el anterior. O sea: este
-    // orden es el de dibujado AL REVÉS, y no es un detalle estético — es lo que
-    // decide qué botón se lleva el clic cuando dos canvas se solapan, y tiene
-    // que ser el MISMO que use el editor para seleccionar clicando (si no, el
-    // clic seleccionaría un objeto distinto del que se ve encima).
+    // The SCREEN canvases in INPUT PRIORITY order: the topmost
+    // first. Topmost = the LAST one drawn, because the UI pass walks
+    // the slots in order and each canvas is painted over the previous one. That is: this
+    // order is the drawing order REVERSED, and it is not an aesthetic detail: it is what
+    // decides which button gets the click when two canvases overlap, and it has
+    // to be the SAME one the editor uses to select by clicking (otherwise the
+    // click would select a different object from the one seen on top).
     //
-    // Los de MUNDO no entran: no se pueden clicar (limitación conocida, ver
-    // Scripts/README.md), así que meterlos aquí solo les robaría el puntero a
-    // los de pantalla.
+    // The WORLD ones do not come in: they cannot be clicked (known limitation, see
+    // Scripts/README.md), so putting them here would only steal the pointer from
+    // the screen ones.
     inline void screenCanvasesTopFirst(const std::vector<std::unique_ptr<UiCanvasSlot>>& slots,
                                        std::vector<UiCanvas*>& out)
     {
@@ -343,16 +343,16 @@ namespace DonTopo
         }
     }
 
-    // El canvas de UN GameObject concreto, por ownerId, o nullptr si ese objeto
-    // no tiene canvas vivo. NO filtra por modo: el filtro es cosa de quien
-    // pregunta (el gizmo del canvas ya sale antes por su cuenta si es de mundo),
-    // y una búsqueda que se saltara los de mundo en silencio sería una trampa
-    // para el siguiente que la use.
+    // The canvas of ONE specific GameObject, by ownerId, or nullptr if that object
+    // has no live canvas. It does NOT filter by mode: the filter is up to whoever
+    // asks (the canvas gizmo already exits earlier on its own if it is a world one),
+    // and a search that silently skipped the world ones would be a trap
+    // for the next one who uses it.
     //
-    // Hace falta porque uiCanvas() devuelve el PRIMER canvas de pantalla, no el
-    // del objeto que se pregunta: con él, el gizmo de un SEGUNDO canvas de
-    // pantalla pintaba el rect del primero — un gizmo que miente, que es peor
-    // que no dibujar nada.
+    // It is needed because uiCanvas() returns the FIRST screen canvas, not that
+    // of the object being asked about: with it, the gizmo of a SECOND screen
+    // canvas drew the first one's rect, a gizmo that lies, which is worse
+    // than drawing nothing.
     inline const UiCanvas* findCanvasByOwner(
         const std::vector<std::unique_ptr<UiCanvasSlot>>& slots, uint64_t ownerId)
     {
@@ -361,26 +361,26 @@ namespace DonTopo
         return nullptr;
     }
 
-    // Lo que hay que dimensionar para el frame de UI, contado sobre el drawData
-    // YA construido de cada slot.
+    // What has to be sized for the UI frame, counted over each slot's
+    // ALREADY built drawData.
     struct UiFrameTotals
     {
-        // TODOS los canvas del frame, de mundo Y de pantalla: comparten UN solo
-        // par de buffers, así que este es el total que hay que reservar.
+        // ALL the frame's canvases, world AND screen: they share ONE single
+        // pair of buffers, so this is the total that has to be reserved.
         uint32_t vertices = 0;
         uint32_t indices  = 0;
-        // Solo los de PANTALLA: son los únicos que abren el pase de UI. Con el
-        // total del frame se abriría también con solo canvas de mundo vivos, y
-        // sería un pase entero sin un draw dentro.
+        // Only the SCREEN ones: they are the only ones that open the UI pass. With the
+        // frame total it would also open with only world canvases alive, and it
+        // would be a whole pass without a single draw inside.
         uint32_t screenVertices = 0;
         uint32_t screenIndices  = 0;
     };
 
-    // La cuenta del frame de UI, sin GPU y en un solo sitio. Dimensionar con la
-    // mitad —solo los de pantalla, que es lo que hacía el backend de D3D12
-    // cuando no existían los de mundo— deja al resto fuera del buffer, y ahí la
-    // guarda uiCursorFits los descarta EN SILENCIO: ni un error, ni un aviso de
-    // ninguna capa de validación, ni un canvas en pantalla.
+    // The UI frame's count, without GPU and in a single place. Sizing with
+    // half (only the screen ones, which is what the D3D12 backend did
+    // when the world ones did not exist) leaves the rest outside the buffer, and there the
+    // uiCursorFits guard discards them SILENTLY: not an error, not a warning from
+    // any validation layer, not a canvas on screen.
     inline UiFrameTotals uiFrameTotals(const std::vector<std::unique_ptr<UiCanvasSlot>>& slots)
     {
         UiFrameTotals t;
@@ -400,32 +400,32 @@ namespace DonTopo
         return t;
     }
 
-    // Vuelca los widgets de la escena en el canvas vivo. Las listas de
-    // UiWidgetLists van en orden de recorrido de la escena y traen el id de cada
-    // GameObject dueño.
+    // Dumps the scene's widgets into the live canvas. The UiWidgetLists lists
+    // go in scene traversal order and carry the id of each owning
+    // GameObject.
     //
-    // Loader es cualquier cosa con loadUiAtlas(path) y loadUiFont(path) — o sea
-    // el Renderer. Es un template para no meter Renderer.h en un header de UI:
-    // el componente no sabe de Vulkan.
+    // Loader is anything with loadUiAtlas(path) and loadUiFont(path), that is
+    // the Renderer. It is a template so as not to put Renderer.h in a UI header:
+    // the component knows nothing about Vulkan.
     //
-    // El orden de montaje dentro de un GameObject es paneles, imágenes, barras,
-    // botones y textos: el último hermano manda, así que un Text suelto que se
-    // solape con un botón o con una barra se dibuja encima (una barra con
-    // etiqueta es justo eso, dos componentes en el mismo GameObject), y el Panel
-    // queda debajo de todo, que es lo que quiere un fondo.
+    // The assembly order inside a GameObject is panels, images, bars,
+    // buttons and texts: the last sibling rules, so a loose Text that
+    // overlaps a button or a bar is drawn on top (a bar with a
+    // label is exactly that, two components on the same GameObject), and the Panel
+    // stays below everything, which is what a background wants.
     //
-    // w.parents es la JERARQUÍA de la escena aplanada a (id, id del padre), en
-    // PRE-ORDEN y con 0 para "cuelga de la raíz". Con ella, los nodos de un
-    // GameObject cuelgan del nodo PRINCIPAL de su padre —el Button si lo tiene,
-    // si no la ProgressBar, si no el Image, si no el Panel, si no el Text—, que
-    // es el que aporta el rect contra el que anclarse. Eso es lo que hace que el
-    // padre COLOQUE, RECORTE y ATENÚE a sus hijos, cosa que con el árbol plano
-    // de antes no podía.
+    // w.parents is the scene HIERARCHY flattened to (id, parent id), in
+    // PRE-ORDER and with 0 for "hangs from the root". With it, the nodes of a
+    // GameObject hang from its parent's MAIN node (the Button if it has one,
+    // otherwise the ProgressBar, otherwise the Image, otherwise the Panel, otherwise the Text),
+    // which is the one that provides the rect to anchor against. That is what makes the
+    // parent PLACE, CLIP and DIM its children, which with the flat tree
+    // from before it could not.
     //
-    // VACÍA, todo cuelga de la raíz, que es exactamente lo que hacía antes de
-    // que esto existiera. El padre que no aparezca en parents (o que no tenga
-    // ningún componente de UI) tampoco cuenta: su hijo sube a la raíz en vez de
-    // desaparecer.
+    // EMPTY, everything hangs from the root, which is exactly what it did before
+    // this existed. A parent that does not appear in parents (or that has no
+    // UI component) does not count either: its child goes up to the root instead of
+    // disappearing.
     template <class Loader>
     inline void syncUiWidgets(const UiWidgetLists& w, UiCanvas& canvas,
                               UiWidgetSyncCache& cache, Loader& loader)
@@ -443,9 +443,9 @@ namespace DonTopo
         const auto& inputFields = w.inputFields;
         const auto& dropdowns   = w.dropdowns;
         const auto& scrollViews = w.scrollViews;
-        // Puntero y no referencia: vacía significa "sin jerarquía", que es un
-        // camino de montaje DISTINTO (todo a la raíz) y no una jerarquía de cero
-        // elementos.
+        // Pointer and not reference: empty means "no hierarchy", which is a
+        // DIFFERENT assembly path (everything to the root) and not a hierarchy of zero
+        // elements.
         const std::vector<std::pair<uint64_t, uint64_t>>* parents =
             w.parents.empty() ? nullptr : &w.parents;
 
@@ -468,7 +468,7 @@ namespace DonTopo
             return font;
         };
 
-        // ¿Cambió el CONJUNTO de widgets? Solo entonces se reconstruye.
+        // Did the widget SET change? Only then is it rebuilt.
         bool rebuild = cache.buttonIds.size() != buttons.size() ||
                        cache.textIds.size() != texts.size() ||
                        cache.barIds.size() != bars.size() ||
@@ -509,23 +509,23 @@ namespace DonTopo
         for (size_t i = 0; !rebuild && i < scrollViews.size(); i++)
             if (cache.scrollViewIds[i] != scrollViews[i].first) rebuild = true;
 
-        // Una OPCION mas en un desplegable es un NODO mas: eso es la forma del
-        // subarbol, igual que anadir un widget. Cambiar el TEXTO de una opcion no
-        // lo es, y por eso se compara la cuenta y no el contenido.
+        // One more OPTION in a dropdown is one more NODE: that is the shape of the
+        // subtree, just like adding a widget. Changing an option's TEXT
+        // is not, and that is why the count is compared and not the content.
         for (size_t i = 0; !rebuild && i < dropdowns.size(); i++)
             if (cache.dropdownOptionCounts[i] != dropdowns[i].second->options.size())
                 rebuild = true;
 
-        // Un botón que gana o pierde etiqueta (texto vacío <-> no vacío) cambia
-        // la FORMA del subárbol, y eso también obliga a reconstruir.
+        // A button that gains or loses a label (empty text <-> non-empty) changes
+        // the SHAPE of the subtree, and that also forces a rebuild.
         for (size_t i = 0; !rebuild && i < buttons.size(); i++)
         {
             const bool wantsLabel = !buttons[i].second->text.empty();
             if (wantsLabel != (cache.buttonLabels[i] != nullptr)) rebuild = true;
         }
 
-        // Y mover un GameObject de padre cambia de dónde cuelga su nodo, que es
-        // la forma del árbol tanto como añadir o quitar un widget.
+        // And moving a GameObject to another parent changes where its node hangs from, which is
+        // the shape of the tree just as much as adding or removing a widget.
         {
             const size_t nuevos = parents ? parents->size() : 0;
             if (cache.parents.size() != nuevos) rebuild = true;
@@ -535,19 +535,19 @@ namespace DonTopo
 
         if (rebuild)
         {
-            // clear() y no root().clearChildren(): el canvas guarda punteros de
-            // estado a nodos concretos (el que tiene el ratón encima, el
-            // pulsado, el del foco, el del último click) y esos nodos son justo
-            // los que se acaban de destruir. clearChildren() los dejaba
-            // colgando, y el siguiente updateInput los desreferenciaba: si el
-            // asignador reutilizaba la dirección, el canvas se creía que el
-            // nodo NUEVO ya estaba hovered y no volvía a marcarlo.
+            // clear() and not root().clearChildren(): the canvas keeps state pointers
+            // to specific nodes (the one with the mouse over it, the
+            // pressed one, the focused one, the last click's) and those nodes are exactly
+            // the ones that were just destroyed. clearChildren() left them
+            // dangling, and the next updateInput dereferenced them: if the
+            // allocator reused the address, the canvas believed the NEW
+            // node was already hovered and did not mark it again.
             canvas.clear();
 
-            // Los vectores se DIMENSIONAN y se escriben por índice, no con
-            // push_back: la fase de actualización indexa por la posición en las
-            // listas de entrada, y con jerarquía los nodos se crean en el orden
-            // del árbol, que es otro.
+            // The vectors are SIZED and written by index, not with
+            // push_back: the update phase indexes by position in the
+            // input lists, and with hierarchy the nodes are created in tree
+            // order, which is a different one.
             cache.buttonIds.assign(buttons.size(), 0ull);
             cache.buttonNodes.assign(buttons.size(), nullptr);
             cache.buttonLabels.assign(buttons.size(), nullptr);
@@ -605,8 +605,8 @@ namespace DonTopo
             cache.scrollViewContents.assign(scrollViews.size(), nullptr);
             cache.scrollViewPrev.assign(scrollViews.size(), ScrollViewComponent{});
 
-            // Dónde está cada GameObject en cada lista, para poder montarlo
-            // cuando toque su turno en el recorrido del árbol.
+            // Where each GameObject is in each list, so it can be assembled
+            // when its turn comes in the tree traversal.
             std::unordered_map<uint64_t, size_t> idxButton, idxBar, idxText, idxLayout,
                                                  idxPanel, idxImage, idxSlider,
                                                  idxCheckbox, idxToggle, idxScrollbar,
@@ -625,7 +625,7 @@ namespace DonTopo
             for (size_t i = 0; i < dropdowns.size();   i++) idxDropdown[dropdowns[i].first]     = i;
             for (size_t i = 0; i < scrollViews.size(); i++) idxScrollView[scrollViews[i].first] = i;
 
-            // Nodo del que cuelgan los HIJOS de cada GameObject.
+            // Node from which each GameObject's CHILDREN hang.
             std::unordered_map<uint64_t, UiElement*> principal;
 
             auto creaBoton = [&](size_t i, UiElement& padre)
@@ -638,17 +638,17 @@ namespace DonTopo
                 cache.buttonLabels[i] = entry.second->text.empty()
                                             ? nullptr
                                             : &b.add<Text>(nombre + "/Label");
-                // Un componente que no puede ser igual a ninguno real fuerza el
-                // primer volcado: un nodo recién creado ya nace sucio, pero los
-                // campos hay que escribirlos igual.
+                // A component that cannot equal any real one forces the
+                // first dump: a newly created node is born dirty, but the
+                // fields have to be written all the same.
                 cache.buttonPrev[i].text = "\x01(not synced)";
 
-                // Handlers de script. Se instalan AQUÍ, en el único sitio que
-                // crea nodos, porque clear() se acaba de llevar por delante los
-                // del árbol anterior: el dueño del callback es el componente y
-                // el nodo solo tiene un weak_ptr a él, así que un botón que
-                // pierde su componente deja de disparar en vez de llamar a un
-                // objeto muerto.
+                // Script handlers. They are installed HERE, in the only place that
+                // creates nodes, because clear() just took away those of the
+                // previous tree: the owner of the callback is the component and
+                // the node only has a weak_ptr to it, so a button that
+                // loses its component stops firing instead of calling a
+                // dead object.
                 std::weak_ptr<UiButtonRuntime> rt = entry.second->callbacks.ptr;
                 b.onClick = [rt](UiEvent&) {
                     if (auto p = rt.lock(); p && p->onClick) p->onClick();
@@ -664,9 +664,9 @@ namespace DonTopo
                 const auto& entry = bars[i];
                 const std::string nombre = uiProgressBarNodeName(entry.first);
                 ProgressBar& p = padre.add<ProgressBar>(nombre);
-                // El relleno es un hijo y no un hermano: así su rect se cuenta
-                // en píxeles desde la esquina del fondo y no hay que rehacer a
-                // mano las anclas ni la escala del canvas.
+                // The fill is a child and not a sibling: this way its rect is counted
+                // in pixels from the background's corner and there is no need to redo
+                // the anchors or the canvas scale by hand.
                 Panel& f = p.add<Panel>(nombre + "/Fill");
                 cache.barIds[i]   = entry.first;
                 cache.barNodes[i] = &p;
@@ -681,9 +681,9 @@ namespace DonTopo
                 Panel& p = padre.add<Panel>(uiPanelNodeName(entry.first));
                 cache.panelIds[i]   = entry.first;
                 cache.panelNodes[i] = &p;
-                // Un componente que no puede ser igual a ninguno real fuerza el
-                // primer volcado: un nodo recién creado ya nace sucio, pero los
-                // campos hay que escribirlos igual.
+                // A component that cannot equal any real one forces the
+                // first dump: a newly created node is born dirty, but the
+                // fields have to be written all the same.
                 cache.panelPrev[i].sprite = "\x01(not synced)";
                 return &p;
             };
@@ -703,9 +703,9 @@ namespace DonTopo
                 const auto& entry = sliders[i];
                 const std::string nombre = uiSliderNodeName(entry.first);
                 Slider& s = padre.add<Slider>(nombre);
-                // Relleno y asa como HIJOS y no hermanos: así sus rects se
-                // cuentan en píxeles desde la esquina de la pista y no hay que
-                // rehacer a mano las anclas ni la escala del canvas.
+                // Fill and handle as CHILDREN and not siblings: this way their rects are
+                // counted in pixels from the track's corner and there is no need to
+                // redo the anchors or the canvas scale by hand.
                 Panel& f = s.add<Panel>(nombre + "/Fill");
                 Panel& h = s.add<Panel>(nombre + "/Handle");
                 cache.sliderIds[i]     = entry.first;
@@ -714,12 +714,11 @@ namespace DonTopo
                 cache.sliderHandles[i] = &h;
                 cache.sliderPrev[i].backgroundSprite = "\x01(not synced)";
 
-                // Input. Se instala AQUÍ, en el único sitio que crea nodos,
-                // porque clear() se acaba de llevar por delante los del árbol
-                // anterior. El weak_ptr es al runtime del COMPONENTE: si el
-                // componente muere, el handler deja de escribir en vez de tocar
-                // un objeto muerto. `pista` sí puede ser un puntero crudo — el
-                // handler es un miembro DE ESE NODO y muere con él.
+                // Input. It is installed HERE, in the only place that creates nodes,
+                // because clear() just took away those of the previous tree. The
+                // weak_ptr is to the COMPONENT's runtime: if the component dies, the
+                // handler stops writing instead of touching a dead object. `pista` can
+                // be a raw pointer: the handler is a member OF THAT NODE and dies with it.
                 std::weak_ptr<UiSliderRuntime> rt = entry.second->callbacks.ptr;
                 auto desdeElRaton = [rt, pista = &s](UiEvent& e)
                 {
@@ -727,8 +726,8 @@ namespace DonTopo
                     if (!p || !p->owner) return;
                     SliderComponent& c = *p->owner;
                     if (!c.interactable) return;
-                    // Sin rect resuelto (nodo invisible o recortado a cero) no
-                    // hay nada contra lo que medir el ratón.
+                    // Without a resolved rect (invisible node or clipped to zero) there is
+                    // nothing to measure the mouse against.
                     if (!pista->rectValid) return;
 
                     const glm::vec2 local = e.mousePos - pista->screenPos;
@@ -738,9 +737,9 @@ namespace DonTopo
                     c.value = nv;
                     if (p->onValueChanged) p->onValueChanged(nv);
                 };
-                // Down Y Drag: la pista entera es zona de clic (como en Unity),
-                // no solo el asa, y el arrastre sigue al ratón aunque salga del
-                // rect (el canvas mantiene el destino del botón pulsado).
+                // Down AND Drag: the whole track is a click zone (as in Unity),
+                // not just the handle, and the drag follows the mouse even if it leaves the
+                // rect (the canvas keeps the pressed button's target).
                 s.onMouseDown = desdeElRaton;
                 s.onDrag      = desdeElRaton;
                 return &s;
@@ -822,9 +821,9 @@ namespace DonTopo
                 s.onMouseDown = desdeElRaton;
                 s.onDrag      = desdeElRaton;
 
-                // La rueda tambien mueve la barra: sin esto, una lista con
-                // scrollbar solo se podria mover arrastrando, que no es lo que
-                // espera nadie. + es hacia el principio (rueda hacia arriba).
+                // The wheel also moves the bar: without this, a list with a
+                // scrollbar could only be moved by dragging, which is not what anybody
+                // expects. + is toward the start (wheel up).
                 s.onScroll = [rt](UiEvent& e)
                 {
                     auto p = rt.lock();
@@ -836,9 +835,9 @@ namespace DonTopo
                     if (nv == comp.value) return;
                     comp.value = nv;
                     if (p->onValueChanged) p->onValueChanged(nv);
-                    // Consumido: si sigue burbujeando, un ScrollView que la
-                    // contenga se desplazaria a la vez y el contenido saltaria el
-                    // doble por muesca.
+                    // Consumed: if it kept bubbling, a ScrollView that
+                    // contains it would scroll at the same time and the content would jump
+                    // double per notch.
                     e.consumed = true;
                 };
                 return &s;
@@ -860,9 +859,9 @@ namespace DonTopo
 
                 std::weak_ptr<UiInputFieldRuntime> rt = entry.second->callbacks.ptr;
 
-                // Texto: el unico camino por el que entra un caracter. El canvas
-                // solo lo entrega al elemento con FOCO, asi que aqui no hace
-                // falta comprobar nada mas que el propio componente.
+                // Text: the only path through which a character enters. The canvas
+                // only delivers it to the element with FOCUS, so nothing needs
+                // checking here beyond the component itself.
                 f.onTextInput = [rt](UiEvent& e)
                 {
                     auto p = rt.lock();
@@ -873,9 +872,9 @@ namespace DonTopo
                     if (p->onValueChanged) p->onValueChanged(comp.text);
                 };
 
-                // Teclas de edicion. Left/Right/Home/End/Backspace/Delete se
-                // CONSUMEN: si no, la navegacion direccional del canvas se
-                // llevaria el foco a otro widget en mitad de una palabra.
+                // Editing keys. Left/Right/Home/End/Backspace/Delete are
+                // CONSUMED: otherwise the canvas's directional navigation would
+                // take the focus to another widget in the middle of a word.
                 f.onKeyDown = [rt](UiEvent& e)
                 {
                     auto p = rt.lock();
@@ -893,9 +892,9 @@ namespace DonTopo
                         case UiKey::Home:      comp.caretHome();              e.consumed = true; break;
                         case UiKey::End:       comp.caretEnd();               e.consumed = true; break;
                         case UiKey::Enter:
-                            // Enter NO se consume: cierra la edicion y deja que
-                            // el canvas siga con lo suyo (submitFocused), que es
-                            // lo que activa un boton de "Aceptar" con el mando.
+                            // Enter is NOT consumed: it closes the editing and lets
+                            // the canvas go on with its own thing (submitFocused), which is
+                            // what activates an "Accept" button with the gamepad.
                             if (p->onEndEdit) p->onEndEdit(comp.text);
                             break;
                         default: break;
@@ -903,8 +902,8 @@ namespace DonTopo
                     if (cambio && p->onValueChanged) p->onValueChanged(comp.text);
                 };
 
-                // Perder el foco tambien cierra la edicion: es cuando un
-                // formulario valida, y no todo el mundo pulsa Enter.
+                // Losing focus also closes the editing: it is when a
+                // form validates, and not everybody presses Enter.
                 f.onBlur = [rt](UiEvent&)
                 {
                     auto p = rt.lock();
@@ -935,7 +934,7 @@ namespace DonTopo
 
                 std::weak_ptr<UiDropdownRuntime> rt = entry.second->callbacks.ptr;
 
-                // La caja abre y cierra.
+                // The box opens and closes.
                 d.onClick = [rt](UiEvent&)
                 {
                     auto p = rt.lock();
@@ -945,9 +944,9 @@ namespace DonTopo
                     comp.isOpen = !comp.isOpen;
                 };
 
-                // Una fila por opcion, cada una con su etiqueta. El indice se
-                // captura por valor: es lo que hace que cada fila sepa cual es
-                // sin buscarse a si misma en la lista.
+                // One row per option, each with its label. The index is
+                // captured by value: it is what makes each row know which one it is
+                // without looking itself up in the list.
                 for (size_t k = 0; k < entry.second->options.size(); k++)
                 {
                     const std::string nf = nombre + "/List/Item" + std::to_string(k);
@@ -963,14 +962,14 @@ namespace DonTopo
                         if (!p || !p->owner) return;
                         DropdownComponent& comp = *p->owner;
                         if (!comp.interactable) return;
-                        // Elegir CIERRA, siempre: si no, la lista se quedaria
-                        // abierta tapando lo de debajo tras cada eleccion.
+                        // Choosing CLOSES, always: otherwise the list would stay
+                        // open covering what is below after every choice.
                         comp.isOpen = false;
                         if (comp.value == indice) { e.consumed = true; return; }
                         comp.value = indice;
                         if (p->onValueChanged) p->onValueChanged(indice);
-                        // Consumido: sin esto el click burbujea hasta la caja y
-                        // su onClick volveria a ABRIR la lista en el mismo frame.
+                        // Consumed: without this the click bubbles up to the box and
+                        // its onClick would OPEN the list again in the same frame.
                         e.consumed = true;
                     };
                 }
@@ -997,15 +996,15 @@ namespace DonTopo
                     if (e.scrollDelta == 0.0f) return;
 
                     const glm::vec2 rango = comp.scrollRange();
-                    // Sin recorrido no se mueve NI avisa: un contenido que cabe
-                    // entero no scrollea, y avisar de un cambio que no ha pasado
-                    // haria trabajar a un script en balde en cada muesca.
+                    // Without travel it neither moves NOR notifies: content that fits
+                    // whole does not scroll, and notifying of a change that has not happened
+                    // would make a script work for nothing on every notch.
                     const bool ejeY = comp.vertical && rango.y > 0.0f;
                     const bool ejeX = !ejeY && comp.horizontal && rango.x > 0.0f;
                     if (!ejeY && !ejeX) return;
 
-                    // La rueda hacia ARRIBA (delta positivo) sube por la lista, o
-                    // sea que baja la posicion normalizada.
+                    // The wheel UP (positive delta) goes up the list, that
+                    // is the normalized position goes down.
                     const float rangoEje = ejeY ? rango.y : rango.x;
                     const float delta = -e.scrollDelta * comp.scrollSensitivity / rangoEje;
 
@@ -1017,8 +1016,8 @@ namespace DonTopo
 
                     comp.normalizedPosition = np;
                     if (p->onValueChanged) p->onValueChanged(np.x, np.y);
-                    // Consumido: si burbujeara, una vista dentro de otra moveria
-                    // las dos con la misma muesca.
+                    // Consumed: if it bubbled, a view inside another would move
+                    // both with the same notch.
                     e.consumed = true;
                 };
                 return &v;
@@ -1034,10 +1033,10 @@ namespace DonTopo
                 return &t;
             };
 
-            // El layout de un GameObject: si no hay otro componente de UI monta
-            // un contenedor propio (no dibujable) y ese pasa a ser su nodo; si lo
-            // hay, se limita a apuntar al de aquel y NO monta nada. `compartido`
-            // es justo ese nodo ajeno, o nullptr.
+            // A GameObject's layout: if there is no other UI component it assembles
+            // its own container (not drawable) and that becomes its node; if
+            // there is, it just points to that one's and assembles NOTHING. `compartido`
+            // is exactly that foreign node, or nullptr.
             auto montaLayout = [&](size_t i, uint64_t id, UiElement& padre,
                                    UiElement* compartido) -> UiElement*
             {
@@ -1048,16 +1047,16 @@ namespace DonTopo
                 cache.layoutIds[i]       = id;
                 cache.layoutNodes[i]     = destino;
                 cache.layoutOwnsRect[i]  = compartido == nullptr ? (char)1 : (char)0;
-                // Un componente que no puede ser igual a ninguno real fuerza el
-                // primer volcado, igual que en el botón y en la barra.
+                // A component that cannot equal any real one forces the
+                // first dump, same as in the button and the bar.
                 cache.layoutPrev[i].columns = 0xFFFFFFFFu;
                 return compartido == nullptr ? destino : nullptr;
             };
 
-            // Todos los componentes de UN GameObject, en el orden en el que se
-            // dibujan: la barra debajo, el botón encima y el texto el último.
-            // El nodo del que colgarán sus hijos es el PRINCIPAL: el botón si lo
-            // hay, si no la barra, si no el texto.
+            // All the components of ONE GameObject, in the order they are
+            // drawn: the bar below, the button on top and the text last.
+            // The node its children will hang from is the MAIN one: the button if there
+            // is one, otherwise the bar, otherwise the text.
             auto montaGameObject = [&](uint64_t id, UiElement& padre)
             {
                 UiElement* panel  = nullptr;
@@ -1082,14 +1081,14 @@ namespace DonTopo
                                          idxScrollbar.count(id) != 0 || idxInputField.count(id) != 0 ||
                                          idxDropdown.count(id) != 0 || idxScrollView.count(id) != 0;
 
-                // El contenedor PRIMERO: es el que aporta el rect y del que
-                // colgarán los hijos. Solo cuando no hay ningún widget en el
-                // mismo GameObject — con uno, el rect ya tiene dueño.
+                // The container FIRST: it is the one that provides the rect and from which the
+                // children will hang. Only when there is no widget on the
+                // same GameObject; with one, the rect already has an owner.
                 if (itLayout != idxLayout.end() && !tieneWidget)
                     caja = montaLayout(itLayout->second, id, padre, nullptr);
 
-                // De abajo arriba: el panel es el fondo, y el texto el que tiene
-                // que quedar encima de todo.
+                // From bottom to top: the panel is the background, and the text is the one that has
+                // to stay on top of everything.
                 if (auto it = idxPanel.find(id);  it != idxPanel.end())  panel  = creaPanel(it->second, padre);
                 if (auto it = idxImage.find(id);  it != idxImage.end())  imagen = creaImagen(it->second, padre);
                 if (auto it = idxScrollView.find(id); it != idxScrollView.end()) vista = creaScrollView(it->second, padre);
@@ -1103,9 +1102,9 @@ namespace DonTopo
                 if (auto it = idxButton.find(id); it != idxButton.end()) boton = creaBoton(it->second, padre);
                 if (auto it = idxText.find(id);   it != idxText.end())   texto = creaTexto(it->second, padre);
 
-                // El PRINCIPAL es el que aporta el rect del que colgaran los
-                // hijos: gana el widget interactivo, y el Panel (que es fondo)
-                // pierde contra todos.
+                // The MAIN one is the one that provides the rect the children will hang
+                // from: the interactive widget wins, and the Panel (which is a background)
+                // loses against all of them.
                 UiElement* princ = boton  ? boton
                                  : campo  ? campo
                                  : combo  ? combo
@@ -1118,11 +1117,11 @@ namespace DonTopo
                                  : panel  ? panel
                                  : (texto ? texto : caja);
 
-                // El ScrollView es la EXCEPCION: sus hijos cuelgan del CONTENIDO
-                // y no del viewport. Colgando del viewport, desplazarse no los
-                // arrastraria y el scroll no serviria de nada. Gana sobre
-                // cualquier otro widget del mismo GameObject: es el unico que
-                // tiene una opinion sobre donde va lo de dentro.
+                // The ScrollView is the EXCEPTION: its children hang from the CONTENT
+                // and not from the viewport. Hanging from the viewport, scrolling would not drag
+                // them along and the scroll would be useless. It wins over
+                // any other widget on the same GameObject: it is the only one that
+                // has an opinion on where what is inside goes.
                 if (vista != nullptr)
                 {
                     if (auto it = idxScrollView.find(id); it != idxScrollView.end())
@@ -1134,34 +1133,34 @@ namespace DonTopo
                 }
                 principal[id] = princ;
 
-                // Con widget en el mismo GameObject, el layout escribe en el nodo
-                // principal de aquel: sus hijos ya cuelgan de ahí, así que es el
-                // que tiene que colocarlos.
+                // With a widget on the same GameObject, the layout writes into that one's
+                // main node: its children already hang from there, so it is the
+                // one that has to place them.
                 if (itLayout != idxLayout.end() && tieneWidget)
                     montaLayout(itLayout->second, id, padre, princ);
             };
 
             if (parents != nullptr)
             {
-                // En PRE-ORDEN: cuando llega el turno de un hijo, su padre ya
-                // está montado y su nodo principal existe.
+                // In PRE-ORDER: when a child's turn comes, its parent is already
+                // assembled and its main node exists.
                 for (const auto& rel : *parents)
                 {
                     UiElement* padre = &canvas.root();
                     if (rel.second != 0)
                     {
                         auto it = principal.find(rel.second);
-                        // Un padre sin ningún componente de UI (o que no llegó en
-                        // parents) no puede sostener a nadie: el hijo sube a la
-                        // raíz en vez de desaparecer del árbol.
+                        // A parent without any UI component (or that did not arrive in
+                        // parents) cannot hold anyone: the child goes up to the
+                        // root instead of disappearing from the tree.
                         if (it != principal.end() && it->second != nullptr) padre = it->second;
                     }
                     montaGameObject(rel.first, *padre);
                 }
 
-                // Lo que esté en las listas pero no en parents se monta en la
-                // raíz: perder un widget por un desajuste de las dos entradas
-                // sería un fallo mudo.
+                // Whatever is in the lists but not in parents is assembled at the
+                // root: losing a widget through a mismatch between the two inputs
+                // would be a silent failure.
                 for (const auto& entry : buttons)
                     if (principal.find(entry.first) == principal.end())
                         montaGameObject(entry.first, canvas.root());
@@ -1204,11 +1203,11 @@ namespace DonTopo
             }
             else
             {
-                // Sin jerarquía: TODO cuelga de la raíz y en el orden de
-                // siempre —botones, barras y textos—, que es lo que esperan las
-                // escenas montadas antes de que la jerarquía existiera. Los
-                // paneles y las imágenes van DELANTE, que es donde va un fondo:
-                // no tienen orden heredado que respetar, son posteriores.
+                // Without hierarchy: EVERYTHING hangs from the root and in the usual
+                // order (buttons, bars and texts), which is what the scenes assembled before
+                // the hierarchy existed expect. Panels and images go IN FRONT, which is
+                // where a background goes: they have no inherited order to respect, they are
+                // later additions.
                 for (size_t i = 0; i < panels.size();  i++) creaPanel(i, canvas.root());
                 for (size_t i = 0; i < images.size();  i++) creaImagen(i, canvas.root());
                 for (size_t i = 0; i < scrollViews.size(); i++) creaScrollView(i, canvas.root());
@@ -1222,11 +1221,11 @@ namespace DonTopo
                 for (size_t i = 0; i < bars.size();    i++) creaBarra(i, canvas.root());
                 for (size_t i = 0; i < texts.size();   i++) creaTexto(i, canvas.root());
 
-                // Sin jerarquía nada cuelga de nadie, así que el contenedor no
-                // coloca a ningún hijo; se monta igual porque el resto del
-                // sistema (gizmo, picking, el volcado de abajo) cuenta con que su
-                // nodo existe. Compartiendo GameObject con un widget, el layout
-                // apunta al nodo de aquel, como en el camino con jerarquía.
+                // Without hierarchy nothing hangs from anything, so the container does not
+                // place any children; it is assembled all the same because the rest of the
+                // system (gizmo, picking, the dump below) counts on its
+                // node existing. Sharing a GameObject with a widget, the layout
+                // points to that one's node, as in the path with hierarchy.
                 for (size_t i = 0; i < lays.size(); i++)
                 {
                     const uint64_t id = lays[i].first;
@@ -1267,33 +1266,33 @@ namespace DonTopo
         {
             const ButtonComponent& src = *buttons[i].second;
 
-            // Camino de vuelta: el estado lo resuelve updateInput en el NODO, y
-            // sin publicarlo aquí un script no tendría forma de leerlo. Va antes
-            // del corte por "no ha cambiado" porque el estado cambia sin que
-            // cambie ni un campo del componente (basta pasar el ratón por
-            // encima), y copiarlo no ensucia el nodo.
+            // The way back: the state is resolved by updateInput on the NODE, and
+            // without publishing it here a script would have no way to read it. It goes before
+            // the "has not changed" cut because the state changes without
+            // a single component field changing (hovering the mouse over it
+            // is enough), and copying it does not dirty the node.
             if (auto rt = src.callbacks.ptr) rt->state = cache.buttonNodes[i]->state;
 
-            if (src == cache.buttonPrev[i]) continue;   // nada que tocar este frame
+            if (src == cache.buttonPrev[i]) continue;   // nothing to touch this frame
 
             Button& b = *cache.buttonNodes[i];
             src.applyTo(b);
             b.atlas = resolveAtlas(src.atlasPath);
-            // Los campos son públicos y se tocan a pelo, así que ensuciar es
-            // responsabilidad de quien escribe. DirtyAll y no un subconjunto:
-            // aquí se ha reescrito el nodo entero (rect, color, sprite y quad).
+            // The fields are public and touched bare, so dirtying is the
+            // responsibility of whoever writes. DirtyAll and not a subset:
+            // here the whole node has been rewritten (rect, color, sprite and quad).
             b.markDirty(UiElement::DirtyAll);
 
             if (Text* label = cache.buttonLabels[i])
             {
                 src.applyToLabel(*label);
-                // Sin ruta se usa la fuente por defecto: un texto que no se ve
-                // parece un bug del motor, no un campo sin rellenar.
+                // Without a path the default font is used: a text that is not seen
+                // looks like an engine bug, not a field left unfilled.
                 label->font = resolveFont(src.fontPath.empty() ? std::string(kDefaultUiFontPath)
                                                                : src.fontPath);
-                // Sin fuente el emisor dibujaría la etiqueta como el quad de su
-                // base, o sea un rectángulo liso TAPANDO el botón. Mejor no
-                // pintar nada y que se vea el botón.
+                // Without a font the emitter would draw the label as its base's
+                // quad, that is a flat rectangle COVERING the button. Better to
+                // paint nothing and let the button show.
                 label->drawable = (label->font != nullptr);
                 label->markDirty(UiElement::DirtyAll);
             }
@@ -1303,13 +1302,13 @@ namespace DonTopo
         for (size_t i = 0; i < panels.size(); i++)
         {
             const PanelComponent& src = *panels[i].second;
-            if (src == cache.panelPrev[i]) continue;   // nada que tocar este frame
+            if (src == cache.panelPrev[i]) continue;   // nothing to touch this frame
 
             Panel& p = *cache.panelNodes[i];
             src.applyTo(p);
             p.atlas = resolveAtlas(src.atlasPath);
-            // Ensuciar es responsabilidad de quien escribe los campos. DirtyAll
-            // porque aquí se reescribe el nodo entero (rect, color y sprite).
+            // Dirtying is the responsibility of whoever writes the fields. DirtyAll
+            // because here the whole node is rewritten (rect, color and sprite).
             p.markDirty(UiElement::DirtyAll);
             cache.panelPrev[i] = src;
         }
@@ -1330,13 +1329,13 @@ namespace DonTopo
         {
             SliderComponent& src = *sliders[i].second;
 
-            // El dueño se reapunta SIEMPRE, cambie o no el componente: es por
-            // donde el handler del nodo escribe el valor, y va antes del corte
-            // por "no ha cambiado" porque un componente que no cambia es
-            // justamente el caso en el que sigue haciendo falta.
+            // The owner is ALWAYS re-pointed, whether the component changes or not: it is
+            // where the node's handler writes the value, and it goes before the cut
+            // for "has not changed" because a component that does not change is
+            // precisely the case in which it is still needed.
             if (auto rt = src.callbacks.ptr) rt->owner = &src;
 
-            if (src == cache.sliderPrev[i]) continue;   // nada que tocar este frame
+            if (src == cache.sliderPrev[i]) continue;   // nothing to touch this frame
 
             Slider&    s = *cache.sliderNodes[i];
             UiElement& f = *cache.sliderFills[i];
@@ -1344,15 +1343,15 @@ namespace DonTopo
             src.applyTo(s);
             src.applyToFill(f);
             src.applyToHandle(h);
-            // UN solo atlas para las tres partes: los sprites son nombres de
-            // sub-rect dentro de él, así que una carga y no tres.
+            // A SINGLE atlas for the three parts: the sprites are sub-rect names
+            // inside it, so one load and not three.
             UiTextureAtlas* atlas = resolveAtlas(src.atlasPath);
             s.atlas = atlas;
             f.atlas = atlas;
             h.atlas = atlas;
-            // Ensuciar es responsabilidad de quien escribe los campos. Los TRES
-            // nodos: la pista puede haberse movido, y el relleno y el asa cambian
-            // de rect con el valor.
+            // Dirtying is the responsibility of whoever writes the fields. The THREE
+            // nodes: the track may have moved, and the fill and handle change
+            // rect with the value.
             s.markDirty(UiElement::DirtyAll);
             f.markDirty(UiElement::DirtyAll);
             h.markDirty(UiElement::DirtyAll);
@@ -1368,9 +1367,9 @@ namespace DonTopo
             Text&       t = *cache.inputFieldTexts[i];
             UiElement&  c = *cache.inputFieldCarets[i];
 
-            // El cursor parpadea con el TIEMPO y el foco, que cambian sin que
-            // cambie ni un campo del componente: por eso esto va ANTES del corte
-            // por "no ha cambiado" y se compara aparte.
+            // The caret blinks with TIME and focus, which change without a
+            // single component field changing: that is why this goes BEFORE the cut
+            // for "has not changed" and is compared separately.
             const bool enfocado = (canvas.focused() == &f);
             const bool fase = src.caretBlinkRate > 0.0f
                                   ? (((int)(canvas.lastTimeSeconds() / src.caretBlinkRate)) % 2) == 0
@@ -1383,18 +1382,18 @@ namespace DonTopo
 
             src.applyTo(f);
             src.applyToText(t);
-            // La fuente se resuelve SOLO si hay algo que escribir: cargarla es
-            // FreeType + bake + subida a GPU, y un campo vacio sin placeholder no
-            // dibujaria ni un glyph con ella.
+            // The font is resolved ONLY if there is something to write: loading it is
+            // FreeType + bake + GPU upload, and an empty field without a placeholder would not
+            // draw a single glyph with it.
             t.font = t.text.empty()
                          ? nullptr
                          : resolveFont(src.fontPath.empty() ? std::string(kDefaultUiFontPath)
                                                             : src.fontPath);
             t.drawable = (t.font != nullptr);
 
-            // El cursor se coloca MIDIENDO el prefijo con la fuente: sin esto
-            // habria que suponer que todas las letras miden lo mismo, y en una
-            // fuente proporcional el cursor acabaria lejos de donde se escribe.
+            // The caret is placed by MEASURING the prefix with the font: without this
+            // we would have to assume all letters are the same width, and in a
+            // proportional font the caret would end up far from where it is typed.
             float caretX = 0.0f;
             if (t.font != nullptr)
             {
@@ -1450,8 +1449,8 @@ namespace DonTopo
             a.markDirty(UiElement::DirtyAll);
             li.markDirty(UiElement::DirtyAll);
 
-            // Las filas. El numero SIEMPRE cuadra: cambiarlo obliga a
-            // reconstruir, asi que aqui no hay que crear ni destruir nada.
+            // The rows. The number ALWAYS matches: changing it forces a
+            // rebuild, so nothing has to be created or destroyed here.
             for (size_t k = 0; k < cache.dropdownItems[i].size(); k++)
             {
                 UiElement& fila = *cache.dropdownItems[i][k];
@@ -1485,9 +1484,9 @@ namespace DonTopo
         for (size_t i = 0; i < checkboxes.size(); i++)
         {
             CheckboxComponent& src = *checkboxes[i].second;
-            // El dueno se reapunta SIEMPRE, cambie o no el componente: es por
-            // donde el handler del nodo escribe, y un componente que no cambia es
-            // justamente el caso en el que sigue haciendo falta.
+            // The owner is ALWAYS re-pointed, whether the component changes or not: it is
+            // where the node's handler writes, and a component that does not change is
+            // precisely the case in which it is still needed.
             if (auto rt = src.callbacks.ptr) rt->owner = &src;
             if (src == cache.checkboxPrev[i]) continue;
 
@@ -1542,23 +1541,23 @@ namespace DonTopo
         for (size_t i = 0; i < bars.size(); i++)
         {
             const ProgressBarComponent& src = *bars[i].second;
-            if (src == cache.barPrev[i]) continue;   // nada que tocar este frame
+            if (src == cache.barPrev[i]) continue;   // nothing to touch this frame
 
             ProgressBar& p = *cache.barNodes[i];
             Panel&       f = *cache.barFills[i];
             src.applyTo(p);
-            // Cada parte con su imagen, y el atlas del componente como fallback
-            // de la que no tenga ruta propia. resolveAtlas cachea por RUTA, así
-            // que dos partes con el mismo fichero cuestan una sola carga — y con
-            // las rutas vacías ni se llama al loader (cargar un atlas es
-            // síncrono y en el frame del "Add Component" se nota como un parón).
+            // Each part with its image, and the component's atlas as a fallback
+            // for any that has no path of its own. resolveAtlas caches by PATH, so
+            // two parts with the same file cost a single load, and with
+            // empty paths the loader is not even called (loading an atlas is
+            // synchronous and in the "Add Component" frame it shows up as a stall).
             UiTextureAtlas* comun = resolveAtlas(src.atlasPath);
             p.atlas = src.backgroundPath.empty() ? comun : resolveAtlas(src.backgroundPath);
             src.applyToFill(f);
             f.atlas = src.fillPath.empty() ? comun : resolveAtlas(src.fillPath);
-            // Ensuciar es responsabilidad de quien escribe los campos. Los DOS
-            // nodos: el fondo puede haberse movido y el relleno cambia de rect
-            // con el valor. DirtyAll porque aquí se reescribe el nodo entero.
+            // Dirtying is the responsibility of whoever writes the fields. The TWO
+            // nodes: the background may have moved and the fill changes rect
+            // with the value. DirtyAll because here the whole node is rewritten.
             p.markDirty(UiElement::DirtyAll);
             f.markDirty(UiElement::DirtyAll);
             cache.barPrev[i] = src;
@@ -1571,26 +1570,26 @@ namespace DonTopo
 
             Text& t = *cache.textNodes[i];
             src.applyTo(t);
-            // La fuente se resuelve SOLO si hay algo que escribir. Cargar una es
-            // FreeType + bake del atlas + subida a GPU, todo síncrono: hacerlo
-            // en el frame del "Add Component" se nota como un parón, y un Text
-            // recién añadido está vacío y no dibujaría ni un glyph con ella.
-            // Mismo criterio que el Button, que sin texto ni monta la etiqueta.
+            // The font is resolved ONLY if there is something to write. Loading one is
+            // FreeType + atlas bake + GPU upload, all synchronous: doing it
+            // in the "Add Component" frame shows up as a stall, and a newly
+            // added Text is empty and would not draw a single glyph with it.
+            // Same criterion as the Button, which without text does not even assemble the label.
             t.font = src.text.empty()
                          ? nullptr
                          : resolveFont(src.fontPath.empty() ? std::string(kDefaultUiFontPath)
                                                             : src.fontPath);
-            // Mismo criterio que la etiqueta del botón: sin fuente no se pinta
-            // un rectángulo liso donde debería haber letras.
+            // Same criterion as the button's label: without a font a flat
+            // rectangle is not painted where there should be letters.
             t.drawable = (t.font != nullptr);
             t.markDirty(UiElement::DirtyAll);
             cache.textPrev[i] = src;
         }
 
-        // El layout va el ÚLTIMO: cuando comparte nodo con un widget, aquel ya
-        // ha reescrito su rect este frame y esto solo añade los campos de
-        // colocación encima. Al revés, un botón que cambia de color borraría el
-        // layout hasta el siguiente cambio del componente.
+        // The layout goes LAST: when it shares a node with a widget, that one has already
+        // rewritten its rect this frame and this only adds the placement fields
+        // on top. The other way round, a button that changes color would erase the
+        // layout until the component's next change.
         for (size_t i = 0; i < lays.size(); i++)
         {
             const LayoutComponent& src = *lays[i].second;
@@ -1598,8 +1597,8 @@ namespace DonTopo
 
             UiElement& e = *cache.layoutNodes[i];
             src.applyTo(e, cache.layoutOwnsRect[i] != 0);
-            // DirtyAll y no solo DirtyLayout: con rect propio aquí se ha
-            // reescrito el nodo entero.
+            // DirtyAll and not just DirtyLayout: with its own rect the whole node
+            // has been rewritten here.
             e.markDirty(UiElement::DirtyAll);
             cache.layoutPrev[i] = src;
         }

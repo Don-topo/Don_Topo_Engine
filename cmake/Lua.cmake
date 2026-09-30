@@ -1,11 +1,11 @@
 # cmake/Lua.cmake
-# Lua 5.4 desde el mirror oficial de GitHub vía FetchContent.
-# El repo no trae CMakeLists (solo Makefile), así que se define aquí una
-# lib estática propia con los .c del core — mismo patrón que PhysX.cmake.
-# Se excluyen lua.c/luac.c (mains del intérprete standalone) y onelua.c
-# (amalgamación, duplicaría símbolos).
+# Lua 5.4 from the official GitHub mirror via FetchContent.
+# The repo has no CMakeLists (only a Makefile), so a static lib of our own
+# is defined here with the core's .c files (same pattern as PhysX.cmake).
+# lua.c/luac.c (mains of the standalone interpreter) and onelua.c
+# (the amalgamation, it would duplicate symbols) are excluded.
 
-# El proyecto raíz es LANGUAGES CXX; Lua es C puro.
+# The root project is LANGUAGES CXX; Lua is pure C.
 enable_language(C)
 
 include(FetchContent)

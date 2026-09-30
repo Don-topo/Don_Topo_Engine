@@ -7,24 +7,24 @@
 
 namespace DonTopo
 {
-    // De donde salen los píxeles de un slot de material.
+    // Where the pixels of a material slot come from.
     enum class TextureSource { None, Path, Embedded };
 
-    // La RUTA gana a los bytes embebidos.
+    // The PATH wins over the embedded bytes.
     //
-    // Antes era al revés, y el motor nunca veía los dos campos llenos a la vez
-    // porque ambos los rellenaba Assimp, uno u otro. Desde que Properties deja
-    // poner una ruta a mano, los dos SÍ pueden estar llenos a la vez, y
-    // entonces la ruta es lo que el usuario acaba de pedir: tiene que ganar.
-    // Además es lo que permite que Clear vuelva a la embebida: si ganara la
-    // embebida, asignar exigiría destruirla primero.
+    // It used to be the other way around, and the engine never saw both fields filled at
+    // once because Assimp filled both, one or the other. Since Properties lets
+    // you set a path by hand, both CAN be filled at the same time, and
+    // then the path is what the user just asked for: it has to win.
+    // It is also what lets Clear go back to the embedded one: if the
+    // embedded one won, assigning would require destroying it first.
     //
-    // La intención es que una ruta rota SIEMPRE se note (damero), nunca se
-    // tape con la textura del FBX. Esta función cumple esa parte: no hay
-    // fallback de Path a Embedded si el fichero no se puede leer. Pero la
-    // intención completa no se cumple en todos los callers: en el camino skinned
-    // de D3D12 (addSkinnedMesh) una subida fallida cae al neutro blanco del
-    // hueco, no al damero, así que ahí una ruta rota se ve blanca.
+    // The intent is that a broken path is ALWAYS noticed (checkerboard), never
+    // covered up with the FBX texture. This function fulfills that part: there is no
+    // fallback from Path to Embedded if the file cannot be read. But the full
+    // intent is not fulfilled in all callers: in D3D12's skinned path
+    // (addSkinnedMesh) a failed upload falls to the neutral white of the
+    // slot, not the checkerboard, so there a broken path looks white.
     inline TextureSource chooseTextureSource(const std::string& path,
                                              const std::vector<uint8_t>& embedded)
     {
@@ -33,30 +33,30 @@ namespace DonTopo
         return TextureSource::None;
     }
 
-    // Libera lo que devuelve stb. Va aparte para que este header no arrastre
-    // stb_image.h a todo el que lo incluya.
+    // Frees what stb returns. It goes separately so that this header does not drag
+    // stb_image.h into everyone that includes it.
     struct StbPixelsFree { void operator()(unsigned char* p) const; };
 
-    // Píxeles RGBA8 de un slot de material. `pixels` nulo = no había nada que
-    // decodificar o stb falló; el relleno (blanco, normal plana, damero) lo
-    // pone cada caller, que es donde vive esa política.
+    // RGBA8 pixels of a material slot. Null `pixels` = there was nothing to
+    // decode or stb failed; the filler (white, flat normal, checkerboard) is
+    // set by each caller, which is where that policy lives.
     struct DecodedTexture
     {
         int w = 0, h = 0;
         std::unique_ptr<unsigned char, StbPixelsFree> pixels;
-        // Ajustes de importacion del fichero (sidecar). Las texturas embebidas y
-        // las que no tienen sidecar llevan el defecto: Auto y sin mips.
+        // Import settings of the file (sidecar). Embedded textures and
+        // those without a sidecar carry the default: Auto and no mips.
         ColorSpaceOverride      colorSpace = ColorSpaceOverride::Auto;
-        std::vector<TextureMip> mips;   // niveles 1..N-1; vacio si mipmaps esta apagado
+        std::vector<TextureMip> mips;   // levels 1..N-1; empty if mipmaps is off
         explicit operator bool() const { return pixels != nullptr; }
     };
 
-    // El ÚNICO sitio que decodifica un slot de material, para los cuatro
-    // uploaders: decodeSlot (AsyncAssetLoader), createTextureImage y
-    // createNormalMapImage (GpuResources) y uploadMaterialTexture (D3D12).
-    // Cada uno llevaba su propio switch sobre chooseTextureSource y nada los
-    // ataba a él: revertir uno solo a "la embebida gana" dejaba la suite en
-    // verde. Ahora un test decodifica con los dos campos llenos, y otro falla si
-    // stbi_load_from_memory aparece fuera de MaterialTextureSource.cpp.
+    // The ONLY place that decodes a material slot, for the four
+    // uploaders: decodeSlot (AsyncAssetLoader), createTextureImage and
+    // createNormalMapImage (GpuResources) and uploadMaterialTexture (D3D12).
+    // Each one carried its own switch over chooseTextureSource and nothing tied them
+    // to it: reverting just one to "the embedded one wins" left the suite
+    // green. Now one test decodes with both fields filled, and another fails if
+    // stbi_load_from_memory appears outside MaterialTextureSource.cpp.
     DecodedTexture decodeMaterialTexture(const std::string& path, const std::vector<uint8_t>& embedded);
 }

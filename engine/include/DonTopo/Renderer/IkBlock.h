@@ -6,15 +6,15 @@
 
 namespace DonTopo
 {
-    // Bloque de IK por personaje que lee bone_ik.comp (binding 11), en uints
-    // (los floats por sus bits). Una copia por frame en vuelo, con su offset en
-    // el push constant, igual que el bloque de pose.
-    //   [0] count  [1..3] relleno
-    //   restricción k, en 4 + 16k:
+    // Per-character IK block read by bone_ik.comp (binding 11), in uints
+    // (floats by their bits). One copy per frame in flight, with its offset in
+    // the push constant, same as the pose block.
+    //   [0] count  [1..3] padding
+    //   constraint k, at 4 + 16k:
     //     type, bone, parent, grandParent, weight,
     //     targetX, targetY, targetZ, poleX, poleY, poleZ, hasPole,
     //     aimX, aimY, aimZ, maxAngle
-    // Si cambia, cambia a la vez en bone_ik.comp.
+    // If it changes, it changes at the same time in bone_ik.comp.
     constexpr uint32_t kIkBlockSolves = 4;
     constexpr uint32_t kIkSolveUints  = 16;
 
@@ -27,8 +27,8 @@ namespace DonTopo
         return u;
     }
 
-    // Escribe ik en dst (ikBlockUints() uints). Los índices de hueso viajan
-    // como uint y el shader los lee con int(): un -1 llega como 0xFFFFFFFF.
+    // Writes ik into dst (ikBlockUints() uints). Bone indices travel as
+    // uint and the shader reads them with int(): a -1 arrives as 0xFFFFFFFF.
     inline void writeIkBlock(const AnimationIk& ik, uint32_t* dst)
     {
         const int n = std::clamp(ik.count, 0, kMaxIkPose);

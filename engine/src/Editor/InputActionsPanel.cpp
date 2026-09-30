@@ -14,17 +14,17 @@
 namespace DonTopo {
 
 namespace {
-    // Junto al imgui.ini del editor (directorio de trabajo), que es donde el
-    // editor ya deja su configuración de sesión: el mapa de acciones es
-    // configuración del proyecto abierto, no un asset de la escena, así que no
-    // va en assets/ ni dentro del .json de escena.
+    // Next to the editor's imgui.ini (working directory), which is where the
+    // editor already leaves its session configuration: the action map is
+    // configuration of the open project, not a scene asset, so it does not
+    // go in assets/ or inside the scene .json.
     const char* kInputActionsFile = "input_actions.json";
 
-    // Longitud máxima de nombre, la de los buffers del panel.
+    // Maximum name length, that of the panel's buffers.
     constexpr size_t kNameCap = 63;
 
-    // Publica un snippet por acción y función en el autocomplete del Script
-    // Editor. Con la lista vacía, el popup queda exactamente como antes.
+    // Publishes one snippet per action and function to the Script Editor's
+    // autocomplete. With the list empty, the popup stays exactly as before.
     void publishAutocomplete(const std::vector<InputActionsPanel::Action>& actions)
     {
         std::vector<std::string> symbols;
@@ -39,21 +39,21 @@ namespace {
     }
 }
 
-// La traducción vive aquí y no en Core porque Core no puede incluir <imgui.h>
-// (split Core/Editor): el editor traduce al guardar y Core lee ya traducido.
+// The translation lives here and not in Core because Core cannot include <imgui.h>
+// (Core/Editor split): the editor translates on save and Core reads it already translated.
 bool InputActionsPanel::bindingToGlfw(int imguiKey, const char*& outDevice, int& outCode)
 {
-    // Ratón: ImGui los mete en el mismo rango de ImGuiKey que las teclas.
+    // Mouse: ImGui puts them in the same ImGuiKey range as the keys.
     if (imguiKey >= ImGuiKey_MouseLeft && imguiKey <= ImGuiKey_MouseX2)
     {
         outDevice = "mouse";
         outCode   = imguiKey - ImGuiKey_MouseLeft;   // GLFW_MOUSE_BUTTON_LEFT == 0
         return true;
     }
-    // Mando. Los botones digitales van a "pad" con su GLFW_GAMEPAD_BUTTON_*;
-    // los gatillos (L2/R2) y las direcciones de stick son ejes en GLFW y van a
-    // "padaxis" con el código eje+signo de Input::padAxisCode. Ojo al signo del
-    // eje Y: en GLFW arriba es NEGATIVO.
+    // Gamepad. Digital buttons go to "pad" with their GLFW_GAMEPAD_BUTTON_*;
+    // the triggers (L2/R2) and the stick directions are axes in GLFW and go to
+    // "padaxis" with the axis+sign code of Input::padAxisCode. Careful with the sign of the
+    // Y axis: in GLFW up is NEGATIVE.
     if (imguiKey >= ImGuiKey_GamepadStart && imguiKey <= ImGuiKey_GamepadRStickDown)
     {
         outDevice = "padaxis";
@@ -79,7 +79,7 @@ bool InputActionsPanel::bindingToGlfw(int imguiKey, const char*& outDevice, int&
                 outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_Y, false); return true;
             case ImGuiKey_GamepadRStickUp:
                 outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_Y, true);  return true;
-            default: break;   // el resto son botones digitales
+            default: break;   // the rest are digital buttons
         }
 
         outDevice = "pad";
@@ -99,12 +99,12 @@ bool InputActionsPanel::bindingToGlfw(int imguiKey, const char*& outDevice, int&
             case ImGuiKey_GamepadR1:        outCode = GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER;  return true;
             case ImGuiKey_GamepadL3:        outCode = GLFW_GAMEPAD_BUTTON_LEFT_THUMB;    return true;
             case ImGuiKey_GamepadR3:        outCode = GLFW_GAMEPAD_BUTTON_RIGHT_THUMB;   return true;
-            default: return false;   // hueco del enum de ImGui sin equivalente
+            default: return false;   // gap in ImGui's enum with no equivalent
         }
     }
 
     outDevice = "key";
-    // Rangos contiguos en ambos enums.
+    // Contiguous ranges in both enums.
     if (imguiKey >= ImGuiKey_0 && imguiKey <= ImGuiKey_9)
     { outCode = GLFW_KEY_0 + (imguiKey - ImGuiKey_0); return true; }
     if (imguiKey >= ImGuiKey_A && imguiKey <= ImGuiKey_Z)
@@ -179,15 +179,15 @@ int InputActionsPanel::padButtonToBinding(int glfwButton)
         case GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER: return ImGuiKey_GamepadR1;
         case GLFW_GAMEPAD_BUTTON_BACK:         return ImGuiKey_GamepadBack;
         case GLFW_GAMEPAD_BUTTON_START:        return ImGuiKey_GamepadStart;
-        // GLFW_GAMEPAD_BUTTON_GUIDE (el botón de Xbox/PS del centro): ImGui no
-        // tiene ImGuiKey para él, así que no se puede bindear.
+        // GLFW_GAMEPAD_BUTTON_GUIDE (the Xbox/PS button in the center): ImGui does not
+        // have an ImGuiKey for it, so it cannot be bound.
         case GLFW_GAMEPAD_BUTTON_LEFT_THUMB:   return ImGuiKey_GamepadL3;
         case GLFW_GAMEPAD_BUTTON_RIGHT_THUMB:  return ImGuiKey_GamepadR3;
         case GLFW_GAMEPAD_BUTTON_DPAD_UP:      return ImGuiKey_GamepadDpadUp;
         case GLFW_GAMEPAD_BUTTON_DPAD_RIGHT:   return ImGuiKey_GamepadDpadRight;
         case GLFW_GAMEPAD_BUTTON_DPAD_DOWN:    return ImGuiKey_GamepadDpadDown;
         case GLFW_GAMEPAD_BUTTON_DPAD_LEFT:    return ImGuiKey_GamepadDpadLeft;
-        default: return -1;   // fuera de rango, o botón sin ImGuiKey
+        default: return -1;   // out of range, or button without an ImGuiKey
     }
 }
 
@@ -207,8 +207,8 @@ int InputActionsPanel::padAxisToBinding(int code)
             return negative ? ImGuiKey_GamepadRStickLeft : ImGuiKey_GamepadRStickRight;
         case GLFW_GAMEPAD_AXIS_RIGHT_Y:
             return negative ? ImGuiKey_GamepadRStickUp   : ImGuiKey_GamepadRStickDown;
-        // Un gatillo solo se aprieta hacia un lado: su dirección negativa no es
-        // un binding.
+        // A trigger is only pressed in one direction: its negative direction is not
+        // a binding.
         case GLFW_GAMEPAD_AXIS_LEFT_TRIGGER:
             return negative ? -1 : ImGuiKey_GamepadL2;
         case GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER:
@@ -220,9 +220,9 @@ int InputActionsPanel::padAxisToBinding(int code)
 InputActionsPanel::InputActionsPanel()
 {
     load();
-    // Fichero anterior a las acciones en scripting (solo "bindings"): se
-    // reescribe una vez con la traducción a GLFW ya dentro. save() se encarga
-    // también de publicar el autocomplete y de refrescar el mapa de Core.
+    // File older than the actions in scripting (only "bindings"): it is
+    // rewritten once with the GLFW translation already in. save() also takes care
+    // of publishing the autocomplete and refreshing Core's map.
     if (m_needsMigrationSave)
         save();
     else
@@ -241,8 +241,8 @@ bool InputActionsPanel::load()
     std::ifstream file(kInputActionsFile);
     if (!file.is_open()) return false;
 
-    // Un JSON roto no puede tumbar el arranque del editor: se ignora y el panel
-    // queda vacío. El primer save() lo reescribe entero.
+    // A broken JSON cannot take down the editor startup: it is ignored and the panel
+    // stays empty. The first save() rewrites it whole.
     nlohmann::json j = nlohmann::json::parse(file, nullptr, false);
     if (j.is_discarded() || !j.is_object()) return false;
 
@@ -258,7 +258,7 @@ bool InputActionsPanel::load()
 
         Action a;
         a.name = nameIt->get<std::string>();
-        if (a.name.empty() || findAction(a.name) >= 0) continue;   // duplicado en disco: se queda el primero
+        if (a.name.empty() || findAction(a.name) >= 0) continue;   // duplicate on disk: the first one stays
 
         auto bindIt = aj.find("bindings");
         if (bindIt != aj.end() && bindIt->is_array())
@@ -267,18 +267,18 @@ bool InputActionsPanel::load()
             {
                 if (!bj.is_number_integer()) continue;
                 const int key = bj.get<int>();
-                // Un valor fuera del rango de ImGuiKey (fichero de otra versión,
-                // edición a mano) rompería GetKeyName al dibujar.
+                // A value outside the ImGuiKey range (file from another version,
+                // manual edit) would break GetKeyName when drawing.
                 if (key < ImGuiKey_NamedKey_BEGIN || key >= ImGuiKey_NamedKey_END) continue;
                 a.bindings.push_back(key);
             }
         }
-        // El panel no lee "glfw" (su modelo son ImGuiKey y de ahí se regenera):
-        // solo mira si lo que hay en disco coincide con lo que la traducción de
-        // AHORA produciría. No basta con mirar si el array falta: un fichero
-        // guardado por una versión con menos dispositivos traducibles (los
-        // sticks no llegaban al runtime) trae "glfw" pero incompleto, y esos
-        // bindings se quedarían pintados y muertos hasta tocar el panel.
+        // The panel does not read "glfw" (its model is ImGuiKey and it is regenerated from that):
+        // it only checks whether what is on disk matches what the translation of
+        // NOW would produce. Checking whether the array is missing is not enough: a file
+        // saved by a version with fewer translatable devices (the
+        // sticks did not reach the runtime) carries "glfw" but incomplete, and those
+        // bindings would stay drawn and dead until the panel is touched.
         size_t translatable = 0;
         for (int b : a.bindings)
         {
@@ -299,9 +299,9 @@ void InputActionsPanel::save() const
     nlohmann::json actions = nlohmann::json::array();
     for (const Action& a : m_actions)
     {
-        // "bindings" (ImGuiKey) se sigue escribiendo igual —es lo que pinta la
-        // UI y lo que lee la versión anterior del panel— y "glfw" se añade con
-        // la traducción que Core sí entiende.
+        // "bindings" (ImGuiKey) is still written the same way (it is what the
+        // UI draws and what the previous version of the panel reads) and "glfw" is added with
+        // the translation that Core does understand.
         nlohmann::json glfw = nlohmann::json::array();
         for (int b : a.bindings)
         {
@@ -315,12 +315,12 @@ void InputActionsPanel::save() const
 
     {
         std::ofstream file(kInputActionsFile);
-        if (!file.is_open()) return;   // disco de solo lectura: se pierde el guardado, no el editor
+        if (!file.is_open()) return;   // read-only disk: the save is lost, not the editor
         file << nlohmann::json{ {"actions", std::move(actions)} }.dump(2);
-    }   // cerrado antes de que Core lo relea
+    }   // closed before Core re-reads it
 
-    // Core relee el mapa y el Script Editor recibe los snippets: una acción
-    // recién creada vale en el siguiente Play y se autocompleta sin reiniciar.
+    // Core re-reads the map and the Script Editor receives the snippets: a freshly
+    // created action works in the next Play and autocompletes without restarting.
     Input::reloadActions();
     publishAutocomplete(m_actions);
 }
@@ -330,12 +330,12 @@ int InputActionsPanel::pollFirstPressedKey() const
     for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k)
     {
         const ImGuiKey key = static_cast<ImGuiKey>(k);
-        if (key == ImGuiKey_Escape) continue;   // reservada para cancelar la escucha
-        // Los huecos reservados del enum (ImGuiKey_ReservedForMod*) no tienen
-        // nombre: bindearlos daría una fila sin etiqueta.
+        if (key == ImGuiKey_Escape) continue;   // reserved to cancel the listening
+        // The reserved gaps of the enum (ImGuiKey_ReservedForMod*) have no
+        // name: binding them would give a row without a label.
         const char* name = ImGui::GetKeyName(key);
         if (!name || name[0] == '\0' || std::strcmp(name, "Unknown") == 0) continue;
-        // repeat=false: una pulsación mantenida no debe encadenar bindings.
+        // repeat=false: a held press must not chain bindings.
         if (ImGui::IsKeyPressed(key, false)) return k;
     }
     return -1;
@@ -343,14 +343,14 @@ int InputActionsPanel::pollFirstPressedKey() const
 
 int InputActionsPanel::pollFirstPressedPadButton() const
 {
-    // Core ya sondea el mando una vez por frame (Input::update, fuera del gate
-    // de Play) y guarda prev/curr, así que aquí hay flanco de bajada sin estado
-    // propio: mantener pulsado un botón no encadena bindings.
+    // Core already polls the gamepad once per frame (Input::update, outside the Play
+    // gate) and stores prev/curr, so here there is a falling edge without state
+    // of its own: holding a button down does not chain bindings.
     for (int b = 0; b <= GLFW_GAMEPAD_BUTTON_LAST; ++b)
     {
         if (!Input::isPadButtonPressed(b)) continue;
         const int key = padButtonToBinding(b);
-        if (key >= 0) return key;   // GUIDE no tiene ImGuiKey: se ignora
+        if (key >= 0) return key;   // GUIDE has no ImGuiKey: ignored
     }
     return -1;
 }
@@ -361,21 +361,21 @@ int InputActionsPanel::pollFirstPressedPadAxis() const
     {
         if (!Input::isPadAxisPressed(c)) continue;
         const int key = padAxisToBinding(c);
-        if (key >= 0) return key;   // gatillo en negativo: no es bindeable
+        if (key >= 0) return key;   // trigger in the negative: not bindable
     }
     return -1;
 }
 
 void InputActionsPanel::draw()
 {
-    // Coste cero con el panel cerrado, incluida la escucha: si el panel se
-    // cierra en mitad de un "Add Binding", la escucha muere con él y al reabrir
-    // el panel no queda ningún frame capturando teclas a espaldas del usuario.
+    // Zero cost with the panel closed, listening included: if the panel is
+    // closed in the middle of an "Add Binding", the listening dies with it and on reopening
+    // the panel there is no frame capturing keys behind the user's back.
     if (!m_open) return;
 
     if (ImGui::Begin("Input Actions", &m_open))
     {
-        // --- Barra de creación ---
+        // --- Creation bar ---
         ImGui::SetNextItemWidth(200.0f);
         const bool submitted = ImGui::InputText("##newActionName", m_newNameBuf, sizeof(m_newNameBuf),
                                                 ImGuiInputTextFlags_EnterReturnsTrue);
@@ -410,14 +410,14 @@ void InputActionsPanel::draw()
             ImGui::TextDisabled("No actions. Type a name and press Create.");
         }
 
-        // --- Escucha de binding ---
-        // Se resuelve antes de dibujar la lista para que el binding capturado
-        // aparezca ya en este mismo frame.
+        // --- Binding listening ---
+        // It is resolved before drawing the list so that the captured binding
+        // already appears in this same frame.
         if (m_listeningIndex >= 0)
         {
             if (m_listeningIndex >= static_cast<int>(m_actions.size()))
             {
-                m_listeningIndex = -1;   // la acción se borró mientras escuchaba
+                m_listeningIndex = -1;   // the action was deleted while it was listening
             }
             else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             {
@@ -425,18 +425,18 @@ void InputActionsPanel::draw()
             }
             else
             {
-                // Teclado/ratón por ImGui; mando por Core. El orden importa
-                // poco (no se puede pulsar tecla y botón el mismo frame), pero
-                // el mando va después porque es el caso raro. Los ejes van los
-                // últimos: al empujar un stick es fácil rozar también su L3/R3.
+                // Keyboard/mouse through ImGui; gamepad through Core. The order matters
+                // little (a key and a button cannot be pressed in the same frame), but
+                // the gamepad goes after because it is the rare case. The axes go
+                // last: when pushing a stick it is easy to also brush its L3/R3.
                 int key = pollFirstPressedKey();
                 if (key < 0) key = pollFirstPressedPadButton();
                 if (key < 0) key = pollFirstPressedPadAxis();
                 if (key >= 0)
                 {
                     Action& a = m_actions[m_listeningIndex];
-                    // Un binding repetido en la misma acción no aporta nada y
-                    // duplicaría la fila.
+                    // A repeated binding in the same action adds nothing and would
+                    // duplicate the row.
                     bool already = false;
                     for (int b : a.bindings) if (b == key) { already = true; break; }
                     if (!already) a.bindings.push_back(key);
@@ -446,8 +446,8 @@ void InputActionsPanel::draw()
             }
         }
 
-        // Índices de la acción a borrar y del binding a quitar. Diferidos: no se
-        // puede mutar el vector mientras se recorre dibujando.
+        // Indices of the action to delete and of the binding to remove. Deferred: the
+        // vector cannot be mutated while it is being walked for drawing.
         int deleteAction  = -1;
         int removeFromAct = -1;
         int removeBinding = -1;
@@ -505,8 +505,8 @@ void InputActionsPanel::draw()
                     if (ImGui::Button("Cancel listen")) m_listeningIndex = -1;
                     ImGui::SameLine();
                     ImGui::TextDisabled("Press a key, mouse button, gamepad button, stick or trigger (Esc cancels)");
-                    // Sin mando reconocido no llega ningun boton: decirlo aqui
-                    // evita que parezca que la escucha esta rota.
+                    // Without a recognized gamepad no button arrives: saying so here
+                    // avoids it looking like the listening is broken.
                     if (!glfwJoystickIsGamepad(GLFW_JOYSTICK_1))
                     {
                         ImGui::SameLine();
@@ -547,7 +547,7 @@ void InputActionsPanel::draw()
         if (deleteAction >= 0)
         {
             m_actions.erase(m_actions.begin() + deleteAction);
-            // Los índices diferidos apuntan a posiciones que acaban de moverse.
+            // The deferred indices point to positions that have just moved.
             if (m_renamingIndex  == deleteAction) m_renamingIndex  = -1;
             if (m_listeningIndex == deleteAction) m_listeningIndex = -1;
             if (m_renamingIndex  > deleteAction) --m_renamingIndex;

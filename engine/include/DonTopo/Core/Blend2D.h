@@ -5,20 +5,20 @@
 
 namespace DonTopo
 {
-    // Blend 2D por triangulación (fila 14a del audit de animación). Pura: ni
-    // Animator ni clips, solo puntos. La usan el Animator (pesos) y el panel
-    // (dibuja la triangulación).
-    struct Blend2DTriangle { int a, b, c; };          // índices a pts, en CCW
+    // 2D blend by triangulation (row 14a of the animation audit). Pure: no
+    // Animator or clips, only points. Used by the Animator (weights) and the
+    // panel (it draws the triangulation).
+    struct Blend2DTriangle { int a, b, c; };          // indices into pts, CCW
     struct Blend2DWeight   { int point; float weight; };
 
-    // Delaunay de pts. Los puntos repetidos (a menos de 1e-5 de uno ANTERIOR)
-    // no entran. Con puntos concíclicos se queda la primera triangulación en
-    // orden lexicográfico (i, j, k): nunca dos triángulos que se solapen.
+    // Delaunay of pts. Repeated points (within 1e-5 of a PREVIOUS one)
+    // are not included. With concyclic points the first triangulation in
+    // lexicographic order (i, j, k) is kept: never two overlapping triangles.
     std::vector<Blend2DTriangle> triangulate2D(const std::vector<glm::vec2>& pts);
 
-    // Pesos del valor p: dentro, baricéntricas del triángulo que lo contiene;
-    // fuera, el punto más cercano de la triangulación; sin triángulos (todos
-    // alineados o menos de 3), el segmento consecutivo más cercano a lo largo
-    // de la recta. Hasta 3, todos > 0, suman 1. Devuelve cuántos (0 sin puntos).
+    // Weights of the value p: inside, barycentric of the triangle that contains it;
+    // outside, the closest point of the triangulation; without triangles (all
+    // collinear or fewer than 3), the closest consecutive segment along
+    // the line. Up to 3, all > 0, summing to 1. Returns how many (0 with no points).
     int blend2DWeights(const std::vector<glm::vec2>& pts, glm::vec2 p, Blend2DWeight out[3]);
 }

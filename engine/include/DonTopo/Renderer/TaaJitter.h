@@ -4,18 +4,18 @@
 
 namespace DonTopo
 {
-    // Jitter subpixel del TAA. Compartido por los dos backends a proposito:
-    // estaba escrito dos veces —AaPass.cpp y D3D12Renderer.cpp— con la misma
-    // secuencia, el mismo ciclo y la misma forma de meterlo en la proyeccion.
+    // Subpixel jitter of the TAA. Shared by both backends on purpose:
+    // it was written twice (AaPass.cpp and D3D12Renderer.cpp) with the same
+    // sequence, the same cycle and the same way of putting it into the projection.
     //
-    // Que se descuadren no da ningun error: el TAA sigue convergiendo, solo que
-    // a una imagen ligeramente distinta segun el backend, y eso solo se ve
-    // poniendo las dos capturas una encima de la otra.
+    // If they drift apart no error is given: the TAA keeps converging, only that
+    // to a slightly different image depending on the backend, and that is only seen by
+    // placing the two captures one on top of the other.
 
-    // Secuencia de Halton en base b: la sucesion de baja discrepancia con la que
-    // el TAA reparte las muestras dentro del pixel. Cubre el area mucho mas
-    // uniformemente que un aleatorio, que es lo que hace que el promedio
-    // temporal converja a un supersampling de verdad.
+    // Halton sequence in base b: the low-discrepancy sequence with which
+    // the TAA spreads the samples within the pixel. It covers the area much more
+    // uniformly than a random one, which is what makes the temporal
+    // average converge to a real supersampling.
     inline float halton(uint32_t index, uint32_t base)
     {
         float result = 0.0f;
@@ -29,12 +29,12 @@ namespace DonTopo
         return result;
     }
 
-    // Cuantas posiciones antes de repetir. Suficientes para que el promedio sea
-    // estable, y pocas para que el ciclo no se note al parar la camara.
+    // How many positions before repeating. Enough for the average to be
+    // stable, and few enough that the cycle is not noticed when the camera stops.
     constexpr uint32_t TAA_JITTER_CYCLE = 16;
 
-    // Desplazamiento de este frame, en PIXELES, dentro de [-0.5, 0.5] * scale.
-    // Avanza el indice, asi que se llama UNA vez por frame.
+    // Offset of this frame, in PIXELS, within [-0.5, 0.5] * scale.
+    // It advances the index, so it is called ONCE per frame.
     inline glm::vec2 taaJitterPixels(uint32_t& index, float scale)
     {
         const glm::vec2 j((halton(index + 1, 2) - 0.5f) * scale,
@@ -43,14 +43,14 @@ namespace DonTopo
         return j;
     }
 
-    // Mete el jitter en la proyeccion. En clip space el ancho completo es 2, de
-    // ahi el factor. Va sobre la columna de la Z para que el desplazamiento sea
-    // constante en pantalla a cualquier profundidad; sobre la de traslacion
-    // dependeria de la distancia y el TAA promediaria muestras que no cubren el
-    // mismo area.
+    // Puts the jitter into the projection. In clip space the full width is 2, hence
+    // the factor. It goes on the Z column so that the offset is
+    // constant on screen at any depth; on the translation one it
+    // would depend on distance and the TAA would average samples that do not cover the
+    // same area.
     //
-    // width/height son los del render INTERNO, no los de la ventana: con SSAA
-    // no son lo mismo y el jitter tiene que medirse en el pixel que se dibuja.
+    // width/height are those of the INTERNAL render, not the window's: with SSAA
+    // they are not the same and the jitter has to be measured in the pixel that is drawn.
     inline void applyTaaJitter(glm::mat4& proj, const glm::vec2& jitterPx,
                                float width, float height)
     {

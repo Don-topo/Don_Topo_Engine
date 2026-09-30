@@ -13,11 +13,11 @@ namespace DonTopo
 {
     struct Mesh;
 
-    // Los recursos GPU que N objetos idénticos comparten. Todo lo que aquí hay
-    // se deriva SOLO del contenido del Mesh y su Material: nada por instancia
-    // (el transform y el nombre siguen en el RenderObject). Ese es el criterio
-    // pa decidir si un campo entra o no: si dos cubos iguales en sitios
-    // distintos pueden compartirlo, entra.
+    // The GPU resources that N identical objects share. Everything here
+    // is derived ONLY from the content of the Mesh and its Material: nothing per instance
+    // (the transform and the name stay in the RenderObject). That is the criterion
+    // for deciding whether a field goes in or not: if two equal cubes in different
+    // places can share it, it goes in.
     struct SharedGpuMesh
     {
         VkBuffer        vertexBuffer  = VK_NULL_HANDLE;
@@ -41,106 +41,106 @@ namespace DonTopo
         VkImageView     ormView       = VK_NULL_HANDLE;
         VkSampler       ormSampler    = VK_NULL_HANDLE;
 
-        // Aquí vivían metallic y roughness. Se fueron al RenderObject
-        // (RenderObjects.h) porque son POR OBJETO: mientras estuvieron en esta
-        // entrada tenían que entrar en la clave de dedup —dos objetos con
-        // distinto acabado no podían compartirla—, y mover un slider obligaba a
-        // re-clavear el objeto y rehacer sus recursos de GPU, con waitForGpu y
-        // resubida de tres texturas. Por eso los sliders solo aplicaban al
-        // soltar.
+        // metallic and roughness used to live here. They moved to the RenderObject
+        // (RenderObjects.h) because they are PER OBJECT: while they were in this
+        // entry they had to go into the dedup key (two objects with a
+        // different finish could not share it), and moving a slider forced
+        // re-keying the object and rebuilding its GPU resources, with waitForGpu and
+        // re-upload of three textures. That is why the sliders only applied
+        // on release.
         //
-        // Lo que sí es de la entrada es esto: si el material trae MAPA ORM. La
-        // textura es compartida y su ruta sigue en la clave, así que la
-        // respuesta vale para todos los objetos que comparten la entrada. Es lo
-        // que hace que el setter por objeto no pueda pisar un mapa con un
-        // slider: con mapa, los dos factores van a 1.0 y manda la textura.
+        // What does belong to the entry is this: whether the material brings an ORM MAP. The
+        // texture is shared and its path stays in the key, so the
+        // answer holds for all the objects that share the entry. It is what
+        // keeps the per-object setter from overriding a map with a
+        // slider: with a map, both factors go to 1.0 and the texture rules.
         bool            hasOrmMap     = false;
 
-        // Un solo descriptor set por entrada: sus cinco bindings (UBO, difusa,
-        // normal, shadow, ORM) son idénticos entre objetos que comparten
-        // malla y material. Lo por-objeto va por push constants.
+        // A single descriptor set per entry: its five bindings (UBO, diffuse,
+        // normal, shadow, ORM) are identical between objects that share
+        // mesh and material. What is per-object goes through push constants.
         VkDescriptorSet descriptorSets[2] = {};
-        // Pool del que salieron. El Renderer encadena pools segun hacen falta,
-        // asi que liberarlos exige acordarse de cual era el suyo.
+        // Pool they came from. The Renderer chains pools as needed,
+        // so freeing them requires remembering which one was theirs.
         VkDescriptorPool descPool         = VK_NULL_HANDLE;
 
-        // AABB en espacio local, para el frustum culling. hasBounds=false (mesh
-        // sin vértices) significa "no se puede acotar": se dibuja siempre.
+        // AABB in local space, for frustum culling. hasBounds=false (mesh
+        // without vertices) means "cannot be bounded": it is always drawn.
         glm::vec3       aabbMin{0.0f};
         glm::vec3       aabbMax{0.0f};
         bool            hasBounds     = false;
 
-        // 0 = subido y visible. >0 = esperando a que la fence del batch con ese
-        // ticket señale. Vive aquí y no en el RenderObject porque son los
-        // recursos los que están en vuelo: un segundo objeto que adquiera esta
-        // misma entrada antes del flush tiene que esperar igual.
+        // 0 = uploaded and visible. >0 = waiting for the fence of the batch with that
+        // ticket to signal. It lives here and not in the RenderObject because it is the
+        // resources that are in flight: a second object that acquires this
+        // same entry before the flush has to wait just the same.
         uint64_t        uploadTicket  = 0;
     };
 
-    // Tabla de recursos GPU compartidos con refcount. No conoce Vulkan más allá
-    // de los handles: crear y destruir son callbacks del caller (el Renderer los
-    // rellena con sus createVertexBuffer/DeferredDelete). Eso es lo que la hace
-    // testeable sin device.
+    // Table of shared GPU resources with refcount. It does not know Vulkan beyond
+    // the handles: creating and destroying are callbacks of the caller (the Renderer fills them
+    // in with its createVertexBuffer/DeferredDelete). That is what makes it
+    // testable without a device.
     class SharedGpuMeshCache
     {
         public:
             using Creator   = std::function<void(SharedGpuMesh&)>;
             using Destroyer = std::function<void(const SharedGpuMesh&)>;
 
-            // Devuelve el índice de la entrada de `key`, creándola con `create`
-            // solo la primera vez. En las siguientes llamadas incrementa el
-            // refcount y NO invoca `create`. createdOut (si se pasa) dice cuál
-            // de los dos casos ha sido: el caller lo necesita pa saber si tiene
-            // que alojar el descriptor set o si ya venía alojado.
+            // Returns the index of the entry of `key`, creating it with `create`
+            // only the first time. On subsequent calls it increments the
+            // refcount and does NOT invoke `create`. createdOut (if passed) says which
+            // of the two cases it was: the caller needs it to know whether it has to
+            // allocate the descriptor set or whether it already came allocated.
             int acquire(const std::string& key, const Creator& create,
                         bool* createdOut = nullptr);
 
-            // Decrementa el refcount. Al llegar a 0 saca la entrada de la tabla,
-            // libera su slot y pasa una COPIA de los handles a `destroy` — el
-            // slot puede reutilizarse en el mismo frame mientras la destrucción
-            // real sigue diferida. No-op si el índice no está vivo.
+            // Decrements the refcount. On reaching 0 it removes the entry from the table,
+            // frees its slot and passes a COPY of the handles to `destroy`, since the
+            // slot can be reused in the same frame while the real destruction
+            // is still deferred. No-op if the index is not alive.
             void release(int index, const Destroyer& destroy);
 
-            // Cambia la clave con la que se encuentra la entrada `index`, sin
-            // tocar refs ni handles. false si el índice no está vivo o si la
-            // clave nueva ya es de OTRA entrada — dos entradas con la misma
-            // clave dejarían una inalcanzable en el mapa, o sea una fuga de
-            // recursos GPU que nadie liberaría nunca.
+            // Changes the key under which the entry `index` is found, without
+            // touching refs or handles. false if the index is not alive or if the
+            // new key already belongs to ANOTHER entry: two entries with the same
+            // key would leave one unreachable in the map, that is, a leak of
+            // GPU resources that nobody would ever free.
             //
-            // La necesita el cambio de textura en caliente: cuando una entrada
-            // con un solo dueño cambia de material, su contenido deja de
-            // corresponder a su clave, y sin re-clavear el siguiente objeto que
-            // pidiera la clave vieja recibiría la malla con la textura nueva.
+            // It is needed by the hot texture swap: when an entry
+            // with a single owner changes material, its content stops
+            // matching its key, and without re-keying the next object that
+            // asked for the old key would receive the mesh with the new texture.
             bool rekey(int index, const std::string& newKey);
 
-            // Fuerza la destrucción de todo lo vivo, ignorando refcounts. SOLO
-            // desde Renderer::shutdown, donde ya no queda nadie que dibuje.
+            // Forces the destruction of everything alive, ignoring refcounts. ONLY
+            // from Renderer::shutdown, where nobody is left drawing.
             void destroyAll(const Destroyer& destroy);
 
             SharedGpuMesh*       get(int index);
             const SharedGpuMesh* get(int index) const;
 
-            // La clave con la que está indexada la entrada `index`, o una
-            // cadena VACÍA si no está viva (o el índice está fuera de rango).
+            // The key under which the entry `index` is indexed, or an
+            // EMPTY string if it is not alive (or the index is out of range).
             //
-            // La pide el cambio de material en caliente: makeSharedMeshKey
-            // pone el número de vértices y el de índices en claro y como los
-            // dos primeros campos, así que comparar ese prefijo contra el de
-            // la clave nueva dice si la geometría sigue siendo la misma sin
-            // rehashear la malla. Quien muta una entrada en su sitio necesita
-            // saberlo: mutar sin resubir geometría y re-clavear después dejaría
-            // la entrada anunciándose con una clave que no describe lo que
-            // tiene, y por el dedup eso se lo lleva el SIGUIENTE que la pida.
+            // It is requested by the hot material swap: makeSharedMeshKey
+            // puts the vertex count and the index count in the clear as the
+            // first two fields, so comparing that prefix against that of
+            // the new key tells whether the geometry is still the same without
+            // rehashing the mesh. Whoever mutates an entry in place needs to
+            // know it: mutating without re-uploading geometry and re-keying afterwards would leave
+            // the entry advertising itself with a key that does not describe what it
+            // holds, and because of the dedup that is picked up by the NEXT one that asks for it.
             //
-            // La referencia vale hasta el siguiente acquire/release/rekey, que
-            // pueden mover el vector de entradas.
+            // The reference is valid until the next acquire/release/rekey, which
+            // can move the entries vector.
             const std::string& keyOf(int index) const;
 
-            // 0 si el índice no está vivo.
+            // 0 if the index is not alive.
             int    refCount(int index) const;
             size_t liveCount() const;
-            // Índices vivos, en orden creciente. Lo usa createDescriptorSets pa
-            // recorrer entradas en vez de objetos.
+            // Live indices, in increasing order. Used by createDescriptorSets to
+            // walk entries instead of objects.
             std::vector<int> liveIndices() const;
 
         private:

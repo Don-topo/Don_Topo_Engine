@@ -5,58 +5,58 @@
 
 namespace DonTopo {
 
-    // Como se entregan los frames a la pantalla.
+    // How frames are delivered to the screen.
     //
-    //   Vsync     espera al refresco. Sin tearing y sin quemar GPU, pero clava
-    //             la tasa de frames a la del monitor. Es el default y el UNICO
-    //             que todas las plataformas garantizan.
-    //   Mailbox   triple buffer: no espera y no rompe la imagen, pero dibuja
-    //             frames que se descartan. Solo Vulkan; DXGI no tiene
-    //             equivalente.
-    //   Immediate sin esperar: la tasa sube por encima del refresco y aparece
-    //             tearing. Es el unico modo con el que se puede MEDIR el coste
-    //             real de un frame — con Vsync todo sale a 16 ms y parece que
-    //             da igual lo que hagas.
+    //   Vsync     waits for the refresh. No tearing and no burning GPU, but it pins
+    //             the frame rate to the monitor's. It is the default and the ONLY
+    //             one that all platforms guarantee.
+    //   Mailbox   triple buffer: it does not wait and does not break the image, but it draws
+    //             frames that get discarded. Vulkan only; DXGI has no
+    //             equivalent.
+    //   Immediate does not wait: the rate goes above the refresh and tearing
+    //             appears. It is the only mode with which the real cost of a frame
+    //             can be MEASURED; with Vsync everything comes out at 16 ms and it looks like
+    //             nothing you do matters.
     //
-    // El valor vive aqui, pero cambiarlo recrea el swapchain, asi que el
-    // interruptor de verdad es un virtual de EditorRenderer. Igual que
-    // shadowResolution y msaaSamples.
+    // The value lives here, but changing it recreates the swapchain, so the
+    // real switch is a virtual of EditorRenderer. Same as
+    // shadowResolution and msaaSamples.
     enum class PresentMode : int { Vsync = 0, Mailbox = 1, Immediate = 2 };
 
-    // Estado escalar de calidad y efectos del render: peso del ambiente y
-    // parametros de bloom, SSAO, SSR, niebla, anti-aliasing y Forward+.
+    // Scalar state of render quality and effects: ambient weight and
+    // bloom, SSAO, SSR, fog, anti-aliasing and Forward+ parameters.
     //
-    // Vive aparte porque NADA de esto depende de la API grafica: son valores
-    // que viajan por push constant o por UBO y que los dos backends -Vulkan
-    // (Renderer) y DirectX 12 (D3D12Renderer)- necesitan igual. Compartiendo
-    // esta base, el menu de opciones de un juego exportado y los paneles del
-    // editor hablan de los mismos get/set sea cual sea el backend, en vez de
-    // duplicar los pares de metodos y sus valores por defecto.
+    // It lives apart because NONE of this depends on the graphics API: these are values
+    // that travel by push constant or by UBO and that both backends (Vulkan
+    // (Renderer) and DirectX 12 (D3D12Renderer)) need equally. By sharing
+    // this base, an exported game's options menu and the editor panels
+    // talk about the same get/set whatever the backend, instead of
+    // duplicating the method pairs and their default values.
     //
-    // Aqui SOLO entra lo que se asigna y se lee. Cualquier setter que ademas
-    // dispare trabajo -recrear targets, marcar recursos sucios, limpiar una
-    // imagen- se queda en el backend, que es quien sabe que hay que rehacer.
+    // ONLY what is assigned and read goes in here. Any setter that also
+    // triggers work (recreating targets, marking resources dirty, clearing an
+    // image) stays in the backend, which is the one that knows what has to be redone.
     class RendererState {
         public:
-            // Peso global del ambiente IBL. 1.0 = el entorno tal cual lo da el
-            // cubemap. Viaja por el UBO, asi que cambia en el frame siguiente
-            // sin recomputar nada.
+            // Global weight of the IBL ambient. 1.0 = the environment exactly as the
+            // cubemap gives it. It travels through the UBO, so it changes on the next frame
+            // without recomputing anything.
             void  setAmbientIntensity(float v) { m_ambientIntensity = v; }
             float ambientIntensity() const     { return m_ambientIntensity; }
-            // Interruptor global: apagarlo NO destruye el IBL precomputado, solo
-            // manda 0 en el UBO. Se puede encender otra vez sin recomputar nada.
+            // Global switch: turning it off does NOT destroy the precomputed IBL, it only
+            // sends 0 in the UBO. It can be turned on again without recomputing anything.
             void  setAmbientEnabled(bool v) { m_ambientEnabled = v; }
             bool  ambientEnabled() const    { return m_ambientEnabled; }
 
             // ── Bloom ────────────────────────────────────────────────────────
-            // Bloom HDR. Los tres viajan por push constant de los pipelines del
-            // bloom (NO por el UBO: ahi solo quedaban 2 floats y el bloque esta
-            // declarado en 5 shaders), asi que cambian en el frame siguiente sin
-            // recrear nada. intensity = 0 deja la imagen exactamente igual que
-            // antes de la feature.
-            // El interruptor, como los parámetros: el mismo panel enciende el
-            // efecto en los dos backends. Vulkan añade su propia lógica al
-            // apagarlo (suelta la cadena de imágenes), pero el valor vive aquí.
+            // HDR bloom. All three travel by push constant of the bloom
+            // pipelines (NOT by the UBO: only 2 floats were left there and the block is
+            // declared in 5 shaders), so they change on the next frame without
+            // recreating anything. intensity = 0 leaves the image exactly the same as
+            // before the feature.
+            // The switch, like the parameters: the same panel turns the
+            // effect on in both backends. Vulkan adds its own logic when
+            // turning it off (it releases the image chain), but the value lives here.
             bool  bloomEnabled() const        { return m_bloomEnabled; }
             void  setBloomEnabledFlag(bool v) { m_bloomEnabled = v; }
             void  setBloomThreshold(float v) { m_bloomThreshold = v; }
@@ -67,13 +67,13 @@ namespace DonTopo {
             float bloomIntensity() const     { return m_bloomIntensity; }
 
             // ── SSAO ─────────────────────────────────────────────────────────
-            // Los cuatro parametros viajan por push constant del pipeline del
-            // SSAO (NO por el UBO: solo quedaban dos floats y el bloque esta
-            // declarado en 5 shaders), asi que cambian en el frame siguiente
-            // sin recrear nada.
-            // El interruptor, como los parámetros: el mismo panel enciende el
-            // efecto en los dos backends. Vulkan añade su propia lógica al
-            // apagarlo (dejar el mapa en la identidad), pero el valor vive aquí.
+            // The four parameters travel by push constant of the SSAO
+            // pipeline (NOT by the UBO: only two floats were left and the block is
+            // declared in 5 shaders), so they change on the next frame
+            // without recreating anything.
+            // The switch, like the parameters: the same panel turns the
+            // effect on in both backends. Vulkan adds its own logic when
+            // turning it off (leaving the map at identity), but the value lives here.
             bool  ssaoEnabled() const        { return m_ssaoEnabled; }
             void  setSsaoEnabledFlag(bool v) { m_ssaoEnabled = v; }
             void  setSsaoRadius(float v)     { m_ssaoRadius = v; }
@@ -86,10 +86,10 @@ namespace DonTopo {
             float ssaoPower() const          { return m_ssaoPower; }
 
             // ── SSR ──────────────────────────────────────────────────────────
-            // SSR (reflejos en espacio de pantalla). Interruptor global; ademas
-            // cada GameObject lleva su propia fuerza, y con el interruptor puesto
-            // pero NINGUN objeto marcado tampoco se graba nada. Los parametros
-            // viajan por push constant propia (SsrPush), no por el UBO.
+            // SSR (screen-space reflections). Global switch; in addition
+            // each GameObject carries its own strength, and with the switch on
+            // but NO object marked, nothing is recorded either. The parameters
+            // travel by their own push constant (SsrPush), not by the UBO.
             void  setSsrEnabled(bool v)      { m_ssrEnabled = v; }
             bool  ssrEnabled() const         { return m_ssrEnabled; }
             void  setSsrMaxDistance(float v) { m_ssrMaxDistance = v; }
@@ -103,11 +103,11 @@ namespace DonTopo {
             void  setSsrIntensity(float v)   { m_ssrIntensity = v; }
             float ssrIntensity() const       { return m_ssrIntensity; }
 
-            // ── Niebla volumetrica ───────────────────────────────────────────
-            // Niebla volumetrica: exponencial por altura con in-scattering de
-            // la luz key. Interruptor global; apagado no graba ni un comando y
-            // la imagen sale identica. Los parametros viajan por push constant
-            // propia (FogPush), no por el UBO.
+            // ── Volumetric fog ───────────────────────────────────────────────
+            // Volumetric fog: exponential by height with in-scattering from
+            // the key light. Global switch; when off it records not a single command and
+            // the image comes out identical. The parameters travel by their own
+            // push constant (FogPush), not by the UBO.
             void  setFogEnabled(bool v)         { m_fogEnabled = v; }
             bool  fogEnabled() const            { return m_fogEnabled; }
             void  setFogDensity(float v)        { m_fogDensity = v; }
@@ -124,11 +124,11 @@ namespace DonTopo {
             int   fogSteps() const              { return m_fogSteps; }
 
             // ── Motion blur ──────────────────────────────────────────────────
-            // Motion blur de camara por reproyeccion: la velocidad de cada pixel
-            // sale del depth mas la matriz del frame anterior, la misma que ya
-            // usa el TAA. Interruptor global; apagado no graba ni un dispatch y
-            // la imagen sale identica. Los parametros viajan por push constant
-            // propia (MotionBlurPush), no por el UBO.
+            // Camera motion blur by reprojection: the velocity of each pixel
+            // comes from the depth plus the previous frame's matrix, the same one the
+            // TAA already uses. Global switch; when off it records not a single dispatch and
+            // the image comes out identical. The parameters travel by their own
+            // push constant (MotionBlurPush), not by the UBO.
             void  setMotionBlurEnabled(bool v)     { m_motionBlurEnabled = v; }
             bool  motionBlurEnabled() const        { return m_motionBlurEnabled; }
             void  setMotionBlurIntensity(float v)  { m_motionBlurIntensity = v; }
@@ -139,10 +139,10 @@ namespace DonTopo {
             int   motionBlurSamples() const        { return m_motionBlurSamples; }
 
             // ── Anti-aliasing ────────────────────────────────────────────────
-            // Los parametros de cada modo viajan por push constant y surten
-            // efecto en el frame siguiente sin recrear nada. El modo activo, en
-            // cambio, lo elige el backend: cambiarlo puede exigir recrear
-            // recursos.
+            // The parameters of each mode travel by push constant and take
+            // effect on the next frame without recreating anything. The active mode,
+            // on the other hand, is chosen by the backend: changing it may require recreating
+            // resources.
             // FXAA
             void  setFxaaSubpix(float v)          { m_fxaaSubpix = v; }
             float fxaaSubpix() const              { return m_fxaaSubpix; }
@@ -150,79 +150,79 @@ namespace DonTopo {
             float fxaaEdgeThreshold() const       { return m_fxaaEdgeThreshold; }
             void  setFxaaEdgeThresholdMin(float v){ m_fxaaEdgeThresholdMin = v; }
             float fxaaEdgeThresholdMin() const    { return m_fxaaEdgeThresholdMin; }
-            // TAA: peso del historial (0 = solo el frame actual, sin acumulacion)
-            // y amplitud del jitter de subpixel en pixeles.
+            // TAA: history weight (0 = current frame only, no accumulation)
+            // and subpixel jitter amplitude in pixels.
             void  setTaaFeedback(float v)         { m_taaFeedback = v; }
             float taaFeedback() const             { return m_taaFeedback; }
             void  setTaaJitterScale(float v)      { m_taaJitterScale = v; }
             float taaJitterScale() const          { return m_taaJitterScale; }
 
-            // ── Sombras en cascada ───────────────────────────────────────────
-            // Los dos viajan al reparto de cascadas (computeCascades) y surten
-            // efecto en el frame siguiente sin recrear nada: el shadow map no
-            // cambia de tamaño, solo cambia QUÉ trozo del mundo cubre cada
-            // cascada. El número de cascadas NO entra aquí: es SHADOW_CASCADES
-            // y tiene que valer lo mismo que el array del bloque UBO que
-            // declaran 5 shaders y que las capas del texture array.
+            // ── Cascaded shadows ─────────────────────────────────────────────
+            // Both travel to the cascade split (computeCascades) and take
+            // effect on the next frame without recreating anything: the shadow map does not
+            // change size, only WHICH piece of the world each cascade covers changes. The
+            // number of cascades does NOT go in here: it is SHADOW_CASCADES
+            // and it has to be worth the same as the array of the UBO block that
+            // 5 shaders declare and as the layers of the texture array.
             //
-            // Alcance máximo de las sombras. Es el ajuste que más se nota: las
-            // 4 cascadas se reparten esta distancia, así que bajarlo concentra
-            // los mismos texeles en menos mundo y afila la sombra de cerca, a
-            // cambio de que más allá no haya sombra.
+            // Maximum reach of the shadows. It is the setting that shows the most: the
+            // 4 cascades divide this distance among them, so lowering it concentrates
+            // the same texels in less world and sharpens the shadow up close, at the
+            // cost of there being no shadow beyond.
             void  setShadowDistance(float v) { m_shadowDistance = v; }
             float shadowDistance() const     { return m_shadowDistance; }
-            // Mezcla entre el reparto logarítmico (1) y el uniforme (0). El
-            // logarítmico da resolución donde se ve, cerca; el uniforme evita
-            // que la última cascada cubra casi todo. 0.75 tira hacia el
-            // logarítmico, que es lo que se quiere con distancias grandes.
+            // Blend between the logarithmic split (1) and the uniform one (0). The
+            // logarithmic gives resolution where it is seen, close up; the uniform keeps
+            // the last cascade from covering almost everything. 0.75 leans toward the
+            // logarithmic, which is what is wanted with large distances.
             void  setCascadeLambda(float v) { m_cascadeLambda = v; }
             float cascadeLambda() const     { return m_cascadeLambda; }
 
-            // Lado del shadow map, en texeles. A diferencia de los dos de
-            // arriba, cambiarlo MUEVE RECURSOS —la imagen, sus vistas y los
-            // framebuffers—, así que el interruptor de verdad es un virtual de
-            // EditorRenderer y aquí solo vive el valor, igual que pasa con
-            // msaaSamples y con el bloom.
+            // Side of the shadow map, in texels. Unlike the two above,
+            // changing it MOVES RESOURCES (the image, its views and the
+            // framebuffers), so the real switch is a virtual of
+            // EditorRenderer and only the value lives here, same as with
+            // msaaSamples and bloom.
             int  shadowResolution() const        { return m_shadowResolution; }
             void setShadowResolutionFlag(int v)  { m_shadowResolution = v; }
 
-            // Factor de supermuestreo: se dibuja a este multiplo del tamano de
-            // salida y el pase de resolve promedia. Como msaaSamples, el VALOR
-            // vive aqui y el interruptor que mueve los targets es un virtual de
-            // EditorRenderer. Antes cada backend guardaba el suyo y podian
-            // divergir del que persiste el project.json.
+            // Supersampling factor: it is drawn at this multiple of the output size
+            // and the resolve pass averages. Like msaaSamples, the VALUE
+            // lives here and the switch that moves the targets is a virtual of
+            // EditorRenderer. Before, each backend kept its own and they could
+            // diverge from the one persisted by project.json.
             float ssaaFactor() const           { return m_ssaaFactor; }
             void  setSsaaFactorFlag(float v)   { m_ssaaFactor = v; }
 
-            // Modo de presentacion. Ver PresentMode. Lo PEDIDO, que no tiene por
-            // que ser lo que el device soporta: quien lo aplica cae a Vsync si
-            // el modo no esta disponible, y presentModeSupported() dice cuales
-            // hay para que la UI pueda deshabilitar los otros con su motivo en
-            // vez de esconderlos.
+            // Presentation mode. See PresentMode. What was REQUESTED, which does not have
+            // to be what the device supports: whoever applies it falls back to Vsync if
+            // the mode is not available, and presentModeSupported() says which ones
+            // exist so the UI can disable the others with its reason instead of
+            // hiding them.
             PresentMode presentMode() const              { return m_presentMode; }
             void        setPresentModeFlag(PresentMode v) { m_presentMode = v; }
 
-            // Cuantas luces tiene la ESCENA, que no es lo mismo que cuantas
-            // iluminan. Scene::collectLights se queda con las primeras
-            // MAX_LIGHTS y descarta el resto EN SILENCIO —es un tope del bloque
-            // UBO, no un error de la escena—, asi que sin este numero no hay
-            // forma de saber que se esta perdiendo mas que contando a mano.
+            // How many lights the SCENE has, which is not the same as how many
+            // illuminate. Scene::collectLights keeps the first
+            // MAX_LIGHTS and discards the rest SILENTLY (it is a limit of the UBO
+            // block, not a scene error), so without this number there is no
+            // way to know what is being lost other than counting by hand.
             //
-            // Aqui y no en un virtual del backend porque no depende de la API:
-            // lo pone quien monta el frame, que es el unico que ve el total, y
-            // lo leen por igual el panel del editor y el menu de opciones de un
-            // juego exportado.
+            // Here and not in a backend virtual because it does not depend on the API:
+            // it is set by whoever assembles the frame, the only one that sees the total, and
+            // it is read equally by the editor panel and the options menu of an
+            // exported game.
             size_t sceneLightTotal() const        { return m_sceneLightTotal; }
             void   setSceneLightTotal(size_t v)   { m_sceneLightTotal = v; }
 
             // ── Forward+ ─────────────────────────────────────────────────────
-            // Culling de luces en GPU. Modos EXCLUYENTES. Off deja el frame
-            // exactamente como antes de la feature: ni un dispatch, y pbr.frag
-            // recorre las MAX_LIGHTS del UBO como siempre.
-            // Anti-aliasing. El modo y las muestras de MSAA los pide el usuario
-            // desde el mismo panel para los dos backends; lo que cada uno tenga
-            // CONSTRUIDO ahora mismo (imágenes, pipelines) es cosa suya, porque
-            // cambiarlo exige recrear recursos con la GPU en reposo.
+            // GPU light culling. MUTUALLY EXCLUSIVE modes. Off leaves the frame
+            // exactly as before the feature: not a dispatch, and pbr.frag
+            // loops over the UBO's MAX_LIGHTS as always.
+            // Anti-aliasing. The mode and the MSAA samples are requested by the user
+            // from the same panel for both backends; what each one has
+            // BUILT right now (images, pipelines) is its own business, because
+            // changing it requires recreating resources with the GPU idle.
             enum class AaMode : int
             {
                 None = 0,
@@ -231,8 +231,8 @@ namespace DonTopo {
                 Msaa = 3,
                 Taa  = 4,
             };
-            // Modo alambre: lo enciende el menú View del editor y vale para los
-            // dos backends, así que el valor vive aquí.
+            // Wireframe mode: turned on by the editor's View menu and valid for
+            // both backends, so the value lives here.
             bool isWireframeMode() const        { return m_wireframeMode; }
             void setWireframeMode(bool enabled) { m_wireframeMode = enabled; }
 
@@ -244,19 +244,19 @@ namespace DonTopo {
             enum class FpMode : int
             {
                 Off       = 0,
-                Tiled     = 1,  // rejilla 2D de tiles de 16x16 con el maximo de profundidad del tile
-                Clustered = 2,  // rejilla 3D de 64x64 pixeles x 24 cortes logaritmicos en Z
+                Tiled     = 1,  // 2D grid of 16x16 tiles with the tile's maximum depth
+                Clustered = 2,  // 3D grid of 64x64 pixels x 24 logarithmic Z slices
             };
-            // Cambia en el frame SIGUIENTE y no recrea nada: los dos modos
-            // comparten buffers (dimensionados al mayor de las dos rejillas), asi
-            // que lo unico que cambia es lo que se graba y el bloque de
-            // parametros. El valor que manda durante un frame se congela en
-            // m_fpActiveMode justo despues de la UI.
+            // Changes on the NEXT frame and recreates nothing: both modes
+            // share buffers (sized to the larger of the two grids), so
+            // the only thing that changes is what is recorded and the parameter
+            // block. The value that rules during a frame is frozen in
+            // m_fpActiveMode right after the UI.
             void   setForwardPlusMode(FpMode mode) { m_fpMode = mode; }
             FpMode forwardPlusMode() const         { return m_fpMode; }
-            // Radio por defecto de TODAS las luces que no traigan el suyo. Es el
-            // dato que el culling necesita y que Light no lleva: meterlo en el
-            // struct cambiaria el layout std140 del UBO, que declaran 5 shaders.
+            // Default radius of ALL the lights that do not bring their own. It is the
+            // data the culling needs and that Light does not carry: putting it in the
+            // struct would change the std140 layout of the UBO, which 5 shaders declare.
             void  setForwardPlusLightRadius(float v) { m_fpLightRadius = v; }
             float forwardPlusLightRadius() const     { return m_fpLightRadius; }
 
@@ -298,7 +298,7 @@ namespace DonTopo {
             float                           m_fogAnisotropy                     = 0.6f;
             int                             m_fogSteps                          = 32;
 
-            // Valores del preset de calidad de PC de FXAA 3.11.
+            // Values of the PC quality preset of FXAA 3.11.
             float                           m_fxaaSubpix                        = 0.75f;
             float                           m_fxaaEdgeThreshold                 = 0.166f;
             float                           m_fxaaEdgeThresholdMin              = 0.0833f;
@@ -306,8 +306,8 @@ namespace DonTopo {
             float                           m_taaFeedback                       = 0.9f;
             float                           m_taaJitterScale                    = 1.0f;
 
-            // Los valores con los que se dibujaba antes de que esto fuera
-            // ajustable: un proyecto sin las claves nuevas se ve igual.
+            // The values it was drawn with before this became
+            // adjustable: a project without the new keys looks the same.
             float                           m_shadowDistance                    = 500.0f;
             float                           m_cascadeLambda                     = 0.75f;
             int                             m_shadowResolution                  = 2048;

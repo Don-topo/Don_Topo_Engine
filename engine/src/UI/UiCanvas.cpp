@@ -9,10 +9,10 @@ namespace DonTopo
     {
         bool pointInRect(const glm::vec2& p, const glm::vec2& pos, const glm::vec2& size)
         {
-            // Medio abierto por la derecha y por abajo: dos rects pegados no se
-            // disputan la columna de píxeles que comparten. Un rect de tamaño 0
-            // (o negativo, que el estirado por márgenes puede producir) no recibe
-            // nada, porque ningún punto cumple las dos desigualdades a la vez.
+            // Half-open on the right and bottom: two adjoining rects do not
+            // fight over the pixel column they share. A rect of size 0
+            // (or negative, which margin stretching can produce) receives
+            // nothing, because no point satisfies both inequalities at once.
             return p.x >= pos.x && p.x < pos.x + size.x &&
                    p.y >= pos.y && p.y < pos.y + size.y;
         }
@@ -26,14 +26,14 @@ namespace DonTopo
                    p.y >= y0 && p.y < y0 + (float)s.height;
         }
 
-        // Pre-orden INVERSO: el árbol se dibuja padre-antes-que-hijos y en orden
-        // de hermanos, así que recorrerlo al revés da PRIMERO lo último dibujado,
-        // que es lo que está visualmente encima.
+        // REVERSE pre-order: the tree is drawn parent-before-children and in sibling
+        // order, so walking it backwards gives FIRST what was drawn last,
+        // which is what is visually on top.
         UiElement* hitTestNode(UiElement& node, const glm::vec2& p)
         {
             if (!node.visible)  return nullptr;
-            // Sin rect resuelto el nodo no está colocado (ni él ni su subárbol):
-            // el emisor no llegó a visitarlo o lo recortó a cero.
+            // Without a resolved rect the node is not placed (neither it nor its subtree):
+            // the emitter never got to visit it or clipped it to zero.
             if (!node.rectValid) return nullptr;
 
             const auto& children = node.children();
@@ -42,13 +42,13 @@ namespace DonTopo
                 if (UiElement* hit = hitTestNode(*children[i - 1], p)) return hit;
             }
 
-            // El elemento puede ser transparente al ratón sin que lo sean sus
-            // hijos: por eso esto va DESPUÉS de probarlos.
+            // The element can be transparent to the mouse without its children being so:
+            // that is why this goes AFTER testing them.
             if (!node.raycastTarget) return nullptr;
             if (!pointInRect(p, node.screenPos, node.screenSize)) return nullptr;
-            // screenScissor ya trae intersecado el recorte del padre (y el propio
-            // si el nodo tiene clipChildren): un hijo que se sale del recorte del
-            // padre no recibe nada aunque su rect contenga el punto.
+            // screenScissor already comes intersected with the parent's clip (and its own
+            // if the node has clipChildren): a child that sticks out of the parent's
+            // clip receives nothing even if its rect contains the point.
             if (!pointInScissor(p, node.screenScissor)) return nullptr;
 
             return &node;
@@ -60,9 +60,9 @@ namespace DonTopo
             for (const auto& child : node.children()) invalidateSubtree(*child);
         }
 
-        // Pre-orden normal, saltando subárboles invisibles o deshabilitados
-        // ENTEROS: un contenedor oculto (o apagado) no esconde solo su rect,
-        // también a sus hijos focusables.
+        // Normal pre-order, skipping invisible or disabled subtrees
+        // WHOLE: a hidden (or turned off) container hides not only its rect,
+        // but also its focusable children.
         void collectFocusables(UiElement& node, std::vector<UiElement*>& out)
         {
             if (!node.visible || !node.enabled) return;
@@ -70,9 +70,9 @@ namespace DonTopo
             for (const auto& child : node.children()) collectFocusables(*child, out);
         }
 
-        // Peso del eje TRANSVERSAL en la navegación direccional. Mayor que 1
-        // para que un vecino alineado gane a otro más cercano en diagonal, que
-        // es lo que espera quien navega con un mando.
+        // Weight of the TRANSVERSE axis in directional navigation. Greater than 1
+        // so that an aligned neighbor beats another one closer diagonally, which
+        // is what someone navigating with a gamepad expects.
         constexpr float kNavCrossPenalty = 2.0f;
 
         glm::vec2 rectCenter(const UiElement& node)
@@ -89,18 +89,18 @@ namespace DonTopo
 
     UiCanvas::UiCanvas()
     {
-        // La raíz agrupa, no pinta: su rect es la pantalla entera y dibujarla
-        // taparía la escena con un rectángulo blanco.
+        // The root groups, does not paint: its rect is the whole screen and drawing it
+        // would cover the scene with a white rectangle.
         m_root.drawable = false;
-        // Y tampoco intercepta el ratón: si lo hiciera, TODO click caería en ella
-        // y nunca llegaría al fondo de la escena.
+        // And it does not intercept the mouse either: if it did, EVERY click would land on it
+        // and never reach the scene's background.
         m_root.raycastTarget = false;
     }
 
     void UiCanvas::clear()
     {
-        // Los punteros de estado apuntan dentro del árbol que se va: soltarlos
-        // aquí es lo que evita que el siguiente updateInput lea memoria muerta.
+        // The state pointers point inside the tree that is going away: dropping them
+        // here is what keeps the next updateInput from reading dead memory.
         m_hovered         = nullptr;
         m_focused         = nullptr;
         m_lastClickTarget = nullptr;
@@ -114,10 +114,10 @@ namespace DonTopo
         out.clear();
         if (!m_visible || width == 0 || height == 0)
         {
-            // Nada se colocó este frame: dejar los rects del anterior haría que
-            // el input siguiera respondiendo sobre un canvas que ya no se dibuja.
-            // Por lo mismo la resolución vuelve a neutra: un uiScale viejo sobre
-            // un canvas que no se dibujó sería una mentira.
+            // Nothing was placed this frame: leaving the previous one's rects would make
+            // the input keep responding on a canvas that is no longer drawn.
+            // For the same reason the resolution goes back to neutral: an old uiScale on
+            // a canvas that was not drawn would be a lie.
             m_uiScale       = 1.0f;
             m_uiOrigin      = {0.0f, 0.0f};
             m_referenceSize = {0.0f, 0.0f};
@@ -138,8 +138,8 @@ namespace DonTopo
 
     void UiCanvas::dispatch(UiElement* target, UiEvent& event, UiEventHandler UiElement::* slot) const
     {
-        // Burbujeo: del elemento al que le pasó hacia la raíz, parando en cuanto
-        // alguien consuma. event.target NO cambia por el camino.
+        // Bubbling: from the element it was passed to toward the root, stopping as soon as
+        // someone consumes. event.target does NOT change along the way.
         for (UiElement* n = target; n != nullptr && !event.consumed; n = n->parent())
         {
             UiEventHandler& handler = n->*slot;
@@ -154,13 +154,13 @@ namespace DonTopo
 
         UiElement* previous = m_focused;
 
-        // El foco se mueve ANTES de avisar: un handler que mire focused() durante
-        // el Blur o el Focus ve el estado nuevo, no uno a medias.
+        // The focus moves BEFORE notifying: a handler that looks at focused() during
+        // the Blur or the Focus sees the new state, not a half-done one.
         if (previous) previous->focused = false;
         m_focused = element;
         if (m_focused) m_focused->focused = true;
 
-        // Blur primero, Focus después: siempre en ese orden.
+        // Blur first, Focus after: always in that order.
         if (previous)
         {
             UiEvent e{};
@@ -190,8 +190,8 @@ namespace DonTopo
             if (order[i] == m_focused) { index = i; found = true; break; }
         }
 
-        // Sin foco previo (o con uno que ya no está en el recorrido) se entra por
-        // el primero yendo hacia delante y por el último yendo hacia atrás.
+        // Without a previous focus (or with one that is no longer in the traversal) it enters through
+        // the first going forward and through the last going backward.
         if (!found)
         {
             setFocus(direction >= 0 ? order.front() : order.back());
@@ -208,15 +208,15 @@ namespace DonTopo
     {
         UiElement* const previous = m_focused;
 
-        // Next/Previous NO tocan geometría: son el recorrido del Tab, tal cual.
+        // Next/Previous do NOT touch geometry: they are the Tab traversal, as is.
         if (dir == UiNavDir::Next || dir == UiNavDir::Previous)
         {
             moveFocus(dir == UiNavDir::Next ? 1 : -1);
             return m_focused != previous;
         }
 
-        // Sin foco previo no hay desde dónde medir: se entra por el primero del
-        // pre-orden, venga la navegación de la dirección que venga.
+        // Without a previous focus there is nowhere to measure from: it enters through the first of the
+        // pre-order, whatever direction the navigation comes from.
         if (m_focused == nullptr)
         {
             std::vector<UiElement*> order;
@@ -226,9 +226,9 @@ namespace DonTopo
             return m_focused != previous;
         }
 
-        // Override explícito: manda sobre la geometría, aunque apunte al lado
-        // contrario. Si el destino no es focusable, setFocus lo ignora y el foco
-        // se queda donde está (navigate devuelve false).
+        // Explicit override: it rules over geometry, even if it points to the
+        // opposite side. If the target is not focusable, setFocus ignores it and the focus
+        // stays where it is (navigate returns false).
         UiElement* forced = nullptr;
         switch (dir)
         {
@@ -244,8 +244,8 @@ namespace DonTopo
             return m_focused != previous;
         }
 
-        // A partir de aquí todo sale de los rects del último buildDrawData. Sin
-        // él, el propio foco no está colocado y no hay nada que comparar.
+        // From here on everything comes from the rects of the last buildDrawData. Without
+        // it, the focus itself is not placed and there is nothing to compare.
         if (!m_focused->rectValid) return false;
 
         std::vector<UiElement*> order;
@@ -261,7 +261,7 @@ namespace DonTopo
 
             const glm::vec2 d = rectCenter(*candidate) - origin;
 
-            // Y crece hacia ABAJO en pantalla: arriba es la Y menor.
+            // And it grows DOWNWARD on screen: up is the smaller Y.
             float along = 0.0f;
             float cross = 0.0f;
             switch (dir)
@@ -272,13 +272,13 @@ namespace DonTopo
                 case UiNavDir::Down:  along =  d.y; cross = std::fabs(d.x); break;
                 default: break;
             }
-            // Su centro tiene que caer HACIA esa dirección; lo que queda en la
-            // perpendicular exacta (along == 0) no cuenta.
+            // Its center has to fall TOWARD that direction; what lies on the
+            // exact perpendicular (along == 0) does not count.
             if (along <= 0.0f) continue;
 
             const float score = along + kNavCrossPenalty * cross;
-            // Estrictamente menor, recorriendo en pre-orden: un empate perfecto
-            // lo gana el primero del árbol, no el que salga de un orden ajeno.
+            // Strictly less, walking in pre-order: a perfect tie
+            // is won by the first in the tree, not by whichever comes out of a foreign order.
             if (best == nullptr || score < bestScore)
             {
                 best      = candidate;
@@ -286,7 +286,7 @@ namespace DonTopo
             }
         }
 
-        // La direccional NO da la vuelta: sin candidato el foco se queda.
+        // The directional one does NOT wrap around: without a candidate the focus stays.
         if (best == nullptr) return false;
 
         setFocus(best);
@@ -295,18 +295,18 @@ namespace DonTopo
 
     namespace
     {
-        // Un botón no interactable sigue entrando en el hit test (si no, Disabled
-        // no se pintaría nunca al pasar por encima) pero se come el Click y el
-        // DoubleClick. Lo demás (Down, Up, Drag) sigue saliendo.
+        // A non-interactable button still enters the hit test (otherwise Disabled
+        // would never be painted when hovering over it) but it swallows the Click and
+        // DoubleClick. The rest (Down, Up, Drag) still comes out.
         bool tragaElClick(const UiElement* element)
         {
             const Button* b = element ? element->asButton() : nullptr;
             return b != nullptr && !b->interactable;
         }
 
-        // Prioridad FIJA: Disabled > Pressed > Selected > Hover > Normal. Aquí
-        // no hay máquina de estados; se deriva entera cada frame de lo que ya
-        // lleva el elemento más interactable y selected.
+        // FIXED priority: Disabled > Pressed > Selected > Hover > Normal. There is
+        // no state machine here; it is derived whole every frame from what the element already
+        // carries plus interactable and selected.
         UiButtonState estadoDe(const Button& b, const UiInputState& input)
         {
             if (!b.interactable)                    return UiButtonState::Disabled;
@@ -316,10 +316,10 @@ namespace DonTopo
             return UiButtonState::Normal;
         }
 
-        // El color del estado MULTIPLICADO por el tinte base del botón. Con la
-        // base en blanco (el default) sale el color del estado tal cual, o sea
-        // exactamente lo de siempre; con otra base, el mismo juego de cinco
-        // estados sirve para botones de colores distintos sin duplicarlos.
+        // The state's color MULTIPLIED by the button's base tint. With the
+        // base at white (the default) the state's color comes out as is, that is
+        // exactly the usual; with another base, the same set of five
+        // states serves buttons of different colors without duplicating them.
         glm::vec4 colorDe(const Button& b, UiButtonState s)
         {
             const glm::vec4* estado = &b.normalColor;
@@ -348,9 +348,9 @@ namespace DonTopo
             }
         }
 
-        // El botón se repinta cada frame, pero casi ningún frame CAMBIA de color:
-        // marcar solo cuando el valor es distinto es lo que impide que un canvas
-        // quieto con botones reemita el árbol entero por cada updateInput.
+        // The button is repainted every frame, but almost no frame CHANGES color:
+        // marking only when the value is different is what keeps a
+        // still canvas with buttons from re-emitting the whole tree on every updateInput.
         void escribeColor(Button& b, const glm::vec4& c)
         {
             if (b.color == c) return;
@@ -366,8 +366,8 @@ namespace DonTopo
             {
                 b.state      = nuevo;
                 b.stateReady = true;
-                // Un estado sin arte NO borra el sprite que hubiera: deja el que
-                // está en vez de dejar el elemento sin dibujo.
+                // A state without art does NOT erase the sprite that was there: it keeps the one that
+                // is there instead of leaving the element without drawing.
                 const std::string& s = spriteDe(b, nuevo);
                 if (!s.empty() && b.sprite != s)
                 {
@@ -387,10 +387,10 @@ namespace DonTopo
                 return;
             }
 
-            // Animation: lineal, y el tiempo lo pone quien llama.
+            // Animation: linear, and the caller sets the time.
             if (!b.stateReady)
             {
-                // Primer updateInput del botón: COLOCA, no funde.
+                // The button's first updateInput: PLACES, does not fade.
                 b.state         = nuevo;
                 b.stateReady    = true;
                 b.fadeFrom      = destino;
@@ -401,8 +401,8 @@ namespace DonTopo
 
             if (nuevo != b.state)
             {
-                // Se arranca desde el color ACTUAL, no desde el del estado que
-                // se deja: cambiar de estado a mitad de fundido no da un salto.
+                // It starts from the CURRENT color, not from that of the state being
+                // left: changing state in the middle of a fade does not give a jump.
                 b.fadeFrom      = b.color;
                 b.fadeStartTime = input.timeSeconds;
                 b.state         = nuevo;
@@ -412,25 +412,25 @@ namespace DonTopo
             if (b.fadeDuration > 0.0f)
                 t = (input.timeSeconds - b.fadeStartTime) / b.fadeDuration;
 
-            // El clamp es lo que impide que pasado el fundido el color siga de
-            // largo (y que un tiempo hacia atrás lo mande al otro lado).
+            // The clamp is what keeps the color from running on past the end of the fade
+            // (and a backward time from sending it to the other side).
             if (t <= 0.0f)      escribeColor(b, b.fadeFrom);
-            else if (t >= 1.0f) escribeColor(b, destino);   // exacto, sin el error del mix
+            else if (t >= 1.0f) escribeColor(b, destino);   // exact, without the mix's error
             else                escribeColor(b, b.fadeFrom + (destino - b.fadeFrom) * t);
         }
 
-        // Una sola pasada por el árbol, al final del updateInput.
+        // A single pass over the tree, at the end of updateInput.
         void tickBotones(UiElement& element, const UiInputState& input)
         {
             if (Button* b = element.asButton()) aplicaEstado(*b, input);
             for (const auto& hijo : element.children()) tickBotones(*hijo, input);
         }
 
-        // ── Curvas de animación ─────────────────────────────────────────────
-        // Funciones puras de t: mismo t, mismo valor, siempre. Los dos remates
-        // de los extremos NO son un clamp de conveniencia, son lo que garantiza
-        // f(0)=0 y f(1)=1 EXACTOS aunque la fórmula de dentro salga a
-        // 0.99999994 por el redondeo (Bounce y Elastic lo hacen).
+        // ── Animation curves ────────────────────────────────────────────────
+        // Pure functions of t: same t, same value, always. The two end
+        // snaps are NOT a convenience clamp, they are what guarantees
+        // EXACT f(0)=0 and f(1)=1 even if the formula inside comes out at
+        // 0.99999994 because of rounding (Bounce and Elastic do).
         float curvaAnim(UiAnimCurve curva, float t)
         {
             if (t <= 0.0f) return 0.0f;
@@ -449,8 +449,8 @@ namespace DonTopo
 
                 case UiAnimCurve::Bounce:
                 {
-                    // Cuatro parábolas cada vez más pequeñas y más altas: no se
-                    // sale de [0,1], pero NO es monótona (ahí están los botes).
+                    // Four parabolas that get smaller and higher: it does not
+                    // leave [0,1], but it is NOT monotonic (that is where the bounces are).
                     const float n = 7.5625f;
                     const float d = 2.75f;
                     if (t < 1.0f / d) return n * t * t;
@@ -462,8 +462,8 @@ namespace DonTopo
 
                 case UiAnimCurve::Elastic:
                 {
-                    // Muelle amortiguado: SE PASA del destino y vuelve, así que
-                    // pasa de 1 a mitad de camino a propósito.
+                    // Damped spring: it OVERSHOOTS the target and comes back, so
+                    // it goes past 1 halfway on purpose.
                     const float c = 2.0f * 3.14159265358979323846f / 3.0f;
                     return std::pow(2.0f, -10.0f * t) * std::sin((t * 10.0f - 0.75f) * c) + 1.0f;
                 }
@@ -474,9 +474,9 @@ namespace DonTopo
             }
         }
 
-        // Escribe la propiedad. Al rematar se copia animTo TAL CUAL: el lerp
-        // con t=1 deja 0.99999994 y la propiedad se quedaría a un pelo de su
-        // destino para siempre.
+        // Writes the property. On finishing, animTo is copied AS IS: the lerp
+        // with t=1 leaves 0.99999994 and the property would stay a hair short of its
+        // target forever.
         void aplicaAnim(UiElement& e, float k, bool remata)
         {
             const glm::vec4 v = remata ? e.animTo
@@ -484,15 +484,15 @@ namespace DonTopo
 
             switch (e.anim)
             {
-                // Cada curva marca EXACTAMENTE lo que escribe. Fade entra en
-                // Transform y no en Material porque la opacidad se multiplica
-                // hacia abajo: si no bajase, los hijos se quedarían con el alfa
-                // del frame anterior.
+                // Each curve marks EXACTLY what it writes. Fade goes into
+                // Transform and not Material because opacity is multiplied
+                // downward: if it were not marked, the children would keep the alpha
+                // of the previous frame.
                 case UiAnim::Fade:     e.opacity  = v.x;                  e.markDirty(UiElement::DirtyTransform); break;
                 case UiAnim::Scale:    e.scale    = glm::vec2(v.x, v.y);  e.markDirty(UiElement::DirtyTransform); break;
                 case UiAnim::Move:     e.position = glm::vec2(v.x, v.y);  e.markDirty(UiElement::DirtyTransform); break;
-                // La rotación solo gira los vértices que emite ESTE nodo (los
-                // hijos vuelven al estado de antes), así que no sale de él.
+                // Rotation only turns the vertices that THIS node emits (the
+                // children go back to the earlier state), so it does not propagate out of it.
                 case UiAnim::Rotation: e.rotation = v.x;                  e.markDirty(UiElement::DirtyVertex);    break;
                 case UiAnim::Color:    e.color    = v;                    e.markDirty(UiElement::DirtyMaterial);  break;
                 case UiAnim::None:
@@ -500,8 +500,8 @@ namespace DonTopo
             }
         }
 
-        // Una sola pasada por el árbol con el delta del frame. Con animPlaying
-        // a false no se avanza NI se escribe: la propiedad se queda donde esté.
+        // A single pass over the tree with the frame's delta. With animPlaying
+        // false it neither advances NOR writes: the property stays wherever it is.
         void tickAnimaciones(UiElement& e, float dt)
         {
             if (e.anim != UiAnim::None && e.animPlaying && e.animDuration > 0.0f)
@@ -514,8 +514,8 @@ namespace DonTopo
                 switch (e.animLoop)
                 {
                     case UiAnimLoop::Loop:
-                        // fmod y no restar la duración a mano: un salto de
-                        // tiempo de varias vueltas cae donde toca de una vez.
+                        // fmod and not subtracting the duration by hand: a time
+                        // jump of several laps lands where it should in one go.
                         t = std::fmod(e.animTime, e.animDuration) / e.animDuration;
                         break;
 
@@ -550,10 +550,10 @@ namespace DonTopo
 
     void UiCanvas::updateInput(const UiInputState& input)
     {
-        // Las animaciones, ANTES que nada: el reloj es el de aquí y el avance
-        // es el delta contra el frame anterior. Lo que escriban se ve en el
-        // siguiente buildDrawData, no en los rects de este frame (que son los
-        // que el hit test acaba de heredar del build anterior).
+        // The animations, BEFORE anything else: the clock is the one here and the advance
+        // is the delta against the previous frame. What they write is seen in the
+        // next buildDrawData, not in this frame's rects (which are
+        // the ones the hit test just inherited from the previous build).
         const float dtAnim = m_hasLastTime ? (input.timeSeconds - m_lastTime) : 0.0f;
         m_lastTime    = input.timeSeconds;
         m_hasLastTime = true;
@@ -565,8 +565,8 @@ namespace DonTopo
                                                : glm::vec2(0.0f, 0.0f);
         const bool moved = !m_hasLastMouse || input.mousePos != m_lastMousePos;
 
-        // Plantilla común: todos los eventos llevan la misma foto del ratón, el
-        // mismo tiempo y los mismos modificadores.
+        // Common template: all the events carry the same mouse snapshot, the
+        // same time and the same modifiers.
         UiEvent base{};
         base.mousePos = input.mousePos;
         base.delta    = delta;
@@ -576,8 +576,8 @@ namespace DonTopo
         base.time     = input.timeSeconds;
 
         // ── Hover ───────────────────────────────────────────────────────────
-        // Enter y Exit son DERIVADOS: se comparan el hit de este frame y el del
-        // anterior. No hay evento Hover, hay un bool hovered.
+        // Enter and Exit are DERIVED: this frame's hit and the previous one's are
+        // compared. There is no Hover event, there is a bool hovered.
         if (hit != m_hovered)
         {
             UiElement* previous = m_hovered;
@@ -609,7 +609,7 @@ namespace DonTopo
             dispatch(hit, e, &UiElement::onMouseMove);
         }
 
-        // ── Botones ─────────────────────────────────────────────────────────
+        // ── Buttons ─────────────────────────────────────────────────────────
         for (int b = 0; b < 3; ++b)
         {
             const bool now = input.mouseDown[b];
@@ -630,8 +630,8 @@ namespace DonTopo
                     e.button   = button;
                     dispatch(hit, e, &UiElement::onMouseDown);
 
-                    // El foco lo toma el primer focusable de la cadena: pinchar
-                    // en la etiqueta de dentro de un campo enfoca el campo.
+                    // The focus is taken by the first focusable in the chain: clicking
+                    // on the label inside a field focuses the field.
                     for (UiElement* n = hit; n != nullptr; n = n->parent())
                     {
                         if (n->focusable) { setFocus(n); break; }
@@ -657,8 +657,8 @@ namespace DonTopo
                     }
                 }
 
-                // El frame que cruza el umbral emite DragBegin Y su primer Drag:
-                // si no, un gesto de un solo salto no daría ni un Drag.
+                // The frame that crosses the threshold emits DragBegin AND its first Drag:
+                // otherwise, a one-jump gesture would give not even one Drag.
                 if (source && m_dragging[b] && moved)
                 {
                     UiEvent e   = base;
@@ -674,8 +674,8 @@ namespace DonTopo
             {
                 UiElement* source = m_pressTarget[b];
 
-                // MouseUp va a quien esté BAJO EL CURSOR, que puede no ser quien
-                // recibió el Down: de esa diferencia sale que no haya Click.
+                // MouseUp goes to whoever is UNDER THE CURSOR, which may not be whoever
+                // received the Down: that difference is why there is no Click.
                 if (hit)
                 {
                     UiEvent e = base;
@@ -697,8 +697,8 @@ namespace DonTopo
                         e.dragSource = source;
                         dispatch(source, e, &UiElement::onDragEnd);
                     }
-                    // El Drop es del elemento de DESTINO, y puede no ser el del
-                    // DragBegin (ni existir, si se suelta fuera de todo).
+                    // The Drop belongs to the TARGET element, and it may not be the DragBegin's
+                    // (nor exist, if released outside of everything).
                     if (hit)
                     {
                         UiEvent e   = base;
@@ -709,14 +709,14 @@ namespace DonTopo
                         e.dragSource = source;
                         dispatch(hit, e, &UiElement::onDrop);
                     }
-                    // Un arrastre CANCELA el click de ese gesto, y también corta
-                    // la cadena de doble click: soltar tras arrastrar no puede
-                    // ser la primera mitad de un doble click.
+                    // A drag CANCELS that gesture's click, and also cuts
+                    // the double-click chain: releasing after dragging cannot
+                    // be the first half of a double click.
                     m_lastClickTarget = nullptr;
                 }
-                // El umbral se vuelve a mirar aquí y no solo en los frames con el
-                // botón mantenido: un gesto que baja y sube en dos frames seguidos
-                // no pasa por ninguno de esos, y 200 px de recorrido no son un click.
+                // The threshold is checked again here and not only in the frames with the
+                // button held: a gesture that goes down and up in two consecutive frames
+                // passes through none of those, and 200 px of travel is not a click.
                 else if (source && hit == source && !tragaElClick(source) &&
                          distance2(input.mousePos, m_pressPos[b]) <= dragThreshold * dragThreshold)
                 {
@@ -739,8 +739,8 @@ namespace DonTopo
                         d.button  = button;
                         dispatch(source, d, &UiElement::onDoubleClick);
 
-                        // Consumido: un tercer click empieza pareja nueva en vez
-                        // de disparar otro doble.
+                        // Consumed: a third click starts a new pair instead
+                        // of firing another double.
                         m_lastClickTarget = nullptr;
                     }
                     else
@@ -758,7 +758,7 @@ namespace DonTopo
             m_buttonDown[b] = now;
         }
 
-        // ── Rueda ───────────────────────────────────────────────────────────
+        // ── Wheel ───────────────────────────────────────────────────────────
         if (input.scrollDelta != 0.0f && hit)
         {
             UiEvent e     = base;
@@ -768,9 +768,9 @@ namespace DonTopo
             dispatch(hit, e, &UiElement::onScroll);
         }
 
-        // ── Teclado ─────────────────────────────────────────────────────────
-        // SOLO al elemento con foco, y burbujeando. Sin foco no se emite nada:
-        // ni siquiera el Tab, que sin un punto de partida no sabría hacia dónde.
+        // ── Keyboard ────────────────────────────────────────────────────────
+        // ONLY to the focused element, and bubbling. Without focus nothing is emitted:
+        // not even Tab, which without a starting point would not know which way to go.
         for (UiKey key : input.keys)
         {
             if (!m_focused) break;
@@ -783,15 +783,15 @@ namespace DonTopo
             e.key     = key;
             dispatch(target, e, &UiElement::onKeyDown);
 
-            // Las teclas se ENTREGAN tal cual; el canvas solo se reserva unas
-            // pocas acciones propias, y las cede si alguien consumió la tecla.
+            // The keys are DELIVERED as they are; the canvas only reserves a
+            // few actions of its own, and yields them if someone consumed the key.
             if (e.consumed) continue;
             if (key == UiKey::Tab)         { moveFocus(input.shift ? -1 : 1); continue; }
             if (key == UiKey::Escape)      { setFocus(nullptr); continue; }
 
-            // Flechas y Enter: es lo que hace jugable un menú con mando. Quien
-            // quiera las flechas para otra cosa las consume en su handler, o
-            // apaga keyboardNavigation.
+            // Arrows and Enter: this is what makes a menu playable with a gamepad. Whoever
+            // wants the arrows for something else consumes them in their handler, or
+            // turns off keyboardNavigation.
             if (!keyboardNavigation) continue;
             switch (key)
             {
@@ -804,15 +804,15 @@ namespace DonTopo
             }
         }
 
-        // ── Texto ───────────────────────────────────────────────────────────
-        // DESPUES de las teclas y con la misma regla: solo al elemento con foco
-        // y burbujeando. Un caracter sin destino se descarta en vez de ir al
-        // primero que pase por ahi.
+        // ── Text ────────────────────────────────────────────────────────────
+        // AFTER the keys and with the same rule: only to the focused element
+        // and bubbling. A character without a destination is discarded instead of going to the
+        // first one that happens to pass by.
         //
-        // Va aparte del bucle de teclas y no dentro porque las dos listas son
-        // independientes: un frame puede traer solo texto (escribir), solo
-        // teclas (Tab, Backspace) o las dos, y no hay forma de intercalarlas
-        // sin inventarse un orden que el caller no ha dado.
+        // It is kept apart from the key loop and not inside it because the two lists are
+        // independent: a frame can carry only text (typing), only
+        // keys (Tab, Backspace) or both, and there is no way to interleave them
+        // without inventing an order that the caller has not given.
         for (uint32_t cp : input.chars)
         {
             if (!m_focused) break;
@@ -827,11 +827,11 @@ namespace DonTopo
         m_lastMousePos = input.mousePos;
         m_hasLastMouse = true;
 
-        // ── Botones ─────────────────────────────────────────────────────────
-        // Lo ÚLTIMO: los estados se derivan del hover, el foco y el botón del
-        // ratón que acaban de quedar fijados arriba. Quien no llame a
-        // updateInput no ve ni un cambio: buildDrawData sigue dando los mismos
-        // vértices y los mismos lotes.
+        // ── Buttons ─────────────────────────────────────────────────────────
+        // LAST: the states are derived from the hover, the focus and the mouse
+        // button that have just been fixed above. Whoever does not call
+        // updateInput sees not a single change: buildDrawData keeps giving the same
+        // vertices and the same batches.
         tickBotones(m_root, input);
     }
 
@@ -839,8 +839,8 @@ namespace DonTopo
     {
         UiElement* target = m_focused;
         if (target == nullptr) return false;
-        // Las mismas reglas que se le aplican al ratón: lo que no se puede
-        // clicar con el cursor tampoco se activa con el mando.
+        // The same rules applied to the mouse: what cannot be
+        // clicked with the cursor is not activated with the gamepad either.
         if (!target->visible || !target->enabled) return false;
         if (tragaElClick(target)) return false;
 
@@ -849,9 +849,9 @@ namespace DonTopo
         e.target = target;
         e.button = UiMouseButton::Left;
         e.time   = m_lastTime;
-        // El "cursor" es el centro del elemento: un handler que mire dónde le
-        // han pulsado recibe un punto que cae DENTRO, no un (0,0) que estaría
-        // en cualquier otro sitio de la pantalla.
+        // The "cursor" is the element's center: a handler that looks at where it
+        // was pressed receives a point that falls INSIDE, not a (0,0) that would be
+        // anywhere else on the screen.
         if (target->rectValid) e.mousePos = target->screenPos + target->screenSize * 0.5f;
 
         dispatch(target, e, &UiElement::onClick);
@@ -860,11 +860,11 @@ namespace DonTopo
 
     void UiCanvas::releaseInput()
     {
-        // El hover, con su MouseExit: por el mismo motivo por el que se lo emite
-        // un input con el ratón fuera. Quien apague algo al salir tiene que
-        // enterarse, y "se quedó pegado en el último hover" es justo el fallo que
-        // dispatchUiInput evita para los que pierden el puntero — aquí no puede,
-        // porque el canvas ya no está en su lista.
+        // The hover, with its MouseExit: for the same reason it is emitted to
+        // an input with the mouse outside. Whoever turns something off on exit has to
+        // find out, and "stuck on the last hover" is exactly the failure that
+        // dispatchUiInput avoids for those who lose the pointer; here it cannot,
+        // because the canvas is no longer in its list.
         if (m_hovered)
         {
             UiElement* previo = m_hovered;
@@ -879,50 +879,50 @@ namespace DonTopo
             dispatch(previo, e, &UiElement::onMouseExit);
         }
 
-        // La captura y el gesto a medias. Se baja también m_buttonDown: si se
-        // dejara a true, el frame en el que el canvas vuelva vería `!now && was`
-        // y emitiría el MouseUp de una pulsación que ya no existe.
+        // The capture and the half-done gesture. m_buttonDown is also lowered: if it
+        // were left at true, the frame in which the canvas comes back would see `!now && was`
+        // and emit the MouseUp of a press that no longer exists.
         for (int b = 0; b < 3; ++b)
         {
             m_pressTarget[b] = nullptr;
             m_dragging[b]    = false;
             m_buttonDown[b]  = false;
         }
-        // Y un gesto cortado no puede ser la primera mitad de un doble click.
+        // And a cut gesture cannot be the first half of a double click.
         m_lastClickTarget = nullptr;
 
-        // El foco, con su Blur. Va por setFocus y no a mano para que el Blur
-        // salga por el mismo sitio que siempre. Sin esto, un canvas que vuelve
-        // con foco puede acabar siendo el dueño del teclado por delante del que
-        // el usuario acaba de pulsar, porque fuera de la lista dispatchUiInput
-        // tampoco pudo soltárselo.
+        // The focus, with its Blur. It goes through setFocus and not by hand so that the Blur
+        // comes out through the same place as always. Without this, a canvas that comes back
+        // with focus can end up being the keyboard owner ahead of the one
+        // the user just pressed, because outside the list dispatchUiInput
+        // could not release it either.
         setFocus(nullptr);
     }
 
     void dispatchUiInput(const std::vector<UiCanvas*>& canvases, const UiInputState& input)
     {
-        // ── Quién se lleva el RATÓN ─────────────────────────────────────────
-        // 1) La CAPTURA manda sobre el solape. Un botón bajado y sin soltar se
-        //    queda el puntero aunque el cursor se haya ido encima de otro
-        //    canvas: sin esto, arrastrar un slider que asome por debajo de otro
-        //    canvas corta el gesto justo al cruzar el borde, y el arrastre se
-        //    pierde sin un solo aviso.
+        // ── Who gets the MOUSE ──────────────────────────────────────────────
+        // 1) The CAPTURE rules over the overlap. A button held down and not released
+        //    keeps the pointer even if the cursor has gone over another
+        //    canvas: without this, dragging a slider that peeks out from under another
+        //    canvas cuts the gesture right when crossing the edge, and the drag is
+        //    lost without a single warning.
         UiCanvas* raton = nullptr;
         for (UiCanvas* c : canvases)
             if (c && c->pointerCaptured()) { raton = c; break; }
 
-        // 2) Sin captura, gana el de MÁS ARRIBA que tenga algo bajo el cursor.
-        //    `canvases` ya llega en ese orden (el último que se dibuja, primero),
-        //    así que aquí no se decide nada: se recorre.
+        // 2) Without capture, the TOPMOST one with something under the cursor wins.
+        //    `canvases` already arrives in that order (the last one drawn, first),
+        //    so nothing is decided here: it is walked.
         if (!raton)
             for (UiCanvas* c : canvases)
                 if (c && c->hitTest(input.mousePos)) { raton = c; break; }
 
-        // ── Quién se lleva el TECLADO ───────────────────────────────────────
-        // El FOCO, no el cursor: escribir en un campo de texto sigue llegando
-        // aunque el ratón se pasee por encima de otro canvas. Si nadie tiene
-        // foco van al de más arriba — hoy eso no se nota (updateInput ignora las
-        // teclas sin foco), pero deja la regla completa en vez de un hueco.
+        // ── Who gets the KEYBOARD ───────────────────────────────────────────
+        // The FOCUS, not the cursor: typing in a text field keeps arriving
+        // even if the mouse wanders over another canvas. If nobody has
+        // focus they go to the topmost one. Today that is not noticeable (updateInput ignores
+        // keys without focus), but it leaves the rule complete instead of a gap.
         UiCanvas* teclado = nullptr;
         for (UiCanvas* c : canvases)
             if (c && c->focused()) { teclado = c; break; }
@@ -930,29 +930,29 @@ namespace DonTopo
             for (UiCanvas* c : canvases)
                 if (c) { teclado = c; break; }
 
-        // Lo que recibe el que NO tiene el puntero: el ratón FUERA. Es lo que le
-        // limpia el hover (con su MouseExit y sus colores de vuelta a Normal) en
-        // vez de dejárselo pegado. El reloj se conserva: sus animaciones y el
-        // fundido de sus botones siguen corriendo.
+        // What the one that does NOT have the pointer receives: the mouse OUTSIDE. It is what
+        // clears its hover (with its MouseExit and its colors back to Normal) instead
+        // of leaving it stuck. The clock is kept: its animations and its
+        // buttons' fade keep running.
         //
-        // Se miente sobre la POSICIÓN, y NO sobre los BOTONES. Es la diferencia
-        // entre limpiar el estado y falsearlo: la cuenta de flancos (`now && !was`)
-        // tiene que seguir siendo la de verdad o el canvas se pierde pulsaciones.
-        // Mentir aquí daba un CLIC FANTASMA, y encima con UN SOLO canvas: cuando
-        // nadie gana el puntero —el cursor sobre el fondo, sin widget debajo— el
-        // único canvas de la escena recibe esto, así que no veía el MouseDown; al
-        // entrar luego el cursor en un botón con el botón AÚN bajado, veía un
-        // flanco NUEVO, registraba el press ahí y al soltar emitía un Click que
-        // nadie pidió, robándole además el foco.
+        // It lies about the POSITION, and NOT about the BUTTONS. That is the difference between cleaning
+        // the state and faking it: the edge count (`now && !was`)
+        // has to remain the real one or the canvas loses presses.
+        // Lying here gave a PHANTOM CLICK, and even with a SINGLE canvas: when
+        // nobody wins the pointer (the cursor over the background, no widget underneath) the
+        // scene's only canvas receives this, so it did not see the MouseDown; when the cursor
+        // later entered a button with the button STILL down, it saw a NEW
+        // edge, registered the press there and on release emitted a Click that
+        // nobody asked for, also stealing the focus.
         //
-        // Con los botones de verdad no hace falta ninguna guarda extra: el ratón
-        // está fuera, así que `hitTest` da nullptr y el press se registra sobre
-        // nullptr — no se despacha MouseDown, no se mueve el foco, y al soltar no
-        // hay Click porque el origen es nulo (sí MouseUp si el cursor está encima
-        // de algo, que es la semántica de siempre). Los colores tampoco cambian:
-        // `estadoDe` exige `hovered` para pintar Pressed. Y `pointerCaptured()`
-        // sigue en false para el perdedor, que es lo que impide que le robe el
-        // puntero al de encima en el paso 1.
+        // With the real buttons no extra guard is needed: the mouse
+        // is outside, so `hitTest` gives nullptr and the press is registered on
+        // nullptr. No MouseDown is dispatched, the focus does not move, and on release there
+        // is no Click because the origin is null (there is a MouseUp if the cursor is over
+        // something, which is the usual semantics). The colors do not change either:
+        // `estadoDe` requires `hovered` to paint Pressed. And `pointerCaptured()`
+        // stays false for the loser, which is what keeps it from stealing the
+        // pointer from the one on top in step 1.
         UiInputState fuera = input;
         fuera.mousePos     = uiPointerAway();
         fuera.scrollDelta  = 0.0f;
@@ -976,16 +976,16 @@ namespace DonTopo
             c->updateInput(propio);
         }
 
-        // El foco se mueve al CLICAR, y solo puede estar en un canvas: en cuanto
-        // el que tiene el puntero coge foco, los demás lo sueltan. Sin esto se
-        // quedarían dos anillos de foco a la vez y el dueño del teclado sería el
-        // que decidiera el orden de la lista, no el que acaba de pulsar.
+        // The focus moves on CLICK, and can only be in one canvas: as soon as
+        // the one that has the pointer takes focus, the others release it. Without this
+        // two focus rings would remain at once and the keyboard owner would be
+        // whichever the list order decided, not the one that just pressed.
         //
-        // Va DESPUÉS del bucle a propósito: el foco que hay que respetar es el
-        // que deja este frame, no el del anterior. Y se mira `focused()` en vez
-        // de "¿ha bajado un botón?" porque es lo mismo sin guardar estado entre
-        // frames: pinchar en algo NO focusable no roba el foco, exactamente
-        // igual que ya pasa dentro de un solo canvas.
+        // It goes AFTER the loop on purpose: the focus to respect is the
+        // one this frame leaves, not the previous one's. And `focused()` is looked at instead
+        // of "did a button go down?" because it is the same without storing state between
+        // frames: clicking on something NOT focusable does not steal the focus, exactly
+        // as already happens inside a single canvas.
         if (raton && raton->focused())
             for (UiCanvas* c : canvases)
                 if (c && c != raton) c->setFocus(nullptr);

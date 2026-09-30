@@ -13,8 +13,8 @@ namespace DonTopo
 {
     namespace
     {
-        // Radio en píxeles DE PANTALLA para agarrar una esquina. Fijo y no
-        // proporcional al zoom: es una distancia de ratón, no de imagen.
+        // Radius in SCREEN pixels to grab a corner. Fixed and not
+        // proportional to the zoom: it is a mouse distance, not an image one.
         constexpr float kHandle = 6.0f;
 
         ImU32 colorRect(bool selected)
@@ -28,8 +28,8 @@ namespace DonTopo
             if (r.height < 0.0f) { r.y += r.height; r.height = -r.height; }
         }
 
-        // Dentro de la imagen y con área: un rect que se sale daría UVs fuera
-        // de [0,1] y el sampler repetiría o estiraría el borde sin avisar.
+        // Inside the image and with area: a rect that goes outside would give UVs outside
+        // [0,1] and the sampler would repeat or stretch the border without warning.
         void clampToImage(UiSpriteRect& r, uint32_t w, uint32_t h)
         {
             const float fw = (float)w;
@@ -50,13 +50,13 @@ namespace DonTopo
     void SpriteEditorPanel::open(EditorContext& ctx, const std::string& imagePath)
     {
         m_open = true;
-        // Pulsar "Editar sprites..." es una petición explícita de mirar el
-        // atlas: la ventana tiene que ponerse delante, no solo existir. Va
-        // ANTES del early-return de abajo a propósito — volver a pedir el mismo
-        // atlas no recarga nada, pero sí tiene que traer la ventana al frente.
+        // Pressing "Edit sprites..." is an explicit request to look at the
+        // atlas: the window has to come to the front, not just exist. It goes
+        // BEFORE the early-return below on purpose: asking again for the same
+        // atlas reloads nothing, but it does have to bring the window to the front.
         m_focusRequested = true;
-        // La misma imagen que ya está abierta no se recarga: perderían los
-        // cambios sin guardar por pulsar dos veces el mismo botón.
+        // The same image that is already open is not reloaded: unsaved
+        // changes would be lost by pressing the same button twice.
         if (imagePath == m_path && !m_path.empty()) return;
         loadFrom(ctx, imagePath);
     }
@@ -75,8 +75,8 @@ namespace DonTopo
         if (imagePath.empty()) return;
         if (!ctx.renderer) { m_error = "No renderer"; return; }
 
-        // El atlas VIVO del renderer (cacheado por ruta): así lo que se guarda
-        // aquí se ve en el viewport sin recargar la escena.
+        // The renderer's LIVE atlas (cached by path): this way what is saved
+        // here shows in the viewport without reloading the scene.
         UiTextureAtlas* atlas = ctx.renderer->loadUiAtlas(imagePath);
         if (!atlas)
         {
@@ -89,7 +89,7 @@ namespace DonTopo
         m_imageH    = atlas->height();
         m_textureId = ctx.renderer->uiAtlasTextureId(atlas);
 
-        // Los sprites salen del atlas vivo, que ya cargó el sidecar al abrirse.
+        // The sprites come from the live atlas, which already loaded the sidecar when opened.
         for (const std::string& name : atlas->spriteNames())
             if (const UiSpriteRect* r = atlas->findSprite(name))
                 m_entries.push_back(Entry{name, *r});
@@ -110,8 +110,8 @@ namespace DonTopo
             return;
         }
 
-        // El atlas vivo ES el que se serializa: así lo que queda en disco y lo
-        // que se dibuja en el viewport no pueden discrepar.
+        // The live atlas IS the one that is serialized: this way what stays on disk and
+        // what is drawn in the viewport cannot disagree.
         vivo->clearSprites();
         for (const Entry& e : m_entries)
             if (!e.name.empty() && e.rect.width > 0.0f && e.rect.height > 0.0f)
@@ -119,9 +119,9 @@ namespace DonTopo
 
         const std::string sidecar = UiTextureAtlas::spriteSheetPathFor(m_path);
 
-        // Mismo criterio que el resto del editor: se puede escribir junto a un
-        // asset compartido del repo, pero NUNCA dentro del proyecto de otro. El
-        // sidecar acompaña a la imagen, así que hereda su sitio y su permiso.
+        // Same criterion as the rest of the editor: writing next to a shared
+        // asset of the repo is allowed, but NEVER inside another project. The
+        // sidecar accompanies the image, so it inherits its place and its permission.
         if (ctx.project && ctx.project->valid() && !ctx.project->contains(sidecar))
         {
             const ProjectContext workspace(ProjectContext::workspaceDir());
@@ -145,8 +145,8 @@ namespace DonTopo
         if (ctx.pushLog)
             ctx.pushLog("Sprites saved to " + sidecar + " (" +
                         std::to_string(m_entries.size()) + ")");
-        // Properties cachea los nombres por ruta: sin este aviso, los combos
-        // seguirían enseñando la lista de antes hasta cambiar de atlas.
+        // Properties caches the names by path: without this notice, the combos
+        // would keep showing the previous list until the atlas changes.
         if (ctx.onSpritesChanged) ctx.onSpritesChanged();
     }
 
@@ -171,7 +171,7 @@ namespace DonTopo
         if (m_imageW == 0 || m_imageH == 0) return;
         if (m_gridCols <= 0 || m_gridRows <= 0) return;
 
-        // El sobrante tras los offsets y los huecos, repartido entre las celdas.
+        // The remainder after the offsets and the gaps, distributed among the cells.
         const float dispX = (float)m_imageW - (float)m_gridOffsetX -
                             (float)m_gridSpacingX * (float)(m_gridCols - 1);
         const float dispY = (float)m_imageH - (float)m_gridOffsetY -
@@ -193,8 +193,8 @@ namespace DonTopo
         m_entries.clear();
         m_selected = -1;
 
-        // Fila a fila y de izquierda a derecha: es el orden en el que se leen
-        // las hojas de sprites, así que los números salen donde uno los espera.
+        // Row by row and left to right: it is the order in which sprite
+        // sheets are read, so the numbers come out where one expects them.
         int n = 0;
         for (int fila = 0; fila < m_gridRows; ++fila)
         {
@@ -218,7 +218,7 @@ namespace DonTopo
         ImGui::SameLine();
         if (ImGui::Button("Reload"))
         {
-            // El "deshacer" de este panel: vuelve a lo que dice el fichero.
+            // This panel's "undo": it goes back to what the file says.
             const std::string path = m_path;
             m_path.clear();
             loadFrom(ctx, path);
@@ -243,9 +243,9 @@ namespace DonTopo
     void SpriteEditorPanel::drawSidebar(EditorContext& ctx)
     {
         (void)ctx;
-        // 280 y no 240: con cuatro números en una línea (el rect del sprite) y
-        // los pares de la rejilla, por debajo de esto los campos se quedan sin
-        // sitio para el propio número.
+        // 280 and not 240: with four numbers on one line (the sprite's rect) and
+        // the grid pairs, below this the fields run out of
+        // room for the number itself.
         ImGui::BeginChild("sprite_list", ImVec2(280.0f, 0.0f), true);
 
         ImGui::TextDisabled("Sprites (%d)", (int)m_entries.size());
@@ -291,8 +291,8 @@ namespace DonTopo
             {
                 const std::string nuevo = m_nameBuf;
                 const int choque = indexOfName(nuevo);
-                // Dos sprites con el mismo nombre serían uno solo al guardar (el
-                // mapa se queda con el último) y el otro desaparecería sin más.
+                // Two sprites with the same name would become a single one on saving (the
+                // map keeps the last) and the other would just disappear.
                 if (nuevo.empty())
                     m_error = "A sprite without a name cannot be referenced";
                 else if (choque >= 0 && choque != m_selected)
@@ -321,10 +321,10 @@ namespace DonTopo
         ImGui::Separator();
         ImGui::TextDisabled("Uniform grid");
 
-        // InputInt2 y no dos InputInt: el InputInt de uno en uno dibuja los
-        // botones -/+ DENTRO del ancho pedido, así que con la columna estrecha
-        // del panel no quedaba sitio ni para ver el número. Las etiquetas van
-        // encima por lo mismo: a la derecha se comían el ancho útil.
+        // InputInt2 and not two InputInt: a lone InputInt draws the -/+
+        // buttons INSIDE the requested width, so with the panel's narrow
+        // column there was no room even to see the number. The labels go
+        // on top for the same reason: on the right they ate the useful width.
         int colsFilas[2] = { m_gridCols, m_gridRows };
         ImGui::TextDisabled("Columns / Rows");
         ImGui::SetNextItemWidth(-1.0f);
@@ -356,8 +356,8 @@ namespace DonTopo
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputText("##prefijo", m_gridPrefix, sizeof(m_gridPrefix));
 
-        // Y el tamaño de celda que sale de todo eso, para no tener que
-        // calcularlo a ojo antes de pulsar.
+        // And the cell size that comes out of all that, so there is no need to
+        // compute it by eye before pressing.
         if (m_imageW > 0 && m_gridCols > 0 && m_gridRows > 0)
         {
             const float cw = std::floor(((float)m_imageW - (float)m_gridOffsetX -
@@ -396,13 +396,13 @@ namespace DonTopo
             ImGui::Dummy(tamano);
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        // El borde de la imagen, para ver dónde acaba cuando el fondo es
-        // transparente y el atlas está casi vacío.
+        // The image border, to see where it ends when the background is
+        // transparent and the atlas is almost empty.
         dl->AddRect(origen, ImVec2(origen.x + tamano.x, origen.y + tamano.y),
                     IM_COL32(255, 255, 255, 60));
 
-        // De pantalla a píxeles de la imagen y al revés. Todo el resto de la
-        // función trabaja en píxeles de IMAGEN: es lo que se guarda.
+        // From screen to image pixels and back. All the rest of the
+        // function works in IMAGE pixels: that is what gets saved.
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const ImVec2 raton{ (mouse.x - origen.x) / m_zoom, (mouse.y - origen.y) / m_zoom };
         auto aPantalla = [&](float x, float y) {
@@ -420,7 +420,7 @@ namespace DonTopo
 
             if (i == m_selected)
             {
-                // Manejadores de las cuatro esquinas.
+                // Handles of the four corners.
                 const ImVec2 esquinas[4] = { p0, ImVec2(p1.x, p0.y), ImVec2(p0.x, p1.y), p1 };
                 for (const ImVec2& c : esquinas)
                     dl->AddRectFilled(ImVec2(c.x - 3.0f, c.y - 3.0f),
@@ -436,8 +436,8 @@ namespace DonTopo
         {
             m_dragStartImg = raton;
 
-            // Primero las esquinas del seleccionado: si no, agarrar una esquina
-            // que cae dentro del propio rect movería el rect entero.
+            // First the selected one's corners: otherwise, grabbing a corner
+            // that falls inside the rect itself would move the whole rect.
             if (m_selected >= 0 && m_selected < (int)m_entries.size())
             {
                 const UiSpriteRect& r = m_entries[m_selected].rect;
@@ -463,7 +463,7 @@ namespace DonTopo
 
             if (m_drag == Drag::None)
             {
-                // Al revés: gana el último dibujado, que es el que se ve encima.
+                // In reverse: the last one drawn wins, which is the one seen on top.
                 int golpe = -1;
                 for (int i = (int)m_entries.size() - 1; i >= 0; --i)
                     if (contains(m_entries[i].rect, raton)) { golpe = i; break; }
@@ -478,7 +478,7 @@ namespace DonTopo
                 }
                 else
                 {
-                    // En vacío se crea uno nuevo arrastrando.
+                    // On empty space a new one is created by dragging.
                     UiSpriteRect nuevo{};
                     nuevo.x = std::floor(raton.x);
                     nuevo.y = std::floor(raton.y);
@@ -539,8 +539,8 @@ namespace DonTopo
 
             if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
             {
-                // Un click sin arrastre al crear deja un rect de 1x1 que no
-                // sirve para nada: se descarta en vez de dejar basura.
+                // A click without dragging when creating leaves a 1x1 rect that is
+                // useless: it is discarded instead of leaving garbage.
                 if (m_drag == Drag::Creating && (r.width < 2.0f || r.height < 2.0f))
                 {
                     m_entries.erase(m_entries.begin() + m_dragIndex);

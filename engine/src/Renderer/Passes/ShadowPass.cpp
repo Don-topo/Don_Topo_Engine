@@ -14,21 +14,21 @@ namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// El alcance de las sombras y el reparto de los cortes entre cascadas eran
-// constantes de aqui (kShadowMaxDistance = 500 y kCascadeLambda = 0.75). Ahora
-// los elige el usuario y llegan por parametro a computeCascades; lo que
-// significan y por que esos defaults esta documentado en RendererState.h, junto
-// a shadowDistance() y cascadeLambda(). Los valores por defecto de alli son
-// exactamente los que habia aqui, asi que la imagen no cambia sola.
+// The shadow reach and the split of the cuts between cascades were
+// constants here (kShadowMaxDistance = 500 and kCascadeLambda = 0.75). Now
+// the user picks them and they arrive as a parameter to computeCascades; what they
+// mean and why those defaults is documented in RendererState.h, next
+// to shadowDistance() and cascadeLambda(). The default values there are
+// exactly the ones that were here, so the image does not change on its own.
 
 
-// ── recursos ────────────────────────────────────────────────────────────────
+// ── resources ────────────────────────────────────────────────────────────────
 
 void ShadowPass::createSizedResources(const Context& ctx)
 {
-    // 1. Imagen depth para shadow map: un texture array con una capa por
-    // cascada. No usa m_res.createImage porque esa fija arrayLayers a 1 y
-    // la firma la comparten todas las texturas del motor.
+    // 1. Depth image for the shadow map: a texture array with one layer per
+    // cascade. It does not use m_res.createImage because that one fixes arrayLayers to 1 and
+    // the signature is shared by all the engine's textures.
     VkImageCreateInfo imageInfo{};
     imageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType     = VK_IMAGE_TYPE_2D;
@@ -58,8 +58,8 @@ void ShadowPass::createSizedResources(const Context& ctx)
     }
     vkBindImageMemory(ctx.gpu.device(), m_image, m_memory, 0);
 
-    // 2. Image views: una del array entero para muestrear, y una por capa
-    // para colgarle un framebuffer.
+    // 2. Image views: one of the whole array for sampling, and one per layer
+    // to hang a framebuffer from.
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType                          = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image                          = m_image;
@@ -90,7 +90,7 @@ void ShadowPass::createResources(const Context& ctx)
 {
     createSizedResources(ctx);
 
-    // 3. Sampler de comparación (PCF listo)
+    // 3. Comparison sampler (PCF ready)
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter               = VK_FILTER_LINEAR;
@@ -153,11 +153,11 @@ void ShadowPass::createResources(const Context& ctx)
         throw std::runtime_error("failed to create shadow render pass!");
     }
 
-     // 5. Framebuffers: uno por cascada, cada uno sobre su capa. Todos
-     // comparten el render pass (el formato del attachment es el mismo).
+     // 5. Framebuffers: one per cascade, each over its layer. All of them
+     // share the render pass (the attachment format is the same).
      createFramebuffers(ctx);
 
-    // 6. Pipeline (vertex-only, sin color attachments)
+    // 6. Pipeline (vertex-only, no color attachments)
     VkShaderModule vertModule = loadShaderModule(ctx.gpu.device(), "shaders/shadow.vert.spv");
 
     VkPipelineShaderStageCreateInfo vertStage{};
@@ -215,7 +215,7 @@ void ShadowPass::createResources(const Context& ctx)
 
     VkPipelineColorBlendStateCreateInfo colorBlend{};
     colorBlend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlend.attachmentCount = 0; // sin color attachments
+    colorBlend.attachmentCount = 0; // no color attachments
 
     VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo dynamicState{};
@@ -223,13 +223,13 @@ void ShadowPass::createResources(const Context& ctx)
     dynamicState.dynamicStateCount = 2;
     dynamicState.pDynamicStates    = dynStates;
 
-    // El model matrix NO va por push constant: shadow.vert lo saca del SSBO
-    // de instancias (set 1) por gl_InstanceIndex, igual que triangle.vert.
-    // El único push constant es el índice de cascada, que dice cuál de las
-    // matrices del UBO usar. Este layout es propio del pass de sombras y no
-    // lo comparte ningún otro pipeline, así que el rango de PushData que
-    // usan triangle/pbr/outline no se toca. El depth pre-pass sí lo toma
-    // prestado: declara los mismos dos sets y no usa el push.
+    // The model matrix does NOT go through a push constant: shadow.vert takes it from the instance
+    // SSBO (set 1) by gl_InstanceIndex, like triangle.vert.
+    // The only push constant is the cascade index, which says which of the UBO's
+    // matrices to use. This layout is the shadow pass's own and no other
+    // pipeline shares it, so the PushData range that
+    // triangle/pbr/outline use is not touched. The depth pre-pass does borrow it:
+    // it declares the same two sets and does not use the push.
     VkPushConstantRange pcr{};
     pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pcr.offset     = 0;
@@ -267,23 +267,23 @@ void ShadowPass::createResources(const Context& ctx)
         throw std::runtime_error("failed to create shadow pipeline!");
     }
 
-    // Variante para las mallas skinned. Todo el estado se copia del de
-    // arriba (mismo bias, mismo depth, mismas cascadas, mismo layout), así
-    // que la sombra de los estáticos no cambia. Lo único distinto es el
+    // Variant for the skinned meshes. All the state is copied from the one
+    // above (same bias, same depth, same cascades, same layout), so
+    // the static meshes' shadow does not change. The only difference is the
     // vertex input.
     //
-    // stride 80, no sizeof(SkinnedVertex): ese es el vértice de ENTRADA del
-    // compute (7×vec4, con índices y pesos de hueso). Lo que se dibuja aquí
-    // es su SALIDA, el OutputVertex de skinning.comp, que son 5×vec4 y lleva
-    // la posición en el primero. Es el mismo stride que declara el pipeline
-    // skinned del pass principal.
+    // stride 80, not sizeof(SkinnedVertex): that is the compute's INPUT vertex
+    // (7×vec4, with bone indices and weights). What is drawn here
+    // is its OUTPUT, the OutputVertex of skinning.comp, which is 5×vec4 and carries
+    // the position in the first one. It is the same stride that the main pass's
+    // skinned pipeline declares.
     VkVertexInputBindingDescription skinnedBinding{};
     skinnedBinding.binding   = 0;
     skinnedBinding.stride    = 5 * (uint32_t)sizeof(glm::vec4);  // 80 bytes
     skinnedBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    // pos es un vec4 (std430 del compute); shadow.vert solo declara vec3, y
-    // leer 3 de los 4 floats es legal.
+    // pos is a vec4 (the compute's std430); shadow.vert only declares vec3, and
+    // reading 3 of the 4 floats is legal.
     VkVertexInputAttributeDescription skinnedAttr{};
     skinnedAttr.binding  = 0;
     skinnedAttr.location = 0;
@@ -304,8 +304,8 @@ void ShadowPass::createResources(const Context& ctx)
     vkDestroyShaderModule(ctx.gpu.device(), vertModule, nullptr);
 }
 
-// Los framebuffers cuelgan de las vistas por capa Y del render pass, asi que
-// van aparte: el resize rehace los primeros sin tocar el segundo.
+// The framebuffers hang from the per-layer views AND from the render pass, so
+// they go apart: the resize rebuilds the former without touching the latter.
 void ShadowPass::createFramebuffers(const Context& ctx)
 {
     for (uint32_t c = 0; c < SHADOW_MATRICES; c++)
@@ -349,7 +349,7 @@ void ShadowPass::resizeResources(const Context& ctx, uint32_t size)
     destroySizedResources(ctx);
     m_size = size;
     createSizedResources(ctx);
-    // Detras de la imagen y sus vistas: los framebuffers las referencian.
+    // Behind the image and its views: the framebuffers reference them.
     createFramebuffers(ctx);
 }
 
@@ -363,7 +363,7 @@ void ShadowPass::destroyResources(const Context& ctx)
     vkDestroyRenderPass(ctx.gpu.device(), m_renderPass, nullptr);
 }
 
-// ── cascadas ────────────────────────────────────────────────────────────────
+// ── cascades ────────────────────────────────────────────────────────────────
 
 void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
                                  const std::vector<Light>& lights,
@@ -377,9 +377,9 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
     for (int& r : m_shadowSlot) r = -1;
     if (lights.empty()) return;
 
-    // Los focos secundarios PRIMERO, porque las tres ramas de la luz key de mas
-    // abajo salen con return. Ocupan las ranuras de SHADOW_KEY_MATRICES en
-    // adelante, que la key no toca nunca.
+    // The secondary spots FIRST, because the three branches of the key light further
+    // down exit with return. They occupy the slots from SHADOW_KEY_MATRICES
+    // onwards, which the key never touches.
     {
         const int n = std::min((int)lights.size(), MAX_LIGHTS);
         m_extraLayers = repartirSombrasExtra(
@@ -392,16 +392,16 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
         {
             if (m_shadowSlot[i] < 0) continue;
 
-            // Que tecnica le toca a ESTA luz. Es el mismo criterio que decide
-            // cuantas ranuras le dio el reparto, y por eso se pregunta igual:
-            // si aqui se contestara distinto, se grabarian menos caras de las
-            // reservadas y el shader muestrearia capas de otra luz.
+            // Which technique applies to THIS light. It is the same criterion that decides
+            // how many slots the allocation gave it, and that is why it is asked the same way:
+            // if it were answered differently here, fewer faces than the reserved
+            // ones would be recorded and the shader would sample another light's layers.
             const int  tipo = static_cast<int>(lights[i].direction.w + 0.5f);
             const bool cubemap = tipo == static_cast<int>(LightType::Point) ||
                                  (tipo == static_cast<int>(LightType::Spot) &&
                                   spotNecesitaCubemap(lights[i].params));
 
-            // flipY = true, igual que todo lo demas en Vulkan.
+            // flipY = true, like everything else in Vulkan.
             const bool ok = cubemap
                 ? pointShadowMatrices(lights[i].position, lights[i].params, /*flipY=*/true,
                                       &m_cascadeMatrices[m_shadowSlot[i]])
@@ -409,30 +409,30 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
                                    /*flipY=*/true, m_cascadeMatrices[m_shadowSlot[i]]);
             if (!ok)
             {
-                // Sin direccion o sin alcance utilizable: se le retira la ranura
-                // en vez de dejar una matriz identidad que sombrearia cualquier
-                // cosa. Las capas reservadas se quedan sin dibujar, que es lo
-                // correcto: el shader no las va a mirar.
+                // No direction or no usable range: its slot is withdrawn
+                // instead of leaving an identity matrix that would shade anything.
+                // The reserved layers are left undrawn, which is
+                // correct: the shader is not going to look at them.
                 m_shadowSlot[i]  = -1;
                 m_shadowFaces[i] = 0;
             }
         }
     }
 
-    // PUNTO: cubemap de seis caras. Tampoco usa el frustum de la camara —el
-    // volumen lo fija el alcance de la luz—, asi que sale por aqui igual que el
-    // foco. Los cortes se quedan a 0: la rama de punto de shadow_lookup.glsl no
-    // los mira.
-    // Un FOCO demasiado abierto entra tambien por aqui: por encima de 90 grados
-    // de cono, una sola cara reparte los mismos texeles sobre tanto mundo que el
-    // borde de la sombra sale escalonado, y empeora con cada grado porque va con
-    // tan(FOV/2). Seis caras de 90 son estrictamente mejores.
+    // POINT: six-face cubemap. It does not use the camera's frustum either (the
+    // volume is set by the light's range), so it exits through here just like the
+    // spot. The cuts are left at 0: the point branch of shadow_lookup.glsl does not
+    // look at them.
+    // A SPOT that is too wide also enters here: above a 90 degree
+    // cone, a single face spreads the same texels over so much world that the
+    // shadow's edge comes out stepped, and it gets worse with each degree because it goes with
+    // tan(FOV/2). Six 90 degree faces are strictly better.
     const int tipoKey = static_cast<int>(lights[0].direction.w + 0.5f);
     if (tipoKey == static_cast<int>(LightType::Point) ||
         (tipoKey == static_cast<int>(LightType::Spot) && spotNecesitaCubemap(lights[0].params)))
     {
-        // flipY = true, igual que el foco y que la ortografica de las cascadas:
-        // en Vulkan la convencion de Y la absorbe la matriz, no el viewport.
+        // flipY = true, like the spot and the cascades' orthographic:
+        // in Vulkan the Y convention is absorbed by the matrix, not the viewport.
         if (pointShadowMatrices(lights[0].position, lights[0].params,
                                 /*flipY=*/true, m_cascadeMatrices))
         {
@@ -441,16 +441,16 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
         return;
     }
 
-    // FOCO: una sola cara en perspectiva, en la capa 0. No usa el frustum de la
-    // camara para nada —el volumen lo fija el cono de la luz—, asi que sale por
-    // aqui antes de calcularlo. Los cortes se quedan a 0: la rama del foco de
-    // shadow_lookup.glsl no los mira.
+    // SPOT: a single perspective face, in layer 0. It does not use the camera's
+    // frustum at all (the volume is set by the light's cone), so it exits through
+    // here before computing it. The cuts are left at 0: the spot branch of
+    // shadow_lookup.glsl does not look at them.
     if (static_cast<int>(lights[0].direction.w + 0.5f) == static_cast<int>(LightType::Spot))
     {
-        // flipY = true, la MISMA inversion que se le hace a la ortografica de
-        // las cascadas unas lineas mas abajo y por la misma razon: en Vulkan la
-        // convencion de Y la absorbe la matriz, y en D3D12 el viewport de altura
-        // negativa del pase de sombras. Ver el comentario de spotShadowMatrix.
+        // flipY = true, the SAME inversion applied to the cascades'
+        // orthographic a few lines below and for the same reason: in Vulkan the Y
+        // convention is absorbed by the matrix, and in D3D12 by the negative-height
+        // viewport of the shadow pass. See the comment on spotShadowMatrix.
         if (spotShadowMatrix(lights[0].position, lights[0].direction, lights[0].params,
                              /*flipY=*/true, m_cascadeMatrices[0]))
         {
@@ -459,20 +459,20 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
         return;
     }
 
-    // El reparto de cascadas vive en cascadeShadowMatrices, compartido con
-    // D3D12: eran las mismas 60 lineas de matematica escritas dos veces, y una
-    // divergencia entre ellas no la detectaba nada (H3).
+    // The cascade split lives in cascadeShadowMatrices, shared with
+    // D3D12: it was the same 60 lines of math written twice, and a
+    // divergence between them would go undetected (H3).
     //
-    // La direccion la decide keyLightDirection, que es el UNICO sitio donde
-    // vive ese criterio: la niebla lo necesita identico para que su
-    // in-scattering y este shadow map hablen de la misma luz. Una luz de punto
-    // no tiene direccion propia y apunta a sceneCenter, que llega ya calculado
-    // desde el Renderer.
+    // The direction is decided by keyLightDirection, which is the ONLY place where
+    // that criterion lives: the fog needs it identical so that its
+    // in-scattering and this shadow map talk about the same light. A point light
+    // has no direction of its own and aims at sceneCenter, which arrives already computed
+    // from the Renderer.
     glm::vec3 lightDir;
     if (!keyLightDirection(lights[0].position, lights[0].direction, sceneCenter, lightDir))
         return;
 
-    // flipY = true: en Vulkan la convencion de Y la absorbe la matriz.
+    // flipY = true: in Vulkan the Y convention is absorbed by the matrix.
     if (!cascadeShadowMatrices(view, proj, lightDir, maxDistance, lambda, m_size,
                                /*flipY=*/true, m_cascadeMatrices, m_cascadeSplits))
     {
@@ -481,7 +481,7 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
     m_activeLayers = SHADOW_CASCADES;
 }
 
-// ── grabacion ───────────────────────────────────────────────────────────────
+// ── recording ───────────────────────────────────────────────────────────────
 
 void ShadowPass::beginCascade(VkCommandBuffer cmd, uint32_t cascade)
 {

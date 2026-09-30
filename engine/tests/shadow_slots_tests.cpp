@@ -1,11 +1,11 @@
-// Test headless del reparto de ranuras de sombra entre las luces secundarias
-// (H74 v2). Sin GPU: `repartirSombrasExtra` es una plantilla pura sobre la lista
-// de luces, y decide DOS cosas a la vez —en que capa graba el renderer y con que
-// matriz muestrea el shader—, asi que un fallo aqui no es "una sombra mal": es
-// una luz muestreando el mapa de otra.
+// Headless test of the shadow slot distribution among the secondary lights
+// (H74 v2). No GPU: `repartirSombrasExtra` is a pure template over the list
+// of lights, and it decides TWO things at once (in which layer the renderer records and with which
+// matrix the shader samples), so a failure here is not "a wrong shadow": it is
+// one light sampling another light's map.
 //
-// Por eso el reparto vive en un solo sitio compartido por los dos backends. Este
-// fichero es lo que garantiza que ese sitio hace lo que dice.
+// That is why the distribution lives in a single place shared by the two backends. This
+// file is what guarantees that that place does what it says.
 #include "DonTopo/Renderer/UniformBufferObject.h"
 
 #include <cstdio>
@@ -17,11 +17,11 @@ using namespace DonTopo;
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
-// Luz minima con lo unico que mira el reparto: su tipo y su cono.
-// OJO con el cono por defecto: el de `Light` en el motor es cos 0.7, que son
-// unos 46 grados de semiangulo — con el doble y el margen del 15 % del shadow
-// map se va a 105 grados, o sea que YA necesita cubemap. Aqui se usa 0.9 (59
-// grados de FOV) para tener un foco que de verdad cabe en una cara.
+// Minimal light with the only things the distribution looks at: its type and its cone.
+// CAREFUL with the default cone: the engine's `Light` one is cos 0.7, which is
+// about 46 degrees of half-angle; doubled and with the 15% margin of the shadow
+// map it goes to 105 degrees, that is, it ALREADY needs a cubemap. Here 0.9 is used (59
+// degrees of FOV) to have a spot that really fits in one face.
 struct Luz {
     LightType tipo  = LightType::Spot;
     float     cosInterior = 0.95f;
@@ -40,20 +40,20 @@ static std::vector<int> repartir(const std::vector<Luz>& luces, int* usadas = nu
     return ranuras;
 }
 
-// Un foco secundario cabe en UNA capa: es el unico tipo que no necesita mas.
+// A secondary spot fits in ONE layer: it is the only type that needs no more.
 static void test_un_foco_ocupa_una_ranura()
 {
     std::vector<Luz> luces(2);
-    luces[0].tipo = LightType::Directional;   // la key, que nunca entra aqui
+    luces[0].tipo = LightType::Directional;   // the key, which never comes in here
     int usadas = 0;
     const std::vector<int> r = repartir(luces, &usadas);
-    CHECK(r[0] == -1);                      // la key la reparte computeCascades
-    CHECK(r[1] == SHADOW_KEY_MATRICES);     // primera ranura libre
+    CHECK(r[0] == -1);                      // the key is distributed by computeCascades
+    CHECK(r[1] == SHADOW_KEY_MATRICES);     // first free slot
     CHECK(usadas == 1);
 }
 
-// LO NUEVO de v2: una luz de PUNTO secundaria proyecta, y se lleva las seis
-// caras de su cubemap en ranuras CONSECUTIVAS. Antes se descartaba entera.
+// NEW in v2: a secondary POINT light casts, and takes the six faces of its
+// cubemap in CONSECUTIVE slots. Before, it was discarded entirely.
 static void test_una_punto_ocupa_seis_ranuras_seguidas()
 {
     std::vector<Luz> luces(2);
@@ -65,9 +65,9 @@ static void test_una_punto_ocupa_seis_ranuras_seguidas()
     CHECK(usadas == 6);
 }
 
-// Mezcla: cada tipo consume lo suyo y nadie pisa a nadie. Esta es la propiedad
-// que de verdad importa — dos luces con la misma ranura muestrean el mapa de la
-// otra, y eso no lo avisa ninguna capa de validacion.
+// Mix: each type consumes its own and nobody steps on anybody. This is the property
+// that really matters: two lights with the same slot sample each other's map,
+// and no validation layer reports that.
 static void test_mezcla_sin_solapamiento()
 {
     std::vector<Luz> luces(5);
@@ -85,34 +85,34 @@ static void test_mezcla_sin_solapamiento()
         if (r[i] < 0) continue;
         const int cuantas = (luces[i].tipo == LightType::Point) ? 6 : 1;
         for (int c = 0; c < cuantas; ++c)
-            CHECK(ocupadas.insert(r[i] + c).second);   // false = ya ocupada
+            CHECK(ocupadas.insert(r[i] + c).second);   // false = already occupied
     }
     for (int ranura : ocupadas)
         CHECK(ranura >= SHADOW_KEY_MATRICES && ranura < SHADOW_MATRICES);
     CHECK((int)ocupadas.size() == usadas);
 }
 
-// Una punto que NO cabe entera no puede reservar a medias: dejaria grabadas
-// tres caras de seis y el shader muestrearia capas de otra luz al elegir una de
-// las que faltan. O entra completa, o no entra.
+// A point light that does NOT fit whole cannot reserve halfway: it would leave
+// three faces of six recorded and the shader would sample layers of another light when choosing one of
+// the missing ones. It either fits complete or it does not fit.
 static void test_una_punto_que_no_cabe_no_reserva_nada()
 {
-    // Focos hasta dejar menos de 6 libres, y luego una punto.
+    // Spots until fewer than 6 are free, and then a point light.
     const int libres = SHADOW_MATRICES - SHADOW_KEY_MATRICES;
     std::vector<Luz> luces(1);
     luces[0].tipo = LightType::Directional;
-    for (int i = 0; i < libres - 2; ++i) luces.push_back(Luz{});   // focos
+    for (int i = 0; i < libres - 2; ++i) luces.push_back(Luz{});   // spots
     Luz punto; punto.tipo = LightType::Point;
     luces.push_back(punto);
 
     int usadas = 0;
     const std::vector<int> r = repartir(luces, &usadas);
-    CHECK(r.back() == -1);              // la punto se queda sin sombra
-    CHECK(usadas == libres - 2);        // y no ha consumido ranuras a medias
+    CHECK(r.back() == -1);              // the point light is left without a shadow
+    CHECK(usadas == libres - 2);        // and has not consumed slots halfway
 }
 
-// Pasado el tope se dejan de repartir, pero las luces siguen iluminando: no
-// proyectar es una degradacion, no un error.
+// Past the cap they are no longer distributed, but the lights keep lighting: not
+// casting is a degradation, not an error.
 static void test_pasado_el_tope_no_se_reparte_mas()
 {
     const int libres = SHADOW_MATRICES - SHADOW_KEY_MATRICES;
@@ -126,15 +126,15 @@ static void test_pasado_el_tope_no_se_reparte_mas()
     CHECK(r.back() == -1);
 }
 
-// Un foco tan abierto que necesita cubemap: con v2 ya no se descarta, entra por
-// el camino de las seis caras igual que una punto. Es el mismo criterio que usa
-// la luz key, y tenerlo en un solo sitio es lo que evito que divergiera (H65).
+// A spot so wide that it needs a cubemap: with v2 it is no longer discarded, it goes through
+// the six-face path just like a point light. It is the same criterion the
+// key light uses, and having it in a single place is what prevented it from diverging (H65).
 static void test_un_foco_muy_abierto_usa_cubemap()
 {
     std::vector<Luz> luces(2);
     luces[0].tipo = LightType::Directional;
     luces[1].tipo = LightType::Spot;
-    luces[1].cosExterior = -0.5f;   // ~120 grados de cono
+    luces[1].cosExterior = -0.5f;   // ~120 degrees of cone
     CHECK(spotNecesitaCubemap(paramsDe(luces[1])));
 
     int usadas = 0;
@@ -143,18 +143,18 @@ static void test_un_foco_muy_abierto_usa_cubemap()
     CHECK(usadas == 6);
 }
 
-// La luz key nunca entra en este reparto: sus matrices las pone computeCascades
-// en los SHADOW_KEY_MATRICES primeros huecos.
+// The key light never enters this distribution: its matrices are set by computeCascades
+// in the first SHADOW_KEY_MATRICES slots.
 static void test_la_key_nunca_recibe_ranura()
 {
     std::vector<Luz> luces(3);
-    luces[0].tipo = LightType::Point;   // key de punto, la que mas ranuras usa
+    luces[0].tipo = LightType::Point;   // point key, the one that uses the most slots
     const std::vector<int> r = repartir(luces);
     CHECK(r[0] == -1);
 }
 
-// Una direccional secundaria no proyecta: necesitaria sus propias cascadas para
-// no verse peor que sin sombra. Sigue iluminando.
+// A secondary directional does not cast: it would need its own cascades so as
+// not to look worse than with no shadow. It still lights.
 static void test_una_direccional_secundaria_no_proyecta()
 {
     std::vector<Luz> luces(2);

@@ -8,32 +8,32 @@
 
 namespace DonTopo {
 
-// Subir SIEMPRE que cambie el aspecto de las miniaturas (rasterizador, luces,
-// encuadre, reduccion de texturas): una cache vieja no sabe que esta obsoleta.
-// 2: los .obj declaran sus .mtl como dependencia (las entradas de la 1 no los tienen).
-// 3: los .gltf declaran sus .bin e imagenes (modelCompanionFiles).
-// 4: el preview de un modelo estatico pinta todas sus piezas.
-// 5: los glTF aplican la transformacion de la raiz.
+// ALWAYS bump when the look of the thumbnails changes (rasterizer, lights,
+// framing, texture reduction): an old cache does not know it is stale.
+// 2: .obj files declare their .mtl as a dependency (entries of 1 do not have them).
+// 3: .gltf files declare their .bin and images (modelCompanionFiles).
+// 4: the preview of a static model draws all its pieces.
+// 5: glTF files apply the root transform.
 inline constexpr uint32_t kThumbDiskVersion = 5;
 
-// Miniaturas ya generadas, una por fichero en <proyecto>/.dt-cache/thumbs/, con
-// la lista de dependencias y sus mtime. Se usa desde los workers: todo const y
-// sin estado compartido salvo el aviso de "no se puede escribir", que es atomico.
+// Thumbnails already generated, one per file in <project>/.dt-cache/thumbs/, with
+// the list of dependencies and their mtime. Used from the workers: everything const and
+// with no shared state except the "cannot write" warning, which is atomic.
 class ThumbnailDiskCache
 {
 public:
     explicit ThumbnailDiskCache(std::filesystem::path dir);
 
-    // La casilla guardada de asset si el fichero existe, la magia y la version
-    // casan, la ruta guardada es la de asset y CADA dependencia sigue igual
-    // (mismo mtime, o sigue sin existir). Nunca lanza.
+    // The stored cell of asset if the file exists, the magic and the version
+    // match, the stored path is that of asset and EVERY dependency is still the same
+    // (same mtime, or still nonexistent). Never throws.
     std::optional<ThumbnailResult> load(const std::filesystem::path& asset) const;
 
-    // Escribe a un temporal unico y renombra encima. false (y un aviso por
-    // stderr la primera vez) si no se pudo, o si r no trae dependencias selladas.
+    // Writes to a unique temporary and renames over it. false (and a warning on
+    // stderr the first time) if it could not, or if r carries no sealed dependencies.
     bool store(const std::filesystem::path& asset, const ThumbnailResult& r) const;
 
-    // <dir>/<fnv1a64 de la ruta absoluta normalizada, 16 hex>.bin
+    // <dir>/<fnv1a64 of the normalized absolute path, 16 hex>.bin
     std::filesystem::path        fileFor(const std::filesystem::path& asset) const;
     const std::filesystem::path& directory() const { return m_dir; }
 

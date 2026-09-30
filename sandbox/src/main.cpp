@@ -43,12 +43,12 @@
 
 namespace {
 
-// ─── Selector de proyecto ────────────────────────────────────────────────────
-// Lo usan los dos backends: es UI de ImGui pura, no sabe con qué se dibuja.
+// ─── Project selector ────────────────────────────────────────────────────────
+// Used by both backends: it is pure ImGui UI, it does not know what is drawing it.
 
-// Estado de la pantalla. Vive fuera de la función porque tiene que sobrevivir
-// de un frame al siguiente: qué proyecto está marcado y qué se escribió en el
-// diálogo de crear.
+// Screen state. It lives outside the function because it has to survive
+// from one frame to the next: which project is selected and what was typed in
+// the create dialog.
 struct ProjectSelectorState {
     std::vector<std::filesystem::path> entries = DonTopo::ProjectContext::discover();
     int                                picked  = -1;
@@ -56,8 +56,8 @@ struct ProjectSelectorState {
     std::string                        createError;
 };
 
-// Dibuja la pantalla y devuelve el proyecto elegido, o una ruta vacía mientras
-// no se haya elegido ninguno.
+// Draws the screen and returns the chosen project, or an empty path while
+// none has been chosen.
 std::filesystem::path drawProjectSelector(ProjectSelectorState& st)
 {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -113,9 +113,9 @@ std::filesystem::path drawProjectSelector(ProjectSelectorState& st)
         const bool enter = ImGui::InputText("##NewProjectName", st.newName, sizeof(st.newName),
                                             ImGuiInputTextFlags_EnterReturnsTrue);
 
-        // El error se enseña AQUÍ, en el diálogo, y no se crea nada: nombre
-        // repetido (aunque cambien las mayúsculas), vacío, `..`, separadores de
-        // ruta o caracteres inválidos en Windows.
+        // The error is shown HERE, in the dialog, and nothing is created: repeated
+        // name (even if the case changes), empty, `..`, path
+        // separators or invalid characters on Windows.
         if (!st.createError.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", st.createError.c_str());
 
@@ -124,7 +124,7 @@ std::filesystem::path drawProjectSelector(ProjectSelectorState& st)
             std::filesystem::path created;
             if (DonTopo::ProjectContext::create(st.newName, created, st.createError))
             {
-                // Refresca la lista y deja el proyecto nuevo seleccionado.
+                // Refreshes the list and leaves the new project selected.
                 st.entries = DonTopo::ProjectContext::discover();
                 st.picked  = -1;
                 for (int i = 0; i < (int)st.entries.size(); ++i)
@@ -150,8 +150,8 @@ std::filesystem::path drawProjectSelector(ProjectSelectorState& st)
     return chosen;
 }
 
-// Deja el editor con ese proyecto abierto. false = el proyecto no valía y el
-// selector sigue en pantalla.
+// Leaves the editor with that project open. false = the project was not valid and the
+// selector stays on screen.
 bool openChosenProject(DonTopo::EditorUI& editor, DonTopo::ProjectContext& project,
                        const std::filesystem::path& chosen)
 {
@@ -160,12 +160,12 @@ bool openChosenProject(DonTopo::EditorUI& editor, DonTopo::ProjectContext& proje
         return false;
 
     editor.setProject(&project);
-    // Se recuerda para el PRÓXIMO arranque: es de este project.json de donde
-    // saldrá el backend de render. Si falla no se aborta nada —el único efecto
-    // es volver a arrancar en Vulkan.
+    // It is remembered for the NEXT startup: the render backend will come from
+    // this project.json. If it fails nothing is aborted —the only effect
+    // is starting on Vulkan again.
     DonTopo::ProjectContext::writeLastProject(chosen);
-    // Y con SU escena, no con la que se montó al arrancar: en un proyecto
-    // recién creado está vacía, así que se entra viendo solo el skybox.
+    // And with ITS scene, not the one set up at startup: in a newly created
+    // project it is empty, so it is entered seeing only the skybox.
     editor.openProjectScene();
     return true;
 }
@@ -179,14 +179,14 @@ int main()
         window.init(1280, 720, "Don Topo Engine", "assets/MainEngineLogo.png");
         DonTopo::Input::init(window.getNativeWindow());
 
-        // Backend de render. Se decide AQUÍ, antes de crear NADA de GPU, porque
-        // el device cuelga de él. El ajuste vive en el project.json, pero el
-        // proyecto todavía no se ha elegido (su selector se dibuja con ImGui, o
-        // sea con un Renderer ya en marcha): por eso se lee del último proyecto
-        // abierto, que es lo que recuerda editor.json.
+        // Render backend. It is decided HERE, before creating ANYTHING on the GPU, because
+        // the device hangs from it. The setting lives in project.json, but the
+        // project has not been chosen yet (its selector is drawn with ImGui, that
+        // is, with a Renderer already running): that is why it is read from the last
+        // opened project, which is what editor.json remembers.
         //
-        // resolveRenderBackend nunca falla: lo que no se pueda arrancar se cae a
-        // Vulkan con un motivo.
+        // resolveRenderBackend never fails: whatever cannot be started falls back to
+        // Vulkan with a reason.
         DonTopo::RenderBackend requestedBackend = DonTopo::RenderBackend::Vulkan;
         const std::filesystem::path lastProject = DonTopo::ProjectContext::readLastProject();
         if (!lastProject.empty())
@@ -202,21 +202,21 @@ int main()
         const DonTopo::BackendSelection backend = DonTopo::resolveRenderBackend(requestedBackend);
 
 #ifdef DT_D3D12_ENABLED
-        // Camino DirectX 12. Sale por aquí ANTES de construir el editor, la
-        // física, el audio o la escena: nada de eso sabe todavía dibujarse con
-        // este backend, y levantarlo para luego no usarlo solo serviría para
-        // arrastrar dependencias de Vulkan a un proceso que no lo va a abrir.
+        // DirectX 12 path. It exits through here BEFORE building the editor, the
+        // physics, the audio or the scene: none of that knows how to draw with
+        // this backend yet, and bringing it up only to not use it would just
+        // drag Vulkan dependencies into a process that is not going to open it.
         //
-        // Este bucle es el esqueleto que las fases siguientes van llenando
-        // hasta igualar al de Vulkan. Hoy presenta y procesa eventos.
+        // This loop is the skeleton that the following phases keep filling in
+        // until it matches the Vulkan one. Today it presents and processes events.
         if (backend.backend == DonTopo::RenderBackend::D3D12)
         {
             std::cout << backend.message << std::endl;
 
-            // El backend lo construye main y la propiedad acaba en el editor;
-            // la referencia al tipo concreto se guarda antes de moverlo, porque
-            // el ciclo de vida (init, drawFrame, shutdown) no está en la
-            // interfaz que consume el editor.
+            // The backend is built by main and ownership ends up in the editor;
+            // the reference to the concrete type is kept before moving it, because
+            // the life cycle (init, drawFrame, shutdown) is not in the
+            // interface the editor consumes.
             auto d3d12Owned = std::make_unique<DonTopo::D3D12::D3D12Renderer>();
             DonTopo::D3D12::D3D12Renderer& d3d12 = *d3d12Owned;
             d3d12.init(window);
@@ -224,42 +224,42 @@ int main()
 
             std::cout << "D3D12: adapter '" << d3d12.adapterName() << "'" << std::endl;
 
-            // La escena del proyecto, cargada con el MISMO Scene::load que usa
-            // el editor. La geometría entra por la API pública del backend,
-            // igual que hace el editor con el Renderer de Vulkan.
+            // The project scene, loaded with the SAME Scene::load the editor
+            // uses. The geometry enters through the backend's public API,
+            // just like the editor does with the Vulkan Renderer.
             //
-            // El orden de declaración está calcado del camino de Vulkan y por
-            // los mismos motivos: los colliders liberan actores sobre la
-            // PxScene y los AudioClip sueltan canales, así que la escena tiene
-            // que destruirse ANTES que physics y audio.
+            // The declaration order is copied from the Vulkan path and for
+            // the same reasons: colliders release actors on the
+            // PxScene and AudioClips release channels, so the scene has
+            // to be destroyed BEFORE physics and audio.
             DonTopo::PhysicsManager d3dPhysics;
             d3dPhysics.init();
             DonTopo::AudioManager d3dAudio;
             d3dAudio.init();
-            // Y el ScriptManager ANTES que la escena, tambien como en Vulkan:
-            // los ScriptComponent del árbol guardan sol::table cuyo destructor
-            // toca la VM de Lua, así que la escena tiene que morir antes que
-            // ella (la destrucción va al revés que la declaración).
+            // And the ScriptManager BEFORE the scene, also as in Vulkan:
+            // the ScriptComponents in the tree store sol::table whose destructor
+            // touches the Lua VM, so the scene has to die before
+            // it (destruction goes in reverse of declaration).
             DonTopo::ScriptManager d3dScripts;
             DonTopo::Scene         d3dScene;
 
-            // El proyecto, que es de donde sale la escena y los ajustes. Vive
-            // aquí, fuera de todo, porque los paneles lo consultan durante toda
-            // la sesión.
+            // The project, which is where the scene and the settings come from. It lives
+            // here, outside everything, because the panels query it throughout
+            // the session.
             DonTopo::ProjectContext d3dProject;
             if (!lastProject.empty())
                 d3dProject = DonTopo::ProjectContext(lastProject);
 
-            // JobSystem y carga asíncrona: sin esto Load Scene cae al camino
-            // síncrono y bloquea el frame entero mientras Assimp trabaja.
+            // JobSystem and asynchronous loading: without this Load Scene falls to the
+            // synchronous path and blocks the whole frame while Assimp works.
             DonTopo::JobSystem d3dJobs;
             d3dJobs.start();
             DonTopo::AsyncAssetLoader d3dAssets(d3dJobs);
 
-            // Antes el user pointer era &d3d12 a secas: el drop de ficheros
-            // externos necesita una cola propia además del renderer, así que
-            // gana un struct pequeño en vez de un puntero suelto — mismo
-            // patrón que el AppCtx del camino de Vulkan.
+            // Before, the user pointer was plain &d3d12: the drop of external
+            // files needs its own queue besides the renderer, so it
+            // gains a small struct instead of a loose pointer — same
+            // pattern as the AppCtx of the Vulkan path.
             struct D3D12WindowCtx {
                 DonTopo::D3D12::D3D12Renderer* renderer;
                 std::vector<DonTopo::DroppedFile> drops;
@@ -284,8 +284,8 @@ int main()
                     c->drops.push_back({ std::filesystem::path(paths[i]), (float)x, (float)y });
             });
 
-            // El editor, con este backend detrás. A partir de aquí el camino
-            // es el mismo que con Vulkan: los paneles hablan con la interfaz.
+            // The editor, with this backend behind it. From here on the path
+            // is the same as with Vulkan: the panels talk to the interface.
             DonTopo::EditorUI editor;
             d3dWindowCtx.editor = &editor;
 
@@ -338,14 +338,14 @@ int main()
             uiInfo.framesInFlight = static_cast<uint32_t>(d3d12.framesInFlight());
             editor.initUi(uiInfo);
 
-            // La escena va a una textura y el backbuffer se queda para la
-            // interfaz: es lo que necesita el viewport dentro de su panel.
+            // The scene goes to a texture and the backbuffer is left for the
+            // interface: it is what the viewport inside its panel needs.
             d3d12.setUiLayer(&editor);
             d3d12.setRenderToTexture(true);
 
-            // Al BACKEND también, no solo al editor: es de donde saca las
-            // sondas de reflexión de la escena. Sin esto no ve ninguna y no
-            // hornea nada, sin decir por qué.
+            // To the BACKEND too, not just to the editor: it is where it gets the
+            // scene reflection probes from. Without this it sees none and bakes
+            // nothing, without saying why.
             d3d12.setScene(&d3dScene);
             d3d12.setSceneRoot(&d3dScene.getRoot());
 
@@ -360,15 +360,15 @@ int main()
                 return out;
             });
 
-            // Scripting, con el mismo cableado que el camino de Vulkan.
+            // Scripting, with the same wiring as the Vulkan path.
             d3dScripts.setScene(&d3dScene);
             d3dScripts.setPhysicsManager(&d3dPhysics);
             d3dScripts.setAudioManager(&d3dAudio);
             d3dScripts.setLogCallback(
                 [&editor](const std::string& msg) { editor.pushExternalLog(msg); });
             d3dScripts.setOnInstantiated([&d3d12](DonTopo::GameObject* go) {
-                // Lo que instancia un script hay que subirlo a la GPU: si no,
-                // existe en la escena y no se dibuja.
+                // What a script instantiates has to be uploaded to the GPU: otherwise,
+                // it exists in the scene and is not drawn.
                 go->traverse([&d3d12](DonTopo::GameObject* n) {
                     if (!n->hasMesh())
                         return;
@@ -378,18 +378,18 @@ int main()
                         n->staticRenderIndex = d3d12.addStaticMesh(*n->getMesh());
                 });
             });
-            // Un solo sitio para "este nodo se va": lo avisa Scene, así que
-            // cubre los tres caminos (panel Scene, Undo de Delete y
-            // Scene.Destroy de Lua) en vez de solo el de los scripts.
+            // A single place for "this node goes away": it is announced by Scene, so
+            // it covers the three paths (Scene panel, Undo of Delete and
+            // Lua's Scene.Destroy) instead of only the scripts one.
             d3dScene.setOnNodeRemoved([&d3d12, &editor](DonTopo::GameObject* go) {
-                // La selección primero: si el editor se queda apuntando a lo que
-                // se va a liberar, crashea al dibujar Properties el frame
-                // siguiente.
+                // The selection first: if the editor is left pointing at what
+                // is about to be released, it crashes when drawing Properties the next
+                // frame.
                 editor.onGameObjectDestroyed(go);
                 d3d12.removeGameObject(go);
             });
-            // Scripts/ vive en la raíz del repo y no se copia junto al exe: el
-            // hot reload tiene que vigilar los .lua que edita el usuario.
+            // Scripts/ lives at the repo root and is not copied next to the exe: the
+            // hot reload has to watch the .lua files the user edits.
             std::filesystem::path d3dScriptsDir = "Scripts";
             if (!std::filesystem::is_directory(d3dScriptsDir))
             {
@@ -409,14 +409,14 @@ int main()
                 "DirectX 12: the editor runs on this backend. No in-game 2D UI and no "
                 "reflection probes yet.");
 
-            // Selector de proyecto, el mismo que con Vulkan: mientras esté
-            // activo el bucle solo presenta su frame, así que el editor no
-            // aparece hasta elegir. Es quien abre la escena —por
-            // openProjectScene, la misma puerta que el Load Scene del menú— y
-            // quien deja puesto el ProjectContext del que salen los ajustes.
+            // Project selector, the same as with Vulkan: while it is
+            // active the loop only presents its frame, so the editor does not
+            // appear until one is chosen. It is what opens the scene —through
+            // openProjectScene, the same door as the menu's Load Scene— and
+            // what sets the ProjectContext the settings come from.
             //
-            // El proyecto recordado NO se abre solo: de él salió el backend con
-            // el que se arrancó, pero elegir es del usuario.
+            // The remembered project is NOT opened by itself: the backend we started with
+            // came from it, but choosing is up to the user.
             ProjectSelectorState d3dProjectSelector;
             editor.setProjectSelector([&]() -> bool {
                 const std::filesystem::path chosen = drawProjectSelector(d3dProjectSelector);
@@ -425,7 +425,7 @@ int main()
                 return openChosenProject(editor, d3dProject, chosen);
             });
 
-            // Cámara de vuelo, la misma que ya tenía este camino.
+            // Fly camera, the same one this path already had.
             DonTopo::Camera d3dCamera(glm::vec3(6.0f, 4.5f, 8.0f), -126.87f, -21.8f);
             d3dWindowCtx.camera = &d3dCamera;
             d3dCamera.moveSpeed = 8.0f;
@@ -435,9 +435,9 @@ int main()
             bool   d3dLooking   = false;
             auto   d3dLastFrame = std::chrono::high_resolution_clock::now();
 
-            // Luces: los buffers viven fuera del bucle para no reasignar por
-            // frame. Las de relleno son las mismas que usa el camino de Vulkan y
-            // solo salen si la escena no aporta ninguna.
+            // Lights: the buffers live outside the loop so as not to reallocate per
+            // frame. The filler ones are the same ones the Vulkan path uses and
+            // only appear if the scene contributes none.
             const std::vector<DonTopo::Light> d3dDefaultLights = {
                 { glm::vec4(0.0f, 500.0f, 300.0f, 1.0f),     glm::vec4(1.0f, 0.95f, 0.8f, 1.0f) },
                 { glm::vec4(-300.0f, 200.0f, -200.0f, 1.0f), glm::vec4(0.4f, 0.5f, 1.0f, 0.8f) },
@@ -445,12 +445,12 @@ int main()
             std::vector<DonTopo::Light> d3dLights;
             std::vector<float>          d3dLightRadii;
 
-            // Empareja los canvas de la escena con sus slots del backend por
-            // ownerId (syncUiCanvases), fuera del bucle para no reasignar cada
-            // frame. La caché de sync de cada canvas vive DENTRO de su slot.
+            // Pairs the scene canvases with their backend slots by
+            // ownerId (syncUiCanvases), outside the loop so as not to reassign every
+            // frame. The sync cache of each canvas lives INSIDE its slot.
             std::vector<DonTopo::UiCanvasBinding> d3dBindings;
-            // Y los canvas de PANTALLA en orden de prioridad de input, tambien
-            // fuera del bucle: se rellena entero cada frame.
+            // And the SCREEN canvases in input priority order, also
+            // outside the loop: it is refilled entirely every frame.
             std::vector<DonTopo::UiCanvas*> d3dUiCanvases;
 
             while (!window.shouldClose())
@@ -462,42 +462,42 @@ int main()
                     std::chrono::duration<float>(d3dNow - d3dLastFrame).count();
                 d3dLastFrame = d3dNow;
 
-                // Selector en pantalla: ni escena, ni scripts, ni cámara. Solo
-                // su frame, que lo dibuja el propio editor dentro de
+                // Selector on screen: neither scene, nor scripts, nor camera. Only
+                // its frame, which is drawn by the editor itself inside
                 // buildUiFrame.
                 if (editor.isProjectSelectorActive())
                 {
                     editor.buildUiFrame(d3d12.viewportTexture(), &d3dScene.getRoot(),
                                         d3dCamera.getViewMatrix());
-                    // Con el selector delante no se dibuja escena, pero el
-                    // singleton de gizmos es global: descartarlo aquí también
-                    // evita que lo que quedara de antes se arrastre. Es el otro
-                    // caso legítimo de tirar sin consumir, como el frame que se
-                    // aborta por swapchain obsoleto.
+                    // With the selector in front no scene is drawn, but the
+                    // gizmo singleton is global: discarding it here also
+                    // prevents whatever was left from before from carrying over. It is the other
+                    // legitimate case of throwing away without consuming, like the frame that
+                    // is aborted because of an out-of-date swapchain.
                     DonTopo::Gizmos::discard();
                     d3d12.drawFrame();
                     continue;
                 }
 
-                // Escena → backend, por frame y ANTES de la interfaz: es lo que
-                // hace que mover un objeto en Properties, ocultar una malla,
-                // tocar sus reflejos o mover una luz se vean. Sin esto el
-                // backend se queda con lo que se le mandó al cargar y el editor
-                // se mira pero no se toca. Mismo recorrido que el camino de
-                // Vulkan, salvo la parte de Play —física y scripts— que este
-                // camino todavía no corre.
+                // Scene → backend, per frame and BEFORE the interface: it is what
+                // makes moving an object in Properties, hiding a mesh,
+                // touching its reflections or moving a light visible. Without this the
+                // backend keeps what it was sent at load and the editor
+                // can be looked at but not touched. Same traversal as the Vulkan
+                // path, except for the Play part —physics and scripts— which this
+                // path does not run yet.
                 //
-                // Recorrido en vivo y no una lista cacheada: el editor puede
-                // borrar GameObjects, y un puntero guardado quedaría colgando.
+                // Live traversal and not a cached list: the editor can
+                // delete GameObjects, and a stored pointer would be left dangling.
                 d3dScripts.pollChanges();
 
-                // Mismo criterio que el camino de Vulkan, y por los mismos
-                // motivos: en Play manda el Audio Listener de la escena si lo
-                // hay y está habilitado, en Edit Mode manda siempre la cámara
-                // del editor (la preview del inspector tiene que oírse desde
-                // donde mira el usuario). Con la base degenerada (escala 0) se
-                // cae a la cámara en vez de colar un NaN en FMOD, del que ya no
-                // se recupera.
+                // Same criterion as the Vulkan path, and for the same
+                // reasons: in Play the scene's Audio Listener rules if there
+                // is one and it is enabled, in Edit Mode the editor camera always
+                // rules (the inspector preview has to be heard from
+                // where the user is looking). With a degenerate basis (scale 0) it
+                // falls back to the camera instead of sneaking a NaN into FMOD, from which it
+                // does not recover.
                 glm::vec3 listenerPos = d3dCamera.getPos();
                 glm::vec3 listenerFwd = d3dCamera.getFront();
                 glm::vec3 listenerUp  = d3dCamera.getUp();
@@ -507,9 +507,9 @@ int main()
                     {
                         const glm::vec3 fwdAxis = glm::vec3(lis->worldTransform[2]);
                         const glm::vec3 upAxis  = glm::vec3(lis->worldTransform[1]);
-                        // getEnabled() como en Vulkan: sin él, este camino
-                        // respetaba un listener deshabilitado y los dos
-                        // backends sonaban distinto con la misma escena.
+                        // getEnabled() as in Vulkan: without it, this path
+                        // respected a disabled listener and the two
+                        // backends sounded different with the same scene.
                         if (lis->getAudioListener()->getEnabled() &&
                             glm::length(fwdAxis) > 1e-6f && glm::length(upAxis) > 1e-6f)
                         {
@@ -519,8 +519,8 @@ int main()
                         }
                     }
                 }
-                // Fuera del gate de Play: ver el comentario del camino de Vulkan
-                // (es la única llamada a System::update() y a
+                // Outside the Play gate: see the comment of the Vulkan path
+                // (it is the only call to System::update() and to
                 // set3DListenerAttributes).
                 d3dAudio.update(listenerPos, listenerFwd, listenerUp, d3dDelta);
 
@@ -533,24 +533,24 @@ int main()
                 }
                 else
                 {
-                    // Sin física corriendo, pero los transforms padre→hijo se
-                    // siguen propagando: Properties y los gizmos tienen que
-                    // funcionar en Edit. Scene::update haría esto y además
-                    // impondría la pose de PhysX sobre cada objeto con collider
-                    // dinámico, que es justo lo que impide editarlos.
+                    // Without physics running, but parent→child transforms
+                    // keep being propagated: Properties and the gizmos have to
+                    // work in Edit. Scene::update would do this and would also
+                    // impose the PhysX pose on every object with a dynamic
+                    // collider, which is exactly what prevents editing them.
                     d3dScene.getRoot().updateWorldTransforms();
-                    // Igual que en el camino de Vulkan: la preview del
-                    // inspector sigue al objeto mientras se arrastra.
-                    // Sin dt: en Edit Mode no hay doppler (el objeto lo mueve
-                    // el gizmo, no una velocidad fisica).
+                    // Same as in the Vulkan path: the inspector preview
+                    // follows the object while it is dragged.
+                    // Without dt: in Edit Mode there is no doppler (the object is moved
+                    // by the gizmo, not by a physical velocity).
                     d3dScene.updateAudioSpatial();
                 }
 
-                // tickDeferredDeletes primero, que libera lo borrado;
-                // onAssetsLoaded después, que aplica lo que acaba de llegar del
-                // loader y cierra el lote con un solo flush. Los dos ANTES del
-                // recorrido: un objeto cuyo mesh acaba de aterrizar tiene que
-                // estar ya registrado cuando se empujen los transform.
+                // tickDeferredDeletes first, which releases what was deleted;
+                // onAssetsLoaded after, which applies what just arrived from the
+                // loader and closes the batch with a single flush. Both BEFORE the
+                // traversal: an object whose mesh just landed has to be
+                // already registered when the transforms are pushed.
                 d3d12.tickDeferredDeletes();
                 editor.onAssetsLoaded(d3dAssets.pumpCompleted(2.0f), d3dScene, d3d12);
 
@@ -565,18 +565,18 @@ int main()
                                                    go->meshVisible);
                     }
 
-                    // El estado de Play lo lleva el editor; el backend de
-                    // DirectX 12 no lo conoce.
+                    // The Play state is carried by the editor; the DirectX 12
+                    // backend does not know it.
                     applySkinnedFrame(*go, d3d12, d3dDelta, editor.isPlaying());
                 });
 
-                // Luces después del recorrido: sus worldTransform ya están
-                // propagados y de ahí salen posición y dirección. Por frame y no
-                // en un evento porque mover el GameObject de una luz tiene que
-                // moverla en el acto, igual que el transform de una malla.
-                // El TOTAL, no el recortado: collectLights se queda con las
-                // primeras MAX_LIGHTS y descarta el resto en silencio. Sin
-                // guardarlo, el editor no puede avisar de lo que se pierde.
+                // Lights after the traversal: their worldTransform are already
+                // propagated and position and direction come from there. Per frame and not
+                // in an event because moving a light's GameObject has to
+                // move it right away, just like a mesh's transform.
+                // The TOTAL, not the trimmed one: collectLights keeps the
+                // first MAX_LIGHTS and silently discards the rest. Without
+                // storing it, the editor cannot warn about what is lost.
                 const size_t totalLuces = d3dScene.collectLights(d3dLights, d3dLightRadii);
                 d3d12.setSceneLightTotal(totalLuces);
                 if (totalLuces > 0)
@@ -586,26 +586,26 @@ int main()
                 }
                 else
                 {
-                    // Sin una sola luz en la escena, las de relleno: las escenas
-                    // del repo son de antes del LightComponent y sin esto el
-                    // editor abriría a oscuras.
+                    // Without a single light in the scene, the filler ones: the repo
+                    // scenes predate LightComponent and without this the
+                    // editor would open in the dark.
                     d3d12.setLights(d3dDefaultLights);
                     d3d12.setLightRadii({});
                 }
 
-                // UI 2D del juego: resolución, widgets y jerarquía de CADA
-                // canvas de la escena, por frame —por lo mismo que los
-                // transform, tocar un campo en Properties tiene que verse en
-                // el acto—. Sin ningún Canvas la lista va vacía y el sync
-                // limpia el árbol.
+                // Game 2D UI: resolution, widgets and hierarchy of EACH
+                // canvas of the scene, per frame —for the same reason as the
+                // transforms, touching a field in Properties has to be seen
+                // right away—. Without any Canvas the list is empty and the sync
+                // cleans the tree.
                 d3dBindings.clear();
                 d3dScene.collectCanvases(d3dBindings);
                 d3d12.syncUiCanvases(d3dBindings);
 
-                // Input de la UI: sin esto el árbol no resuelve estados y los
-                // colores del botón, el fundido y el Click no harían nada. El
-                // ratón solo entra en Play; el tiempo entra siempre, para que un
-                // color recién editado se vea sin darle a Play.
+                // UI input: without this the tree does not resolve states and the
+                // button colors, the fade and the Click would do nothing. The
+                // mouse only enters in Play; time always enters, so that a
+                // freshly edited color is seen without pressing Play.
                 {
                     DonTopo::UiInputState uiInput;
                     if (editor.isPlaying() && editor.isViewportImageHovered())
@@ -616,46 +616,46 @@ int main()
                         uiInput.mouseDown[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
                         uiInput.mouseDown[1] = ImGui::IsMouseDown(ImGuiMouseButton_Right);
                         uiInput.mouseDown[2] = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-                        // La rueda ya la lee ImGui, así que se le pide a él en
-                        // vez de duplicar un callback de GLFW.
+                        // The wheel is already read by ImGui, so it is asked of it
+                        // instead of duplicating a GLFW callback.
                         uiInput.scrollDelta = ImGui::GetIO().MouseWheel;
                     }
                     else
                     {
                         uiInput.mousePos = glm::vec2(-1.0f, -1.0f);
                     }
-                    // Teclado y mando SOLO en Play, igual que el ratón: en
-                    // edición, el Tab y las flechas son del editor.
+                    // Keyboard and gamepad ONLY in Play, like the mouse: in
+                    // editing, Tab and the arrows belong to the editor.
                     if (editor.isPlaying() && !ImGui::GetIO().WantCaptureKeyboard)
                         DonTopo::fillUiInputKeys(uiInput);
                     else
-                        // El gate del PUSH (WantTextInput) no es el mismo que este,
-                        // asi que un caracter puede haber entrado en un frame que no
-                        // se consume. Sin tirarlo, saldria en el siguiente que si.
+                        // The PUSH gate (WantTextInput) is not the same as this one,
+                        // so a character may have come in on a frame that is not
+                        // consumed. Without discarding it, it would come out on the next one that is.
                         DonTopo::discardUiInputChars();
                     uiInput.timeSeconds = (float)glfwGetTime();
-                    // A TODOS los canvas de pantalla, no solo al primero: ver
-                    // dispatchUiInput. Con uiCanvas() los botones de un segundo
-                    // canvas se dibujaban pero eran inertes.
+                    // To ALL the screen canvases, not just the first: see
+                    // dispatchUiInput. With uiCanvas() the buttons of a second
+                    // canvas were drawn but were inert.
                     d3d12.screenUiCanvases(d3dUiCanvases);
                     DonTopo::dispatchUiInput(d3dUiCanvases, uiInput);
                 }
 
-                // La interfaz después: lo que se toque aquí lo recoge el
-                // recorrido del frame siguiente.
+                // The interface afterwards: whatever is touched here is picked up by the
+                // next frame's traversal.
                 editor.buildUiFrame(d3d12.viewportTexture(), &d3dScene.getRoot(),
                                     d3dCamera.getViewMatrix());
 
-                // Cámara después de la interfaz, para que arrastrar por un
-                // panel no gire la vista.
+                // Camera after the interface, so that dragging over a
+                // panel does not rotate the view.
                 {
                     GLFWwindow* native = window.getNativeWindow();
 
-                    // Sobre el panel de la escena, no "donde ImGui no capture":
-                    // el viewport ES una ventana de ImGui, así que
-                    // WantCaptureMouse vale true justo donde hay que girar la
-                    // vista y la cámara no se movía nunca. Mismo criterio que
-                    // el camino de Vulkan.
+                    // Over the scene panel, not "where ImGui does not capture":
+                    // the viewport IS an ImGui window, so
+                    // WantCaptureMouse is true precisely where the
+                    // view has to be rotated and the camera never moved. Same criterion as
+                    // the Vulkan path.
                     const bool rightDown =
                         editor.isViewportHovered() &&
                         glfwGetMouseButton(native, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
@@ -673,27 +673,27 @@ int main()
                     d3dLastX = mouseX;
                     d3dLastY = mouseY;
 
-                    // El TECLADO de la cámara solo con el botón derecho
-                    // pulsado, como en Unity: sin eso, W/E/R —los atajos del
-                    // modo del gizmo— adelantarían y subirían la cámara en vez
-                    // de cambiar de modo. El mando no entra en el reparto: no
-                    // compite con ningún atajo y sigue volando siempre.
+                    // The camera KEYBOARD only with the right button
+                    // held, as in Unity: without that, W/E/R —the gizmo
+                    // mode shortcuts— would move the camera forward and up instead
+                    // of changing mode. The gamepad does not enter the split: it does not
+                    // compete with any shortcut and keeps flying always.
                     if (editor.isViewportHovered())
                         d3dCamera.update(native, d3dDelta, /*keyboardEnabled=*/rightDown);
 
                     d3d12.setCamera(d3dCamera);
                 }
 
-                // Gizmos: los rellena el panel del viewport dentro de
-                // buildUiFrame (colliders, luces, frustum de la cámara, ejes de
-                // la selección) y aquí se suben al backend. En Vulkan de esto se
-                // encarga Renderer::drawFrame.
+                // Gizmos: filled in by the viewport panel inside
+                // buildUiFrame (colliders, lights, camera frustum, axes of
+                // the selection) and here they are uploaded to the backend. In Vulkan this is
+                // done by Renderer::drawFrame.
                 //
-                // takeVertices se los lleva Y vacía el buffer de una vez: este
-                // camino llegó a leerlos sin vaciar y el vector crecía frame a
-                // frame hasta reventar kMaxGizmoVertices, con el aviso de
-                // capacidad como único síntoma. Ahora consumir vacía, así que el
-                // siguiente backend no puede repetirlo (H16).
+                // takeVertices takes them AND empties the buffer at once: this
+                // path once read them without emptying and the vector grew frame by
+                // frame until exceeding kMaxGizmoVertices, with the capacity warning as
+                // the only symptom. Now consuming empties, so the
+                // next backend cannot repeat it (H16).
                 {
                     const std::vector<DonTopo::GizmoVertex> lineas =
                         DonTopo::Gizmos::takeVertices();
@@ -704,26 +704,26 @@ int main()
                 d3d12.drawFrame();
             }
 
-            // ORDEN CRÍTICO. La GPU sigue con el último frame en vuelo al salir
-            // del bucle, y ese frame usa los buffers y la textura de ImGui.
-            // Apagar ImGui sin esperar antes se los quita a la GPU debajo, y el
-            // proceso muere al cerrar —con volcado de WER, pero sin que nada en
-            // pantalla lo delate, porque ya no queda frame que dibujar.
+            // CRITICAL ORDER. The GPU is still on the last frame in flight when leaving
+            // the loop, and that frame uses the ImGui buffers and texture.
+            // Shutting ImGui down without waiting first takes them from the GPU from underneath, and the
+            // process dies on close —with a WER dump, but with nothing on
+            // screen giving it away, because there is no frame left to draw.
             d3d12.waitIdle();
             editor.shutdownUi();
-            // El JobSystem antes que el backend: un job a medias sigue tocando
-            // el loader y la escena, y pararlo después sería usarlos ya
-            // liberados.
+            // The JobSystem before the backend: a half-done job still touches
+            // the loader and the scene, and stopping it afterwards would be using them already
+            // released.
             d3dJobs.shutdown();
             d3d12.shutdown();
             return 0;
         }
 #endif
 
-        // El backend lo construye main —que es quien sabe cuál toca— y la
-        // propiedad pasa al editor. La referencia al tipo concreto se guarda
-        // ANTES de moverlo: el ciclo de vida (init, drawFrame, shutdown) no
-        // está en la interfaz, y este camino es el de Vulkan.
+        // The backend is built by main —which is the one that knows which applies— and
+        // ownership passes to the editor. The reference to the concrete type is kept
+        // BEFORE moving it: the life cycle (init, drawFrame, shutdown) is not
+        // in the interface, and this path is the Vulkan one.
         DonTopo::EditorUI editor;
 
         auto               vulkanRenderer = std::make_unique<DonTopo::Renderer>();
@@ -734,40 +734,40 @@ int main()
         if (!backend.message.empty())
             editor.pushExternalLog(backend.message);
 
-        // scene.shutdown() libera explícitamente los colliders/
-        // audioclips de la escena antes de destruir physics/audio (ver más abajo).
-        // physics/audio se siguen declarando antes que scene como red de
-        // seguridad ante una salida por excepción anterior a ese shutdown
-        // explícito: en ese caso, el orden de declaración garantiza igualmente
-        // que scene se destruya antes que physics/audio.
+        // scene.shutdown() explicitly releases the colliders/
+        // audioclips of the scene before destroying physics/audio (see below).
+        // physics/audio are still declared before scene as a safety
+        // net against an exit by exception prior to that explicit
+        // shutdown: in that case, the declaration order still guarantees
+        // that scene is destroyed before physics/audio.
         DonTopo::PhysicsManager physics;
         physics.init();
 
         DonTopo::AudioManager audio;
         audio.init();
 
-        // scriptManager se declara ANTES que scene: los ScriptComponent del
-        // árbol guardan sol::table cuyo destructor toca la VM Lua, así que
-        // scene debe destruirse antes que el sol::state de scriptManager
-        // (orden de destrucción = inverso al de declaración).
+        // scriptManager is declared BEFORE scene: the ScriptComponents in the
+        // tree store sol::table whose destructor touches the Lua VM, so
+        // scene must be destroyed before the sol::state of scriptManager
+        // (destruction order = reverse of declaration).
         DonTopo::ScriptManager scriptManager;
 
         DonTopo::Scene scene;
 
-        // Escena de arranque: solo lo que necesita el arranque, nada más.
-        // renderer.init() exige un `meshes` no vacío —de ahí saca el bbox del
-        // auto-fit, y con la lista vacía saldría en infinitos—, así que basta un
-        // cubo procedural, que no toca disco. Los tres FBX que cargaba la demo
-        // (modelTexture, model y modelAnimation) eran todo el coste de arranque
-        // y ya no se cargan: en cuanto se elige proyecto esta escena se
-        // reemplaza entera por la del proyecto (EditorUI::openProjectScene), así
-        // que cargarlos era trabajo que se tiraba a la basura.
-        // El tamaño de este suelo NO es decorativo: renderer.init() saca de él
-        // m_cameraDistance (= maxDim * 1.2) y de ahí salen el near y el far de la
-        // proyección del editor (near = d*0.001, far = d*3). Con solo el cubo de
-        // 50 el far caía a ~180 y, con la cámara en z=300, el skybox se recortaba.
-        // Los 1000 son los mismos que tenía el suelo de la demo, así que el
-        // encuadre y el skybox se ven igual que antes.
+        // Startup scene: only what startup needs, nothing more.
+        // renderer.init() requires a non-empty `meshes` —it takes the auto-fit bbox
+        // from it, and with an empty list it would come out as infinities—, so a
+        // procedural cube is enough, which does not touch disk. The three FBX the demo
+        // loaded (modelTexture, model and modelAnimation) were the whole startup cost
+        // and are no longer loaded: as soon as a project is chosen this scene is
+        // replaced entirely by the project's (EditorUI::openProjectScene), so
+        // loading them was work thrown in the trash.
+        // The size of this floor is NOT decorative: renderer.init() takes from it
+        // m_cameraDistance (= maxDim * 1.2) and from there come the near and far of the
+        // editor projection (near = d*0.001, far = d*3). With only the cube of
+        // 50 the far fell to ~180 and, with the camera at z=300, the skybox was clipped.
+        // The 1000 is the same the demo floor had, so the
+        // framing and the skybox look the same as before.
         auto floorMesh = std::make_shared<DonTopo::Mesh>(DonTopo::Plane::create(1000.0f, 0.0f));
         auto cubeMesh  = std::make_shared<DonTopo::Mesh>(DonTopo::Cube::create(50.0f));
 
@@ -784,8 +784,8 @@ int main()
         cube->updateWorldTransforms();
         cube->setBoxCollider(physics.createBoxColliderComponent(
             glm::vec3(25.0f, 25.0f, 25.0f), glm::vec3(0.0f), cube->worldTransform, /*dynamic=*/true));
-        // Rigidbody: hace del cubo un cuerpo simulado (cae con la gravedad de la
-        // escena). Sin Rigidbody el collider sería static y no caería.
+        // Rigidbody: makes the cube a simulated body (it falls with the scene
+        // gravity). Without a Rigidbody the collider would be static and would not fall.
         {
             auto cubeRb = std::make_shared<DonTopo::Rigidbody>();
             physics.attachRigidbody(cube->getBoxCollider(), cubeRb);
@@ -805,7 +805,7 @@ int main()
         std::vector<DonTopo::GameObject*> allNodes;
         scene.traverse([&](DonTopo::GameObject* go) { allNodes.push_back(go); });
 
-        // Pasada 1: meshes estáticos -> Renderer::init(meshes)
+        // Pass 1: static meshes -> Renderer::init(meshes)
         std::vector<DonTopo::Mesh> meshes;
         for (auto* go : allNodes)
         {
@@ -839,22 +839,22 @@ int main()
                 else                n->staticRenderIndex  = renderer.addStaticMesh(*n->getMesh());
             });
         });
-        // Un solo sitio para "este nodo se va": lo avisa Scene, así que cubre
-        // los tres caminos (panel Scene, Undo de Delete y Scene.Destroy de Lua)
-        // en vez de solo el de los scripts.
+        // A single place for "this node goes away": it is announced by Scene, so it covers
+        // the three paths (Scene panel, Undo of Delete and Lua's Scene.Destroy)
+        // instead of only the scripts one.
         scene.setOnNodeRemoved([&renderer, &editor](DonTopo::GameObject* go) {
-            // Suelta la selección del editor si apunta a go o su subtree ANTES de
-            // liberar nada — si no, m_selected queda colgando y el editor crashea
-            // al dibujar Properties/gizmo el frame siguiente.
+            // Releases the editor selection if it points to go or its subtree BEFORE
+            // releasing anything — otherwise m_selected is left dangling and the editor crashes
+            // when drawing Properties/gizmo the next frame.
             editor.onGameObjectDestroyed(go);
-            // Libera GPU del subtree completo (estático + skinned).
+            // Releases the GPU of the whole subtree (static + skinned).
             renderer.removeGameObject(go);
         });
-        // Scripts/ vive en la raíz del repo y NO se copia junto al exe
-        // (a diferencia de assets/shaders): el hot reload debe vigilar los
-        // .lua originales que edita el usuario, no una copia que cada build
-        // pisaría. Como el exe corre con CWD en build-ninja/sandbox, se
-        // busca la carpeta hacia arriba desde el directorio actual.
+        // Scripts/ lives at the repo root and is NOT copied next to the exe
+        // (unlike assets/shaders): the hot reload must watch the
+        // original .lua files the user edits, not a copy that every build
+        // would overwrite. Since the exe runs with CWD in build-ninja/sandbox, the
+        // folder is searched upwards from the current directory.
         std::filesystem::path scriptsDir = "Scripts";
         if (!std::filesystem::is_directory(scriptsDir))
         {
@@ -882,17 +882,17 @@ int main()
             "assets/skybox/nz.png",  // -Z
         });
 
-        // Pasada 2: meshes animados -> addSkinnedMesh (después de init, como requiere el Renderer)
+        // Pass 2: animated meshes -> addSkinnedMesh (after init, as the Renderer requires)
         for (auto* go : allNodes)
         {
             if (go->hasMesh() && go->isSkinned())
                 go->skinnedRenderIndex = renderer.addSkinnedMesh(*go->getSkinnedMesh());
         }
 
-        // Luces por defecto: las que se usan cuando la escena abierta no tiene
-        // ni un LightComponent. Las escenas del repo son de antes de que
-        // existiera el componente y sin esto el editor abriría a oscuras; en
-        // cuanto la escena aporta UNA luz, estas desaparecen y manda la escena.
+        // Default lights: the ones used when the opened scene has
+        // not a single LightComponent. The repo scenes predate the
+        // component and without this the editor would open in the dark; as
+        // soon as the scene contributes ONE light, these disappear and the scene rules.
         const std::vector<DonTopo::Light> defaultLights = {
             { glm::vec4(0.0f, 500.0f, 300.0f, 1.0f),     glm::vec4(1.0f, 0.95f, 0.8f, 1.0f) },
             { glm::vec4(-300.0f, 200.0f, -200.0f, 1.0f), glm::vec4(0.4f, 0.5f, 1.0f, 0.8f) },
@@ -914,7 +914,7 @@ int main()
             static_cast<AppCtx*>(glfwGetWindowUserPointer(w))->rnd->notifyResize();
         });
 
-        // Cámara: solo rota con botón derecho y cuando ImGui no captura el ratón
+        // Camera: only rotates with the right button and when ImGui does not capture the mouse
         glfwSetCursorPosCallback(window.getNativeWindow(), [](GLFWwindow* w, double x, double y) {
             ImGui_ImplGlfw_CursorPosCallback(w, x, y);
             static double lastX = x, lastY = y;
@@ -928,7 +928,7 @@ int main()
             }
         });
 
-        // Reenviar mouse buttons y scroll a ImGui
+        // Forward mouse buttons and scroll to ImGui
         glfwSetMouseButtonCallback(window.getNativeWindow(), [](GLFWwindow* w, int btn, int action, int mods) {
             ImGui_ImplGlfw_MouseButtonCallback(w, btn, action, mods);
         });
@@ -937,10 +937,10 @@ int main()
         });
         glfwSetCharCallback(window.getNativeWindow(), [](GLFWwindow* w, unsigned int c) {
             ImGui_ImplGlfw_CharCallback(w, c);
-            // Al canvas del juego SOLO en Play y con ImGui sin foco de texto:
-            // el mismo gate que ya se le aplica al teclado unas lineas mas
-            // abajo. Sin esto, renombrar un GameObject en el Hierarchy tambien
-            // escribiria dentro del InputField de la escena.
+            // To the game canvas ONLY in Play and with ImGui without text focus:
+            // the same gate already applied to the keyboard a few lines
+            // below. Without this, renaming a GameObject in the Hierarchy would also
+            // type into the scene's InputField.
             auto* ctx = static_cast<AppCtx*>(glfwGetWindowUserPointer(w));
             if (ctx && ctx->ed && ctx->ed->isPlaying() && !ImGui::GetIO().WantTextInput)
                 DonTopo::pushUiInputChar(c);
@@ -973,11 +973,11 @@ int main()
                 ctx->drops.push_back({ std::filesystem::path(paths[i]), (float)x, (float)y });
         });
 
-        // JobSystem + loader asíncrono de assets. Se crean tras todo el setup y
-        // ANTES del bucle: el drop de FBX y Load Scene encolan aquí, y el pump
-        // por frame (más abajo) drena los resultados. El shutdown del JobSystem
-        // va lo PRIMERO al salir del bucle (join de los workers antes de destruir
-        // Renderer/Scene) — ver el bloque de apagado.
+        // JobSystem + asynchronous asset loader. They are created after all the setup and
+        // BEFORE the loop: the FBX drop and Load Scene enqueue here, and the per-frame
+        // pump (below) drains the results. The shutdown of the JobSystem
+        // goes FIRST on leaving the loop (join of the workers before destroying
+        // Renderer/Scene) — see the shutdown block.
         DonTopo::JobSystem        jobSystem;
         jobSystem.start();
         DonTopo::AsyncAssetLoader assetLoader(jobSystem);
@@ -989,13 +989,13 @@ int main()
         });
         editor.setJobSystem(&jobSystem);
 
-        // ─── Selector de proyecto ────────────────────────────────────────────
-        // Primer estado del bucle de ImGui que ya existe: misma ventana, mismo
-        // device Vulkan y misma sesión de ImGui. Mientras esté activo, el bucle
-        // de abajo se salta TODO (scripts, cámara, escena, luces, UI) y solo
-        // presenta el frame del selector, así que el editor no aparece hasta
-        // elegir proyecto. `project` vive aquí, fuera del bucle: es lo que los
-        // paneles consultan durante toda la sesión.
+        // ─── Project selector ────────────────────────────────────────────────
+        // First state of the ImGui loop that already exists: same window, same
+        // Vulkan device and same ImGui session. While it is active, the loop
+        // below skips EVERYTHING (scripts, camera, scene, lights, UI) and only
+        // presents the selector frame, so the editor does not appear until a
+        // project is chosen. `project` lives here, outside the loop: it is what the
+        // panels query throughout the session.
         DonTopo::ProjectContext project;
         ProjectSelectorState    projectSelector;
 
@@ -1006,22 +1006,22 @@ int main()
             return openChosenProject(editor, project, chosen);
         });
 
-        // Empareja los canvas de la escena con sus slots del Renderer por
-        // ownerId (Renderer::syncUiCanvases), fuera del bucle para no
-        // reasignar cada frame. La caché de sync de cada canvas vive DENTRO
-        // de su slot, en el Renderer: aquí ya no hace falta ninguna.
+        // Pairs the scene canvases with their Renderer slots by
+        // ownerId (Renderer::syncUiCanvases), outside the loop so as not to
+        // reassign every frame. The sync cache of each canvas lives INSIDE
+        // its slot, in the Renderer: none is needed here any more.
         std::vector<DonTopo::UiCanvasBinding> uiBindings;
-        // Y los canvas de PANTALLA en orden de prioridad de input, tambien
-        // fuera del bucle: se rellena entero cada frame.
+        // And the SCREEN canvases in input priority order, also
+        // outside the loop: it is refilled entirely every frame.
         std::vector<DonTopo::UiCanvas*> uiCanvases;
 
         while (!window.shouldClose())
         {
             DonTopo::Input::update();
 
-            // Selector de proyecto activo: el frame se limita a presentarlo. Ni
-            // scripts, ni cámara, ni escena, ni luces, ni UI — nada de lo de
-            // abajo corre hasta que hay proyecto elegido.
+            // Selector active: the frame just presents it. No
+            // scripts, no camera, no scene, no lights, no UI — nothing below
+            // runs until a project is chosen.
             if (editor.isProjectSelectorActive())
             {
                 renderer.drawFrame(window);
@@ -1036,15 +1036,15 @@ int main()
             float dt = std::chrono::duration<float>(now - last).count();
             last = now;
 
-            // Mismo reparto que el camino de D3D12: el TECLADO de la cámara
-            // solo mientras se mantiene el botón derecho, que es lo que deja
-            // W/E/R libres para los atajos del modo del gizmo. El mando queda
-            // fuera del reparto y sigue volando siempre.
+            // Same split as the D3D12 path: the camera KEYBOARD
+            // only while the right button is held, which is what leaves
+            // W/E/R free for the gizmo mode shortcuts. The gamepad stays
+            // outside the split and keeps flying always.
             //
-            // Aquí el botón se consulta a GLFW en vez de reusar una variable:
-            // en el camino de Vulkan el mouse-look vive en el callback de
-            // cursor, no en el bucle, así que no hay ningún `rightDown` que
-            // tomar prestado.
+            // Here the button is queried from GLFW instead of reusing a variable:
+            // in the Vulkan path the mouse-look lives in the cursor
+            // callback, not in the loop, so there is no `rightDown` to
+            // borrow.
             if (editor.isViewportHovered())
             {
                 const bool rightDown = glfwGetMouseButton(window.getNativeWindow(),
@@ -1053,19 +1053,19 @@ int main()
             }
             renderer.setCamera(camera);
 
-            // Listener 3D. En Play, si la escena tiene un Audio Listener (y está
-            // habilitado), el audio 3D se oye desde ÉL: posición = columna 3 del
-            // worldTransform, forward = -Z local, up = +Y local (misma
-            // convención que la cámara y el runtime); con la base degenerada
-            // (escala 0) se cae a la cámara en vez de colar un NaN en FMOD, del
-            // que ya no se recupera.
+            // 3D listener. In Play, if the scene has an Audio Listener (and it is
+            // enabled), 3D audio is heard from IT: position = column 3 of the
+            // worldTransform, forward = local -Z, up = local +Y (same
+            // convention as the camera and the runtime); with a degenerate basis
+            // (scale 0) it falls back to the camera instead of sneaking a NaN into FMOD, from
+            // which it does not recover.
             //
-            // En Edit Mode manda SIEMPRE la cámara del editor, aunque la escena
-            // tenga listener: el botón Play del Audio Clip (PropertiesPanel) es
-            // una herramienta de edición y tiene que oírse desde donde el
-            // usuario está mirando. Con el listener de la escena mandando aquí,
-            // previsualizar un clip 3D de un objeto lejano daría silencio sin
-            // ninguna explicación.
+            // In Edit Mode the editor camera ALWAYS rules, even if the scene
+            // has a listener: the Audio Clip Play button (PropertiesPanel) is
+            // an editing tool and has to be heard from where the
+            // user is looking. With the scene's listener ruling here,
+            // previewing a 3D clip of a distant object would give silence with no
+            // explanation.
             glm::vec3 listenerPos = camera.getPos();
             glm::vec3 listenerFwd = camera.getFront();
             glm::vec3 listenerUp  = camera.getUp();
@@ -1084,14 +1084,14 @@ int main()
                     }
                 }
             }
-            // FUERA del gate de Play, a propósito: AudioManager::update es lo
-            // único que llama a set3DListenerAttributes y a System::update(),
-            // así que dejándolo dentro el listener se quedaba donde lo dejó la
-            // última sesión de Play —o en el (0,0,0) mirando a -Z de fábrica de
-            // FMOD si nunca se entró— y la preview de un clip 3D sonaba atenuada
-            // o muda sin motivo aparente.
-            // dt para el doppler: la velocidad del listener sale de comparar
-            // con su posicion del frame anterior.
+            // OUTSIDE the Play gate, on purpose: AudioManager::update is the only
+            // thing that calls set3DListenerAttributes and System::update(),
+            // so leaving it inside the listener stayed where the last
+            // Play session left it —or at FMOD's factory (0,0,0) looking at -Z if Play
+            // was never entered— and the preview of a 3D clip sounded attenuated
+            // or muted for no apparent reason.
+            // dt for the doppler: the listener velocity comes from comparing
+            // with its position from the previous frame.
             audio.update(listenerPos, listenerFwd, listenerUp, dt);
 
             if (renderer.isPlaying())
@@ -1103,34 +1103,34 @@ int main()
             }
             else
             {
-                // Sin física corriendo, pero los transforms padre→hijo se
-                // siguen propagando: gizmo/Properties deben seguir
-                // funcionando en Edit Mode. Scene::update también hace esto,
-                // pero además impone la pose de PhysX sobre cada GameObject
-                // con collider dinámico — justo lo que hace imposible editar
-                // esos objetos hoy (la física los pelea cada frame). Al
-                // saltarnos scene.update() entero en Edit Mode, ese pull ya
-                // no ocurre.
+                // Without physics running, but parent→child transforms
+                // keep being propagated: gizmo/Properties must keep
+                // working in Edit Mode. Scene::update also does this,
+                // but it also imposes the PhysX pose on every GameObject
+                // with a dynamic collider — exactly what makes editing
+                // those objects impossible today (physics fights them every frame). By
+                // skipping scene.update() entirely in Edit Mode, that pull no
+                // longer happens.
                 scene.getRoot().updateWorldTransforms();
-                // Pero el seguimiento del audio 3D sí hace falta aquí: la
-                // preview del inspector puede estar sonando mientras el usuario
-                // arrastra el objeto con el gizmo. En Play lo hace scene.update.
-                // Sin dt a proposito: arrastrar con el gizmo no es velocidad.
+                // But 3D audio tracking is needed here: the
+                // inspector preview may be playing while the user
+                // drags the object with the gizmo. In Play scene.update does it.
+                // Without dt on purpose: dragging with the gizmo is not velocity.
                 scene.updateAudioSpatial();
             }
 
-            // Pump por frame de la carga asíncrona, ANTES del traverse: los
-            // objetos cuyo mesh acaba de llegar tienen que estar ya registrados
-            // en el Renderer cuando se recorra la escena para empujar transforms.
-            // tickDeferredDeletes primero (libera lo borrado); onAssetsLoaded
-            // aplica los resultados y cierra el batch con UN solo
-            // flushPendingUploads (así ~440 vkQueueWaitIdle se vuelven uno).
+            // Per-frame pump of the asynchronous load, BEFORE the traverse: the
+            // objects whose mesh just arrived have to be already registered
+            // in the Renderer when the scene is traversed to push transforms.
+            // tickDeferredDeletes first (releases what was deleted); onAssetsLoaded
+            // applies the results and closes the batch with ONE
+            // flushPendingUploads (so ~440 vkQueueWaitIdle become one).
             renderer.tickDeferredDeletes();
             editor.onAssetsLoaded(assetLoader.pumpCompleted(2.0f), scene, renderer);
 
-            // Recorrido en vivo (no la lista allNodes cacheada al arrancar): el
-            // editor permite borrar GameObjects en tiempo real, así que un
-            // puntero cacheado podría quedar colgante tras un delete.
+            // Live traversal (not the allNodes list cached at startup): the
+            // editor allows deleting GameObjects in real time, so a
+            // cached pointer could be left dangling after a delete.
             DonTopo::GameObject* liveCube = nullptr;
             scene.traverse([&](DonTopo::GameObject* go) {
                 if (go == cube)
@@ -1139,26 +1139,26 @@ int main()
                 if (go->staticRenderIndex >= 0)
                 {
                     renderer.setTransform(go->staticRenderIndex, go->worldTransform);
-                    // Mismo sitio que el transform: es la única sincronización
-                    // por frame que ya cubre Play Mode, Undo/Redo y la carga de
-                    // escena sin caminos propios.
+                    // Same place as the transform: it is the only per-frame
+                    // synchronization that already covers Play Mode, Undo/Redo and scene
+                    // loading without paths of their own.
                     renderer.setObjectSsr(go->staticRenderIndex,
                                           go->ssrEnabled ? go->ssrIntensity : 0.0f);
                     renderer.setObjectMeshVisible(go->staticRenderIndex, go->meshVisible);
                 }
 
-                // En Edit el grafo no evalúa transiciones (solo avanza el tiempo
-                // del estado de entrada); si no, las condiciones "animation
-                // finished" pasearían el grafo solo en el editor.
+                // In Edit the graph does not evaluate transitions (it only advances the time
+                // of the entry state); otherwise, the "animation
+                // finished" conditions would walk the graph by themselves only in the editor.
                 applySkinnedFrame(*go, renderer, dt, renderer.isPlaying());
             });
 
-            // Luces de la escena, después del traverse: los worldTransform del
-            // frame ya están propagados y de ellos salen posición y dirección.
-            // Va por frame y no en un evento porque mover el GameObject de una
-            // luz tiene que moverla en el acto, igual que el transform de una
-            // malla.
-            // El TOTAL, no el recortado: ver el comentario del camino DX12.
+            // Scene lights, after the traverse: the frame's worldTransform are
+            // already propagated and position and direction come from them.
+            // It goes per frame and not in an event because moving a light's
+            // GameObject has to move it right away, just like a mesh's
+            // transform.
+            // The TOTAL, not the trimmed one: see the comment of the DX12 path.
             const size_t totalLuces = scene.collectLights(frameLights, frameLightRadii);
             renderer.setSceneLightTotal(totalLuces);
             if (totalLuces > 0)
@@ -1172,24 +1172,24 @@ int main()
                 renderer.setLightRadii({});
             }
 
-            // Canvas de UI: la resolución, los widgets y la jerarquía de CADA
-            // canvas de la escena salen de sus componentes, no de uno cableado
-            // aquí. Va por frame y no en un evento porque tocar un campo en
-            // Properties tiene que verse en el acto — también fuera de Play,
-            // que es cuando se pinta el gizmo del área útil. Sin ningún Canvas
-            // la lista va vacía y syncUiCanvases deja limpio lo que hubiera.
+            // UI canvas: the resolution, widgets and hierarchy of EACH
+            // scene canvas come from their components, not from one wired
+            // here. It goes per frame and not in an event because touching a field in
+            // Properties has to be seen right away — also outside Play,
+            // which is when the usable-area gizmo is drawn. Without any Canvas
+            // the list is empty and syncUiCanvases leaves clean whatever there was.
             uiBindings.clear();
             scene.collectCanvases(uiBindings);
             renderer.syncUiCanvases(uiBindings);
 
-            // Input de la UI: sin esto el árbol no resuelve estados, así que los
-            // cinco colores del botón, el fundido y el Click no harían nada.
-            // El RATÓN solo entra en Play (como en Unity: en edición un botón no
-            // se ilumina al pasarle por encima), pero el tiempo entra siempre —
-            // así el estado Normal se aplica en cuanto se edita su color y se ve
-            // sin darle a Play. La imagen del viewport se dibuja 1:1 con el
-            // render, así que restarle su esquina al ratón ya da el píxel del
-            // canvas, sin escalar nada.
+            // UI input: without this the tree does not resolve states, so the
+            // five button colors, the fade and the Click would do nothing.
+            // The MOUSE only enters in Play (as in Unity: in editing a button is not
+            // highlighted when hovered), but time always enters —
+            // so the Normal state applies as soon as its color is edited and is seen
+            // without pressing Play. The viewport image is drawn 1:1 with the
+            // render, so subtracting its corner from the mouse already gives the canvas
+            // pixel, without scaling anything.
             {
                 DonTopo::UiInputState uiInput;
                 if (editor.isPlaying() && editor.isViewportImageHovered())
@@ -1200,37 +1200,37 @@ int main()
                     uiInput.mouseDown[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
                     uiInput.mouseDown[1] = ImGui::IsMouseDown(ImGuiMouseButton_Right);
                     uiInput.mouseDown[2] = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-                    // La rueda ya la lee ImGui: se le pide a él en vez de
-                    // duplicar un callback de GLFW.
+                    // The wheel is already read by ImGui: it is asked of it instead of
+                    // duplicating a GLFW callback.
                     uiInput.scrollDelta = ImGui::GetIO().MouseWheel;
                 }
                 else
                 {
-                    // Fuera de todo el canvas: ningún botón queda en Hover.
+                    // Outside the whole canvas: no button is left in Hover.
                     uiInput.mousePos = glm::vec2(-1.0f, -1.0f);
                 }
-                // Teclado y mando SOLO en Play, igual que el ratón: en edición
-                // el Tab y las flechas son del editor, no del juego.
+                // Keyboard and gamepad ONLY in Play, like the mouse: in editing
+                // Tab and the arrows belong to the editor, not to the game.
                 if (editor.isPlaying() && !ImGui::GetIO().WantCaptureKeyboard)
                     DonTopo::fillUiInputKeys(uiInput);
                 else
-                    // Mismo motivo que en el camino de D3D12: los dos gates no
-                    // coinciden, y lo que no se consume no puede cruzar el frame.
+                    // Same reason as in the D3D12 path: the two gates do not
+                    // coincide, and what is not consumed cannot cross the frame.
                     DonTopo::discardUiInputChars();
                 uiInput.timeSeconds = (float)glfwGetTime();
-                // A TODOS los canvas de pantalla, no solo al primero: ver
+                // To ALL the screen canvases, not just the first: see
                 // dispatchUiInput.
                 renderer.screenUiCanvases(uiCanvases);
                 DonTopo::dispatchUiInput(uiCanvases, uiInput);
             }
 
-            // --- Gizmos: demo de depuración visual (bbox, ray, frustum) ---
-            // Los ejes ya no se dibujan fijos aquí: ViewportPanel::drawSelectionGizmo()
-            // los muestra automáticamente sobre cualquier GameObject seleccionado.
-            // liveCube (capturado en el traverse de arriba, no el puntero `cube`
-            // cacheado en el setup) evita un use-after-free si el usuario borró el
-            // GameObject "cube" desde el editor: scene.traverse() solo visita nodos
-            // vivos, así que liveCube queda nullptr ese frame en vez de colgante.
+            // --- Gizmos: visual debug demo (bbox, ray, frustum) ---
+            // The axes are no longer drawn fixed here: ViewportPanel::drawSelectionGizmo()
+            // shows them automatically on any selected GameObject.
+            // liveCube (captured in the traverse above, not the `cube` pointer
+            // cached in the setup) avoids a use-after-free if the user deleted the
+            // "cube" GameObject from the editor: scene.traverse() only visits live
+            // nodes, so liveCube is nullptr that frame instead of dangling.
             if (liveCube)
             {
                 DonTopo::Gizmos::drawRay(
@@ -1249,22 +1249,22 @@ int main()
             window.pollEvents();
         }
 
-        // El proveedor de drops captura `ctx` por referencia, y ctx (declarado
-        // DESPUÉS de editor, porque guarda punteros a él) muere antes que el
-        // editor. Soltarlo aquí evita que quede una lambda colgando durante el
-        // resto del apagado.
+        // The drops provider captures `ctx` by reference, and ctx (declared
+        // AFTER editor, because it stores pointers to it) dies before the
+        // editor. Releasing it here avoids leaving a lambda dangling during the
+        // rest of the shutdown.
         editor.setDroppedFilesProvider(nullptr);
 
-        // PRIMERO el JobSystem: si se destruyera después del Renderer/Scene, un
-        // worker aún en vuelo (un ReadFile de FBX a medias) podría tocar memoria
-        // ya liberada. El join de shutdown() garantiza que ningún hilo sigue vivo
-        // antes de empezar a destruir el resto.
+        // The JobSystem FIRST: if it were destroyed after the Renderer/Scene, a
+        // worker still in flight (a half-done FBX ReadFile) could touch memory
+        // already freed. The join in shutdown() guarantees that no thread is alive
+        // before starting to destroy the rest.
         jobSystem.shutdown();
 
-        // Libera explícitamente colliders/audioclips antes de destruir
-        // physics/audio: sin esto, ~BoxCollider() intentaría release() un
-        // PxRigidDynamic sobre una PxScene ya liberada (o ~AudioClipComponent
-        // llamaría a un AudioManager ya destruido).
+        // Explicitly releases colliders/audioclips before destroying
+        // physics/audio: without this, ~BoxCollider() would try to release() a
+        // PxRigidDynamic on an already released PxScene (or ~AudioClipComponent
+        // would call an already destroyed AudioManager).
         scene.shutdown();
         audio.shutdown();
         physics.shutdown();

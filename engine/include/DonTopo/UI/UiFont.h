@@ -1,21 +1,21 @@
 #pragma once
 
-// Fuente de la UI de juego: un atlas MSDF horneado desde un TTF.
+// Game UI font: an MSDF atlas baked from a TTF.
 //
-// Un MSDF guarda la DISTANCIA al contorno en tres canales, no el color del
-// glyph. Por eso el texto se ve nítido a cualquier tamaño sin rehornear nada:
-// el atlas se hornea UNA vez a bakeSize() y el tamaño final sale de escalar el
-// quad; el shader reconstruye el borde con la mediana de los tres canales.
+// An MSDF stores the DISTANCE to the outline in three channels, not the glyph's
+// color. That is why the text looks sharp at any size without rebaking anything:
+// the atlas is baked ONCE at bakeSize() and the final size comes from scaling the
+// quad; the shader reconstructs the edge with the median of the three channels.
 //
-// Dos mitades, igual que UiTextureAtlas:
-//   - CPU pura: métricas por glyph, kerning y el escalado a un fontSize dado.
-//     No toca ni FreeType ni Vulkan, se puede rellenar a mano y es lo que
-//     ejercitan los tests.
-//   - GPU: loadFromFile() abre el TTF, hornea el atlas y lo sube.
+// Two halves, just like UiTextureAtlas:
+//   - Pure CPU: per-glyph metrics, kerning and scaling to a given fontSize.
+//     It touches neither FreeType nor Vulkan, can be filled in by hand and is what
+//     the tests exercise.
+//   - GPU: loadFromFile() opens the TTF, bakes the atlas and uploads it.
 //
-// La fuente CONTIENE su UiTextureAtlas en vez de heredar de él: así el
-// registro de descriptor (UiSpriteBatch::registerAtlas) y el agrupado por
-// atlas del batcher funcionan tal cual, sin una segunda ruta para el texto.
+// The font CONTAINS its UiTextureAtlas instead of inheriting from it: this way the
+// descriptor registration (UiSpriteBatch::registerAtlas) and the batcher's grouping by
+// atlas work as they are, without a second path for text.
 
 #include "DonTopo/UI/UiTextureAtlas.h"
 
@@ -29,7 +29,7 @@ namespace DonTopo
     class GpuDevice;
     class GpuResources;
 
-    // Tramo CERRADO de codepoints, [first, last]. Un codepoint suelto es
+    // CLOSED span of codepoints, [first, last]. A single codepoint is
     // first == last.
     struct UiCodepointRange
     {
@@ -37,15 +37,15 @@ namespace DonTopo
         uint32_t last  = 0;
     };
 
-    // Lo que se hornea cuando nadie pide otra cosa: ASCII imprimible, el
-    // suplemento Latin-1 entero (á é í ó ú ü ñ Ñ ¿ ¡ « » º ª) y dos sueltos, el
-    // '…' que pide UiTextOverflow::Ellipsis y el '€'. Los controles 127..159 se
-    // quedan fuera porque no tienen dibujo.
+    // What is baked when nobody asks for anything else: printable ASCII, the
+    // whole Latin-1 supplement (á é í ó ú ü ñ Ñ ¿ ¡ « » º ª) and two loose ones, the
+    // '…' that UiTextOverflow::Ellipsis asks for and the '€'. The controls 127..159 are
+    // left out because they have no drawing.
     //
-    // Ampliar el rango es barato: un codepoint que la fuente NO trae ni se
-    // hornea ni ocupa sitio en el atlas. Y quedarse corto es caro y mudo —
-    // shapeText salta el codepoint sin glyph sin dejar ni hueco, así que "Año"
-    // sale "Ao" y no hay ni un log que lo cuente.
+    // Widening the range is cheap: a codepoint that the font does NOT have is neither
+    // baked nor takes space in the atlas. And falling short is expensive and silent:
+    // shapeText skips the codepoint without a glyph without even leaving a gap, so "Año"
+    // comes out "Ao" and there is not a single log to tell.
     inline const std::vector<UiCodepointRange>& defaultUiCodepointRanges()
     {
         static const std::vector<UiCodepointRange> ranges = {
@@ -54,22 +54,22 @@ namespace DonTopo
         return ranges;
     }
 
-    // Todo en PÍXELES DEL TAMAÑO DE HORNEADO (bakeSize). Quien dibuja escala
-    // por fontSize/bakeSize.
+    // Everything in PIXELS OF THE BAKE SIZE (bakeSize). Whoever draws scales
+    // by fontSize/bakeSize.
     struct UiGlyph
     {
-        // Área del glyph DENTRO del atlas, en píxeles. Incluye el margen que
-        // necesita el campo de distancia: el quad se dibuja con este tamaño,
-        // no con el del contorno.
+        // Area of the glyph INSIDE the atlas, in pixels. It includes the margin that
+        // the distance field needs: the quad is drawn with this size,
+        // not with the outline's.
         UiSpriteRect rect{};
 
-        // Del cursor (pluma) al borde IZQUIERDO del quad, +X a la derecha.
+        // From the cursor (pen) to the LEFT edge of the quad, +X to the right.
         float bearingX = 0.0f;
-        // De la línea base al borde SUPERIOR del quad, +Y hacia ARRIBA. Ojo:
-        // el canvas tiene +Y hacia abajo, así que el batcher lo RESTA.
+        // From the baseline to the TOP edge of the quad, +Y UPWARD. Careful:
+        // the canvas has +Y downward, so the batcher SUBTRACTS it.
         float bearingY = 0.0f;
-        // Cuánto avanza el cursor tras este glyph. No tiene por qué parecerse
-        // ni al ancho del rect ni al bearing.
+        // How far the cursor advances after this glyph. It does not have to resemble
+        // either the rect's width or the bearing.
         float advance = 0.0f;
     };
 
@@ -80,14 +80,14 @@ namespace DonTopo
 
         // --- CPU ---------------------------------------------------------------
 
-        // Tamaño al que se horneó el atlas. Es el denominador de todo escalado:
-        // a 0 la fuente no dibuja nada en vez de dividir por cero.
+        // Size the atlas was baked at. It is the denominator of all scaling:
+        // at 0 the font draws nothing instead of dividing by zero.
         void  setBakeSize(float px) { m_bakeSize = px; }
         float bakeSize() const { return m_bakeSize; }
 
-        // Anchura, en píxeles del atlas, de la banda donde el campo de
-        // distancia es válido. Es lo que el shader necesita para saber cuántos
-        // píxeles de pantalla cubre el borde.
+        // Width, in atlas pixels, of the band where the distance field
+        // is valid. It is what the shader needs to know how many screen
+        // pixels the edge covers.
         void  setPixelRange(float px) { m_pixelRange = px; }
         float pixelRange() const { return m_pixelRange; }
 
@@ -99,84 +99,84 @@ namespace DonTopo
         void addGlyph(uint32_t codepoint, const UiGlyph& glyph) { m_glyphs[codepoint] = glyph; }
         const UiGlyph* findGlyph(uint32_t codepoint) const;
 
-        // Corrección ENTRE dos glyphs consecutivos, en píxeles de horneado.
-        // Suele ser negativa (acerca el par). Un par sin entrada vale 0.
+        // Correction BETWEEN two consecutive glyphs, in bake pixels.
+        // It is usually negative (brings the pair closer). A pair with no entry is worth 0.
         void  setKerning(uint32_t left, uint32_t right, float amount);
         float kerning(uint32_t left, uint32_t right) const;
 
-        // UVs del glyph a partir de su rect y del tamaño del atlas. No pasa por
-        // los sprites con nombre de UiTextureAtlas: un glyph no tiene nombre.
+        // UVs of the glyph from its rect and the atlas size. It does not go through
+        // UiTextureAtlas's named sprites: a glyph has no name.
         UiUvRect glyphUv(const UiGlyph& glyph) const;
 
-        // Factor por el que hay que multiplicar TODAS las métricas para dibujar
-        // a fontSize. Con bakeSize a 0 devuelve 0.
+        // Factor by which ALL the metrics must be multiplied to draw
+        // at fontSize. With bakeSize at 0 it returns 0.
         float scaleFor(float fontSize) const;
 
         UiTextureAtlas&       atlas()       { return m_atlas; }
         const UiTextureAtlas& atlas() const { return m_atlas; }
 
-        // Una fuente sin glyphs no dibuja: el batcher sale antes de recorrer
-        // nada. Que el atlas esté o no subido a la GPU es otra cosa (los tests
-        // van sin Vulkan).
+        // A font without glyphs does not draw: the batcher exits before walking
+        // anything. Whether or not the atlas is uploaded to the GPU is another matter (the tests
+        // run without Vulkan).
         bool hasGlyphs() const { return !m_glyphs.empty(); }
 
-        // UTF-8 -> codepoints. Los bytes inválidos dan U+FFFD en vez de
-        // desincronizar el resto de la cadena.
+        // UTF-8 -> codepoints. Invalid bytes give U+FFFD instead of
+        // desynchronizing the rest of the string.
         static std::vector<uint32_t> decodeUtf8(const std::string& text);
-        // Misma decodificacion sobre un vector REUTILIZADO: el batcher pasa por
-        // aqui cada frame, y la version que devuelve por valor asignaria uno
-        // nuevo por cada texto del canvas.
+        // The same decoding over a REUSED vector: the batcher goes through
+        // here every frame, and the version that returns by value would allocate a new
+        // one for every text in the canvas.
         static void decodeUtf8(const std::string& text, std::vector<uint32_t>& out);
 
         // --- GPU ---------------------------------------------------------------
 
-        // Hornea los rangos de codepoints del TTF a un atlas MSDF y lo sube. El
-        // atlas queda UNORM: un MSDF son distancias, y una vista SRGB las
-        // deforma sin dar ni un error de validación.
+        // Bakes the TTF's codepoint ranges into an MSDF atlas and uploads it. The
+        // atlas stays UNORM: an MSDF is distances, and an SRGB view distorts
+        // them without giving a single validation error.
         bool loadFromFile(GpuDevice& gpu, GpuResources& res, const std::string& path,
                           float bakePx = 48.0f,
                           const std::vector<UiCodepointRange>& ranges = defaultUiCodepointRanges());
 
-        // El horneado a secas: FreeType, MSDF, métricas y kerning, sin tocar la
-        // GPU. Deja los píxeles en el atlas (UiTextureAtlas::sourcePixels) para
-        // que los suba quien sepa hacerlo. loadFromFile es esto y la subida.
+        // The bare bake: FreeType, MSDF, metrics and kerning, without touching the
+        // GPU. It leaves the pixels in the atlas (UiTextureAtlas::sourcePixels) for
+        // whoever knows how to upload them. loadFromFile is this plus the upload.
         //
-        // threads reparte el MSDF de cada glyph, que es el 90% del coste y es
-        // independiente glyph a glyph: 0 = los hilos del hardware, 1 = la ruta
-        // secuencial. El resultado NO depende del número de hilos (el
-        // empaquetado se decide antes y cada glyph escribe en su rect), y eso es
-        // justo lo que compara el test byte a byte.
+        // threads splits the MSDF of each glyph, which is 90% of the cost and is
+        // independent glyph by glyph: 0 = the hardware threads, 1 = the sequential
+        // path. The result does NOT depend on the number of threads (the
+        // packing is decided beforehand and each glyph writes into its own rect), and that is
+        // exactly what the test compares byte by byte.
         bool bakeFromFile(const std::string& path, float bakePx = 48.0f,
                           const std::vector<UiCodepointRange>& ranges = defaultUiCodepointRanges(),
                           unsigned threads = 0);
 
-        // Lo mismo, pero pasando por una caché en DISCO: el atlas horneado se
-        // guarda tal cual y el siguiente arranque lo lee en milisegundos en vez
-        // de volver a pasar por FreeType y msdfgen. Es lo que usan los dos
-        // backends, porque el horneado es síncrono y el editor se para en seco
-        // la primera vez que un texto pide su fuente.
+        // The same, but going through a DISK cache: the baked atlas is
+        // saved as is and the next startup reads it in milliseconds instead
+        // of going through FreeType and msdfgen again. It is what both
+        // backends use, because the bake is synchronous and the editor stops dead
+        // the first time a text asks for its font.
         //
-        // La entrada vale mientras no cambien ni el TTF (tamaño y fecha), ni
-        // bakePx, ni pixelRange, ni los rangos. Cualquier problema con el
-        // fichero —que no esté, que sea de otra versión, que esté a medias o
-        // corrupto— se resuelve horneando: la caché NUNCA es la única fuente de
-        // verdad. Guardarla es best-effort; que falle no rompe el horneado.
+        // The entry is valid as long as neither the TTF (size and date), nor
+        // bakePx, nor pixelRange, nor the ranges change. Any problem with the
+        // file (missing, from another version, half-written or
+        // corrupt) is solved by baking: the cache is NEVER the only source of
+        // truth. Saving it is best-effort; if it fails the bake does not break.
         bool bakeFromFileCached(const std::string& path, float bakePx = 48.0f,
                                 const std::vector<UiCodepointRange>& ranges = defaultUiCodepointRanges(),
                                 unsigned threads = 0);
 
-        // Dónde vive la caché, relativo al directorio de trabajo. Vacío = sin
-        // caché (los tests hornean de verdad). Un atlas ocupa el tamaño del
-        // bitmap RGBA, unos 4 MB a 1024x1024.
+        // Where the cache lives, relative to the working directory. Empty = no
+        // cache (the tests really bake). An atlas takes the size of the
+        // RGBA bitmap, about 4 MB at 1024x1024.
         static void               setCacheDirectory(std::string dir);
         static const std::string& cacheDirectory();
 
         void destroy(GpuDevice& gpu) { m_atlas.destroy(gpu); }
 
     private:
-        // Las dos mitades de la caché. Cargar deja la fuente lista (métricas,
-        // glyphs, kerning y píxeles del atlas); guardar escribe a un temporal y
-        // renombra, para que un cierre a medias no deje una entrada rota.
+        // The two halves of the cache. Loading leaves the font ready (metrics,
+        // glyphs, kerning and atlas pixels); saving writes to a temporary and
+        // renames, so a half-finished shutdown does not leave a broken entry.
         bool loadFromCache(const std::string& path, float bakePx,
                            const std::vector<UiCodepointRange>& ranges);
         bool saveToCache(const std::string& path, float bakePx,
@@ -191,8 +191,8 @@ namespace DonTopo
         float m_lineHeight = 0.0f;
 
         std::unordered_map<uint32_t, UiGlyph> m_glyphs;
-        // Clave = (izquierdo << 32) | derecho: un solo mapa en vez de un mapa
-        // de mapas, y el par ausente ni se guarda.
+        // Key = (left << 32) | right: a single map instead of a map
+        // of maps, and the absent pair is not even stored.
         std::unordered_map<uint64_t, float> m_kerning;
     };
 }

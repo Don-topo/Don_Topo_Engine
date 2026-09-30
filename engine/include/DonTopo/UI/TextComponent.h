@@ -24,22 +24,22 @@
 
 namespace DonTopo
 {
-    // Una etiqueta de la UI 2D como componente de GameObject, con el MISMO
-    // contrato que CanvasComponent y ButtonComponent: SOLO DATOS. No guarda ni
-    // un UiElement ni la fuente — el árbol vivo lo sigue teniendo el Renderer
-    // (Renderer::uiCanvas()), y quien dibuja lo reconstruye/actualiza cada frame
-    // con syncUiWidgets(). Así lo que se ve en Play y en el juego exportado sale
-    // de la ESCENA y no de un árbol cableado a mano.
+    // A 2D UI label as a GameObject component, with the SAME
+    // contract as CanvasComponent and ButtonComponent: DATA ONLY. It holds neither
+    // a UiElement nor the font. The live tree is still held by the Renderer
+    // (Renderer::uiCanvas()), and whoever draws rebuilds/updates it every frame
+    // with syncUiWidgets(). This way what is seen in Play and in the exported game comes from
+    // the SCENE and not from a hand-wired tree.
     //
-    // Los nombres, los defaults y el significado son EXACTAMENTE los del núcleo:
-    //   - el bloque de rect es de UiElement (UiCanvas.h), el mismo que replica
-    //     ButtonComponent,
-    //   - el resto son TODOS los campos de Text (UiWidgets.h), salvo `font`.
-    // Este componente no interpreta ni clampa nada.
+    // The names, defaults and meaning are EXACTLY those of the core:
+    //   - the rect block belongs to UiElement (UiCanvas.h), the same one
+    //     ButtonComponent replicates,
+    //   - the rest are ALL the fields of Text (UiWidgets.h), except `font`.
+    // This component neither interprets nor clamps anything.
     //
-    // fontPath es lo ÚNICO que no es un campo del núcleo: el núcleo guarda un
-    // puntero a un recurso de GPU, que no se serializa. La resuelve el sync
-    // contra el Renderer, no el componente.
+    // fontPath is the ONLY thing that is not a core field: the core holds a
+    // pointer to a GPU resource, which is not serialized. The sync resolves it
+    // against the Renderer, not the component.
     class TextComponent
     {
         public:
@@ -47,14 +47,14 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};   // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};   // px, relative to the anchor
             glm::vec2 size{160.0f, 40.0f};    // px
-            glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};   // relleno del glyph
+            glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};   // glyph fill
             bool      visible = true;
 
-            // --- Texto (Text) -------------------------------------------------
+            // --- Text (Text) --------------------------------------------------
             std::string text;
-            std::string fontPath;   // TTF; vacía = la fuente por defecto
+            std::string fontPath;   // TTF; empty = the default font
             float       fontSize = 16.0f;
 
             float     outlineWidth = 0.0f;
@@ -71,8 +71,8 @@ namespace DonTopo
             float boldStrength = 0.08f;
             float italicSkew   = 0.25f;
 
-            // Vuelca el rect y el texto en el nodo vivo. NO toca `font` (es un
-            // puntero a GPU: lo resuelve el sync).
+            // Dumps the rect and the text into the live node. Does NOT touch `font` (it is a
+            // GPU pointer: the sync resolves it).
             void applyTo(Text& t) const
             {
                 t.anchorMin = anchorMin;
@@ -97,9 +97,9 @@ namespace DonTopo
                 t.italicSkew   = italicSkew;
             }
 
-            // El sync lo usa para saber si hay algo que volcar: sin esto habría
-            // que ensuciar el nodo TODOS los frames, que es justo lo que la
-            // caché de vértices del canvas existe para evitar.
+            // The sync uses it to know whether there is anything to dump: without this the
+            // node would have to be dirtied EVERY frame, which is exactly what the
+            // canvas's vertex cache exists to avoid.
             bool operator==(const TextComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -115,18 +115,18 @@ namespace DonTopo
             bool operator!=(const TextComponent& o) const { return !(*this == o); }
     };
 
-    // Nombre del nodo vivo de un Text dentro del canvas. Mismo papel que
-    // uiButtonNodeName (única forma de volver del árbol de UI al GameObject) y
-    // con prefijo DISTINTO a propósito: un GameObject puede llevar Button y Text
-    // a la vez, y dos nodos hermanos con el mismo nombre harían que el gizmo y
-    // el picking cogieran el que no toca.
+    // Name of a Text's live node inside the canvas. Same role as
+    // uiButtonNodeName (the only way back from the UI tree to the GameObject) and
+    // with a DIFFERENT prefix on purpose: a GameObject can carry Button and Text
+    // at once, and two sibling nodes with the same name would make the gizmo and
+    // picking grab the wrong one.
     inline std::string uiTextNodeName(uint64_t ownerId)
     {
         return "txt:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiTextNodeName. Devuelve 0 si el nombre no es de un Text: 0 no
-    // es un id válido de GameObject.
+    // Inverse of uiTextNodeName. Returns 0 if the name is not a Text's: 0 is not
+    // a valid GameObject id.
     inline uint64_t uiTextOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("txt:", 0) != 0) return 0;
@@ -143,7 +143,7 @@ namespace DonTopo
 
 }
 
-// Compatibilidad: la maquinaria de sync se mudó a UiWidgetSync.h y hay ~80
-// puntos de llamada que incluyen este fichero esperando encontrarla. Se incluye
-// al FINAL a propósito: UiWidgetSync.h necesita TextComponent completo.
+// Compatibility: the sync machinery moved to UiWidgetSync.h and there are ~80
+// call sites that include this file expecting to find it. It is included
+// at the END on purpose: UiWidgetSync.h needs the complete TextComponent.
 #include "DonTopo/UI/UiWidgetSync.h"

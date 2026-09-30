@@ -8,7 +8,7 @@
 #include "DonTopo/Editor/UndoManager.h" // BoxColliderState, SphereColliderState, CapsuleColliderState, PlaneColliderState
 #include "DonTopo/Editor/DeferredSlider.h"
 #include "DonTopo/Core/CameraComponent.h"
-#include "DonTopo/Core/GameObject.h" // uiComponentsAvailable necesita el tipo completo
+#include "DonTopo/Core/GameObject.h" // uiComponentsAvailable needs the complete type
 
 namespace IGFD { class FileDialog; }
 
@@ -22,8 +22,8 @@ class PlaneCollider;
 class Rigidbody;
 struct EditorContext;
 
-// Ventana "Properties" — transform, colliders (Box/Sphere/Capsule/Plane),
-// Mesh, Audio Clip, Scripts y el botón "Add" con su popup "Nuevo Script".
+// "Properties" window: transform, colliders (Box/Sphere/Capsule/Plane),
+// Mesh, Audio Clip, Scripts and the "Add" button with its "New Script" popup.
 class PropertiesPanel {
 public:
     PropertiesPanel();
@@ -33,33 +33,32 @@ public:
 
     void draw(EditorContext& ctx);
 
-    // Tira la caché de nombres de sprite. La llama quien toque un sidecar por
-    // fuera (el editor de sprites): sin esto los combos siguen enseñando la
-    // lista con la que se abrió la sección.
+    // Drops the sprite name cache. Whoever touches a sidecar from outside (the sprite
+    // editor) calls it: without this the combos keep showing the list the section
+    // was opened with.
     void invalidateSpriteNames() { m_spriteNamesValid = false; }
     bool* GetOpenPtr() { return &m_open; }
-    // Olvida TODO lo que las secciones tengan cacheado. Dos llamantes:
-    //   - ScenePanel borró el nodo seleccionado: los punteros apuntan a
-    //     componentes ya liberados y no pueden sobrevivir al frame.
-    //   - Undo/Redo: mutan los componentes en sitio, así que la sección tiene
-    //     que volver a leerlos o se queda enseñando el valor deshecho.
+    // Forgets EVERYTHING the sections have cached. Two callers:
+    //   - ScenePanel deleted the selected node: the pointers point to components
+    //     that are already freed and cannot survive the frame.
+    //   - Undo/Redo: they mutate the components in place, so the section has to
+    //     read them again or it keeps showing the undone value.
     void invalidateCaches();
 
-    // ¿La carga `job` que acaba de aterrizar en `targetId` la pidió el usuario
-    // desde la sección Mesh? Si sí, la olvida y devuelve true. La llama
-    // EditorUI::onAssetsLoaded para decidir si apila el undo de "añadir Mesh":
-    // la carga de escena usa el mismo requestMesh y no es una edición. Por
-    // objeto Y job, no solo por objeto: una recarga de la misma escena
-    // conserva los ids, así que una petición cancelada que se quedara aquí
-    // colaría la carga de escena de ese objeto como si fuera del usuario.
+    // Was the load `job` that has just landed on `targetId` requested by the user
+    // from the Mesh section? If so, it forgets it and returns true. EditorUI::onAssetsLoaded
+    // calls it to decide whether to stack the "add Mesh" undo: scene loading uses
+    // the same requestMesh and is not an edit. By object AND job, not only by object:
+    // a reload of the same scene keeps the ids, so a cancelled request that stayed
+    // here would sneak that object's scene load in as if it were the user's.
     bool consumeUserMeshJob(uint64_t targetId, uint64_t job);
 
-    // Un GameObject solo ofrece los componentes de UI si YA tiene Canvas: el
-    // Canvas es la raíz de la que cuelgan. Es la única fuente de verdad del
-    // gate (la usa el popup "Add"), y está aquí y no dentro del ImGui pa que
-    // se pueda probar sin GUI.
-    // Vale el Canvas del propio GameObject o el de CUALQUIER ancestro: un botón
-    // cuelga normalmente del Canvas, no es el Canvas.
+    // A GameObject only offers the UI components if it ALREADY has a Canvas: the
+    // Canvas is the root they hang from. It is the only source of truth for the
+    // gate (the "Add" popup uses it), and it is here and not inside the ImGui code so
+    // that it can be tested without a GUI.
+    // The GameObject's own Canvas or the one of ANY ancestor counts: a button
+    // normally hangs from the Canvas, it is not the Canvas.
     static bool uiComponentsAvailable(const GameObject* go)
     {
         for (const GameObject* n = go; n; n = n->parent)
@@ -67,11 +66,11 @@ public:
         return false;
     }
 
-    // Qué acepta cada caja de asset del Button: las de fuente son las que abre
-    // FreeType (UiFont::loadFromFile) y las de atlas las que lee stb_image
-    // (UiTextureAtlas::loadFromFile). Aquí y no dentro del ImGui para poder
-    // probarlas sin GUI, igual que uiComponentsAvailable. La comparación es en
-    // minúsculas: del content browser puede llegar un ".PNG".
+    // What each asset box of the Button accepts: the font ones are those FreeType
+    // opens (UiFont::loadFromFile) and the atlas ones those stb_image reads
+    // (UiTextureAtlas::loadFromFile). Here and not inside the ImGui code so they can
+    // be tested without a GUI, like uiComponentsAvailable. The comparison is in
+    // lowercase: a ".PNG" can arrive from the content browser.
     static bool isUiFontPath(const std::string& path)
     {
         static const char* const kExts[] = { ".ttf", ".otf", ".ttc" };
@@ -89,8 +88,8 @@ private:
     {
         const size_t dot = path.find_last_of('.');
         if (dot == std::string::npos) return false;
-        // Un punto que quede ANTES del último separador es de un directorio
-        // ("C:/mis.cosas/fuente"), no una extensión.
+        // A dot that comes BEFORE the last separator belongs to a directory
+        // ("C:/my.stuff/font"), it is not an extension.
         const size_t sep = path.find_last_of("/\\");
         if (sep != std::string::npos && dot < sep) return false;
         std::string ext = path.substr(dot);
@@ -101,18 +100,18 @@ private:
         return false;
     }
 
-    // Caja de asset de los componentes de UI, calcada a la del Mesh: botón
-    // "Browse..." y debajo la zona de drop de 40 px con su mensaje. La ruta
-    // editable a mano la dibuja el llamante justo ANTES de llamar aquí: cada
-    // sección tiene su propio inputText —con su accessor tipado, su undo y su
-    // tooltip— y meterlo en el helper obligaría a duplicar la etiqueta (la del
-    // Text de arriba y la que ImGui pinta a la derecha del campo).
+    // Asset box of the UI components, modeled on the Mesh one: "Browse..." button
+    // and below it the 40 px drop zone with its message. The hand-editable path is
+    // drawn by the caller right BEFORE calling here: each section has its own
+    // inputText (with its typed accessor, its undo and its tooltip) and putting it
+    // in the helper would force duplicating the label (the one of the Text above
+    // and the one ImGui draws to the right of the field).
     //
-    // idSuffix identifica la caja: alimenta el id del botón y el del hijo, que
-    // tienen que ser únicos dentro del panel. onBrowse abre el file dialog del
-    // sitio (cada uno con su instancia, su owner y su flag) y onDrop aplica la
-    // ruta soltada; el veto por extensión sigue viviendo en los set*Path, que
-    // es por donde pasan los dos orígenes, no aquí.
+    // idSuffix identifies the box: it feeds the id of the button and of the child,
+    // which have to be unique within the panel. onBrowse opens the file dialog of the
+    // place (each with its own instance, owner and flag) and onDrop applies the
+    // dropped path; the extension veto still lives in the set*Path functions, which
+    // is where both origins go through, not here.
     void drawAssetDropBox(EditorContext& ctx, const char* idSuffix, const char* hint,
                           const std::function<void()>& onBrowse,
                           const std::function<void(const std::string&)>& onDrop);
@@ -125,163 +124,163 @@ private:
     void drawCameraSection(EditorContext& ctx);
     void drawAnimatorSection(EditorContext& ctx);
     void drawMeshSection(EditorContext& ctx);
-    // Las tres texturas de cada material del mesh. Va DENTRO de la sección
-    // Mesh, sin Add-gate propio: no es un componente nuevo, es parte del que ya
-    // está puesto.
+    // The three textures of each material of the mesh. It goes INSIDE the Mesh
+    // section, without its own Add-gate: it is not a new component, it is part of
+    // the one that is already set.
     void drawTexturesSection(EditorContext& ctx);
-    // Empuje en vivo de los factores mientras se arrastra un slider: va a la
-    // GPU y NO al Material ni al stack de undo (ver el comentario del .cpp).
+    // Live push of the factors while a slider is dragged: it goes to the GPU and NOT
+    // to the Material nor to the undo stack (see the comment in the .cpp).
     void previewMaterialFactors(EditorContext& ctx, uint64_t ownerId,
                                 float metallic, float roughness);
-    // path vacío = Clear. Un solo sitio del que salen las seis llamadas
-    // (tres slots x drop y browse) y el único que apila el comando. ownerId en
-    // vez de leer ctx.selected: el resultado del diálogo de Browse llega varios
-    // frames después de abrirlo, y ningún diálogo de este panel es modal —la
-    // selección pudo cambiar mientras tanto—, así que resuelve el GameObject
-    // por id, mismo patrón que setButtonAssetPath.
+    // empty path = Clear. A single place from which the six calls come out
+    // (three slots x drop and browse) and the only one that stacks the command.
+    // ownerId instead of reading ctx.selected: the result of the Browse dialog
+    // arrives several frames after opening it, and no dialog of this panel is modal
+    // (the selection may have changed in the meantime), so it resolves the
+    // GameObject by id, same pattern as setButtonAssetPath.
     void assignMaterialTexture(EditorContext& ctx, uint64_t ownerId, int materialIndex,
                                 MaterialTextureSlot slot, const std::string& path);
-    // Vincula (o desvincula, con path vacio) un .mat a un slot de material.
-    // Mismo patron que assignMaterialTexture: resuelve por id, valida indice y
-    // extension, y apila un MaterialAssetCommand.
+    // Links (or unlinks, with an empty path) a .mat to a material slot.
+    // Same pattern as assignMaterialTexture: it resolves by id, validates index and
+    // extension, and stacks a MaterialAssetCommand.
     void assignMaterialAsset(EditorContext& ctx, uint64_t ownerId, int materialIndex,
                              const std::string& path);
-    // Screen Space Reflections del objeto. No es un componente y no pasa por
-    // "Add": son dos campos del GameObject (como el transform), así que la
-    // sección aparece sobre cualquier objeto con malla.
+    // Screen Space Reflections of the object. It is not a component and does not go
+    // through "Add": they are two fields of the GameObject (like the transform), so
+    // the section appears on any object with a mesh.
     void drawSsrSection(EditorContext& ctx);
-    // Reflection Probe. SÍ es un componente y SÍ pasa por "Add": la sección se
-    // esconde hasta que el usuario lo añade, igual que los colliders.
+    // Reflection Probe. It IS a component and it DOES go through "Add": the section
+    // is hidden until the user adds it, just like the colliders.
     void drawReflectionProbeSection(EditorContext& ctx);
-    // Light. También componente y también tras "Add": la sección no existe
-    // hasta que el usuario la añade, igual que los colliders.
+    // Light. Also a component and also behind "Add": the section does not exist
+    // until the user adds it, just like the colliders.
     void drawLightSection(EditorContext& ctx);
     void drawMeshDialog(EditorContext& ctx);
     void drawAudioClipSection(EditorContext& ctx);
-    // Audio Listener: sección mínima (solo Enabled y quitar). Como mucho uno por
-    // escena — el gate de unicidad está en el popup "Add", contra
+    // Audio Listener: minimal section (only Enabled and remove). At most one per
+    // scene; the uniqueness gate is in the "Add" popup, against
     // Scene::findAudioListener.
     void drawAudioListenerSection(EditorContext& ctx);
     void drawReverbZoneSection(EditorContext& ctx);
-    // Canvas: raíz de la UI 2D. Sección tras "Add" como los colliders, con los
-    // 10 campos de resolución que resuelve UiCanvas.
+    // Canvas: root of the 2D UI. Section behind "Add" like the colliders, with the
+    // 10 resolution fields that UiCanvas resolves.
     void drawCanvasSection(EditorContext& ctx);
     void drawButtonSection(EditorContext& ctx);
-    // Drena los file dialogs de las rutas del Button. Fuera de la sección y sin
-    // condicionar a la selección, igual que drawMeshDialog.
+    // Drains the file dialogs of the Button paths. Outside the section and not
+    // conditioned on the selection, just like drawMeshDialog.
     void drawButtonPathDialogs(EditorContext& ctx);
-    // Escribe una ruta de asset del Button (fuente o atlas) resolviendo el
-    // GameObject por id, validando la extensión y dejando el cambio en el stack
-    // de undo. Es el punto único por el que pasan el drop, el file dialog y
-    // cualquier otro origen futuro.
+    // Writes an asset path of the Button (font or atlas), resolving the
+    // GameObject by id, validating the extension and leaving the change on the undo
+    // stack. It is the single point that the drop, the file dialog and any other
+    // future origin go through.
     void setButtonAssetPath(EditorContext& ctx, uint64_t ownerId, bool isFont,
                              const std::string& path);
-    // Nombres de sprite del atlas de una ruta, para poder ELEGIRLOS en vez de
-    // escribirlos a ciegas. Se consultan al renderer (que cachea el atlas por
-    // ruta) y se guardan aquí: sin esta caché, una ruta que no existe se
-    // intentaría abrir en cada frame que la sección esté visible.
+    // Sprite names of the atlas of a path, so they can be PICKED instead of typed
+    // blindly. They are queried from the renderer (which caches the atlas by path)
+    // and stored here: without this cache, a path that does not exist would be
+    // tried again on every frame the section is visible.
     //
-    // La lista se refresca sola al cambiar de ruta. Quien toque el sidecar por
-    // fuera —el editor de sprites— tiene que llamar a invalidateSpriteNames().
+    // The list refreshes by itself when the path changes. Whoever touches the sidecar
+    // from outside (the sprite editor) has to call invalidateSpriteNames().
     const std::vector<std::string>& spriteNamesFor(EditorContext& ctx, const std::string& atlasPath);
 
-    std::string              m_spriteNamesPath;      // ruta de la que salió la lista
+    std::string              m_spriteNamesPath;      // path the list came from
     std::vector<std::string> m_spriteNames;
     bool                     m_spriteNamesValid = false;
-    // Text: etiqueta de la UI 2D. Sección tras "Add" como el Button, con el
-    // mismo rect y TODOS los campos de Text (contorno, sombra, wrap y overflow).
+    // Text: 2D UI label. Section behind "Add" like the Button, with the same rect and
+    // ALL the Text fields (outline, shadow, wrap and overflow).
     void drawTextSection(EditorContext& ctx);
-    // Drena el file dialog de la fuente del Text. Fuera de la sección y sin
-    // condicionar a la selección, por el mismo motivo que drawButtonPathDialogs.
+    // Drains the file dialog of the Text font. Outside the section and not
+    // conditioned on the selection, for the same reason as drawButtonPathDialogs.
     void drawTextPathDialog(EditorContext& ctx);
-    // Escribe la ruta de la fuente del Text resolviendo el GameObject por id,
-    // validando la extensión y dejando el cambio en el stack de undo. Punto
-    // único por el que pasan el drop y el file dialog.
+    // Writes the Text font path, resolving the GameObject by id, validating the
+    // extension and leaving the change on the undo stack. Single point that the
+    // drop and the file dialog go through.
     void setTextFontPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
-    // ProgressBar: barra de progreso de la UI 2D. Sección tras "Add" como el
-    // Button y el Text, con el mismo rect, el valor y su rango, los dos colores
-    // y los dos sprites (del MISMO atlas).
+    // ProgressBar: progress bar of the 2D UI. Section behind "Add" like the Button
+    // and the Text, with the same rect, the value and its range, the two colors and
+    // the two sprites (from the SAME atlas).
     void drawProgressBarSection(EditorContext& ctx);
-    // Drena el file dialog del atlas de la ProgressBar. Fuera de la sección y
-    // sin condicionar a la selección, por el mismo motivo que los del Button.
+    // Drains the file dialog of the ProgressBar atlas. Outside the section and not
+    // conditioned on the selection, for the same reason as the Button ones.
     void drawProgressBarPathDialog(EditorContext& ctx);
-    // Escribe UNA de las tres rutas de imagen de la ProgressBar (field: 0 atlas,
-    // 1 fondo, 2 relleno) resolviendo el GameObject por id, validando la
-    // extensión y dejando el cambio en el stack de undo. Punto único por el que
-    // pasan el drop y el file dialog de las tres cajas.
+    // Writes ONE of the three image paths of the ProgressBar (field: 0 atlas,
+    // 1 background, 2 fill), resolving the GameObject by id, validating the
+    // extension and leaving the change on the undo stack. Single point that the
+    // drop and the file dialog of the three boxes go through.
     void setProgressBarImagePath(EditorContext& ctx, uint64_t ownerId, int field,
                                   const std::string& path);
-    // Layout: el auto-layout de la UI 2D. Sección tras "Add" como los otros tres
-    // componentes de UI, con el rect del contenedor, el modo y sus parámetros
-    // (padding, spacing, celda, columnas), los fitters y el ignoreLayout.
+    // Layout: the auto-layout of the 2D UI. Section behind "Add" like the other three
+    // UI components, with the container rect, the mode and its parameters
+    // (padding, spacing, cell, columns), the fitters and ignoreLayout.
     void drawLayoutSection(EditorContext& ctx);
-    // Panel: el rectángulo de fondo de la UI 2D. Sección tras "Add" como las
-    // otras, con el rect, el color, raycastTarget y el par atlas/sprite.
+    // Panel: the background rectangle of the 2D UI. Section behind "Add" like the
+    // others, with the rect, the color, raycastTarget and the atlas/sprite pair.
     void drawPanelSection(EditorContext& ctx);
-    // Drena el file dialog del atlas del Panel. Fuera de la sección y por el
-    // mismo motivo que el de la ProgressBar: si no se drena siempre, cambiar de
-    // selección con el diálogo abierto deja el flag atascado.
+    // Drains the file dialog of the Panel atlas. Outside the section and for the
+    // same reason as the ProgressBar one: if it is not always drained, changing the
+    // selection with the dialog open leaves the flag stuck.
     void drawPanelPathDialog(EditorContext& ctx);
-    // Escribe la ruta del atlas del Panel (desde el diálogo o desde un drop),
-    // con el veto por extensión en un solo sitio.
+    // Writes the Panel atlas path (from the dialog or from a drop), with the
+    // extension veto in a single place.
     void setPanelAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
 
-    // Image: el sprite de la UI 2D con sus cuatro modos. Mismo patrón que el
-    // Panel más el bloque propio del widget (bordes, tiles y Filled).
+    // Image: the 2D UI sprite with its four modes. Same pattern as the Panel
+    // plus the widget's own block (borders, tiles and Filled).
     void drawImageSection(EditorContext& ctx);
     void drawImagePathDialog(EditorContext& ctx);
     void setImageAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
 
-    // Slider: widget INTERACTIVO de la UI 2D. Seccion tras "Add" como el resto.
-    // InputField: widget de la UI 2D. Seccion tras "Add" como el resto.
+    // Slider: INTERACTIVE widget of the 2D UI. Section behind "Add" like the rest.
+    // InputField: widget of the 2D UI. Section behind "Add" like the rest.
     void drawInputFieldSection(EditorContext& ctx);
-    // Drena los file dialogs del InputField. Fuera de la seccion por lo mismo que los
-    // demas: si no se drenan siempre, cambiar de seleccion con uno abierto deja
-    // el flag atascado.
+    // Drains the file dialogs of the InputField. Outside the section for the same
+    // reason as the others: if they are not always drained, changing the selection
+    // with one open leaves the flag stuck.
     void drawInputFieldPathDialog(EditorContext& ctx);
     void setInputFieldAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
     void setInputFieldFontPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
-    // Dropdown: widget de la UI 2D. Seccion tras "Add" como el resto.
+    // Dropdown: widget of the 2D UI. Section behind "Add" like the rest.
     void drawDropdownSection(EditorContext& ctx);
-    // Drena los file dialogs del Dropdown. Fuera de la seccion por lo mismo que los
-    // demas: si no se drenan siempre, cambiar de seleccion con uno abierto deja
-    // el flag atascado.
+    // Drains the file dialogs of the Dropdown. Outside the section for the same
+    // reason as the others: if they are not always drained, changing the selection
+    // with one open leaves the flag stuck.
     void drawDropdownPathDialog(EditorContext& ctx);
     void setDropdownAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
     void setDropdownFontPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
-    // ScrollView: widget de la UI 2D. Seccion tras "Add" como el resto.
+    // ScrollView: widget of the 2D UI. Section behind "Add" like the rest.
     void drawScrollViewSection(EditorContext& ctx);
-    // Drena los file dialogs del ScrollView. Fuera de la seccion por lo mismo que los
-    // demas: si no se drenan siempre, cambiar de seleccion con uno abierto deja
-    // el flag atascado.
+    // Drains the file dialogs of the ScrollView. Outside the section for the same
+    // reason as the others: if they are not always drained, changing the selection
+    // with one open leaves the flag stuck.
     void drawScrollViewPathDialog(EditorContext& ctx);
     void setScrollViewAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
 
     void drawSliderSection(EditorContext& ctx);
-    // Drena el file dialog del atlas del Slider, fuera de la seccion por lo mismo
-    // que los demas: si no se drena siempre, cambiar de seleccion con el dialogo
-    // abierto deja el flag atascado.
+    // Drains the file dialog of the Slider atlas, outside the section for the same
+    // reason as the others: if it is not always drained, changing the selection with
+    // the dialog open leaves the flag stuck.
     void drawSliderPathDialog(EditorContext& ctx);
     void setSliderAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
-    // Checkbox: widget INTERACTIVO de la UI 2D. Seccion tras "Add" como el resto.
+    // Checkbox: INTERACTIVE widget of the 2D UI. Section behind "Add" like the rest.
     void drawCheckboxSection(EditorContext& ctx);
-    // Drena el file dialog del atlas del Checkbox, fuera de la seccion por lo mismo
-    // que los demas: si no se drena siempre, cambiar de seleccion con el dialogo
-    // abierto deja el flag atascado.
+    // Drains the file dialog of the Checkbox atlas, outside the section for the same
+    // reason as the others: if it is not always drained, changing the selection with
+    // the dialog open leaves the flag stuck.
     void drawCheckboxPathDialog(EditorContext& ctx);
     void setCheckboxAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
-    // Toggle: widget INTERACTIVO de la UI 2D. Seccion tras "Add" como el resto.
+    // Toggle: INTERACTIVE widget of the 2D UI. Section behind "Add" like the rest.
     void drawToggleSection(EditorContext& ctx);
-    // Drena el file dialog del atlas del Toggle, fuera de la seccion por lo mismo
-    // que los demas: si no se drena siempre, cambiar de seleccion con el dialogo
-    // abierto deja el flag atascado.
+    // Drains the file dialog of the Toggle atlas, outside the section for the same
+    // reason as the others: if it is not always drained, changing the selection with
+    // the dialog open leaves the flag stuck.
     void drawTogglePathDialog(EditorContext& ctx);
     void setToggleAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
-    // Scrollbar: widget INTERACTIVO de la UI 2D. Seccion tras "Add" como el resto.
+    // Scrollbar: INTERACTIVE widget of the 2D UI. Section behind "Add" like the rest.
     void drawScrollbarSection(EditorContext& ctx);
-    // Drena el file dialog del atlas del Scrollbar, fuera de la seccion por lo mismo
-    // que los demas: si no se drena siempre, cambiar de seleccion con el dialogo
-    // abierto deja el flag atascado.
+    // Drains the file dialog of the Scrollbar atlas, outside the section for the same
+    // reason as the others: if it is not always drained, changing the selection with
+    // the dialog open leaves the flag stuck.
     void drawScrollbarPathDialog(EditorContext& ctx);
     void setScrollbarAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
 
@@ -289,25 +288,24 @@ private:
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
     void drawNewScriptPopup(EditorContext& ctx);
-    // ownerId, no ctx.selected: el diálogo de Browse no es modal y se drena
-    // varios frames después de abrirse, con la selección ya cambiada. Mismo
-    // patrón que assignMaterialTexture y setScrollbarAtlasPath.
+    // ownerId, not ctx.selected: the Browse dialog is not modal and is drained
+    // several frames after being opened, with the selection already changed. Same
+    // pattern as assignMaterialTexture and setScrollbarAtlasPath.
     void loadMeshForSelected(EditorContext& ctx, uint64_t ownerId, const std::string& path);
     void loadAudioClipForSelected(EditorContext& ctx, const std::string& path);
 
     bool m_open = true;
 
-    // A QUIÉN pertenece lo que cada sección tiene cacheado. Cada sección
-    // re-sincroniza sus campos de edición cuando esto deja de coincidir con el
-    // componente que está pintando.
+    // WHO owns what each section has cached. Each section re-synchronizes its edit
+    // fields when this stops matching the component it is drawing.
     //
-    // Van TODOS juntos en una struct a propósito: invalidateCaches() los borra
-    // de una sentencia (`m_caches = {}`), así que una sección nueva queda
-    // cubierta por el hecho de declarar su puntero aquí. Enumerándolos a mano
-    // esta función se quedó corta CUATRO veces —sphere, capsule, plane y
-    // rigidbody—, y el síntoma es de los que no cantan: el Undo cambia el
-    // componente, la sección sigue enseñando el valor viejo, y el próximo drag
-    // de otro campo lo reaplica y resucita lo que se acababa de deshacer.
+    // ALL of them go together in a struct on purpose: invalidateCaches() clears them
+    // in one statement (`m_caches = {}`), so a new section is covered by the mere fact
+    // of declaring its pointer here. Enumerating them by hand, this function fell
+    // short FOUR times (sphere, capsule, plane and rigidbody), and the symptom is one
+    // of those that do not announce themselves: Undo changes the component, the
+    // section keeps showing the old value, and the next drag of another field
+    // reapplies it and resurrects what had just been undone.
     struct EditCaches
     {
         GameObject*      props     = nullptr;
@@ -320,65 +318,64 @@ private:
     };
     EditCaches m_caches;
 
-    // Properties – cache de edición del nodo seleccionado (persiste entre
-    // frames para que DragFloat pueda acumular el delta del arrastre; solo
-    // se re-sincroniza con localTransform al cambiar de selección).
+    // Properties: edit cache of the selected node (persists between
+    // frames so that DragFloat can accumulate the drag delta; it is only
+    // re-synchronized with localTransform when the selection changes).
     glm::vec3   m_editPosition{0.0f};
     glm::vec3   m_editRotationDeg{0.0f};
     glm::vec3   m_editScale{1.0f};
-    // true si el frame anterior el usuario tenía el mouse presionado sobre
-    // algún DragFloat de Position/Rotation/Scale (evita que el refresco en
-    // vivo de BoxCollider dinámico pelee con el drag, y delimita la sesión de
-    // edición pa el snapshot de Undo de abajo).
+    // true if in the previous frame the user had the mouse pressed on some
+    // Position/Rotation/Scale DragFloat (prevents the live refresh of a dynamic
+    // BoxCollider from fighting with the drag, and delimits the edit session
+    // for the Undo snapshot below).
     bool        m_transformDragActive = false;
-    // Snapshot de localTransform tomado al iniciar un drag de Position/
-    // Rotation/Scale (primer IsItemActivated de la sesión) — "before" del
-    // PropertyCommand<glm::mat4> que se empuja al confirmar (commit).
+    // Snapshot of localTransform taken when a Position/Rotation/Scale drag starts
+    // (first IsItemActivated of the session): the "before" of the
+    // PropertyCommand<glm::mat4> that is pushed on confirm (commit).
     glm::mat4   m_transformBeforeEdit{1.0f};
-    // El localTransform del que salieron los tres m_edit* de arriba. Existe
-    // para detectar que alguien de FUERA movió el objeto sin cambiar la
-    // selección —el gizmo del viewport, un script Lua, un Ctrl+Z— y volver a
-    // descomponer.
+    // The localTransform the three m_edit* above came from. It exists to detect
+    // that someone OUTSIDE moved the object without changing the selection (the
+    // viewport gizmo, a Lua script, a Ctrl+Z) and decompose again.
     //
-    // Sin esto los campos se quedaban congelados en el valor de cuando se
-    // seleccionó, y era peor que cosmético: el siguiente toque a cualquier
-    // DragFloat recomponía la matriz desde esa caché rancia y BORRABA el
-    // movimiento. Va aquí, en el dueño de la caché, y no como un aviso que
-    // cada sitio que mueva un objeto tenga que acordarse de mandar.
+    // Without this the fields stayed frozen at the value from when it was selected,
+    // and it was worse than cosmetic: the next touch on any DragFloat recomposed the
+    // matrix from that stale cache and ERASED the movement. It goes here, in the
+    // owner of the cache, and not as a notice that every place that moves an object
+    // has to remember to send.
     glm::mat4   m_transformCached{1.0f};
 
-    // Reflection Probe – drag de Radius/Intensity. Mismo patrón que SSR: el
-    // "before" se toma en IsItemActivated y el owner id evita aplicar un
-    // "before" ajeno si el drag se interrumpió sin commit.
+    // Reflection Probe: Radius/Intensity drag. Same pattern as SSR: the
+    // "before" is taken in IsItemActivated and the owner id prevents applying a
+    // foreign "before" if the drag was interrupted without a commit.
     bool     m_probeDragActive   = false;
     uint64_t m_probeDragOwnerId  = 0;
     float    m_probeDragBefore   = 0.0f;
-    // Cuál de los dos sliders está en drag (el "before" es un único float).
+    // Which of the two sliders is being dragged (the "before" is a single float).
     bool     m_probeDragIsRadius = false;
 
-    // Light – drag de los sliders (intensity/range/ángulos/tamaño del area).
-    // Mismo patrón que la sonda, pero con el campo en drag identificado por su
-    // etiqueta: son seis sliders y un bool no llega.
+    // Light: drag of the sliders (intensity/range/angles/area size).
+    // Same pattern as the probe, but with the dragged field identified by its
+    // label: there are six sliders and a bool is not enough.
     bool        m_lightDragActive  = false;
     uint64_t    m_lightDragOwnerId = 0;
     float       m_lightDragBefore  = 0.0f;
     const char* m_lightDragField   = nullptr;
-    // El "before" del color no cabe en el float de arriba: ColorEdit3 abre un
-    // popup y el commit llega frames después de tocarlo.
+    // The color "before" does not fit in the float above: ColorEdit3 opens a
+    // popup and the commit arrives frames after touching it.
     glm::vec3   m_lightColorBefore {1.0f};
 
-    // Sesión de arrastre de los campos del Canvas, mismo baile que la luz: el
-    // valor de ANTES se congela en IsItemActivated y se commitea entero en
-    // IsItemDeactivatedAfterEdit, así un arrastre es UN paso de undo y no
-    // cientos. El campo se identifica por su etiqueta (un bool no llega pa 9).
+    // Drag session of the Canvas fields, same dance as the light: the BEFORE
+    // value is frozen in IsItemActivated and committed whole in
+    // IsItemDeactivatedAfterEdit, so a drag is ONE undo step and not
+    // hundreds. The field is identified by its label (a bool is not enough for 9).
     uint64_t    m_canvasDragOwnerId  = 0;
     const char* m_canvasDragField    = nullptr;
     float       m_canvasDragBefore   = 0.0f;
     glm::vec2   m_canvasDragBefore2 {0.0f};
 
-    // Lo mismo para los campos del Button. Cuatro "before" porque el componente
-    // tiene las cuatro familias de campo (float, vec2, color y texto) y cada
-    // una commitea su propio PropertyCommand<T>.
+    // The same for the Button fields. Four "before" values because the component
+    // has the four field families (float, vec2, color and text) and each
+    // one commits its own PropertyCommand<T>.
     uint64_t    m_buttonDragOwnerId = 0;
     const char* m_buttonDragField   = nullptr;
     float       m_buttonDragBefore  = 0.0f;
@@ -386,9 +383,9 @@ private:
     glm::vec4   m_buttonDragBefore4 {1.0f};
     std::string m_buttonDragBeforeStr;
 
-    // Y lo mismo para los campos del Text: propios y no compartidos con el
-    // Button porque los dos componentes pueden estar en el MISMO GameObject, y
-    // un "before" compartido mezclaría los dos arrastres.
+    // And the same for the Text fields: their own and not shared with the
+    // Button because both components can be on the SAME GameObject, and
+    // a shared "before" would mix the two drags.
     uint64_t    m_textDragOwnerId = 0;
     const char* m_textDragField   = nullptr;
     float       m_textDragBefore  = 0.0f;
@@ -396,9 +393,9 @@ private:
     glm::vec4   m_textDragBefore4 {1.0f};
     std::string m_textDragBeforeStr;
 
-    // Y lo mismo para los campos de la ProgressBar: propios y no compartidos con
-    // el Button ni con el Text, porque los TRES componentes pueden estar en el
-    // MISMO GameObject y un "before" compartido mezclaría los arrastres.
+    // And the same for the ProgressBar fields: their own and not shared with
+    // the Button nor the Text, because the THREE components can be on the
+    // SAME GameObject and a shared "before" would mix the drags.
     uint64_t    m_barDragOwnerId = 0;
     const char* m_barDragField   = nullptr;
     float       m_barDragBefore  = 0.0f;
@@ -406,27 +403,27 @@ private:
     glm::vec4   m_barDragBefore4 {1.0f};
     std::string m_barDragBeforeStr;
 
-    // Y lo mismo para los campos del Layout, por el mismo motivo: el contenedor
-    // puede convivir con los otros tres componentes en el mismo GameObject.
+    // And the same for the Layout fields, for the same reason: the container
+    // can coexist with the other three components on the same GameObject.
     uint64_t    m_layoutDragOwnerId = 0;
     const char* m_layoutDragField   = nullptr;
     float       m_layoutDragBefore  = 0.0f;
     glm::vec2   m_layoutDragBefore2 {0.0f};
 
-    // Y lo mismo para el Panel y para el Image, cada uno con el suyo: los dos
-    // caben en el mismo GameObject (y con el Button, el Text y la barra), así
-    // que un "before" compartido mezclaría arrastres de componentes distintos.
+    // And the same for the Panel and for the Image, each with its own: both
+    // fit on the same GameObject (and with the Button, the Text and the bar), so
+    // a shared "before" would mix drags of different components.
     uint64_t    m_panelDragOwnerId = 0;
     const char* m_panelDragField   = nullptr;
     glm::vec2   m_panelDragBefore2 {0.0f};
     glm::vec4   m_panelDragBefore4 {1.0f};
     std::string m_panelDragBeforeStr;
 
-    // Y uno propio para cada widget interactivo, por lo mismo: todos caben en
-    // el mismo GameObject y un "before" compartido mezclaria arrastres.
+    // And one of its own for each interactive widget, for the same reason: they all
+    // fit on the same GameObject and a shared "before" would mix drags.
 
-    // Y uno propio para cada widget del tercer lote, por lo mismo que los
-    // demas: todos caben en el mismo GameObject.
+    // And one of its own for each widget of the third batch, for the same reason as
+    // the others: they all fit on the same GameObject.
 
     uint64_t    m_inputFieldDragOwnerId = 0;
     const char* m_inputFieldDragField   = nullptr;
@@ -484,24 +481,24 @@ private:
     glm::vec4   m_imageDragBefore4 {1.0f};
     std::string m_imageDragBeforeStr;
 
-    // Box Collider – mismo patrón de cache que Transform: persiste entre
-    // frames para que los DragFloat acumulen el delta del arrastre, y se
-    // resincroniza con el BoxCollider real al cambiar de selección o (si es
-    // dinámico y no se está arrastrando) cada frame para reflejar cambios
-    // externos de tamaño/gravedad.
+    // Box Collider: same cache pattern as Transform: it persists between
+    // frames so the DragFloat can accumulate the drag delta, and it is
+    // resynchronized with the real BoxCollider when the selection changes or (if it
+    // is dynamic and is not being dragged) every frame to reflect external
+    // changes of size/gravity.
     glm::vec3    m_editColliderCenter{0.0f};
     glm::vec3    m_editColliderSize{50.0f};
     bool         m_editIsTrigger = false;
-    // Material de física del collider (defaults iguales a los de Collider).
+    // Physics material of the collider (defaults equal to those of Collider).
     float        m_editColliderStaticFriction  = 0.5f;
     float        m_editColliderDynamicFriction = 0.5f;
     float        m_editColliderBounciness      = 0.1f;
     bool         m_colliderDragActive = false;
-    // Snapshot tomado al iniciar un drag de Center/Size — "before" del
-    // PropertyCommand<BoxColliderState> que se empuja al confirmar.
+    // Snapshot taken when a Center/Size drag starts: the "before" of the
+    // PropertyCommand<BoxColliderState> that is pushed on confirm.
     BoxColliderState m_boxColliderBeforeEdit{};
 
-    // Sphere Collider – mismo patrón de cache que Box Collider.
+    // Sphere Collider: same cache pattern as Box Collider.
     glm::vec3       m_editSphereCenter{0.0f};
     float           m_editSphereRadius{25.0f};
     bool            m_editSphereIsTrigger = false;
@@ -511,7 +508,7 @@ private:
     bool            m_sphereColliderDragActive = false;
     SphereColliderState m_sphereColliderBeforeEdit{};
 
-    // Capsule Collider – mismo patrón de cache que Box Collider.
+    // Capsule Collider: same cache pattern as Box Collider.
     glm::vec3        m_editCapsuleCenter{0.0f};
     float            m_editCapsuleRadius{15.0f};
     float            m_editCapsuleHeight{50.0f};
@@ -522,7 +519,7 @@ private:
     bool             m_capsuleColliderDragActive = false;
     CapsuleColliderState m_capsuleColliderBeforeEdit{};
 
-    // Plane Collider – solo Center (sin Size/Use Gravity, siempre estático).
+    // Plane Collider: only Center (without Size/Use Gravity, always static).
     glm::vec3      m_editPlaneCenter{0.0f};
     bool           m_editPlaneIsTrigger = false;
     float          m_editPlaneStaticFriction  = 0.5f;
@@ -531,10 +528,10 @@ private:
     bool           m_planeColliderDragActive = false;
     PlaneColliderState m_planeColliderBeforeEdit{};
 
-    // Rigidbody – mismo patrón de cache que los colliders. Los DragFloat
-    // (mass/drag/angularDrag) usan begin/commit con m_rigidbodyBeforeEdit para
-    // empujar un único PropertyCommand<RigidbodyState> al soltar; los checkbox
-    // (gravity/kinematic/constraints) empujan comando inmediato.
+    // Rigidbody: same cache pattern as the colliders. The DragFloat
+    // (mass/drag/angularDrag) use begin/commit with m_rigidbodyBeforeEdit to
+    // push a single PropertyCommand<RigidbodyState> on release; the checkboxes
+    // (gravity/kinematic/constraints) push an immediate command.
     float          m_editRbMass = 1.0f;
     bool           m_editRbUseGravity = true;
     bool           m_editRbKinematic = false;
@@ -547,10 +544,10 @@ private:
     uint64_t       m_rigidbodyDragOwnerId = 0;
     RigidbodyState m_rigidbodyBeforeEdit{};
 
-    // Camera – mismo patrón de cache que Rigidbody. Los DragFloat (fov/size/
-    // near/far) usan begin/commit con m_cameraBeforeEdit pa empujar un único
-    // PropertyCommand<CameraState> al soltar; el combo de modo empuja comando
-    // inmediato.
+    // Camera: same cache pattern as Rigidbody. The DragFloat (fov/size/
+    // near/far) use begin/commit with m_cameraBeforeEdit to push a single
+    // PropertyCommand<CameraState> on release; the mode combo pushes an
+    // immediate command.
     CameraComponent::ProjectionMode m_editCamMode = CameraComponent::ProjectionMode::Perspective;
     float       m_editCamFov = 45.0f;
     float       m_editCamOrthoSize = 100.0f;
@@ -560,71 +557,69 @@ private:
     uint64_t    m_cameraDragOwnerId = 0;
     CameraState m_cameraBeforeEdit{};
 
-    // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada de
-    // m_audioFileDialog: la librería documenta que una única instancia
-    // compartida (p.ej. el singleton IGFD::FileDialog::Instance()) no
-    // soporta 2 diálogos concurrentes (mismo estado interno de lista de
-    // ficheros/thumbnails/columnas), y los diálogos de Mesh y Audio pueden
-    // estar abiertos a la vez; compartir instancia causaba corrupción al
-    // redimensionar el popup de uno mientras el otro seguía abierto el mismo
-    // frame. unique_ptr porque IGFD::FileDialog es tipo incompleto aquí.
+    // Own ImGuiFileDialog instance for "Add > Mesh", separate from
+    // m_audioFileDialog: the library documents that a single shared instance
+    // (e.g. the IGFD::FileDialog::Instance() singleton) does not support 2
+    // concurrent dialogs (same internal state of file list/thumbnails/columns), and
+    // the Mesh and Audio dialogs can be open at the same time; sharing an instance
+    // caused corruption when resizing the popup of one while the other was still open
+    // the same frame. unique_ptr because IGFD::FileDialog is an incomplete type here.
     bool m_meshDlgOpen = false;
-    // A qué GameObject vuelve el FBX elegido cuando el diálogo se cierre, varios
-    // frames después de abrirse: ninguno de los diálogos de este panel es modal
-    // (cero ImGuiFileDialogFlags_Modal), así que el Hierarchy sigue clicable y la
-    // selección puede haber cambiado para entonces. Sin esto la malla se cargaba
-    // en el objeto seleccionado EN ESE MOMENTO, no en el que abrió el diálogo.
-    // Mismo patrón, y mismo motivo, que m_textureDlgOwner y m_fontDlgOwner.
+    // Which GameObject the chosen FBX goes back to when the dialog closes, several
+    // frames after being opened: none of the dialogs of this panel is modal
+    // (zero ImGuiFileDialogFlags_Modal), so the Hierarchy is still clickable and the
+    // selection may have changed by then. Without this the mesh was loaded onto the
+    // object selected AT THAT MOMENT, not the one that opened the dialog.
+    // Same pattern, and same reason, as m_textureDlgOwner and m_fontDlgOwner.
     uint64_t m_meshDlgOwner = 0;
     std::unique_ptr<IGFD::FileDialog> m_meshFileDialog;
-    // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
-    // error pendiente); se limpia al cambiar de selección o al cargar bien.
+    // Message of the last failed Mesh load attempt (empty if there is no pending
+    // error); it is cleared when the selection changes or on a successful load.
     std::string m_meshLoadError;
-    // Textura de material rechazada por extensión no soportada. Se limpia al
-    // cambiar de selección, mismo motivo que m_meshLoadError: si no, el error
-    // del objeto anterior se queda pintado bajo las texturas del nuevo.
+    // Material texture rejected for an unsupported extension. It is cleared when the
+    // selection changes, same reason as m_meshLoadError: otherwise the error of the
+    // previous object stays painted under the textures of the new one.
     std::string m_textureLoadError;
-    // Instancia propia de ImGuiFileDialog para la sección Material, nunca
-    // compartida con m_meshFileDialog ni con m_audioFileDialog (mismo motivo
-    // documentado arriba: redimensionar el popup de una toca el estado interno
-    // de la que lo dibuja).
+    // Own ImGuiFileDialog instance for the Material section, never shared with
+    // m_meshFileDialog nor with m_audioFileDialog (same reason documented above:
+    // resizing the popup of one touches the internal state of the one drawing it).
     bool m_textureDlgOpen = false;
     std::unique_ptr<IGFD::FileDialog> m_textureFileDialog;
-    // A qué objeto, material y slot vuelve el resultado del Browse cuando el
-    // modal se cierre, varios frames después: ninguno de los diálogos de este
-    // panel es modal (cero ImGuiFileDialogFlags_Modal), así que el Hierarchy
-    // sigue clicable y la selección puede haber cambiado para entonces. Sin
-    // m_textureDlgOwner el resultado se aplicaría al objeto seleccionado EN ESE
-    // MOMENTO, no al que abrió el diálogo.
+    // Which object, material and slot the Browse result goes back to when the
+    // modal closes, several frames later: none of the dialogs of this
+    // panel is modal (zero ImGuiFileDialogFlags_Modal), so the Hierarchy
+    // is still clickable and the selection may have changed by then. Without
+    // m_textureDlgOwner the result would be applied to the object selected AT THAT
+    // MOMENT, not the one that opened the dialog.
     uint64_t            m_textureDlgOwner    = 0;
     int                 m_textureDlgMaterial = 0;
     MaterialTextureSlot m_textureDlgSlot     = MaterialTextureSlot::Albedo;
 
-    // Instancia propia de ImGuiFileDialog para vincular un .mat desde la fila
-    // "Material asset" de la seccion Material. Mismo patron que m_textureFileDialog.
+    // Own ImGuiFileDialog instance for linking a .mat from the "Material asset" row
+    // of the Material section. Same pattern as m_textureFileDialog.
     bool m_matAssetDlgOpen = false;
     std::unique_ptr<IGFD::FileDialog> m_matAssetFileDialog;
     uint64_t m_matAssetDlgOwner    = 0;
     int      m_matAssetDlgMaterial = 0;
 
-    // Snapshot al empezar el drag de los sliders Metallic/Roughness de la
-    // sección Material — mismo patrón que m_audioDragActive/m_ssrDragActive,
-    // con una diferencia: el Material NO se escribe mientras se arrastra. El
-    // viewport sí sigue al slider (previewMaterialFactors empuja los dos floats
-    // a la GPU), pero el override, el Material y el comando llegan una sola vez
-    // al soltar. Escribir el Material en vivo capturaría como baseline del FBX
-    // un valor a medio arrastrar (ver previewMaterialFactors).
+    // Snapshot when the drag of the Metallic/Roughness sliders of the Material
+    // section starts: same pattern as m_audioDragActive/m_ssrDragActive,
+    // with one difference: the Material is NOT written while dragging. The
+    // viewport does follow the slider (previewMaterialFactors pushes the two floats
+    // to the GPU), but the override, the Material and the command arrive only once
+    // on release. Writing the Material live would capture a half-dragged value as
+    // the FBX baseline (see previewMaterialFactors).
     //
-    // Y porque el Material no se escribe en vivo, el valor pendiente vive en
-    // m_materialFactorSlider y no en una local: ImGui no entrega el valor en el
-    // frame de soltar, y con una local el commit veía "no ha cambiado nada"
-    // (ver DeferredSlider.h). Una sola instancia para los dos sliders, por lo
-    // mismo que el resto de estos miembros.
+    // And because the Material is not written live, the pending value lives in
+    // m_materialFactorSlider and not in a local: ImGui does not deliver the value in
+    // the release frame, and with a local the commit saw "nothing has changed"
+    // (see DeferredSlider.h). A single instance for both sliders, for the same
+    // reason as the rest of these members.
     //
-    // Un solo juego de miembros para los dos sliders (no dos): solo un
-    // widget de ImGui puede tener el ActiveId a la vez, así que Metallic y
-    // Roughness nunca están en drag simultáneamente, y m_materialFactorDragSlot
-    // dice cuál de los dos es.
+    // A single set of members for the two sliders (not two): only one ImGui
+    // widget can have the ActiveId at a time, so Metallic and
+    // Roughness are never dragged simultaneously, and m_materialFactorDragSlot
+    // says which of the two it is.
     bool                m_materialFactorDragActive        = false;
     uint64_t            m_materialFactorDragOwnerId       = 0;
     int                 m_materialFactorDragMaterialIndex = 0;
@@ -632,36 +627,36 @@ private:
     float               m_materialFactorDragBefore        = 0.0f;
     DeferredSliderFloat m_materialFactorSlider;
 
-    // GameObject para el que se pulsó "Add > Mesh" (revela la sección
-    // Browse/drop hasta que se asigne un mesh o se pulse "x" para quitarlo).
-    // 0 = sección oculta. No se limpia al cambiar de selección: si el
-    // usuario vuelve al mismo GameObject sin haber completado la carga, la
-    // sección sigue visible (igual que dejar un diálogo de collider a medias).
+    // GameObject for which "Add > Mesh" was pressed (it reveals the Browse/drop
+    // section until a mesh is assigned or "x" is pressed to remove it).
+    // 0 = section hidden. It is not cleared when the selection changes: if the
+    // user returns to the same GameObject without having completed the load, the
+    // section stays visible (like leaving a collider dialog half done).
     //
-    // El id y no el puntero: nadie limpia esto al borrar el GameObject, y como
-    // sobrevive a cambios de selección a propósito, el puntero podía quedarse
-    // apuntando a memoria liberada. Nunca se desreferencia (solo se compara),
-    // así que el daño no era un crash sino peor de ver: un GameObject nuevo
-    // reciclando esa dirección abría la sección Mesh sin que nadie la hubiera
-    // pedido. Los ids arrancan en 1 (GameObject.cpp: s_nextId{1}), así que 0
-    // nunca colisiona con uno real.
+    // The id and not the pointer: nobody clears this when the GameObject is deleted,
+    // and since it survives selection changes on purpose, the pointer could end up
+    // pointing to freed memory. It is never dereferenced (only compared),
+    // so the damage was not a crash but something worse to see: a new GameObject
+    // recycling that address opened the Mesh section without anyone having
+    // requested it. Ids start at 1 (GameObject.cpp: s_nextId{1}), so 0
+    // never collides with a real one.
     uint64_t m_meshAddRequestedFor = 0;
 
-    // Cargas de mesh pedidas desde la sección Mesh, objeto -> job, hasta que
-    // aterrizan (ver consumeUserMeshJob). Una por objeto como mucho: el
-    // pendingMeshJob de loadMeshForSelected no deja pedir otra en vuelo.
+    // Mesh loads requested from the Mesh section, object -> job, until they
+    // land (see consumeUserMeshJob). At most one per object: the
+    // pendingMeshJob of loadMeshForSelected does not allow requesting another in flight.
     std::unordered_map<uint64_t, uint64_t> m_userMeshJobs;
 
-    // Misma razón que m_meshFileDialog: instancia propia, nunca compartida
-    // con m_meshFileDialog.
+    // Same reason as m_meshFileDialog: own instance, never shared
+    // with m_meshFileDialog.
     bool m_audioDlgOpen = false;
     std::unique_ptr<IGFD::FileDialog> m_audioFileDialog;
 
-    // Rutas del Button (fuente y atlas). Misma razón que m_meshFileDialog para
-    // tener instancia propia por diálogo, nunca compartida. El id del dueño se
-    // guarda al abrir: el diálogo se drena fuera de la sección y para entonces
-    // la selección puede haber cambiado, así que resolver por id (y no por
-    // ctx.selected) es lo que impide escribir la ruta en otro GameObject.
+    // Button paths (font and atlas). Same reason as m_meshFileDialog for
+    // having an instance of its own per dialog, never shared. The owner id is
+    // stored on open: the dialog is drained outside the section and by then
+    // the selection may have changed, so resolving by id (and not by
+    // ctx.selected) is what prevents writing the path onto another GameObject.
     bool     m_fontDlgOpen  = false;
     uint64_t m_fontDlgOwner = 0;
     std::unique_ptr<IGFD::FileDialog> m_fontFileDialog;
@@ -670,38 +665,37 @@ private:
     uint64_t m_uiAtlasDlgOwner = 0;
     std::unique_ptr<IGFD::FileDialog> m_uiAtlasFileDialog;
 
-    // Último rechazo por extensión, para poder decir POR QUÉ no se aceptó el
-    // fichero en vez de tragárselo en silencio. Se limpia al acertar.
+    // Last rejection by extension, so it can say WHY the file was not accepted
+    // instead of swallowing it silently. It is cleared on success.
     std::string m_buttonPathError;
 
-    // Fuente del Text. Instancia de diálogo propia (nunca compartida con la del
-    // Button) y su propio id de dueño, por la misma razón que las del Button.
+    // Text font. Own dialog instance (never shared with the Button one) and its
+    // own owner id, for the same reason as the Button ones.
     bool     m_textFontDlgOpen  = false;
     uint64_t m_textFontDlgOwner = 0;
     std::unique_ptr<IGFD::FileDialog> m_textFontFileDialog;
     std::string m_textPathError;
 
-    // Imágenes de la ProgressBar. Instancia de diálogo propia y su propio id de
-    // dueño, por la misma razón que las del Button y la del Text. UNA sola
-    // instancia para las tres cajas (solo puede haber un diálogo abierto a la
-    // vez) más el campo que lo abrió: sin él, elegir un fichero escribiría
-    // siempre en el atlas.
+    // ProgressBar images. Own dialog instance and its own owner id, for the same
+    // reason as the Button ones and the Text one. A SINGLE instance for the three
+    // boxes (only one dialog can be open at a time) plus the field that opened it:
+    // without it, choosing a file would always write to the atlas.
     bool     m_barAtlasDlgOpen  = false;
     uint64_t m_barAtlasDlgOwner = 0;
-    int      m_barAtlasDlgField = 0;   // 0 atlas, 1 fondo, 2 relleno
+    int      m_barAtlasDlgField = 0;   // 0 atlas, 1 background, 2 fill
     std::unique_ptr<IGFD::FileDialog> m_barAtlasFileDialog;
     std::string m_barPathError;
 
-    // Atlas del Panel y del Image. Instancia de diálogo propia cada uno (nunca
-    // compartida) y su propio id de dueño, por la misma razón que las demás.
+    // Atlas of the Panel and of the Image. Each with its own dialog instance (never
+    // shared) and its own owner id, for the same reason as the others.
     bool     m_panelAtlasDlgOpen  = false;
     uint64_t m_panelAtlasDlgOwner = 0;
     std::unique_ptr<IGFD::FileDialog> m_panelAtlasFileDialog;
     std::string m_panelPathError;
 
-    // Atlas de los cuatro interactivos: instancia de dialogo propia cada uno.
+    // Atlas of the four interactive ones: each with its own dialog instance.
 
-    // Atlas (y fuente donde la hay) de los widgets del tercer lote.
+    // Atlas (and font where there is one) of the widgets of the third batch.
 
     bool     m_inputFieldAtlasDlgOpen  = false;
     uint64_t m_inputFieldAtlasDlgOwner = 0;
@@ -748,54 +742,54 @@ private:
     uint64_t m_imageAtlasDlgOwner = 0;
     std::unique_ptr<IGFD::FileDialog> m_imageAtlasFileDialog;
     std::string m_imagePathError;
-    // Mismo patrón que m_meshLoadError/m_meshAddRequestedFor pero para el
-    // componente AudioClip — el id incluido, y por el mismo motivo: nadie lo
-    // limpia al borrar el GameObject y sobrevive a los cambios de selección a
-    // propósito, así que el puntero podía quedar colgando y un objeto nuevo
-    // que reciclara esa dirección abría la sección Audio Clip sin pedirlo.
-    // 0 = sección oculta.
+    // Same pattern as m_meshLoadError/m_meshAddRequestedFor but for the
+    // AudioClip component, id included, and for the same reason: nobody
+    // clears it when the GameObject is deleted and it survives selection changes on
+    // purpose, so the pointer could be left dangling and a new object
+    // recycling that address opened the Audio Clip section without being asked.
+    // 0 = section hidden.
     std::string m_audioLoadError;
     uint64_t    m_audioClipAddRequestedFor = 0;
 
-    // Snapshot al empezar el drag de los sliders de audio: un drag continuo no
-    // puede empujar un comando por frame, así que se captura al activar y se
-    // empuja uno solo al soltar. A diferencia de Transform/Rigidbody (que usan
-    // DragFloat), aquí se usa SliderFloat: salta al valor bajo el cursor en el
-    // MISMO frame en que se activa por click, así que el "before" no puede
-    // releerse del componente después de dibujar el widget (ya valdría el
-    // nuevo valor); por eso el .cpp hoistea las lecturas antes del slider.
+    // Snapshot when the drag of the audio sliders starts: a continuous drag
+    // cannot push one command per frame, so it is captured on activation and a
+    // single one is pushed on release. Unlike Transform/Rigidbody (which use
+    // DragFloat), SliderFloat is used here: it jumps to the value under the cursor in the
+    // SAME frame in which it is activated by click, so the "before" cannot be
+    // re-read from the component after drawing the widget (it would already hold the
+    // new value); that is why the .cpp hoists the reads before the slider.
     bool     m_audioDragActive = false;
-    // El snapshot ENTERO, no un float por slider: la seccion ya tiene siete
-    // valores continuos (volumen, pitch, las dos distancias, spread, paneo y
-    // doppler) y mantener un miembro por cada uno se descontrola. Con el struct
-    // completo, anadir un slider mas no toca este header.
+    // The WHOLE snapshot, not one float per slider: the section already has seven
+    // continuous values (volume, pitch, the two distances, spread, pan and
+    // doppler) and keeping one member for each gets out of hand. With the complete
+    // struct, adding one more slider does not touch this header.
     AudioClipState m_audioDragBefore{};
-    // Dueño del snapshot en curso: si el drag se interrumpe sin commit (p.ej.
-    // Ctrl+Z a mitad de arrastre reconstruye/borra el GameObject seleccionado)
-    // y el siguiente commit llega para otro AudioClip, este id evita aplicar
-    // un "before" que no le corresponde.
+    // Owner of the snapshot in progress: if the drag is interrupted without a commit
+    // (e.g. Ctrl+Z in the middle of a drag rebuilds/deletes the selected GameObject)
+    // and the next commit arrives for another AudioClip, this id prevents applying
+    // a "before" that does not belong to it.
     uint64_t m_audioDragOwnerId = 0;
 
-    // SSR — mismo patrón de snapshot que los sliders de audio (SliderFloat, no
-    // DragFloat: salta al valor bajo el cursor en el mismo frame del click, así
-    // que el "before" se lee antes de dibujar el widget).
+    // SSR: same snapshot pattern as the audio sliders (SliderFloat, not
+    // DragFloat: it jumps to the value under the cursor in the same frame of the click, so
+    // the "before" is read before drawing the widget).
     bool     m_ssrDragActive = false;
     float    m_ssrDragBeforeIntensity = 0.5f;
     uint64_t m_ssrDragOwnerId = 0;
 
-    // Popup "Nuevo Script" — disparado desde Add > Script > Nuevo Script...
-    // El dueño se captura al abrir (ctx.selected puede cambiar con el popup
-    // abierto) y se resuelve contra la escena antes de añadir.
+    // "New Script" popup, triggered from Add > Script > New Script...
+    // The owner is captured on open (ctx.selected can change with the popup
+    // open) and resolved against the scene before adding.
     //
-    // Por id y no por puntero: la revalidación de antes recorría la escena
-    // comparando DIRECCIONES, y esa comprobación no distingue "sigue vivo" de
-    // "otro GameObject ha reciclado su dirección" — el asignador reutiliza
-    // bloques del mismo tamaño, así que borrar el objetivo y crear otro con el
-    // popup abierto daba el visto bueno y el script se añadía al objeto
-    // equivocado. Y aquí el puntero SÍ se desreferencia (addScript, y el
-    // ScriptComponent se queda con él como dueño), así que no era solo un
-    // panel abriéndose de más. Ver m_meshAddRequestedFor, mismo defecto sin
-    // desreferencia. 0 = nadie.
+    // By id and not by pointer: the earlier revalidation walked the scene
+    // comparing ADDRESSES, and that check does not distinguish "still alive" from
+    // "another GameObject has recycled its address": the allocator reuses
+    // blocks of the same size, so deleting the target and creating another one with the
+    // popup open gave the green light and the script was added to the wrong
+    // object. And here the pointer IS dereferenced (addScript, and the
+    // ScriptComponent keeps it as owner), so it was not just a panel opening
+    // when it should not. See m_meshAddRequestedFor, same defect without
+    // dereference. 0 = nobody.
     bool        m_openNewScriptPopup = false;
     char        m_newScriptNameBuffer[64] = {};
     std::string m_newScriptError;

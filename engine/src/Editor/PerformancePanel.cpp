@@ -15,23 +15,23 @@ namespace DonTopo {
 
 namespace {
 
-// Refresco de RAM/CPU/VRAM. GetProcessMemoryInfo y QueryVideoMemoryInfo son
-// llamadas al kernel/driver: a 60 fps se notan, a 1 Hz no.
+// RAM/CPU/VRAM refresh. GetProcessMemoryInfo and QueryVideoMemoryInfo are
+// kernel/driver calls: at 60 fps they are noticeable, at 1 Hz they are not.
 //
-// Es tambien la VENTANA del porcentaje de CPU, que se calcula por diferencia
-// entre dos muestras: con un segundo la cifra deja de bailar, a cambio de
-// tardar un segundo en reaccionar. Para RAM y VRAM da igual, que son valores
-// absolutos.
+// It is also the WINDOW of the CPU percentage, which is computed as the difference
+// between two samples: with one second the figure stops jumping around, at the cost of
+// taking a second to react. For RAM and VRAM it does not matter, since they are
+// absolute values.
 constexpr double kSampleInterval = 1.0;
 
-// El naranja de aviso del panel, en UN solo sitio. Ya lo usaban a mano el
-// overflow del SSBO y los slots al 90 %; ahora también el pass más caro y los
-// avisos nuevos, para que "naranja" signifique siempre lo mismo.
+// The panel's warning orange, in ONE place. The SSBO overflow and the slots at 90 %
+// already used it by hand; now also the most expensive pass and the new
+// warnings, so that "orange" always means the same thing.
 const ImVec4 kWarn(1.0f, 0.6f, 0.2f, 1.0f);
 
-// Escribe el texto pegado al borde derecho de la celda. Una columna de números
-// con anchos distintos no se puede leer en vertical, que es justo para lo que
-// sirve una tabla de tiempos.
+// Writes the text flush against the right edge of the cell. A column of numbers
+// with different widths cannot be read vertically, which is exactly what
+// a table of times is for.
 void rightAligned(const char* text, bool disabled)
 {
     const float w     = ImGui::CalcTextSize(text).x;
@@ -41,11 +41,11 @@ void rightAligned(const char* text, bool disabled)
     else          ImGui::TextUnformatted(text);
 }
 
-// Una fila de la tabla de tiempos GPU. Un valor <= 0 significa "ese pass no ha
-// corrido este frame" (efecto apagado, o la captura aún no tiene dos frames).
-// `hottest` marca el pass más caro del frame: de los diez números de la tabla
-// es el único sobre el que se puede actuar, así que se señala en vez de
-// obligar a compararlos a ojo.
+// One row of the GPU times table. A value <= 0 means "that pass has not
+// run this frame" (effect off, or the capture does not yet have two frames).
+// `hottest` marks the most expensive pass of the frame: of the ten numbers in the table
+// it is the only one that can be acted on, so it is pointed out instead of
+// forcing them to be compared by eye.
 void gpuRow(const char* name, float ms, float totalMs, bool hottest)
 {
     ImGui::TableNextRow();
@@ -53,9 +53,9 @@ void gpuRow(const char* name, float ms, float totalMs, bool hottest)
     if (hottest) ImGui::TextColored(kWarn, "%s", name);
     else         ImGui::TextUnformatted(name);
     ImGui::TableSetColumnIndex(1);
-    // Mismo formato que el menú View, desde GpuTimeFormat.h: la regla de qué se
-    // enseña cuando NO hay medida vive en un solo sitio (H57). Aquí además se
-    // atenúa, que en una tabla distingue de un vistazo las filas sin dato.
+    // Same format as the View menu, from GpuTimeFormat.h: the rule for what is
+    // shown when there is NO measurement lives in one place (H57). Here it is also
+    // dimmed, which in a table distinguishes rows without data at a glance.
     char buf[kGpuMsTextSize];
     gpuMsText(ms, buf, kGpuMsTextSize);
     rightAligned(buf, ms <= 0.0f);
@@ -65,7 +65,7 @@ void gpuRow(const char* name, float ms, float totalMs, bool hottest)
         const float frac = std::clamp(ms / totalMs, 0.0f, 1.0f);
         char pct[16];
         std::snprintf(pct, sizeof(pct), "%.1f %%", 100.0f * frac);
-        // Barra proporcional: el reparto se ve antes de leer ningún número.
+        // Proportional bar: the split is visible before reading any number.
         if (hottest) ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kWarn);
         ImGui::ProgressBar(frac, ImVec2(-1.0f, ImGui::GetTextLineHeight()), pct);
         if (hottest) ImGui::PopStyleColor();
@@ -79,9 +79,9 @@ PerformancePanel::~PerformancePanel() = default;
 
 void PerformancePanel::sampleProcess()
 {
-    // El reloj lo lleva draw(): esto se llama SOLO en el frame del refresco.
-    // Antes decidía aquí dentro, y como la llamada estaba dentro de la sección
-    // "Proceso", con esa sección plegada el reloj no avanzaba nunca.
+    // The clock is kept by draw(): this is called ONLY on the refresh frame.
+    // Before, it decided in here, and since the call was inside the "Process"
+    // section, with that section collapsed the clock never advanced.
     const double now = ImGui::GetTime();
     const platform::ProcessStats st = platform::processStats();
     if (st.valid)
@@ -90,9 +90,9 @@ void PerformancePanel::sampleProcess()
         m_peakWorkingMb = (float)st.peakWorkingSetMb;
     }
 
-    // CPU del proceso: tiempo de kernel + usuario consumido desde la muestra
-    // anterior, repartido entre el tiempo de pared y los nucleos. Sin dividir
-    // por los nucleos, un proceso con 8 hilos saturados marcaria 800 %.
+    // Process CPU: kernel + user time consumed since the previous sample,
+    // divided between wall time and cores. Without dividing by the cores, a process
+    // with 8 saturated threads would show 800 %.
     if (m_lastCpuSeconds >= 0.0)
     {
         const double wall  = now - m_lastCpuWall;
@@ -104,7 +104,7 @@ void PerformancePanel::sampleProcess()
     m_lastCpuSeconds = st.cpuSeconds;
     m_lastCpuWall    = now;
 
-    // VRAM del proceso y presupuesto: solo donde el sistema lo da (DXGI).
+    // Process VRAM and budget: only where the system provides it (DXGI).
     if (const auto vram = platform::gpuMemoryBudget())
     {
         m_gpuUsedMb   = (float)vram->usedMb;
@@ -114,10 +114,10 @@ void PerformancePanel::sampleProcess()
 
 void PerformancePanel::draw(EditorContext& ctx)
 {
-    // Lo PRIMERO: sincronizar la captura del Renderer con el estado del panel.
-    // Con el panel cerrado esto deja el frame exactamente como si la feature no
-    // existiera (ni resets, ni timestamps, ni contadores), y de paso cubre el
-    // caso de cerrar con la X de la ventana, que Begin escribe en m_open.
+    // FIRST: synchronize the Renderer's capture with the panel's state.
+    // With the panel closed this leaves the frame exactly as if the feature did not
+    // exist (no resets, no timestamps, no counters), and incidentally it covers the
+    // case of closing with the window's X, which Begin writes into m_open.
     if (ctx.renderer) ctx.renderer->setPerfCaptureEnabled(m_open);
     if (!m_open) return;
 
@@ -125,30 +125,30 @@ void PerformancePanel::draw(EditorContext& ctx)
     {
         const ImGuiIO& io = ImGui::GetIO();
 
-        // ── CPU: framerate y tiempo de frame ─────────────────────────────────
+        // ── CPU: framerate and frame time ────────────────────────────────────
         const float frameMs = io.DeltaTime * 1000.0f;
         m_frameMsHistory[m_histCursor] = frameMs;
         m_fpsHistory[m_histCursor]     = io.Framerate;
         m_histCursor = (m_histCursor + 1) % kHistory;
         if (m_histFilled < kHistory) m_histFilled++;
 
-        // Y al punto que se está formando para la gráfica, que avanza al ritmo
-        // del refresco y no al de los frames.
+        // And to the point being formed for the graph, which advances at the pace
+        // of the refresh and not of the frames.
         m_bucketMaxMs = std::max(m_bucketMaxMs, frameMs);
         m_bucketSumMs += (double)frameMs;
         ++m_bucketFrames;
 
-        // ── Refresco: UN solo reloj para todo el panel ───────────────────────
-        // Los dos historiales se alimentan cada frame (arriba), pero TODO lo
-        // que se enseña —números, barras y gráficas— avanza en este tick. Antes
-        // solo RAM/CPU/VRAM iban cacheados y el resto parpadeaba 60 veces por
-        // segundo, que es la diferencia entre un dato y un borrón.
+        // ── Refresh: ONE clock for the whole panel ───────────────────────────
+        // The two histories are fed every frame (above), but EVERYTHING
+        // that is shown (numbers, bars and graphs) advances on this tick. Before,
+        // only RAM/CPU/VRAM were cached and the rest flickered 60 times per
+        // second, which is the difference between a datum and a blur.
         const double now     = ImGui::GetTime();
         const bool   refresh = now >= m_nextSampleTime;
         if (refresh) m_nextSampleTime = now + kSampleInterval;
 
-        // Se resuelve el Renderer antes de nada: casi todo lo que se congela
-        // sale de él.
+        // The Renderer is resolved first of all: almost everything that is frozen
+        // comes from it.
         if (!ctx.renderer)
         {
             ImGui::TextDisabled("No Renderer.");
@@ -162,12 +162,12 @@ void PerformancePanel::draw(EditorContext& ctx)
             m_showFps     = io.Framerate;
             m_showFrameMs = frameMs;
 
-            // Cierra el punto de la gráfica: el PEOR frame del intervalo en la
-            // curva de ms, y los FPS medios en el histograma. El peor frame es
-            // lo que hay que ver en una curva de tiempo; los FPS se leen como
-            // ritmo, y ahí el peor caso engañaría. El 1% low de abajo sigue
-            // saliendo del historial por frame, que es lo único que puede
-            // dárselo.
+            // Closes the graph point: the WORST frame of the interval on the
+            // ms curve, and the mean FPS on the histogram. The worst frame is
+            // what has to be seen on a time curve; FPS is read as a
+            // rhythm, and there the worst case would mislead. The 1% low below still
+            // comes from the per-frame history, which is the only thing that can
+            // provide it.
             if (m_bucketFrames > 0)
             {
                 const float avg = (float)(m_bucketSumMs / (double)m_bucketFrames);
@@ -180,10 +180,10 @@ void PerformancePanel::draw(EditorContext& ctx)
                 m_bucketFrames = 0;
             }
 
-            // Estadísticos del historial. Salen de los mismos 120 valores que
-            // ya pinta la gráfica —ni una medida nueva—, y dicen lo que la
-            // gráfica no deja leer: la media esconde los tirones y el pico
-            // esconde el caso normal.
+            // History statistics. They come from the same 120 values the graph
+            // already draws (not a single new measurement), and they say what the
+            // graph does not let you read: the mean hides the hitches and the peak
+            // hides the normal case.
             m_showMinMs = m_showMaxMs = m_showAvgMs = m_showLowFps = 0.0f;
             if (m_histFilled > 0)
             {
@@ -200,20 +200,20 @@ void PerformancePanel::draw(EditorContext& ctx)
                     m_showMaxMs = std::max(m_showMaxMs, v);
                 }
                 m_showAvgMs = (float)(sum / (double)m_histFilled);
-                // 1% low: el frame del percentil 99 en tiempo, expresado en
-                // FPS. Es la cifra que delata el micro-tirón que la media se
-                // traga; con 120 muestras equivale al peor frame de los últimos
-                // dos segundos.
+                // 1% low: the frame at the 99th percentile in time, expressed in
+                // FPS. It is the figure that betrays the micro-hitch the mean
+                // swallows; with 120 samples it equals the worst frame of the last
+                // two seconds.
                 const int idx = (int)((float)(m_histFilled - 1) * 0.99f);
                 std::nth_element(sorted, sorted + idx, sorted + m_histFilled);
                 if (sorted[idx] > 0.0f) m_showLowFps = 1000.0f / sorted[idx];
             }
 
-            // Los tiempos GPU salen del frame N-2 (es el slot cuya fence ya
-            // esperó este frame), así que los dos primeros frames tras abrir el
-            // panel muestran "--". No se bloquea nada para adelantarlos. La
-            // captura sigue corriendo CADA frame: lo que va a 1 Hz es la
-            // lectura que se pinta, no la medida.
+            // The GPU times come from frame N-2 (it is the slot whose fence was already
+            // waited on this frame), so the first two frames after opening the
+            // panel show "--". Nothing is blocked to bring them forward. The
+            // capture keeps running EVERY frame: what goes at 1 Hz is the
+            // reading that is drawn, not the measurement.
             m_passMs[0] = r.shadowGpuMs();
             m_passMs[1] = r.sceneGpuMs();
             m_passMs[2] = r.ssaoGpuMs();
@@ -235,9 +235,9 @@ void PerformancePanel::draw(EditorContext& ctx)
             m_slotSkinned    = slots.skinned;
             m_slotSkinnedCap = slots.skinnedCapacity;
 
-            // Recorrido del árbol. No es una llamada al sistema ni toca la GPU
-            // —es pasear punteros que ya están en caché—, pero a 1 Hz da igual
-            // lo grande que sea la escena.
+            // Tree walk. It is not a system call and does not touch the GPU
+            // (it is walking pointers that are already in cache), but at 1 Hz it does not matter
+            // how big the scene is.
             m_sceneObjects = m_sceneMeshes = m_sceneLightNodes = 0;
             if (ctx.scene)
             {
@@ -247,9 +247,9 @@ void PerformancePanel::draw(EditorContext& ctx)
                     if (n->hasMesh())  ++m_sceneMeshes;
                     if (n->getLight()) ++m_sceneLightNodes;
                 });
-                // La raíz cuenta como nodo en traverse y no es un objeto de la
-                // escena: se descuenta para que el número cuadre con la
-                // jerarquía que se ve en el panel Scene.
+                // The root counts as a node in traverse and is not an object of the
+                // scene: it is subtracted so that the number matches the
+                // hierarchy seen in the Scene panel.
                 m_sceneObjects = nodes > 0 ? nodes - 1 : 0;
             }
             m_sceneLights     = r.sceneLightTotal();
@@ -266,10 +266,10 @@ void PerformancePanel::draw(EditorContext& ctx)
         ImGui::TextDisabled("The whole panel (numbers, bars and graphs) advances every %.1f s.",
                             kSampleInterval);
 
-        // ¿Quién marca el frame? Se compara la MEDIA de CPU (no el frame
-        // suelto, que salta) contra el total de GPU. Con Vsync la resta no
-        // significa nada: lo que sobra es espera al refresco, no trabajo, y
-        // todo sale a 16 ms hagas lo que hagas.
+        // Who sets the frame? The CPU MEAN (not the single frame,
+        // which jumps) is compared against the GPU total. With Vsync the subtraction means
+        // nothing: what is left over is waiting for the refresh, not work, and
+        // everything comes out at 16 ms whatever you do.
         if (m_passTotal > 0.0f && m_histFilled > 0)
         {
             if (r.presentMode() == PresentMode::Vsync)
@@ -283,15 +283,15 @@ void PerformancePanel::draw(EditorContext& ctx)
                             m_showAvgMs - m_passTotal, m_showAvgMs, m_passTotal);
         }
 
-        // ── CPU: historial ───────────────────────────────────────────────────
+        // ── CPU: history ─────────────────────────────────────────────────────
         ImGui::PushID("cpu");
         if (ImGui::CollapsingHeader("CPU (history)", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            // El historial es circular, así que se pasa el offset para que la
-            // gráfica avance de izquierda a derecha en vez de saltar.
-            // Un punto por refresco, no por frame. El historial es circular,
-            // asi que se pasa el offset para que la grafica avance de izquierda
-            // a derecha en vez de saltar.
+            // The history is circular, so the offset is passed so that the
+            // graph advances from left to right instead of jumping.
+            // One point per refresh, not per frame. The history is circular,
+            // so the offset is passed so that the graph advances from left
+            // to right instead of jumping.
             char overlay[64];
             std::snprintf(overlay, sizeof(overlay), "CPU %.2f ms", m_showFrameMs);
             ImGui::PlotLines("##frameMs", m_plotMsHistory, m_plotFilled,
@@ -316,13 +316,13 @@ void PerformancePanel::draw(EditorContext& ctx)
         ImGui::PushID("gpu");
         if (ImGui::CollapsingHeader("GPU per pass", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            // Los nueve pases EN ORDEN DE PIPELINE, que es informacion en si
-            // misma: se lee como se graba el frame. La tabla es ordenable, pero
-            // el orden de partida es este.
+            // The nine passes IN PIPELINE ORDER, which is information in itself:
+            // it reads the way the frame is recorded. The table is sortable, but
+            // the starting order is this one.
             struct PassRow { const char* name; float ms; };
-            // Los nombres, en el MISMO orden en el que el refresco llena
-            // m_passMs. Si se añade un pase hay que tocar los dos sitios, y por
-            // eso el static_assert de debajo.
+            // The names, in the SAME order in which the refresh fills
+            // m_passMs. If a pass is added both places have to be touched, and
+            // that is why the static_assert below.
             static const char* const kPassNames[] = {
                 "Shadows", "Scene", "AO (SSAO)", "Forward+ (cull)", "SSR",
                 "Fog",  "Motion blur", "Bloom", "Anti-aliasing",
@@ -332,8 +332,8 @@ void PerformancePanel::draw(EditorContext& ctx)
             PassRow rows[kPassCount];
             for (int i = 0; i < kPassCount; ++i) rows[i] = {kPassNames[i], m_passMs[i]};
 
-            // El pass más caro del frame. -1 mientras no haya ni una medida:
-            // sin datos no hay nada que destacar.
+            // The most expensive pass of the frame. -1 while there is not a single measurement:
+            // with no data there is nothing to highlight.
             int hottest = -1;
             for (int i = 0; i < kPassCount; ++i)
                 if (rows[i].ms > 0.0f && (hottest < 0 || rows[i].ms > rows[hottest].ms))
@@ -345,16 +345,16 @@ void PerformancePanel::draw(EditorContext& ctx)
                     ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Sortable |
                     ImGuiTableFlags_SortTristate))
             {
-                // Ordenar por nombre no dice nada; por % es lo mismo que por ms
-                // (comparten el total). Solo la columna de ms ordena.
+                // Sorting by name says nothing; by % it is the same as by ms
+                // (they share the total). Only the ms column sorts.
                 ImGui::TableSetupColumn("Pass",    ImGuiTableColumnFlags_NoSort);
                 ImGui::TableSetupColumn("ms",      ImGuiTableColumnFlags_DefaultSort);
                 ImGui::TableSetupColumn("% total", ImGuiTableColumnFlags_NoSort);
                 ImGui::TableHeadersRow();
 
-                // Se reordena CADA frame, no solo cuando SpecsDirty: los tiempos
-                // cambian en cada vuelta, asi que un orden calculado una vez se
-                // quedaria mintiendo al frame siguiente.
+                // It is reordered EVERY frame, not only when SpecsDirty: the times
+                // change on every pass, so an order computed once would
+                // end up lying on the next frame.
                 if (const ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs())
                 {
                     if (specs->SpecsCount > 0)
@@ -377,10 +377,10 @@ void PerformancePanel::draw(EditorContext& ctx)
         }
         ImGui::PopID();
 
-        // ── Contadores de dibujo ─────────────────────────────────────────────
-        // Scope de IDs propio por seccion: una cabecera y un widget que se
-        // llamen igual en dos secciones distintas colisionan, y el sintoma es
-        // que uno de los dos deja de responder.
+        // ── Draw counters ────────────────────────────────────────────────────
+        // Own ID scope per section: a header and a widget that are
+        // named the same in two different sections collide, and the symptom is
+        // that one of the two stops responding.
         ImGui::PushID("dibujo");
         if (ImGui::CollapsingHeader("Drawing", ImGuiTreeNodeFlags_DefaultOpen))
         {
@@ -389,23 +389,23 @@ void PerformancePanel::draw(EditorContext& ctx)
             ImGui::Text("Culled:     %d", m_culled);
             ImGui::TextDisabled("Scene pass only (instanced statics + skinned).");
 
-            // Debe ser siempre 0, asi que solo se pinta cuando NO lo es: una
-            // fila permanente a cero es ruido, y este numero solo importa el
-            // dia que deja de serlo. Mismo criterio que el aviso de celdas
-            // desbordadas de Forward+.
+            // It must always be 0, so it is only drawn when it is NOT: a
+            // permanent row at zero is noise, and this number only matters on the
+            // day it stops being so. Same criterion as the Forward+ overflowed
+            // cells warning.
             if (m_instanceOverflow > 0)
                 ImGui::TextColored(kWarn,
                                    "%d objects without room in the SSBO: they lose their shadow",
                                    m_instanceOverflow);
 
-            // Ranuras de objeto. Aqui y no en el menu View porque es un
-            // diagnostico, no un ajuste: lo que dice es si borrar esta
-            // devolviendo los huecos. Si tras varios ciclos Play/Stop el numero
-            // sube en vez de volver al de partida, hay una fuga.
+            // Object slots. Here and not in the View menu because it is a
+            // diagnostic, not a setting: what it says is whether deleting is
+            // returning the gaps. If after several Play/Stop cycles the number
+            // goes up instead of returning to the starting one, there is a leak.
             auto slotRow = [](const char* label, size_t used, size_t capacity) {
                 if (capacity == 0) {
-                    // Backend sin tope duro: el vector crece, asi que el numero
-                    // solo es util comparado consigo mismo.
+                    // Backend without a hard cap: the vector grows, so the number
+                    // is only useful compared with itself.
                     ImGui::Text("%s %zu (no cap)", label, used);
                     return;
                 }
@@ -422,9 +422,9 @@ void PerformancePanel::draw(EditorContext& ctx)
         }
         ImGui::PopID();
 
-        // ── Escena: lo que hay que dibujar ───────────────────────────────────
-        // El "por que" de los numeros de arriba: cuantos objetos y cuantas
-        // luces hay, y que parte de ellos se esta perdiendo por un tope.
+        // ── Scene: what has to be drawn ──────────────────────────────────────
+        // The "why" of the numbers above: how many objects and how many
+        // lights there are, and what part of them is being lost to a cap.
         ImGui::PushID("escena");
         if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen))
         {
@@ -438,17 +438,17 @@ void PerformancePanel::draw(EditorContext& ctx)
                 ImGui::TextDisabled("No scene.");
             }
 
-            // El total lo pone quien monta el frame, no el backend: es el unico
-            // que ve las luces DESCARTADAS. collectLights se queda con las
-            // primeras MAX_LIGHTS y tira el resto en silencio.
+            // The total is set by whoever assembles the frame, not the backend: it is the only one
+            // that sees the DISCARDED lights. collectLights keeps the
+            // first MAX_LIGHTS and silently throws away the rest.
             if (m_sceneLights > (size_t)MAX_LIGHTS)
                 ImGui::TextColored(kWarn, "Lights:      %zu / %d: the rest neither light nor "
                                           "cast shadows", m_sceneLights, MAX_LIGHTS);
             else
                 ImGui::Text("Lights:      %zu / %d", m_sceneLights, MAX_LIGHTS);
 
-            // Forward+ solo cuenta si esta encendido: apagado no graba ni un
-            // dispatch y sus contadores no significan nada.
+            // Forward+ only counts if it is on: when off it records not a single
+            // dispatch and its counters mean nothing.
             if (r.forwardPlusMode() != RendererState::FpMode::Off)
             {
                 ImGui::Text("Lights/cell: %.1f  (Forward+ %s)",
@@ -464,16 +464,16 @@ void PerformancePanel::draw(EditorContext& ctx)
                 ImGui::TextDisabled("Forward+: off.");
             }
 
-            // Sondas de reflexion: lo caro de una sonda es su VRAM y su bake,
-            // no su coste por frame, asi que van aqui y no en la tabla de
-            // pases. La cifra por sonda la da el BACKEND ACTIVO: los dos
-            // guardan cosas distintas (H51).
+            // Reflection probes: what is expensive about a probe is its VRAM and its bake,
+            // not its per-frame cost, so they go here and not in the table of
+            // passes. The per-probe figure is given by the ACTIVE BACKEND: the two
+            // store different things (H51).
             if (m_probes > 0)
             {
                 ImGui::Text("Probes:      %d  (%.2f MB each, %.1f MB in total)",
                             m_probes, m_probeMbEach, m_probeMbEach * (double)m_probes);
-                // Un "0.00 ms" se leeria como bake instantaneo en vez de como
-                // "nunca se ha horneado" (H56), asi que se distingue.
+                // A "0.00 ms" would be read as an instant bake instead of as
+                // "never baked" (H56), so they are distinguished.
                 char b[kGpuMsTextSize];
                 if (m_probeBakeMs <= 0.0f)
                     ImGui::TextDisabled("Last bake: not baked");
@@ -488,10 +488,10 @@ void PerformancePanel::draw(EditorContext& ctx)
         }
         ImGui::PopID();
 
-        // ── Configuración activa ─────────────────────────────────────────────
-        // No es un panel de ajustes (eso es Rendering): es el CONTEXTO de las
-        // medidas de arriba. Un tiempo de pass sin saber a que resolucion y con
-        // que AA se tomo no se puede comparar con el de ayer.
+        // ── Active configuration ─────────────────────────────────────────────
+        // It is not a settings panel (that is Rendering): it is the CONTEXT of the
+        // measurements above. A pass time without knowing at what resolution and
+        // with what AA it was taken cannot be compared with yesterday's.
         ImGui::PushID("config");
         if (ImGui::CollapsingHeader("Active configuration"))
         {
@@ -499,8 +499,8 @@ void PerformancePanel::draw(EditorContext& ctx)
             const uint32_t uw = r.uiWidth(),     uh = r.uiHeight();
             ImGui::Text("Render:      %u x %u  (%.2f Mpx)", rw, rh,
                         (double)rw * (double)rh / 1e6);
-            // Con SSAA el render interno es MAYOR que la salida, y ese factor
-            // es lo que explica el coste del pass de escena.
+            // With SSAA the internal render is LARGER than the output, and that factor
+            // is what explains the cost of the scene pass.
             if (rw != uw || rh != uh)
                 ImGui::Text("Output:      %u x %u  (SSAA x%.2f)", uw, uh, r.ssaaFactor());
             else
@@ -523,8 +523,8 @@ void PerformancePanel::draw(EditorContext& ctx)
             ImGui::Text("Shadows:     %d x %d texels, range %.0f",
                         r.shadowResolution(), r.shadowResolution(), r.shadowDistance());
 
-            // Lo PEDIDO, no lo efectivo: el backend cae a Vsync sin avisar si
-            // el modo no esta soportado, y eso no se puede leer desde aqui.
+            // What was REQUESTED, not what is effective: the backend falls back to Vsync without warning if
+            // the mode is not supported, and that cannot be read from here.
             const char* pm = "Vsync";
             switch (r.presentMode())
             {
@@ -541,7 +541,7 @@ void PerformancePanel::draw(EditorContext& ctx)
         }
         ImGui::PopID();
 
-        // ── Proceso: RAM, CPU, VRAM ──────────────────────────────────────────
+        // ── Process: RAM, CPU, VRAM ──────────────────────────────────────────
         ImGui::PushID("proceso");
         if (ImGui::CollapsingHeader("Process", ImGuiTreeNodeFlags_DefaultOpen))
         {
@@ -549,8 +549,8 @@ void PerformancePanel::draw(EditorContext& ctx)
             ImGui::Text("Process CPU:       %.1f %%", m_cpuPercent);
             if (m_gpuBudgetMb > 0.0f)
             {
-                // Mismo umbral que las ranuras de objeto: al 90 % del
-                // presupuesto el driver ya empieza a echar recursos a RAM.
+                // Same threshold as the object slots: at 90 % of the
+                // budget the driver already starts pushing resources out to RAM.
                 const float uso = std::clamp(m_gpuUsedMb / m_gpuBudgetMb, 0.0f, 1.0f);
                 if (uso >= 0.9f)
                     ImGui::TextColored(kWarn, "Process VRAM:      %.1f MB / %.1f MB of budget",

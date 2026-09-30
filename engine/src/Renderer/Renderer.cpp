@@ -30,31 +30,31 @@ namespace DonTopo {
         shutdown();
     }
 
-    // En headless no hay editor que pulse Play: el runtime arranca jugando
-    // desde el frame 0.
+    // In headless there is no editor to press Play: the runtime starts playing
+    // from frame 0.
     bool Renderer::isPlaying() const { return m_headless || (m_ui && m_ui->isPlaying()); }
 
     void Renderer::init(Window& window, const std::vector<Mesh>& meshes)
     {
-        // Se mantiene como la suma de las dos fases, en el mismo orden que
-        // antes (ver initPresentation/initSceneResources para el detalle del
-        // reparto). El editor (Sandbox) llama a init() y no cambia; el
-        // runtime llama a las dos fases por separado para colar el splash
-        // entre medias.
+        // Kept as the sum of the two phases, in the same order as
+        // before (see initPresentation/initSceneResources for the details of the
+        // split). The editor (Sandbox) calls init() and does not change; the
+        // runtime calls the two phases separately to slip the splash
+        // in between.
         initPresentation(window);
         initSceneResources(meshes);
     }
 
     void Renderer::initPresentation(Window& window)
     {
-        // Gizmos::kFramesInFlight se usa para dimensionar buffers por frame en vuelo
-        // dentro de Gizmos; debe coincidir siempre con Renderer::MAX_FRAMES. MAX_FRAMES
-        // es private, así que este static_assert vive aquí (contexto de miembro) en vez
-        // de a nivel de archivo.
+        // Gizmos::kFramesInFlight is used to size per-in-flight-frame buffers
+        // inside Gizmos; it must always match Renderer::MAX_FRAMES. MAX_FRAMES
+        // is private, so this static_assert lives here (member context) instead
+        // of at file level.
         static_assert(Gizmos::kFramesInFlight == MAX_FRAMES,
             "Gizmos::kFramesInFlight must match Renderer::MAX_FRAMES");
-        // Mismo caso: MotionBlurPass dimensiona sus imagenes y sus sets por
-        // frame en vuelo sin poder ver MAX_FRAMES.
+        // Same case: MotionBlurPass sizes its images and its sets per
+        // in-flight frame without being able to see MAX_FRAMES.
         static_assert(MotionBlurPass::kFramesInFlight == MAX_FRAMES,
             "MotionBlurPass::kFramesInFlight must match Renderer::MAX_FRAMES");
         static_assert(FogPass::kFramesInFlight == MAX_FRAMES,
@@ -68,16 +68,16 @@ namespace DonTopo {
         static_assert(DepthPrepassPass::kFramesInFlight == MAX_FRAMES,
             "DepthPrepassPass::kFramesInFlight must match Renderer::MAX_FRAMES");
 
-        // Fase 1: lo minimo para poder presentar un frame (splash incluido).
-        // El auto-fit de cámara y los recursos de escena (pipelines, shadow,
-        // compute, descriptores independientes de la UI como offscreen, mallas)
-        // viven en initSceneResources porque dependen de `meshes` o de
-        // recursos creados ahí mismo.
+        // Phase 1: the bare minimum to be able to present a frame (splash included).
+        // The camera auto-fit and the scene resources (pipelines, shadow,
+        // compute, UI-independent descriptors such as offscreen, meshes)
+        // live in initSceneResources because they depend on `meshes` or on
+        // resources created right there.
         m_gpu.init(window.getNativeWindow());
-        // ANTES de cualquier render pass, imagen o pipeline: el numero de
-        // muestras del modo de AA activo entra en la creacion de los tres. Sin
-        // esto un modo por defecto distinto de None se construiria a una muestra
-        // y el MSAA no haria nada, en silencio.
+        // BEFORE any render pass, image or pipeline: the number of
+        // samples of the active AA mode goes into the creation of all three. Without
+        // this, a default mode other than None would be built with one sample
+        // and MSAA would do nothing, silently.
         m_aaActiveMode  = aaMode();
         m_aaSampleCount = targetSampleCount();
         createSwapChain(window);
@@ -87,33 +87,33 @@ namespace DonTopo {
         createOffscreenRenderPass();
         createCompositeRenderPass();
         createUiRenderPass();
-        // Los gizmos van en el pass de composicion, no en el de escena: ahi el
-        // color ya esta tonemapeado y sus lineas salen exactamente con el color
-        // plano que declaran, igual que antes del bloom.
+        // The gizmos go in the composition pass, not the scene one: there the
+        // color is already tonemapped and their lines come out with exactly the flat
+        // color they declare, same as before the bloom.
         Gizmos::init(m_gpu, m_compositeRenderPass, m_swapChainFormat, m_aaSampleCount);
-        // Passes del AA: solo dependen de m_swapChainFormat, igual que el de
-        // composicion, asi que sobreviven a los resize (lo que se recrea son sus
-        // imagenes y framebuffers, en createAaImages).
+        // AA passes: they only depend on m_swapChainFormat, same as the
+        // composition one, so they survive resizes (what gets recreated are their
+        // images and framebuffers, in createAaImages).
         m_aaPass.createRenderPasses(aaCtx());
         createRenderPass();
         createFramebuffers();
-        // createCommandBuffers/createSyncObjects solo dependen del device y
-        // del command pool (createCommandBuffers) o del device y
-        // m_swapChainImages.size() (createSyncObjects) — nada de
-        // initSceneResources (descriptor sets, pipelines, malla) los toca
-        // durante el init. Se adelantan aquí, respecto al original, para que
-        // queden listos en la fase 1 junto con el resto de lo necesario para
-        // presentar.
+        // createCommandBuffers/createSyncObjects only depend on the device and
+        // the command pool (createCommandBuffers) or on the device and
+        // m_swapChainImages.size() (createSyncObjects); nothing from
+        // initSceneResources (descriptor sets, pipelines, mesh) touches them
+        // during init. They are moved up here, relative to the original, so that they
+        // are ready in phase 1 along with the rest of what is needed to
+        // present.
         createCommandBuffers();
         createSyncObjects();
-        // necesita m_renderPass + m_swapChainImages.size(); no depende de
-        // nada de initSceneResources, así que se mueve aquí (antes vivía a
-        // mitad del init original) para que el splash pueda dibujar con
-        // la UI ya operativa si hiciera falta.
+        // needs m_renderPass + m_swapChainImages.size(); it does not depend on
+        // anything in initSceneResources, so it moves here (it used to live in the
+        // middle of the original init) so that the splash can draw with
+        // the UI already operational if needed.
         if (!m_headless && m_ui)
         {
-            // Los handles viajan como enteros: UiLayer ya no incluye vulkan.h,
-            // porque el mismo editor tiene que poder dibujarse con DirectX 12.
+            // The handles travel as integers: UiLayer no longer includes vulkan.h,
+            // because the same editor has to be able to draw itself with DirectX 12.
             UiLayer::InitInfo info{};
             info.api            = UiLayer::GraphicsApi::Vulkan;
             info.window         = window.getNativeWindow();
@@ -130,10 +130,10 @@ namespace DonTopo {
 
     void Renderer::refitCameraRange()
     {
-        // Suelo del rango: una escena diminuta (o con todo en el mismo punto)
-        // daría far ~0 y no se vería ni el skybox. 200 deja far=600, que cubre de
-        // sobra la cámara con la que abre el editor (z=300 mirando al origen), y
-        // near=0.2, que no recorta props pequeños.
+        // Range floor: a tiny scene (or one with everything at the same point)
+        // would give far ~0 and not even the skybox would be visible. 200 leaves far=600, which
+        // amply covers the camera the editor opens with (z=300 looking at the origin), and
+        // near=0.2, which does not clip small props.
         constexpr float kMinCameraDistance = 200.0f;
 
         glm::vec3 bMin( std::numeric_limits<float>::max());
@@ -145,8 +145,8 @@ namespace DonTopo {
             const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
             if (!gpu || !gpu->hasBounds) continue;
 
-            // Las 8 esquinas de la AABB local llevadas a mundo: con el objeto
-            // rotado o escalado, la caja alineada a ejes de la malla ya no acota.
+            // The 8 corners of the local AABB taken to world space: with the object
+            // rotated or scaled, the mesh's axis-aligned box no longer bounds it.
             for (int c = 0; c < 8; ++c)
             {
                 const glm::vec3 corner((c & 1) ? gpu->aabbMax.x : gpu->aabbMin.x,
@@ -162,17 +162,17 @@ namespace DonTopo {
         for (const SkinnedRenderObject& obj : m_skinnedObjects)
         {
             if (!obj.hasBounds) continue;
-            // La cota de un skinned es una esfera en local (vale para toda pose):
-            // se toma su centro en mundo y el radio sin escalar. Aproximado a
-            // propósito — esto solo fija near/far, no culea nada.
+            // The bound of a skinned mesh is a sphere in local space (valid for any pose):
+            // its center is taken in world space and the radius unscaled. Approximate on
+            // purpose: this only sets near/far, it culls nothing.
             const glm::vec3 center(obj.transform[3]);
             bMin = glm::min(bMin, center - glm::vec3(obj.boundRadius));
             bMax = glm::max(bMax, center + glm::vec3(obj.boundRadius));
             any = true;
         }
 
-        // Nada acotable: conserva el rango vigente en vez de dejarlo en infinitos.
-        // Es lo que pasa con la escena vacía de un proyecto recién creado.
+        // Nothing boundable: keep the current range instead of leaving it at infinities.
+        // This is what happens with the empty scene of a newly created project.
         if (!any) return;
 
         m_cameraTarget = (bMin + bMax) * 0.5f;
@@ -183,8 +183,8 @@ namespace DonTopo {
 
     void Renderer::initSceneResources(const std::vector<Mesh>& meshes)
     {
-        // Auto-fit camera to mesh bounding box (necesita `meshes`; por eso
-        // vive aquí y no en initPresentation).
+        // Auto-fit camera to mesh bounding box (needs `meshes`; that is why it
+        // lives here and not in initPresentation).
         glm::vec3 bMin( std::numeric_limits<float>::max());
         glm::vec3 bMax(-std::numeric_limits<float>::max());
 
@@ -197,12 +197,12 @@ namespace DonTopo {
             }
         }
 
-        // Sin una sola malla con vertices -escena vacia, o todas vacias- los
-        // extremos se quedan tal cual salieron (bMin en +max y bMax en -max), y
-        // entonces maxDim vale -inf. De ahi pasa a m_cameraDistance y al rango
-        // de profundidad que se deriva de el, y el editor arranca con una
-        // proyeccion de infinitos que no dibuja nada. refitCameraRange() si se
-        // guarda de este caso; este camino no lo hacia.
+        // Without a single mesh with vertices (empty scene, or all of them empty) the
+        // extremes stay as they came out (bMin at +max and bMax at -max), and
+        // then maxDim is -inf. From there it goes to m_cameraDistance and to the depth
+        // range derived from it, and the editor starts with a
+        // projection of infinities that draws nothing. refitCameraRange() does
+        // guard against this case; this path did not.
         if (bMin.x > bMax.x)
         {
             bMin = glm::vec3(-1.0f);
@@ -213,17 +213,17 @@ namespace DonTopo {
         float maxDim     = glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
         m_cameraDistance = maxDim * 1.2f;
 
-        // ANTES de createPipeline y createShadowResources: los dos pipeline
-        // layouts declaran m_instanceBuffers.descLayout() como set 1.
+        // BEFORE createPipeline and createShadowResources: both pipeline
+        // layouts declare m_instanceBuffers.descLayout() as set 1.
         m_instanceBuffers.create(instanceCtx());
         createDescriptorSetLayout();
-        // ANTES de createPipeline: el pipeline layout de escena declara
-        // m_fpDescLayout como set 2. Los buffers que SI dependen del tamano (la
-        // rejilla) los crea despues createFpBuffers, desde createOffscreenImages.
-        // Los timestamps: propiedades del device que comparten todos los pases
-        // con queries. Este pass corre ANTES que createBloomPipelines (el layout
-        // del pipeline de escena necesita el set de aqui), asi que se resuelven
-        // aqui mismo; el bloom volvera a leer exactamente lo mismo.
+        // BEFORE createPipeline: the scene pipeline layout declares
+        // m_fpDescLayout as set 2. The buffers that DO depend on the size (the
+        // grid) are created later by createFpBuffers, from createOffscreenImages.
+        // The timestamps: device properties shared by all the passes
+        // with queries. This pass runs BEFORE createBloomPipelines (the layout
+        // of the scene pipeline needs the set from here), so they are resolved
+        // right here; the bloom will read exactly the same thing again.
         {
             VkPhysicalDeviceProperties tsProps{};
             vkGetPhysicalDeviceProperties(m_gpu.physicalDevice(), &tsProps);
@@ -235,73 +235,73 @@ namespace DonTopo {
         m_shadowPass.createResources(shadowCtx());
         m_skinningPass.createPipelines(skinningCtx());
         createSkinnedGraphicsPipelines();
-        // ANTES de createDescriptorSets: los sets de cada objeto escriben ya las
-        // vistas de los dos cubemaps del IBL (bindings 5 y 6). Aqui se crean con
-        // contenido neutro; initSkybox los rellenara si hay entorno.
+        // BEFORE createDescriptorSets: each object's sets already write the
+        // views of the two IBL cubemaps (bindings 5 and 6). Here they are created with
+        // neutral content; initSkybox will fill them in if there is an environment.
         m_iblPass.createResources(iblCtx());
-        // ANTES de createOffscreenImages: ahi se crea la cadena de mips, que
-        // necesita el descriptor set layout y el pool del bloom ya montados.
+        // BEFORE createOffscreenImages: that is where the mip chain is created, and it
+        // needs the bloom's descriptor set layout and pool already set up.
         createBloomPipelines();
-        // UI de juego: mismo pass y mismas muestras que la composicion, que es
-        // donde se graban sus lotes (LDR, ya tonemapeado, encima de la escena).
-        // Pass propio y UNA muestra: la UI ya no va dentro de la composicion,
-        // asi que ni la toca el AA ni depende del numero de muestras de la
-        // escena (y por eso tampoco hay que recrear su pipeline al cambiar MSAA).
+        // Game UI: same pass and same samples as the composition, which is
+        // where its batches are recorded (LDR, already tonemapped, on top of the scene).
+        // Own pass and ONE sample: the UI no longer goes inside the composition,
+        // so AA does not touch it nor does it depend on the number of samples of the
+        // scene (and that is also why its pipeline does not need recreating when MSAA changes).
         m_uiBatch.init(m_gpu, m_res, m_uiRenderPass, VK_SAMPLE_COUNT_1_BIT);
-        // Los canvas de MUNDO no van en ese pass: se graban dentro del de
-        // ESCENA, con la perspectiva de la camara y tapados por la geometria.
-        // Sus dos variantes se compilan contra m_offscreenRenderPass y con SUS
-        // muestras, que no son las del pass de UI. Hay que rehacerlas cada vez
-        // que se recrea ese renderpass — ver recreateMsaaDependentPipelines().
+        // WORLD canvases do not go in that pass: they are recorded inside the
+        // SCENE one, with the camera's perspective and hidden by the geometry.
+        // Their two variants are compiled against m_offscreenRenderPass and with ITS
+        // samples, which are not those of the UI pass. They have to be redone every time
+        // that renderpass is recreated; see recreateMsaaDependentPipelines().
         m_uiBatch.initWorldPipelines(m_gpu, m_offscreenRenderPass, m_aaSampleCount);
-        // ANTES de createOffscreenImages (que llama a createSsaoImages) y DESPUÉS
-        // de ShadowPass::createResources: el pipeline del depth pre-pass
-        // reutiliza el pipeline layout del pass de sombras, que se crea allí.
+        // BEFORE createOffscreenImages (which calls createSsaoImages) and AFTER
+        // ShadowPass::createResources: the depth pre-pass pipeline
+        // reuses the shadow pass's pipeline layout, which is created there.
         m_depthPrepass.createRenderPassAndPipeline(depthPrepassCtx());
         m_ssaoPass.createPipelines(ssaoCtx());
-        // Detrás del SSAO: comparte su sampler de profundidad (DepthPrepassPass) y
-        // su depth pre-pass, y el pool de queries se apoya en el
-        // m_timestampsSupported que resolvió el bloom.
+        // After SSAO: it shares its depth sampler (DepthPrepassPass) and
+        // its depth pre-pass, and the query pool relies on the
+        // m_timestampsSupported that the bloom resolved.
         m_ssrPass.createPipelines(ssrCtx());
-        // Detras del SSR: come del MISMO depth pre-pass y del mismo sampler de
-        // profundidad, y su pool de queries se apoya en el mismo
+        // After SSR: it feeds from the SAME depth pre-pass and the same depth
+        // sampler, and its query pool relies on the same
         // m_timestampsSupported.
         m_fogPass.createPipelines(fogCtx());
-        // Detras de la niebla, y ANTES de createOffscreenImages: sus imagenes y
-        // sus descriptor sets se crean con el swapchain y necesitan el layout y
-        // el pool ya montados.
+        // After the fog, and BEFORE createOffscreenImages: its images and
+        // its descriptor sets are created with the swapchain and need the layout and
+        // the pool already set up.
         m_motionBlurPass.createPipeline(motionBlurCtx());
-        // ANTES de createOffscreenImages (que llama a createAaImages): ahi se
-        // alojan los descriptor sets del AA, que necesitan sus layouts y sus
-        // pools ya montados. El pool de queries se apoya en el
-        // m_timestampsSupported que resolvio el bloom.
+        // BEFORE createOffscreenImages (which calls createAaImages): that is where the
+        // AA descriptor sets are allocated, and they need their layouts and their
+        // pools already set up. The query pool relies on the
+        // m_timestampsSupported that the bloom resolved.
         m_aaPass.createPipelines(aaCtx());
         createAaQueryPools();
-        // La capa de UI ya se inicializó en initPresentation. En editor,
-        // createOffscreenImages necesita que lo esté (llama a
-        // registerUiTexture); en headless no la llama, así que el orden no
-        // importa. Como initUi corrió antes (fase 1) y esta llamada corre en
-        // fase 2, el orden UI→offscreen se conserva igual que en el init
-        // original.
+        // The UI layer was already initialized in initPresentation. In the editor,
+        // createOffscreenImages needs it to be (it calls
+        // registerUiTexture); in headless it does not call it, so the order does not
+        // matter. Since initUi ran before (phase 1) and this call runs in
+        // phase 2, the UI -> offscreen order is preserved as in the original
+        // init.
         createOffscreenImages();
 
-        // Las subidas van por LOTES, no una a una. Sin batch, el CmdScope de
-        // cada createBuffer/createImage hace endOneTimeCommands al salir, o sea
-        // enviar y ESPERAR a la GPU: medido en una escena de 1000 mallas, 10.970
-        // esperas que costaban 1.886 ms de los ~2.600 que tardaba todo esto. El
+        // The uploads go in BATCHES, not one by one. Without a batch, the CmdScope of
+        // each createBuffer/createImage does endOneTimeCommands on exit, that is,
+        // submit and WAIT for the GPU: measured in a scene of 1000 meshes, 10,970
+        // waits that cost 1,886 ms of the ~2,600 that all this took. That is
         // 73 %.
         //
-        // TransferBatch existe justo para eso y lo usaba solo la carga asincrona
-        // (addStaticMesh); este camino, el del arranque, se quedo fuera. La
-        // correccion se mantiene porque las barreras siguen ordenando dentro del
-        // command buffer igual que ordenaban entre submits: lo que desaparece es
-        // la espera, no la sincronizacion.
+        // TransferBatch exists precisely for that and only the asynchronous load
+        // (addStaticMesh) used it; this path, the startup one, was left out. The
+        // correction holds because the barriers still order things inside the
+        // command buffer just as they ordered them between submits: what disappears is
+        // the wait, not the synchronization.
         //
-        // Por lotes y no un batch unico para toda la escena porque el staging
-        // vive hasta que la fence senala (TransferBatch::addStaging): un solo
-        // batch mantendria vivas a la vez las copias intermedias de TODAS las
-        // texturas de la escena. El tamano de lote acota ese pico; subirlo
-        // ahorra esperas y cuesta memoria.
+        // In batches and not a single batch for the whole scene because the staging
+        // lives until the fence signals (TransferBatch::addStaging): a single
+        // batch would keep the intermediate copies of ALL the scene's textures
+        // alive at once. The batch size bounds that peak; raising it
+        // saves waits and costs memory.
         constexpr size_t kMallasPorLote = 32;
 
         m_objects.resize(meshes.size());
@@ -315,31 +315,31 @@ namespace DonTopo {
             if ((i + 1) % kMallasPorLote == 0)
                 flushUploadsAndWait();
         }
-        // El ultimo lote, que casi nunca sale redondo. Y ademas es lo que deja
-        // este camino SINCRONO como siempre fue: al volver de aqui todo esta
-        // subido y en su layout, que es lo que dan por hecho los
-        // createDescriptorSets de mas abajo y quien llame a initSceneResources.
+        // The last batch, which almost never comes out round. And it is also what leaves
+        // this path SYNCHRONOUS as it always was: on returning from here everything is
+        // uploaded and in its layout, which is what the createDescriptorSets below
+        // and whoever calls initSceneResources take for granted.
         flushUploadsAndWait();
 
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
-        // DETRAS de createUniformBuffers: el set de la niebla referencia el UBO
-        // del frame, y en el init ese buffer todavia no existia cuando corrio
-        // createOffscreenImages. En las recreaciones por swapchain ya existe y
-        // los sets los rehace createOffscreenImages.
+        // AFTER createUniformBuffers: the fog set references the frame's
+        // UBO, and during init that buffer did not exist yet when
+        // createOffscreenImages ran. On swapchain recreations it already exists and
+        // createOffscreenImages redoes the sets.
         m_fogPass.createSets(fogCtx());
     }
 
     bool Renderer::beginSplash(const std::string& logoPath)
     {
-        // Sobre el render pass del swapchain ya creado por initPresentation
-        // (createRenderPass): color-only, un solo attachment (VK_FORMAT =
-        // m_swapChainFormat, sin depth) — ver el comentario "solo color,
-        // usados por el pass de UI" en createFramebuffers. El pipeline del
-        // splash (Task 3) se crea con pDepthStencilState = nullptr, que es
-        // compatible con este render pass precisamente porque no tiene
-        // attachment de depth/stencil. No lanza si el logo falta.
+        // On top of the swapchain render pass already created by initPresentation
+        // (createRenderPass): color-only, a single attachment (VK_FORMAT =
+        // m_swapChainFormat, no depth); see the comment "color only,
+        // used by the UI pass" in createFramebuffers. The splash pipeline
+        // (Task 3) is created with pDepthStencilState = nullptr, which is
+        // compatible with this render pass precisely because it has no
+        // depth/stencil attachment. It does not throw if the logo is missing.
         return m_splash.init(m_gpu, m_renderPass, m_swapChainFormat, logoPath);
     }
 
@@ -352,7 +352,7 @@ namespace DonTopo {
         uint32_t imageIndex;
         VkResult res = vkAcquireNextImageKHR(m_gpu.device(), m_swapChain, UINT64_MAX,
             m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
-        if (res == VK_ERROR_OUT_OF_DATE_KHR) return; // durante el splash no recreamos: el siguiente frame lo hara
+        if (res == VK_ERROR_OUT_OF_DATE_KHR) return; // during the splash we do not recreate: the next frame will
         if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) return;
 
         vkResetFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame]);
@@ -363,7 +363,7 @@ namespace DonTopo {
         vkBeginCommandBuffer(m_commandBuffers[m_currentFrame], &bi);
 
         VkClearValue clear{};
-        clear.color = { { 0.05f, 0.05f, 0.06f, 1.0f } }; // mismo fondo que el shader
+        clear.color = { { 0.05f, 0.05f, 0.06f, 1.0f } }; // same background as the shader
 
         VkRenderPassBeginInfo rp{};
         rp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -374,7 +374,7 @@ namespace DonTopo {
         rp.pClearValues      = &clear;
         vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rp, VK_SUBPASS_CONTENTS_INLINE);
 
-        // Viewport/scissor dinamicos (el pipeline los declara dinamicos).
+        // Dynamic viewport/scissor (the pipeline declares them dynamic).
         VkViewport vp{ 0, 0, (float)m_swapChainExtent.width, (float)m_swapChainExtent.height, 0.0f, 1.0f };
         VkRect2D sc{ { 0, 0 }, m_swapChainExtent };
         vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &vp);
@@ -413,10 +413,10 @@ namespace DonTopo {
 
     void Renderer::drawFrame(Window& window)
     {
-        // 1. Espera a que el frame anterior terminó
+        // 1. Wait for the previous frame to finish
         vkWaitForFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame], VK_TRUE, UINT64_MAX);
 
-        // 2. Pide la siguiente imagen del swapchain
+        // 2. Request the next swapchain image
         uint32_t imageIndex;
         VkResult result;
 
@@ -424,11 +424,11 @@ namespace DonTopo {
         if(result == VK_ERROR_OUT_OF_DATE_KHR)
         {
             recreateSwapChain(window);
-            // Este frame no llega a grabar/dibujar comandos: descartar aquí
-            // evita que los vértices de gizmos acumulados por drawX(...) antes de
-            // esta llamada se arrastren duplicados al siguiente frame que sí
-            // dibuje. Es el caso raro —tirar el trabajo sin consumirlo—, y por
-            // eso no se llama clear: en el camino normal, Gizmos::draw ya vacía.
+            // This frame never gets to record/draw commands: discarding here
+            // avoids the gizmo vertices accumulated by drawX(...) before
+            // this call being carried over, duplicated, to the next frame that does
+            // draw. It is the rare case (throwing the work away without consuming it), and
+            // that is why clear is not called: in the normal path, Gizmos::draw already empties.
             Gizmos::discard();
             return;
         }
@@ -440,68 +440,68 @@ namespace DonTopo {
 
         vkResetFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame]);
 
-        // 3. Graba el command buffer
+        // 3. Record the command buffer
         if(vkResetCommandBuffer(m_commandBuffers[m_currentFrame], 0) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to reset command buffer!");
         }
 
-        // Un cambio de modo de AA, de sus parametros de recursos o del tamano del
-        // panel del viewport se resuelve AQUI: la fence de este frame ya
-        // senalizo y el command buffer aun no se ha grabado, asi que es el punto
-        // donde se pueden destruir imagenes y pipelines sin pillar trabajo en
-        // vuelo. Y ANTES de buildUiFrame, que es lo importante: la
-        // reconstruccion re-registra la textura del viewport y le da un
-        // VkDescriptorSet nuevo. Si corriera despues, ImGui ya habria grabado el
-        // viejo -recien destruido- en la lista de dibujo de este frame.
+        // A change of AA mode, of its resource parameters or of the viewport
+        // panel size is resolved HERE: this frame's fence already
+        // signaled and the command buffer has not been recorded yet, so this is the point
+        // where images and pipelines can be destroyed without catching in-flight
+        // work. And BEFORE buildUiFrame, which is the important part: the
+        // reconstruction re-registers the viewport texture and gives it a
+        // new VkDescriptorSet. If it ran afterwards, ImGui would already have recorded the
+        // old one (just destroyed) in this frame's draw list.
         if (m_aaResourcesDirty) rebuildAaResources();
-        // Mismo sitio y mismo motivo: entre frames y con la GPU parada.
+        // Same place and same reason: between frames and with the GPU stopped.
         if (m_shadowResourcesDirty) rebuildShadowResources();
 
-        // Reflection probes: MISMO sitio y mismo motivo que la linea de arriba.
-        // Aqui se puede esperar a que la GPU quede libre para bakear una sonda o
-        // reescribir los bindings 5/6 de un descriptor set. Sin sondas en la
-        // escena sale por el camino rapido sin tocar nada, y con sondas ya
-        // bakeadas y quietas tampoco graba un solo comando: el coste GPU por
-        // frame es identico en los tres casos.
+        // Reflection probes: SAME place and same reason as the line above.
+        // Here we can wait for the GPU to become free to bake a probe or
+        // rewrite bindings 5/6 of a descriptor set. With no probes in the
+        // scene it exits through the fast path without touching anything, and with probes already
+        // baked and still it does not record a single command either: the per-frame
+        // GPU cost is identical in all three cases.
         m_probePass.sync(probeCtx());
 
-        // ── Construir frame de UI (antes de grabar el command buffer) ─────────────
-        // En headless no hay capa de UI que alimentar: el runtime blitea
-        // la imagen offscreen directamente al swapchain (ver recordCommandBuffer).
+        // ── Build the UI frame (before recording the command buffer) ──────────────
+        // In headless there is no UI layer to feed: the runtime blits
+        // the offscreen image directly to the swapchain (see recordCommandBuffer).
         if (!m_headless && m_ui)
             m_ui->buildUiFrame(m_offscreenDescSet[m_currentFrame], m_sceneRoot, m_viewMatrix);
 
-        // Se muestrea AQUÍ, después de buildUiFrame() y no antes: ese draw()
-        // es quien puede voltear m_isPlaying (botones Play/Stop) o mutar la
-        // escena (Add/Remove/Create Camera). currentFrameCamera() lee ambas
-        // cosas, así que si se llamaba antes del draw(), el UBO (geometría
-        // iluminada) y el command buffer grabado justo debajo (skybox +
-        // gizmos) podían acabar leyendo cámaras distintas en el frame exacto
-        // del clic — un frame de tearing visible. El UBO está en memoria
-        // host-mapeada: basta con escribirlo antes del vkQueueSubmit de más
-        // abajo, no hace falta que sea lo primero del frame.
+        // It is sampled HERE, after buildUiFrame() and not before: that draw()
+        // is what can flip m_isPlaying (Play/Stop buttons) or mutate the
+        // scene (Add/Remove/Create Camera). currentFrameCamera() reads both
+        // things, so if it were called before draw(), the UBO (lit geometry)
+        // and the command buffer recorded right below (skybox +
+        // gizmos) could end up reading different cameras on the exact frame
+        // of the click: a frame of visible tearing. The UBO is in
+        // host-mapped memory: it is enough to write it before the vkQueueSubmit further
+        // down, it does not need to be the first thing in the frame.
         //
-        // Las cascadas se ajustan al frustum de la cámara, así que se calculan
-        // aquí, con la misma cámara ya estable, y ANTES de los dos que las
-        // consumen: updateUniformBuffer (que las copia al UBO) y
-        // recordCommandBuffer (que culea y graba el pass de sombras con ellas).
-        // Forward+: se congela AQUI, despues de buildUiFrame (que es quien puede
-        // haber cambiado el modo con el combo) y antes de los dos que lo
-        // consumen. Sin este punto unico, el bloque de parametros que lee
-        // pbr.frag y el dispatch que se graba podrian salir de modos distintos en
-        // el frame exacto del clic.
+        // The cascades are fitted to the camera frustum, so they are computed
+        // here, with the same, now stable camera, and BEFORE the two that
+        // consume them: updateUniformBuffer (which copies them into the UBO) and
+        // recordCommandBuffer (which culls and records the shadow pass with them).
+        // Forward+: it is frozen HERE, after buildUiFrame (which is what may
+        // have changed the mode with the combo) and before the two that
+        // consume it. Without this single point, the parameter block that
+        // pbr.frag reads and the dispatch that gets recorded could come out of different modes on
+        // the exact frame of the click.
         m_fpActiveMode = m_fpMode;
 
-        // La camara del frame se muestrea aqui y no dentro del pase: es el mismo
-        // currentFrameCamera() que ve el culling del pass de sombras.
+        // The frame's camera is sampled here and not inside the pass: it is the same
+        // currentFrameCamera() that the shadow pass culling sees.
         {
-            // El centro de la escena, a donde apunta una luz de punto. Se saca
-            // AQUI, junto a las cascadas, porque es el mismo valor que tiene que
-            // ver la niebla (via fogCtx) en este frame.
+            // The scene center, where a point light aims. It is taken
+            // HERE, next to the cascades, because it is the same value the fog has to
+            // see (via fogCtx) in this frame.
             SceneCenter centro;
-            // sharedIndex < 0 = entrada liberada (o aun sin subir): no tiene
-            // sitio en el mundo y tiraria de la media hacia el origen.
+            // sharedIndex < 0 = freed entry (or not yet uploaded): it has no
+            // place in the world and would pull the average towards the origin.
             for (const RenderObject& object : m_objects)
                 if (object.sharedIndex >= 0) centro.add(object.transform);
             for (const SkinnedRenderObject& character : m_skinnedObjects)
@@ -517,17 +517,17 @@ namespace DonTopo {
 
         recordCommandBuffer(imageIndex);
 
-        // 4. Envía a la GPU
-        // En headless el pass 2 no dibuja UI: blitea la imagen offscreen al
-        // swapchain (recordCommandBuffer), así que el primer uso real de la
-        // imagen adquirida ocurre en TRANSFER, no en COLOR_ATTACHMENT_OUTPUT.
-        // Esperar el semáforo también en TRANSFER hace que esa ordenación sea
-        // local y explícita, en vez de depender de que la barrera del blit se
-        // encadene con trabajo previo del pass 1 (ver el comentario largo del
-        // srcStageMask en recordCommandBuffer, que sigue vigente y explica por
-        // qué ESA barrera no puede esperar solo en TRANSFER). Añadir un stage
-        // al wait solo puede hacer que la GPU espere más, nunca menos: no
-        // cambia nada del camino con editor.
+        // 4. Submit to the GPU
+        // In headless pass 2 does not draw UI: it blits the offscreen image to the
+        // swapchain (recordCommandBuffer), so the first real use of the
+        // acquired image happens in TRANSFER, not in COLOR_ATTACHMENT_OUTPUT.
+        // Waiting on the semaphore in TRANSFER too makes that ordering
+        // local and explicit, instead of depending on the blit's barrier
+        // chaining with earlier pass 1 work (see the long comment on
+        // srcStageMask in recordCommandBuffer, which is still valid and explains
+        // why THAT barrier cannot wait on TRANSFER alone). Adding a stage
+        // to the wait can only make the GPU wait more, never less: it
+        // changes nothing on the editor path.
         VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         if (m_headless) waitStage |= VK_PIPELINE_STAGE_TRANSFER_BIT;
         VkSubmitInfo submitInfo{};
@@ -544,7 +544,7 @@ namespace DonTopo {
             throw std::runtime_error("failed to submit graphics queue!");
         }
 
-        // 5. Presenta
+        // 5. Present
         VkPresentInfoKHR presentInfo{};
         presentInfo.sType               = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         presentInfo.waitSemaphoreCount  = 1;
@@ -560,10 +560,10 @@ namespace DonTopo {
             throw std::runtime_error("failed to present!");
         }
 
-        // Los vértices de gizmos ya los vació Gizmos::draw al consumirlos, así
-        // que el siguiente ciclo de drawX(...) —que el caller llama ANTES de
-        // invocar drawFrame— empieza desde un buffer vacío sin que nadie tenga
-        // que acordarse de nada.
+        // The gizmo vertices were already emptied by Gizmos::draw when consuming them, so
+        // the next cycle of drawX(...), which the caller invokes BEFORE
+        // calling drawFrame, starts from an empty buffer without anyone having
+        // to remember anything.
         m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES;
     }
 
@@ -572,17 +572,17 @@ namespace DonTopo {
         if (m_gpu.device() == VK_NULL_HANDLE) return;
         vkDeviceWaitIdle(m_gpu.device());
 
-        // El vkDeviceWaitIdle de arriba es la precondición de flushAll: sin él,
-        // esto destruiría recursos que la GPU todavía puede estar leyendo.
+        // The vkDeviceWaitIdle above is the precondition of flushAll: without it,
+        // this would destroy resources the GPU may still be reading.
         m_deferredDeletes.flushAll(m_gpu.device());
 
-        // Los batches de subida, AHORA y no como miembros tras m_gpu.shutdown():
-        // una excepción a media carga (p. ej. la VRAM agotada en addSkinnedMesh)
-        // deja m_pendingBatch abierto, y su destructor libera su command buffer
-        // y su staging con el device. Destruido después del device, eso era un
-        // vkFreeCommandBuffers sobre un device inválido y el loader abortaba el
-        // proceso (0xC0000409) antes de que el catch del host dijera nada. Tras
-        // el WaitIdle de arriba, los en vuelo ya han terminado.
+        // The upload batches, NOW and not as members after m_gpu.shutdown():
+        // an exception halfway through a load (e.g. VRAM exhausted in addSkinnedMesh)
+        // leaves m_pendingBatch open, and its destructor frees its command buffer
+        // and its staging with the device. Destroyed after the device, that was a
+        // vkFreeCommandBuffers on an invalid device and the loader aborted the
+        // process (0xC0000409) before the host's catch said anything. After
+        // the WaitIdle above, the in-flight ones have already finished.
         m_inFlightBatches.clear();
         m_pendingBatch.reset();
 
@@ -590,52 +590,52 @@ namespace DonTopo {
         if (!m_headless && m_ui) m_ui->shutdownUi();
         vkDestroyRenderPass(m_gpu.device(), m_offscreenRenderPass, nullptr);
         m_offscreenRenderPass = VK_NULL_HANDLE;
-        // Bloom + composicion. Las imagenes y los sets ya se han ido con
-        // destroyOffscreenImages (llama a destroyBloomImages); aqui quedan los
-        // objetos que no dependen del tamano del swapchain.
+        // Bloom + composition. The images and sets are already gone with
+        // destroyOffscreenImages (it calls destroyBloomImages); what remains here are the
+        // objects that do not depend on the swapchain size.
         vkDestroyPipeline(m_gpu.device(), m_compositePipeline, nullptr);
         vkDestroyPipelineLayout(m_gpu.device(), m_compositePipelineLayout, nullptr);
         vkDestroyDescriptorPool(m_gpu.device(), m_compositeDescPool, nullptr);
         vkDestroyDescriptorSetLayout(m_gpu.device(), m_compositeDescLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_compositeRenderPass, nullptr);
         m_compositeRenderPass = VK_NULL_HANDLE;
-        // El de la UI no depende del numero de muestras, asi que solo se
-        // destruye aqui, en el teardown de verdad.
+        // The UI one does not depend on the number of samples, so it is only
+        // destroyed here, in the real teardown.
         if (m_uiRenderPass != VK_NULL_HANDLE)
         {
             vkDestroyRenderPass(m_gpu.device(), m_uiRenderPass, nullptr);
             m_uiRenderPass = VK_NULL_HANDLE;
         }
         m_bloomPass.destroyPipelines(bloomCtx());
-        // SSAO. Las imagenes, vistas, framebuffers y sets se fueron con
-        // destroyOffscreenImages (llama a destroySsaoImages); aqui queda lo que
-        // no depende del tamano. El pipeline layout es el del pass de sombras y
-        // se destruye con el, mas abajo.
+        // SSAO. The images, views, framebuffers and sets went away with
+        // destroyOffscreenImages (it calls destroySsaoImages); what remains here is what does
+        // not depend on the size. The pipeline layout is the shadow pass's and
+        // is destroyed with it, further down.
         m_ssaoPass.destroyPipelines(ssaoCtx());
         m_depthPrepass.destroyRenderPassAndPipeline(depthPrepassCtx());
 
-        // SSR: las imagenes y los sets ya se fueron con destroyOffscreenImages;
-        // aqui solo queda lo que es independiente del tamano.
+        // SSR: the images and sets are already gone with destroyOffscreenImages;
+        // only what is independent of the size remains here.
         m_ssrPass.destroyPipelines(ssrCtx());
 
-        // Niebla volumetrica: no tiene imagen ni sampler propios (escribe dentro
-        // del HDR y muestrea con el sampler del SSAO y el del shadow map), asi
-        // que aqui esta todo lo suyo menos los sets.
+        // Volumetric fog: it has no image or sampler of its own (it writes inside
+        // the HDR and samples with the SSAO sampler and the shadow map one), so
+        // everything of its is here except the sets.
         m_fogPass.destroyPipelines(fogCtx());
 
-        // Motion blur: aqui lo que no depende del tamano. Las imagenes y los
-        // sets se fueron con destroyImages.
+        // Motion blur: here what does not depend on the size. The images and
+        // sets went away with destroyImages.
         m_motionBlurPass.destroyPipeline(motionBlurCtx());
 
-        // Forward+: la rejilla y la lista de indices se fueron con
-        // destroyOffscreenImages; aqui queda lo que no depende del tamano. Los
-        // tres buffers mapeados en persistente no necesitan unmap: el mapeo muere
-        // con la memoria, igual que en el UBO y en el SSBO de instancias.
+        // Forward+: the grid and the index list went away with
+        // destroyOffscreenImages; what remains here is what does not depend on the size. The
+        // three persistently mapped buffers do not need unmap: the mapping dies
+        // with the memory, same as in the UBO and in the instance SSBO.
         m_fpPass.destroyPipelines(fpCtx());
 
-        // Anti-aliasing: las imagenes, los framebuffers y los sets se fueron con
-        // destroyOffscreenImages (llama a destroyAaImages); aqui queda lo que no
-        // depende del tamano ni del modo.
+        // Anti-aliasing: the images, framebuffers and sets went away with
+        // destroyOffscreenImages (it calls destroyAaImages); what remains here is what does not
+        // depend on the size or the mode.
         m_aaPass.destroyPipelinesAndRenderPasses(aaCtx());
         if (m_perfQueryPool != VK_NULL_HANDLE)
         {
@@ -663,9 +663,9 @@ namespace DonTopo {
         }
         vkDestroyPipeline(m_gpu.device(), m_pipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_wireframePipeline, nullptr);
-        // Los CUATRO del contorno, estaticos y con huesos: son de este pase, no
-        // del Renderer. Antes de soltar el pipeline layout, que es el que el
-        // Context le presta.
+        // The FOUR outline ones, static and skinned: they belong to this pass, not
+        // to the Renderer. Before releasing the pipeline layout, which is the one the
+        // Context lends it.
         m_outlinePass.destroyResources(outlineCtx());
         vkDestroyPipelineLayout(m_gpu.device(), m_pipelineLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_renderPass, nullptr);
@@ -674,15 +674,15 @@ namespace DonTopo {
             vkDestroyImageView(m_gpu.device(), imageView, nullptr);
         }                        
         vkDestroySwapchainKHR(m_gpu.device(), m_swapChain, nullptr);
-        // La cadena m_descriptorPools se destruye más abajo, DESPUÉS de los dos bucles que
-        // llaman a destroyRenderObject y destroySkinnedRenderObject: ambas
-        // funciones liberan sets del pool (creado con
-        // FREE_DESCRIPTOR_SET_BIT pa soportar rebuildSkinnedMesh), y destruir
-        // el pool aquí antes dejaría un handle ya destruido al que liberar.
+        // The m_descriptorPools chain is destroyed further down, AFTER the two loops that
+        // call destroyRenderObject and destroySkinnedRenderObject: both
+        // functions free sets from the pool (created with
+        // FREE_DESCRIPTOR_SET_BIT to support rebuildSkinnedMesh), and destroying
+        // the pool here first would leave an already destroyed handle to free from.
         m_objects.clear();
         m_staticSlots.clear();
-        // Sin refcounts ni diferido: el vkDeviceWaitIdle de arriba garantiza que
-        // nadie está leyendo, y a estas alturas ya no queda quien dibuje.
+        // No refcounts or deferral: the vkDeviceWaitIdle above guarantees that
+        // nobody is reading, and by now there is nobody left to draw.
         m_sharedMeshes.destroyAll([this](const SharedGpuMesh& gpu) {
             destroySharedGpuMesh(gpu);
         });
@@ -692,24 +692,24 @@ namespace DonTopo {
             vkFreeMemory(m_gpu.device(), m_uniformBuffersMemory[i], nullptr);
         }
         vkDestroyDescriptorSetLayout(m_gpu.device(), m_descriptorSetLayout, nullptr);
-        // SSBO de instancias: buffers, pool, sets y layout. Una línea, como los
-        // trece pases de al lado — antes eran cuatro y había que acordarse de
-        // las cuatro.
+        // Instance SSBO: buffers, pool, sets and layout. One line, like the
+        // thirteen passes next to it; before it was four and you had to remember
+        // all four.
         m_instanceBuffers.destroy(instanceCtx());
         vkDestroyImageView(m_gpu.device(), m_depthImageView, nullptr);
         vkDestroyImage(m_gpu.device(), m_depthImage, nullptr);
         vkFreeMemory(m_gpu.device(), m_depthImageMemory, nullptr);
-        // El sampler que comparten TODAS las texturas de material. Aqui y no en
-        // destroySharedGpuMesh: alli es prestado, y destruirlo con el primer
-        // material dejaria a los demas apuntando a un sampler muerto.
+        // The sampler shared by ALL the material textures. Here and not in
+        // destroySharedGpuMesh: there it is borrowed, and destroying it with the first
+        // material would leave the others pointing at a dead sampler.
         m_res.destroySharedSampler();
-        // Shadow map. El Context lleva los dos set layouts que ya se han
-        // destruido cuatro lineas mas arriba; destroyResources no los toca (un
-        // pipeline layout sobrevive a los set layouts con los que se creo).
+        // Shadow map. The Context carries the two set layouts that were already
+        // destroyed four lines above; destroyResources does not touch them (a
+        // pipeline layout outlives the set layouts it was created with).
         m_shadowPass.destroyResources(shadowCtx());
-        // Las sondas ANTES del IBL global: destroy() de las sondas no toca los
-        // pipelines de convolucion, pero si el orden se invirtiera un futuro
-        // camino de limpieza con convolucion pendiente se quedaria sin ellos.
+        // The probes BEFORE the global IBL: the probes' destroy() does not touch the
+        // convolution pipelines, but if the order were reversed a future cleanup
+        // path with a pending convolution would be left without them.
         m_probePass.destroy(probeCtx());
         m_iblPass.destroyResources(iblCtx());
         vkDestroyPipeline(m_gpu.device(), m_skinnedGfxPipeline, nullptr);
@@ -721,39 +721,39 @@ namespace DonTopo {
 
         m_skinnedObjects.clear();
         m_skinnedSlots.clear();
-        // Las tres de relleno que comparten las mallas sin material, DESPUES de
-        // los personajes: son el ultimo que suelta texturas de material, y
-        // liberarlas antes le dejaba destruyendo handles ya muertos (H79).
-        // Todos los personajes se soltaron arriba: la caché de sus texturas
-        // tiene que estar vacía. Si no, alguien se saltó el release; se avisa y
-        // no se destruye nada a ciegas (mismo criterio que H79).
+        // The three fill-ins shared by the meshes without a material, AFTER
+        // the characters: they are the last one that releases material textures, and
+        // releasing them earlier left it destroying already dead handles (H79).
+        // All the characters were released above: the cache of their textures
+        // must be empty. If not, someone skipped the release; a warning is given and
+        // nothing is destroyed blindly (same criterion as H79).
         if (m_skinnedTextures.size() != 0)
             fprintf(stderr, "[Renderer] %zu character textures not released at shutdown\n",
                     m_skinnedTextures.size());
         m_res.destroySharedPlaceholders();
-        // Ahora sí: ya no queda ningún destroySkinnedRenderObject pendiente que
-        // necesite liberar sets de la cadena de pools.
+        // Now yes: there is no pending destroySkinnedRenderObject left that
+        // needs to free sets from the pool chain.
         for (VkDescriptorPool pool : m_descriptorPools)
         {
             if (pool != VK_NULL_HANDLE)
                 vkDestroyDescriptorPool(m_gpu.device(), pool, nullptr);
         }
         m_descriptorPools.clear();
-        // Igual que el de arriba: ya no queda ningun destroySkinnedRenderObject
-        // pendiente que necesite liberar sets del pool de compute.
+        // Same as the one above: there is no pending destroySkinnedRenderObject left
+        // that needs to free sets from the compute pool.
         m_skinningPass.destroyPipelines(skinningCtx());
         m_skybox.shutdown(m_gpu);
         m_splash.shutdown(m_gpu);
         Gizmos::shutdown(m_gpu);
-        // Los atlas ANTES del batch: sus descriptor sets salen de su pool, y
-        // destruir el pool primero dejaria los handles colgando.
+        // The atlases BEFORE the batch: their descriptor sets come from their pool, and
+        // destroying the pool first would leave the handles dangling.
         for (auto& atlas : m_uiAtlases) atlas->destroy(m_gpu);
         m_uiAtlases.clear();
-        // Punteros a lo que se acaba de destruir: fuera antes de que nadie los
-        // pueda volver a pedir.
+        // Pointers to what was just destroyed: out before anyone
+        // can request them again.
         m_uiAtlasByPath.clear();
         m_uiAtlasImGuiId.clear();
-        // El atlas de miniaturas, con los demás atlas y antes de que muera el device.
+        // The thumbnail atlas, with the other atlases and before the device dies.
         destroyThumbAtlas();
         for (auto& font : m_uiFonts) font->destroy(m_gpu);
         m_uiFonts.clear();
@@ -764,15 +764,15 @@ namespace DonTopo {
 
     UiTextureAtlas* Renderer::loadUiAtlas(const std::string& path)
     {
-        // La misma ruta dos veces es el mismo atlas: el editor lo consulta para
-        // enseñar sus sprites y el sync lo pide cada vez que cambia un widget.
+        // The same path twice is the same atlas: the editor queries it to
+        // show its sprites and the sync asks for it every time a widget changes.
         if (auto it = m_uiAtlasByPath.find(path); it != m_uiAtlasByPath.end())
             return it->second;
 
         auto atlas = std::make_unique<UiTextureAtlas>();
         if (!atlas->loadFromFile(m_gpu, m_res, path)) return nullptr;
-        // Sub-rects, si los hay: sin sidecar el atlas se usa entero, que es lo
-        // que hacia siempre. No es un fallo que no este.
+        // Sub-rects, if there are any: without a sidecar the atlas is used whole, which is what
+        // it always did. It is not an error for it to be missing.
         atlas->loadSprites(UiTextureAtlas::spriteSheetPathFor(path));
         if (!m_uiBatch.registerAtlas(m_gpu, *atlas))
         {
@@ -786,7 +786,8 @@ namespace DonTopo {
 
     uint64_t Renderer::uiAtlasTextureId(const UiTextureAtlas* atlas)
     {
-        // Sin editor no hay a quién registrarla, y sin vista no hay nada subido.
+        // Without an editor there is nobody to register it with, and without a view nothing has
+        // been uploaded.
         if (!atlas || !m_ui || atlas->view() == VK_NULL_HANDLE) return 0;
 
         if (auto it = m_uiAtlasImGuiId.find(atlas); it != m_uiAtlasImGuiId.end())
@@ -800,9 +801,9 @@ namespace DonTopo {
 
     namespace
     {
-        // El swapchain del editor es B8G8R8A8_SRGB: sampleo sRGB -> lineal, y la
-        // escritura vuelve a codificar. Identidad, así que las miniaturas salen con
-        // los colores de la imagen. (D3D12 usa otra por su RTV UNORM.)
+        // The editor swapchain is B8G8R8A8_SRGB: sampling does sRGB -> linear, and the
+        // write encodes again. Identity, so the thumbnails come out with
+        // the image's colors. (D3D12 uses another one because of its UNORM RTV.)
         constexpr VkFormat kThumbFormat = VK_FORMAT_R8G8B8A8_SRGB;
     }
 
@@ -872,8 +873,8 @@ namespace DonTopo {
     {
         auto font = std::make_unique<UiFont>();
         if (!font->loadFromFile(m_gpu, m_res, path, bakePx)) return nullptr;
-        // La fuente CONTIENE su atlas, asi que el registro del descriptor es
-        // exactamente el mismo que el de un atlas de sprites.
+        // The font CONTAINS its atlas, so the descriptor registration is
+        // exactly the same as for a sprite atlas.
         if (!m_uiBatch.registerAtlas(m_gpu, font->atlas()))
         {
             font->destroy(m_gpu);
@@ -885,9 +886,9 @@ namespace DonTopo {
 
     void Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
     {
-        // Empareja por ownerId: los slots que sobreviven conservan su árbol y
-        // su caché, así que reordenar los canvas en la jerarquía no reconstruye
-        // lo que no ha cambiado (eso se vería como un parpadeo).
+        // Matches by ownerId: the slots that survive keep their tree and
+        // their cache, so reordering the canvases in the hierarchy does not rebuild
+        // what has not changed (that would show up as flicker).
         matchUiCanvasSlots(bindings, m_uiSlots);
 
         for (size_t i = 0; i < bindings.size(); i++)
@@ -897,19 +898,19 @@ namespace DonTopo {
             if (b.canvas) b.canvas->applyTo(s.canvas);
             const UiCanvasRenderMode modo =
                 b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
-            // Cambiar de modo mete o saca el canvas del reparto de input
-            // (screenCanvasesTopFirst filtra por ScreenSpace). Si se va a World a
-            // media pulsación —renderMode es escribible desde Lua— nunca ve el
-            // MouseUp y se queda con su captura y su hover: al volver le robaría
-            // el puntero al de encima durante un frame. releaseInput lo suelta.
+            // Changing mode puts the canvas in or takes it out of the input distribution
+            // (screenCanvasesTopFirst filters by ScreenSpace). If it goes to World
+            // mid-press (renderMode is writable from Lua) it never sees the
+            // MouseUp and keeps its capture and its hover: on coming back it would steal
+            // the pointer from the one on top for a frame. releaseInput releases it.
             if (modo != s.mode) s.canvas.releaseInput();
             s.mode      = modo;
             s.depthTest = b.canvas ? b.canvas->depthTest  : true;
-            // Copia por valor de los ajustes de mundo y del transform del
-            // GameObject: la matriz de modelo se calcula al GRABAR (necesita la
-            // vista de la camara para el billboard) y para entonces el binding
-            // ya no existe. Sin canvas se queda el componente por defecto, que
-            // no se llega a leer porque el modo sera ScreenSpace.
+            // Copy by value of the world settings and of the GameObject's
+            // transform: the model matrix is computed at RECORD time (it needs the
+            // camera view for the billboard) and by then the binding
+            // no longer exists. Without a canvas the default component is kept, which
+            // never actually gets read because the mode will be ScreenSpace.
             if (b.canvas) s.component = *b.canvas;
             s.worldTransform = b.worldTransform;
             syncUiWidgets(b.widgets, s.canvas, s.cache, *this);
@@ -918,9 +919,9 @@ namespace DonTopo {
 
     UiCanvas& Renderer::uiCanvas()
     {
-        // El PRIMER canvas de pantalla, en el orden de la escena: es el mismo
-        // criterio que usaba el shim temporal (Task 4), así que un proyecto con
-        // un solo canvas de pantalla se ve exactamente igual que antes.
+        // The FIRST screen canvas, in scene order: it is the same
+        // criterion the temporary shim (Task 4) used, so a project with a
+        // single screen canvas looks exactly the same as before.
         for (auto& s : m_uiSlots)
             if (s && s->mode == UiCanvasRenderMode::ScreenSpace) return s->canvas;
         return m_uiCanvasFallback;
@@ -935,23 +936,23 @@ namespace DonTopo {
 
     void Renderer::screenUiCanvases(std::vector<UiCanvas*>& out)
     {
-        // El orden sale de la MISMA función libre que usa D3D12: el de más
-        // arriba primero, o sea el pase de UI (que recorre m_uiSlots en orden)
-        // al revés. Duplicar el criterio aquí es como los dos backends se
-        // desincronizan.
+        // The order comes from the SAME free function that D3D12 uses: the topmost
+        // first, that is, the UI pass (which walks m_uiSlots in order)
+        // in reverse. Duplicating the criterion here is how the two backends
+        // get out of sync.
         screenCanvasesTopFirst(m_uiSlots, out);
     }
 
     const UiCanvas* Renderer::uiCanvasOf(uint64_t ownerId) const
     {
-        // Misma funcion libre que D3D12: un solo criterio de busqueda.
+        // Same free function as D3D12: a single lookup criterion.
         return findCanvasByOwner(m_uiSlots, ownerId);
     }
 
     const UiElement* Renderer::findUiNode(const std::string& name) const
     {
-        // TODOS los canvas, no solo el de pantalla: un botón de un canvas de
-        // mundo también tiene que poder llevar gizmo en el editor.
+        // ALL the canvases, not just the screen one: a button of a world
+        // canvas also has to be able to carry a gizmo in the editor.
         for (const auto& s : m_uiSlots)
         {
             if (!s) continue;
@@ -962,13 +963,13 @@ namespace DonTopo {
 
     void Renderer::initSkybox(const std::array<std::string, 6>& facePaths)
     {
-        // kHdrFormat: el skybox dibuja en el pass de escena, que desde el bloom
-        // sale en flotante. Su color pasa por el tonemap de la composicion como
-        // el resto de la escena — y es lo que permite que el cielo genere bloom.
+        // kHdrFormat: the skybox draws in the scene pass, which since the bloom
+        // comes out in float. Its color goes through the composition tonemap like
+        // the rest of the scene, and that is what lets the sky generate bloom.
         m_skybox.init(m_gpu, m_offscreenRenderPass, kHdrFormat, facePaths, m_aaSampleCount);
-        // El cubemap recien cargado es la fuente del IBL. Una sola vez, aqui: es
-        // el punto por el que pasan tanto el editor como DonTopoRuntime, y no
-        // depende de nada del editor.
+        // The just-loaded cubemap is the IBL source. Only once, here: it is
+        // the point that both the editor and DonTopoRuntime go through, and it does not
+        // depend on anything from the editor.
         m_iblPass.precompute(iblCtx());
     }
 
@@ -982,21 +983,21 @@ namespace DonTopo {
     {
         const float aspect = viewportAspect();
 
-        // Edición: la proyección de siempre (45° fijos + near/far derivados de
-        // m_cameraDistance). No se toca a propósito — el componente solo manda
-        // en Play, así que el editor no cambia de look.
+        // Edit: the usual projection (fixed 45° + near/far derived from
+        // m_cameraDistance). Not touched on purpose: the component only rules
+        // in Play, so the editor's look does not change.
         FrameCamera fc{ m_viewMatrix,
                         glm::perspective(glm::radians(45.0f), aspect,
                                           m_cameraDistance * 0.001f, m_cameraDistance * 3.0f),
                         m_camera.getPos() };
         fc.proj[1][1] *= -1.0f; // Vulkan Y flip
 
-        // Play con cámara en escena: manda el CameraComponent. m_camera y
-        // m_viewMatrix NO se tocan nunca — siguen siendo los del editor, así que
-        // al parar Play la vista vuelve sola, sin guardar ni restaurar estado
-        // (y sin que main.cpp, que llama a setCamera cada frame, se entere).
-        // Sin cámara en escena se cae al repliegue de arriba; el aviso al Log lo
-        // da EditorUI al arrancar Play, no aquí (esto corre cada frame).
+        // Play with a camera in the scene: the CameraComponent rules. m_camera and
+        // m_viewMatrix are NEVER touched; they remain the editor's, so
+        // when Play stops the view comes back on its own, without saving or restoring state
+        // (and without main.cpp, which calls setCamera every frame, noticing).
+        // Without a camera in the scene it falls back to the case above; the warning to the Log is
+        // given by EditorUI when starting Play, not here (this runs every frame).
         if (isPlaying() && m_scene)
         {
             if (GameObject* cam = m_scene->findCamera())
@@ -1010,10 +1011,10 @@ namespace DonTopo {
         return fc;
     }
 
-    // Las tres delegan: la geometria del culling vive en Renderer/Frustum.h y
-    // Renderer/SkinnedBounds.h, fuera de este fichero y de Vulkan. Los
-    // wrappers se quedan porque son la puerta por la que entran los tests y el
-    // resto de este fichero.
+    // The three delegate: the culling geometry lives in Renderer/Frustum.h and
+    // Renderer/SkinnedBounds.h, outside this file and outside Vulkan. The
+    // wrappers stay because they are the door through which the tests and the
+    // rest of this file come in.
     Renderer::Frustum Renderer::frustumFromViewProj(const glm::mat4& m)
     {
         return Culling::frustumFromViewProj(m);
@@ -1044,11 +1045,11 @@ namespace DonTopo {
             throw std::runtime_error("failed to get surface formats!");
         }
 
-        // Un driver que dice soportar la superficie pero no da ni un formato
-        // deja el vector vacio, y la eleccion de mas abajo arranca leyendo
-        // surfaceFormats[0]: acceso fuera de rango en el arranque, sin
-        // diagnostico. Es un caso que no deberia pasar, y por eso mismo hay que
-        // decirlo en vez de leer basura.
+        // A driver that says it supports the surface but gives not even one format
+        // leaves the vector empty, and the choice further down starts by reading
+        // surfaceFormats[0]: an out-of-range access at startup, with no
+        // diagnostic. It is a case that should not happen, and that is exactly why it has to be
+        // reported instead of reading garbage.
         if (formatCount == 0) {
             throw std::runtime_error("surface reports zero formats!");
         }
@@ -1086,9 +1087,9 @@ namespace DonTopo {
         }
         
         m_swapChainExtent = extent;
-        // El tamano interno del render sale de este: igual salvo en SSAA, donde
-        // es este por el factor. Tiene que quedar fijado ANTES de crear el depth
-        // y los targets intermedios, que ya van a la resolucion interna.
+        // The internal render size comes from this one: the same except in SSAA, where
+        // it is this one times the factor. It has to be set BEFORE creating the depth
+        // and the intermediate targets, which already use the internal resolution.
         updateRenderExtent();
 
         uint32_t imageCount = surfaceCapabilities.minImageCount + 1;
@@ -1105,17 +1106,17 @@ namespace DonTopo {
         createInfo.imageColorSpace = m_swapChainColorSpace;
         createInfo.imageExtent = m_swapChainExtent;
         createInfo.imageArrayLayers = 1;
-        // TRANSFER_DST: en modo headless la imagen offscreen se blitea aquí en
-        // vez de dibujarse la UI encima. El flag va incondicional para que
-        // editor y runtime compartan el mismo camino de creación de recursos.
+        // TRANSFER_DST: in headless mode the offscreen image is blitted here instead
+        // of the UI being drawn on top. The flag is unconditional so that
+        // editor and runtime share the same resource creation path.
         createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         createInfo.preTransform = surfaceCapabilities.currentTransform;
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-        // Modo de presentacion. FIFO (vsync) es el unico que la spec garantiza,
-        // asi que es el default y el destino de cualquier caida. Los otros se
-        // consultan al device y se cachean aqui, que es donde ya tenemos surface
-        // y physicalDevice; presentModeSupported() lee esa cache.
+        // Presentation mode. FIFO (vsync) is the only one the spec guarantees,
+        // so it is the default and the destination of any fallback. The others are
+        // queried from the device and cached here, which is where we already have surface
+        // and physicalDevice; presentModeSupported() reads that cache.
         {
             uint32_t n = 0;
             vkGetPhysicalDeviceSurfacePresentModesKHR(m_gpu.physicalDevice(), m_gpu.surface(), &n, nullptr);
@@ -1167,12 +1168,12 @@ namespace DonTopo {
             createInfo.image    = m_swapChainImages[i];
             createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
             createInfo.format   = m_swapChainFormat;
-            // Mapeo de canales (identidad = sin cambios)
+            // Channel mapping (identity = no changes)
             createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
             createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
             createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
             createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-            // Qué parte de la imagen usamos
+            // Which part of the image we use
             createInfo.subresourceRange.aspectMask      = VK_IMAGE_ASPECT_COLOR_BIT;
             createInfo.subresourceRange.baseMipLevel    = 0;
             createInfo.subresourceRange.levelCount      = 1;
@@ -1188,19 +1189,19 @@ namespace DonTopo {
         printf("Image View OK\n"); fflush(stdout);
     }
 
-    // Pass de escena 3D → offscreen (finalLayout=SHADER_READ para que la UI lo muestree)
+    // 3D scene pass → offscreen (finalLayout=SHADER_READ so the UI can sample it)
     void Renderer::createOffscreenRenderPass()
     {
         VkAttachmentDescription colorAtt{};
-        // HDR y no m_swapChainFormat: aqui sale la escena SIN tonemapear (ver el
-        // final de pbr.frag), asi que el attachment tiene que aguantar valores
-        // por encima de 1.0 o el umbral del bloom no encontraria nada.
+        // HDR and not m_swapChainFormat: here the scene comes out WITHOUT tonemapping (see the
+        // end of pbr.frag), so the attachment has to hold values
+        // above 1.0 or the bloom threshold would find nothing.
         colorAtt.format         = kHdrFormat;
         colorAtt.samples        = m_aaSampleCount;
         colorAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        // Con MSAA lo que se conserva es el RESUELTO, no el multisample: este
-        // attachment no lo lee nadie despues, asi que guardarlo seria pagar el
-        // ancho de banda de N muestras para tirarlas.
+        // With MSAA what is kept is the RESOLVED one, not the multisample: nobody
+        // reads this attachment afterwards, so storing it would be paying the
+        // bandwidth of N samples to throw them away.
         colorAtt.storeOp        = (m_aaSampleCount == VK_SAMPLE_COUNT_1_BIT)
                                 ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
         colorAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1214,9 +1215,9 @@ namespace DonTopo {
         colorRef.attachment = 0;
         colorRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-        // Destino del resolve: m_hdrImage, la imagen de UNA muestra de siempre.
-        // Sale en SHADER_READ_ONLY igual que sin MSAA, asi que el SSAO, el SSR,
-        // el bloom y la composicion leen exactamente lo mismo que leian.
+        // Resolve target: m_hdrImage, the usual ONE-sample image.
+        // It comes out in SHADER_READ_ONLY just like without MSAA, so SSAO, SSR,
+        // the bloom and the composition read exactly what they used to read.
         VkAttachmentDescription resolveAtt = colorAtt;
         resolveAtt.samples      = VK_SAMPLE_COUNT_1_BIT;
         resolveAtt.loadOp       = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1231,9 +1232,9 @@ namespace DonTopo {
         depthAtt.format         = VK_FORMAT_D32_SFLOAT;
         depthAtt.samples        = m_aaSampleCount;
         depthAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        // STORE y ya no DONT_CARE: el pass de composicion carga esta misma
-        // profundidad para que el contorno de seleccion y los gizmos sigan
-        // teniendo contra que testear despues de haberse mudado alli.
+        // STORE and no longer DONT_CARE: the composition pass loads this same
+        // depth so that the selection outline and the gizmos still have
+        // something to test against after having moved there.
         depthAtt.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
         depthAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         depthAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -1249,26 +1250,26 @@ namespace DonTopo {
         subpass.colorAttachmentCount    = 1;
         subpass.pColorAttachments       = &colorRef;
         subpass.pDepthStencilAttachment = &depthRef;
-        // Sin MSAA no hay nada que resolver y el puntero se queda nulo, que es
-        // como estuvo este pass hasta ahora.
+        // Without MSAA there is nothing to resolve and the pointer stays null, which is
+        // how this pass has been until now.
         if (m_aaSampleCount != VK_SAMPLE_COUNT_1_BIT)
             subpass.pResolveAttachments = &resolveRef;
 
-        // Dependencias: garantizan que el bloom (compute) y la composicion
-        // (fragment) pueden leer la textura cuando el pass acaba.
+        // Dependencies: they guarantee that the bloom (compute) and the composition
+        // (fragment) can read the texture when the pass ends.
         VkSubpassDependency deps[2]{};
         deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
         deps[0].dstSubpass    = 0;
-        // COMPUTE tambien en el src: el lector de la imagen HDR ya no es solo el
-        // fragment shader de la composicion, tambien el downsample del bloom del
-        // frame anterior, y esta dependencia es la que impide pisarla.
+        // COMPUTE also in the src: the reader of the HDR image is no longer just the
+        // composition fragment shader, but also the bloom downsample of the
+        // previous frame, and this dependency is what prevents overwriting it.
         //
-        // Y las pruebas de fragmento del frame ANTERIOR: m_depthImage es una sola
-        // imagen para los dos frames en vuelo, y este pass la estrena cada frame
-        // desde UNDEFINED con un clear. Sin esperar a sus escrituras de depth
-        // (este pass y la composición, que la carga), la transición y el clear
-        // de un frame podían solaparse con el depth que el otro aún escribía
-        // (WRITE_AFTER_WRITE de la validación de sincronización).
+        // And the fragment tests of the PREVIOUS frame: m_depthImage is a single
+        // image for the two in-flight frames, and this pass debuts it every frame
+        // from UNDEFINED with a clear. Without waiting for its depth writes
+        // (this pass and the composition, which loads it), the transition and the clear
+        // of one frame could overlap with the depth the other was still writing
+        // (WRITE_AFTER_WRITE from synchronization validation).
         deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
         deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
@@ -1279,8 +1280,8 @@ namespace DonTopo {
 
         deps[1].srcSubpass    = 0;
         deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
-        // El depth se escribe en LATE_FRAGMENT_TESTS y ahora lo lee el pass de
-        // composicion, asi que entra en el srcStageMask junto al color.
+        // The depth is written in LATE_FRAGMENT_TESTS and is now read by the composition
+        // pass, so it goes into srcStageMask along with the color.
         deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
         deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
                               | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
@@ -1306,20 +1307,20 @@ namespace DonTopo {
 
     void Renderer::createUiRenderPass()
     {
-        // Un solo attachment: la imagen final LDR, con lo que ya haya dentro.
-        // Una muestra SIEMPRE, aunque la escena vaya con MSAA: aqui ya no hay
-        // geometria 3D que suavizar, y el propio AA ya ha resuelto.
+        // A single attachment: the final LDR image, with whatever is already inside.
+        // ONE sample ALWAYS, even if the scene runs with MSAA: there is no longer any
+        // 3D geometry to smooth here, and the AA itself has already resolved.
         VkAttachmentDescription colorAtt{};
         colorAtt.format         = m_swapChainFormat;
         colorAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
-        // LOAD y no DONT_CARE: debajo de la UI esta la escena entera.
+        // LOAD and not DONT_CARE: under the UI is the entire scene.
         colorAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;
         colorAtt.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
         colorAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         colorAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        // Entra y sale en SHADER_READ_ONLY: es como la dejan los dos caminos
-        // que escriben antes (composicion sin AA, o el pass de resolucion) y
-        // como la esperan el panel del editor y el blit headless.
+        // Enters and leaves in SHADER_READ_ONLY: that is how the two paths that
+        // write before leave it (composition without AA, or the resolve pass) and
+        // how the editor panel and the headless blit expect it.
         colorAtt.initialLayout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         colorAtt.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -1332,9 +1333,9 @@ namespace DonTopo {
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments    = &colorRef;
 
-        // Lo de antes escribio color (composicion o resolucion del AA); esto
-        // vuelve a escribir sobre lo mismo, asi que la dependencia va de salida
-        // de color a salida de color.
+        // What came before wrote color (composition or AA resolve); this
+        // writes over the same thing again, so the dependency goes from color output
+        // to color output.
         VkSubpassDependency dep{};
         dep.srcSubpass    = VK_SUBPASS_EXTERNAL;
         dep.dstSubpass    = 0;
@@ -1358,16 +1359,16 @@ namespace DonTopo {
 
     void Renderer::createCompositeRenderPass()
     {
-        // Color: la imagen offscreen LDR de siempre (formato del swapchain), la
-        // que muestrea la UI y la que blitea el runtime headless. El triangulo de
-        // pantalla completa la cubre entera, asi que no hace falta cargar ni
-        // limpiar nada previo.
+        // Color: the usual LDR offscreen image (swapchain format), the
+        // one the UI samples and the one the headless runtime blits. The
+        // full-screen triangle covers it entirely, so there is no need to load or
+        // clear anything beforehand.
         VkAttachmentDescription colorAtt{};
         colorAtt.format         = m_swapChainFormat;
         colorAtt.samples        = m_aaSampleCount;
         colorAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        // Con MSAA lo que se conserva es el resuelto, igual que en el pass de
-        // escena: el color multisample no lo lee nadie.
+        // With MSAA what is kept is the resolved one, same as in the scene pass:
+        // nobody reads the multisample color.
         colorAtt.storeOp        = (m_aaSampleCount == VK_SAMPLE_COUNT_1_BIT)
                                 ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
         colorAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1381,11 +1382,11 @@ namespace DonTopo {
         colorRef.attachment = 0;
         colorRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-        // Destino del resolve del MSAA: m_offscreenImage. Que este pass sea
-        // tambien multisample es lo que hace que el contorno de seleccion y los
-        // gizmos salgan suavizados: se rasterizan a N muestras contra el depth
-        // multisample de la escena. Resolver el depth para dibujarlos en un pass
-        // de una muestra no es opcion, VK_KHR_depth_stencil_resolve es Vulkan 1.2.
+        // MSAA resolve target: m_offscreenImage. This pass being
+        // multisample too is what makes the selection outline and the
+        // gizmos come out smoothed: they are rasterized at N samples against the scene's
+        // multisample depth. Resolving the depth to draw them in a
+        // one-sample pass is not an option, VK_KHR_depth_stencil_resolve is Vulkan 1.2.
         VkAttachmentDescription resolveAtt = colorAtt;
         resolveAtt.samples      = VK_SAMPLE_COUNT_1_BIT;
         resolveAtt.loadOp       = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1396,10 +1397,10 @@ namespace DonTopo {
         resolveRef.attachment = 2;
         resolveRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-        // Depth: el MISMO buffer que acaba de escribir el pass de escena, cargado
-        // tal cual. Es lo que permite que el contorno y los gizmos se dibujen
-        // aqui, ya en LDR, sin que el tonemap les toque el color y respetando
-        // exactamente la profundidad de la escena.
+        // Depth: the SAME buffer the scene pass just wrote, loaded
+        // as is. It is what allows the outline and the gizmos to be drawn
+        // here, already in LDR, without the tonemap touching their color and respecting
+        // exactly the scene's depth.
         VkAttachmentDescription depthAtt{};
         depthAtt.format         = VK_FORMAT_D32_SFLOAT;
         depthAtt.samples        = m_aaSampleCount;
@@ -1423,8 +1424,8 @@ namespace DonTopo {
             subpass.pResolveAttachments = &resolveRef;
 
         VkSubpassDependency deps[2]{};
-        // Entrada: espera al pass de escena (color+depth) y a los dispatches del
-        // bloom, que son las dos fuentes que este pass muestrea.
+        // Input: waits for the scene pass (color+depth) and for the bloom
+        // dispatches, which are the two sources this pass samples.
         deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
         deps[0].dstSubpass    = 0;
         deps[0].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
@@ -1442,7 +1443,7 @@ namespace DonTopo {
                               | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
                               | VK_ACCESS_SHADER_READ_BIT;
 
-        // Salida: la UI (o el blit headless) lee la imagen ya compuesta.
+        // Output: the UI (or the headless blit) reads the already composited image.
         deps[1].srcSubpass    = 0;
         deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
         deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1467,7 +1468,7 @@ namespace DonTopo {
         printf("composite render pass OK\n"); fflush(stdout);
     }
 
-    // Pass de UI → swapchain (solo color, sin depth)
+    // UI pass → swapchain (color only, no depth)
     void Renderer::createRenderPass()
     {
         VkAttachmentDescription colorAtt{};
@@ -1512,7 +1513,7 @@ namespace DonTopo {
         printf("UI render pass OK\n"); fflush(stdout);
     }
 
-    // Framebuffers del swapchain: solo color, usados por el pass de UI
+    // Swapchain framebuffers: color only, used by the UI pass
     void Renderer::createFramebuffers()
     {
         m_swapChainFramebuffers.resize(m_swapChainImageViews.size());
@@ -1566,9 +1567,9 @@ namespace DonTopo {
             if(vkCreateSemaphore(m_gpu.device(), &semaphoreInfo, nullptr, &m_imageAvailable[i]) != VK_SUCCESS                
                 || vkCreateFence(m_gpu.device(), &fenceCreateInfo, nullptr, &m_inFlight[i]) != VK_SUCCESS)
             {
-                // m_imageAvailable — señala que hay imagen disponible del swapchain
-                // m_renderFinished — señala que el render terminó, listo para presentar
-                // m_inFlight — fence que bloquea la CPU hasta que la GPU terminó ese frame
+                // m_imageAvailable: signals that a swapchain image is available
+                // m_renderFinished: signals that rendering finished, ready to present
+                // m_inFlight: fence that blocks the CPU until the GPU finished that frame
                 throw std::runtime_error("failed to create sync objects!");
             }
         }
@@ -1594,17 +1595,17 @@ namespace DonTopo {
         const int outlineStatic  = m_outlinePass.staticTarget();
         const int outlineSkinned = m_outlinePass.skinnedTarget();
 
-        // Grosor del casco relativo al tamaño del objeto en mundo: con un valor
-        // fijo, un objeto grande apenas mostraría borde y uno pequeño quedaría
-        // engullido por él.
+        // Hull thickness relative to the object's size in world space: with a fixed
+        // value, a large object would barely show a border and a small one would be
+        // swallowed by it.
 
         if (outlineStatic >= 0 && (size_t)outlineStatic < m_objects.size())
         {
             const RenderObject&  obj = m_objects[outlineStatic];
             const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-            // Las mismas guardas que el bucle de dibujo, literalmente: un objeto
-            // sin contorno porque está fuera de cámara —u oculto— es lo correcto,
-            // porque el objeto tampoco se ha dibujado.
+            // The same guards as the draw loop, literally: an object
+            // with no outline because it is off camera (or hidden) is correct,
+            // because the object was not drawn either.
             if (Visibility::objectVisible(obj, gpu, m_lastCompletedTicket, camFrustum))
             {
                 const glm::vec3 extent = gpu->aabbMax - gpu->aabbMin;
@@ -1612,8 +1613,8 @@ namespace DonTopo {
 
                 PushData push;
                 push.transform = obj.transform;
-                // flags.x = 0: el outline dibuja UNA instancia con su matriz
-                // aquí, no por el SSBO — ni siquiera lo lee outline.vert.
+                // flags.x = 0: the outline draws ONE instance with its matrix
+                // here, not through the SSBO; outline.vert does not even read it.
                 push.flags.y = outlineThickness(maxExtent, obj.transform);
 
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1633,18 +1634,18 @@ namespace DonTopo {
 
         if (outlineSkinned >= 0 && (size_t)outlineSkinned < m_skinnedObjects.size())
         {
-            // La visibilidad ya la decidió el culling del principio del frame:
-            // es la misma que gobernó el compute de skinning, así que si vale 0
-            // el buffer de salida ni siquiera se ha actualizado y dibujar el
-            // casco sacaría una pose vieja.
-            // Con el checkbox "Visible" apagado pasa exactamente lo mismo: el
-            // compute no se despacha, así que no hay pose que dibujar.
+            // Visibility was already decided by the culling at the start of the frame:
+            // it is the same one that governed the skinning compute, so if it is 0
+            // the output buffer has not even been updated and drawing the
+            // hull would show an old pose.
+            // With the "Visible" checkbox off exactly the same thing happens: the
+            // compute is not dispatched, so there is no pose to draw.
             if (m_skinnedVisible[outlineSkinned] &&
                 m_skinnedObjects[outlineSkinned].meshVisible)
             {
                 const SkinnedRenderObject& sobj = m_skinnedObjects[outlineSkinned];
-                // matGfx vacío: no habría de dónde sacar el set 0, y el UBO que
-                // lee outline.vert vive ahí. Sin materiales no hay contorno.
+                // matGfx empty: there would be nowhere to get set 0 from, and the UBO that
+                // outline.vert reads lives there. Without materials there is no outline.
                 if (sobj.outputVertexBuffer != VK_NULL_HANDLE && !sobj.matGfx.empty())
                 {
                     PushData push;
@@ -1653,9 +1654,9 @@ namespace DonTopo {
 
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         m_outlinePass.skinnedPipeline(isWireframeMode()));
-                    // Un solo draw sobre todo el index buffer: los submeshes solo
-                    // existen para cambiar de material, y el contorno es de un
-                    // color plano.
+                    // A single draw over the whole index buffer: the submeshes only
+                    // exist to change material, and the outline is a
+                    // flat color.
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
                         0, 1, &sobj.matGfx[0].descSets[m_currentFrame], 0, nullptr);
                     vkCmdPushConstants(cmd, m_pipelineLayout,
@@ -1675,9 +1676,9 @@ namespace DonTopo {
     {
         if (on == m_perfCapture) return;
         m_perfCapture = on;
-        // Al apagar se invalidan los slots pendientes: sus queries no se van a
-        // volver a resetear, y leerlas al reabrir el panel devolveria basura del
-        // frame en que se cerro (o NOT_READY para siempre).
+        // When turned off the pending slots are invalidated: their queries will not be
+        // reset again, and reading them when the panel is reopened would return garbage from the
+        // frame in which it was closed (or NOT_READY forever).
         for (int f = 0; f < MAX_FRAMES; f++) m_perfQueryPending[f] = false;
         if (!on)
         {
@@ -1692,7 +1693,7 @@ namespace DonTopo {
     void Renderer::recordScenePass(VkCommandBuffer cmd, const FrameCamera& fc,
                                        const Frustum& camFrustum, bool perfStamp)
     {
-    // ── Pass 1: escena 3D → offscreen ────────────────────────────────────────
+    // ── Pass 1: 3D scene → offscreen ──────────────────────────────────────────
     {
         VkClearValue clearValues[2];
         clearValues[0].color        = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -1727,18 +1728,18 @@ namespace DonTopo {
 
         vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
             isWireframeMode() ? m_wireframePipeline : m_pipeline);
-        // El pass de sombras y el depth pre-pass ya han escrito su parte del
-        // buffer: sus transforms van delante y los de aquí detrás. colorPass =
-        // true porque este es el único que pinta color, y por tanto el único
-        // que mete la fuerza de SSR en la clave del agrupado: es una push
-        // constant por grupo, igual que metallic y roughness, así que dos
-        // objetos con la misma malla y distinta fuerza no pueden ir en el
-        // mismo draw.
+        // The shadow pass and the depth pre-pass have already written their part of the
+        // buffer: their transforms go first and the ones here after. colorPass =
+        // true because this is the only one that paints color, and therefore the only
+        // one that puts the SSR strength in the grouping key: it is a push
+        // constant per group, just like metallic and roughness, so two
+        // objects with the same mesh and different strength cannot go in the
+        // same draw.
         gatherAndBatch(camFrustum, /*colorPass*/ true);
 
-        // Contadores del panel Performance: se cuentan sobre los mismos
-        // candidatos que acaba de agrupar buildInstanceBatches, asi que
-        // reflejan exactamente lo que se va a dibujar abajo.
+        // Counters for the Performance panel: they are counted over the same
+        // candidates that buildInstanceBatches just grouped, so
+        // they reflect exactly what is going to be drawn below.
         if (perfStamp)
         {
             for (const auto& cand : m_batchCandidates)
@@ -1752,18 +1753,18 @@ namespace DonTopo {
             }
         }
 
-        // Set 1 una sola vez para todo el pass: el SSBO no cambia entre
-        // draws, y el pipeline skinned de abajo comparte layout, así que
-        // sigue bindeado y válido también para él.
+        // Set 1 only once for the whole pass: the SSBO does not change between
+        // draws, and the skinned pipeline below shares the layout, so
+        // it stays bound and valid for it too.
         const VkDescriptorSet instSet = m_instanceBuffers.set(m_currentFrame);
         vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_pipelineLayout, 1, 1, &instSet, 0, nullptr);
 
-        // Forward+: uno por frame y comun a TODOS los draws del pass (estatico
-        // y skinned), asi que se bindea una sola vez aqui. Va DENTRO del pass
-        // de escena y no antes: el pass de sombras y el depth pre-pass usan
-        // el pipeline layout de ShadowPass, que solo declara dos sets, y
-        // bindear con el deja el set 2 sin definir.
+        // Forward+: one per frame and common to ALL the pass's draws (static
+        // and skinned), so it is bound only once here. It goes INSIDE the scene
+        // pass and not before: the shadow pass and the depth pre-pass use
+        // ShadowPass's pipeline layout, which only declares two sets, and
+        // binding with it leaves set 2 undefined.
         const VkDescriptorSet fpSceneSet = m_fpPass.set(m_currentFrame);
         if (fpSceneSet != VK_NULL_HANDLE)
         {
@@ -1773,23 +1774,23 @@ namespace DonTopo {
 
         for (const InstanceBatch& batch : m_instanceBatches)
         {
-            // No puede ser nullptr: solo llegan a un grupo los candidatos
-            // que ya pasaron la guarda de arriba.
+            // It cannot be nullptr: only candidates that already passed the guard above
+            // reach a group.
             const SharedGpuMesh* gpu = m_sharedMeshes.get(batch.sharedIndex);
             vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
                 m_pipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
             PushData push;
-            // transform se queda en la identidad: con useInstancing = 1 el
-            // vertex shader coge el model matrix del SSBO. metallic y roughness
-            // salen del GRUPO y ya no de la entrada compartida: desde que son
-            // por objeto, "misma entrada" no implica "mismos factores" — quien
-            // garantiza que el valor vale para todas las instancias del draw es
-            // que los dos entran en la clave de agrupado (InstanceBatching.h).
+            // transform stays at identity: with useInstancing = 1 the
+            // vertex shader takes the model matrix from the SSBO. metallic and roughness
+            // come from the GROUP and no longer from the shared entry: since they are
+            // per object, "same entry" does not imply "same factors"; what
+            // guarantees that the value holds for all the draw's instances is
+            // that both go into the grouping key (InstanceBatching.h).
             push.metallic  = batch.metallic;
             push.roughness = batch.roughness;
             push.flags.x   = 1.0f;
-            // pbr.frag la vuelca al alfa del HDR, que es la máscara por píxel
-            // que lee ssr.comp.
+            // pbr.frag dumps it into the HDR alpha, which is the per-pixel mask
+            // that ssr.comp reads.
             push.flags.y   = batch.ssrStrength;
             vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -1809,19 +1810,19 @@ namespace DonTopo {
 
             for (size_t si = 0; si < m_skinnedObjects.size(); si++)
             {
-                // Borrado, en vuelo o fuera de cámara: la decisión ya la tomó
-                // el culling del principio del frame, la misma que decidió si
-                // se le despachaba el compute.
+                // Deleted, in flight or off camera: the decision was already made by
+                // the culling at the start of the frame, the same one that decided whether
+                // its compute was dispatched.
                 if (!m_skinnedVisible[si])
                 {
                     if (perfStamp) m_statCulled++;
                     continue;
                 }
                 SkinnedRenderObject& sobj = m_skinnedObjects[si];
-                // Checkbox "Visible" del componente Mesh. Va aquí y no en
-                // m_skinnedVisible porque ese flag también gobierna el
-                // despacho del compute (que sigue corriendo: el contorno de
-                // selección lee sus vértices) y el contorno mismo.
+                // "Visible" checkbox of the Mesh component. It goes here and not in
+                // m_skinnedVisible because that flag also governs the compute
+                // dispatch (which keeps running: the selection outline reads its vertices)
+                // and the outline itself.
                 if (!sobj.meshVisible) continue;
                 VkBuffer     vbs[]  = { sobj.outputVertexBuffer };
                 VkDeviceSize offs[] = { 0 };
@@ -1836,7 +1837,7 @@ namespace DonTopo {
                     push.transform = sobj.transform;
                     push.metallic  = mgfx.metallic;
                     push.roughness = mgfx.roughness;
-                    // flags.x se queda a 0 (ruta skinned, matriz propia).
+                    // flags.x stays at 0 (skinned path, own matrix).
                     push.flags.y   = m_ssrEnabled ? sobj.ssrStrength : 0.0f;
                     vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame],
                         VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
@@ -1851,62 +1852,62 @@ namespace DonTopo {
             }
         }
 
-        // Contorno del objeto seleccionado: después de toda la geometría
-        // (necesita el depth buffer completo para que el casco solo asome
-        // por el borde) y antes del skybox.
-        // El contorno de selección y los gizmos YA NO se dibujan aquí: se han
-        // mudado al pass de composición, que es LDR. Este pass sale sin
-        // tonemapear y les habría cambiado su color plano.
+        // Outline of the selected object: after all the geometry
+        // (it needs the complete depth buffer so the hull only peeks out
+        // at the edge) and before the skybox.
+        // The selection outline and the gizmos are NO LONGER drawn here: they moved
+        // to the composition pass, which is LDR. This pass comes out
+        // untonemapped and would have changed their flat color.
 
-        // Proyección del skybox (mismo pass, misma cámara que el culling de
-        // arriba). El Y-flip ya viene aplicado desde currentFrameCamera().
-        // Con jitter cuando el modo es TAA: tiene que moverse EXACTAMENTE
-        // igual que la geometría o el TAA vería un borde permanente entre
-        // ambos. Fuera de TAA es fc.proj tal cual.
+        // Skybox projection (same pass, same camera as the culling
+        // above). The Y-flip is already applied from currentFrameCamera().
+        // With jitter when the mode is TAA: it has to move EXACTLY
+        // like the geometry or the TAA would see a permanent edge between
+        // the two. Outside TAA it is fc.proj as is.
         const glm::mat4 proj = m_aaPass.jitteredProj();
 
-        // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass).
-        // Omitido en wireframe: el fondo ya es negro sólido (clearValue por defecto).
+        // Skybox: fullscreen quad, depth LEQUAL with no write (at the end of the pass).
+        // Omitted in wireframe: the background is already solid black (default clearValue).
         if (!isWireframeMode() && m_skybox.isInitialized()) {
-            glm::mat4 rotView    = glm::mat4(glm::mat3(fc.view)); // sin traslación
+            glm::mat4 rotView    = glm::mat4(glm::mat3(fc.view)); // no translation
             glm::mat4 invViewProj = glm::inverse(proj * rotView);
             m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);
         }
 
-        // ── Canvas de MUNDO ──────────────────────────────────────────────
-        // Lo ultimo del pase, detras de la geometria y del skybox: van con
-        // alpha y tienen que mezclarse sobre lo que ya hay. Aqui —y no en el
-        // pase de UI— es lo que les da perspectiva y lo que hace que una
-        // pared los tape: el depth buffer de la escena esta cargado y la
-        // variante con depthTest lo lee (escribir no escribe ninguna).
+        // ── WORLD canvases ───────────────────────────────────────────────
+        // The last thing in the pass, behind the geometry and the skybox: they go with
+        // alpha and have to blend over what is already there. Here (and not in the
+        // UI pass) is what gives them perspective and what makes a
+        // wall hide them: the scene depth buffer is loaded and the
+        // variant with depthTest reads it (it does not write any).
         //
-        // `proj` es la JITTEREADA (la misma que el skybox y que la
-        // geometria): con TAA, un canvas de mundo sin jitter dejaria un
-        // borde permanente contra todo lo que si lo lleva.
+        // `proj` is the JITTERED one (the same as the skybox and the
+        // geometry): with TAA, a world canvas without jitter would leave a
+        // permanent edge against everything that does carry it.
         //
-        // LIMITACION CONOCIDA — los post que reconstruyen posicion desde la
-        // profundidad tratan al canvas como la GEOMETRIA QUE TIENE DETRAS.
-        // Un canvas de mundo NO entra en el depth pre-pass (ese solo graba
-        // mallas) y NO escribe profundidad (depthWrite va apagado en las
-        // tres variantes, a proposito: la UI va con alpha). Asi que en el
-        // pixel que ocupa, el depth que leen los post es el de lo que hay
-        // detras. Los tres afectados, todos muestreando el mismo depthTex
-        // del pre-pass:
-        //   - fog.comp        -> un cartel cerca de la camara delante de una
-        //                        pared lejana recibe la niebla DE LA PARED:
-        //                        sale sobre-nublado.
-        //   - motion_blur.comp-> recibe los vectores de movimiento de la
-        //                        pared: arrastra al mover la camara.
-        //   - taa.frag        -> reproyecta con el depth de la pared.
-        // No se arregla aqui: meterlos en el pre-pass les daria oclusion de
-        // AO y romperia el alpha. Al verificar en GUI hay que mirar los
-        // colores con la NIEBLA APAGADA primero, o se confunde el
-        // sobre-nublado con un fallo de la conversion sRGB->lineal.
+        // KNOWN LIMITATION: the post effects that reconstruct position from
+        // depth treat the canvas as the GEOMETRY BEHIND IT.
+        // A world canvas does NOT enter the depth pre-pass (that one only records
+        // meshes) and does NOT write depth (depthWrite is off in the
+        // three variants, on purpose: the UI goes with alpha). So in the
+        // pixel it occupies, the depth the post effects read is that of what is
+        // behind it. The three affected, all sampling the same depthTex
+        // of the pre-pass:
+        //   - fog.comp        -> a sign near the camera in front of a
+        //                        distant wall gets the WALL'S fog:
+        //                        it comes out over-fogged.
+        //   - motion_blur.comp-> it receives the wall's motion
+        //                        vectors: it drags when the camera moves.
+        //   - taa.frag        -> it reprojects with the wall's depth.
+        // It is not fixed here: putting them in the pre-pass would give them AO
+        // occlusion and break the alpha. When verifying in the GUI, look at the
+        // colors with the FOG OFF first, or the over-fogging gets confused
+        // with a failure of the sRGB->linear conversion.
         //
-        // El orden lo pone la funcion libre de UiWidgetSync.h, que es la
-        // que esta probada sin GPU (test_world_canvases_se_ordenan_de_lejos_a_cerca).
-        // El draw data y la matriz de modelo ya estan hechos arriba, antes
-        // del beginFrame.
+        // The order is set by the free function in UiWidgetSync.h, which is the
+        // one tested without a GPU (test_world_canvases_se_ordenan_de_lejos_a_cerca).
+        // The draw data and the model matrix are already done above, before
+        // beginFrame.
         sortWorldCanvasesBackToFront(m_uiSlots, fc.view, m_uiWorldOrder);
         for (UiCanvasSlot* s : m_uiWorldOrder)
         {
@@ -1924,29 +1925,29 @@ namespace DonTopo {
         {
             vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                                 m_perfQueryPool, m_currentFrame * 4 + 3);
-            // Las cuatro estan escritas: el slot ya es legible dentro de dos
-            // frames. Si la captura se apaga antes, setPerfCaptureEnabled
-            // limpia el flag y no se lee un pool sin resetear.
+            // All four are written: the slot is now readable within two
+            // frames. If the capture is turned off before, setPerfCaptureEnabled
+            // clears the flag and an unreset pool is not read.
             m_perfQueryPending[m_currentFrame] = true;
         }
     }
 
-    // SSR: necesita el color de la escena YA iluminado, así que va DETRÁS del
-    // pass de escena; y suma el reflejo dentro del propio HDR ANTES del bloom,
-    // para que el reflejo genere bloom y pase por el tonemap ACES igual que el
-    // resto de la imagen. Con el efecto apagado no graba nada y el HDR se
-    // queda exactamente como salió del render pass.
+    // SSR: it needs the scene color ALREADY lit, so it goes AFTER the
+    // scene pass; and it adds the reflection inside the HDR itself BEFORE the bloom,
+    // so that the reflection generates bloom and goes through the ACES tonemap like the
+    // rest of the image. With the effect off it records nothing and the HDR
+    // stays exactly as it came out of the render pass.
     m_ssrPass.record(ssrCtx(), m_commandBuffers[m_currentFrame], fc.proj);
 
-    // Niebla volumetrica: detrás del SSR (quiere el color ya iluminado y con
-    // los reflejos dentro) y antes del bloom, para que el in-scattering
-    // florezca y pase por el tonemap ACES igual que el resto de la imagen.
-    // Apagada no graba nada.
+    // Volumetric fog: after the SSR (it wants the color already lit and with the
+    // reflections in it) and before the bloom, so that the in-scattering
+    // blooms and goes through the ACES tonemap like the rest of the image.
+    // Off, it records nothing.
     m_fogPass.record(fogCtx(), m_commandBuffers[m_currentFrame], fc.view, fc.proj);
 
-    // Motion blur de cámara: detrás de la niebla (emborrona la imagen tal y
-    // como se va a ver) y antes del bloom, para que la estela arrastre los
-    // highlights y florezca con ellos. Apagado no graba nada.
+    // Camera motion blur: after the fog (it blurs the image just as
+    // it will be seen) and before the bloom, so that the trail drags the
+    // highlights and blooms with them. Off, it records nothing.
     m_motionBlurPass.record(motionBlurCtx(), m_commandBuffers[m_currentFrame]);
 
     }
@@ -1955,7 +1956,7 @@ namespace DonTopo {
                                                const Frustum& camFrustum, VkExtent2D uiExtent,
                                                uint32_t uiScreenVertices, uint32_t uiScreenIndices)
     {
-    // ── Bloom + composición: HDR → tonemap → offscreen LDR ───────────────────
+    // ── Bloom + composition: HDR → tonemap → LDR offscreen ────────────────────
     {
         VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
 
@@ -1966,9 +1967,9 @@ namespace DonTopo {
         }
         else
         {
-            // Apagado: ni un dispatch de la cadena, y sin timestamps que medir.
-            // El slot deja de tener par pendiente para que al reencender no se
-            // lea una medida de antes del apagón.
+            // Off: not a single dispatch of the chain, and no timestamps to measure.
+            // The slot stops having a pending pair so that on turning it back on
+            // a measurement from before the blackout is not read.
             m_bloomPass.skipQuery(bloomCtx());
             m_bloomPass.recordClear(bloomCtx(), cmd);
         }
@@ -1976,16 +1977,16 @@ namespace DonTopo {
         VkRenderPassBeginInfo rpInfo{};
         rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpInfo.renderPass        = m_compositeRenderPass;
-        // Con FXAA, SSAA o TAA la composicion (tonemap + contorno + gizmos)
-        // va a la imagen intermedia y el pass de resolucion la lleva de ahi a
-        // m_offscreenImage. En None y en MSAA escribe directamente en
-        // m_offscreenImage, exactamente como antes de esta feature: mismo
-        // render pass, mismos comandos.
+        // With FXAA, SSAA or TAA the composition (tonemap + outline + gizmos)
+        // goes to the intermediate image and the resolve pass takes it from there to
+        // m_offscreenImage. In None and in MSAA it writes directly to
+        // m_offscreenImage, exactly as before this feature: same
+        // render pass, same commands.
         rpInfo.framebuffer       = needsAaIntermediate() ? m_aaPass.compositeFramebuffer(m_currentFrame)
                                                          : m_compositeFramebuffer[m_currentFrame];
         rpInfo.renderArea.extent = m_renderExtent;
         rpInfo.renderArea.offset = {0, 0};
-        // Los dos attachments son DONT_CARE/LOAD: nada que limpiar.
+        // Both attachments are DONT_CARE/LOAD: nothing to clear.
         rpInfo.clearValueCount   = 0;
 
         vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -2001,9 +2002,9 @@ namespace DonTopo {
         scissor.extent = m_renderExtent;
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // Sin cadena de mips (viewport minúsculo) o con el efecto apagado no
-        // hay nada que sumar: la intensidad se fuerza a 0 y queda solo el
-        // tonemap. El pass NO se puede saltar: es quien tonemapea.
+        // Without a mip chain (tiny viewport) or with the effect off there is
+        // nothing to add: the intensity is forced to 0 and only the
+        // tonemap remains. The pass CANNOT be skipped: it is the one that tonemaps.
         const float intensity = (bloomEnabled() && m_bloomPass.mipCount() > 0) ? m_bloomIntensity : 0.0f;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipelineLayout,
@@ -2012,44 +2013,44 @@ namespace DonTopo {
                            0, sizeof(float), &intensity);
         vkCmdDraw(cmd, 3, 1, 0, 0);
 
-        // Contorno y gizmos, ya sobre la imagen tonemapeada y con la
-        // profundidad de la escena cargada: mismo resultado que cuando vivían
-        // en el pass anterior, pero sin pasar por el tonemap ni por el bloom.
+        // Outline and gizmos, already over the tonemapped image and with the
+        // scene depth loaded: same result as when they lived
+        // in the previous pass, but without going through the tonemap or the bloom.
         recordSelectionOutline(cmd, camFrustum);
         Gizmos::draw(cmd, fc.proj * fc.view, m_currentFrame);
 
         vkCmdEndRenderPass(cmd);
 
-        // Solo con el bloom encendido: el par se abre arriba bajo la misma
-        // condición, y escribir aquí sin haber reseteado dejaría la query sucia.
+        // Only with the bloom on: the pair is opened above under the same
+        // condition, and writing here without having reset would leave the query dirty.
         if (m_timestampsSupported && bloomEnabled())
             vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_bloomPass.queryPool(), m_currentFrame * 2 + 1);
 
-        // Anti-aliasing: lo ultimo de la cadena de post, sobre color LDR ya
-        // tonemapeado y con el contorno de seleccion y los gizmos ya dibujados
-        // (asi que tambien se les suavizan los bordes, que es lo deseado: sus
-        // lineas y el casco invertido son lo mas escalonado de la pantalla).
+        // Anti-aliasing: the last thing in the post chain, over LDR color already
+        // tonemapped and with the selection outline and the gizmos already drawn
+        // (so their edges are smoothed too, which is what is wanted: their
+        // lines and the inverted hull are the most jagged thing on screen).
         m_aaPass.record(aaCtx(), cmd);
 
-        // ── UI de juego, ya sobre la imagen final ─────────────────────────
-        // Despues del AA a proposito: aqui el texto no lo suaviza el FXAA ni
-        // lo arrastra el historial del TAA, y con SSAA se dibuja UNA vez al
-        // tamano de salida en vez de supersamplearse. Es donde la dibuja
-        // tambien el backend de DirectX 12 (sobre el back buffer resuelto).
+        // ── Game UI, already over the final image ─────────────────────────
+        // After the AA on purpose: here the text is not smoothed by FXAA nor
+        // dragged by the TAA history, and with SSAA it is drawn ONCE at the
+        // output size instead of being supersampled. It is where the
+        // DirectX 12 backend draws it too (over the resolved back buffer).
         //
-        // Va por encima de la escena, del contorno de seleccion y de los
-        // gizmos, y por debajo de la interfaz del editor, que se graba en el
-        // pass del swapchain. Con el canvas vacio no se abre ni el pass.
+        // It goes above the scene, the selection outline and the
+        // gizmos, and below the editor interface, which is recorded in the
+        // swapchain pass. With an empty canvas the pass is not even opened.
         //
-        // El draw data de TODOS los slots y el beginFrame() del batch ya
-        // estan hechos ARRIBA, antes del pase de escena: los canvas de mundo
-        // se graban alli y necesitan el buffer dimensionado y los cursores
-        // reiniciados antes que nadie. Aqui solo quedan los de PANTALLA, que
-        // se graban uno por uno dentro del MISMO vkCmdBeginRenderPass.
+        // The draw data of ALL the slots and the batch's beginFrame() are
+        // already done ABOVE, before the scene pass: the world canvases
+        // are recorded there and need the buffer sized and the cursors
+        // reset before anyone else. Only the SCREEN ones remain here, which
+        // are recorded one by one inside the SAME vkCmdBeginRenderPass.
         //
-        // La condicion de apertura son los de PANTALLA y solo ellos: con el
-        // total del frame, un proyecto con unicamente canvas de mundo
-        // abriria este pase para no grabar ni un draw dentro.
+        // The opening condition is the SCREEN ones and only them: with the
+        // frame total, a project with only world canvases
+        // would open this pass to record not a single draw inside.
         if (uiScreenVertices > 0 && uiScreenIndices > 0 && m_uiFramebuffer[m_currentFrame] != VK_NULL_HANDLE)
         {
             VkRenderPassBeginInfo uiRp{};
@@ -2062,8 +2063,8 @@ namespace DonTopo {
 
             vkCmdBeginRenderPass(cmd, &uiRp, VK_SUBPASS_CONTENTS_INLINE);
 
-            // El viewport es estado dinamico y este pass es propio: hay que
-            // ponerlo, no se hereda del de composicion.
+            // The viewport is dynamic state and this pass is its own: it has to be
+            // set, it is not inherited from the composition one.
             VkViewport vp{};
             vp.width    = (float)uiExtent.width;
             vp.height   = (float)uiExtent.height;
@@ -2071,31 +2072,31 @@ namespace DonTopo {
             vp.maxDepth = 1.0f;
             vkCmdSetViewport(cmd, 0, 1, &vp);
 
-            // Aqui NO va un beginFrame(). El del frame ya se llamo arriba,
-            // antes del pase de escena, con el total de mundo + pantalla.
-            // Llamarlo otra vez reiniciaria los cursores a 0 y los canvas de
-            // pantalla escribirian ENCIMA de los vertices de los de mundo,
-            // que la GPU todavia no ha leido (lee el buffer al EJECUTAR la
-            // lista, no al grabarla): los canvas de mundo saldrian con la
-            // geometria del de pantalla, sin un solo aviso de validacion.
+            // There is NO beginFrame() here. The frame's was already called above,
+            // before the scene pass, with the world + screen total.
+            // Calling it again would reset the cursors to 0 and the screen
+            // canvases would write OVER the vertices of the world ones,
+            // which the GPU has not read yet (it reads the buffer when EXECUTING the
+            // list, not when recording it): the world canvases would come out with the
+            // screen one's geometry, without a single validation warning.
 
-            // bottom=0 y top=alto: (0,0) cae ARRIBA a la izquierda. Parece del revés
-            // y es justo lo contrario: en Vulkan el +Y de NDC va hacia ABAJO, así
-            // que la receta de OpenGL (top=0, bottom=alto) deja [1][1] negativo y
-            // dibuja la UI ENTERA espejada — invisible mientras solo hubo quads de
-            // color, evidente en cuanto se dibujó la primera letra. RH_ZO porque
-            // Vulkan clipea z fuera de [0,1] y glm::ortho a secas da [-1,1].
-            // Del ESPACIO DEL CANVAS (píxeles de salida), no del framebuffer: los
-            // vértices llegan en esos píxeles y el viewport ya estira el NDC al
-            // framebuffer entero. Con SSAA eso deja la UI supersampleada en vez de
-            // encogida a 1/factor, que es lo que salía al proyectar con el extent
-            // del render.
+            // bottom=0 and top=height: (0,0) lands at the TOP left. It looks backwards
+            // and it is exactly the opposite: in Vulkan NDC +Y goes DOWN, so
+            // the OpenGL recipe (top=0, bottom=height) leaves [1][1] negative and
+            // draws the WHOLE UI mirrored; invisible while there were only color
+            // quads, obvious as soon as the first letter was drawn. RH_ZO because
+            // Vulkan clips z outside [0,1] and a bare glm::ortho gives [-1,1].
+            // From the CANVAS SPACE (output pixels), not the framebuffer: the
+            // vertices arrive in those pixels and the viewport already stretches the NDC to the
+            // whole framebuffer. With SSAA that leaves the UI supersampled instead of
+            // shrunk to 1/factor, which is what came out when projecting with the render's
+            // extent.
             const glm::mat4 uiProj = glm::orthoRH_ZO(0.0f, (float)uiExtent.width,
                                                      0.0f, (float)uiExtent.height,
                                                      0.0f, 1.0f);
 
-            // Canvas y framebuffer son ya el MISMO espacio (pixeles de
-            // salida): los scissor no se escalan.
+            // Canvas and framebuffer are now the SAME space (output pixels):
+            // the scissors are not scaled.
             for (auto& s : m_uiSlots)
             {
                 if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
@@ -2104,9 +2105,9 @@ namespace DonTopo {
             vkCmdEndRenderPass(cmd);
         }
 
-        // Cierre de la medida del render completo, ya con el AA incluido. Es
-        // la referencia con la que se compara el sobrecoste de SSAA y MSAA,
-        // que no tienen pass propio que medir.
+        // End of the measurement of the complete render, now with the AA included. It is
+        // the reference against which the overhead of SSAA and MSAA is compared,
+        // which have no pass of their own to measure.
         if (m_timestampsSupported)
         {
             vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_aaQueryPool, m_currentFrame * 4 + 3);
@@ -2140,12 +2141,12 @@ namespace DonTopo {
     else
     {
         // ── Pass 2 (headless): offscreen → swapchain ──────────────────────────
-        // Sin editor no hay quien muestree la imagen offscreen, así que se
-        // copia tal cual a la imagen de presentación. Es un blit 1:1: la
-        // offscreen se crea con el mismo formato y extent que el swapchain
-        // (createOffscreenImages). El renderpass offscreen declara
-        // initialLayout=UNDEFINED, así que no hay que restaurar su layout
-        // después del blit.
+        // Without an editor there is nobody to sample the offscreen image, so it is
+        // copied as is to the presentation image. It is a 1:1 blit: the
+        // offscreen is created with the same format and extent as the swapchain
+        // (createOffscreenImages). The offscreen renderpass declares
+        // initialLayout=UNDEFINED, so there is no need to restore its layout
+        // after the blit.
         VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
         const VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 
@@ -2171,23 +2172,23 @@ namespace DonTopo {
         toTransferDst.srcAccessMask       = 0;
         toTransferDst.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
 
-        // srcStageMask = COLOR_ATTACHMENT_OUTPUT y no TRANSFER: esto no es un
-        // despiste, es lo que ordena esta barrera (y por tanto el blit de abajo)
-        // detrás del semáforo de vkAcquireNextImageKHR. El submit de este frame
-        // solo espera ese semáforo en COLOR_ATTACHMENT_OUTPUT_BIT
-        // (submitInfo.pWaitDstStageMask, más abajo), que no cubre TRANSFER — así
-        // que si la barrera esperase únicamente en TRANSFER, el driver no tendría
-        // ninguna dependencia que la obligue a ir después de la adquisición de la
-        // imagen del swapchain y el blit podría ejecutarse sobre una imagen que
-        // aún no es nuestra (o pisar la del frame anterior in-flight). Que
-        // funcione depende de que el Pass 1 (offscreen) SIEMPRE emita trabajo en
-        // COLOR_ATTACHMENT_OUTPUT antes de esta barrera, así que el srcStageMask
-        // de aquí se encadena con ese trabajo y queda correctamente después del
-        // semáforo. Si algún día "se corrige" este srcStageMask a
-        // VK_PIPELINE_STAGE_TRANSFER_BIT (que es lo que parece obvio a primera
-        // vista), se rompe esa cadena en silencio: sin validation layers de por
-        // medio no hay ningún aviso, solo un blit ocasionalmente sobre una imagen
-        // todavía no adquirida.
+        // srcStageMask = COLOR_ATTACHMENT_OUTPUT and not TRANSFER: this is not an
+        // oversight, it is what orders this barrier (and therefore the blit below)
+        // behind the vkAcquireNextImageKHR semaphore. This frame's submit
+        // only waits on that semaphore at COLOR_ATTACHMENT_OUTPUT_BIT
+        // (submitInfo.pWaitDstStageMask, further down), which does not cover TRANSFER, so
+        // if the barrier waited only on TRANSFER, the driver would have no
+        // dependency forcing it to come after the acquisition of the
+        // swapchain image and the blit could run on an image that
+        // is not yet ours (or overwrite the previous in-flight frame's). That it
+        // works depends on Pass 1 (offscreen) ALWAYS emitting work at
+        // COLOR_ATTACHMENT_OUTPUT before this barrier, so the srcStageMask
+        // here chains with that work and ends up correctly after the
+        // semaphore. If someday this srcStageMask gets "fixed" to
+        // VK_PIPELINE_STAGE_TRANSFER_BIT (which is what seems obvious at
+        // first sight), that chain breaks silently: without validation layers in
+        // between there is no warning, just a blit occasionally on an image
+        // not yet acquired.
         VkImageMemoryBarrier preBarriers[] = { toTransferSrc, toTransferDst };
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -2236,49 +2237,49 @@ namespace DonTopo {
             throw std::runtime_error("failed to begin command buffer!");
         }
 
-        // SSBO de instancias del frame: se dimensiona ANTES de grabar nada,
-        // porque crecerlo recrea el buffer y actualiza su descriptor set (aquí
-        // es seguro: drawFrame ya esperó la fence de este frame). El peor caso
-        // es que todos los objetos sean visibles en TODOS los passes: uno por
-        // cascada del shadow map más el de la escena, de ahí el factor
-        // SHADOW_CASCADES + 1. El cursor arranca a 0: las cascadas escriben
-        // delante (una detrás de otra), la escena al final.
-        // +2 y no +1: además del pass de escena, el depth pre-pass del SSAO
-        // escribe su propio tramo del SSBO con el conjunto visible de la cámara.
-        // Los personajes cuentan igual que los estáticos: son otro draw con su
-        // matriz en el mismo SSBO. Contar solo los estáticos dejaba a una
-        // escena de puros personajes con capacidad CERO, y los dos pases que
-        // los recorren se salían por un `break` mudo (H23).
-        // Asegurar la capacidad y poner el cursor a 0 son la MISMA operación y
-        // por eso van juntas: crecer recrea el buffer, y un cursor que sobrevive
-        // a eso apunta a memoria liberada. Antes eran dos líneas seguidas que
-        // había que acordarse de escribir en ese orden.
+        // Frame instance SSBO: it is sized BEFORE recording anything,
+        // because growing it recreates the buffer and updates its descriptor set (here it
+        // is safe: drawFrame already waited for this frame's fence). The worst case
+        // is all objects being visible in ALL the passes: one per
+        // shadow map cascade plus the scene one, hence the factor
+        // SHADOW_CASCADES + 1. The cursor starts at 0: the cascades write
+        // in front (one after another), the scene at the end.
+        // +2 and not +1: besides the scene pass, the SSAO depth pre-pass
+        // writes its own stretch of the SSBO with the camera's visible set.
+        // Characters count the same as static ones: they are another draw with their
+        // matrix in the same SSBO. Counting only the static ones left a
+        // scene of pure characters with ZERO capacity, and the two passes that
+        // walk them bailed out through a silent `break` (H23).
+        // Ensuring the capacity and setting the cursor to 0 are the SAME operation and
+        // that is why they go together: growing recreates the buffer, and a cursor that survives
+        // that points at freed memory. Before they were two consecutive lines that
+        // had to be remembered in that order.
         m_instanceBuffers.beginFrame(instanceCtx(), m_currentFrame,
                                      shadowInstanceCapacity((uint32_t)m_objects.size(),
                                                             (uint32_t)m_skinnedObjects.size()));
         m_statInstanceOverflow    = 0;
 
-        // Cámara del frame: la usan el culling de los skinned (aquí abajo), el
-        // de los estáticos y, más adelante en el pass principal, el skybox y los
-        // gizmos. Se muestrea UNA vez para que todos vean exactamente la misma.
+        // Frame camera: it is used by the skinned culling (down here), the
+        // static one's and, later in the main pass, the skybox and the
+        // gizmos. It is sampled ONCE so that all of them see exactly the same one.
         const FrameCamera fc = currentFrameCamera();
         const Frustum camFrustum = frustumFromViewProj(fc.proj * fc.view);
 
-        // Visibilidad de los skinned ANTES del compute: es la misma decisión que
-        // lee el bucle de dibujo, así que el frame en que un personaje vuelve a
-        // entrar en cámara se le despacha el skinning y se dibuja después, en
-        // este mismo command buffer, con su animTime actual. Separar las dos
-        // decisiones sería lo que dejaría un frame con la pose vieja.
+        // Visibility of the skinned ones BEFORE the compute: it is the same decision the
+        // draw loop reads, so on the frame a character comes back
+        // into camera its skinning is dispatched and it is drawn afterwards, in
+        // this same command buffer, with its current animTime. Separating the two
+        // decisions would be what leaves a frame with the old pose.
         //
-        // El pass de sombras sólo itera m_objects, así que los skinned no
-        // proyectan sombra y basta con el frustum de la cámara.
+        // The shadow pass only iterates m_objects, so the skinned ones do not
+        // cast shadows and the camera frustum is enough.
         m_skinnedVisible.assign(m_skinnedObjects.size(), 0);
         for (size_t i = 0; i < m_skinnedObjects.size(); i++)
         {
             const SkinnedRenderObject& sobj = m_skinnedObjects[i];
-            if (sobj.outputVertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
-            // En vuelo: su SSBO de entrada y sus texturas se subieron en un batch
-            // cuya fence no ha señalado. Ni compute ni dibujo hasta que complete.
+            if (sobj.outputVertexBuffer == VK_NULL_HANDLE) continue; // deleted from the editor
+            // In flight: its input SSBO and its textures were uploaded in a batch
+            // whose fence has not signaled. No compute or draw until it completes.
             if (sobj.uploadTicket > m_lastCompletedTicket) continue;
             if (sobj.hasBounds &&
                 !aabbVisible(camFrustum, glm::vec3(-sobj.boundRadius), glm::vec3(sobj.boundRadius),
@@ -2289,11 +2290,11 @@ namespace DonTopo {
             m_skinnedVisible[i] = 1;
         }
 
-        // ── Medida del anti-aliasing ──────────────────────────────────────────
-        // Cuatro queries por frame en vuelo: [0,1] el pass propio del modo (lo
-        // escribe recordAaPass) y [2,3] el render completo sin UI, que se mide
-        // SIEMPRE, tambien sin AA. Los resultados que se leen aqui son los de
-        // hace dos frames en este mismo slot: la fence ya los espero.
+        // ── Anti-aliasing measurement ─────────────────────────────────────────
+        // Four queries per in-flight frame: [0,1] the mode's own pass (written
+        // by recordAaPass) and [2,3] the complete render without UI, which is measured
+        // ALWAYS, also without AA. The results read here are those from
+        // two frames ago in this same slot: the fence already waited for them.
         if (m_timestampsSupported && m_aaQueryPending[m_currentFrame])
         {
             uint64_t total[2] = {};
@@ -2303,10 +2304,10 @@ namespace DonTopo {
             {
                 m_renderGpuMs = (float)((double)(total[1] - total[0]) * m_timestampPeriod * 1e-6);
             }
-            // El par del pass propio se lee aparte y solo si ese frame llego a
-            // escribirlo: en None y en MSAA no existe, y pedir las cuatro de
-            // golpe devolveria NOT_READY para todas y se perderia tambien el
-            // total de arriba.
+            // The own pass's pair is read separately and only if that frame got to
+            // write it: in None and in MSAA it does not exist, and asking for all four at
+            // once would return NOT_READY for all of them and the total above would
+            // be lost too.
             if (m_aaPass.passStamped(m_currentFrame))
             {
                 uint64_t stamps[2] = {};
@@ -2329,17 +2330,17 @@ namespace DonTopo {
         }
         if (m_timestampsSupported)
         {
-            // Reset unico de las cuatro: recordAaPass ya no puede resetear por su
-            // cuenta sin machacar el par del total.
+            // Single reset of the four: recordAaPass can no longer reset on its own
+            // without clobbering the total's pair.
             vkCmdResetQueryPool(m_commandBuffers[m_currentFrame], m_aaQueryPool, m_currentFrame * 4, 4);
             vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                                 m_aaQueryPool, m_currentFrame * 4 + 2);
         }
 
-        // ── Medida del panel Performance ─────────────────────────────────────
-        // Solo si el panel esta abierto. La lectura es del slot de hace dos
-        // frames (la fence de este frame ya lo espero), sin WAIT_BIT: si el
-        // driver aun no las tiene se conserva el valor anterior y ya.
+        // ── Performance panel measurement ────────────────────────────────────
+        // Only if the panel is open. The read is of the slot from two
+        // frames ago (this frame's fence already waited for it), without WAIT_BIT: if the
+        // driver does not have them yet the previous value is kept and that is it.
         const bool perfStamp = m_timestampsSupported && m_perfCapture;
         if (perfStamp && m_perfQueryPending[m_currentFrame])
         {
@@ -2372,40 +2373,40 @@ namespace DonTopo {
             vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                                 m_perfQueryPool, m_currentFrame * 4 + 1);
         }
-        // ANTES del pass de escena: pbr.frag necesita el AO ya resuelto, y el AO
-        // necesita la profundidad de TODA la escena. Por eso el depth pre-pass, y
-        // por eso va aquí y no después.
+        // BEFORE the scene pass: pbr.frag needs the AO already resolved, and the AO
+        // needs the depth of the WHOLE scene. That is why the depth pre-pass exists, and
+        // why it goes here and not afterwards.
         recordSsaoPass(m_commandBuffers[m_currentFrame], camFrustum, fc.proj);
-        // Forward+: DETRAS del pre-pass (el tiled lee esa profundidad) y DELANTE
-        // del pass de escena, que es quien consume la rejilla de luces. En Off no
-        // graba ni un comando.
+        // Forward+: AFTER the pre-pass (the tiled one reads that depth) and BEFORE
+        // the scene pass, which is what consumes the light grid. In Off it
+        // records not a single command.
         m_fpPass.record(fpCtx(), m_commandBuffers[m_currentFrame], fc.proj);
 
-        // ── UI: draw data de TODOS los canvas del frame, y beginFrame ───────────
-        // Aqui arriba y no dentro del pase de UI, que es donde vivia. El motivo
-        // es que los canvas de MUNDO se graban en el pase de ESCENA, que empieza
-        // tres lineas mas abajo: si beginFrame() siguiera en el pase de UI, los
-        // de mundo llamarian a record() ANTES de que nadie hubiera dimensionado
-        // el buffer ni reiniciado los cursores. La capacidad seria la del frame
-        // anterior (o 0) y la guarda uiCursorFits los descartaria EN SILENCIO —
-        // ni un error, ni un aviso de validacion, ni un canvas en pantalla.
+        // ── UI: draw data of ALL the frame's canvases, and beginFrame ────────────
+        // Up here and not inside the UI pass, which is where it used to live. The reason
+        // is that WORLD canvases are recorded in the SCENE pass, which starts
+        // three lines below: if beginFrame() stayed in the UI pass, the
+        // world ones would call record() BEFORE anyone had sized
+        // the buffer or reset the cursors. The capacity would be that of the previous
+        // frame (or 0) and the uiCursorFits guard would discard them SILENTLY:
+        // not an error, nor a validation warning, nor a canvas on screen.
         //
-        // Y por eso el total tiene que ser el de TODOS los canvas del frame, de
-        // mundo y de pantalla: un solo buffer compartido, un solo beginFrame.
-        // Llamarlo otra vez para el pase de UI reiniciaria los cursores y los
-        // canvas de pantalla pisarian los vertices de los de mundo, que la GPU
-        // todavia no ha leido (lee el buffer al EJECUTAR, no al grabar).
+        // And that is why the total has to be that of ALL the frame's canvases, world
+        // and screen: a single shared buffer, a single beginFrame.
+        // Calling it again for the UI pass would reset the cursors and the
+        // screen canvases would overwrite the vertices of the world ones, which the GPU
+        // has not read yet (it reads the buffer when EXECUTING, not when recording).
         //
-        // Construir el draw data aqui obliga a conocer ya el espacio de cada
-        // canvas, y se conoce: el de pantalla es effectiveViewport(), y el de
-        // mundo es su propia referenceResolution (en modo World el canvas no se
-        // ajusta a ninguna pantalla, lo fija CanvasComponent::applyTo).
+        // Building the draw data here requires knowing each canvas's space
+        // already, and it is known: the screen one's is effectiveViewport(), and the
+        // world one's is its own referenceResolution (in World mode the canvas does not
+        // fit any screen, CanvasComponent::applyTo sets it).
         const VkExtent2D uiExtent = effectiveViewport();
         uint32_t uiTotalVertices = 0;
         uint32_t uiTotalIndices  = 0;
-        // Los de PANTALLA aparte: son los unicos que abren el pase de UI. Con el
-        // total del frame se abriria tambien con solo canvas de mundo vivos, y
-        // seria un vkCmdBeginRenderPass sin un solo draw dentro.
+        // The SCREEN ones apart: they are the only ones that open the UI pass. With the
+        // frame total it would also open with only live world canvases, and
+        // it would be a vkCmdBeginRenderPass with not a single draw inside.
         uint32_t uiScreenVertices = 0;
         uint32_t uiScreenIndices  = 0;
         for (auto& s : m_uiSlots)
@@ -2413,11 +2414,11 @@ namespace DonTopo {
             if (!s) continue;
             if (s->mode == UiCanvasRenderMode::World)
             {
-                // La matriz de MODELO, aqui y no en syncUiCanvases: necesita la
-                // vista de la camara para el billboard, y syncUiCanvases no la
-                // tiene. Aqui ademas cae ANTES de sortWorldCanvasesBackToFront,
-                // que ordena leyendo la posicion de model[3] — calcularla ya en
-                // el grabado la dejaria a cero para el orden.
+                // The MODEL matrix, here and not in syncUiCanvases: it needs the
+                // camera view for the billboard, and syncUiCanvases does not have
+                // it. Here it also lands BEFORE sortWorldCanvasesBackToFront,
+                // which orders by reading the position from model[3]; computing it already
+                // at record time would leave it at zero for the ordering.
                 const glm::vec2 tam = s->canvas.referenceResolution;
                 s->model = uiWorldCanvasMatrix(s->component, tam, s->worldTransform, fc.view);
                 s->canvas.buildDrawData((uint32_t)tam.x, (uint32_t)tam.y, s->drawData);
@@ -2433,12 +2434,12 @@ namespace DonTopo {
         }
         m_uiBatch.beginFrame(m_gpu, m_currentFrame, uiTotalVertices, uiTotalIndices);
 
-        // Pass 1 del frame: la escena 3D a su render target propio.
+        // Frame pass 1: the 3D scene to its own render target.
         recordScenePass(m_commandBuffers[m_currentFrame], fc, camFrustum, perfStamp);
-        // Bloom y composicion: del HDR de la escena al LDR que vera la pantalla.
+        // Bloom and composition: from the scene's HDR to the LDR the screen will see.
         recordBloomAndComposite(m_commandBuffers[m_currentFrame], fc, camFrustum, uiExtent,
                                 uiScreenVertices, uiScreenIndices);
-        // Pass 2 del frame: la UI 2D sobre la imagen del swapchain.
+        // Frame pass 2: the 2D UI over the swapchain image.
         recordUiPass(m_commandBuffers[m_currentFrame], imageIndex);
     }
 
@@ -2450,7 +2451,7 @@ namespace DonTopo {
         VkShaderModule vertModule = createShaderModule(vertCode);
         VkShaderModule fragModule = createShaderModule(fragCode);
 
-        // 1. Shader stages — qué shader va en cada etapa
+        // 1. Shader stages: which shader goes in each stage
         VkPipelineShaderStageCreateInfo vertStage{};
         vertStage.sType     = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         vertStage.stage     = VK_SHADER_STAGE_VERTEX_BIT;
@@ -2465,20 +2466,20 @@ namespace DonTopo {
 
         VkPipelineShaderStageCreateInfo stages[] = {vertStage,fragStage};
 
-        // 2. Vertex input — sin vertex buffer, las posiciones van en el shader
+        // 2. Vertex input: no vertex buffer, the positions go in the shader
         VkVertexInputBindingDescription bindingDesc{};
         bindingDesc.binding     = 0;
         bindingDesc.stride      = sizeof(Vertex);
         bindingDesc.inputRate   = VK_VERTEX_INPUT_RATE_VERTEX;
 
-        // Atributo 0: pos (vec2, offset 0)
+        // Attribute 0: pos (vec2, offset 0)
         VkVertexInputAttributeDescription attrDescs[5]{};
         attrDescs[0].binding    = 0;
         attrDescs[0].location   = 0;
         attrDescs[0].format     = VK_FORMAT_R32G32B32_SFLOAT;
         attrDescs[0].offset     = offsetof(Vertex, pos);
 
-        // Atributo 1: color (vec3, offset después de pos)
+        // Attribute 1: color (vec3, offset after pos)
         attrDescs[1].binding    = 0;
         attrDescs[1].location   = 1;
         attrDescs[1].format     = VK_FORMAT_R32G32B32_SFLOAT;
@@ -2509,37 +2510,37 @@ namespace DonTopo {
         vertexInput.vertexAttributeDescriptionCount     = 5;
         vertexInput.pVertexAttributeDescriptions        = attrDescs;
 
-        // 3. Input assembly — qué primitivo forman los vértices
+        // 3. Input assembly: which primitive the vertices form
         VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
         inputAssembly.sType     = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
         inputAssembly.topology  = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-        // 4-8. Todo el estado que comparte con el pipeline de mallas con huesos
-        // y con los cuatro del contorno: viewport y scissor dinamicos, relleno
-        // solido con culling trasero, profundidad LESS con escritura, y opaco
-        // sin blending. Vive en PipelineDefaults.h desde H10 — estaba escrito
-        // aqui y otra vez en createSkinnedGraphicsPipelines, con los mismos
-        // valores. Ojo: NO se puede copiar, sus punteros apuntan a sus propios
-        // miembros y tiene que seguir vivo hasta el vkCreateGraphicsPipelines.
+        // 4-8. All the state it shares with the skinned mesh pipeline
+        // and with the four outline ones: dynamic viewport and scissor, solid
+        // fill with back-face culling, LESS depth with write, and opaque
+        // without blending. It lives in PipelineDefaults.h since H10; it was written
+        // here and again in createSkinnedGraphicsPipelines, with the same
+        // values. Careful: it CANNOT be copied, its pointers point at its own
+        // members and it has to stay alive until vkCreateGraphicsPipelines.
         const GraphicsPipelineState estadoComun(m_aaSampleCount);
 
-        // 9. Pipeline layout — sin descriptors ni push constants por ahora
+        // 9. Pipeline layout: no descriptors or push constants for now
         VkPushConstantRange pushRange{};
         pushRange.stageFlags    = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pushRange.offset        = 0;
         pushRange.size          = sizeof(PushData);   // 80 bytes
 
-        // Set 0: UBO + texturas (por entrada compartida). Set 1: SSBO de
-        // transforms por instancia, uno por frame, que se bindea una vez por
-        // pass. Este layout lo comparten el pipeline estático, el wireframe y el
-        // skinned; el skinned no lee el set 1 (useInstancing = 0), pero al
-        // compartir layout el set sigue bindeado y es válido.
-        // Set 2: los buffers de Forward+ (parametros, luces, rejilla e indices).
-        // Uno por frame, se bindea una vez por pass. Set propio y no bindings
-        // nuevos del set 0 porque ese solo tenia libre el 8 y ampliarlo obligaria
-        // a reescribir el descriptor set de CADA objeto. Solo lo lee pbr.frag; el
-        // wireframe, el skinned y el outline comparten layout y no lo declaran,
-        // que es legal mientras no lo usen.
+        // Set 0: UBO + textures (per shared entry). Set 1: SSBO of
+        // per-instance transforms, one per frame, bound once per
+        // pass. This layout is shared by the static pipeline, the wireframe and the
+        // skinned one; the skinned one does not read set 1 (useInstancing = 0), but since
+        // it shares the layout the set stays bound and is valid.
+        // Set 2: the Forward+ buffers (parameters, lights, grid and indices).
+        // One per frame, bound once per pass. Its own set and not new bindings
+        // of set 0 because that one only had 8 free and extending it would force
+        // rewriting the descriptor set of EACH object. Only pbr.frag reads it; the
+        // wireframe, the skinned and the outline share the layout and do not declare it,
+        // which is legal as long as they do not use it.
         VkDescriptorSetLayout setLayouts[] = { m_descriptorSetLayout, m_instanceBuffers.descLayout(), m_fpPass.descLayout() };
 
         VkPipelineLayoutCreateInfo layoutInfo{};
@@ -2548,20 +2549,20 @@ namespace DonTopo {
         layoutInfo.pSetLayouts              = setLayouts;
         layoutInfo.pushConstantRangeCount   = 1;
         layoutInfo.pPushConstantRanges      = &pushRange;
-        // Guarda de idempotencia: recreateMsaaDependentPipelines vuelve a entrar
-        // aqui para rehacer los cuatro pipelines con otro numero de muestras, y
-        // el layout no depende de eso.
+        // Idempotence guard: recreateMsaaDependentPipelines comes back in
+        // here to redo the four pipelines with another sample count, and
+        // the layout does not depend on that.
         if(m_pipelineLayout == VK_NULL_HANDLE &&
            vkCreatePipelineLayout(m_gpu.device(), &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create pipeline layout!");
         }
 
-        // 10. Pipeline completo
+        // 10. Complete pipeline
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         estadoComun.fill(pipelineInfo);
-        // Y lo que es de ESTE pipeline y no del comun: sus shaders, su vertex
-        // input, el layout y contra que render pass se compila.
+        // And what belongs to THIS pipeline and not to the common one: its shaders, its vertex
+        // input, the layout and which render pass it is compiled against.
         pipelineInfo.stageCount             = 2;
         pipelineInfo.pStages                = stages;
         pipelineInfo.pVertexInputState      = &vertexInput;
@@ -2573,8 +2574,8 @@ namespace DonTopo {
             throw std::runtime_error("failed to create graphics pipeline!");
         }
 
-        // Pipeline wireframe: mismo vertex input/layout/render pass, solo
-        // cambia polygonMode a LINE y el fragment shader a color plano.
+        // Wireframe pipeline: same vertex input/layout/render pass, only
+        // polygonMode changes to LINE and the fragment shader to flat color.
         auto wireFragCode = loadShaderFile("shaders/wireframe.frag.spv");
         VkShaderModule wireFragModule = createShaderModule(wireFragCode);
 
@@ -2598,23 +2599,23 @@ namespace DonTopo {
             throw std::runtime_error("failed to create wireframe graphics pipeline!");
         }
 
-        // Pipeline del contorno de selección: mismo vertex input, mismo layout y
-        // mismo render pass que el de arriba; solo cambian los dos shaders y el
-        // culling, que pasa a descartar las caras FRONTALES. Las traseras del
-        // casco extruido quedan por detrás de la superficie del objeto, así que
-        // el depth test (LESS) solo deja pasar el reborde que sobresale de su
-        // silueta. depthWrite se queda en TRUE a propósito: ese reborde tiene que
-        // escribir profundidad o el skybox, que dibuja con LEQUAL donde nada
-        // escribió, lo taparía.
+        // Selection outline pipeline: same vertex input, same layout and
+        // same render pass as the one above; only the two shaders and the
+        // culling change, which now discards FRONT faces. The back faces of the
+        // extruded hull stay behind the object's surface, so
+        // the depth test (LESS) only lets through the rim that sticks out of its
+        // silhouette. depthWrite stays TRUE on purpose: that rim has to
+        // write depth or the skybox, which draws with LEQUAL where nothing
+        // wrote, would cover it.
         m_outlinePass.createStaticPipelines(outlineCtx(), pipelineInfo, estadoComun.rasterization,
                                            vertexInput, offsetof(Vertex, pos),
                                            offsetof(Vertex, normal));
 
-        // los módulos se destruyen al final de esta función — solo los necesita el pipeline
+        // the modules are destroyed at the end of this function; only the pipeline needs them
         vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
         vkDestroyShaderModule(m_gpu.device(), fragModule, nullptr);
         vkDestroyShaderModule(m_gpu.device(), wireFragModule, nullptr);
-        // Los del contorno los carga y los suelta SelectionOutlinePass.
+        // The outline ones are loaded and released by SelectionOutlinePass.
         printf("pipeline OK\n"); fflush(stdout);
     }
 
@@ -2650,11 +2651,11 @@ namespace DonTopo {
     {
         if (v == presentMode()) return;
         setPresentModeFlag(v);
-        // El modo va DENTRO del swapchain, asi que cambiarlo obliga a rehacerlo.
-        // Se reusa la misma senal que un resize de ventana en vez de recrearlo
-        // aqui: ese camino ya espera a que la GPU este en reposo y rehace todo
-        // lo que cuelga del swapchain, y hacerlo a mano seria una segunda copia
-        // de ese teardown.
+        // The mode lives INSIDE the swapchain, so changing it forces a rebuild.
+        // The same signal as a window resize is reused instead of recreating it
+        // here: that path already waits for the GPU to be idle and redoes everything
+        // that hangs off the swapchain, and doing it by hand would be a second copy
+        // of that teardown.
         m_framebufferResized = true;
     }
 
@@ -2662,8 +2663,8 @@ namespace DonTopo {
     {
         switch (v)
         {
-            // FIFO lo garantiza la spec de Vulkan: no hace falta consultarlo, y
-            // devolver false aqui dejaria a la UI sin ninguna opcion valida.
+            // FIFO is guaranteed by the Vulkan spec: there is no need to query it, and
+            // returning false here would leave the UI with no valid option.
             case PresentMode::Vsync:     return true;
             case PresentMode::Mailbox:   return m_mailboxDisponible;
             case PresentMode::Immediate: return m_immediateDisponible;
@@ -2677,7 +2678,7 @@ namespace DonTopo {
         int height = 0;
 
         glfwGetFramebufferSize(window.getNativeWindow(), &width, &height);
-        // Espera si la ventana está minimizada (0x0)
+        // Wait if the window is minimized (0x0)
         while(width == 0 || height == 0)
         {
             glfwWaitEvents();
@@ -2686,7 +2687,7 @@ namespace DonTopo {
 
         vkDeviceWaitIdle(m_gpu.device());
 
-        // Teardown offscreen primero (sus FBs usan m_depthImageView)
+        // Offscreen teardown first (its FBs use m_depthImageView)
         destroyOffscreenImages();
 
         // Teardown swapchain
@@ -2713,9 +2714,9 @@ namespace DonTopo {
         createImageViews();
         createDepthResources();
         createFramebuffers();
-        createOffscreenImages(); // recrea con el nuevo tamaño
+        createOffscreenImages(); // recreated with the new size
 
-        // Solo recrear los semáforos que dependen del image count
+        // Only recreate the semaphores that depend on the image count
         m_renderFinished.resize(m_swapChainImages.size());
         VkSemaphoreCreateInfo semInfo{};
         semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -2747,9 +2748,9 @@ namespace DonTopo {
 
         m_res.copyBuffer(stagingBuffer, buf, size, batch);
 
-        // Con batch, la copia se ejecuta al enviar la fence: destruir el staging
-        // ahora sería un use-after-free en la GPU. Lo posee el batch hasta que
-        // señala. Sin batch, la copia ya esperó (vkQueueWaitIdle) y se libera ya.
+        // With a batch, the copy runs when the fence is submitted: destroying the staging
+        // now would be a use-after-free on the GPU. The batch owns it until it
+        // signals. Without a batch, the copy already waited (vkQueueWaitIdle) and it is released now.
         if (batch)
             batch->addStaging(stagingBuffer, stagingMemory);
         else
@@ -2782,7 +2783,7 @@ namespace DonTopo {
 
         m_res.copyBuffer(stagingBuffer, buf, size, batch);
 
-        // Ver createVertexBuffer: el staging vive hasta la fence cuando hay batch.
+        // See createVertexBuffer: the staging lives until the fence when there is a batch.
         if (batch)
             batch->addStaging(stagingBuffer, stagingMemory);
         else
@@ -2824,9 +2825,9 @@ namespace DonTopo {
         ormBinding.descriptorCount = 1;
         ormBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-        // IBL: irradiancia (difuso) y entorno prefiltrado (especular). Los
-        // consume solo pbr.frag, pero el layout lo comparten los tres pipelines
-        // via m_pipelineLayout, asi que van aqui igual.
+        // IBL: irradiance (diffuse) and prefiltered environment (specular). Only
+        // pbr.frag consumes them, but the layout is shared by the three pipelines
+        // via m_pipelineLayout, so they go here all the same.
         VkDescriptorSetLayoutBinding irradianceBinding{};
         irradianceBinding.binding         = 5;
         irradianceBinding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -2839,9 +2840,9 @@ namespace DonTopo {
         prefilterBinding.descriptorCount = 1;
         prefilterBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-        // SSAO. Mismo criterio que los dos de arriba: solo lo lee pbr.frag, pero
-        // el layout lo comparten los pipelines estatico, wireframe, skinned y
-        // outline via m_pipelineLayout.
+        // SSAO. Same criterion as the two above: only pbr.frag reads it, but
+        // the layout is shared by the static, wireframe, skinned and
+        // outline pipelines via m_pipelineLayout.
         VkDescriptorSetLayoutBinding ssaoBinding{};
         ssaoBinding.binding         = 7;
         ssaoBinding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -2866,14 +2867,14 @@ namespace DonTopo {
     {
         VkDeviceSize size = sizeof(UniformBufferObject);
 
-        // Que el bloque QUEPA en un UBO de esta GPU. Lo domina MAX_LIGHTS (64
-        // luces son 4 KB de los ~5 que ocupa), asi que subirlo mas es lo que
-        // puede pasarse de la raya. La spec garantiza 16 KB como minimo, pero
-        // el minimo de la spec no es el limite real (H72): se lee del device.
+        // That the block FITS in a UBO of this GPU. It is dominated by MAX_LIGHTS (64
+        // lights are 4 KB of the ~5 it takes up), so raising it further is what
+        // can go over the line. The spec guarantees 16 KB as a minimum, but
+        // the spec minimum is not the real limit (H72): it is read from the device.
         //
-        // Pasarse no da un error util —vkCreateBuffer traga, y lo que falla es
-        // el binding del descriptor mas tarde—, asi que se avisa aqui con los
-        // dos numeros y con la causa.
+        // Going over does not give a useful error (vkCreateBuffer swallows it, and what fails is
+        // the descriptor binding later), so a warning is given here with the
+        // two numbers and with the cause.
         const uint32_t topeUbo = m_gpu.maxUniformBufferRange();
         if (topeUbo > 0 && size > topeUbo)
         {
@@ -2891,11 +2892,11 @@ namespace DonTopo {
             bufferInfo.size         = size;
             bufferInfo.usage        = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
             bufferInfo.sharingMode  = VK_SHARING_MODE_EXCLUSIVE;
-            // Los cuatro VkResult se comprueban: el ultimo deja un puntero en
-            // m_uniformBuffersMapped que updateUniformBuffer usa con memcpy en
-            // CADA frame. Ignorarlos convertia un fallo de memoria en una
-            // escritura sobre un puntero sin inicializar, que es un crash sin
-            // relacion aparente con la causa.
+            // All four VkResults are checked: the last one leaves a pointer in
+            // m_uniformBuffersMapped that updateUniformBuffer uses with memcpy on
+            // EVERY frame. Ignoring them turned a memory failure into a
+            // write through an uninitialized pointer, which is a crash with no
+            // apparent relation to its cause.
             if (vkCreateBuffer(m_gpu.device(), &bufferInfo, nullptr, &m_uniformBuffers[i]) != VK_SUCCESS)
                 throw std::runtime_error("failed to create uniform buffer!");
 
@@ -2911,7 +2912,7 @@ namespace DonTopo {
             if (vkBindBufferMemory(m_gpu.device(), m_uniformBuffers[i], m_uniformBuffersMemory[i], 0) != VK_SUCCESS)
                 throw std::runtime_error("failed to bind uniform buffer memory!");
 
-            // Mapeo persistente — nunca llamamos unmap
+            // Persistent mapping: we never call unmap
             if (vkMapMemory(m_gpu.device(), m_uniformBuffersMemory[i], 0, size, 0, &m_uniformBuffersMapped[i]) != VK_SUCCESS)
                 throw std::runtime_error("failed to map uniform buffer!");
 
@@ -2925,30 +2926,30 @@ namespace DonTopo {
                                             uint32_t              firstInstanceBase,
                                             std::vector<InstanceBatch>& outBatches)
     {
-        // El agrupado vive en Renderer/InstanceBatching.{h,cpp} desde que hay un
-        // segundo backend que lo necesita: no tiene una linea de Vulkan, y
-        // arrastrar vulkan.h al de DirectX 12 por esto no tiene sentido. Este
-        // delegado se queda para no tocar a los llamantes ni a instancing_tests.
+        // The grouping lives in Renderer/InstanceBatching.{h,cpp} since there is a
+        // second backend that needs it: it has no line of Vulkan, and
+        // dragging vulkan.h into the DirectX 12 one for this makes no sense. This
+        // delegate stays so as not to touch the callers or instancing_tests.
         return Batching::buildInstanceBatches(candidates, count, outTransforms, outCapacity,
                                               firstInstanceBase, outBatches);
     }
 
     void Renderer::gatherAndBatch(const Frustum& frustum, bool colorPass)
     {
-        // Las guardas y el culling son POR OBJETO y se resuelven aquí, que es
-        // donde está la caché GPU; el agrupado solo ve el resultado en
-        // `visible`. Agrupar antes de cullear dibujaría de más.
+        // The guards and the culling are PER OBJECT and are resolved here, which is
+        // where the GPU cache is; the grouping only sees the result in
+        // `visible`. Grouping before culling would draw too much.
         //
-        // Los tres pases pasaban por aquí con el bucle escrito a mano, y las
-        // tres copias tenían que coincidir: si divergen, el AO oscurece contra
-        // geometría que no se dibuja y las sombras flotan sin objeto. Ahora la
-        // decisión está en Visibility::gatherCandidates, con su test.
+        // The three passes went through here with the loop written by hand, and the
+        // three copies had to match: if they diverge, the AO darkens against
+        // geometry that is not drawn and the shadows float without an object. Now the
+        // decision is in Visibility::gatherCandidates, with its test.
         Visibility::gatherCandidates(m_objects, m_sharedMeshes, m_lastCompletedTicket,
                                      frustum, colorPass && m_ssrEnabled, colorPass,
                                      m_batchCandidates);
 
-        // Tramo propio dentro del SSBO del frame: los pases comparten buffer y
-        // el cursor marca dónde empieza el de este, que es la base de sus
+        // Own stretch inside the frame's SSBO: the passes share the buffer and
+        // the cursor marks where this one's starts, which is the base of its
         // firstInstance.
         const InstanceCursor::Span libre = m_instanceBuffers.cur().rest();
         m_instanceBuffers.cur().commit(
@@ -2958,11 +2959,11 @@ namespace DonTopo {
 
     void Renderer::createDescriptorPool()
     {
-        // El primero de la cadena. Antes esto era el UNICO, dimensionado con las
-        // mallas que hubiera en el arranque mas 128 de margen; pasado el margen,
-        // vkAllocateDescriptorSets fallaba y se lanzaba en mitad de un Load
-        // Scene. Ahora el tamano es fijo y allocateSharedSets encadena otro
-        // cuando hace falta.
+        // The first of the chain. Before this was the ONLY one, sized with the
+        // meshes there were at startup plus 128 of margin; past the margin,
+        // vkAllocateDescriptorSets failed and it threw in the middle of a Load
+        // Scene. Now the size is fixed and allocateSharedSets chains another one
+        // when needed.
         if (!addDescriptorPool())
             throw std::runtime_error("failed to create descriptor pool!");
     }
@@ -2981,9 +2982,9 @@ namespace DonTopo {
         poolInfo.poolSizeCount = 2;
         poolInfo.pPoolSizes    = poolSizes;
         poolInfo.maxSets       = n;
-        // FREE_DESCRIPTOR_SET: rebuildSkinnedMesh destruye y recrea el objeto en
-        // su sitio, y sin poder devolver los sets al pool cada reimportación
-        // consumiría slots hasta agotarlo.
+        // FREE_DESCRIPTOR_SET: rebuildSkinnedMesh destroys and recreates the object in
+        // place, and without being able to return the sets to the pool each reimport
+        // would consume slots until it ran out.
         poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
         VkDescriptorPool pool = VK_NULL_HANDLE;
@@ -3003,11 +3004,11 @@ namespace DonTopo {
         allocInfo.descriptorSetCount = MAX_FRAMES;
         allocInfo.pSetLayouts        = layouts;
 
-        // Dos intentos: el ultimo pool y, si esta lleno, uno recien creado. Los
-        // anteriores no se recorren: al liberar, los huecos vuelven a SU pool y
-        // podrian reaprovecharse, pero buscarlos costaria una llamada fallida
-        // por pool en el camino normal. Lo que se pierde es memoria, no
-        // correccion.
+        // Two attempts: the last pool and, if it is full, a newly created one. The
+        // earlier ones are not walked: on freeing, the holes go back to THEIR pool and
+        // could be reused, but looking for them would cost a failed call
+        // per pool on the normal path. What is lost is memory, not
+        // correctness.
         for (int intento = 0; intento < 2; ++intento)
         {
             if (!m_descriptorPools.empty())
@@ -3027,10 +3028,10 @@ namespace DonTopo {
 
     void Renderer::createDescriptorSets()
     {
-        // Por entrada compartida, no por objeto: initSceneResources construye
-        // primero todos los RenderObject (sin pool todavía) y luego llama aquí.
-        // Iterar m_objects alojaría N sets para la misma entrada y los N-1
-        // primeros se perderían.
+        // Per shared entry, not per object: initSceneResources builds
+        // all the RenderObjects first (no pool yet) and then calls here.
+        // Iterating m_objects would allocate N sets for the same entry and the first N-1
+        // would be lost.
         for (int index : m_sharedMeshes.liveIndices())
             allocateObjectDescriptorSet(*m_sharedMeshes.get(index));
     }
@@ -3068,9 +3069,9 @@ namespace DonTopo {
             ormInfo.imageView   = obj.ormView;
             ormInfo.sampler     = obj.ormSampler;
 
-            // IBL: los mismos dos cubemaps para todos los objetos. Existen desde
-            // init(), asi que estos writes valen aunque no haya skybox. Los dos
-            // descriptores los rellena IblPass, mas abajo.
+            // IBL: the same two cubemaps for all the objects. They exist since
+            // init(), so these writes are valid even without a skybox. Both
+            // descriptors are filled in by IblPass, further down.
 
             VkWriteDescriptorSet writes[7]{};
             writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = obj.descriptorSets[i];
@@ -3093,8 +3094,8 @@ namespace DonTopo {
             writes[4].dstBinding = 4; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[4].descriptorCount = 1; writes[4].pImageInfo = &ormInfo;
 
-            // Los dos del IBL, del sitio unico: los escriben tambien los
-            // personajes y el pase de sondas.
+            // The two IBL ones, from the single place: the characters and the probe pass
+            // also write them.
             VkDescriptorImageInfo iblInfos[2]{};
             IblPass::fillIblWrites(obj.descriptorSets[i], m_iblPass.irradianceView(),
                                    m_iblPass.prefilterView(), m_iblPass.sampler(),
@@ -3102,22 +3103,22 @@ namespace DonTopo {
 
             vkUpdateDescriptorSets(m_gpu.device(), 7, writes, 0, nullptr);
 
-            // Binding 7 (SSAO) aparte: es la única vista de este set que se
-            // destruye y se rehace al redimensionar, y refreshSsaoDescriptors
-            // vuelve a pasar por aquí con los mismos handles.
+            // Binding 7 (SSAO) apart: it is the only view of this set that is
+            // destroyed and redone on resize, and refreshSsaoDescriptors
+            // comes back through here with the same handles.
             writeSsaoBinding(obj.descriptorSets[i], i);
         }
     }
 
     void Renderer::writeSsaoBinding(VkDescriptorSet set, int frameIndex)
     {
-        // Sin imagen todavía (init temprano) no hay nada válido que escribir: el
-        // set se completa desde refreshSsaoDescriptors en cuanto exista.
+        // With no image yet (early init) there is nothing valid to write: the
+        // set is completed from refreshSsaoDescriptors as soon as it exists.
         if (m_ssaoPass.blurViews()[frameIndex] == VK_NULL_HANDLE) return;
 
         VkDescriptorImageInfo info{};
-        // GENERAL y no SHADER_READ_ONLY: la misma imagen es storage image del
-        // compute y textura del pass de escena, igual que la cadena del bloom.
+        // GENERAL and not SHADER_READ_ONLY: the same image is the compute's storage image
+        // and the scene pass's texture, just like the bloom chain.
         info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         info.imageView   = m_ssaoPass.blurViews()[frameIndex];
         info.sampler     = m_depthPrepass.sampler();
@@ -3140,7 +3141,7 @@ namespace DonTopo {
             for (int i = 0; i < MAX_FRAMES; i++)
                 if (gpu->descriptorSets[i]) writeSsaoBinding(gpu->descriptorSets[i], i);
         }
-        // Los skinned tienen sus propios sets del mismo layout, uno por material.
+        // The skinned ones have their own sets of the same layout, one per material.
         for (const SkinnedRenderObject& sobj : m_skinnedObjects)
             for (const SkinnedMatGfx& mgfx : sobj.matGfx)
                 for (int i = 0; i < MAX_FRAMES; i++)
@@ -3151,33 +3152,33 @@ namespace DonTopo {
     {
         if (v == ssaoEnabled()) return;
         setSsaoEnabledFlag(v);
-        // Al apagar, el mapa se queda con el AO del último frame calculado y
-        // seguiría oscureciendo. Un clear a 1.0 por frame en vuelo lo devuelve a
-        // la identidad; a partir de ahí, cero trabajo.
+        // When turned off, the map keeps the AO of the last computed frame and
+        // would keep darkening. A clear to 1.0 per in-flight frame returns it to
+        // identity; from then on, zero work.
         if (!v)
             m_ssaoPass.markClearPending();
     }
 
     void Renderer::updateUniformBuffer(uint32_t frameIndex)
     {
-        // Cámara del CameraComponent en Play, la del editor en edición. El
-        // Y-flip de Vulkan ya viene aplicado desde currentFrameCamera().
+        // The CameraComponent's camera in Play, the editor's in edit mode. The
+        // Vulkan Y-flip is already applied from currentFrameCamera().
         const FrameCamera fc = currentFrameCamera();
 
-        // View-proj SIN jitter: es la que reproyecta el TAA y la que se compara
-        // con la del frame anterior. El jitter es ruido de muestreo, no
-        // movimiento de cámara, y meterlo aquí arrastraría el historial.
+        // View-proj WITHOUT jitter: it is the one the TAA reprojects with and the one compared
+        // with the previous frame's. The jitter is sampling noise, not
+        // camera motion, and putting it in here would drag the history.
         //
-        // El relevo prev←curr se hace aquí y TODOS los frames porque el motion
-        // blur también reproyecta con estas dos, y corre con el TAA apagado. La
-        // línea equivalente del final del pass del TAA se queda donde está y
-        // escribe exactamente el mismo valor: con el TAA activo esto es
-        // redundante, no un cambio.
+        // The prev←curr handoff is done here and on ALL frames because the motion
+        // blur also reprojects with these two, and it runs with the TAA off. The
+        // equivalent line at the end of the TAA pass stays where it is and
+        // writes exactly the same value: with the TAA active this is
+        // redundant, not a change.
         m_aaPass.updateFrameMatrices(aaCtx(), fc.view, fc.proj);
 
         UniformBufferObject ubo{};
         ubo.view = fc.view;
-        // Con TAA sale jittereada; en cualquier otro modo es fc.proj tal cual.
+        // With TAA it comes out jittered; in any other mode it is fc.proj as is.
         ubo.proj = m_aaPass.jitteredProj();
         ubo.numLights        = std::min((int)m_lights.size(), MAX_LIGHTS);
         ubo.ambientIntensity = m_ambientEnabled ? m_ambientIntensity : 0.0f;
@@ -3187,38 +3188,38 @@ namespace DonTopo {
         }
         
         ubo.viewPos  = glm::vec4(fc.eye, 1.0f);
-        // Las cascadas ya las calculó draw() para este frame. Copiarlas y no
-        // recalcularlas es lo que garantiza que el fragment shader muestree con
-        // exactamente las mismas matrices con las que se culeó y se grabó el
-        // pass de sombras.
-        // Las SEIS, no cuatro: con una luz de punto las caras 4 y 5 tambien
-        // llevan matriz. Copiar solo 4 dejaria dos caras con la identidad.
+        // The cascades were already computed by draw() for this frame. Copying them and not
+        // recomputing them is what guarantees that the fragment shader samples with
+        // exactly the same matrices with which the shadow pass was culled and
+        // recorded.
+        // All SIX, not four: with a point light faces 4 and 5 also
+        // carry a matrix. Copying only 4 would leave two faces with the identity.
         for (int i = 0; i < SHADOW_MATRICES; i++)
         {
             ubo.lightSpaceMatrix[i] = m_shadowPass.cascadeMatrix(i);
         }
         ubo.cascadeSplits = m_shadowPass.cascadeSplits();
-        // position.w dice al shader QUE sombra tiene cada luz. Ese hueco estaba
-        // libre: ningun shader leia position.w.
+        // position.w tells the shader WHICH shadow each light has. That slot was
+        // free: no shader read position.w.
         //
-        //   luz 0 (key):  1 = su sombra se grabo como CUBEMAP, 0 = cascadas o
-        //                 una sola cara, que el shader distingue por el tipo.
-        //   luces 1..n:   indice de matriz + 1, y 0 = no proyecta sombra.
+        //   light 0 (key):  1 = its shadow was recorded as a CUBEMAP, 0 = cascades or
+        //                   a single face, which the shader tells apart by type.
+        //   lights 1..n:    matrix index + 1, and 0 = casts no shadow.
         //
-        // Todo sale de lo que el pase HIZO —las capas que dejo validas y las
-        // ranuras que reparto—, no de recalcular aqui ningun criterio: dos
-        // copias de un criterio es lo que rompio H65.
+        // Everything comes from what the pass DID (the layers it left valid and the
+        // slots it handed out), not from recomputing any criterion here: two
+        // copies of a criterion is what broke H65.
         if (ubo.numLights > 0)
         {
             ubo.lights[0].position.w =
                 (m_shadowPass.activeLayers() == SHADOW_KEY_MATRICES) ? 1.0f : 0.0f;
 
-            // Ranura + 1, con el SIGNO diciendo por que camino se grabo:
-            // positivo = una cara, negativo = cubemap de seis. Va en el mismo
-            // campo porque no hay otro libre en el bloque, y sale de lo que el
-            // pase hizo (shadowFaceCounts) en vez de que el shader lo deduzca
-            // del tipo de luz: deducirlo seria una segunda copia del criterio,
-            // que es lo que rompio H65.
+            // Slot + 1, with the SIGN telling which path it was recorded through:
+            // positive = one face, negative = six-face cubemap. It goes in the same
+            // field because there is no other free one in the block, and it comes from what the
+            // pass did (shadowFaceCounts) instead of the shader deducing it
+            // from the light type: deducing it would be a second copy of the criterion,
+            // which is what broke H65.
             const int* ranuras = m_shadowPass.shadowSlots();
             const int* caras   = m_shadowPass.shadowFaceCounts();
             for (int i = 1; i < ubo.numLights; i++)
@@ -3230,13 +3231,13 @@ namespace DonTopo {
         }
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
-        // El bake de una reflection probe parte de este mismo buffer (luces y
-        // matrices de cascada del frame); hasta que se escribe una vez es basura.
+        // A reflection probe's bake starts from this same buffer (lights and the
+        // frame's cascade matrices); until it is written once it is garbage.
         m_uboWritten[frameIndex] = true;
 
-        // ── Forward+: bloque de parametros y lista de luces ──────────────────
-        // El frame que toca no es m_currentFrame sino frameIndex (el bakeo de
-        // sondas escribe el 0), asi que el contexto se arma con ese.
+        // ── Forward+: parameter block and light list ─────────────────────────
+        // The frame it applies to is not m_currentFrame but frameIndex (the probe
+        // bake writes 0), so the context is built with that one.
         ForwardPlusPass::Context fpc = fpCtx();
         fpc.currentFrame = frameIndex;
         m_fpPass.uploadFrameData(fpc, fc.view, fc.proj, m_lights, m_lightRadii, m_fpLightRadius);
@@ -3250,9 +3251,9 @@ namespace DonTopo {
         imageInfo.sType             = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType         = VK_IMAGE_TYPE_2D;
         imageInfo.format            = depthFormat;
-        // Tamano y muestras INTERNOS: este depth lo comparten el pass de escena y
-        // el de composicion, asi que sigue al SSAA (mas resolucion) y al MSAA
-        // (mas muestras). El del pre-pass del SSAO/SSR es otro y siempre va a una.
+        // INTERNAL size and samples: this depth is shared by the scene pass and
+        // the composition one, so it follows SSAA (more resolution) and MSAA
+        // (more samples). The SSAO/SSR pre-pass one is another and always runs at one.
         imageInfo.extent            = { m_renderExtent.width, m_renderExtent.height, 1 };
         imageInfo.mipLevels         = 1;
         imageInfo.arrayLayers       = 1;
@@ -3309,11 +3310,11 @@ namespace DonTopo {
             [&](SharedGpuMesh& gpu) { createSharedGpuMesh(mesh, gpu, batch, decoded); },
             &created);
 
-        // Los factores del OBJETO, aquí y no en la entrada compartida: es lo que
-        // permite que dos objetos con la misma malla y distinto acabado
-        // compartan VRAM. Se leen de la entrada —no del material— si trae mapa
-        // ORM, que es el único que puede contestar eso para una entrada
-        // reutilizada (created == false, cuando createSharedGpuMesh ni corre).
+        // The OBJECT's factors, here and not in the shared entry: it is what
+        // lets two objects with the same mesh and different finish
+        // share VRAM. They are read from the entry (not from the material) if it has an
+        // ORM map, which is the only one that can answer that for a
+        // reused entry (created == false, when createSharedGpuMesh does not even run).
         if (const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex))
             setEffectiveFactors(obj, *gpu, mesh.material.metallic, mesh.material.roughness);
         return created;
@@ -3323,10 +3324,10 @@ namespace DonTopo {
     {
         if (objectIndex >= m_objects.size()) return;
         RenderObject& obj = m_objects[objectIndex];
-        // Sin entrada compartida no hay a quién preguntarle por el mapa ORM, y
-        // tampoco hay nada que dibujar: el objeto está sin construir o ya
-        // liberado. Se sale sin escribir, que es lo mismo que hacen los demás
-        // setters ante un índice que no describe nada.
+        // Without a shared entry there is nobody to ask about the ORM map, and
+        // there is nothing to draw either: the object is unbuilt or already
+        // released. It returns without writing, which is the same thing the other
+        // setters do with an index that describes nothing.
         const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
         if (!gpu) return;
         setEffectiveFactors(obj, *gpu, metallic, roughness);
@@ -3335,12 +3336,12 @@ namespace DonTopo {
     void Renderer::setEffectiveFactors(RenderObject& obj, const SharedGpuMesh& gpu,
                                        float metallic, float roughness)
     {
-        // La regla de "con mapa ORM manda el mapa", en UN sitio: la comparten el
-        // registro del objeto y setObjectMaterialFactors, que es por donde
-        // entran los sliders. Escrita dos veces, arrastrar un slider sobre un
-        // objeto con mapa ORM le habría metido el valor del slider donde el
-        // registro pone 1.0, y el objeto habría cambiado de aspecto según qué
-        // camino lo tocó el último.
+        // The "with an ORM map the map rules" rule, in ONE place: it is shared by the
+        // object's registration and setObjectMaterialFactors, which is where the
+        // sliders come in. Written twice, dragging a slider over an
+        // object with an ORM map would have put the slider's value where the
+        // registration puts 1.0, and the object would have changed look depending on which
+        // path touched it last.
         obj.metallic  = gpu.hasOrmMap ? 1.0f : metallic;
         obj.roughness = gpu.hasOrmMap ? 1.0f : roughness;
     }
@@ -3351,10 +3352,10 @@ namespace DonTopo {
     {
         obj.indexCount = (uint32_t)mesh.indices.size();
 
-        // AABB local para el frustum culling. Se calcula aquí y no en el bucle
-        // de dibujo porque la geometría no cambia después: lo único que se
-        // mueve es el transform del RenderObject, y el test ya la transforma
-        // cada frame.
+        // Local AABB for frustum culling. It is computed here and not in the draw
+        // loop because the geometry does not change afterwards: the only thing that
+        // moves is the RenderObject's transform, and the test already transforms it
+        // every frame.
         obj.hasBounds = !mesh.vertices.empty();
         if (obj.hasBounds)
         {
@@ -3370,18 +3371,18 @@ namespace DonTopo {
         createVertexBuffer(mesh.vertices, obj.vertexBuffer, obj.vertexMemory, batch);
         createIndexBuffer(mesh.indices,   obj.indexBuffer,  obj.indexMemory,  batch);
 
-        // Busca un slot entre los píxeles que ya decodificó el worker. Sin
-        // acierto se cae a la ruta de siempre (stbi_load en este hilo), que es
-        // lo que pasa en el init síncrono y en las texturas sin decodificar.
+        // Looks up a slot among the pixels the worker already decoded. With no
+        // hit it falls back to the usual path (stbi_load on this thread), which is
+        // what happens in the synchronous init and with undecoded textures.
         auto findSlot = [decoded](DecodedImage::Slot s) -> const DecodedImage* {
             if (!decoded) return nullptr;
             for (const auto& d : *decoded) if (d.slot == s) return &d;
             return nullptr;
         };
 
-        // El formato de cada imagen lo decide resolveSrgb (slot + ajustes del
-        // sidecar) y la vista tiene que declarar EXACTAMENTE el mismo: la imagen
-        // no se crea con MUTABLE_FORMAT.
+        // The format of each image is decided by resolveSrgb (slot + sidecar
+        // settings) and the view has to declare EXACTLY the same one: the image
+        // is not created with MUTABLE_FORMAT.
         VkFormat albedoFmt = VK_FORMAT_R8G8B8A8_SRGB;
         if (const DecodedImage* albedo = findSlot(DecodedImage::Albedo))
         {
@@ -3435,9 +3436,9 @@ namespace DonTopo {
         }
         else
         {
-            // La blanca compartida, prestada: sin ORM el shader multiplica por 1
-            // y esa imagen es identica en todas las mallas. createSolidColorImage
-            // se queda para quien SI quiere la suya (UiSpriteBatch la destruye).
+            // The shared white one, borrowed: without ORM the shader multiplies by 1
+            // and that image is identical in all the meshes. createSolidColorImage
+            // stays for whoever DOES want its own (UiSpriteBatch destroys it).
             m_res.sharedWhiteOrm(obj.ormImage, obj.ormMem);
             obj.hasOrmMap = false;
         }
@@ -3450,15 +3451,15 @@ namespace DonTopo {
         if (!m_pendingBatch)
             m_pendingBatch = std::make_unique<TransferBatch>(m_gpu);
 
-        // Hueco reciclado si lo hay, y si no el vector crece como siempre. Sin
-        // esto, cada ciclo Play/Stop dejaba una entrada muerta más (H19): los
-        // índices están anotados en cada GameObject, así que compactar no es
-        // una opción y la única salida es reutilizar.
+        // Recycled slot if there is one, and if not the vector grows as usual. Without
+        // this, each Play/Stop cycle left one more dead entry (H19): the
+        // indices are noted in each GameObject, so compacting is not
+        // an option and the only way out is reuse.
         const int slot = m_staticSlots.acquire();
         if (slot < 0)
             m_objects.emplace_back();
         else
-            m_objects[(size_t)slot] = RenderObject{};   // sin restos del anterior
+            m_objects[(size_t)slot] = RenderObject{};   // no leftovers from the previous one
         const int index = slot < 0 ? (int)m_objects.size() - 1 : slot;
         RenderObject& obj = m_objects[(size_t)index];
         const bool created = buildRenderObject(mesh, obj, m_pendingBatch.get(), decoded);
@@ -3467,11 +3468,11 @@ namespace DonTopo {
         {
             SharedGpuMesh& gpu = *m_sharedMeshes.get(obj.sharedIndex);
             allocateObjectDescriptorSet(gpu);
-            // La entrada no se dibuja hasta que la fence de este batch señale.
-            // Es la decisión de producto de la spec: nada de placeholders, el
-            // GameObject aparece cuando está listo. Si la entrada ya existía no
-            // se toca su ticket: o ya está subida (0), o sigue esperando el
-            // suyo, y machacarlo con uno posterior la retrasaría de más.
+            // The entry is not drawn until this batch's fence signals.
+            // It is the spec's product decision: no placeholders, the
+            // GameObject appears when it is ready. If the entry already existed its
+            // ticket is not touched: either it is already uploaded (0), or it is still waiting for
+            // its own, and overwriting it with a later one would delay it more than needed.
             gpu.uploadTicket = m_nextUploadTicket;
         }
         return index;
@@ -3479,19 +3480,19 @@ namespace DonTopo {
 
     void Renderer::destroySharedGpuMesh(const SharedGpuMesh& obj)
     {
-        // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
-        // para todo el motor. Destruirlo aqui seria un doble free en cuanto
-        // se soltara el segundo material.
+        // The sampler is BORROWED (GpuResources::sharedMaterialSampler): a single one
+        // for the whole engine. Destroying it here would be a double free as soon as
+        // the second material was released.
         vkDestroyImageView(m_gpu.device(), obj.ormView,       nullptr);
         m_res.releaseMaterialImage(obj.ormImage, obj.ormMem);
-        // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
-        // para todo el motor. Destruirlo aqui seria un doble free en cuanto
-        // se soltara el segundo material.
+        // The sampler is BORROWED (GpuResources::sharedMaterialSampler): a single one
+        // for the whole engine. Destroying it here would be a double free as soon as
+        // the second material was released.
         vkDestroyImageView(m_gpu.device(), obj.normalView,    nullptr);
         m_res.releaseMaterialImage(obj.normalImage, obj.normalMem);
-        // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
-        // para todo el motor. Destruirlo aqui seria un doble free en cuanto
-        // se soltara el segundo material.
+        // The sampler is BORROWED (GpuResources::sharedMaterialSampler): a single one
+        // for the whole engine. Destroying it here would be a double free as soon as
+        // the second material was released.
         vkDestroyImageView(m_gpu.device(), obj.textureView,   nullptr);
         m_res.releaseMaterialImage(obj.textureImage, obj.textureMem);
         vkDestroyBuffer(m_gpu.device(),    obj.indexBuffer,   nullptr);
@@ -3499,43 +3500,43 @@ namespace DonTopo {
         vkDestroyBuffer(m_gpu.device(),    obj.vertexBuffer,  nullptr);
         vkFreeMemory(m_gpu.device(),       obj.vertexMemory,  nullptr);
 
-        // Los sets vuelven al pool (creado con FREE_DESCRIPTOR_SET_BIT), igual
-        // que destroySkinnedRenderObject: sin esto, cada removeStaticObject /
-        // rebuild agotaba su pool en vez de reciclar sus sets. No hace
-        // falta anularlos: obj es siempre la copia que la cache sacó de la
-        // tabla, y el slot original ya quedó vacío.
+        // The sets go back to the pool (created with FREE_DESCRIPTOR_SET_BIT), just
+        // like destroySkinnedRenderObject: without this, each removeStaticObject /
+        // rebuild exhausted its pool instead of recycling its sets. There is no need to
+        // null them: obj is always the copy the cache took out of the
+        // table, and the original slot was already left empty.
         if (obj.descriptorSets[0] != VK_NULL_HANDLE && obj.descPool != VK_NULL_HANDLE)
             vkFreeDescriptorSets(m_gpu.device(), obj.descPool, MAX_FRAMES, obj.descriptorSets);
     }
 
     void Renderer::recordShadowPass(VkCommandBuffer cmd)
     {
-        // Sin luces no hay matrices que extraer (computeCascades deja la
-        // identidad, cuyo frustum es el cubo unidad y culearía casi todo). Aun
-        // así hay que abrir los N render pass: son los que limpian las capas y
-        // las dejan en DEPTH_STENCIL_READ_ONLY_OPTIMAL, que es el layout que
-        // declaran los descriptor sets. Lo que se salta es la geometría, que
-        // nadie va a muestrear (numLights = 0 apaga el shadow en el shader).
-        // Cuantas capas se dibujan depende del TIPO de la luz key: 4 con las
-        // cascadas de una direccional, 1 con la cara en perspectiva de un foco,
-        // 6 con el cubemap de una de punto. Las que sobran se abren igual —el
-        // render pass es lo que las limpia y las deja en el layout que declaran
-        // los descriptor sets— pero dibujar en ellas seria grabar con la matriz
-        // identidad sobre capas que nadie muestrea.
+        // Without lights there are no matrices to extract (computeCascades leaves the
+        // identity, whose frustum is the unit cube and would cull almost everything). Even
+        // so the N render passes have to be opened: they are what clears the layers and
+        // leaves them in DEPTH_STENCIL_READ_ONLY_OPTIMAL, which is the layout the
+        // descriptor sets declare. What is skipped is the geometry, which
+        // nobody is going to sample (numLights = 0 turns the shadow off in the shader).
+        // How many layers are drawn depends on the key light's TYPE: 4 with the
+        // cascades of a directional, 1 with the perspective face of a spot,
+        // 6 with the cubemap of a point one. The spare ones are opened all the same (the
+        // render pass is what clears them and leaves them in the layout the descriptor
+        // sets declare) but drawing into them would be recording with the identity
+        // matrix onto layers nobody samples.
         for (uint32_t cascade = 0; cascade < SHADOW_MATRICES; cascade++)
         {
-            // Se dibuja en las capas de la luz key (desde la 0) y en las de los
-            // focos secundarios (desde SHADOW_KEY_MATRICES). Las de en medio,
-            // que sobran cuando la key no usa las seis, se abren igual para que
-            // el render pass las limpie y las deje en el layout que declaran los
-            // descriptor sets, pero no se dibuja en ellas.
+            // Drawing happens in the key light's layers (from 0) and in those of the
+            // secondary spots (from SHADOW_KEY_MATRICES). The ones in between,
+            // which are spare when the key does not use all six, are opened all the same so that
+            // the render pass clears them and leaves them in the layout the
+            // descriptor sets declare, but nothing is drawn in them.
             const bool esDeLaKey    = cascade < m_shadowPass.activeLayers();
             const bool esDeUnExtra  = cascade >= SHADOW_KEY_MATRICES &&
                                       cascade <  SHADOW_KEY_MATRICES + m_shadowPass.extraLayers();
             const bool drawCasters  = !m_lights.empty() && (esDeLaKey || esDeUnExtra);
 
-            // Render pass, viewport, scissor, pipeline y push del índice: del
-            // pase. Los draws de aquí abajo son del Renderer.
+            // Render pass, viewport, scissor, pipeline and index push: the pass's.
+            // The draws down here are the Renderer's.
             m_shadowPass.beginCascade(cmd, cascade);
 
             if (!drawCasters)
@@ -3544,17 +3545,16 @@ namespace DonTopo {
                 continue;
             }
 
-            // Culling por el frustum de ESTA cascada, no por el de la cámara ni
-            // por el de la cascada mayor: un objeto que la cámara no ve puede
-            // seguir proyectando sombra sobre lo que sí se ve, y un objeto que
-            // cae en la cascada lejana no pinta nada en el mapa de la cercana.
+            // Culling by THIS cascade's frustum, not the camera's nor
+            // the larger cascade's: an object the camera does not see can
+            // still cast a shadow on what is seen, and an object that
+            // falls in the far cascade paints nothing in the near one's map.
             const Frustum lightFrustum = frustumFromViewProj(m_shadowPass.cascadeMatrix(cascade));
 
-            // Mismas guardas por objeto que el pass principal, con el frustum de
-            // la luz. El agrupado es independiente del de la cámara: los
-            // conjuntos visibles no coinciden, así que cada pass escribe su
-            // propio rango del SSBO (las cascadas van primero, una detrás de
-            // otra, y el de la escena al final).
+            // Same per-object guards as the main pass, with the light's frustum.
+            // The grouping is independent of the camera's: the visible
+            // sets do not match, so each pass writes its own range of the SSBO
+            // (the cascades go first, one after another, and the scene's at the end).
             gatherAndBatch(lightFrustum, /*colorPass*/ false);
 
             const VkDescriptorSet instSet = m_instanceBuffers.set(m_currentFrame);
@@ -3573,34 +3573,34 @@ namespace DonTopo {
                 vkCmdDrawIndexed(cmd, gpu->indexCount, batch.instanceCount, 0, 0, batch.firstInstance);
             }
 
-            // Skinned. SkinningPass::record corre justo antes en este mismo command
-            // buffer y deja outputVertexBuffer con la pose de ESTE frame y una
-            // barrera compute → VERTEX_INPUT, así que aquí ya se puede leer como
-            // vertex buffer. Mismo shader, mismo layout, mismo SSBO de
-            // instancias y misma matriz de cascada que los estáticos: lo único
-            // propio es el pipeline con el stride de SkinnedVertex.
+            // Skinned. SkinningPass::record runs right before in this same command
+            // buffer and leaves outputVertexBuffer with THIS frame's pose and a
+            // compute -> VERTEX_INPUT barrier, so here it can already be read as a
+            // vertex buffer. Same shader, same layout, same instance SSBO and
+            // same cascade matrix as the static ones: the only own thing
+            // is the pipeline with the SkinnedVertex stride.
             bool skinnedBound = false;
             for (size_t si = 0; si < m_skinnedObjects.size(); si++)
             {
-                // Misma lista de visibles que consumió el compute: a un objeto
-                // al que no se le despachó skinning le quedaría la pose del
-                // último frame en que fue visible, así que su sombra sería
-                // falsa. Se paga que un personaje fuera de cámara no proyecte.
+                // Same visible list the compute consumed: an object
+                // that was not dispatched skinning would be left with the pose of the
+                // last frame in which it was visible, so its shadow would be
+                // wrong. The price is that a character off camera casts no shadow.
                 if (si >= m_skinnedVisible.size() || !m_skinnedVisible[si]) continue;
                 const SkinnedRenderObject& sobj = m_skinnedObjects[si];
-                // Checkbox "Visible" del componente Mesh: oculto no proyecta.
+                // "Visible" checkbox of the Mesh component: hidden casts no shadow.
                 if (!sobj.meshVisible) continue;
                 if (sobj.outputVertexBuffer == VK_NULL_HANDLE || sobj.matGfx.empty()) continue;
-                // Sin sitio en el SSBO de instancias de este frame: mejor sin
-                // sombra que pisar el rango de otro pass. Con la capacidad bien
-                // dimensionada esto ya no deberia ocurrir; el contador esta
-                // para que, si ocurre, se vea en el PerformancePanel en vez de
-                // perderse la sombra en silencio (H23).
+                // No room in this frame's instance SSBO: better no
+                // shadow than overwriting another pass's range. With the capacity properly
+                // sized this should no longer happen; the counter is there
+                // so that, if it does, it shows in the PerformancePanel instead of
+                // the shadow being lost silently (H23).
                 //
-                // shadow.vert saca el model matrix del SSBO por gl_InstanceIndex:
-                // una entrada por objeto y un draw de una instancia apuntando a
-                // ella con firstInstance. Sin sitio no hay puntero, así que no
-                // hay forma de escribir sin haber mirado.
+                // shadow.vert takes the model matrix from the SSBO via gl_InstanceIndex:
+                // one entry per object and a one-instance draw pointing at
+                // it with firstInstance. With no room there is no pointer, so there
+                // is no way to write without having looked.
                 uint32_t instanceIndex = 0;
                 glm::mat4* slot = m_instanceBuffers.cur().alloc(1, &instanceIndex);
                 if (!slot) { ++m_statInstanceOverflow; break; }
@@ -3608,16 +3608,16 @@ namespace DonTopo {
 
                 if (!skinnedBound)
                 {
-                    // El layout es el mismo, así que el push constant de la
-                    // cascada sobrevive al cambio de pipeline; el pase lo
-                    // reescribe por no depender de esa compatibilidad.
+                    // The layout is the same, so the cascade's push constant
+                    // survives the pipeline change; the pass
+                    // rewrites it so as not to depend on that compatibility.
                     m_shadowPass.bindSkinnedPipeline(cmd, cascade);
                     skinnedBound = true;
                 }
 
-                // Set 0 solo por el UBO de la cascada (binding 0): shadow.vert no
-                // muestrea nada, así que cualquier descriptor set del material
-                // sirve mientras sea del layout que declara el pipeline.
+                // Set 0 only for the cascade's UBO (binding 0): shadow.vert does not
+                // sample anything, so any material descriptor set
+                // works as long as it is of the layout the pipeline declares.
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPass.pipelineLayout(),
                     0, 1, &sobj.matGfx[0].descSets[m_currentFrame], 0, nullptr);
 
@@ -3633,13 +3633,13 @@ namespace DonTopo {
         }
     }
 
-    // Los cuatro pipelines GRAFICOS de las mallas con huesos. Comparten
-    // shaders con los estaticos y solo cambian el vertex input (stride 80,
-    // la salida del compute de skinning). Se rehacen al cambiar el MSAA, que
-    // es lo que los separa de los tres compute de SkinningPass.
+    // The four GRAPHICS pipelines of the skinned meshes. They share
+    // shaders with the static ones and only the vertex input changes (stride 80,
+    // the skinning compute's output). They are redone when MSAA changes, which
+    // is what separates them from the three compute ones of SkinningPass.
     void Renderer::createSkinnedGraphicsPipelines()
     {
-         // --- Skinned graphics pipeline (stride=80, mismos shaders) ---
+         // --- Skinned graphics pipeline (stride=80, same shaders) ---
         {
             auto vertCode = loadShaderFile("shaders/triangle.vert.spv");
             auto fragCode = loadShaderFile("shaders/pbr.frag.spv");
@@ -3672,10 +3672,10 @@ namespace DonTopo {
             vi.vertexBindingDescriptionCount   = 1;  vi.pVertexBindingDescriptions  = &binding;
             vi.vertexAttributeDescriptionCount = 5;  vi.pVertexAttributeDescriptions = attrs;
 
-            // El MISMO estado que los estaticos, ni un valor distinto: vive en
-            // PipelineDefaults.h desde H10. Lo unico que de verdad separa a este
-            // pipeline del de arriba es el vertex input —la salida del compute
-            // de skinning, stride 80— y sus shaders.
+            // The SAME state as the static ones, not a single different value: it lives in
+            // PipelineDefaults.h since H10. The only thing that really separates this
+            // pipeline from the one above is the vertex input (the skinning compute's
+            // output, stride 80) and its shaders.
             const GraphicsPipelineState estadoComun(m_aaSampleCount);
 
             VkGraphicsPipelineCreateInfo pci{};
@@ -3689,9 +3689,9 @@ namespace DonTopo {
             if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pci, nullptr, &m_skinnedGfxPipeline) != VK_SUCCESS)
                 throw std::runtime_error("failed to create skinned graphics pipeline!");
 
-            // Pipeline wireframe skinned: mismo vertex input/layout que el
-            // gfx pipeline de arriba, solo cambia polygonMode a LINE y el
-            // fragment shader a color plano.
+            // Skinned wireframe pipeline: same vertex input/layout as the
+            // gfx pipeline above, only polygonMode changes to LINE and the
+            // fragment shader to flat color.
             auto wireFragCode = loadShaderFile("shaders/wireframe.frag.spv");
             auto wireFragMod  = createShaderModule(wireFragCode);
 
@@ -3713,14 +3713,14 @@ namespace DonTopo {
             if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &wirePci, nullptr, &m_skinnedWireframePipeline) != VK_SUCCESS)
                 throw std::runtime_error("failed to create skinned wireframe pipeline!");
 
-            // Contorno de selección skinned: gemelo del estático de
-            // createPipeline (mismos shaders, cullMode FRONT), pero sobre este
-            // vertex input de stride 80. El buffer que lee es el de SALIDA del
-            // compute de skinning, así que el casco se extruye sobre la pose ya
-            // deformada de este frame, no sobre la de reposo.
-            // pos@0 y normal@48 de OutputVertex, la salida del compute de
-            // skinning: el casco se extruye sobre la pose deformada de ESTE
-            // frame, no sobre la de reposo.
+            // Skinned selection outline: twin of the static one in
+            // createPipeline (same shaders, cullMode FRONT), but over this
+            // vertex input of stride 80. The buffer it reads is the skinning
+            // compute's OUTPUT, so the hull is extruded over this frame's already
+            // deformed pose, not over the rest one.
+            // pos@0 and normal@48 of OutputVertex, the skinning compute's
+            // output: the hull is extruded over THIS frame's deformed pose,
+            // not over the rest one.
             m_outlinePass.createSkinnedPipelines(outlineCtx(), pci, estadoComun.rasterization, vi, 0, 48);
 
             vkDestroyShaderModule(m_gpu.device(), vertMod, nullptr);
@@ -3760,9 +3760,9 @@ namespace DonTopo {
         destroy(obj.outputVertexBuffer,   obj.outputVertexMemory);
         destroy(obj.indexBuffer,          obj.indexMemory);
 
-        // Compartida: se destruye cuando la suelta el último personaje. Si no es
-        // de la caché (la blanca de relleno), releaseMaterialImage sabe que es
-        // prestada y no la destruye.
+        // Shared: it is destroyed when the last character releases it. If it is not
+        // from the cache (the white fill-in), releaseMaterialImage knows it is
+        // borrowed and does not destroy it.
         auto soltarMaterial = [&](VkImage img, VkDeviceMemory mem) {
             const MaterialImage m{ img, mem };
             if (m_skinnedTextures.contains(m))
@@ -3772,25 +3772,25 @@ namespace DonTopo {
         };
         for (auto& mgfx : obj.matGfx)
         {
-            // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
-            // para todo el motor. Destruirlo aqui seria un doble free en cuanto
-            // se soltara el segundo material.
+            // The sampler is BORROWED (GpuResources::sharedMaterialSampler): a single one
+            // for the whole engine. Destroying it here would be a double free as soon as
+            // the second material was released.
             if (mgfx.ormView       != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.ormView,       nullptr); }
             soltarMaterial(mgfx.ormImage, mgfx.ormMem);
-            // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
-            // para todo el motor. Destruirlo aqui seria un doble free en cuanto
-            // se soltara el segundo material.
+            // The sampler is BORROWED (GpuResources::sharedMaterialSampler): a single one
+            // for the whole engine. Destroying it here would be a double free as soon as
+            // the second material was released.
             if (mgfx.normalView    != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.normalView,    nullptr); }
             soltarMaterial(mgfx.normalImage, mgfx.normalMem);
-            // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
-            // para todo el motor. Destruirlo aqui seria un doble free en cuanto
-            // se soltara el segundo material.
+            // The sampler is BORROWED (GpuResources::sharedMaterialSampler): a single one
+            // for the whole engine. Destroying it here would be a double free as soon as
+            // the second material was released.
             if (mgfx.textureView   != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.textureView,   nullptr); }
             soltarMaterial(mgfx.textureImage, mgfx.textureMem);
         }
 
-        // Los sets vuelven al pool (creado con FREE_DESCRIPTOR_SET_BIT): sin
-        // esto, reconstruir el objeto lo agotaría.
+        // The sets go back to the pool (created with FREE_DESCRIPTOR_SET_BIT): without
+        // this, rebuilding the object would exhaust it.
         if (obj.computeDescSet != VK_NULL_HANDLE && obj.computeDescPool != VK_NULL_HANDLE)
         {
             vkFreeDescriptorSets(m_gpu.device(), obj.computeDescPool, 1, &obj.computeDescSet);
@@ -3815,7 +3815,7 @@ namespace DonTopo {
         if (!m_pendingBatch)
             m_pendingBatch = std::make_unique<TransferBatch>(m_gpu);
 
-        // Mismo reciclaje que en addStaticMesh.
+        // Same recycling as in addStaticMesh.
         const int slot = m_skinnedSlots.acquire();
         if (slot < 0)
             m_skinnedObjects.emplace_back();
@@ -3825,7 +3825,7 @@ namespace DonTopo {
         SkinnedRenderObject& obj = m_skinnedObjects[(size_t)index];
         initSkinnedRenderObject(obj, mesh, m_pendingBatch.get(), decoded);
 
-        // Igual que los estáticos: invisible hasta que la fence del batch señale.
+        // Same as the static ones: invisible until the batch's fence signals.
         obj.uploadTicket = m_nextUploadTicket;
         return index;
     }
@@ -3834,15 +3834,15 @@ namespace DonTopo {
                                            TransferBatch* batch,
                                            const std::vector<DecodedImage>* decoded)
     {
-        // Las texturas de los materiales skinned no se decodifican en el worker
-        // (no hay forma de mapear un DecodedImage a un submesh concreto), así que
-        // toman siempre la ruta síncrona de stbi_load — pero SIEMPRE con batch,
-        // para que sus uploads caigan en m_pendingBatch y el ticket se resuelva.
+        // The textures of skinned materials are not decoded in the worker
+        // (there is no way to map a DecodedImage to a specific submesh), so they
+        // always take the synchronous stbi_load path, but ALWAYS with a batch,
+        // so that their uploads land in m_pendingBatch and the ticket gets resolved.
         (void)decoded;
         const Skeleton&      skel = mesh.skeleton;
-        // Clip 0 pa duration/ticksPerSecond del objeto: son lo que consume
-        // updateAnimation(), que solo corre en el caso SIN Animator (Task 3
-        // añade el camino con Animator). Malla sin animaciones -> clip vacío.
+        // Clip 0 for the object's duration/ticksPerSecond: they are what
+        // updateAnimation() consumes, which only runs in the case WITHOUT an Animator (Task 3
+        // adds the Animator path). Mesh without animations -> empty clip.
         static const AnimationClip kEmptyClip{};
         const AnimationClip& clip = mesh.animationClips.empty() ? kEmptyClip : mesh.animationClips[0];
         int boneCount   = (int)skel.names.size();
@@ -3854,15 +3854,15 @@ namespace DonTopo {
         obj.indexCount     = (uint32_t)mesh.indices.size();
         obj.duration       = clip.duration;
         obj.ticksPerSecond = (clip.ticksPerSecond > 0.0f) ? clip.ticksPerSecond : 24.0f;
-        // Cota del culling: se calcula UNA vez al cargar porque depende sólo de
-        // la malla y de sus clips, no de la pose ni del transform.
+        // Culling bound: it is computed ONCE on load because it depends only on
+        // the mesh and its clips, not on the pose or the transform.
         obj.boundRadius    = skinnedBoundRadius(mesh);
         obj.hasBounds      = obj.boundRadius > 0.0f;
-        // Tamaño de la malla en reposo, SOLO pa escalar el grosor del contorno.
-        // No sirve boundRadius: esa cota vale para cualquier pose de cualquier
-        // clip y es holgada a propósito (un brazo que llegue lejos la infla
-        // varias veces por encima del cuerpo), así que usarla daba un borde
-        // desproporcionado justo en las mallas con animación.
+        // Size of the mesh at rest, ONLY to scale the outline thickness.
+        // boundRadius is no good: that bound holds for any pose of any
+        // clip and is loose on purpose (an arm that reaches far inflates it
+        // several times over the body), so using it gave a disproportionate
+        // border precisely on the meshes with animation.
         obj.restMaxExtent = 0.0f;
         if (!mesh.skinnedVertices.empty())
         {
@@ -3877,12 +3877,12 @@ namespace DonTopo {
             obj.restMaxExtent = glm::max(e.x, glm::max(e.y, e.z));
         }
 
-        // --- Flatten keyframes de TODOS los clips a formato GPU ---
-        // (packSkinnedClips vive fuera pa poder probarse sin un VkDevice)
+        // --- Flatten keyframes of ALL the clips into GPU format ---
+        // (packSkinnedClips lives outside so it can be tested without a VkDevice)
         const PackedClips packed = packSkinnedClips(mesh);
         obj.clipCount = skinnedClipCount(mesh);
 
-        // --- Upload SSBOs estáticos ---
+        // --- Upload static SSBOs ---
         m_res.uploadBuffer(packed.pos.data(),   packed.pos.size()   * sizeof(GpuPosKey),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframePosBuffer,   obj.keyframePosMemory,   batch);
         m_res.uploadBuffer(packed.rot.data(),   packed.rot.size()   * sizeof(GpuRotKey),
@@ -3897,7 +3897,7 @@ namespace DonTopo {
         // --- Index buffer ---
         createIndexBuffer(mesh.indices, obj.indexBuffer, obj.indexMemory, batch);
 
-        // --- SSBOs dinámicos (device local, sin datos iniciales) ---
+        // --- Dynamic SSBOs (device local, no initial data) ---
         m_res.createBuffer((uint32_t)boneCount * sizeof(glm::mat4),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -3908,8 +3908,8 @@ namespace DonTopo {
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             obj.finalBoneBuffer, obj.finalBoneMemory);
 
-        // Pose en TRS (bone_eval) y la congelada: 3 vec4 por hueso; se copian
-        // entre sí al interrumpir un fade, de ahí los usos de transferencia.
+        // TRS pose (bone_eval) and the frozen one: 3 vec4 per bone; they are copied
+        // into each other when interrupting a fade, hence the transfer usages.
         for (auto* par : { &obj.poseTrsBuffer, &obj.frozenTrsBuffer })
         {
             VkDeviceMemory& mem = (par == &obj.poseTrsBuffer) ? obj.poseTrsMemory : obj.frozenTrsMemory;
@@ -3919,8 +3919,8 @@ namespace DonTopo {
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, *par, mem);
         }
 
-        // Bloque de pose: una copia por frame en vuelo, visible desde el host y
-        // mapeada para siempre (se reescribe cada frame en SkinningPass).
+        // Pose block: one copy per in-flight frame, host-visible and
+        // mapped forever (it is rewritten every frame in SkinningPass).
         m_res.createBuffer((uint32_t)(MAX_FRAMES * poseBlockUints((uint32_t)boneCount) * sizeof(uint32_t)),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -3928,7 +3928,7 @@ namespace DonTopo {
         if (vkMapMemory(m_gpu.device(), obj.poseBlockMemory, 0, VK_WHOLE_SIZE, 0, &obj.poseBlockMapped) != VK_SUCCESS)
             throw std::runtime_error("failed to map the pose block!");
 
-        // Bloque de IK: igual, una copia por frame en vuelo.
+        // IK block: same, one copy per in-flight frame.
         m_res.createBuffer((uint32_t)(MAX_FRAMES * ikBlockUints() * sizeof(uint32_t)),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -3944,9 +3944,9 @@ namespace DonTopo {
             obj.outputVertexBuffer, obj.outputVertexMemory);
 
         // --- Compute descriptor set ---
-        // El pase encadena pools segun hacen falta, asi que esto ya no se cae
-        // con el personaje 17. Se guarda de que pool salio: es lo que
-        // destroySkinnedRenderObject necesita para devolverlo.
+        // The pass chains pools as needed, so this no longer breaks
+        // with character 17. It remembers which pool it came from: that is what
+        // destroySkinnedRenderObject needs to give it back.
         obj.computeDescPool = m_skinningPass.allocateSet(skinningCtx(), obj.computeDescSet);
         if (obj.computeDescPool == VK_NULL_HANDLE)
             throw std::runtime_error("failed to allocate compute descriptor set!");
@@ -3977,7 +3977,7 @@ namespace DonTopo {
         }
         vkUpdateDescriptorSets(m_gpu.device(), 12, writes, 0, nullptr);
 
-        // --- Texturas y descriptor sets por material ---
+        // --- Textures and descriptor sets per material ---
         constexpr uint8_t white[4] = {255, 255, 255, 255};
         obj.matGfx.resize(mesh.materials.size());
 
@@ -3986,11 +3986,11 @@ namespace DonTopo {
             const Material& smat = mesh.materials[mi];
             SkinnedMatGfx& mgfx = obj.matGfx[mi];
 
-            // Color, normal y ORM, compartidos entre personajes del mismo FBX
-            // (m_skinnedTextures). Sin textura, la blanca de relleno de siempre,
-            // que no entra en la caché.
-            // El formato con el que se creo la imagen (resolveSrgb) viaja en la
-            // entrada de la cache: quien la comparte declara la MISMA vista.
+            // Color, normal and ORM, shared between characters of the same FBX
+            // (m_skinnedTextures). Without a texture, the usual white fill-in,
+            // which does not go into the cache.
+            // The format the image was created with (resolveSrgb) travels in the
+            // cache entry: whoever shares it declares the SAME view.
             auto pedir = [&](const std::string& ruta, const std::vector<uint8_t>& emb, TextureKind tipo,
                              VkImage& img, VkDeviceMemory& mem, VkFormat& fmt) {
                 const MaterialImage m = m_skinnedTextures.acquire(
@@ -4096,7 +4096,7 @@ namespace DonTopo {
                 gw[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 gw[4].descriptorCount = 1; gw[4].pImageInfo = &ormInfo;
 
-                // Mismo sitio unico que las mallas estaticas.
+                // Same single place as the static meshes.
                 VkDescriptorImageInfo iblInfos[2]{};
                 IblPass::fillIblWrites(mgfx.descSets[fi], m_iblPass.irradianceView(),
                                        m_iblPass.prefilterView(), m_iblPass.sampler(),
@@ -4104,8 +4104,8 @@ namespace DonTopo {
 
                 vkUpdateDescriptorSets(m_gpu.device(), 7, gw, 0, nullptr);
 
-                // Binding 7 (SSAO), igual que en la ruta estática: va aparte
-                // porque su vista se rehace con el swapchain.
+                // Binding 7 (SSAO), same as in the static path: it goes apart
+                // because its view is redone with the swapchain.
                 writeSsaoBinding(mgfx.descSets[fi], fi);
             }
         }
@@ -4124,15 +4124,15 @@ namespace DonTopo {
     {
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
 
-        // Espera a que la GPU termine: un command buffer en vuelo (double
-        // buffering) puede estar leyendo los buffers que vamos a destruir.
-        // Mismo motivo que en removeGameObject.
+        // Wait for the GPU to finish: an in-flight command buffer (double
+        // buffering) may be reading the buffers we are about to destroy.
+        // Same reason as in removeGameObject.
         vkDeviceWaitIdle(m_gpu.device());
 
         SkinnedRenderObject& obj = m_skinnedObjects[index];
 
-        // El estado de animación es del Animator, no de los buffers: perderlo
-        // haría que el personaje diera un salto visible al importar un fichero.
+        // The animation state belongs to the Animator, not to the buffers: losing it
+        // would make the character visibly jump when importing a file.
         const glm::mat4 transform  = obj.transform;
         const float     animTime   = obj.animTime;
         const uint32_t  activeClip = obj.activeClip;
@@ -4143,9 +4143,9 @@ namespace DonTopo {
 
         obj.transform = transform;
         obj.animTime  = animTime;
-        // Clamp: la lista de clips puede haber encogido y activeClip apuntaría
-        // fuera del SSBO de BoneInfos, con el compute leyendo basura en
-        // silencio. Mismo criterio que setAnimationState.
+        // Clamp: the clip list may have shrunk and activeClip would point
+        // outside the BoneInfos SSBO, with the compute silently reading garbage.
+        // Same criterion as setAnimationState.
         obj.activeClip = clampClipIndex(activeClip, obj.clipCount);
     }
 
@@ -4153,9 +4153,9 @@ namespace DonTopo {
     {
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
         auto& obj = m_skinnedObjects[index];
-        // La regla entera (ritmo, wrap y congelar el oculto) vive en
-        // advanceMeshClock, compartida con D3D12: escrita dos veces, las dos
-        // copias divergieron (A13).
+        // The whole rule (pace, wrap and freezing the hidden one) lives in
+        // advanceMeshClock, shared with D3D12: written twice, the two
+        // copies diverged (A13).
         obj.animTime = advanceMeshClock(obj.animTime, deltaTime, obj.ticksPerSecond,
                                         obj.duration, obj.meshVisible);
     }
@@ -4164,21 +4164,21 @@ namespace DonTopo {
     {
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
         auto& obj = m_skinnedObjects[index];
-        // Clamp y no assert: un clipIndex fuera de rango (escena con un grafo que
-        // referencia un clip que el FBX ya no trae) haría que clipBase apuntara
-        // fuera del SSBO de BoneInfos, y el compute leería basura en silencio.
+        // Clamp and not assert: an out-of-range clipIndex (a scene with a graph that
+        // references a clip the FBX no longer has) would make clipBase point
+        // outside the BoneInfos SSBO, and the compute would silently read garbage.
         obj.activeClip = clampClipIndex(clipIndex, obj.clipCount);
         obj.animTime   = animTime;
-        // Una sola muestra a partir de aquí: la pose de un Animator la vuelve a
-        // mandar setAnimationPose cada frame si hace falta.
+        // A single sample from here on: an Animator's pose is sent again by
+        // setAnimationPose every frame if needed.
         obj.hasPose = false;
     }
 
     void Renderer::setAnimationIk(int index, const AnimationIk& ik)
     {
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
-        // Los índices de hueso vienen del Animator, que los resolvió contra el
-        // MISMO esqueleto: solo se filtra lo que no cabe en el SSBO.
+        // The bone indices come from the Animator, which resolved them against the
+        // SAME skeleton: only what does not fit in the SSBO is filtered.
         auto& obj = m_skinnedObjects[index];
         obj.ik = ik;
         for (int k = 0; k < obj.ik.count; k++)
@@ -4191,24 +4191,24 @@ namespace DonTopo {
         auto& obj = m_skinnedObjects[index];
         obj.pose    = pose;
         obj.hasPose = true;
-        // La máscara de cada capa se copia: la del Animator solo vale durante
-        // esta llamada. SkinningPass reapunta la pose a estas copias.
+        // Each layer's mask is copied: the Animator's is only valid during
+        // this call. SkinningPass re-points the pose at these copies.
         for (int L = 0; L < kMaxLayersPose; L++)
         {
             const std::vector<uint8_t>* m = (L < pose.layerCount) ? pose.layers[L].mask : nullptr;
             if (m) obj.poseMasks[L] = *m; else obj.poseMasks[L].clear();
             obj.pose.layers[L].mask = nullptr;
         }
-        // Mismo clamp que el clip activo: cada clip indexa el SSBO de BoneInfos
-        // y uno fuera de rango leería basura en silencio.
+        // Same clamp as the active clip: each clip indexes the BoneInfos SSBO
+        // and an out-of-range one would silently read garbage.
         int masPesada = -1;
         for (int k = 0; k < obj.pose.count; k++)
         {
             obj.pose.samples[k].clip = (int)clampClipIndex((uint32_t)std::max(0, obj.pose.samples[k].clip), obj.clipCount);
             if (masPesada < 0 || obj.pose.samples[k].weight > obj.pose.samples[masPesada].weight) masPesada = k;
         }
-        // El resto del renderer (límites, contorno) sigue mirando un solo clip:
-        // el que más pesa.
+        // The rest of the renderer (bounds, outline) still looks at a single clip:
+        // the one with the most weight.
         if (masPesada >= 0)
         {
             obj.activeClip = (uint32_t)obj.pose.samples[masPesada].clip;
@@ -4241,13 +4241,13 @@ namespace DonTopo {
 
     void Renderer::flushUploadsAndWait()
     {
-        // Envía el batch pendiente (si lo hay) y lo pasa a m_inFlightBatches.
+        // Submits the pending batch (if any) and moves it to m_inFlightBatches.
         flushPendingUploads();
-        // Tras vkDeviceWaitIdle todas las fences de los batches en vuelo están
-        // señaladas, así que cada uno es complete() y tickDeferredDeletes los
-        // reclama y avanza m_lastCompletedTicket en una sola pasada: el bucle
-        // termina en cuanto hasPendingUploads() es false. La espera es un stall
-        // deliberado, aceptable en estas transiciones síncronas raras.
+        // After vkDeviceWaitIdle all the in-flight batches' fences are
+        // signaled, so each one is complete() and tickDeferredDeletes
+        // reclaims them and advances m_lastCompletedTicket in a single pass: the loop
+        // ends as soon as hasPendingUploads() is false. The wait is a
+        // deliberate stall, acceptable in these rare synchronous transitions.
         vkDeviceWaitIdle(m_gpu.device());
         while (hasPendingUploads())
             tickDeferredDeletes();
@@ -4257,14 +4257,14 @@ namespace DonTopo {
     {
         m_deferredDeletes.tick(m_gpu.device());
 
-        // Los batches se reclaman EN ORDEN estricto: un ticket solo se da por
-        // completado cuando el suyo y todos los anteriores han señalado. Por eso
-        // paramos en el primer batch del frente que aún no ha señalado, aunque uno
-        // posterior ya lo haya hecho: si dejáramos que un batch posterior avanzara
-        // m_lastCompletedTicket, un objeto de un batch anterior todavía en vuelo
-        // (texturas aún en TRANSFER_DST_OPTIMAL) se volvería visible y samplearía
-        // basura. Los batches se insertan con ticket creciente, así que el frente
-        // es siempre el más antiguo.
+        // The batches are reclaimed in strict ORDER: a ticket is only considered
+        // complete when its own and all the earlier ones have signaled. That is why
+        // we stop at the first batch at the front that has not signaled yet, even if a
+        // later one already has: if we let a later batch advance
+        // m_lastCompletedTicket, an object from an earlier batch still in flight
+        // (textures still in TRANSFER_DST_OPTIMAL) would become visible and would sample
+        // garbage. Batches are inserted with an increasing ticket, so the front
+        // is always the oldest.
         while (!m_inFlightBatches.empty() && m_inFlightBatches.front().batch->complete())
         {
             m_inFlightBatches.front().batch->reclaim();
@@ -4275,11 +4275,11 @@ namespace DonTopo {
 
     void Renderer::releaseRenderObject(RenderObject& obj)
     {
-        // El objeto suelta su referencia YA: el resto del frame lo ve sin
-        // recursos (el skip de recordCommandBuffer lo detecta por
-        // sharedIndex < 0). Si quedan más holders no se destruye nada; si era
-        // el último, la cache nos pasa una copia de los handles y la
-        // destrucción de verdad ocurre kDelayFrames después.
+        // The object drops its reference NOW: the rest of the frame sees it without
+        // resources (the skip in recordCommandBuffer detects it through
+        // sharedIndex < 0). If more holders remain nothing is destroyed; if it was
+        // the last one, the cache hands us a copy of the handles and the
+        // real destruction happens kDelayFrames later.
         const int index = obj.sharedIndex;
         obj.sharedIndex = -1;
 
@@ -4304,12 +4304,12 @@ namespace DonTopo {
     {
         if (index < 0 || index >= (int)m_objects.size()) return;
         RenderObject& obj = m_objects[index];
-        if (obj.sharedIndex < 0) return; // ya liberado
+        if (obj.sharedIndex < 0) return; // already released
         releaseRenderObject(obj);
-        // La entrada queda vacía y su hueco vuelve al pool. Los recursos de GPU
-        // los libera la cola diferida kDelayFrames después, pero la ENTRADA ya
-        // no tiene nada: releaseRenderObject dejó sharedIndex a -1, que es lo
-        // que mira el skip de recordCommandBuffer.
+        // The entry is left empty and its slot goes back to the pool. The GPU resources
+        // are released by the deferred queue kDelayFrames later, but the ENTRY
+        // has nothing left: releaseRenderObject left sharedIndex at -1, which is
+        // what the skip in recordCommandBuffer looks at.
         m_staticSlots.release(index);
     }
 
@@ -4317,9 +4317,9 @@ namespace DonTopo {
     {
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
         SkinnedRenderObject& obj = m_skinnedObjects[index];
-        if (obj.outputVertexBuffer == VK_NULL_HANDLE) return; // ya liberado
-        // queueDestroy... ya deja obj vacío: la asignación de después sobra y
-        // pisaría el snapshot si se dejara.
+        if (obj.outputVertexBuffer == VK_NULL_HANDLE) return; // already released
+        // queueDestroy... already leaves obj empty: the assignment afterwards is redundant and
+        // would overwrite the snapshot if left in.
         queueDestroySkinnedRenderObject(obj);
         m_skinnedSlots.release(index);
     }
@@ -4327,20 +4327,20 @@ namespace DonTopo {
     void Renderer::removeGameObject(GameObject* node)
     {
         if (!node) return;
-        // Sin vkDeviceWaitIdle: removeStaticObject/removeSkinnedObject encolan
-        // la destrucción kDelayFrames frames, que es más de lo que cualquier
-        // command buffer en vuelo puede tardar.
+        // No vkDeviceWaitIdle: removeStaticObject/removeSkinnedObject enqueue
+        // the destruction kDelayFrames frames out, which is longer than any
+        // in-flight command buffer can take.
         node->traverse([this](GameObject* go) {
-            // Y los indices a -1 en la MISMA operacion que suelta la ranura:
-            // dejarlos apuntando a un hueco ya liberado no puede sobrevivir a
-            // esta llamada. Desde que las ranuras se reciclan, un indice stale
-            // no apunta a un hueco vacio sino al SIGUIENTE objeto que lo
-            // estrene, y todos los lectores lo dan por bueno con solo mirar que
-            // sea >= 0.
+            // And the indices to -1 in the SAME operation that releases the slot:
+            // leaving them pointing at an already released slot cannot survive
+            // this call. Since slots are recycled, a stale index
+            // does not point at an empty slot but at the NEXT object that
+            // takes it, and all the readers take it as good just by checking that
+            // it is >= 0.
             //
-            // Lo hacia el llamante, y el backend de DirectX 12 ya lo hacia aqui
-            // (D3D12Renderer::removeGameObject): los dos backends divergian en
-            // esto, con Vulkan dependiendo de que cuatro sitios se acordaran.
+            // The caller used to do it, and the DirectX 12 backend already did it here
+            // (D3D12Renderer::removeGameObject): the two backends diverged on
+            // this, with Vulkan depending on four places remembering.
             if (go->staticRenderIndex >= 0)
                 removeStaticObject(go->staticRenderIndex);
             go->staticRenderIndex = -1;
@@ -4369,15 +4369,15 @@ namespace DonTopo {
     void Renderer::removeMeshComponent(GameObject* go)
     {
         if (!go || !go->hasMesh()) return;
-        // Sin vkDeviceWaitIdle: removeStaticObject/removeSkinnedObject encolan
-        // la destrucción kDelayFrames frames, que es más de lo que cualquier
-        // command buffer en vuelo puede tardar.
+        // No vkDeviceWaitIdle: removeStaticObject/removeSkinnedObject enqueue
+        // the destruction kDelayFrames frames out, which is longer than any
+        // in-flight command buffer can take.
         if (go->staticRenderIndex >= 0)
             removeStaticObject(go->staticRenderIndex);
         go->staticRenderIndex = -1;
-        // Desde que el import detecta rigs, el editor sí crea mallas skinned:
-        // sin esto, quitar el componente filtra su render object en GPU y deja
-        // el índice stale, que el resto del código toma por válido.
+        // Since the import detects rigs, the editor does create skinned meshes:
+        // without this, removing the component leaks its render object on the GPU and leaves
+        // the stale index, which the rest of the code takes as valid.
         if (go->skinnedRenderIndex >= 0)
             removeSkinnedObject(go->skinnedRenderIndex);
         go->skinnedRenderIndex = -1;
@@ -4387,28 +4387,28 @@ namespace DonTopo {
     void Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot)
     {
         if (renderIndex < 0 || renderIndex >= (int)m_objects.size()) return;
-        // La textura vive en la entrada compartida, así que el checkerboard lo
-        // ven TODOS los objetos que comparten esa malla+material. Es lo
-        // correcto: el asset que ha desaparecido es el mismo para todos ellos.
+        // The texture lives in the shared entry, so the checkerboard is
+        // seen by ALL the objects that share that mesh+material. That is
+        // correct: the asset that disappeared is the same for all of them.
         SharedGpuMesh* gpuPtr = m_sharedMeshes.get(m_objects[renderIndex].sharedIndex);
         if (!gpuPtr) return;
         SharedGpuMesh& obj = *gpuPtr;
 
-        // Dos problemas distintos, y solo uno lo resolvía la cola diferida.
+        // Two different problems, and only one of them was solved by the deferred queue.
         //
-        // Los RECURSOS estaban a salvo: los handles viejos se encolan (ver más
-        // abajo) en lugar de destruirse ya, así que un command buffer en vuelo
-        // que aún referencie el descriptor set los sigue viendo válidos hasta
-        // que la cola los libera kDelayFrames frames después.
+        // The RESOURCES were safe: the old handles are enqueued (see further
+        // down) instead of being destroyed now, so an in-flight command buffer
+        // that still references the descriptor set keeps seeing them valid until
+        // the queue releases them kDelayFrames frames later.
         //
-        // Lo que NO estaba a salvo es el descriptor set en sí: escribirlo
-        // mientras un command buffer que lo tiene bindeado sigue en vuelo es
-        // uso inválido de la especificación —hace falta UPDATE_AFTER_BIND, que
-        // estos sets no piden— por mucho que los recursos aguanten (H25).
+        // What was NOT safe is the descriptor set itself: writing it
+        // while a command buffer that has it bound is still in flight is
+        // invalid use per the specification (UPDATE_AFTER_BIND is needed, which
+        // these sets do not request) however well the resources hold up (H25).
         //
-        // Se espera a la GPU antes de tocarlo. Es caro y da igual: esto solo
-        // corre cuando una textura no se ha podido cargar, o sea una vez por
-        // asset roto y nunca por frame.
+        // We wait for the GPU before touching it. It is expensive and it does not matter: this only
+        // runs when a texture could not be loaded, that is, once per
+        // broken asset and never per frame.
 
         VkImage*        img     = nullptr;
         VkDeviceMemory* mem     = nullptr;
@@ -4432,49 +4432,49 @@ namespace DonTopo {
                 break;
         }
 
-        // Los tres handles viejos siguen referenciados por el descriptor set
-        // que un command buffer en vuelo puede estar usando. Se encolan por
-        // valor: capturar los punteros img/mem/view sería leer los NUEVOS
-        // cuando el lambda corriera, tres frames después.
+        // The three old handles are still referenced by the descriptor set
+        // that an in-flight command buffer may be using. They are enqueued by
+        // value: capturing the img/mem/view pointers would read the NEW ones
+        // when the lambda ran, three frames later.
         //
-        // El sampler NO entra: desde que es el compartido de
-        // GpuResources::sharedMaterialSampler, destruir el viejo aqui se
-        // llevaria por delante el de TODOS los demas materiales. Y el fallo no
-        // saldria al cargar sino solo al cambiar una textura desde el editor,
-        // que es justo lo que no cubre ningun test.
+        // The sampler does NOT go in: since it is the shared one from
+        // GpuResources::sharedMaterialSampler, destroying the old one here would
+        // take down the one of ALL the other materials. And the failure would
+        // not show on load but only when changing a texture from the editor,
+        // which is exactly what no test covers.
         const VkImage        oldImage   = *img;
         const VkDeviceMemory oldMem     = *mem;
         const VkImageView    oldView    = *view;
-        // Si la vieja era una de relleno COMPARTIDA, la imagen y su memoria no
-        // son de esta malla y destruirlas se llevaria por delante las de todas
-        // las demas. Se pregunta AQUI y no dentro del lambda porque el lambda
-        // solo recibe el VkDevice; el conjunto de compartidas no cambia despues
-        // de crearse, asi que preguntarlo ahora es igual de valido.
+        // If the old one was a SHARED fill-in, the image and its memory
+        // are not this mesh's and destroying them would take down those of all the
+        // others. It is asked HERE and not inside the lambda because the lambda
+        // only receives the VkDevice; the set of shared ones does not change after
+        // being created, so asking now is just as valid.
         const bool prestada = m_res.isSharedPlaceholder(oldImage);
         m_deferredDeletes.push([oldImage, oldMem, oldView, prestada](VkDevice dev) {
-            // La vista SI era de esta malla en los dos casos.
+            // The view WAS this mesh's in both cases.
             vkDestroyImageView(dev, oldView, nullptr);
             if (prestada) return;
             vkDestroyImage(dev, oldImage, nullptr);
             vkFreeMemory(dev,   oldMem,   nullptr);
         });
 
-        // path vacío + sin bytes embebidos = createTextureImage genera el
-        // checkerboard "missing" de fallback (mismo camino que un modelo
-        // cargado sin textura). createTextureImage crea la VkImage con
-        // formato VK_FORMAT_R8G8B8A8_SRGB (hardcoded) para todos los slots;
-        // por eso la image view se crea también en SRGB (formato por
-        // defecto de createTextureImageView) para los tres slots, aunque
-        // Normal/MetallicRoughness normalmente usen UNORM — la imagen no se
-        // crea con VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, así que la view debe
-        // usar el mismo formato exacto con el que se creó la imagen o la
-        // validation layer dispara VUID-VkImageViewCreateInfo-image-01762.
+        // empty path + no embedded bytes = createTextureImage generates the
+        // "missing" fallback checkerboard (same path as a model
+        // loaded without a texture). createTextureImage creates the VkImage with
+        // format VK_FORMAT_R8G8B8A8_SRGB (hardcoded) for all the slots;
+        // that is why the image view is also created in SRGB (default format of
+        // createTextureImageView) for the three slots, even though
+        // Normal/MetallicRoughness normally use UNORM: the image is not
+        // created with VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, so the view must
+        // use the exact same format the image was created with or the
+        // validation layer fires VUID-VkImageViewCreateInfo-image-01762.
         m_res.createTextureImage("", {}, *img, *mem);
         m_res.createTextureImageView(*img, *view);
         *sampler = m_res.sharedMaterialSampler();
 
-        // El wait va aquí y no arriba: lo que hay que proteger es la escritura
-        // del set, no la creación de la imagen nueva.
+        // The wait goes here and not above: what has to be protected is the write
+        // of the set, not the creation of the new image.
         vkDeviceWaitIdle(m_gpu.device());
 
         for (int i = 0; i < MAX_FRAMES; i++)
@@ -4503,22 +4503,22 @@ namespace DonTopo {
 
         const int      viejo  = obj.sharedIndex;
         SharedGpuMesh* gpuPtr = m_sharedMeshes.get(viejo);
-        // sharedIndex a -1 (objeto ya liberado desde el editor): no hay entrada
-        // que rehacer, y crearla aquí resucitaría un objeto que nadie ha pedido.
+        // sharedIndex at -1 (object already released from the editor): there is no entry
+        // to redo, and creating it here would resurrect an object nobody asked for.
         if (!gpuPtr) return;
 
         const std::string nuevaClave = makeSharedMeshKey(mesh);
 
-        // Camino GENERAL: este objeto se separa a la entrada de `nuevaClave`
-        // —creándola si no existía— y suelta la vieja. Vale para cualquier
-        // cambio, geometría incluida, porque vuelve a subirlo todo.
+        // GENERAL path: this object splits off to the entry of `nuevaClave`
+        // (creating it if it did not exist) and releases the old one. Valid for any
+        // change, geometry included, because it uploads everything again.
         //
-        // El acquire va ANTES del release a propósito: al revés, soltar al
-        // último dueño devolvería su hueco al freelist y el acquire podría
-        // reutilizar ESE mismo hueco para la entrada nueva, justo cuando la
-        // destrucción de la anterior sigue encolada sobre una copia de sus
-        // handles (ver SharedGpuMeshCache::release). En este orden el hueco
-        // viejo no se libera hasta que el nuevo ya está cogido.
+        // The acquire goes BEFORE the release on purpose: the other way around, releasing the
+        // last owner would return its slot to the freelist and the acquire could
+        // reuse THAT same slot for the new entry, just when the
+        // destruction of the previous one is still enqueued over a copy of its
+        // handles (see SharedGpuMeshCache::release). In this order the old
+        // slot is not released until the new one has already been taken.
         auto separarAEntradaPropia = [&]() {
             if (!m_pendingBatch)
                 m_pendingBatch = std::make_unique<TransferBatch>(m_gpu);
@@ -4529,64 +4529,64 @@ namespace DonTopo {
                 [&](SharedGpuMesh& g) { createSharedGpuMesh(mesh, g, m_pendingBatch.get(), nullptr); },
                 &creada);
 
-            // La vieja por el MISMO camino que borrar el objeto: si este era su
-            // último dueño, la destrucción de verdad NO ocurre aquí sino
-            // kDelayFrames frames después, porque un command buffer en vuelo
-            // todavía la referencia. releaseRenderObject deja sharedIndex a -1,
-            // así que el orden importa: primero soltar, luego apuntar.
+            // The old one through the SAME path as deleting the object: if this was its
+            // last owner, the real destruction does NOT happen here but
+            // kDelayFrames frames later, because an in-flight command buffer
+            // still references it. releaseRenderObject leaves sharedIndex at -1,
+            // so the order matters: first release, then point.
             releaseRenderObject(obj);
             obj.sharedIndex = nuevo;
 
             if (creada)
             {
-                // Las dos cosas que hace addStaticMesh con una entrada recién
-                // creada, y las dos hacen falta: alojar su descriptor set, y
-                // marcarle el ticket del batch en curso para que no se dibuje
-                // con sus texturas todavía en TRANSFER_DST_OPTIMAL.
+                // The two things addStaticMesh does with a newly created
+                // entry, and both are needed: allocate its descriptor set, and
+                // mark it with the ticket of the current batch so that it is not drawn
+                // with its textures still in TRANSFER_DST_OPTIMAL.
                 SharedGpuMesh& nueva = *m_sharedMeshes.get(nuevo);
                 allocateObjectDescriptorSet(nueva);
                 nueva.uploadTicket = m_nextUploadTicket;
             }
         };
 
-        // `obj.name` NO se refresca aquí, y no es un olvido: buildRenderObject
-        // sí lo hace porque es el camino de REGISTRO, donde el RenderObject
-        // acaba de nacer vacío. Aquí el objeto ya tiene el nombre que le puso el
-        // editor, es dato por instancia y de depuración —no entra en la clave de
-        // dedup ni en un solo byte de lo que se sube—, así que pisarlo desde el
-        // mesh metería en una llamada que trata del material una segunda
-        // responsabilidad que nadie ha pedido.
+        // `obj.name` is NOT refreshed here, and it is not an oversight: buildRenderObject
+        // does it because it is the REGISTRATION path, where the RenderObject
+        // has just been born empty. Here the object already has the name the
+        // editor gave it, it is per-instance and debug data (it does not go into the dedup
+        // key nor a single byte of what gets uploaded), so overwriting it from the
+        // mesh would put a second responsibility nobody asked for into a call
+        // that deals with the material.
 
-        // Los dos primeros campos de la clave son, en claro y separados por '|',
-        // el número de vértices y el de índices: makeSharedMeshKey los pone
-        // delante justamente por ser discriminantes exactos. Comparar ese
-        // prefijo contra el de la clave vieja cubre los dos recuentos sin
-        // rehashear la malla.
+        // The first two fields of the key are, in the clear and separated by '|',
+        // the vertex count and the index count: makeSharedMeshKey puts them
+        // first precisely because they are exact discriminants. Comparing that
+        // prefix against the old key's covers both counts without
+        // rehashing the mesh.
         auto prefijoGeometria = [](const std::string& clave) {
             const size_t primera = clave.find('|');
             if (primera == std::string::npos) return clave;
-            // npos = no hay segundo '|' (clave que no salió de
-            // makeSharedMeshKey): se compara la cadena entera, que es el lado
-            // conservador — a lo sumo manda al camino general.
+            // npos = there is no second '|' (a key that did not come out of
+            // makeSharedMeshKey): the whole string is compared, which is the conservative
+            // side; at most it sends it down the general path.
             return clave.substr(0, clave.find('|', primera + 1));
         };
 
-        // Con más de un dueño no se puede mutar en su sitio: se le cambiaría la
-        // textura a los otros objetos, que no han pedido nada.
+        // With more than one owner it cannot be mutated in place: the texture of the other
+        // objects would change, and they asked for nothing.
         //
-        // Y con la geometría cambiada tampoco, aunque el dueño sea único: el
-        // camino rápido no vuelve a subir vértices ni índices, así que la
-        // entrada quedaría re-clavada a una clave que describe una geometría que
-        // no tiene, y el siguiente objeto que pidiera esa clave se llevaría la
-        // vieja —corrupción silenciosa y COMPARTIDA, del tipo que el dedup
-        // existe para evitar—.
+        // And with the geometry changed neither, even if the owner is unique: the
+        // fast path does not upload vertices or indices again, so the
+        // entry would be re-keyed to a key that describes a geometry it
+        // does not have, and the next object that asked for that key would get the
+        // old one (silent and SHARED corruption, the kind the dedup
+        // exists to avoid).
         //
-        // Ojo con lo que este prefijo prueba y lo que no: compara los dos
-        // RECUENTOS, no el contenido. Una malla con los mismos vértices e
-        // índices contados pero movidos se cuela, y por eso el contrato del
-        // header sigue diciendo que cambiar la geometría por aquí no está
-        // soportado. Lo que cierra es el caso realista —una malla distinta— sin
-        // pagar un rehasheo por clic.
+        // Careful with what this prefix proves and what it does not: it compares the two
+        // COUNTS, not the content. A mesh with the same counted vertices and
+        // indices but moved slips through, and that is why the header's contract
+        // still says that changing the geometry through here is not
+        // supported. What it closes is the realistic case (a different mesh) without
+        // paying a rehash per click.
         if (m_sharedMeshes.refCount(viejo) > 1 ||
             prefijoGeometria(m_sharedMeshes.keyOf(viejo)) != prefijoGeometria(nuevaClave))
         {
@@ -4594,11 +4594,11 @@ namespace DonTopo {
             return;
         }
 
-        // Camino RÁPIDO: dueño único y misma geometría. Se sustituyen las tres
-        // imágenes en su sitio y se reescriben los descriptores; los buffers de
-        // vértices e índices, el descriptor set y el índice de la entrada se
-        // quedan como están, así que el sharedIndex del objeto sigue valiendo y
-        // el uploadTicket que tuviera sigue describiendo su geometría.
+        // FAST path: unique owner and same geometry. The three images are
+        // replaced in place and the descriptors rewritten; the vertex and index
+        // buffers, the descriptor set and the entry's index
+        // stay as they are, so the object's sharedIndex is still valid and
+        // whatever uploadTicket it had still describes its geometry.
         SharedGpuMesh& gpu = *gpuPtr;
 
         struct SlotRefs
@@ -4615,27 +4615,27 @@ namespace DonTopo {
             { &gpu.ormImage,     &gpu.ormMem,     &gpu.ormView,     &gpu.ormSampler,    4 },
         };
 
-        // Las tres viejas, encoladas ANTES de que las nuevas pisen los campos.
-        // Mismas tres cautelas que replaceStaticTextureWithMissing, y por las
-        // mismas razones:
+        // The three old ones, enqueued BEFORE the new ones overwrite the fields.
+        // Same three precautions as replaceStaticTextureWithMissing, and for the
+        // same reasons:
         //
-        //  - Por VALOR, no capturando los punteros: el lambda corre
-        //    kDelayFrames frames después y para entonces *s.img ya es la imagen
-        //    NUEVA, o sea que capturar el puntero sería destruir justo la que se
-        //    acaba de crear.
-        //  - Encoladas y no destruidas ya: el descriptor set que las nombra
-        //    puede estar bindeado en un command buffer en vuelo.
-        //  - `prestada` se resuelve AQUÍ y no dentro del lambda. Las de relleno
-        //    son de GpuResources y las comparten todas las mallas sin material:
-        //    destruirlas se llevaría por delante las de todas las demás. Se
-        //    pregunta ahora porque el conjunto de compartidas no cambia después
-        //    de crearse, y porque isSharedPlaceholder decide COMPARANDO
-        //    handles: en el teardown esos handles se anulan y la guarda dejaría
-        //    de reconocerlas (H79).
+        //  - By VALUE, not capturing the pointers: the lambda runs
+        //    kDelayFrames frames later and by then *s.img is already the NEW
+        //    image, so capturing the pointer would destroy exactly the one that was just
+        //    created.
+        //  - Enqueued and not destroyed now: the descriptor set that names them
+        //    may be bound in an in-flight command buffer.
+        //  - `prestada` (borrowed) is resolved HERE and not inside the lambda. The fill-in ones
+        //    belong to GpuResources and are shared by all the meshes without a material:
+        //    destroying them would take down those of all the others. It is
+        //    asked now because the set of shared ones does not change after
+        //    being created, and because isSharedPlaceholder decides by COMPARING
+        //    handles: in the teardown those handles are nulled and the guard would stop
+        //    recognizing them (H79).
         //
-        // El sampler no entra en la cola: es el compartido de todos los
-        // materiales (sharedMaterialSampler) y destruirlo dejaría sin sampler a
-        // la escena entera.
+        // The sampler does not go in the queue: it is the one shared by all the
+        // materials (sharedMaterialSampler) and destroying it would leave the
+        // whole scene without a sampler.
         for (const SlotRefs& s : slots)
         {
             const VkImage        oldImage = *s.img;
@@ -4643,8 +4643,8 @@ namespace DonTopo {
             const VkImageView    oldView  = *s.view;
             const bool           prestada = m_res.isSharedPlaceholder(oldImage);
             m_deferredDeletes.push([oldImage, oldMem, oldView, prestada](VkDevice dev) {
-                // La vista SÍ era de esta malla en los dos casos: la crea
-                // createTextureImageView por entrada, también sobre la prestada.
+                // The view WAS this mesh's in both cases: createTextureImageView
+                // creates it per entry, also over the borrowed one.
                 vkDestroyImageView(dev, oldView, nullptr);
                 if (prestada) return;
                 vkDestroyImage(dev, oldImage, nullptr);
@@ -4652,16 +4652,16 @@ namespace DonTopo {
             });
         }
 
-        // Las tres nuevas por el mismo camino y con los mismos formatos que
-        // createSharedGpuMesh: el formato que devuelve createTextureImage /
-        // createNormalMapImage (resolveSrgb: slot + sidecar). La imagen no se crea
-        // con MUTABLE_FORMAT, así que la vista tiene que declarar EXACTAMENTE el
-        // formato con el que se creó.
+        // The three new ones through the same path and with the same formats as
+        // createSharedGpuMesh: the format returned by createTextureImage /
+        // createNormalMapImage (resolveSrgb: slot + sidecar). The image is not created
+        // with MUTABLE_FORMAT, so the view has to declare EXACTLY the
+        // format it was created with.
         //
-        // Sin TransferBatch: la variante síncrona espera ella misma a la cola,
-        // así que al volver las imágenes ya son legibles. Es lo que quiere esta
-        // ruta —un clic del usuario, no un frame— y evita tener que tocar el
-        // uploadTicket de una entrada que ya se está dibujando.
+        // Without TransferBatch: the synchronous variant waits on the queue itself,
+        // so on return the images are already readable. It is what this
+        // path wants (a user click, not a frame) and it avoids having to touch the
+        // uploadTicket of an entry that is already being drawn.
         VkFormat albedoFmt = VK_FORMAT_R8G8B8A8_SRGB;
         m_res.createTextureImage(mesh.material.texturePath, mesh.material.embeddedTexture,
                                  gpu.textureImage, gpu.textureMem, nullptr, &albedoFmt);
@@ -4674,10 +4674,10 @@ namespace DonTopo {
         m_res.createTextureImageView(gpu.normalImage, gpu.normalView, normalFmt);
         gpu.normalSampler = m_res.sharedMaterialSampler();
 
-        // Mismo reparto que addStaticMesh: con mapa ORM los factores valen 1 y
-        // los pone la textura; sin él, la blanca compartida y los factores del
-        // material. chooseTextureSource es el sitio único que decide de dónde
-        // salen los píxeles (la ruta gana a los bytes embebidos).
+        // Same split as addStaticMesh: with an ORM map the factors are 1 and
+        // the texture supplies them; without it, the shared white one and the
+        // material's factors. chooseTextureSource is the single place that decides where
+        // the pixels come from (the path wins over embedded bytes).
         VkFormat ormFmt = VK_FORMAT_R8G8B8A8_UNORM;
         if (chooseTextureSource(mesh.material.metallicRoughnessPath,
                                 mesh.material.embeddedMetallicRoughness) != TextureSource::None)
@@ -4695,12 +4695,12 @@ namespace DonTopo {
         m_res.createTextureImageView(gpu.ormImage, gpu.ormView, ormFmt);
         gpu.ormSampler = m_res.sharedMaterialSampler();
 
-        // El wait va AQUÍ y no antes de crear las imágenes: lo que hay que
-        // proteger es la ESCRITURA del set. Escribir uno que un command buffer
-        // en vuelo tiene bindeado es uso inválido de la especificación —haría
-        // falta UPDATE_AFTER_BIND, que estos sets no piden— por mucho que los
-        // recursos aguanten (H25). Es caro y da igual: esto corre cuando el
-        // usuario cambia una textura, no por frame.
+        // The wait goes HERE and not before creating the images: what has to be
+        // protected is the WRITE of the set. Writing one that an in-flight command buffer
+        // has bound is invalid use per the specification (UPDATE_AFTER_BIND
+        // would be needed, which these sets do not request) however well the
+        // resources hold up (H25). It is expensive and it does not matter: this runs when the
+        // user changes a texture, not per frame.
         vkDeviceWaitIdle(m_gpu.device());
 
         for (int i = 0; i < MAX_FRAMES; i++)
@@ -4721,35 +4721,35 @@ namespace DonTopo {
                 vkUpdateDescriptorSets(m_gpu.device(), 1, &write, 0, nullptr);
             }
 
-        // Lo último: el contenido de la entrada ya no corresponde a su clave, y
-        // sin re-clavear el siguiente objeto que pidiera la vieja recibiría esta
-        // malla con la textura nueva.
+        // Last: the entry's content no longer corresponds to its key, and
+        // without re-keying the next object that asked for the old one would receive this
+        // mesh with the new texture.
         //
-        // Y va lo ÚLTIMO a propósito, aunque eso signifique tirar tres subidas
-        // de imagen y un vkDeviceWaitIdle cuando el rekey se rechaza. Adelantarlo
-        // sería más barato en ese caso y peor en todos: entre el rekey y aquí hay
-        // cuatro llamadas que pueden lanzar (createTextureImage tira
-        // runtime_error si no puede crear la imagen o el buffer de staging), y
-        // con la entrada ya anunciada bajo la clave nueva, salir por excepción a
-        // medias la dejaría PUBLICADA con un material a medio hacer: el
-        // siguiente objeto que pidiera esa clave la adquiriría y compartiría el
-        // destrozo. Re-clavando al final, una excepción a medias deja una
-        // entrada incoherente pero todavía bajo su clave vieja y con un solo
-        // dueño, que es este objeto — el daño no sale de aquí. Barato en el
-        // camino raro, contenido en el peor.
+        // And it goes LAST on purpose, even if that means throwing away three image
+        // uploads and a vkDeviceWaitIdle when the rekey is rejected. Moving it earlier
+        // would be cheaper in that case and worse in all the others: between the rekey and here there are
+        // four calls that can throw (createTextureImage throws
+        // runtime_error if it cannot create the image or the staging buffer), and
+        // with the entry already announced under the new key, leaving by exception
+        // halfway would leave it PUBLISHED with a half-made material: the
+        // next object that asked for that key would acquire it and share the
+        // wreckage. By re-keying at the end, an exception halfway leaves an
+        // incoherent entry but still under its old key and with a single
+        // owner, which is this object, so the damage does not leave here. Cheap on the
+        // rare path, contained in the worst.
         //
-        // El rekey se rechaza cuando OTRA entrada ya tiene esta clave exacta
-        // —dos con la misma dejarían una inalcanzable en el mapa, o sea una fuga
-        // de recursos GPU que nadie liberaría—. Entonces este objeto se va a esa
-        // otra y suelta la suya, que ya no la quiere nadie.
+        // The rekey is rejected when ANOTHER entry already has this exact key
+        // (two with the same one would leave one unreachable in the map, that is, a
+        // leak of GPU resources nobody would release). Then this object moves to that
+        // other one and releases its own, which nobody wants anymore.
         //
-        // Regla general del lambda: después de su acquire, `gpu` y `gpuPtr` no
-        // se pueden tocar, porque un acquire que CREA entrada puede hacer crecer
-        // el vector de la cache y dejarlos colgando. Aquí en concreto no crece
-        // —si el rekey se rechazó es porque esa clave ya tiene entrada viva, así
-        // que el acquire la encuentra y no crea nada—, pero el código no se
-        // apoya en eso: la regla es del lambda, que también corre desde el
-        // camino general, donde sí puede crear.
+        // General rule of the lambda: after its acquire, `gpu` and `gpuPtr` cannot
+        // be touched, because an acquire that CREATES an entry can make the cache's
+        // vector grow and leave them dangling. Here in particular it does not grow
+        // (if the rekey was rejected it is because that key already has a live entry,
+        // so the acquire finds it and creates nothing), but the code does not
+        // rely on that: the rule belongs to the lambda, which also runs from the
+        // general path, where it can create.
         if (!m_sharedMeshes.rekey(viejo, nuevaClave))
             separarAEntradaPropia();
     }
@@ -4758,7 +4758,7 @@ namespace DonTopo {
 
     void Renderer::createOffscreenImages()
     {
-        // Sampler compartido entre los dos frames offscreen
+        // Sampler shared between the two offscreen frames
         VkSamplerCreateInfo samplerInfo{};
         samplerInfo.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         samplerInfo.magFilter    = VK_FILTER_LINEAR;
@@ -4772,13 +4772,13 @@ namespace DonTopo {
 
         for (int i = 0; i < MAX_FRAMES; i++)
         {
-            // Imagen color offscreen (LDR, ya tonemapeada). La escribe el pass de
-            // composicion; la escena va a m_hdrImage.
+            // Offscreen color image (LDR, already tonemapped). It is written by the
+            // composition pass; the scene goes to m_hdrImage.
             m_res.createImage(
                 effectiveViewport().width, effectiveViewport().height,
                 m_swapChainFormat,
                 VK_IMAGE_TILING_OPTIMAL,
-                // TRANSFER_SRC: origen del blit al swapchain en headless.
+                // TRANSFER_SRC: source of the blit to the swapchain in headless.
                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -4786,8 +4786,8 @@ namespace DonTopo {
 
             m_res.createTextureImageView(m_offscreenImage[i], m_offscreenView[i], m_swapChainFormat);
 
-            // Framebuffer del pass de la UI: la MISMA imagen final, al tamano de
-            // salida. Se crea aqui porque muere y renace con ella.
+            // UI pass framebuffer: the SAME final image, at the output size.
+            // It is created here because it dies and is reborn with it.
             VkFramebufferCreateInfo uiFb{};
             uiFb.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             uiFb.renderPass      = m_uiRenderPass;
@@ -4799,23 +4799,23 @@ namespace DonTopo {
             if (vkCreateFramebuffer(m_gpu.device(), &uiFb, nullptr, &m_uiFramebuffer[i]) != VK_SUCCESS)
                 throw std::runtime_error("failed to create ui framebuffer!");
 
-            // Imagen HDR de la escena: tamano INTERNO (que con SSAA es mayor que
-            // el de la ventana), formato flotante. La leen el downsample del
-            // bloom (compute) y la composicion (fragment). Con MSAA es el destino
-            // del resolve, no el target directo del rasterizador.
+            // Scene HDR image: INTERNAL size (which with SSAA is larger than
+            // the window's), float format. It is read by the bloom downsample
+            // (compute) and the composition (fragment). With MSAA it is the resolve
+            // destination, not the rasterizer's direct target.
             m_res.createImage(
                 m_renderExtent.width, m_renderExtent.height,
                 kHdrFormat,
                 VK_IMAGE_TILING_OPTIMAL,
-                // STORAGE ademas de SAMPLED: ssr_resolve.comp suma el reflejo
-                // sobre esta misma imagen (imageLoad + imageStore del MISMO
-                // texel) antes de que el bloom la lea. R16G16B16A16_SFLOAT es de
-                // los formatos obligatorios como storage image.
-                // TRANSFER_SRC: origen del blit a la cara del cubemap cuando se
-                // bakea una reflection probe. No cambia nada del render normal.
-                // TRANSFER_DST: destino de la copia de vuelta del motion blur,
-                // que emborrona hacia una imagen aparte porque lee pixeles
-                // arbitrarios. Apagado no se graba ninguna copia.
+                // STORAGE in addition to SAMPLED: ssr_resolve.comp adds the reflection
+                // over this same image (imageLoad + imageStore of the SAME
+                // texel) before the bloom reads it. R16G16B16A16_SFLOAT is one of
+                // the mandatory formats as storage image.
+                // TRANSFER_SRC: source of the blit to the cubemap face when
+                // a reflection probe is baked. It changes nothing in normal rendering.
+                // TRANSFER_DST: destination of the motion blur's copy back,
+                // which blurs into a separate image because it reads arbitrary
+                // pixels. When off, no copy is recorded.
                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                     VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -4824,30 +4824,30 @@ namespace DonTopo {
 
             m_res.createTextureImageView(m_hdrImage[i], m_hdrView[i], kHdrFormat);
 
-            // Registrar la textura en la capa de UI para obtener el
-            // VkDescriptorSet. En headless nadie la muestrea: el descriptor
-            // set se queda nulo y destroyOffscreenImages ya comprueba antes
-            // de liberarlo.
+            // Register the texture in the UI layer to obtain the
+            // VkDescriptorSet. In headless nobody samples it: the descriptor
+            // set stays null and destroyOffscreenImages already checks before
+            // freeing it.
             if (!m_headless && m_ui)
                 m_offscreenDescSet[i] = m_ui->registerUiTexture(
                     reinterpret_cast<uint64_t>(m_offscreenSampler),
                     reinterpret_cast<uint64_t>(m_offscreenView[i]));
         }
 
-        // ANTES de createAaImages: el descriptor set del TAA referencia
-        // la profundidad del pre-pass. Sus tres imagenes van al
-        // tamano interno del render, igual que el resto de targets intermedios.
+        // BEFORE createAaImages: the TAA descriptor set references
+        // the pre-pass depth. Its three images go at the
+        // internal render size, like the rest of the intermediate targets.
         m_depthPrepass.createImages(depthPrepassCtx());
         m_ssaoPass.createImages(ssaoCtx());
-        // Los sets por objeto guardan la vista vieja: hay que repasarlos. En el
-        // arranque no hay ninguno todavia y el bucle no hace nada.
+        // The per-object sets hold the old view: they have to be revisited. At
+        // startup there are none yet and the loop does nothing.
         refreshSsaoDescriptors();
-        // DETRAS de createSsaoImages: el descriptor set del culling referencia
-        // la profundidad, que se acaba de crear ahi. La rejilla se dimensiona con
-        // m_renderExtent, igual que el resto de targets intermedios.
+        // AFTER createSsaoImages: the culling descriptor set references
+        // the depth, which was just created there. The grid is sized with
+        // m_renderExtent, like the rest of the intermediate targets.
         m_fpPass.createBuffers(fpCtx());
-        // ANTES de los framebuffers de escena y composicion: con MSAA sus
-        // attachments de color son las imagenes multisample que se crean ahi.
+        // BEFORE the scene and composition framebuffers: with MSAA their color
+        // attachments are the multisample images that are created there.
         createMsaaImages();
         m_aaPass.createImages(aaCtx());
 
@@ -4855,9 +4855,9 @@ namespace DonTopo {
 
         for (int i = 0; i < MAX_FRAMES; i++)
         {
-            // Framebuffer de escena: HDR + depth compartido. Con MSAA se
-            // rasteriza sobre el color multisample y el HDR de siempre pasa a ser
-            // el destino del resolve, en el tercer slot.
+            // Scene framebuffer: HDR + shared depth. With MSAA it
+            // rasterizes over the multisample color and the usual HDR becomes
+            // the resolve destination, in the third slot.
             VkImageView atts[3] = { msaa ? m_msaaHdrView[i] : m_hdrView[i], m_depthImageView, m_hdrView[i] };
             VkFramebufferCreateInfo fbInfo{};
             fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -4870,12 +4870,12 @@ namespace DonTopo {
             if (vkCreateFramebuffer(m_gpu.device(), &fbInfo, nullptr, &m_offscreenFramebuffer[i]) != VK_SUCCESS)
                 throw std::runtime_error("failed to create offscreen framebuffer!");
 
-            // Framebuffer de composicion: LDR + el MISMO depth (cargado). Solo
-            // hace falta cuando la composicion escribe DIRECTAMENTE en la
-            // offscreen; si el modo activo mete un pass de resolucion detras, el
-            // destino es la imagen intermedia (m_aaSrcFramebuffer) y este no se
-            // usaria. Ademas con SSAA seria invalido: el depth tiene el tamano
-            // interno y la offscreen el de la ventana.
+            // Composition framebuffer: LDR + the SAME depth (loaded). Only
+            // needed when the composition writes DIRECTLY into the
+            // offscreen; if the active mode puts a resolve pass behind it, the
+            // destination is the intermediate image (m_aaSrcFramebuffer) and this one would not
+            // be used. Also with SSAA it would be invalid: the depth has the internal
+            // size and the offscreen the window's.
             if (needsAaIntermediate()) continue;
 
             VkImageView compAtts[3] = { msaa ? m_msaaLdrView[i] : m_offscreenView[i], m_depthImageView, m_offscreenView[i] };
@@ -4887,17 +4887,17 @@ namespace DonTopo {
                 throw std::runtime_error("failed to create composite framebuffer!");
         }
 
-        // Depende de m_hdrView (los sets del primer downsample y de la
-        // composicion lo referencian), asi que va despues del bucle.
+        // Depends on m_hdrView (the sets of the first downsample and of the
+        // composition reference it), so it goes after the loop.
         createBloomImages();
-        // Depende de m_hdrView (el set de la suma lo referencia) y de
-        // la profundidad del pre-pass (el de la marcha), asi que va detras de los dos.
+        // Depends on m_hdrView (the sum's set references it) and on
+        // the pre-pass depth (the march's), so it goes after both.
         m_ssrPass.createImages(ssrCtx());
-        // Depende de m_hdrView y de la profundidad del pre-pass igual que el SSR. En el
-        // primer init sale por la guarda (el UBO aun no existe) y lo rehace el
-        // final de init.
+        // Depends on m_hdrView and on the pre-pass depth just like the SSR. On the
+        // first init it exits through the guard (the UBO does not exist yet) and the
+        // end of init redoes it.
         m_fogPass.createSets(fogCtx());
-        // Depende de m_hdrView y de la profundidad del pre-pass igual que el SSR.
+        // Depends on m_hdrView and on the pre-pass depth just like the SSR.
         m_motionBlurPass.createImages(motionBlurCtx());
         printf("offscreen images OK\n"); fflush(stdout);
     }
@@ -4945,7 +4945,7 @@ namespace DonTopo {
                 vkDestroyFramebuffer(m_gpu.device(), m_offscreenFramebuffer[i], nullptr);
                 m_offscreenFramebuffer[i] = VK_NULL_HANDLE;
             }
-            // Antes que la vista que referencia.
+            // Before the view that references it.
             if (m_uiFramebuffer[i])
             {
                 vkDestroyFramebuffer(m_gpu.device(), m_uiFramebuffer[i], nullptr);
@@ -4974,14 +4974,14 @@ namespace DonTopo {
         }
     }
 
-    // El pase de bloom vive en BloomPass; lo que queda aqui es la COMPOSICION,
-    // que no es suya: suma el mip 0 sobre el HDR, tonemapea y ademas hospeda el
-    // contorno de seleccion, los gizmos y la UI de juego.
+    // The bloom pass lives in BloomPass; what remains here is the COMPOSITION,
+    // which is not its: it adds mip 0 over the HDR, tonemaps and also hosts the
+    // selection outline, the gizmos and the game UI.
     void Renderer::createBloomPipelines()
     {
-        // --- Medicion del coste GPU -----------------------------------------
-        // Propiedades del device que comparten todos los pases; se resuelven
-        // aqui porque el bloom es el primero que pide un pool de queries.
+        // --- GPU cost measurement -------------------------------------------
+        // Device properties shared by all the passes; they are resolved
+        // here because the bloom is the first to ask for a query pool.
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(m_gpu.physicalDevice(), &props);
         m_timestampPeriod     = props.limits.timestampPeriod;
@@ -4989,13 +4989,13 @@ namespace DonTopo {
 
         m_bloomPass.createPipelines(bloomCtx());
 
-        // El layout de la composicion reutilizaba el VkDescriptorSetLayoutCreateInfo
-        // del bloom: aqui hay que declararlo, con los mismos dos bindings.
+        // The composition layout used to reuse the bloom's VkDescriptorSetLayoutCreateInfo:
+        // here it has to be declared, with the same two bindings.
         VkDescriptorSetLayoutCreateInfo dsl{};
         dsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         dsl.bindingCount = 2;
 
-        // --- Composicion: escena HDR + mip 0 del bloom -----------------------
+        // --- Composition: HDR scene + bloom mip 0 -----------------------
         VkDescriptorSetLayoutBinding compBindings[2]{};
         for (int i = 0; i < 2; i++)
         {
@@ -5056,7 +5056,7 @@ namespace DonTopo {
         compStages[1].module = compFragModule;
         compStages[1].pName  = "main";
 
-        // Sin vertex buffer: los tres vertices salen de gl_VertexIndex.
+        // No vertex buffer: the three vertices come from gl_VertexIndex.
         VkPipelineVertexInputStateCreateInfo compVi{};
         compVi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
@@ -5072,21 +5072,21 @@ namespace DonTopo {
         VkPipelineRasterizationStateCreateInfo compRs{};
         compRs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
         compRs.polygonMode = VK_POLYGON_MODE_FILL;
-        // NONE: el triangulo se genera en el shader y su orientacion no depende
-        // de ningun frontFace del resto del motor.
+        // NONE: the triangle is generated in the shader and its orientation does not depend
+        // on any frontFace of the rest of the engine.
         compRs.cullMode    = VK_CULL_MODE_NONE;
         compRs.lineWidth   = 1.0f;
 
         VkPipelineMultisampleStateCreateInfo compMs{};
         compMs.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        // El triangulo de composicion tambien va al pass multisample cuando hay
-        // MSAA: lo que se resuelve al final es el conjunto del pass, y este
-        // pipeline tiene que declarar las mismas muestras que sus companeros.
+        // The composition triangle also goes to the multisample pass when there is
+        // MSAA: what gets resolved at the end is the whole pass, and this
+        // pipeline has to declare the same samples as its companions.
         compMs.rasterizationSamples = m_aaSampleCount;
 
-        // Sin test ni escritura de profundidad: el triangulo cubre la pantalla y
-        // el depth cargado tiene que llegar INTACTO al contorno y a los gizmos,
-        // que se dibujan justo despues en este mismo pass.
+        // No depth test or write: the triangle covers the screen and
+        // the loaded depth has to reach the outline and the gizmos INTACT,
+        // which are drawn right after in this same pass.
         VkPipelineDepthStencilStateCreateInfo compDs{};
         compDs.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         compDs.depthTestEnable  = VK_FALSE;
@@ -5134,17 +5134,17 @@ namespace DonTopo {
     void Renderer::createBloomImages()
     {
         m_bloomPass.createImages(bloomCtx());
-        // Los sets se crean SIEMPRE, haya cadena o no. Antes se salia aqui
-        // cuando el viewport era diminuto (<4 px, que es cuando mipCount queda
-        // a 0) y m_compositeSets se quedaba en VK_NULL_HANDLE... que es
-        // exactamente lo que recordCommandBuffer bindea sin preguntar. Y el set
-        // no es solo del bloom: su binding 0 es la escena HDR, sin la cual la
-        // composicion -que es quien tonemapea- no tiene ni entrada.
+        // The sets are ALWAYS created, whether or not there is a chain. Before it returned here
+        // when the viewport was tiny (<4 px, which is when mipCount ends up
+        // at 0) and m_compositeSets stayed at VK_NULL_HANDLE... which is
+        // exactly what recordCommandBuffer binds without asking. And the set
+        // is not only the bloom's: its binding 0 is the HDR scene, without which the
+        // composition (which is what tonemaps) has no input at all.
         createCompositeSets();
     }
 
-    // Los dos bindings que lee bloom_composite.frag: la escena HDR y el mip 0 de
-    // la cadena del bloom. El sampler es el del bloom, que sirve para los dos.
+    // The two bindings bloom_composite.frag reads: the HDR scene and mip 0 of
+    // the bloom chain. The sampler is the bloom's, which serves for both.
     void Renderer::createCompositeSets()
     {
         vkResetDescriptorPool(m_gpu.device(), m_compositeDescPool, 0);
@@ -5163,16 +5163,16 @@ namespace DonTopo {
             compInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             compInfos[0].imageView   = m_hdrView[f];
             compInfos[0].sampler     = m_bloomPass.sampler();
-            // Sin cadena no hay mip 0 al que apuntar, pero el descriptor tiene
-            // que ser valido igualmente. Se repite la escena en el hueco del
-            // bloom: recordCommandBuffer ya fuerza la intensidad a 0 cuando
-            // mipCount es 0, asi que no suma nada. Ojo al layout, que NO es el
-            // mismo: el mip vive en GENERAL y la escena en SHADER_READ_ONLY.
+            // Without a chain there is no mip 0 to point at, but the descriptor has
+            // to be valid all the same. The scene is repeated in the bloom
+            // slot: recordCommandBuffer already forces the intensity to 0 when
+            // mipCount is 0, so it adds nothing. Careful with the layout, which is NOT the
+            // same: the mip lives in GENERAL and the scene in SHADER_READ_ONLY.
             //
-            // Se repite la escena y no se inventa una imagen negra porque aqui
-            // el sustituto es una imagen RENDERIZADA, no memoria sin escribir:
-            // el caso peligroso del backend D3D12 (inf * 0 = NaN sobre un heap
-            // sin poner a cero) no aplica.
+            // The scene is repeated and a black image is not invented because here
+            // the substitute is a RENDERED image, not unwritten memory:
+            // the dangerous case of the D3D12 backend (inf * 0 = NaN over a heap
+            // not zeroed) does not apply.
             const bool haveChain     = m_bloomPass.mipCount() > 0;
             compInfos[1].imageLayout = haveChain ? VK_IMAGE_LAYOUT_GENERAL
                                                  : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -5196,8 +5196,8 @@ namespace DonTopo {
     void Renderer::destroyBloomImages()
     {
         m_bloomPass.destroyImages(bloomCtx());
-        // Los sets de composicion mueren con el reset del pool que hace
-        // createCompositeSets; aqui solo se anulan los handles.
+        // The composition sets die with the pool reset that
+        // createCompositeSets does; here only the handles are nulled.
         for (int f = 0; f < MAX_FRAMES; f++) m_compositeSets[f] = VK_NULL_HANDLE;
     }
 
@@ -5205,10 +5205,10 @@ namespace DonTopo {
     {
         if (v == bloomEnabled()) return;
         setBloomEnabledFlag(v);
-        // Al apagar, la cadena se queda con el bloom del último frame calculado y
-        // la composición la sigue muestreando (el shader multiplica siempre, y
-        // 0 * inf sería NaN). Un clear a negro por frame en vuelo la deja neutra;
-        // a partir de ahí, cero trabajo.
+        // When turned off, the chain keeps the bloom of the last computed frame and
+        // the composition keeps sampling it (the shader always multiplies, and
+        // 0 * inf would be NaN). A clear to black per in-flight frame leaves it neutral;
+        // from then on, zero work.
         if (!v)
             m_bloomPass.markClearPending();
     }
@@ -5221,24 +5221,24 @@ namespace DonTopo {
         };
     }
 
-    // ── Skinning por compute ────────────────────────────────────────────────
+    // ── Compute skinning ────────────────────────────────────────────────────
     SkinningPass::Context Renderer::skinningCtx()
     {
-        // m_skinnedVisible es la MISMA lista que consume el bucle de dibujo: si
-        // el pase saltara un objeto que luego se dibuja, le quedaria la pose del
-        // ultimo frame en que fue visible.
+        // m_skinnedVisible is the SAME list the draw loop consumes: if
+        // the pass skipped an object that is later drawn, it would be left with the pose of the
+        // last frame in which it was visible.
         return SkinningPass::Context{ m_gpu, m_skinnedObjects, m_skinnedVisible, (uint32_t)m_currentFrame };
     }
 
     // ── Shadow map ──────────────────────────────────────────────────────────
     ShadowPass::Context Renderer::shadowCtx()
     {
-        // Los dos sets que declara shadow.vert. El pipeline layout que sale de
-        // ellos lo presta el pase al depth pre-pass, que declara los mismos.
+        // The two sets shadow.vert declares. The pipeline layout that comes out of
+        // them is lent by the pass to the depth pre-pass, which declares the same ones.
         return ShadowPass::Context{ m_gpu, m_descriptorSetLayout, m_instanceBuffers.descLayout() };
     }
 
-    // ── IBL global y sondas ─────────────────────────────────────────────────
+    // ── Global IBL and probes ───────────────────────────────────────────────
     SelectionOutlinePass::Context Renderer::outlineCtx()
     {
         return SelectionOutlinePass::Context{ m_gpu, m_pipelineLayout, m_compositeRenderPass };
@@ -5246,8 +5246,8 @@ namespace DonTopo {
 
     IblPass::Context Renderer::iblCtx()
     {
-        // Sin skybox cargado las dos vistas van nulas y precompute() se sale:
-        // los cubemaps se quedan con el ambiente neutro.
+        // Without a skybox loaded both views are null and precompute() exits:
+        // the cubemaps stay with the neutral ambient.
         return IblPass::Context{
             m_gpu,
             m_skybox.isInitialized() ? m_skybox.cubeView()    : VK_NULL_HANDLE,
@@ -5255,9 +5255,9 @@ namespace DonTopo {
         };
     }
 
-    // El unico Context largo del motor, y por un motivo: el bake REDIBUJA la
-    // escena. Todo lo que va aqui es del pass offscreen del frame (slot 0) y de
-    // las listas de objetos, que se quedan en el Renderer.
+    // The only long Context in the engine, and for a reason: the bake REDRAWS the
+    // scene. Everything here belongs to the frame's offscreen pass (slot 0) and to
+    // the object lists, which stay in the Renderer.
     ReflectionProbePass::Context Renderer::probeCtx()
     {
         return ReflectionProbePass::Context{
@@ -5295,43 +5295,43 @@ namespace DonTopo {
 
     void Renderer::recordSsaoPass(VkCommandBuffer cmd, const Frustum& camFrustum, const glm::mat4& proj)
     {
-        // Viewport degenerado o recursos aun sin crear: nada que hacer.
+        // Degenerate viewport or resources not yet created: nothing to do.
         if (!m_ssaoPass.ready(m_currentFrame)) return;
 
-        // El SSR come del MISMO depth pre-pass: con el SSAO apagado pero el SSR
-        // activo hay que grabarlo igual. Lo unico que se desacopla es esto; los
-        // dos dispatches de oclusion siguen atados a ssaoEnabled().
-        // El TAA es el tercer cliente: reproyecta el frame anterior a partir de
-        // esta misma profundidad, y la quiere SIN el jitter de subpixel, que es
-        // justo como la graba este pre-pass (usa fc.proj, no la jittereada).
-        // El cuarto cliente es el Forward+ tiled: reduce el maximo de profundidad
-        // de cada tile a partir de esta misma imagen. El clustered NO la necesita
-        // (su rejilla es analitica) y por eso no entra aqui.
-        // El quinto cliente es la niebla volumetrica: desproyecta esta misma
-        // profundidad para saber hasta donde marchar cada pixel. Sin esto, con
-        // la niebla encendida y todo lo demas apagado, la imagen de profundidad
-        // no se grabaria en el frame.
-        // El sexto es el motion blur: reproyecta esta misma profundidad al frame
-        // anterior para sacar la velocidad de cada pixel. Sin esto, encendido y
-        // con todo lo demas apagado, leeria una imagen que nadie ha escrito.
+        // The SSR feeds from the SAME depth pre-pass: with SSAO off but SSR
+        // active it has to be recorded all the same. The only thing decoupled is this; the
+        // two occlusion dispatches are still tied to ssaoEnabled().
+        // The TAA is the third client: it reprojects the previous frame from
+        // this same depth, and it wants it WITHOUT the subpixel jitter, which is
+        // exactly how this pre-pass records it (it uses fc.proj, not the jittered one).
+        // The fourth client is the tiled Forward+: it reduces each tile's depth
+        // maximum from this same image. The clustered one does NOT need it
+        // (its grid is analytic) and that is why it does not come in here.
+        // The fifth client is the volumetric fog: it unprojects this same
+        // depth to know how far to march each pixel. Without this, with
+        // the fog on and everything else off, the depth image
+        // would not be recorded in the frame.
+        // The sixth is the motion blur: it reprojects this same depth to the previous
+        // frame to get each pixel's velocity. Without this, turned on and
+        // with everything else off, it would read an image nobody wrote.
         const bool ssrNeedsDepth = m_ssrPass.active(ssrCtx()) || m_aaActiveMode == AaMode::Taa ||
                                    m_fpActiveMode == FpMode::Tiled || m_fogEnabled ||
                                    m_motionBlurPass.active(motionBlurCtx());
         m_ssrStampedPrepass = false;
 
-        // Apagado: deja el mapa en la identidad si hay algo que limpiar.
-        // Encendido: lee los timestamps del slot y abre el par de este frame.
+        // Off: leaves the map at identity if there is something to clear.
+        // On: reads the slot's timestamps and opens this frame's pair.
         m_ssaoPass.recordPreDepth(ssaoCtx(), cmd);
 
-        // Con el SSAO apagado y sin nadie mas pidiendo la profundidad, aquí
-        // acaba el frame para este pass: cero trabajo grabado.
+        // With SSAO off and nobody else asking for the depth, the frame
+        // ends here for this pass: zero work recorded.
         if (!ssaoEnabled() && !ssrNeedsDepth) return;
 
-        // Queries del SSR: se resetean las CUATRO aquí, que es lo primero suyo
-        // que se graba en el frame, y el par [0,1] acota el pre-pass. Con el SSAO
-        // encendido ese coste ya lo mide su propio par y recordSsrPass no lo
-        // vuelve a sumar; el par se escribe igualmente para que la lectura de los
-        // cuatro nunca dé NOT_READY.
+        // SSR queries: all FOUR are reset here, which is the first of its own
+        // things recorded in the frame, and the [0,1] pair bounds the pre-pass. With SSAO
+        // on, that cost is already measured by its own pair and recordSsrPass does not
+        // add it again; the pair is written all the same so that reading all
+        // four never gives NOT_READY.
         if (ssrNeedsDepth && m_timestampsSupported)
         {
             vkCmdResetQueryPool(cmd, m_ssrPass.queryPool(), m_currentFrame * 4, 4);
@@ -5339,25 +5339,24 @@ namespace DonTopo {
             m_ssrStampedPrepass = true;
         }
 
-        // ── Depth pre-pass: la escena entera, solo profundidad ───────────────
-        // El target y el pipeline son de DepthPrepassPass; los draws se quedan
-        // aqui, que es donde estan las listas de objetos y el SSBO de
-        // instancias.
+        // ── Depth pre-pass: the whole scene, depth only ──────────────────────
+        // The target and the pipeline belong to DepthPrepassPass; the draws stay
+        // here, which is where the object lists and the instance SSBO are.
         {
             m_depthPrepass.begin(depthPrepassCtx(), cmd);
 
-            // Mismas guardas y mismo frustum que el pass de escena: si aquí
-            // entrara algo que allí no se dibuja, el AO oscurecería contra
-            // geometría invisible.
+            // Same guards and same frustum as the scene pass: if something entered
+            // here that is not drawn there, the AO would darken against
+            // invisible geometry.
             //
-            // Los personajes SÍ entran, detrás de los estáticos. Antes no, con el
-            // argumento de que el pass de sombras tampoco los metía — y eso era
-            // falso: sí los dibuja (ver bindSkinnedPipeline más abajo). Esta
-            // profundidad no es solo del AO: la NIEBLA marcha hasta ella, así que
-            // sin los personajes la niebla de su silueta se calculaba hasta lo que
-            // hubiera detrás y salía un recorte con la forma del objeto de atrás.
-            // Tramo propio del SSBO, detrás del de las cascadas y delante del del
-            // pass de escena.
+            // Characters DO go in, after the static ones. Before they did not, with the
+            // argument that the shadow pass did not include them either, and that was
+            // false: it does draw them (see bindSkinnedPipeline further down). This
+            // depth is not just the AO's: the FOG marches up to it, so
+            // without the characters the fog of their silhouette was computed up to whatever
+            // was behind and a cutout shaped like the object behind came out.
+            // Own stretch of the SSBO, after the cascades' and before the
+            // scene pass's.
             gatherAndBatch(camFrustum, /*colorPass*/ false);
 
             const VkDescriptorSet instSet = m_instanceBuffers.set(m_currentFrame);
@@ -5377,29 +5376,29 @@ namespace DonTopo {
                 vkCmdDrawIndexed(cmd, gpu->indexCount, batch.instanceCount, 0, 0, batch.firstInstance);
             }
 
-            // Y los personajes, con su propio pipeline: lo que se dibuja es la
-            // SALIDA del compute de skinning, que tiene otro stride. Mismas
-            // guardas que en el pass de sombras: si el compute no despachó para
-            // este objeto, su buffer lleva una pose vieja.
+            // And the characters, with their own pipeline: what is drawn is the
+            // skinning compute's OUTPUT, which has another stride. Same
+            // guards as in the shadow pass: if the compute did not dispatch for
+            // this object, its buffer holds an old pose.
             {
                 bool skinnedBound = false;
                 for (size_t si = 0; si < m_skinnedObjects.size(); si++)
                 {
-                    // La MISMA lista de visibles que consumió el compute, igual que
-                    // en el pass de sombras: a un objeto sin despachar le quedaría
-                    // la pose del último frame en que fue visible.
+                    // The SAME visible list the compute consumed, just like
+                    // in the shadow pass: an undispatched object would be left with
+                    // the pose of the last frame in which it was visible.
                     if (si >= m_skinnedVisible.size() || !m_skinnedVisible[si]) continue;
                     const SkinnedRenderObject& sobj = m_skinnedObjects[si];
                     if (!sobj.meshVisible) continue;
                     if (sobj.outputVertexBuffer == VK_NULL_HANDLE || sobj.matGfx.empty())
                         continue;
-                    // Sin sitio en el SSBO de este frame: mejor sin profundidad que
-                    // pisar el tramo de otro pase. Contado, como en el pase de
-                    // sombras: sin contador no habia forma de saberlo (H23).
+                    // No room in this frame's SSBO: better no depth than
+                    // overwriting another pass's stretch. Counted, as in the shadow
+                    // pass: without a counter there was no way to know (H23).
                     //
-                    // El shader saca el model del SSBO por gl_InstanceIndex: una
-                    // entrada por objeto y un draw de una instancia con
-                    // firstInstance apuntando a ella. Sin sitio no hay puntero.
+                    // The shader takes the model from the SSBO via gl_InstanceIndex: one
+                    // entry per object and a one-instance draw with
+                    // firstInstance pointing at it. With no room there is no pointer.
                     uint32_t instanceIndex = 0;
                     glm::mat4* slot = m_instanceBuffers.cur().alloc(1, &instanceIndex);
                     if (!slot) { ++m_statInstanceOverflow; break; }
@@ -5411,8 +5410,8 @@ namespace DonTopo {
                         skinnedBound = true;
                     }
 
-                    // Set 0 solo por el UBO: este shader no muestrea nada, así que
-                    // vale cualquier set del layout que declara el pipeline.
+                    // Set 0 only for the UBO: this shader does not sample anything, so
+                    // any set of the layout the pipeline declares works.
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         m_shadowPass.pipelineLayout(), 0, 1,
                         &sobj.matGfx[0].descSets[m_currentFrame], 0, nullptr);
@@ -5433,8 +5432,8 @@ namespace DonTopo {
         if (m_ssrStampedPrepass)
             vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_ssrPass.queryPool(), m_currentFrame * 4 + 1);
 
-        // El SSR solo quería la profundidad: sin SSAO no hay oclusión que
-        // calcular ni mapa que escribir.
+        // The SSR only wanted the depth: without SSAO there is no occlusion to
+        // compute nor map to write.
         if (!ssaoEnabled()) return;
 
         m_ssaoPass.record(ssaoCtx(), cmd, proj);
@@ -5453,8 +5452,8 @@ namespace DonTopo {
     // ── SSR ─────────────────────────────────────────────────────────────────
     bool Renderer::anyObjectWithSsr() const
     {
-        // El recorrido se queda aqui: m_objects y m_skinnedObjects son del
-        // Renderer, no del pase. SsrPass::active() recibe el resultado.
+        // The traversal stays here: m_objects and m_skinnedObjects belong to the
+        // Renderer, not to the pass. SsrPass::active() receives the result.
         for (const RenderObject& o : m_objects)
             if (o.ssrStrength > 0.0f) return true;
         for (const SkinnedRenderObject& o : m_skinnedObjects)
@@ -5472,7 +5471,7 @@ namespace DonTopo {
         };
     }
 
-    // ── Niebla volumetrica ──────────────────────────────────────────────────
+    // ── Volumetric fog ──────────────────────────────────────────────────────
     FogPass::Context Renderer::fogCtx()
     {
         return FogPass::Context{
@@ -5505,10 +5504,10 @@ namespace DonTopo {
         };
     }
 
-    // Los dos pools de timestamps que se crean con el AA. El del AA se queda
-    // aqui porque ademas cronometra el frame entero sin UI ([2,3]), y el del
-    // panel Performance porque este es el ultimo sitio del arranque donde
-    // m_timestampsSupported ya esta resuelto y el device sigue vivo.
+    // The two timestamp pools created with the AA. The AA's stays
+    // here because it also times the whole frame without UI ([2,3]), and the
+    // Performance panel's because this is the last place in startup where
+    // m_timestampsSupported is already resolved and the device is still alive.
     void Renderer::createAaQueryPools()
     {
         if (!m_timestampsSupported) return;
@@ -5520,23 +5519,23 @@ namespace DonTopo {
         if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_aaQueryPool) != VK_SUCCESS)
             throw std::runtime_error("failed to create aa query pool!");
 
-        // Pool del panel Performance: [0,1] sombras, [2,3] escena. Con el panel
-        // cerrado no se usa ni una query.
+        // Performance panel pool: [0,1] shadows, [2,3] scene. With the panel
+        // closed not a single query is used.
         qpi.queryCount = MAX_FRAMES * 4;
         if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_perfQueryPool) != VK_SUCCESS)
             throw std::runtime_error("failed to create perf query pool!");
     }
 
-    // Los targets multisample de la escena y de la composicion. NO son del pase
-    // de resolucion: el resolve del MSAA ocurre dentro de esos dos render
-    // passes, que son del Renderer.
+    // The multisample targets of the scene and of the composition. They do NOT belong to the
+    // resolve pass: the MSAA resolve happens inside those two render
+    // passes, which belong to the Renderer.
     void Renderer::createMsaaImages()
     {
         if (m_aaActiveMode != AaMode::Msaa) return;
 
-        // Imagen multisample: GpuResources::createImage fija samples = 1, asi que
-        // estas dos van a mano. Ninguna se muestrea ni se blitea nunca: solo
-        // sirven de attachment y se resuelven dentro del render pass.
+        // Multisample image: GpuResources::createImage sets samples = 1, so
+        // these two are done by hand. Neither is ever sampled or blitted: they only
+        // serve as attachments and are resolved inside the render pass.
         auto createMsImage = [&](VkFormat format, VkImage& image, VkDeviceMemory& memory, VkImageView& view)
         {
             VkImageCreateInfo ii{};
@@ -5569,10 +5568,10 @@ namespace DonTopo {
 
         for (int f = 0; f < MAX_FRAMES; f++)
         {
-            // Color multisample de la escena y de la composicion. Los dos se
-            // resuelven dentro de su render pass sobre las imagenes de una
-            // muestra de siempre, asi que nada de lo que hay detras (SSAO,
-            // SSR, bloom, UI, blit) se entera de que existen.
+            // Multisample color of the scene and of the composition. Both are
+            // resolved inside their render pass onto the usual one-sample
+            // images, so nothing behind them (SSAO,
+            // SSR, bloom, UI, blit) finds out they exist.
             createMsImage(kHdrFormat,        m_msaaHdrImage[f], m_msaaHdrMemory[f], m_msaaHdrView[f]);
             createMsImage(m_swapChainFormat, m_msaaLdrImage[f], m_msaaLdrMemory[f], m_msaaLdrView[f]);
         }
@@ -5598,22 +5597,22 @@ namespace DonTopo {
     {
         if (mode == aaMode()) return;
         setAaModeFlag(mode);
-        // Cualquier cambio de modo mueve recursos: el tamano interno (SSAA), el
-        // numero de muestras (MSAA), o simplemente la existencia de la imagen
-        // intermedia y del historial. Se reconstruye entero, que es barato de
-        // razonar y ocurre una vez por click del usuario.
+        // Any mode change moves resources: the internal size (SSAA), the
+        // number of samples (MSAA), or simply the existence of the
+        // intermediate image and of the history. It is rebuilt whole, which is easy to
+        // reason about and happens once per user click.
         m_aaResourcesDirty = true;
     }
 
     void Renderer::setViewportSize(uint32_t width, uint32_t height)
     {
-        // Panel colapsado o con area nula: no hay nada que renderizar y crear
-        // imagenes de 0 pixeles es invalido. Se conserva el tamano anterior.
+        // Collapsed panel or with a null area: there is nothing to render and creating
+        // 0-pixel images is invalid. The previous size is kept.
         if (width == 0 || height == 0) return;
         if (m_viewportExtent.width == width && m_viewportExtent.height == height) return;
         m_viewportExtent   = { width, height };
-        // Misma via que un cambio de modo: recrear con la GPU en reposo, al
-        // principio del frame siguiente.
+        // Same path as a mode change: recreate with the GPU idle, at the
+        // start of the next frame.
         m_aaResourcesDirty = true;
     }
 
@@ -5621,7 +5620,7 @@ namespace DonTopo {
     {
         if (v == ssaaFactor()) return;
         setSsaaFactorFlag(v);
-        // Solo cambia el tamano de los targets cuando SSAA es el modo activo.
+        // The targets' size only changes when SSAA is the active mode.
         if (aaMode() == AaMode::Ssaa) m_aaResourcesDirty = true;
     }
 
@@ -5629,9 +5628,9 @@ namespace DonTopo {
     {
         if (v == shadowResolution() || v <= 0) return;
         setShadowResolutionFlag(v);
-        // No se rehace aqui: esto lo llama la UI en mitad de un frame, y soltar
-        // el shadow map ahora mismo lo quitaria de debajo de la lista de
-        // comandos en vuelo. Se marca y drawFrame lo atiende entre frames.
+        // It is not redone here: the UI calls this in the middle of a frame, and releasing
+        // the shadow map right now would pull it out from under the in-flight
+        // command list. It is marked and drawFrame handles it between frames.
         m_shadowResourcesDirty = true;
     }
 
@@ -5639,24 +5638,24 @@ namespace DonTopo {
     {
         m_shadowResourcesDirty = false;
 
-        // La imagen puede estar en el frame anterior, que todavia no ha
-        // terminado. Es un ajuste de calidad que se toca de uvas a peras: un
-        // wait completo sale mas barato que llevar borrado diferido para esto.
+        // The image may be in the previous frame, which has not finished
+        // yet. It is a quality setting that is touched once in a blue moon: a
+        // full wait comes out cheaper than carrying deferred deletion for this.
         vkDeviceWaitIdle(m_gpu.device());
 
         m_shadowPass.resizeResources(shadowCtx(), (uint32_t)shadowResolution());
 
-        // Y TODO lo que apuntaba a la vista vieja. Son tres consumidores y hay
-        // que acordarse de los tres: los sets de cada malla y los de cada
-        // material de personaje (binding 3), que rehace refreshShadowDescriptors,
-        // y los del pase de NIEBLA, que se lleva la vista y el sampler en su
-        // Context (ver fogCtx) y por tanto tambien se queda con la vista muerta.
+        // And EVERYTHING that pointed at the old view. There are three consumers and all
+        // three have to be remembered: each mesh's sets and each character
+        // material's (binding 3), which refreshShadowDescriptors redoes,
+        // and those of the FOG pass, which takes the view and the sampler in its
+        // Context (see fogCtx) and therefore is also left with the dead view.
         //
-        // Olvidar la niebla dejaba un imageView destruido en un set de compute:
-        // el arranque se llenaba de errores de validacion en CADA frame.
+        // Forgetting the fog left a destroyed imageView in a compute set:
+        // startup filled with validation errors on EVERY frame.
         refreshShadowDescriptors();
-        // createSets resetea su pool antes de repartir, asi que re-llamarlo no
-        // lo agota.
+        // createSets resets its pool before handing out, so calling it again does not
+        // exhaust it.
         m_fogPass.createSets(fogCtx());
     }
 
@@ -5667,9 +5666,9 @@ namespace DonTopo {
         shadowInfo.imageView   = m_shadowPass.view();
         shadowInfo.sampler     = m_shadowPass.sampler();
 
-        // El sampler NO cambia en un resize (resizeResources no lo toca), pero
-        // se reescribe igual: el write es uno solo y asi esta funcion vale
-        // tambien si algun dia el sampler pasa a depender del tamano.
+        // The sampler does NOT change on a resize (resizeResources does not touch it), but
+        // it is rewritten all the same: the write is a single one and this way the function is also valid
+        // if someday the sampler comes to depend on the size.
         auto writeBinding3 = [&](VkDescriptorSet set)
         {
             if (set == VK_NULL_HANDLE) return;
@@ -5683,8 +5682,8 @@ namespace DonTopo {
             vkUpdateDescriptorSets(m_gpu.device(), 1, &w, 0, nullptr);
         };
 
-        // Mallas estaticas: por ENTRADA COMPARTIDA, que es de quien son los
-        // sets (varios objetos con la misma malla comparten uno).
+        // Static meshes: per SHARED ENTRY, which is who owns the
+        // sets (several objects with the same mesh share one).
         for (int index : m_sharedMeshes.liveIndices())
         {
             SharedGpuMesh* mesh = m_sharedMeshes.get(index);
@@ -5692,7 +5691,7 @@ namespace DonTopo {
             for (int f = 0; f < MAX_FRAMES; f++) writeBinding3(mesh->descriptorSets[f]);
         }
 
-        // Personajes: un bloque por material, que es como se dibujan.
+        // Characters: one block per material, which is how they are drawn.
         for (SkinnedRenderObject& obj : m_skinnedObjects)
             for (SkinnedMatGfx& mgfx : obj.matGfx)
                 for (int f = 0; f < MAX_FRAMES; f++) writeBinding3(mgfx.descSets[f]);
@@ -5709,8 +5708,8 @@ namespace DonTopo {
     {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(m_gpu.physicalDevice(), &props);
-        // El color y la profundidad tienen que coincidir: el pass de escena usa
-        // los dos a la vez, asi que el maximo util es la interseccion.
+        // Color and depth have to match: the scene pass uses
+        // both at once, so the useful maximum is the intersection.
         const VkSampleCountFlags counts = props.limits.framebufferColorSampleCounts
                                         & props.limits.framebufferDepthSampleCounts;
         if (counts & VK_SAMPLE_COUNT_8_BIT) return 8;
@@ -5745,8 +5744,8 @@ namespace DonTopo {
         {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(m_gpu.physicalDevice(), &props);
-            // maxFramebufferWidth/Height nunca son menores que maxImageDimension2D,
-            // asi que con recortar por este limite basta para los dos.
+            // maxFramebufferWidth/Height are never smaller than maxImageDimension2D,
+            // so clamping by this limit is enough for both.
             const uint32_t limit = props.limits.maxImageDimension2D;
 
             const uint32_t w = (uint32_t)std::lround(effectiveViewport().width  * (double)ssaaFactor());
@@ -5764,21 +5763,21 @@ namespace DonTopo {
 
     void Renderer::recreateMsaaDependentPipelines()
     {
-        // Solo los que viven en el pass de escena y en el de composicion. Los de
-        // sombras, los del depth pre-pass y los de resolucion del AA tienen
-        // render passes propios que siempre van a una muestra.
-        // Los cuatro del contorno NO estan en esta lista: los posee
-        // SelectionOutlinePass y se sueltan abajo con su destroyResources, que
-        // ademas los deja a VK_NULL_HANDLE para que createPipeline y
-        // createSkinnedGraphicsPipelines los rehagan limpios.
+        // Only those that live in the scene pass and in the composition one. The shadow
+        // ones, the depth pre-pass ones and the AA resolve ones have
+        // their own render passes that always run at one sample.
+        // The four outline ones are NOT in this list: they are owned by
+        // SelectionOutlinePass and released below with its destroyResources, which
+        // also leaves them at VK_NULL_HANDLE so that createPipeline and
+        // createSkinnedGraphicsPipelines redo them clean.
         VkPipeline* pipelines[] = {
             &m_pipeline, &m_wireframePipeline,
             &m_skinnedGfxPipeline, &m_skinnedWireframePipeline,
             &m_compositePipeline,
-            // Los tres compute del skinning YA NO estan aqui: viven en
-            // SkinningPass, no dependen de las muestras y su creacion ya no va
-            // en la misma pasada que estos, asi que no hay que destruirlos ni
-            // rehacerlos al cambiar de MSAA.
+            // The three skinning compute ones are NO LONGER here: they live in
+            // SkinningPass, do not depend on the samples and their creation no longer goes
+            // in the same pass as these, so there is no need to destroy or
+            // redo them when MSAA changes.
         };
         for (VkPipeline* p : pipelines)
         {
@@ -5794,25 +5793,25 @@ namespace DonTopo {
         createPipeline();
         createSkinnedGraphicsPipelines();
 
-        // El pipeline de composicion vive en createBloomPipelines, que ademas
-        // crea layouts y pools; aqui solo hace falta el pipeline, asi que se
-        // rehace a mano con el mismo codigo que usa aquella.
+        // The composition pipeline lives in createBloomPipelines, which also
+        // creates layouts and pools; here only the pipeline is needed, so it is
+        // redone by hand with the same code that one uses.
         recreateCompositePipeline();
-        // La UI de PANTALLA no se rehace aqui: tiene pass propio, a una muestra
-        // siempre, y el numero de muestras de la escena no le afecta.
+        // The SCREEN UI is not redone here: it has its own pass, always at one sample,
+        // and the scene's sample count does not affect it.
         //
-        // La de MUNDO si, y es obligatorio: sus dos variantes estan compiladas
-        // contra m_offscreenRenderPass, que el llamante (rebuildAaResources)
-        // acaba de destruir y volver a crear con otro numero de muestras. Un
-        // pipeline que apunta a un VkRenderPass destruido NO da error de
-        // validacion — se manifiesta como device lost la primera vez que se usa.
-        // Esta es la UNICA ruta de recreacion: createOffscreenRenderPass() solo
-        // se llama en dos sitios (el init y ese bloque de rebuildAaResources), y
-        // recreateSwapChain no lo toca.
+        // The WORLD one is, and it is mandatory: its two variants are compiled
+        // against m_offscreenRenderPass, which the caller (rebuildAaResources)
+        // just destroyed and created again with another sample count. A
+        // pipeline pointing at a destroyed VkRenderPass gives NO validation
+        // error; it shows up as device lost the first time it is used.
+        // This is the ONLY recreation path: createOffscreenRenderPass() is only
+        // called in two places (init and that block of rebuildAaResources), and
+        // recreateSwapChain does not touch it.
         m_uiBatch.initWorldPipelines(m_gpu, m_offscreenRenderPass, m_aaSampleCount);
 
-        // Los dos que no viven en Renderer.cpp. El skybox se salta solo si no
-        // hay cubemap cargado.
+        // The two that do not live in Renderer.cpp. The skybox is skipped only if there is
+        // no cubemap loaded.
         m_skybox.recreatePipeline(m_gpu, m_offscreenRenderPass, m_aaSampleCount);
         Gizmos::recreatePipeline(m_gpu, m_compositeRenderPass, m_aaSampleCount);
     }
@@ -5821,15 +5820,15 @@ namespace DonTopo {
     {
         m_aaResourcesDirty = false;
 
-        // Lo pedido pasa a ser lo construido ANTES de tocar nada: todo lo que hay
-        // debajo (targetSampleCount, needsAaIntermediate, updateRenderExtent,
-        // createAaImages) decide que crear mirando estos dos. A partir de aqui
-        // coinciden hasta el proximo click o el proximo arrastre del panel.
+        // What was requested becomes what was built BEFORE touching anything: everything
+        // below (targetSampleCount, needsAaIntermediate, updateRenderExtent,
+        // createAaImages) decides what to create by looking at these two. From here on
+        // they match until the next click or the next drag of the panel.
         m_aaActiveMode   = aaMode();
         m_viewportActive = m_viewportExtent;
 
-        // Nada de esto se puede tocar con trabajo en vuelo: son imagenes, render
-        // passes y pipelines que la GPU puede estar leyendo ahora mismo.
+        // None of this can be touched with work in flight: they are images, render
+        // passes and pipelines the GPU may be reading right now.
         vkDeviceWaitIdle(m_gpu.device());
 
         const VkSampleCountFlagBits wanted = targetSampleCount();
@@ -5840,8 +5839,8 @@ namespace DonTopo {
         if (samplesChanged)
         {
             m_aaSampleCount = wanted;
-            // Los render passes declaran el numero de muestras en cada
-            // attachment, y los pipelines tienen que coincidir con su pass.
+            // The render passes declare the sample count in each
+            // attachment, and the pipelines have to match their pass.
             vkDestroyRenderPass(m_gpu.device(), m_offscreenRenderPass, nullptr);
             vkDestroyRenderPass(m_gpu.device(), m_compositeRenderPass, nullptr);
             createOffscreenRenderPass();
@@ -5849,8 +5848,8 @@ namespace DonTopo {
             recreateMsaaDependentPipelines();
         }
 
-        // El depth lo comparten el pass de escena y el de composicion, asi que
-        // cambia tanto con el tamano (SSAA) como con las muestras (MSAA).
+        // The depth is shared by the scene pass and the composition one, so it
+        // changes with both the size (SSAA) and the samples (MSAA).
         vkDestroyImageView(m_gpu.device(), m_depthImageView, nullptr);
         vkDestroyImage(m_gpu.device(), m_depthImage, nullptr);
         vkFreeMemory(m_gpu.device(), m_depthImageMemory, nullptr);
@@ -5859,8 +5858,8 @@ namespace DonTopo {
         createDepthResources();
         createOffscreenImages();
 
-        // Los descriptor sets de los objetos referencian el mapa de AO, que
-        // acaba de recrearse con otro tamano.
+        // The objects' descriptor sets reference the AO map, which
+        // was just recreated with another size.
         refreshSsaoDescriptors();
     }
 

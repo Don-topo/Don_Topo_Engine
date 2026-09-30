@@ -8,55 +8,55 @@ namespace DonTopo {
 
     class GameObject;
 
-    // Todo lo que el Renderer necesita de la capa de UI, y nada más. Existe
-    // para que el motor no dependa del editor: el Renderer llama a estos
-    // hooks sin saber qué biblioteca de UI ni qué paneles hay detrás. En el
-    // runtime no hay implementación: el puntero se queda nulo y el pass de UI
-    // no se graba.
+    // Everything the Renderer needs from the UI layer, and nothing more. It exists
+    // so that the engine does not depend on the editor: the Renderer calls these
+    // hooks without knowing which UI library or which panels are behind them. In the
+    // runtime there is no implementation: the pointer stays null and the UI pass
+    // is not recorded.
     //
-    // ESTE HEADER NO INCLUYE NINGUNA API GRÁFICA a propósito. Lo comparten dos
-    // backends —Vulkan y DirectX 12— y meter vulkan.h aquí obligaría a que el
-    // editor conociera Vulkan para dibujarse con DX12. Los handles viajan como
-    // enteros opacos: quien los pone sabe qué son y quien los consume los
-    // devuelve al backend que los creó, sin interpretarlos por el camino.
+    // THIS HEADER INCLUDES NO GRAPHICS API ON PURPOSE. It is shared by two
+    // backends (Vulkan and DirectX 12) and putting vulkan.h here would force the
+    // editor to know Vulkan in order to draw itself with DX12. Handles travel as
+    // opaque integers: whoever sets them knows what they are and whoever consumes them
+    // returns them to the backend that created them, without interpreting them along the way.
     class UiLayer {
         public:
-            // Con qué API gráfica se ha arrancado. La capa de UI lo necesita
-            // para elegir su propio backend (ImGui tiene uno por API).
+            // Which graphics API it was started with. The UI layer needs it
+            // to choose its own backend (ImGui has one per API).
             enum class GraphicsApi {
                 Vulkan,
                 D3D12,
             };
 
-            // Lo que el backend de UI necesita del Renderer para arrancar. Va
-            // como struct y no como accesores públicos del Renderer para no
-            // abrir sus handles a cualquier otro llamante.
+            // What the UI backend needs from the Renderer to start. It goes
+            // as a struct and not as public Renderer accessors so as not to
+            // open its handles to any other caller.
             //
-            // Los campos son de UNA de las dos APIs según `api`; los de la otra
-            // se quedan a cero. Un struct común y no una jerarquía porque el
-            // Renderer lo rellena en un sitio y la UI lo lee en otro: partirlo
-            // en dos obligaría a downcasts en ambos extremos para no ganar
-            // nada.
+            // The fields belong to ONE of the two APIs depending on `api`; those of the other
+            // stay at zero. A common struct and not a hierarchy because the
+            // Renderer fills it in one place and the UI reads it in another: splitting it
+            // in two would force downcasts at both ends for no
+            // gain.
             struct InitInfo {
                 GraphicsApi api    = GraphicsApi::Vulkan;
                 GLFWwindow* window = nullptr;
 
                 // --- Vulkan -------------------------------------------------
-                // VkInstance, VkPhysicalDevice, VkDevice, VkQueue y VkRenderPass
-                // como enteros: en x64 todos caben en 64 bits.
+                // VkInstance, VkPhysicalDevice, VkDevice, VkQueue and VkRenderPass
+                // as integers: on x64 they all fit in 64 bits.
                 uint64_t instance       = 0;
                 uint64_t physicalDevice = 0;
                 uint64_t device         = 0;
                 uint32_t queueFamily    = 0;
                 uint64_t queue          = 0;
                 uint32_t imageCount     = 0;
-                // Pass del swapchain donde se dibuja la UI (pass 2).
+                // Swapchain pass where the UI is drawn (pass 2).
                 uint64_t renderPass     = 0;
 
                 // --- DirectX 12 ---------------------------------------------
-                // ID3D12Device*, ID3D12CommandQueue* e ID3D12DescriptorHeap*,
-                // más el rango de descriptores que la UI puede repartirse y el
-                // formato del render target donde se graba.
+                // ID3D12Device*, ID3D12CommandQueue* and ID3D12DescriptorHeap*,
+                // plus the descriptor range the UI can divide up and the
+                // format of the render target it is recorded into.
                 void*    d3dDevice      = nullptr;
                 void*    d3dQueue       = nullptr;
                 void*    d3dSrvHeap     = nullptr;
@@ -73,30 +73,30 @@ namespace DonTopo {
             virtual void initUi(const InitInfo& info) = 0;
             virtual void shutdownUi()                 = 0;
 
-            // Registra la imagen offscreen de la escena y devuelve el handle
-            // con el que la UI la muestreará.
+            // Registers the scene's offscreen image and returns the handle
+            // with which the UI will sample it.
             //
-            // En Vulkan `a` es un VkSampler y `b` un VkImageView, y el retorno
-            // es el VkDescriptorSet. En DirectX 12 `a` es el ID3D12Resource* de
-            // la textura, `b` no se usa, y el retorno es el descriptor GPU.
-            // En los dos casos el valor devuelto acaba en ImGui::Image, que lo
-            // trata como opaco.
+            // In Vulkan `a` is a VkSampler and `b` a VkImageView, and the return
+            // is the VkDescriptorSet. In DirectX 12 `a` is the ID3D12Resource* of
+            // the texture, `b` is not used, and the return is the GPU descriptor.
+            // In both cases the returned value ends up in ImGui::Image, which
+            // treats it as opaque.
             virtual uint64_t registerUiTexture(uint64_t a, uint64_t b) = 0;
             virtual void     unregisterUiTexture(uint64_t handle)      = 0;
 
-            // Construye el frame de UI. Se llama ANTES de grabar la lista de
-            // comandos: aquí es donde la UI puede voltear el estado de Play o
-            // mutar la escena, y el Renderer lee ambas cosas justo después.
+            // Builds the UI frame. Called BEFORE recording the command list:
+            // this is where the UI can flip the Play state or mutate the scene, and
+            // the Renderer reads both right afterwards.
             virtual void buildUiFrame(uint64_t         viewportTexture,
                                       GameObject*      sceneRoot,
                                       const glm::mat4& cameraView) = 0;
 
-            // Graba la UI ya construida. `commandList` es un VkCommandBuffer o
-            // un ID3D12GraphicsCommandList* según la API con la que se inició.
+            // Records the already built UI. `commandList` is a VkCommandBuffer or
+            // an ID3D12GraphicsCommandList* depending on the API it was started with.
             virtual void recordUi(void* commandList) = 0;
 
-            // Play Mode activo. Lo consulta el Renderer para elegir la cámara
-            // del frame (CameraComponent de la escena vs. cámara de vuelo).
+            // Play Mode is active. The Renderer queries it to choose the frame's camera
+            // (the scene's CameraComponent vs. the fly camera).
             virtual bool isPlaying() const = 0;
     };
 

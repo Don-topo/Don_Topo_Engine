@@ -7,8 +7,8 @@
 #include <cmath>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-// matrix_decompose y quaternion son extensiones GTX: sin la macro, glm avisa
-// en cada unidad que las incluya.
+// matrix_decompose and quaternion are GTX extensions: without the macro, glm warns
+// in every unit that includes them.
 #ifndef GLM_ENABLE_EXPERIMENTAL
 #define GLM_ENABLE_EXPERIMENTAL
 #endif
@@ -19,7 +19,7 @@ namespace DonTopo
 {
     namespace
     {
-        // En el MISMO orden que PropertyId: el índice es el enum.
+        // In the SAME order as PropertyId: the index is the enum.
         const char* const kNombres[] = {
             "position.x", "position.y", "position.z",
             "rotation.x", "rotation.y", "rotation.z",
@@ -53,9 +53,9 @@ namespace DonTopo
     float samplePropertyTrack(const PropertyTrack& t, float tiempo, float actual)
     {
         if (t.keys.empty()) return actual;
-        // El tramo se busca COMPARANDO tiempos, no por índice: el fichero (o el
-        // panel) puede traer las keys en cualquier orden y el resultado no
-        // puede depender de eso.
+        // The segment is found by COMPARING times, not by index: the file (or the
+        // panel) may bring the keys in any order and the result
+        // cannot depend on that.
         const PropertyKey* lo = nullptr;
         const PropertyKey* hi = nullptr;
         for (const auto& k : t.keys)
@@ -63,8 +63,8 @@ namespace DonTopo
             if (k.time <= tiempo && (!lo || k.time > lo->time)) lo = &k;
             if (k.time >= tiempo && (!hi || k.time < hi->time)) hi = &k;
         }
-        if (!lo) return hi->value;      // todas por delante: la primera
-        if (!hi) return lo->value;      // todas por detrás: la última
+        if (!lo) return hi->value;      // all ahead: the first one
+        if (!hi) return lo->value;      // all behind: the last one
         const float span = hi->time - lo->time;
         if (span <= 0.0f) return hi->value;
         return glm::mix(lo->value, hi->value, (tiempo - lo->time) / span);
@@ -81,8 +81,8 @@ namespace DonTopo
         for (const auto& k : t.keys) mete(k.value);
         for (int i = 0; i < nExtra && extra; i++) mete(extra[i]);
         if (!hay) { lo = -1.0f; hi = 1.0f; return; }
-        // Altura cero (pista plana, o una sola key): la línea saldría pegada a
-        // un borde y no se vería que es plana.
+        // Zero height (flat track, or a single key): the line would end up stuck to
+        // an edge and it would not be visible that it is flat.
         if (hi - lo < 1e-6f) { lo -= 0.5f; hi += 0.5f; return; }
         const float margen = (hi - lo) * 0.1f;
         lo -= margen;
@@ -97,8 +97,8 @@ namespace DonTopo
         const float alto  = y1 - y0;
         p.time  = ancho > 0.0f ? (x - x0) / ancho * duracion : 0.0f;
         p.time  = glm::clamp(p.time, 0.0f, duracion);
-        // La pantalla crece hacia abajo y el valor hacia arriba: sin esta
-        // inversión, arrastrar hacia arriba bajaría el valor.
+        // The screen grows downward and the value upward: without this
+        // inversion, dragging upward would lower the value.
         p.value = alto > 0.0f ? hi - (y - y0) / alto * (hi - lo) : lo;
         return p;
     }
@@ -108,7 +108,7 @@ namespace DonTopo
     {
         const float span = hi - lo;
         x = duracion > 0.0f ? x0 + (time / duracion) * (x1 - x0) : x0;
-        x = glm::clamp(x, x0, x1);      // una key más allá del clip se queda en el borde
+        x = glm::clamp(x, x0, x1);      // a key beyond the clip stays at the edge
         y = span > 0.0f ? y1 - (value - lo) / span * (y1 - y0) : y1;
     }
 
@@ -130,9 +130,9 @@ namespace DonTopo
         float total = 0.0f;
         for (int i = 0; i < n; i++) total += c[i].weight;
         if (total <= 0.0f) return 0.0f;
-        // Ángulos: se mezcla la DIFERENCIA con la primera aportación,
-        // normalizada a [-180, 180]. Mezclándolos en crudo, 350 y 10 darían
-        // 180 (media aritmética) en vez de 0.
+        // Angles: the DIFFERENCE with the first contribution is blended,
+        // normalized to [-180, 180]. Blending them raw, 350 and 10 would give
+        // 180 (arithmetic mean) instead of 0.
         const float base = c[0].value;
         float delta = 0.0f;
         for (int i = 0; i < n; i++)
@@ -148,7 +148,7 @@ namespace DonTopo
             return (int)id >= (int)PropertyId::LightColorR && (int)id <= (int)PropertyId::LightRange;
         }
 
-        // Traslación, euler en GRADOS y escala del localTransform.
+        // Translation, euler in DEGREES and scale of the localTransform.
         struct Trs { glm::vec3 pos{0.0f}, euler{0.0f}, escala{1.0f}; };
         Trs descompone(const glm::mat4& m)
         {
@@ -156,9 +156,9 @@ namespace DonTopo
             glm::quat rot;
             glm::vec3 skew;
             glm::vec4 persp;
-            // glm::decompose con una matriz singular NO escribe sus salidas, así
-            // que las locales van inicializadas arriba: leerlas sin más daría
-            // basura (-1e8) y de ahí un NaN que se propaga a la escena.
+            // glm::decompose with a singular matrix does NOT write its outputs, so
+            // the locals are initialized above: reading them as is would give
+            // garbage (-1e8) and from there a NaN that propagates to the scene.
             glm::decompose(m, out.escala, rot, out.pos, skew, persp);
             out.euler = glm::degrees(glm::eulerAngles(rot));
             return out;
@@ -171,8 +171,8 @@ namespace DonTopo
         }
         float componente(const glm::vec3& v, int i) { return i == 0 ? v.x : (i == 1 ? v.y : v.z); }
 
-        // Factores de material del OBJETO, no de la malla: editMesh() copia la
-        // malla si está compartida, y animar no puede pagar eso cada frame.
+        // Material factors of the OBJECT, not of the mesh: editMesh() copies the
+        // mesh if it is shared, and animating cannot pay that every frame.
         const MaterialOverride* overrideDe(const GameObject& go)
         {
             for (const auto& ov : go.materialOverrides)
@@ -193,8 +193,8 @@ namespace DonTopo
     bool propertyAvailable(const GameObject& go, PropertyId id)
     {
         if (esDeLuz(id)) return go.getLight() != nullptr;
-        // El transform lo tiene todo GameObject, y los factores de material
-        // viven en el propio objeto: no hacen falta ni malla ni componente.
+        // Every GameObject has the transform, and the material factors
+        // live in the object itself: neither a mesh nor a component is needed.
         return id != PropertyId::Count;
     }
 
@@ -221,8 +221,8 @@ namespace DonTopo
                 default:                         return luz->getRange();
             }
         }
-        // Material: el override si está activo (-1 es el centinela de "sin
-        // override"), y si no el valor de la malla.
+        // Material: the override if it is active (-1 is the "no
+        // override" sentinel), and otherwise the mesh value.
         const MaterialOverride* ov = overrideDe(go);
         const float delOverride = !ov ? -1.0f
                                       : (id == PropertyId::MaterialMetallic ? ov->metallic : ov->roughness);

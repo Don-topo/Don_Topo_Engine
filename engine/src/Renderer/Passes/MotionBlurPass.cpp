@@ -13,8 +13,8 @@ namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// Los mismos campos y en el mismo orden que el bloque de
-// motion_blur.comp.
+// The same fields and in the same order as the
+// motion_blur.comp block.
 struct MotionBlurPush {
     glm::mat4 reproject;
     float     invResX;
@@ -30,21 +30,21 @@ static_assert(sizeof(MotionBlurPush) == 84,
 bool MotionBlurPass::active(const Context& ctx) const
 {
     if (!ctx.state.motionBlurEnabled()) return false;
-    // Recursos aún sin crear (viewport degenerado): nada que grabar.
+    // Resources not created yet (degenerate viewport): nothing to record.
     if (m_image[ctx.currentFrame] == VK_NULL_HANDLE) return false;
-    // Menos de dos taps no promedia nada: el resultado sería el píxel central
-    // y la copia de vuelta escribiría la misma imagen con el coste de un
-    // dispatch entero.
+    // Fewer than two taps average nothing: the result would be the center pixel
+    // and the copy back would write the same image at the cost of a whole
+    // dispatch.
     return ctx.state.motionBlurSamples() >= 2;
 }
 
 void MotionBlurPass::createPipeline(const Context& ctx)
 {
-    // Tres bindings: la escena muestreada, la profundidad muestreada y la
-    // imagen intermedia como storage. No hay sampler propio: el color va con
-    // el del SSR (LINEAR + CLAMP_TO_EDGE, que es lo que quieren unos taps
-    // entre texeles y que no traigan color del borde opuesto) y la
-    // profundidad con el del SSAO (NEAREST, el que le toca a D32_SFLOAT).
+    // Three bindings: the sampled scene, the sampled depth and the
+    // intermediate image as storage. There is no sampler of its own: the color goes with
+    // SSR's (LINEAR + CLAMP_TO_EDGE, which is what taps between texels
+    // want so they do not bring in color from the opposite edge) and the
+    // depth with SSAO's (NEAREST, the one that suits D32_SFLOAT).
     VkDescriptorSetLayoutBinding bindings[3]{};
     for (int i = 0; i < 3; i++)
     {
@@ -104,8 +104,8 @@ void MotionBlurPass::createPipeline(const Context& ctx)
 
     vkDestroyShaderModule(ctx.gpu.device(), module, nullptr);
 
-    // Medicion del coste en GPU. Dos marcas por frame en vuelo, como el resto
-    // de pases: el soporte y el periodo los resolvio el Renderer y llegan en el
+    // GPU cost measurement. Two marks per frame in flight, like the rest
+    // of the passes: the support and the period were resolved by the Renderer and arrive in the
     // Context.
     if (ctx.timestampsSupported)
     {
@@ -122,7 +122,7 @@ void MotionBlurPass::createPipeline(const Context& ctx)
 
 void MotionBlurPass::destroyPipeline(const Context& ctx)
 {
-    // Las imagenes y los sets se fueron con destroyImages.
+    // The images and the sets went away with destroyImages.
     vkDestroyPipeline(ctx.gpu.device(), m_pipeline, nullptr);
     vkDestroyPipelineLayout(ctx.gpu.device(), m_pipelineLayout, nullptr);
     vkDestroyDescriptorPool(ctx.gpu.device(), m_descPool, nullptr);
@@ -139,9 +139,9 @@ void MotionBlurPass::createImages(const Context& ctx)
 {
     for (int f = 0; f < kFramesInFlight; f++)
     {
-        // Mismo formato y tamaño que el HDR: es la copia emborronada de esa
-        // misma imagen, y vkCmdCopyImage exige formatos compatibles.
-        // TRANSFER_SRC porque de aquí sale esa copia.
+        // Same format and size as the HDR: it is the blurred copy of that
+        // same image, and vkCmdCopyImage requires compatible formats.
+        // TRANSFER_SRC because that copy comes out of here.
         ctx.res.createImage(
             ctx.renderExtent.width, ctx.renderExtent.height,
             ctx.hdrFormat, VK_IMAGE_TILING_OPTIMAL,
@@ -151,8 +151,8 @@ void MotionBlurPass::createImages(const Context& ctx)
         ctx.res.createTextureImageView(m_image[f], m_view[f], ctx.hdrFormat);
     }
 
-    // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
-    // free, igual que en el bloom, el SSAO y el SSR.
+    // The sets from the previous time point to already destroyed views: reset and not
+    // free, as in the bloom, the SSAO and the SSR.
     vkResetDescriptorPool(ctx.gpu.device(), m_descPool, 0);
 
     for (int f = 0; f < kFramesInFlight; f++)
@@ -166,8 +166,8 @@ void MotionBlurPass::createImages(const Context& ctx)
             throw std::runtime_error("failed to allocate motion blur descriptor sets!");
 
         VkDescriptorImageInfo infos[3]{};
-        // El HDR entra en SHADER_READ_ONLY: es donde lo dejan el render pass,
-        // el SSR y la niebla.
+        // The HDR enters in SHADER_READ_ONLY: it is where the render pass,
+        // the SSR and the fog leave it.
         infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         infos[0].imageView   = ctx.hdrView[f];
         infos[0].sampler     = ctx.ssrSampler;
@@ -217,8 +217,8 @@ void MotionBlurPass::destroyImages(const Context& ctx)
 
 void MotionBlurPass::record(const Context& ctx, VkCommandBuffer cmd)
 {
-    // Lo del frame ANTERIOR de este mismo slot: su fence ya senalo, asi que el
-    // resultado esta listo y no hay que bloquear a nadie para leerlo.
+    // The one from the PREVIOUS frame of this same slot: its fence already signaled, so the
+    // result is ready and nobody has to block to read it.
     if (ctx.timestampsSupported && m_queryPending[ctx.currentFrame])
     {
         uint64_t stamps[2] = {};
@@ -231,13 +231,13 @@ void MotionBlurPass::record(const Context& ctx, VkCommandBuffer cmd)
 
     if (!active(ctx) || m_sets[ctx.currentFrame] == VK_NULL_HANDLE)
     {
-        // Apagado no cuesta nada, y decirlo asi en el panel es la respuesta
-        // correcta: no es "0.00 ms de trabajo", es que no hubo trabajo.
+        // Off it costs nothing, and saying so in the panel is the right
+        // answer: it is not "0.00 ms of work", it is that there was no work.
         m_gpuMs = 0.0f;
-        // Ni dispatch ni copia ni barreras: el HDR se queda tal y como lo
-        // dejaron el pass de escena, el SSR y la niebla, en SHADER_READ_ONLY,
-        // que es justo lo que esperan el bloom y la composición. Imagen
-        // idéntica a la de antes de esta feature.
+        // No dispatch, no copy, no barriers: the HDR stays exactly as the
+        // scene pass, the SSR and the fog left it, in SHADER_READ_ONLY,
+        // which is precisely what the bloom and the composition expect. Image
+        // identical to the one before this feature.
         return;
     }
 
@@ -249,9 +249,9 @@ void MotionBlurPass::record(const Context& ctx, VkCommandBuffer cmd)
     }
 
     MotionBlurPush push{};
-    // La MISMA matriz que reproyecta el TAA: clip de este frame (sin jitter)
-    // → clip del anterior. taaCurrViewProj y taaPrevViewProj se
-    // actualizan todos los frames, esté el TAA activo o no.
+    // The SAME matrix that TAA reprojects with: this frame's clip (without jitter)
+    // → the previous one's clip. taaCurrViewProj and taaPrevViewProj are
+    // updated every frame, whether TAA is active or not.
     push.reproject = ctx.taaPrevViewProj * glm::inverse(ctx.taaCurrViewProj);
     push.invResX   = 1.0f / (float)ctx.renderExtent.width;
     push.invResY   = 1.0f / (float)ctx.renderExtent.height;
@@ -269,9 +269,9 @@ void MotionBlurPass::record(const Context& ctx, VkCommandBuffer cmd)
     b.subresourceRange.baseArrayLayer = 0;
     b.subresourceRange.layerCount     = 1;
 
-    // La intermedia entra desde UNDEFINED: se reescribe entera (el shader
-    // escribe TODOS los píxeles, también los que no emborrona) y el contenido
-    // del frame anterior no se reutiliza.
+    // The intermediate enters from UNDEFINED: it is rewritten entirely (the shader
+    // writes ALL the pixels, also the ones it does not blur) and the previous
+    // frame's content is not reused.
     b.image         = m_image[ctx.currentFrame];
     b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
     b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
@@ -286,9 +286,9 @@ void MotionBlurPass::record(const Context& ctx, VkCommandBuffer cmd)
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(cmd, (ctx.renderExtent.width + 7) / 8, (ctx.renderExtent.height + 7) / 8, 1);
 
-    // La copia de vuelta, y no un segundo dispatch: es una copia 1:1 de la
-    // imagen entera, que es lo que mejor hace el hardware. Las dos imágenes
-    // pasan a sus layouts de transferencia.
+    // The copy back, and not a second dispatch: it is a 1:1 copy of the
+    // whole image, which is what the hardware does best. The two images
+    // go to their transfer layouts.
     VkImageMemoryBarrier toCopy[2] = { b, b };
     toCopy[0].image         = m_image[ctx.currentFrame];
     toCopy[0].oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
@@ -313,8 +313,8 @@ void MotionBlurPass::record(const Context& ctx, VkCommandBuffer cmd)
                    ctx.hdrImage[ctx.currentFrame], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    1, &region);
 
-    // Y el HDR vuelve a SHADER_READ_ONLY, que es el layout que declaran los
-    // descriptor sets del bloom (compute) y de la composición (fragment).
+    // And the HDR goes back to SHADER_READ_ONLY, the layout declared by the
+    // descriptor sets of the bloom (compute) and the composition (fragment).
     b.image         = ctx.hdrImage[ctx.currentFrame];
     b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -324,9 +324,9 @@ void MotionBlurPass::record(const Context& ctx, VkCommandBuffer cmd)
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          0, 0, nullptr, 0, nullptr, 1, &b);
 
-    // La marca de salida va aqui y no tras el dispatch: la copia de vuelta es
-    // una imagen entera del tamano del render y forma parte de lo que cuesta
-    // este pase. Medir solo el dispatch daria una cifra optimista.
+    // The end mark goes here and not after the dispatch: the copy back is
+    // a whole render-sized image and is part of what this pass costs.
+    // Measuring only the dispatch would give an optimistic figure.
     if (ctx.timestampsSupported)
     {
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_queryPool,

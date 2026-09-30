@@ -13,12 +13,12 @@ namespace DonTopo {
 struct EditorContext;
 class GameObject;
 
-// Ventana "Animator" — canvas de nodos del grafo de estados del GameObject
-// seleccionado (nodo = estado con su clip y su loop, link = transición).
+// "Animator" window: node canvas of the state graph of the selected GameObject
+// (node = state with its clip and its loop, link = transition).
 //
-// Panel propio y no un bloque de Properties porque el canvas de
-// imgui-node-editor necesita zoom y pan propios: en la columna de Properties
-// sería inservible.
+// It is its own panel and not a block of Properties because the imgui-node-editor
+// canvas needs its own zoom and pan: in the Properties column it would be
+// unusable.
 class AnimatorPanel {
 public:
     AnimatorPanel();
@@ -31,130 +31,127 @@ public:
     void open() { m_open = true; }
 
 private:
-    // Vuelca AnimatorComponent::State::editorPos al canvas. Solo al cambiar de
-    // objeto: hacerlo cada frame pelearía con el ratón del usuario y los nodos
-    // no se podrían arrastrar.
+    // Dumps AnimatorComponent::State::editorPos to the canvas. Only when the object
+    // changes: doing it every frame would fight with the user's mouse and the nodes
+    // could not be dragged.
     void syncPositionsFromComponent(GameObject* go);
-    // Camino inverso, cada frame: el canvas es la fuente de verdad de las
-    // posiciones mientras el panel está abierto, y editorPos es lo que se
-    // serializa.
+    // Reverse path, every frame: the canvas is the source of truth for the positions
+    // while the panel is open, and editorPos is what gets serialized.
     void syncPositionsToComponent(GameObject* go);
     void drawParameterList(EditorContext& ctx, GameObject* go);
-    // Capas: la lista (seleccionar, añadir, quitar, reordenar, renombrar) y,
-    // para las que no son la base, peso, modo y máscara.
+    // Layers: the list (select, add, remove, reorder, rename) and, for the ones that
+    // are not the base, weight, mode and mask.
     void drawLayerBar(EditorContext& ctx, GameObject* go);
     void drawLayerMaskPopup(GameObject* go);
-    // Restricciones de IK del componente (no de una capa): tipo, hueso,
-    // objetivo, pole, peso y, en look-at, eje y ángulo máximo.
+    // IK constraints of the component (not of a layer): type, bone, target, pole,
+    // weight and, for look-at, axis and maximum angle.
     void drawIkList(EditorContext& ctx, GameObject* go);
-    // Clips de propiedades del componente: los que animan un objeto SIN
-    // esqueleto (transform, luz, material).
+    // Property clips of the component: the ones that animate an object WITHOUT a
+    // skeleton (transform, light, material).
     void drawPropertyClips(EditorContext& ctx, GameObject* go);
     void drawGraph(EditorContext& ctx, GameObject* go);
     void drawConditionsPopup(EditorContext& ctx, GameObject* go);
-    // Lista de clips ("blend") o de parámetros float ("by") de un estado. Se
-    // abre FUERA del nodo, entre ed::Suspend y ed::Resume: un BeginCombo dentro
-    // del nodo pinta su lista en coordenadas del canvas (con zoom y pan), así
-    // que salía desplazada y no recibía los clics.
+    // List of clips ("blend") or of float parameters ("by") of a state. It is opened
+    // OUTSIDE the node, between ed::Suspend and ed::Resume: a BeginCombo inside the
+    // node draws its list in canvas coordinates (with zoom and pan), so it came out
+    // displaced and did not receive the clicks.
     void drawBlendPickPopup(GameObject* go);
-    // Lista de ficheros FBX que aportan clips, con Add/Remove y rename inline.
+    // List of FBX files that provide clips, with Add/Remove and inline rename.
     void drawAnimationSources(EditorContext& ctx, GameObject* go);
-    // Drena el diálogo de fichero cada frame, incondicionalmente — incluso si
-    // el panel está cerrado o colapsado (por eso draw() la llama fuera del
-    // if(m_open) y del ImGui::Begin/End, no dentro): si solo se drenara con
-    // la ventana visible, cerrar o colapsar el panel con el diálogo abierto
-    // dejaría m_animSrcDlgOpen (y el estado interno de IGFD) atascado en true
-    // para siempre. Mismo patrón que PropertiesPanel::draw + drawMeshDialog.
+    // Drains the file dialog every frame, unconditionally, even if the panel is
+    // closed or collapsed (that is why draw() calls it outside the if(m_open) and
+    // the ImGui::Begin/End, not inside): if it were only drained with the window
+    // visible, closing or collapsing the panel with the dialog open would leave
+    // m_animSrcDlgOpen (and the internal IGFD state) stuck at true forever. Same
+    // pattern as PropertiesPanel::draw + drawMeshDialog.
     void drawAnimationSourceDialog(EditorContext& ctx);
-    // Importa path como fuente del GameObject seleccionado, vía comando (undo).
+    // Imports path as a source of the selected GameObject, via a command (undo).
     void importAnimationSource(EditorContext& ctx, GameObject* go, const std::string& path);
 
     ax::NodeEditor::EditorContext* m_ctx = nullptr;
-    bool m_open = false;   // arranca cerrado: es un panel especializado
+    bool m_open = false;   // starts closed: it is a specialized panel
 
-    // Último GameObject cuyas posiciones se volcaron al canvas. Al cambiar la
-    // selección hay que re-volcarlas.
+    // Last GameObject whose positions were dumped to the canvas. When the selection
+    // changes they have to be dumped again.
     GameObject* m_boundTo = nullptr;
-    // Tooltip del widget de un nodo que está bajo el cursor: se anota mientras
-    // se dibuja el nodo y se pinta tras cerrar el lienzo (ver drawGraph).
+    // Tooltip of the widget of a node that is under the cursor: it is noted down
+    // while the node is drawn and painted after closing the canvas (see drawGraph).
     std::string m_tooltipNodo;
-    // Capa cuyo grafo se muestra y edita, y la que tenía el canvas en el último
-    // volcado de posiciones: al cambiar de capa se vuelcan otra vez, como al
-    // cambiar de objeto.
-    // Ancho de la columna izquierda: lo arrastra el usuario por el borde. Vive
-    // en la sesión, no en el project.json (ahí va la visibilidad de paneles).
+    // Layer whose graph is shown and edited, and the one the canvas had at the last
+    // position dump: when the layer changes they are dumped again, as when the object
+    // changes.
+    // Width of the left column: the user drags it by the edge. It lives in the
+    // session, not in project.json (that is where panel visibility goes).
     float m_anchoColumna  = 300.0f;
     int  m_layer          = 0;
-    // Sub-máquina que se está mirando por dentro; -1 es la raíz de la capa. Se
-    // resetea al cambiar de capa o de objeto: su índice no significa nada en
-    // otro grafo.
-    // Sub-máquina que se está mirando por dentro, por **editorId** y no por
-    // índice: removeState reindexa el vector, así que un índice guardado aquí
-    // pasa a señalar a otro estado en cuanto se borra cualquier nodo anterior
-    // —y la app se salía de la caja sola—. Es la misma razón por la que el
-    // canvas identifica sus nodos por editorId. -1 = raíz de la capa.
+    // Sub-machine being looked at from the inside; -1 is the root of the layer. It is
+    // reset when the layer or the object changes: its index means nothing in
+    // another graph.
+    // Sub-machine being looked at from the inside, by **editorId** and not by
+    // index: removeState reindexes the vector, so an index stored here
+    // ends up pointing to another state as soon as any earlier node is deleted
+    // (and the app would get out of the box on its own). It is the same reason why the
+    // canvas identifies its nodes by editorId. -1 = root of the layer.
     int  m_nivelId        = -1;
-    // El índice que le corresponde en la capa actual, resuelto cada frame desde
-    // m_nivelId. -1 si la caja ya no existe (la borraron estando dentro).
+    // The index that corresponds to it in the current layer, resolved every frame from
+    // m_nivelId. -1 if the box no longer exists (it was deleted while inside).
     int  nivelActual(const AnimatorComponent& anim) const;
     int  m_boundLayer     = -1;
     int  m_renamingLayer  = -1;
     bool m_focusRename    = false;
     char m_layerNameBuf[64] = {};
 
-    // Índice de la transición cuyo popup de condiciones está abierto, -1 si
-    // ninguno. Diferido al final del frame: abrir un popup en mitad del canvas
-    // rompe el layout del node editor.
+    // Index of the transition whose conditions popup is open, -1 if none. Deferred to
+    // the end of the frame: opening a popup in the middle of the canvas breaks the
+    // node editor layout.
     int m_conditionsFor = -1;
 
-    // Índice del estado sobre el que se abrió el menú contextual de nodo,
-    // -1 si ninguno. Se usa un miembro plano en vez de ImGui::GetStateStorage()
-    // (el plan B que contemplaba el spec): con un solo popup de nodo activo a
-    // la vez no hace falta la indirección de la state storage de ImGui, y un
-    // miembro es más fácil de razonar y de testear a ojo.
+    // Index of the state over which the node context menu was opened, -1 if none. A
+    // plain member is used instead of ImGui::GetStateStorage() (the plan B that the
+    // spec contemplated): with a single node popup active at a time the indirection
+    // of the ImGui state storage is not needed, and a member is easier to reason
+    // about and to test by eye.
     int m_nodeCtxTarget = -1;
 
-    // Popup de blend pendiente: el botón del nodo lo pide y drawBlendPickPopup
-    // lo abre ya en coordenadas de pantalla. Por editorId, no por índice: el
-    // vector de estados puede reindexarse entre el clic y el popup.
+    // Pending blend popup: the node button requests it and drawBlendPickPopup opens
+    // it already in screen coordinates. By editorId, not by index: the state vector
+    // can be reindexed between the click and the popup.
     bool m_blendPickRequested = false;
     int  m_blendPickEditorId  = -1;
-    int  m_blendPickKind      = 0;       // 0 clip de una entrada del blend, 1 parámetro ("by"), 2 multiplicador de velocidad, 3 parámetro Y del blend 2D.
-    int  m_blendPickEntry     = -1;      // índice en blendEntries para kind 0.
-    // Undo del grafo: convierte las ediciones en vivo de este panel en un
-    // comando por gesto (ver AnimatorGraphUndo.h).
+    int  m_blendPickKind      = 0;       // 0 clip of a blend entry, 1 parameter ("by"), 2 speed multiplier, 3 Y parameter of the 2D blend.
+    int  m_blendPickEntry     = -1;      // index into blendEntries for kind 0.
+    // Graph undo: turns the live edits of this panel into one command per gesture
+    // (see AnimatorGraphUndo.h).
     AnimatorGraphUndoTracker m_graphUndo;
-    // Revisión del historial en el frame anterior. Si cambia (undo, redo o un
-    // push), los nodos que un undo haya reinsertado se recolocan desde el
-    // componente: el canvas no los conocía.
+    // History revision in the previous frame. If it changes (undo, redo or a push),
+    // the nodes that an undo has reinserted are repositioned from the component: the
+    // canvas did not know them.
     uint64_t m_lastUndoRevision = 0;
 
     char m_newParamName[64] = {};
-    int  m_newParamType     = 0;   // índice en ParamType: 0 bool, 1 trigger, 2 int, 3 float
+    int  m_newParamType     = 0;   // index into ParamType: 0 bool, 1 trigger, 2 int, 3 float
 
-    // Instancia propia y no compartida con los diálogos de PropertiesPanel:
-    // IGFD guarda estado por instancia, y compartirla haría que redimensionar
-    // un popup tocara el otro.
+    // Own instance and not shared with the PropertiesPanel dialogs: IGFD keeps state
+    // per instance, and sharing it would make resizing one popup affect the other.
     std::unique_ptr<IGFD::FileDialog> m_animSrcDialog;
     bool m_animSrcDlgOpen = false;
-    // Id del GameObject objetivo, capturado al pulsar "Add Animation FBX..."
-    // (OpenDialog), NO leído de ctx.selected al drenar: el diálogo no es
-    // modal, así que el usuario puede cambiar de selección mientras elige el
-    // fichero, y el FBX tiene que ir a quien estaba seleccionado al abrir el
-    // diálogo. Se resuelve vía Scene::findById en vez de guardar un
-    // GameObject* crudo por el mismo motivo que los comandos de Undo: el
-    // objeto puede haberse borrado (o reconstruido) mientras el diálogo
-    // estaba abierto.
+    // Id of the target GameObject, captured when pressing "Add Animation FBX..."
+    // (OpenDialog), NOT read from ctx.selected when draining: the dialog is not
+    // modal, so the user can change the selection while choosing the file, and the
+    // FBX has to go to whoever was selected when the dialog was opened. It is resolved
+    // via Scene::findById instead of storing a raw GameObject* for the same reason
+    // as the Undo commands: the object may have been deleted (or rebuilt) while the
+    // dialog was open.
     uint64_t m_animSrcDlgTarget = 0;
-    std::string m_animSrcError;      // último error, en rojo bajo la lista
-    // Clip cuyo nombre se está editando, "" si ninguno.
+    std::string m_animSrcError;      // last error, in red under the list
+    // Clip whose name is being edited, "" if none.
     std::string m_renamingClip;
-    // 256 y no 64: un nombre Mixamo (p.ej. "mixamorig_Explosive_Superhero_Idle")
-    // más el sufijo " (N)" que añade addAnimationSource en colisión ya roza los
-    // 64 bytes, y un snprintf truncado aquí se convierte en un rename real (no
-    // un rechazo) en cuanto el usuario pulsa Enter: silenciosamente perdería
-    // los últimos caracteres del nombre. 256 deja el truncamiento implausible
-    // sin añadir una ruta de rechazo nueva en la UI.
+    // 256 and not 64: a Mixamo name (e.g. "mixamorig_Explosive_Superhero_Idle")
+    // plus the " (N)" suffix that addAnimationSource adds on a collision already
+    // comes close to 64 bytes, and a truncated snprintf here becomes a real rename
+    // (not a rejection) as soon as the user presses Enter: it would silently lose
+    // the last characters of the name. 256 makes truncation implausible without
+    // adding a new rejection path in the UI.
     char m_renameBuf[256] = {};
 };
 

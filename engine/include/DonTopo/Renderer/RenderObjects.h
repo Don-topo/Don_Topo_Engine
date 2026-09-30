@@ -8,46 +8,46 @@
 
 namespace DonTopo {
 
-    // Los tipos de instancia dibujable del backend Vulkan. Vivian dentro de
-    // Renderer y salieron aqui por una razon concreta: ReflectionProbePass los
-    // recibe en su Context para redibujar la escena en las seis caras de una
-    // sonda, y meter Renderer.h dentro de un pase seria circular (Renderer.h ya
-    // incluye el header del pase para tenerlo por valor).
+    // The drawable instance types of the Vulkan backend. They lived inside
+    // Renderer and moved here for a concrete reason: ReflectionProbePass
+    // receives them in its Context to redraw the scene onto the six faces of
+    // a probe, and putting Renderer.h inside a pass would be circular (Renderer.h already
+    // includes the pass header to hold it by value).
     //
-    // Estan en el mismo namespace que Renderer, asi que dentro de la clase se
-    // siguen nombrando sin calificar exactamente igual que antes. Mismo
-    // movimiento que se le hizo a Frustum cuando salio a Culling.
+    // They are in the same namespace as Renderer, so inside the class they are
+    // still named unqualified exactly as before. Same
+    // move that was made for Frustum when it went out to Culling.
 
-    // Una instancia dibujable. Ya NO posee recursos GPU: buffers,
-    // texturas y descriptor set viven en la entrada compartida que
-    // apunta sharedIndex, y N objetos con la misma malla+material
-    // apuntan todos a la misma. Lo único por instancia es el transform
-    // (y el nombre, que es de depuración).
+    // A drawable instance. It NO LONGER owns GPU resources: buffers,
+    // textures and descriptor set live in the shared entry that
+    // sharedIndex points to, and N objects with the same mesh+material
+    // all point to the same one. The only per-instance thing is the transform
+    // (and the name, which is for debugging).
     struct RenderObject
     {
         std::string     name;
-        // -1 = sin recursos (nunca construido, o ya liberado desde el
-        // editor). Es el chequeo que sustituye al viejo
+        // -1 = no resources (never built, or already freed from the
+        // editor). It is the check that replaces the old
         // "vertexBuffer == VK_NULL_HANDLE".
         int             sharedIndex         = -1;
         glm::mat4       transform{1.0f};
-        // 0 = no refleja. Lo sincroniza el bucle de la aplicación desde
-        // el GameObject, igual que el transform.
+        // 0 = does not reflect. Synchronized by the application loop from
+        // the GameObject, same as the transform.
         float           ssrStrength         = 0.0f;
-        // Factores PBR POR OBJETO. Vivían en la entrada compartida
-        // (SharedGpuMesh), que es lo que obligaba a re-clavear el objeto y
-        // rehacer sus recursos de GPU para mover un slider: cambiar un número
-        // cambiaba la clave de dedup. Aquí no cuestan nada moverlos —viajan por
-        // push constant, como el transform— y de paso dos objetos con la misma
-        // malla y distinto acabado comparten la VRAM.
+        // PBR factors PER OBJECT. They lived in the shared entry
+        // (SharedGpuMesh), which is what forced re-keying the object and
+        // rebuilding its GPU resources to move a slider: changing a number
+        // changed the dedup key. Here moving them costs nothing (they travel by
+        // push constant, like the transform) and incidentally two objects with the same
+        // mesh and different finish share the VRAM.
         //
-        // Con mapa ORM van los dos a 1.0 y manda la textura: el shader
-        // multiplica. Esa decisión la toma quien registra el objeto, no el pase
-        // de dibujo, que ya no tiene el material delante.
+        // With an ORM map both go to 1.0 and the texture rules: the shader
+        // multiplies. That decision is made by whoever registers the object, not the draw
+        // pass, which no longer has the material in front of it.
         float           metallic            = 0.0f;
         float           roughness           = 0.5f;
-        // false = lo saltan los pases de escena, de sombras y de AO: el
-        // mesh no se manda a la GPU, así que tampoco proyecta ni ocluye.
+        // false = skipped by the scene, shadow and AO passes: the
+        // mesh is not sent to the GPU, so it neither casts nor occludes.
         bool            meshVisible         = true;
     };
 
@@ -67,7 +67,7 @@ namespace DonTopo {
         float           metallic      = 0.0f;
         float           roughness     = 0.5f;
         VkDescriptorSet descSets[2]   = {};
-        // Pool del que salieron; ver SharedGpuMesh::descPool.
+        // Pool they came from; see SharedGpuMesh::descPool.
         VkDescriptorPool descPool     = VK_NULL_HANDLE;
     };
 
@@ -81,19 +81,19 @@ namespace DonTopo {
         glm::mat4 transform{1.0f};
         float     metallic  = 1.0f;
         float     roughness = 1.0f;
-        // flags.x = 1: triangle.vert coge el model matrix del SSBO de
-        // instancias por gl_InstanceIndex (ruta estática, agrupada);
-        // 0: lo coge de `transform` (ruta skinned, que comparte este
-        // vertex shader y dibuja una instancia con su propia matriz).
-        // Es el viejo _pad reaprovechado: mismo tipo y offset, así que
-        // pbr.frag sigue declarando el bloque igual que siempre.
+        // flags.x = 1: triangle.vert takes the model matrix from the instance
+        // SSBO by gl_InstanceIndex (static, grouped path);
+        // 0: it takes it from `transform` (skinned path, which shares this
+        // vertex shader and draws one instance with its own matrix).
+        // It is the old _pad reused: same type and offset, so
+        // pbr.frag keeps declaring the block the same as always.
         glm::vec2 flags{0.0f, 0.0f};
     };
     static_assert(sizeof(PushData) == 80, "PushData must be 80 bytes");
 
     struct SkinnedRenderObject {
         std::string    name;
-        // SSBOs estáticos
+        // static SSBOs
         VkBuffer       keyframePosBuffer    = VK_NULL_HANDLE;
         VkDeviceMemory keyframePosMemory    = VK_NULL_HANDLE;
         VkBuffer       keyframeRotBuffer    = VK_NULL_HANDLE;
@@ -104,12 +104,12 @@ namespace DonTopo {
         VkDeviceMemory boneInfoMemory       = VK_NULL_HANDLE;
         VkBuffer       inputVertexBuffer    = VK_NULL_HANDLE;
         VkDeviceMemory inputVertexMemory    = VK_NULL_HANDLE;
-        // SSBOs dinámicos (escritos por compute)
+        // dynamic SSBOs (written by compute)
         VkBuffer       localTransformBuffer = VK_NULL_HANDLE;
         VkDeviceMemory localTransformMemory = VK_NULL_HANDLE;
         VkBuffer       finalBoneBuffer      = VK_NULL_HANDLE;
         VkDeviceMemory finalBoneMemory      = VK_NULL_HANDLE;
-        // Output vertex buffer (usado también como VB en graphics)
+        // Output vertex buffer (also used as VB in graphics)
         VkBuffer       outputVertexBuffer   = VK_NULL_HANDLE;
         VkDeviceMemory outputVertexMemory   = VK_NULL_HANDLE;
         // Index buffer
@@ -118,54 +118,54 @@ namespace DonTopo {
         uint32_t       indexCount           = 0;
         uint32_t       vertexCount          = 0;
         uint32_t       boneCount            = 0;
-        // Nº de clips concatenados en los SSBOs de keyframes. Solo se usa
-        // pa clampar en setAnimationState (Task 3): un clipIndex fuera de
-        // rango haría que clipBase apuntara fuera del SSBO de BoneInfos y
-        // el compute leyera basura sin que nada avisara.
+        // No. of clips concatenated in the keyframe SSBOs. Only used
+        // to clamp in setAnimationState (Task 3): a clipIndex out of
+        // range would make clipBase point outside the BoneInfos SSBO and
+        // the compute read garbage with nothing warning about it.
         uint32_t       clipCount            = 1;
         // Descriptor set de compute
         VkDescriptorSet computeDescSet      = VK_NULL_HANDLE;
-        // Y el pool del que salio. SkinningPass encadena pools segun hacen
-        // falta, asi que para liberar el set hay que acordarse de CUAL era:
-        // vkFreeDescriptorSets pide el pool concreto, no vale con el ultimo.
+        // And the pool it came from. SkinningPass chains pools as needed,
+        // so to free the set you have to remember WHICH one it was:
+        // vkFreeDescriptorSets asks for the specific pool, the last one will not do.
         VkDescriptorPool computeDescPool    = VK_NULL_HANDLE;
-        // Texturas y descriptor sets por material
+        // Textures and descriptor sets per material
         std::vector<SkinnedMatGfx>  matGfx;
         std::vector<SubMeshDraw>    subMeshes;
-        // Fuerza de SSR del objeto, sincronizada desde el GameObject
-        // igual que el transform. La ruta skinned dibuja una instancia
-        // por submalla, así que aquí no hay agrupado que partir.
+        // SSR strength of the object, synchronized from the GameObject
+        // like the transform. The skinned path draws one instance
+        // per submesh, so there is no grouping to split here.
         float          ssrStrength          = 0.0f;
-        // false = lo saltan el pass de escena y el de sombras. El compute
-        // de skinning sí sigue corriendo: el contorno de selección lee
-        // sus vértices de salida.
+        // false = skipped by the scene pass and the shadow pass. The skinning
+        // compute does keep running: the selection outline reads
+        // its output vertices.
         bool           meshVisible          = true;
-        // Estado de animación
+        // Animation state
         float     animTime       = 0.0f;
-        // Índice del clip que se evalúa este frame. Los demás residen en el
-        // SSBO y no se leen.
+        // Index of the clip evaluated this frame. The others reside in the
+        // SSBO and are not read.
         uint32_t  activeClip     = 0;
-        // La pose que manda un Animator (setAnimationPose): hasta 6 muestras y
-        // la congelada. Sin ella (hasPose false), bone_eval evalúa una sola
-        // muestra: activeClip en animTime, que es el camino de updateAnimation.
+        // The pose an Animator sends (setAnimationPose): up to 6 samples and
+        // the frozen one. Without it (hasPose false), bone_eval evaluates a single
+        // sample: activeClip at animTime, which is the updateAnimation path.
         AnimationPose pose;
         bool          hasPose        = false;
-        // TRS de la pose resultante (lo escribe bone_eval) y la copia congelada
-        // al interrumpir un fade. 3 vec4 por hueso.
+        // TRS of the resulting pose (written by bone_eval) and the frozen copy
+        // when a fade is interrupted. 3 vec4 per bone.
         VkBuffer       poseTrsBuffer        = VK_NULL_HANDLE;
         VkDeviceMemory poseTrsMemory        = VK_NULL_HANDLE;
         VkBuffer       frozenTrsBuffer      = VK_NULL_HANDLE;
         VkDeviceMemory frozenTrsMemory      = VK_NULL_HANDLE;
-        // Bloque de pose (PoseBlock.h), una copia por frame en vuelo, mapeado
-        // de forma persistente: lo escribe SkinningPass::record cada frame.
+        // Pose block (PoseBlock.h), one copy per frame in flight, persistently
+        // mapped: written by SkinningPass::record every frame.
         VkBuffer       poseBlockBuffer      = VK_NULL_HANDLE;
         VkDeviceMemory poseBlockMemory      = VK_NULL_HANDLE;
         void*          poseBlockMapped      = nullptr;
-        // Copia de las máscaras de la pose: la del Animator solo vale durante
+        // Copy of the pose masks: the Animator's one is only valid during
         // setAnimationPose.
         std::vector<uint8_t> poseMasks[kMaxLayersPose];
-        // IK: lo que manda el Animator (ya en espacio del modelo) y su bloque
-        // para la GPU, con una copia por frame en vuelo.
+        // IK: what the Animator sends (already in model space) and its block
+        // for the GPU, with one copy per frame in flight.
         AnimationIk    ik;
         VkBuffer       ikBlockBuffer  = VK_NULL_HANDLE;
         VkDeviceMemory ikBlockMemory  = VK_NULL_HANDLE;
@@ -173,21 +173,21 @@ namespace DonTopo {
         float     duration       = 0.0f;
         float     ticksPerSecond = 24.0f;
         glm::mat4 transform      {1.0f};
-        // Cota para el frustum culling: esfera centrada en el origen
-        // local, válida en toda pose (ver skinnedBoundRadius).
-        // hasBounds false = malla sin con qué acotar -> no se culea
-        // nunca, que es el lado seguro.
+        // Bound for frustum culling: sphere centered on the local
+        // origin, valid in every pose (see skinnedBoundRadius).
+        // hasBounds false = mesh with nothing to bound it with -> it is never
+        // culled, which is the safe side.
         float     boundRadius    = 0.0f;
         bool      hasBounds      = false;
-        // Lado mayor de la AABB de la pose de REPOSO, en espacio local.
-        // Solo lo usa el grosor del contorno de selección, que es
-        // proporcional al tamaño del objeto: boundRadius no vale ahí
-        // porque acota todas las poses y sale varias veces mayor que la
-        // malla. 0 = malla sin vértices (el contorno cae a su mínimo).
+        // Largest side of the AABB of the REST pose, in local space.
+        // Only used by the selection outline thickness, which is
+        // proportional to the object's size: boundRadius is no good there
+        // because it bounds all poses and comes out several times larger than the
+        // mesh. 0 = mesh without vertices (the outline falls to its minimum).
         float     restMaxExtent  = 0.0f;
-        // 0 = subido y visible. >0 = esperando a que la fence del batch
-        // con ese ticket señale. Sin esto, el objeto se dibujaría con
-        // sus texturas todavía en TRANSFER_DST_OPTIMAL.
+        // 0 = uploaded and visible. >0 = waiting for the fence of the batch
+        // with that ticket to signal. Without this, the object would be drawn with
+        // its textures still in TRANSFER_DST_OPTIMAL.
         uint64_t  uploadTicket   = 0;
     };
 

@@ -1,12 +1,12 @@
-// Tests de Scene::fromJson con y sin AsyncAssetLoader.
+// Tests of Scene::fromJson with and without AsyncAssetLoader.
 //
-// El caso mas importante es el primero: con loader == nullptr el
-// comportamiento tiene que ser IDENTICO al de antes de esta feature. Es lo que
-// protege el restore de Play->Stop (EditorUI.cpp:170) y las ocho suites que ya
-// existen. Ese test (testSyncPathUnchanged) es un DIFERENCIAL sobre
-// pendingMeshJob con una escena que SI tiene sourcePath — no una comparacion
-// de toJson() entre dos cargas nullptr, que no puede detectar una seleccion
-// de rama invertida (ver el comentario junto a la funcion para el porque).
+// The most important case is the first one: with loader == nullptr the
+// behavior has to be IDENTICAL to that before this feature. It is what
+// protects the Play->Stop restore (EditorUI.cpp:170) and the eight suites that already
+// exist. That test (testSyncPathUnchanged) is a DIFFERENTIAL on
+// pendingMeshJob with a scene that DOES have a sourcePath, not a comparison
+// of toJson() between two nullptr loads, which cannot detect an inverted
+// branch selection (see the comment next to the function for why).
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Core/Scene.h"
@@ -26,17 +26,17 @@
 
 namespace {
 
-// Check con fallo RUIDOSO y valido en Release: assert() se compila a nada bajo
-// NDEBUG, asi que un `assert(ptr); ptr->campo` deja un deref de puntero
-// potencialmente nulo sin red. CHECK cuenta el fallo, lo imprime y NO
-// desreferencia — un test roto reporta en vez de petar con un 0xC0000005 mudo.
+// Check with a LOUD failure and valid in Release: assert() compiles to nothing under
+// NDEBUG, so an `assert(ptr); ptr->field` leaves a dereference of a
+// potentially null pointer with no net. CHECK counts the failure, prints it and does NOT
+// dereference; a broken test reports instead of crashing with a silent 0xC0000005.
 int g_failures = 0;
 #define CHECK(cond, msg) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL: %s (%s:%d)\n", (msg), __FILE__, __LINE__); \
     ++g_failures; } } while (0)
 
-// Una sola PhysicsManager para todo el fichero: crear y liberar una por test
-// crashea al segundo init porque PxFoundation es unica por proceso.
+// A single PhysicsManager for the whole file: creating and freeing one per test
+// crashes on the second init because PxFoundation is unique per process.
 DonTopo::PhysicsManager& physics()
 {
     static DonTopo::PhysicsManager p;
@@ -53,16 +53,16 @@ DonTopo::AudioManager& audio()
     return a;
 }
 
-// Escena minima con dos nodos anidados y transforms NO neutros: un test que
-// afirmase la identidad pasaria igual si nadie leyera el campo. Sin
-// sourcePath: nunca dispara la rama de carga de mesh, sincrona o asincrona
-// por igual — es justo lo que hace falta para comparar los dos caminos sin
-// que el resultado dependa de si el asset existe en disco.
+// Minimal scene with two nested nodes and NON-neutral transforms: a test that
+// asserted identity would pass all the same if nobody read the field. Without
+// sourcePath: it never triggers the mesh load branch, synchronous or asynchronous
+// alike; it is exactly what is needed to compare the two paths without
+// the result depending on whether the asset exists on disk.
 //
-// Envuelta en version/root: Scene::fromJson exige ambos campos (los mismos
-// que produce toJson()) y devuelve false si faltan — el fixture del brief
-// no los traia y por tanto nunca cargaba nada. Sin el envoltorio los tres
-// tests fallarian en el primer assert, antes de ejercitar nada del loader.
+// Wrapped in version/root: Scene::fromJson requires both fields (the same
+// ones toJson() produces) and returns false if they are missing; the brief's fixture
+// did not carry them and therefore never loaded anything. Without the wrapper the three
+// tests would fail on the first assert, before exercising anything of the loader.
 nlohmann::json twoNodeScene()
 {
     return nlohmann::json::parse(R"({
@@ -77,11 +77,11 @@ nlohmann::json twoNodeScene()
     })");
 }
 
-// Escena con un nodo que SI dispara la rama de carga de mesh: sourcePath
-// apunta a un fichero que a proposito no existe. No hace falta un asset real
-// — el worker fallara con un LoadedMesh::error no vacio, que es justo el
-// caso que hay que soportar sin crashear. Sirve para probar de verdad la
-// rama async (la fixture del brief, sin "mesh", nunca la disparaba).
+// Scene with a node that DOES trigger the mesh load branch: sourcePath
+// points to a file that on purpose does not exist. A real asset is not needed
+// since the worker will fail with a non-empty LoadedMesh::error, which is exactly the
+// case that has to be supported without crashing. It serves to really test the
+// async branch (the brief's fixture, without "mesh", never triggered it).
 nlohmann::json sceneWithPendingLoad()
 {
     return nlohmann::json::parse(R"({
@@ -97,13 +97,13 @@ nlohmann::json sceneWithPendingLoad()
     })");
 }
 
-// Quita "id" recursivamente de un nodo serializado (mismo patron que el
-// stripIds de Scene::cloneGameObject). node->id lo asigna un contador
-// atomico GLOBAL en el constructor de GameObject: dos Scene distintas
-// cargando el MISMO JSON (sin "id" en el fichero) reusan la posicion en el
-// contador pero nunca el mismo valor absoluto, asi que comparar toJson() sin
-// quitar "id" fallaria SIEMPRE, incluso entre dos cargas identicas — no
-// probaria nada sobre loader nullptr vs default.
+// Removes "id" recursively from a serialized node (same pattern as the
+// stripIds of Scene::cloneGameObject). node->id is assigned by a GLOBAL atomic
+// counter in the GameObject constructor: two different Scenes
+// loading the SAME JSON (without "id" in the file) reuse the position in the
+// counter but never the same absolute value, so comparing toJson() without
+// removing "id" would ALWAYS fail, even between two identical loads; it
+// would prove nothing about loader nullptr vs default.
 void stripIds(nlohmann::json& node)
 {
     if (!node.is_object()) return;
@@ -113,24 +113,24 @@ void stripIds(nlohmann::json& node)
             stripIds(child);
 }
 
-// El caso mas importante: con loader == nullptr el comportamiento tiene que
-// ser IDENTICO al de antes de esta feature — en particular, la rama estatica
-// que esta tarea toco (el `else if (!sourcePath.empty()) { if (loader) {...}
-// else {...} }` dentro de nodeFromJson) NO debe encolar ninguna peticion.
+// The most important case: with loader == nullptr the behavior has to
+// be IDENTICAL to that before this feature; in particular, the static branch
+// that this task touched (the `else if (!sourcePath.empty()) { if (loader) {...}
+// else {...} }` inside nodeFromJson) must NOT enqueue any request.
 //
-// Es un DIFERENCIAL sobre pendingMeshJob, no una comparacion de toJson():
-// carga la MISMA escena con y sin loader y compara el campo que la rama
-// if(loader)/else realmente escribe. Esto SI prueba seleccion de rama — a
-// diferencia de comparar dos toJson() donde AMBOS lados usan loader==nullptr
-// (ver testSyncDefaultArgEqualsExplicitNullptr mas abajo): con los dos lados
-// nullptr, una rama corrupta corrompe los dos por igual y esa comparacion
-// seguiria cuadrando. Hace falta un nodo con sourcePath (sceneWithPendingLoad,
-// no twoNodeScene) para que la rama exista siquiera — con twoNodeScene
-// j.contains("mesh") es false y todo el bloque queda muerto para el test.
+// It is a DIFFERENTIAL on pendingMeshJob, not a comparison of toJson():
+// it loads the SAME scene with and without loader and compares the field that the
+// if(loader)/else branch really writes. This DOES test branch selection, unlike
+// comparing two toJson() where BOTH sides use loader==nullptr
+// (see testSyncDefaultArgEqualsExplicitNullptr further down): with both sides
+// nullptr, a corrupted branch corrupts both equally and that comparison
+// would keep matching. A node with sourcePath is needed (sceneWithPendingLoad,
+// not twoNodeScene) for the branch to even exist; with twoNodeScene
+// j.contains("mesh") is false and the whole block is dead for the test.
 //
-// Sabotaje: invertir la condicion a `if (!loader)` en la rama estatica de
-// nodeFromJson -> los dos asserts de abajo se intercambian (sin loader
-// encolaria, con loader no) y el test falla.
+// Sabotage: invert the condition to `if (!loader)` in the static branch of
+// nodeFromJson -> the two asserts below swap (without a loader it
+// would enqueue, with a loader it would not) and the test fails.
 void testSyncPathUnchanged(DonTopo::AsyncAssetLoader& loader)
 {
     DonTopo::Scene sync;
@@ -138,10 +138,9 @@ void testSyncPathUnchanged(DonTopo::AsyncAssetLoader& loader)
     DonTopo::GameObject* hijoASync = nullptr;
     sync.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") hijoASync = go; });
     CHECK(hijoASync, "hijoA debe existir (sync)");
-    // Sin loader: corre la rama sincrona (ModelLoader::load). El fichero no
-    // existe, asi que no hay mesh — pero sobre todo NO se llamo a
-    // requestMesh en absoluto, y pendingMeshJob se queda en su valor por
-    // defecto (0).
+    // Without a loader: the synchronous branch runs (ModelLoader::load). The file does not
+    // exist, so there is no mesh; but above all requestMesh was NOT called
+    // at all, and pendingMeshJob stays at its default value (0).
     if (hijoASync)
         CHECK(hijoASync->pendingMeshJob == 0,
               "sin loader no debe encolarse ninguna peticion (rama sincrona)");
@@ -151,17 +150,17 @@ void testSyncPathUnchanged(DonTopo::AsyncAssetLoader& loader)
     DonTopo::GameObject* hijoAAsync = nullptr;
     withLoader.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") hijoAAsync = go; });
     CHECK(hijoAAsync, "hijoA debe existir (async)");
-    // Con loader: corre la rama asincrona -> requestMesh SI se llamo.
+    // With a loader: the asynchronous branch runs -> requestMesh WAS called.
     if (hijoAAsync)
         CHECK(hijoAAsync->pendingMeshJob != 0,
               "con loader debe encolarse una peticion real (rama asincrona)");
 }
 
-// Comprobacion secundaria de determinismo: el parametro por defecto y el
-// nullptr explicito son el MISMO camino (misma jerarquia/transforms tras
-// stripIds). NO prueba seleccion de rama — ver testSyncPathUnchanged para
-// eso — porque los dos lados son loader==nullptr: una rama estatica
-// corrupta corrompe ambos por igual y esta comparacion seguiria cuadrando.
+// Secondary determinism check: the default parameter and the explicit
+// nullptr are the SAME path (same hierarchy/transforms after
+// stripIds). It does NOT test branch selection (see testSyncPathUnchanged for
+// that) because both sides are loader==nullptr: a corrupted static
+// branch corrupts both equally and this comparison would keep matching.
 void testSyncDefaultArgEqualsExplicitNullptr()
 {
     DonTopo::Scene a, b;
@@ -175,11 +174,11 @@ void testSyncDefaultArgEqualsExplicitNullptr()
     CHECK(ja == jb, "default-arg y nullptr explicito dan el mismo resultado");
 }
 
-// Con loader, los GameObject existen ya con su jerarquia y su transform: lo
-// unico que falta es el mesh. El nodo con sourcePath queda con una peticion
-// en vuelo (pendingMeshJob != 0) y sin render index — nada se ha bombeado
-// todavia. Sabotaje: crear los nodos solo al bombear — el assert de nombres
-// falla porque la escena esta vacia.
+// With a loader, the GameObjects already exist with their hierarchy and their transform: the
+// only thing missing is the mesh. The node with sourcePath is left with a request
+// in flight (pendingMeshJob != 0) and without a render index; nothing has been pumped
+// yet. Sabotage: create the nodes only when pumping; the names assert
+// fails because the scene is empty.
 void testAsyncCreatesNodesImmediately(DonTopo::AsyncAssetLoader& loader)
 {
     DonTopo::Scene s;
@@ -189,20 +188,20 @@ void testAsyncCreatesNodesImmediately(DonTopo::AsyncAssetLoader& loader)
     bool hijoAHasPendingJob = false;
     s.traverse([&](DonTopo::GameObject* go) {
         if (go->name == "hijoA" || go->name == "hijoB") ++found;
-        // Nada se ha bombeado todavia: ningun nodo puede tener indice de render.
+        // Nothing has been pumped yet: no node can have a render index.
         CHECK(go->staticRenderIndex  == -1, "sin bombear no hay indice static");
         CHECK(go->skinnedRenderIndex == -1, "sin bombear no hay indice skinned");
         if (go->name == "hijoA")
         {
-            // hijoA traia sourcePath: debe tener una peticion en vuelo y
-            // NINGUN mesh todavia (el GameObject existe completo desde el
-            // frame 0, sin esperar al asset).
+            // hijoA carried sourcePath: it must have a request in flight and
+            // NO mesh yet (the GameObject exists complete from
+            // frame 0, without waiting for the asset).
             hijoAHasPendingJob = (go->pendingMeshJob != 0);
             CHECK(!go->hasMesh(), "hijoA no debe tener mesh todavia");
         }
         if (go->name == "hijoB")
         {
-            // hijoB no traia sourcePath: no hay nada que pedir.
+            // hijoB did not carry sourcePath: there is nothing to request.
             CHECK(go->pendingMeshJob == 0, "hijoB sin sourcePath no encola");
         }
     });
@@ -210,54 +209,54 @@ void testAsyncCreatesNodesImmediately(DonTopo::AsyncAssetLoader& loader)
     CHECK(hijoAHasPendingJob, "el nodo con sourcePath debe encolar una peticion real");
 }
 
-// Borrar un GameObject con carga pendiente y bombear despues no crashea: el
-// resultado se descarta porque su targetId ya no esta en la escena viva.
+// Deleting a GameObject with a pending load and pumping afterwards does not crash: the
+// result is discarded because its targetId is no longer in the live scene.
 //
-// Es el test con mas valor de los tres: el use-after-free clasico de este
-// patron es guardar un GameObject* en la peticion. Sabotaje: guardar el
-// puntero en vez del id y desreferenciarlo al bombear — crash o basura.
+// It is the most valuable test of the three: the classic use-after-free of this
+// pattern is storing a GameObject* in the request. Sabotage: store the
+// pointer instead of the id and dereference it when pumping; crash or garbage.
 void testDeletedTargetIsDiscarded(DonTopo::AsyncAssetLoader& loader)
 {
     DonTopo::Scene s;
-    // sceneWithPendingLoad, no twoNodeScene: hace falta una peticion REAL en
-    // vuelo (hijoA tiene sourcePath) para que este test compruebe algo — con
-    // la fixture sin mesh del brief, pumpCompleted() no tenia nada que
-    // entregar y el test pasaba sin ejercitar el camino de descarte.
+    // sceneWithPendingLoad, not twoNodeScene: a REAL request in flight is needed
+    // (hijoA has sourcePath) for this test to check anything; with
+    // the brief's fixture without a mesh, pumpCompleted() had nothing to
+    // deliver and the test passed without exercising the discard path.
     CHECK(s.fromJson(sceneWithPendingLoad(), physics(), audio(), &loader), "fromJson &loader debe cargar");
 
     DonTopo::GameObject* victim = nullptr;
     s.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") victim = go; });
     CHECK(victim, "hijoA debe existir");
-    if (!victim) return;   // Release-safe: sin victim no se puede seguir sin desreferenciar nulo
+    if (!victim) return;   // Release-safe: without victim you cannot continue without dereferencing null
     CHECK(victim->pendingMeshJob != 0, "hace falta una peticion real en vuelo para este test");
 
     const uint64_t goneId = victim->id;
     s.removeGameObject(victim);
 
-    // Un resultado dirigido a un id que ya no existe no puede tocar memoria
-    // liberada. Se comprueba que sigue sin aparecer tras bombear.
+    // A result addressed to an id that no longer exists cannot touch freed
+    // memory. It is checked that it still does not show up after pumping.
     for (auto& r : loader.pumpCompleted(1000.0f))
-        (void)r;   // solo importa que no crashee
+        (void)r;   // all that matters is that it does not crash
 
     bool stillThere = false;
     s.traverse([&](DonTopo::GameObject* go) { if (go->id == goneId) stillThere = true; });
     CHECK(!stillThere, "el nodo borrado no puede resucitar al bombear");
 }
 
-// La cache de precarga (PreloadedMeshCache) se consulta ANTES de leer disco: un
-// sourcePath presente en la cache usa una copia profunda de la malla cacheada
-// sin tocar el fichero. Es lo que permite al runtime cargar la escena desde
-// mallas ya precargadas en paralelo (con progreso en el splash) sin cambiar el
-// modelo de registro ni perder la config de animacion.
+// The preload cache (PreloadedMeshCache) is consulted BEFORE reading disk: a
+// sourcePath present in the cache uses a deep copy of the cached mesh
+// without touching the file. It is what lets the runtime load the scene from
+// meshes already preloaded in parallel (with progress on the splash) without changing the
+// registration model or losing the animation config.
 //
-// Verificable sin asset real: se fabrica una malla en RAM con nombre y
-// vertices DISTINTIVOS y se mete en la cache bajo el sourcePath de hijoA, que
-// apunta a un fichero que NO existe. Si el nodo acaba con esa malla, la cache
-// se consulto de verdad — sin cache, un path inexistente no da mesh alguno.
+// Verifiable without a real asset: a mesh is fabricated in RAM with a DISTINCTIVE name and
+// vertices and put in the cache under the sourcePath of hijoA, which
+// points to a file that does NOT exist. If the node ends up with that mesh, the cache
+// was really consulted; without the cache, a nonexistent path gives no mesh at all.
 //
-// Sabotaje: si nodeFromJson ignorase `preloaded` (no consultara la cache), el
-// primer bloque falla en `hijoA->hasMesh()`: el path inexistente cae al disco,
-// que no puede leerse, y el nodo se queda sin mesh.
+// Sabotage: if nodeFromJson ignored `preloaded` (did not consult the cache), the
+// first block fails on `hijoA->hasMesh()`: the nonexistent path falls to disk,
+// which cannot be read, and the node is left without a mesh.
 void testPreloadedCacheConsulted()
 {
     const std::string src = "assets/__no_existe__.fbx";
@@ -271,9 +270,9 @@ void testPreloadedCacheConsulted()
     DonTopo::PreloadedMeshCache cache;
     cache[src] = fabricated;
 
-    // Con cache: el nodo recibe la malla ficticia sin leer disco (el fichero no
-    // existe: sin cache no habria mesh). Ademas debe ser COPIA PROFUNDA, no el
-    // mismo shared_ptr — dos GameObject no pueden compartir un Mesh mutable.
+    // With cache: the node receives the fake mesh without reading disk (the file does not
+    // exist: without the cache there would be no mesh). It must also be a DEEP COPY, not the
+    // same shared_ptr; two GameObjects cannot share a mutable Mesh.
     DonTopo::Scene withCache;
     CHECK(withCache.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, &cache), "fromJson con cache debe cargar");
     DonTopo::GameObject* hijoA = nullptr;
@@ -288,9 +287,9 @@ void testPreloadedCacheConsulted()
             CHECK(hijoA->getMesh()->vertices.size() == 1 &&
                   hijoA->getMesh()->vertices[0].pos == glm::vec3(7.0f, 8.0f, 9.0f),
                   "los vertices deben ser los de la malla cacheada");
-            // Contrato desde el Apéndice B: la malla estática precargada se
-            // COMPARTE (es const para el GameObject), y editarla copia, así que
-            // la de la caché no se toca.
+            // Contract since Appendix B: the preloaded static mesh is
+            // SHARED (it is const for the GameObject), and editing it copies, so
+            // the one in the cache is not touched.
             CHECK(hijoA->getMesh().get() == fabricated.get(), "la malla precargada se comparte, no se copia");
             hijoA->editMesh()->name = "editada";
             CHECK(fabricated->name == "malla_precargada_ficticia", "editar el nodo no debe tocar la malla de la cache");
@@ -298,8 +297,8 @@ void testPreloadedCacheConsulted()
         }
     }
 
-    // Cache-miss (cache con otra clave que no casa): cae al disco inexistente ->
-    // sin mesh. Prueba que un miss no inventa nada y respeta el fallback.
+    // Cache miss (cache with another key that does not match): falls to the nonexistent disk ->
+    // no mesh. Proves that a miss does not invent anything and respects the fallback.
     DonTopo::PreloadedMeshCache otherCache;
     otherCache["assets/otra_cosa.fbx"] = fabricated;
     DonTopo::Scene withMiss;
@@ -310,8 +309,8 @@ void testPreloadedCacheConsulted()
     if (missA)
         CHECK(!missA->hasMesh(), "cache-miss para un path inexistente debe caer al disco y quedarse sin mesh");
 
-    // preloaded == nullptr: identico al miss (fallback a disco), byte-compatible
-    // con todos los callers de siempre.
+    // preloaded == nullptr: identical to the miss (fallback to disk), byte-compatible
+    // with all the usual callers.
     DonTopo::Scene noCache;
     CHECK(noCache.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, nullptr), "fromJson nullptr cache debe cargar");
     DonTopo::GameObject* nullA = nullptr;
@@ -321,29 +320,29 @@ void testPreloadedCacheConsulted()
         CHECK(!nullA->hasMesh(), "sin cache el path inexistente no da mesh");
 }
 
-// Un clon NO puede heredar los indices de render del original (H14).
+// A clone can NOT inherit the render indices of the original (H14).
 //
-// Son la ranura del backend donde vive la malla del original: si el clon se los
-// quedara, moverlo moveria la malla del ORIGINAL, y borrarlo soltaria una
-// ranura que el original sigue usando — que desde que las ranuras se reciclan
-// significa que el siguiente objeto en darse de alta la estrenaria mientras el
-// original la dibuja. Nada de eso da error en ningun sitio.
+// They are the backend slot where the original's mesh lives: if the clone kept them,
+// moving it would move the ORIGINAL's mesh, and deleting it would release a
+// slot that the original is still using; which, since slots are recycled,
+// means that the next object to be registered would take it over while the
+// original draws it. None of that gives an error anywhere.
 //
-// HONESTIDAD SOBRE LO QUE ESTE TEST PRUEBA Y LO QUE NO. Hoy pasa por
-// CONSTRUCCION: cloneGameObject serializa con nodeToJson y reconstruye con
-// nodeFromJson, y los indices NO se serializan, asi que los nodos nuevos ya
-// nacen a -1 por su valor por defecto. Se comprobo quitando el traverse de
-// reseteo de Scene::cloneGameObject y el test seguia verde, o sea que ese
-// traverse es defensivo y hoy no cubre nada.
+// HONESTY ABOUT WHAT THIS TEST PROVES AND WHAT IT DOES NOT. Today it passes by
+// CONSTRUCTION: cloneGameObject serializes with nodeToJson and rebuilds with
+// nodeFromJson, and the indices are NOT serialized, so the new nodes are already
+// born at -1 by their default value. It was checked by removing the reset traverse of
+// Scene::cloneGameObject and the test stayed green, that is, that
+// traverse is defensive and today covers nothing.
 //
-// Se queda igualmente porque afirma la PROPIEDAD y no la implementacion: el dia
-// que alguien serialice los indices en nodeToJson, o cambie el clonado a una
-// copia directa en vez de pasar por JSON, este test se pone rojo. Lo que NO
-// hace es proteger ese traverse — para eso habria que poder construir un clon
-// que si llegase con indices puestos, y por ese camino no se puede.
+// It stays all the same because it asserts the PROPERTY and not the implementation: the day
+// someone serializes the indices in nodeToJson, or changes the cloning to a
+// direct copy instead of going through JSON, this test turns red. What it does NOT
+// do is protect that traverse; for that it would be necessary to be able to build a clone
+// that did arrive with indices set, and that cannot be done through that path.
 //
-// Se afirma sobre el ARBOL entero y no solo sobre la raiz del clon: clonar un
-// modelo importado siempre trae jerarquia.
+// It is asserted over the WHOLE tree and not only over the clone's root: cloning an
+// imported model always brings a hierarchy.
 void testClonNoHeredaIndicesDeRender()
 {
     DonTopo::Scene scene;
@@ -355,13 +354,13 @@ void testClonNoHeredaIndicesDeRender()
     CHECK(original, "hijoA debe existir");
     if (!original) return;
 
-    // Un hijo, para que el clon tenga jerarquia que recorrer.
+    // A child, so that the clone has a hierarchy to walk.
     DonTopo::GameObject* hijo = scene.cloneGameObject(original, original, physics(), audio());
     CHECK(hijo, "el hijo de prueba debe crearse");
     if (!hijo) return;
 
-    // El original y su hijo YA registrados: valores distintos y no triviales,
-    // para que heredarlos se note y no se confunda con un cero por defecto.
+    // The original and its child ALREADY registered: distinct and non-trivial values,
+    // so that inheriting them is noticeable and not mistaken for a default zero.
     original->staticRenderIndex  = 7;
     original->skinnedRenderIndex = 3;
     hijo->staticRenderIndex      = 11;
@@ -380,7 +379,7 @@ void testClonNoHeredaIndicesDeRender()
     });
     CHECK(nodos == 2, "el clon debe traer su hijo (raiz + 1)");
 
-    // Y el original intacto: clonar no le toca los suyos.
+    // And the original intact: cloning does not touch its own.
     CHECK(original->staticRenderIndex  == 7, "el original conserva su indice static");
     CHECK(original->skinnedRenderIndex == 3, "el original conserva su indice skinned");
 }
@@ -403,8 +402,8 @@ std::shared_ptr<DonTopo::Mesh> fakePiece(const std::string& src, int piece, cons
     return m;
 }
 
-// Review Focus 4: "piece" va y vuelve; la pieza 0 no escribe el campo; un nodo
-// con "piece" se sirve de la entrada de SU pieza en la cache.
+// Review Focus 4: "piece" goes back and forth; piece 0 does not write the field; a node
+// with "piece" uses the entry of ITS piece in the cache.
 void testPieceRoundTripsThroughJson()
 {
     const std::string src = "assets/__no_existe__.gltf";
@@ -433,8 +432,8 @@ void testPieceRoundTripsThroughJson()
           "p1 recibe la pieza 1 y la conserva");
 }
 
-// Review Focus 1: lo que hace el undo de Delete (collectMeshes + subtreeToJson +
-// insertFromJson con esa cache) devuelve a cada hijo SU malla.
+// Review Focus 1: what the Delete undo does (collectMeshes + subtreeToJson +
+// insertFromJson with that cache) returns to each child ITS mesh.
 void testDeleteUndoKeepsEachPiece()
 {
     const std::string src = "assets/__no_existe__.gltf";
@@ -460,13 +459,13 @@ void testDeleteUndoKeepsEachPiece()
     }
 }
 
-// Review final: Stop de Play recarga la escena sin loader ni cache y la rama
-// estatica sincrona hacia un ReadFile de Assimp POR NODO (60 piezas = 60
-// lecturas del mismo fichero). Ahora hay una cache de StaticModel por
-// sourcePath con la vida de la llamada a fromJson: cada nodo recibe SU pieza y
-// los que piden la misma pieza comparten la malla (prueba de que salio de la
-// cache y no de otra lectura). Una pieza fuera de rango sigue siendo el mismo
-// aviso de carga fallida que cuando ModelLoader::load lanzaba.
+// Final review: Play Stop reloads the scene without a loader or cache and the synchronous
+// static branch did an Assimp ReadFile PER NODE (60 pieces = 60
+// reads of the same file). Now there is a StaticModel cache per
+// sourcePath with the lifetime of the fromJson call: each node receives ITS piece and
+// those that ask for the same piece share the mesh (proof that it came from the
+// cache and not from another read). An out-of-range piece is still the same
+// failed-load warning as when ModelLoader::load threw.
 void testSyncStaticPiecesShareOneLoad()
 {
     namespace fs = std::filesystem;
@@ -494,7 +493,7 @@ void testSyncStaticPiecesShareOneLoad()
     CHECK(a0 && a0->hasMesh() && a0->getMesh()->piece == 0, "a0 recibe la pieza 0");
     CHECK(b1 && b1->hasMesh() && b1->getMesh()->piece == 1, "b1 recibe la pieza 1");
     CHECK(c0 && c0->hasMesh() && c0->getMesh()->piece == 0, "c0 recibe la pieza 0");
-    // triB (pieza 1) esta en el plano YZ: ningun vertice con x != 0.
+    // triB (piece 1) is in the YZ plane: no vertex with x != 0.
     if (b1 && b1->hasMesh())
     {
         bool yz = !b1->getMesh()->vertices.empty();
@@ -513,11 +512,11 @@ void testSyncStaticPiecesShareOneLoad()
 
 int main()
 {
-    // UN solo JobSystem + AsyncAssetLoader para todo el fichero, creados aqui y
-    // pasados por referencia — igual que en produccion, donde el editor y el
-    // runtime crean UNA instancia de cada, viva toda la app. Antes cada test
-    // creaba y destruia los suyos (start/shutdown por test): ese churn repetido
-    // de arranque/parada de hilos es lo que este experimento aisla.
+    // ONE single JobSystem + AsyncAssetLoader for the whole file, created here and
+    // passed by reference, same as in production, where the editor and the
+    // runtime create ONE instance of each, alive for the whole app. Before, each test
+    // created and destroyed its own (start/shutdown per test): that repeated churn of
+    // thread start/stop is what this experiment isolates.
     DonTopo::JobSystem jobSystem;
     jobSystem.start();
     DonTopo::AsyncAssetLoader loader(jobSystem);

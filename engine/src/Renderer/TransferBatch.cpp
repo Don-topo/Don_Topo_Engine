@@ -7,10 +7,10 @@ namespace DonTopo
 {
     TransferBatch::~TransferBatch()
     {
-        // Un batch enviado y no reclamado al destruirse filtraría staging y
-        // fence. No se puede esperar aquí sin arriesgar un bloqueo en el
-        // destructor, así que se drena de forma explícita: si esto salta, hay un
-        // camino que envía sin llamar a reclaim().
+        // A batch that was submitted and not reclaimed when destroyed would leak staging and
+        // fence. We cannot wait here without risking a block in the
+        // destructor, so it is drained explicitly: if this fires, there is a
+        // path that submits without calling reclaim().
         if (m_submitted && m_fence != VK_NULL_HANDLE)
         {
             vkWaitForFences(m_gpu.device(), 1, &m_fence, VK_TRUE, UINT64_MAX);
@@ -18,8 +18,8 @@ namespace DonTopo
         }
         else if (m_cmd != VK_NULL_HANDLE)
         {
-            // Abierto pero nunca enviado: nada corrió en la GPU, se libera sin
-            // esperar.
+            // Opened but never submitted: nothing ran on the GPU, it is released without
+            // waiting.
             vkFreeCommandBuffers(m_gpu.device(), m_gpu.commandPool(), 1, &m_cmd);
             m_cmd = VK_NULL_HANDLE;
             for (auto& [buf, mem] : m_staging)
@@ -76,17 +76,17 @@ namespace DonTopo
 
     bool TransferBatch::complete() const
     {
-        if (!m_submitted) return m_cmd == VK_NULL_HANDLE;   // batch vacío = nada que esperar
+        if (!m_submitted) return m_cmd == VK_NULL_HANDLE;   // empty batch = nothing to wait for
         return vkGetFenceStatus(m_gpu.device(), m_fence) == VK_SUCCESS;
     }
 
     void TransferBatch::reclaim()
     {
         if (!m_submitted) return;
-        // Guarda invertida: en vez de enumerar desde dónde es seguro llamar,
-        // se pregunta por el estado real de la GPU. Reclamar antes de tiempo es
-        // un use-after-free que las capas de validación cazan, pero que en
-        // release corrompe en silencio.
+        // Inverted guard: instead of enumerating where it is safe to call from,
+        // it asks about the real state of the GPU. Reclaiming too early is
+        // a use-after-free that the validation layers catch, but that in
+        // release corrupts silently.
         if (vkGetFenceStatus(m_gpu.device(), m_fence) != VK_SUCCESS)
             throw std::runtime_error("TransferBatch::reclaim with the fence not signaled");
 

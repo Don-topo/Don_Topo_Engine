@@ -13,8 +13,8 @@ namespace DonTopo {
 namespace {
 constexpr std::uintmax_t kMaxMaterialAssetBytes = 64 * 1024;
 
-// Ruta relativa a `base` si es posible (con ".." si hace falta subir), o
-// absoluta tal cual si no se puede expresar relativa (otra unidad).
+// Path relative to `base` if possible (with ".." if it has to go up), or
+// absolute as is if it cannot be expressed relatively (another drive).
 std::string toRelativeToFolder(const std::string& path, const std::filesystem::path& base)
 {
     if (path.empty()) return path;
@@ -24,7 +24,7 @@ std::string toRelativeToFolder(const std::string& path, const std::filesystem::p
     return rel.generic_string();
 }
 
-// La inversa: relativa a `base`, o ya absoluta.
+// The inverse: relative to `base`, or already absolute.
 std::string fromRelativeToFolder(const std::string& stored, const std::filesystem::path& base)
 {
     if (stored.empty()) return stored;
@@ -35,7 +35,7 @@ std::string fromRelativeToFolder(const std::string& stored, const std::filesyste
 
 float clampFactor(float v)
 {
-    if (!std::isfinite(v)) return -1.0f;   // no finito: como si no estuviera puesto
+    if (!std::isfinite(v)) return -1.0f;   // not finite: as if it were not set
     return std::clamp(v, 0.0f, 1.0f);
 }
 } // namespace
@@ -49,11 +49,11 @@ MaterialAsset loadMaterialAsset(const std::filesystem::path& mat, std::string* w
     std::error_code ec;
     if (!std::filesystem::is_regular_file(mat, ec) || ec)
     {
-        // Aunque el spec lo cuenta junto a "ilegible", SÍ se distingue del
-        // resto: applyMaterialOverrides llama a esta función sin `warning`
-        // (nullptr), así que `warn` no hace nada en el camino caliente — el
-        // coste solo existe cuando collectMaterialOverrideWarnings (que solo
-        // corre al cargar la escena) lo pide.
+        // Although the spec counts it together with "unreadable", it IS distinguished from the
+        // rest: applyMaterialOverrides calls this function without `warning`
+        // (nullptr), so `warn` does nothing on the hot path — the
+        // cost only exists when collectMaterialOverrideWarnings (which only
+        // runs when loading the scene) asks for it.
         warn("missing material; everything is inherited from the model");
         return out;
     }

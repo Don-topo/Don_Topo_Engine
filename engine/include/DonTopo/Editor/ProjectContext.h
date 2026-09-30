@@ -8,44 +8,44 @@
 
 namespace DonTopo {
 
-// Sandbox de rutas de un proyecto del editor.
+// Path sandbox of an editor project.
 //
-// El workspace es la carpeta `projects/` junto al ejecutable; cada proyecto es
-// una subcarpeta con un `project.json` y las subcarpetas `assets/`, `scenes/`
-// y `scripts/`. Una vez elegido el proyecto, todo lo que el editor lee o
-// escribe del usuario (escenas, scripts, assets, destino del export) pasa por
-// resolve()/contains(): una ruta de otro proyecto se rechaza sin tocar disco.
+// The workspace is the `projects/` folder next to the executable; each project is
+// a subfolder with a `project.json` and the subfolders `assets/`, `scenes/`
+// and `scripts/`. Once the project is chosen, everything the editor reads or
+// writes from the user (scenes, scripts, assets, export destination) goes through
+// resolve()/contains(): a path from another project is rejected without touching disk.
 //
-// Los assets DEL MOTOR (logo de la ventana, shaders, splash, skybox de la
-// demo) NO son del proyecto y se siguen resolviendo como siempre desde la raíz
-// del ejecutable/repo: no pasan por aquí.
+// The ENGINE's assets (window logo, shaders, splash, demo
+// skybox) are NOT the project's and are still resolved as always from the root
+// of the executable/repo: they do not go through here.
 class ProjectContext {
 public:
-    // Ajustes del menu View que se guardan POR PROYECTO en la seccion
-    // "settings" del project.json.
+    // View menu settings that are saved PER PROJECT in the "settings"
+    // section of project.json.
     //
-    // Los ENABLES arrancan en false a proposito: un proyecto nuevo, o uno sin
-    // seccion "settings", abre con todos los efectos apagados aunque el
-    // Renderer tenga otros defaults.
+    // The ENABLES start as false on purpose: a new project, or one without a
+    // "settings" section, opens with all effects off even if the
+    // Renderer has other defaults.
     //
-    // Los PARAMETROS (intensidades, radios, pasos) NO llevan aqui el valor por
-    // defecto real: readSettings() recibe una `base` que el editor rellena
-    // leyendo el propio Renderer, y cada campo ausente en el JSON se queda con
-    // el valor de esa base. Asi el default de un parametro sigue siendo el del
-    // Renderer sin duplicar aqui sus numeros (y sin que ProjectContext dependa
-    // del Renderer).
+    // The PARAMETERS (intensities, radii, steps) do NOT carry their real default value
+    // here: readSettings() receives a `base` that the editor fills in by
+    // reading the Renderer itself, and each field missing from the JSON keeps
+    // the value of that base. This way a parameter's default is still the Renderer's
+    // without duplicating its numbers here (and without ProjectContext depending
+    // on the Renderer).
     struct ViewSettings {
-        // Indices de la visibilidad de panel, en el mismo orden que el menu View.
+        // Panel visibility indices, in the same order as the View menu.
         //
-        // El ORDEN de este enum no es parte del formato en disco: cada panel se
-        // guarda por su nombre (kPanelKeys, en ProjectContext.cpp), asi que
-        // reordenar o insertar en medio no invalida ningun project.json. Lo que
-        // si es obligatorio es que kPanelKeys lleve el mismo orden, y eso lo
-        // vigila un static_assert.
+        // The ORDER of this enum is not part of the on-disk format: each panel is
+        // saved by its name (kPanelKeys, in ProjectContext.cpp), so
+        // reordering or inserting in the middle does not invalidate any project.json. What
+        // is mandatory is that kPanelKeys carries the same order, and a
+        // static_assert watches that.
         //
-        // Sprite Editor y Collision Layers NO estan aqui a proposito: se abren
-        // para una tarea concreta y se cierran, no son paneles que uno quiera
-        // encontrarse abiertos al arrancar. Es la unica ausencia deliberada.
+        // Sprite Editor and Collision Layers are NOT here on purpose: they are opened
+        // for a specific task and closed, they are not panels one wants to
+        // find open at startup. It is the only deliberate absence.
         enum Panel {
             PanelScene = 0,
             PanelViewport,
@@ -61,31 +61,31 @@ public:
         };
 
         bool        ambient = false;
-        // Modo alambre. Era el UNICO campo de RendererState que no se
-        // persistia: se perdia al reabrir y el juego exportado nunca lo veia.
+        // Wireframe mode. It was the ONLY RendererState field that was not
+        // persisted: it was lost on reopening and the exported game never saw it.
         bool        wireframe = false;
         bool        bloom   = false;
         bool        ssao    = false;
         bool        ssr     = false;
         bool        fog     = false;
         bool        motionBlur = false;
-        // Combos por NOMBRE, nunca por indice: reordenar el array de opciones
-        // no puede cambiar el ajuste guardado de nadie.
+        // Combos by NAME, never by index: reordering the options array
+        // must not change anyone's saved setting.
         std::string aaMode = "None";
         std::string fpMode = "Off";
-        // Backend de render. No se aplica al leerlo: el device ya está creado
-        // cuando se abre el proyecto, así que solo surte efecto en el arranque
-        // siguiente (ver readLastProject). Nombres en RenderBackend.h.
+        // Render backend. It is not applied when read: the device is already created
+        // when the project is opened, so it only takes effect on the next
+        // startup (see readLastProject). Names in RenderBackend.h.
         std::string renderBackend = "Vulkan";
-        // Carpeta del cielo. Dentro se esperan px/nx/py/ny/pz/nz.png, que es
-        // la convencion que ya asumian el sandbox, el runtime, el backend de
-        // DirectX 12 y el exportador. Por defecto la de siempre, asi que un
-        // proyecto sin la clave se ve igual.
+        // Sky folder. Inside it px/nx/py/ny/pz/nz.png are expected, which is
+        // the convention the sandbox, the runtime, the DirectX 12 backend and the
+        // exporter already assumed. By default the usual one, so a
+        // project without the key looks the same.
         std::string skyboxFolder  = "assets/skybox";
 
-        // Las seis rutas que espera EditorRenderer::initSkybox, en su orden:
-        // +X, -X, +Y, -Y, +Z, -Z. Aqui y no en cada llamante para que la
-        // convencion de nombres viva en un solo sitio.
+        // The six paths that EditorRenderer::initSkybox expects, in its order:
+        // +X, -X, +Y, -Y, +Z, -Z. Here and not in each caller so that the
+        // naming convention lives in one place only.
         std::array<std::string, 6> skyboxFaces() const
         {
             const std::string base =
@@ -124,49 +124,49 @@ public:
         float taaFeedback      = 0.0f;
         float taaJitterScale   = 0.0f;
         float fpLightRadius    = 0.0f;
-        // Sombras en cascada. Defaults = los valores con los que se dibujaba
-        // antes de que fueran ajustables, asi que un project.json sin estas
-        // claves se ve exactamente igual que antes.
+        // Cascaded shadows. Defaults = the values it was drawn with
+        // before they were adjustable, so a project.json without these
+        // keys looks exactly the same as before.
         float shadowDistance   = 500.0f;
         float cascadeLambda    = 0.75f;
         int   shadowResolution = 2048;
-        // Modo de presentacion: 0 vsync, 1 mailbox, 2 immediate. Se guarda lo
-        // PEDIDO, no lo que el device pudo dar: si el proyecto se abre en otra
-        // maquina que si lo soporta, vuelve a valer.
+        // Present mode: 0 vsync, 1 mailbox, 2 immediate. What was REQUESTED is
+        // saved, not what the device could give: if the project is opened on another
+        // machine that does support it, it takes effect again.
         int   presentMode      = 0;
 
-        // --- Volumenes de audio por bus ---------------------------------------
+        // --- Per-bus audio volumes --------------------------------------------
         //
-        // Neutros (1.0) a proposito, y NO entran en la regla de "todo apagado"
-        // que aplica a los efectos: un proyecto sin estos campos tiene que
-        // abrirse sonando igual que antes de la feature, no en silencio.
+        // Neutral (1.0) on purpose, and they are NOT covered by the "everything off" rule
+        // that applies to the effects: a project without these fields has to
+        // open sounding the same as before the feature, not silent.
         float masterVolume = 1.0f;
         float musicVolume  = 1.0f;
         float sfxVolume    = 1.0f;
 
-        // Vacio = sin dato guardado: el panel se queda como este, que NO es lo
-        // mismo que cerrado. Los paneles no entran en la regla de "todo
-        // apagado".
+        // Empty = no saved data: the panel stays as it is, which is NOT the
+        // same as closed. Panels are not covered by the "everything
+        // off" rule.
         //
-        // `optional` y no un int con -1 por centinela: esto era una lista de
-        // nueve -1 escritos a mano, y anadir el decimo panel al enum le habria
-        // dado un 0 —"cerrado"— en vez de "sin dato", cerrando el panel nuevo
-        // en todos los proyectos que ya existen. El hueco de un panel nuevo
-        // tiene que nacer vacio SOLO.
+        // `optional` and not an int with -1 as sentinel: this used to be a list of
+        // nine hand-written -1s, and adding the tenth panel to the enum would have
+        // given it a 0 ("closed") instead of "no data", closing the new panel
+        // in all the projects that already exist. A new panel's slot
+        // has to be born empty BY ITSELF.
         std::optional<bool> panelOpen[PanelCount] = {};
 
-        // --- Capas de colisión de física -------------------------------------
+        // --- Physics collision layers -----------------------------------------
         //
-        // Mismo índice que PhysicsManager (0-31), pero sin incluirlo: la
-        // dependencia va Editor -> Physics en el .cpp del editor, no en este
-        // header. La matriz viaja comprimida a una máscara por capa (bit b de
-        // layerMasks[a] = "a colisiona con b") y arranca ENTERA a unos, que es
-        // la matriz que no filtra nada — un proyecto sin estos campos abre
-        // exactamente como antes de la feature.
+        // Same index as PhysicsManager (0-31), but without including it: the
+        // dependency goes Editor -> Physics in the editor's .cpp, not in this
+        // header. The matrix travels compressed to one mask per layer (bit b of
+        // layerMasks[a] = "a collides with b") and starts ALL ones, which is
+        // the matrix that filters nothing: a project without these fields opens
+        // exactly as before the feature.
         static constexpr int LayerCount = 32;
 
-        // Capas realmente creadas (el prefijo [0, layerActive) de los arrays de
-        // abajo). Siempre >= 1: la capa 0 ("Default") no se puede borrar.
+        // Layers actually created (the prefix [0, layerActive) of the arrays
+        // below). Always >= 1: layer 0 ("Default") cannot be deleted.
         int layerActive = 1;
 
         std::array<std::string, LayerCount> layerNames = [] {
@@ -181,96 +181,96 @@ public:
             return m;
         }();
 
-        // Diagnostico de la ultima lectura, para el Log del editor. No se
-        // serializa.
-        bool        loadFailed = false; // JSON ilegible o "settings" corrupto
-        std::string unknownEnum;        // nombre de combo que no existe hoy
+        // Diagnostic of the last read, for the editor Log. It is not
+        // serialized.
+        bool        loadFailed = false; // unreadable JSON or corrupt "settings"
+        std::string unknownEnum;        // combo name that does not exist today
     };
 
-    // Lee la seccion "settings" del project.json. NUNCA lanza: fichero ausente,
-    // JSON roto, "settings" que no es un objeto o campos con el tipo cambiado se
-    // caen al valor de `base` (enables y combos, al default de ViewSettings).
-    // No escribe nada: un fichero corrupto se queda como esta.
+    // Reads the "settings" section of project.json. NEVER throws: a missing file,
+    // broken JSON, a "settings" that is not an object or fields with a changed type
+    // fall back to the value of `base` (enables and combos, to the ViewSettings default).
+    // It writes nothing: a corrupt file is left as it is.
     static ViewSettings readSettings(const std::filesystem::path& projectDir, const ViewSettings& base);
 
-    // Sustituye la seccion "settings" del project.json conservando el resto del
-    // fichero (name, version, lo que haya). Escribe en un temporal de la misma
-    // carpeta y hace rename encima: un fallo a mitad no deja el project.json
-    // truncado. Devuelve false sin tocar el original si algo falla.
+    // Replaces the "settings" section of project.json keeping the rest of the
+    // file (name, version, whatever is there). It writes to a temporary in the same
+    // folder and renames over it: a failure halfway does not leave project.json
+    // truncated. Returns false without touching the original if something fails.
     static bool writeSettings(const std::filesystem::path& projectDir, const ViewSettings& settings);
 
-    // Version de la propia seccion "settings", independiente de kProjectVersion.
+    // Version of the "settings" section itself, independent of kProjectVersion.
     static constexpr const char* kSettingsVersion = "1.0";
 
-    // --- Estado del editor (editor.json, junto al ejecutable) -------------
+    // --- Editor state (editor.json, next to the executable) ---------------
     //
-    // El backend de render se guarda POR PROYECTO, pero el Renderer se crea
-    // antes de que el usuario elija proyecto: al arrancar, el editor todavia no
-    // sabe de que project.json leerlo. Por eso recuerda aqui cual fue el ultimo
-    // proyecto abierto, y de ese saca el backend con el que arranca.
+    // The render backend is saved PER PROJECT, but the Renderer is created
+    // before the user chooses a project: at startup, the editor does not yet
+    // know which project.json to read it from. That is why it remembers here which was the last
+    // project opened, and from that one it takes the backend to start with.
     //
-    // Es estado del editor, no del proyecto: no viaja con el, no se exporta y
-    // perderlo solo significa volver a arrancar en Vulkan.
+    // It is editor state, not project state: it does not travel with it, it is not exported and
+    // losing it only means starting on Vulkan again.
 
-    // Ruta del ultimo proyecto abierto. Vacia si no hay editor.json, si esta
-    // corrupto, o si la carpeta que apunta ya no existe (proyecto borrado o
-    // movido): en todos esos casos el arranque se cae a Vulkan sin quejarse.
+    // Path of the last project opened. Empty if there is no editor.json, if it is
+    // corrupt, or if the folder it points to no longer exists (project deleted or
+    // moved): in all those cases startup falls back to Vulkan without complaining.
     static std::filesystem::path readLastProject();
 
-    // Recuerda `projectDir` como ultimo proyecto abierto. Misma escritura
-    // atomica que writeSettings (temporal + rename). Devuelve false sin tocar
-    // el fichero anterior si algo falla; nadie debe abortar por eso.
+    // Remembers `projectDir` as the last project opened. Same atomic write
+    // as writeSettings (temporary + rename). Returns false without touching
+    // the previous file if something fails; nobody should abort because of that.
     static bool writeLastProject(const std::filesystem::path& projectDir);
 
     ProjectContext() = default;
     explicit ProjectContext(const std::filesystem::path& root);
 
-    // Raíz del proyecto, ya canonicalizada si se pudo. Vacía si el contexto no
-    // se ha inicializado (tests headless, arranque antes del selector).
+    // Project root, already canonicalized if possible. Empty if the context has not
+    // been initialized (headless tests, startup before the selector).
     const std::filesystem::path& root() const { return m_root; }
     bool valid() const { return !m_root.empty(); }
 
-    // root() / relative, sin normalizar más allá de lo que hace operator/. Si
-    // `relative` ya es absoluta se devuelve tal cual (operator/ la sustituye):
-    // el filtro sigue siendo contains(), no esta función.
+    // root() / relative, not normalized beyond what operator/ does. If
+    // `relative` is already absolute it is returned as is (operator/ replaces it):
+    // the filter is still contains(), not this function.
     std::filesystem::path resolve(const std::filesystem::path& relative) const;
 
-    // ¿`absolute` cae dentro del proyecto (o es la propia raíz)?
+    // Does `absolute` fall inside the project (or is it the root itself)?
     //
-    // FALLA EN CERRADO: si el contexto no es válido, o si no se puede
-    // canonicalizar la raíz o el prefijo existente del destino (permisos, ruta
-    // borrada a media operación), devuelve false. Ante la duda, fuera.
+    // FAILS CLOSED: if the context is not valid, or if the root or the destination's
+    // existing prefix cannot be canonicalized (permissions, path
+    // deleted mid-operation), it returns false. When in doubt, outside.
     bool contains(const std::filesystem::path& absolute) const;
 
     // --- Workspace -------------------------------------------------------
 
-    // `projects/` junto al ejecutable. No la crea.
+    // `projects/` next to the executable. It does not create it.
     static std::filesystem::path workspaceDir();
 
-    // Subcarpetas del workspace que tienen un `project.json`, ordenadas por
-    // nombre de carpeta. Crea el workspace si no existe. Nunca lanza.
+    // Workspace subfolders that have a `project.json`, sorted by
+    // folder name. Creates the workspace if it does not exist. Never throws.
     static std::vector<std::filesystem::path> discover();
 
-    // Nombre declarado en el `project.json` del proyecto; si el fichero falta o
-    // no se puede parsear, el nombre de la carpeta.
+    // Name declared in the project's `project.json`; if the file is missing or
+    // cannot be parsed, the folder name.
     static std::string readProjectName(const std::filesystem::path& projectDir);
 
-    // Valida el nombre para usarlo como carpeta del workspace: no vacío ni solo
-    // espacios, ni `.`/`..`, sin separadores de ruta ni caracteres inválidos en
-    // Windows, sin nombres de dispositivo reservados, y único frente a las
-    // carpetas ya existentes comparando SIN distinguir mayúsculas. Rellena
-    // `error` con el motivo cuando devuelve false.
+    // Validates the name to use it as a workspace folder: not empty or only
+    // spaces, not `.`/`..`, no path separators or characters invalid on
+    // Windows, no reserved device names, and unique against the
+    // already existing folders comparing WITHOUT distinguishing case. Fills
+    // `error` with the reason when it returns false.
     static bool validateName(const std::string& name, std::string& error);
 
-    // Valida y, si pasa, crea `projects/<name>/` con su `project.json`, las
-    // subcarpetas `assets/`, `scenes/`, `scripts/` y la escena de arranque
-    // kStartupScene —vacía: al abrir el proyecto solo se ve el skybox—. Si la
-    // validación falla no crea nada y devuelve false con el motivo en `error`.
+    // Validates and, if it passes, creates `projects/<name>/` with its `project.json`, the
+    // subfolders `assets/`, `scenes/`, `scripts/` and the startup scene
+    // kStartupScene (empty: when the project opens only the skybox is seen). If
+    // validation fails it creates nothing and returns false with the reason in `error`.
     static bool create(const std::string& name, std::filesystem::path& outDir, std::string& error);
 
-    // Versión que se escribe en los `project.json` nuevos.
+    // Version written in new `project.json` files.
     static constexpr const char* kProjectVersion = "1.0";
-    // Escena que abre el editor al elegir proyecto, relativa a root().
+    // Scene the editor opens when choosing a project, relative to root().
     static constexpr const char* kStartupScene = "scenes/main.json";
 
 private:

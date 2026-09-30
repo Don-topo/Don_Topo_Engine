@@ -22,8 +22,8 @@
 
 namespace {
 
-// Nombre válido: no vacío tras trim, solo alfanuméricos/espacio/_/-/. (sin
-// caracteres de control ni símbolos que puedan romper rutas de asset o UI).
+// Valid name: non-empty after trim, only alphanumerics/space/_/-/. (no
+// control characters or symbols that could break asset paths or the UI).
 bool isValidGameObjectName(const std::string& name)
 {
     size_t begin = name.find_first_not_of(" \t");
@@ -47,20 +47,20 @@ std::string trim(const std::string& name)
     return name.substr(begin, end - begin + 1);
 }
 
-// Mueve dragged pa la posición de target dentro de la lista de hijos de
-// target->parent (o al final de target->children si target es el root: así
-// nunca puede quedar como hermano del root ni fuera de su subárbol).
+// Moves dragged to the position of target within the children list of
+// target->parent (or to the end of target->children if target is the root: this way
+// it can never end up as a sibling of the root or outside its subtree).
 void moveGameObject(DonTopo::GameObject* dragged, DonTopo::GameObject* target)
 {
     using DonTopo::GameObject;
 
     if (!dragged || !target || dragged == target || !dragged->parent)
-        return; // root (sin parent) no se puede arrastrar
+        return; // the root (no parent) cannot be dragged
 
     bool cycle = false;
     dragged->traverse([&](GameObject* go) { if (go == target) cycle = true; });
     if (cycle)
-        return; // no soltar un nodo dentro de su propio subárbol
+        return; // do not drop a node inside its own subtree
 
     GameObject* destParent;
     ptrdiff_t destIndex;
@@ -86,7 +86,7 @@ void moveGameObject(DonTopo::GameObject* dragged, DonTopo::GameObject* target)
     srcParent->children.erase(srcIt);
 
     if (srcParent == destParent && srcIndex < destIndex)
-        --destIndex; // el hueco dejado por el erase desplaza los índices siguientes
+        --destIndex; // the gap left by the erase shifts the following indices
 
     moved->parent = destParent;
     destParent->children.insert(destParent->children.begin() + destIndex, std::move(moved));
@@ -101,21 +101,21 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     m_selectionDeletedThisFrame = false;
     if (!m_open) return;
     ImGui::Begin("Scene", &m_open);
-    // El root no se dibuja como nodo: la lista muestra directamente sus
-    // hijos, root sigue siendo el padre real por debajo (mismo comportamiento
-    // de create/delete/rename/reorder que ya tenían).
+    // The root is not drawn as a node: the list directly shows its
+    // children, root is still the real parent underneath (same behavior
+    // of create/delete/rename/reorder as they already had).
     if (sceneRoot)
         for (const auto& child : sceneRoot->children)
             drawNode(ctx, child.get());
 
-    // Espacio vacío tras la lista: soltar aquí reengancha el nodo arrastrado
-    // como hijo directo del root (equivalente a soltar sobre la fila root
-    // de antes, ahora que esa fila ya no existe).
+    // Empty space after the list: dropping here re-attaches the dragged node
+    // as a direct child of the root (equivalent to dropping on the root row
+    // from before, now that this row no longer exists).
     ImGui::Dummy(ImGui::GetContentRegionAvail());
     if (ImGui::IsItemClicked())
-        ctx.selected = nullptr; // clic en zona vacía deselecciona
-    // Veto de reparent mientras el modal de carga está activo (edición de
-    // jerarquía). El render del árbol y la selección siguen: solo se veta mover.
+        ctx.selected = nullptr; // click on an empty area deselects
+    // Reparent veto while the loading modal is active (hierarchy editing).
+    // The tree rendering and the selection continue: only moving is vetoed.
     if (!ctx.editingLocked && sceneRoot && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
@@ -152,8 +152,8 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     "Create '" + created->name + "'", parentId, index, std::move(snapshot)));
             }
         }
-        // Visible solo si no hay ya una cámara en la escena — el invariante lo
-        // decide Scene::findCamera, no un flag de este panel.
+        // Visible only if there is no camera in the scene yet; the invariant is
+        // decided by Scene::findCamera, not by a flag of this panel.
         if (ctx.scene && !ctx.scene->findCamera())
         {
             if (ImGui::MenuItem("Create Camera") && sceneRoot)
@@ -178,15 +178,15 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         ImGui::EndPopup();
     }
 
-    // Ejecutar el borrado tras recorrer todo el árbol: hacerlo antes
-    // invalidaría los for-range de children en curso en la pila de llamadas.
+    // Run the deletion after walking the whole tree: doing it earlier
+    // would invalidate the children range-fors in progress on the call stack.
     if (m_pendingDelete)
     {
         GameObject* target = m_pendingDelete;
         m_pendingDelete = nullptr;
 
-        // La selección puede ser el propio target o un descendiente suyo;
-        // hay que comprobarlo antes de borrar el subárbol (después ya no existe).
+        // The selection may be the target itself or a descendant of it;
+        // it has to be checked before deleting the subtree (afterwards it no longer exists).
         bool selectionInSubtree = false;
         target->traverse([&](GameObject* go) {
             if (go == ctx.selected) selectionInSubtree = true;
@@ -194,7 +194,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 
         ctx.pushLog("GameObject '" + target->name + "' deleted");
 
-        // Snapshot pa Undo, tomado ANTES de tocar nada.
+        // Snapshot for Undo, taken BEFORE touching anything.
         bool canUndoDelete = ctx.scene && ctx.physics && ctx.audio && ctx.renderer && target->parent;
         uint64_t parentId = 0;
         size_t index = 0;
@@ -210,18 +210,18 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             snapshot = ctx.scene->subtreeToJson(target);
         }
 
-        // La GPU la suelta ahora Scene::removeGameObject vía su oyente, más
-        // abajo. Antes se liberaba AQUÍ, o sea antes de correr los OnDestroy de
-        // Lua: el objeto seguía vivo para el script pero ya sin sus recursos.
-        // Ahora se libera después, que es el orden correcto.
+        // The GPU is now released by Scene::removeGameObject through its listener, further
+        // down. It used to be released HERE, that is, before running Lua's OnDestroy:
+        // the object was still alive for the script but already without its resources.
+        // Now it is released afterwards, which is the correct order.
 
-        // Sin esto, borrar desde el editor en Play salta OnDestroy y deja
-        // punteros muertos en el alive-set hasta el siguiente update
-        // (ventana de use-after-free vía hot reload).
+        // Without this, deleting from the editor in Play skips OnDestroy and leaves
+        // dead pointers in the alive-set until the next update
+        // (use-after-free window via hot reload).
         if (ctx.isPlaying && ctx.scriptManager)
         {
-            // Snapshot antes de llamar a Lua — OnDestroy puede añadir
-            // componentes e invalidar la iteración.
+            // Snapshot before calling Lua: OnDestroy can add
+            // components and invalidate the iteration.
             std::vector<ScriptComponent*> subtreeScripts;
             target->traverse([&](GameObject* n) {
                 for (auto& s : n->getScripts())
@@ -281,9 +281,9 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 [dragged](const std::unique_ptr<GameObject>& c) { return c.get() == dragged; });
             size_t newIndex = static_cast<size_t>(it - newSiblings.begin());
 
-            // moveGameObject() puede ser un no-op (drop en sí mismo, en un
-            // descendiente propio, o dragged sin parent) — si nada cambió,
-            // no ensuciar el stack con un comando fantasma.
+            // moveGameObject() can be a no-op (drop on itself, on one of its own
+            // descendants, or dragged without a parent); if nothing changed,
+            // do not pollute the stack with a phantom command.
             if (!(newParentId == oldParentId && newIndex == oldIndex))
             {
                 ctx.undo->push(std::make_unique<ReparentCommand>(
@@ -348,7 +348,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 void ScenePanel::beginRename(GameObject* node)
 {
     if (!node || !node->parent)
-        return; // root no se puede renombrar
+        return; // the root cannot be renamed
 
     m_renameTarget = node;
     std::string current = node->name.empty() ? "GameObject" : node->name;
@@ -387,8 +387,8 @@ void ScenePanel::createCamera(EditorContext& ctx, GameObject* parent)
     go->setCameraComponent(std::make_shared<CameraComponent>());
     ctx.pushLog("GameObject '" + go->name + "' with Camera created");
 
-    // Mismo patrón que createBasicShape: el snapshot se toma DESPUÉS de montar
-    // el componente, así que el Undo/Redo lo reconstruye entero.
+    // Same pattern as createBasicShape: the snapshot is taken AFTER assembling
+    // the component, so Undo/Redo rebuilds it whole.
     if (ctx.physics && ctx.audio && ctx.renderer && ctx.undo)
     {
         uint64_t parentId = parent->id;
@@ -413,16 +413,16 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
     if (ImGui::IsItemClicked())
         ctx.selected = node;
 
-    // Drag: el root (parent == nullptr) no se puede arrastrar. Vetado también
-    // mientras el modal de carga está activo (edición de jerarquía).
+    // Drag: the root (parent == nullptr) cannot be dragged. Also vetoed
+    // while the loading modal is active (hierarchy editing).
     if (!ctx.editingLocked && node->parent && ImGui::BeginDragDropSource())
     {
         ImGui::SetDragDropPayload("DT_GAMEOBJECT", &node, sizeof(GameObject*));
         ImGui::Text("%s", label.c_str());
         ImGui::EndDragDropSource();
     }
-    // Drop: soltar sobre cualquier nodo (incluido el root) reposiciona el
-    // arrastrado; moveGameObject ya bloquea ciclos y "salir" del root.
+    // Drop: dropping on any node (including the root) repositions the
+    // dragged one; moveGameObject already blocks cycles and "leaving" the root.
     if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
@@ -450,8 +450,8 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
                     "Create '" + created->name + "'", parentId, index, std::move(snapshot)));
             }
         }
-        // Mismo gate que el menú de la ventana: la cámara puede colgar de
-        // cualquier nodo, pero solo puede haber una.
+        // Same gate as the window menu: the camera can hang from
+        // any node, but there can only be one.
         if (ctx.scene && !ctx.scene->findCamera())
         {
             if (ImGui::MenuItem("Create Camera"))

@@ -51,48 +51,48 @@
 
 namespace {
 
-// Guarda de los diálogos de asset de este panel (mesh, audio, fuente, atlas).
-// A diferencia del Content Browser —que ya no puede salir de la raíz del
-// proyecto— estos diálogos navegan por todo el disco, así que son la única vía
-// por la que un asset de OTRO proyecto podía entrar en la escena y acabar en el
-// paquete de export.
+// Guard for this panel's asset dialogs (mesh, audio, font, atlas).
+// Unlike Content Browser—which can no longer exit the project root—these
+// dialogs browse the entire disk, so they are the only way an asset from
+// ANOTHER project could enter the scene and end up in the export package.
 //
-// Dos casos de "no está en el proyecto abierto", con destino distinto:
-// - Dentro del workspace `projects/` pero de OTRO proyecto: se rechaza sin
-//   más (mismo mensaje de siempre). Cruzar assets entre dos proyectos
-//   separados sigue sin ser el flujo que se quiere soportar.
-// - Genuinamente fuera del workspace (Escritorio, Descargas, un USB...): se
-//   IMPORTA — se copia a assets/Imported/<Tipo>/ si la extensión es de las
-//   soportadas, igual que el drop externo sobre el Content Browser. Antes de
-//   esta función existir, este caso se aceptaba sin copiar (referenciaba la
-//   ruta externa tal cual); ese "aceptar sin copiar" era precisamente el
-//   agujero que esta feature cierra — la corrección inicial invertía sin
-//   querer las dos ramas y dejaba este caso, el más común de los dos,
-//   comportándose exactamente como antes (encontrado en la revisión final).
-// Sin proyecto abierto (tests headless) pasa todo, como antes de que el
-// concepto existiera.
-// Los 18 diálogos de assets de este panel pasan por aquí al drenarse, y NADIE
-// aplica una ruta sin preguntar antes. Por eso el veto de edición vive en esta
-// función y no en cada botón "Browse...": gatear el botón solo tapa el caso de
-// abrir el diálogo con el modal ya puesto, y deja fuera el que de verdad pasa
-// —el diálogo abierto ANTES, que sigue vivo porque ninguno de estos es modal
-// (cero ImGuiFileDialogFlags_Modal en src/) y la toolbar sigue clicable—.
-// Puesto aquí, el diálogo número 19 lo hereda por el mero hecho de seguir el
-// patrón de los otros 18.
+// Two cases of "not in the open project" with different destinations:
+// - Inside the workspace `projects/` but from ANOTHER project: rejected
+//   outright (same message as always). Crossing assets between two separate
+//   projects is still not the flow we want to support.
+// - Genuinely outside the workspace (Desktop, Downloads, a USB...): it is
+//   IMPORTED—copied to assets/Imported/<Type>/ if the extension is supported,
+//   the same as external drop onto Content Browser. Before this function
+//   existed, this case was accepted without copying (referenced the external
+//   path as is); that "accept without copying" was precisely the hole this
+//   feature closes—the initial fix inadvertently inverted the two branches
+//   and left this case, the most common of the two, behaving exactly as
+//   before (found in final review).
+// No open project (headless tests) pass everything, as before the concept
+// existed.
+// The 18 asset dialogs from this panel pass through here when drained, and
+// NO ONE applies a path without asking first. That is why the edit veto
+// lives in this function and not in each "Browse..." button: gating the
+// button only blocks the case of opening the dialog with the modal already
+// placed, and leaves out the one that actually happens—the dialog opened
+// BEFORE, which stays alive because none of these is modal (zero
+// ImGuiFileDialogFlags_Modal in src/) and the toolbar stays clickable.
+// Placed here, dialog number 19 inherits it by merely following the pattern
+// of the other 18.
 //
-// El nombre dice "aceptar o importar", no "pertenece al proyecto", porque
-// responde a dos preguntas —de quién es el asset y si el panel está en
-// condiciones de aplicarlo ahora mismo— y además TIENE EFECTOS: copia el
-// fichero al proyecto y escribe en el Log. Devuelve la ruta que el llamante
-// debe usar (la copia, no la elegida), o nullopt si se rechaza.
+// The name says "accept or import", not "belongs to the project", because
+// it answers two questions—whose asset is it and whether the panel is in
+// condition to apply it right now—and also HAS EFFECTS: copies the file to
+// the project and writes to the Log. Returns the path the caller should use
+// (the copy, not the chosen one), or nullopt if rejected.
 std::optional<std::filesystem::path> acceptOrImportAsset(const DonTopo::EditorContext& ctx,
                                                      const std::filesystem::path& path)
 {
-    // Veto mientras el modal de Load Scene está activo: la escena sobre la que
-    // se abrió el diálogo está siendo reemplazada, así que aplicar la elección
-    // escribiría en un objeto que ya no es el que el usuario tenía delante. Con
-    // línea en el Log, que es lo único que distingue esto de "el Browse no ha
-    // hecho nada".
+    // Veto while the Load Scene modal is active: the scene on which the dialog
+    // was opened is being replaced, so applying the choice would write to an
+    // object that is no longer the one the user had in front of them. With a
+    // line in the Log, which is the only thing that distinguishes this from
+    // "Browse did nothing".
     if (ctx.editingLocked)
     {
         ctx.logModule("Project", "Scene load in progress: the chosen asset is discarded");
@@ -102,10 +102,10 @@ std::optional<std::filesystem::path> acceptOrImportAsset(const DonTopo::EditorCo
     if (!ctx.project || !ctx.project->valid()) return path;
     if (ctx.project->contains(path))           return path;
 
-    // El workspace lo crea el selector al arrancar, así que este contains()
-    // responde sobre una carpeta que existe; si aun así fallara, contains()
-    // devuelve false y el path se trata como genuinamente externo (importable),
-    // no como de otro proyecto.
+    // The workspace is created by the selector at startup, so this contains()
+    // answers on a folder that exists; if it still failed, contains() returns
+    // false and the path is treated as genuinely external (importable), not as
+    // from another project.
     const DonTopo::ProjectContext workspace(DonTopo::ProjectContext::workspaceDir());
     if (workspace.contains(path))
     {
@@ -113,10 +113,10 @@ std::optional<std::filesystem::path> acceptOrImportAsset(const DonTopo::EditorCo
         return std::nullopt;
     }
 
-    // Genuinamente fuera del workspace: se intenta importar. Si la extensión
-    // no es de las soportadas, se rechaza en vez de aceptarla sin copiar —
-    // referenciar una ruta absoluta fuera del proyecto es justo lo que esta
-    // feature quiere dejar de hacer.
+    // Genuinely outside the workspace: attempt to import. If the extension is
+    // not supported, reject instead of accepting without copying—referencing
+    // an absolute path outside the project is exactly what this feature wants
+    // to stop doing.
     const std::string ext = path.extension().string();
     if (!DonTopo::isImportableExtension(ext))
     {
@@ -136,9 +136,9 @@ std::optional<std::filesystem::path> acceptOrImportAsset(const DonTopo::EditorCo
     return outcome.destPath;
 }
 
-// 2 decimales — suficiente para leer el valor de un vistazo en el Log sin
-// líneas kilométricas; el panel Properties ya muestra 3 decimales para
-// edición fina, el Log es solo un resumen legible.
+// 2 decimals—sufficient to read the value at a glance in the Log without
+// kilometer-long lines; the Properties panel already shows 3 decimals for
+// fine editing, the Log is just a readable summary.
 std::string formatVec3(const glm::vec3& v)
 {
     char buf[64];
@@ -153,7 +153,7 @@ std::string formatFloat(float f)
     return buf;
 }
 
-// "attackRange" -> "Attack Range" (labels de props de scripts)
+// "attackRange" -> "Attack Range" (script property labels)
 std::string prettyPropLabel(const std::string& raw)
 {
     std::string out;
@@ -167,19 +167,20 @@ std::string prettyPropLabel(const std::string& raw)
     return out;
 }
 
-// Compara floats con tolerancia — evita empujar un comando de Undo cuando el
-// drag termina en el mismo valor con el que empezó (ruido de redondeo).
+// Compare floats with tolerance—avoids pushing an Undo command when the
+// drag ends at the same value it started with (rounding noise).
 bool nearlyEqualF(float a, float b) { return std::fabs(a - b) < 0.0001f; }
 
-// Aviso bajo el checkbox "Is Trigger" cuando el GameObject no tiene Rigidbody.
+// Warning below the "Is Trigger" checkbox when the GameObject has no
+// Rigidbody.
 //
-// PhysX no genera pares entre dos actores estáticos —no pueden moverse el uno
-// respecto al otro, así que ni siquiera llama al filter shader—, y un collider
-// sin Rigidbody es PxRigidStatic. O sea: un trigger sin Rigidbody NO detecta
-// objetos que tampoco lo tengan. Es la misma regla que Unity, pero aquí no
-// había nada que la dijera: se marcaba el checkbox, no pasaba nada, y no
-// quedaba ni una pista de por qué. Ver los tests de triggers en
-// physics_tests.cpp, que fijan las tres combinaciones.
+// PhysX does not generate pairs between two static actors—they cannot
+// move relative to each other, so it does not even call the filter shader—,
+// and a collider without Rigidbody is PxRigidStatic. That is: a trigger
+// without Rigidbody does NOT detect objects without one either. It is the
+// same rule as Unity, but nothing here said so: you marked the checkbox,
+// nothing happened, and there was no clue why. See trigger tests in
+// physics_tests.cpp, which fix all three combinations.
 void drawTriggerRigidbodyHint(const DonTopo::GameObject* go, bool isTrigger)
 {
     if (!isTrigger || !go || go->hasRigidbody()) return;
@@ -190,10 +191,10 @@ void drawTriggerRigidbodyHint(const DonTopo::GameObject* go, bool isTrigger)
                           "Add a Rigidbody to this object or to the one that should enter.");
 }
 
-// Resolutores de collider por tipo. Punteros a función (sin capturas) para que
-// drawColliderLayerCombo los pueda meter en el lambda del Undo, que nunca debe
-// capturar un puntero crudo al collider: un Undo de Delete reconstruye el
-// GameObject y el viejo queda colgando.
+// Collider resolvers by type. Function pointers (no captures) so that
+// drawColliderLayerCombo can put them in the Undo lambda, which must never
+// capture a raw collider pointer: a Delete Undo rebuilds the GameObject
+// and the old one hangs.
 DonTopo::Collider* resolveBoxCollider(DonTopo::GameObject* go)
 { return go->hasBoxCollider() ? go->getBoxCollider().get() : nullptr; }
 DonTopo::Collider* resolveSphereCollider(DonTopo::GameObject* go)
@@ -203,20 +204,21 @@ DonTopo::Collider* resolveCapsuleCollider(DonTopo::GameObject* go)
 DonTopo::Collider* resolvePlaneCollider(DonTopo::GameObject* go)
 { return go->hasPlaneCollider() ? go->getPlaneCollider().get() : nullptr; }
 
-// Desplegable de la capa de colisión, común a los 4 colliders. NO cachea el
-// valor en un miembro como los DragFloat de al lado: un combo confirma en el
-// mismo frame y no hay arrastre que proteger, así que se lee el collider vivo.
-// Se ofrecen las 32 capas que soporta el core, tengan nombre o no; los nombres
-// se editan en los ajustes del proyecto.
+// Collision layer dropdown, common to all 4 colliders. Does NOT cache the
+// value in a member like the DragFloats beside it: a combo confirms in the
+// same frame and there is no drag to protect, so the live collider is read.
+// All 32 layers supported by the core are offered, whether named or not;
+// the names are edited in project settings.
 void drawColliderLayerCombo(DonTopo::EditorContext& ctx, const char* label,
                             const char* seccion, DonTopo::Collider* collider,
                             DonTopo::Collider* (*resolve)(DonTopo::GameObject*))
 {
     if (!collider || !ctx.selected) return;
 
-    // Solo las capas CREADAS en los ajustes del proyecto, no las 32 del techo.
-    // Si el collider quedó en una capa que ya no existe (no debería: removeLayer
-    // reasigna), se amplía la lista hasta ella para no mostrar un combo vacío.
+    // Only layers CREATED in project settings, not the 32 in the ceiling.
+    // If the collider ended up in a layer that no longer exists (should not:
+    // removeLayer reassigns), the list is expanded up to it to avoid showing
+    // an empty combo.
     const int creadas = ctx.physics ? ctx.physics->layerCount() : 1;
     const int antes   = collider->getLayer();
     const int total   = std::max(creadas, antes + 1);
@@ -251,8 +253,8 @@ void drawColliderLayerCombo(DonTopo::EditorContext& ctx, const char* label,
         }));
 }
 
-// La ruta que hay AHORA en el material para ese slot (override aplicado o lo
-// que trajo el FBX): es lo que se enseña.
+// The path that is NOW in the material for that slot (override applied or
+// what the FBX brought): that is what is shown.
 std::string currentTexturePath(const DonTopo::Material& mat, DonTopo::MaterialTextureSlot slot)
 {
     switch (slot)
@@ -264,8 +266,8 @@ std::string currentTexturePath(const DonTopo::Material& mat, DonTopo::MaterialTe
     return {};
 }
 
-// La ruta del OVERRIDE, que no es lo mismo: vacía significa "esto es del FBX",
-// y es lo que decide si Clear tiene algo que hacer.
+// The path of the OVERRIDE, which is not the same: empty means "this is
+// from the FBX", and it is what decides whether Clear has something to do.
 std::string currentOverride(const DonTopo::GameObject& go, int materialIndex,
                             DonTopo::MaterialTextureSlot slot)
 {
@@ -285,7 +287,7 @@ bool hasOverride(const DonTopo::GameObject& go, int materialIndex, DonTopo::Mate
     return !currentOverride(go, materialIndex, slot).empty();
 }
 
-// El .mat vinculado a ese slot, o vacio si no hay ninguno.
+// The .mat linked to that slot, or empty if there is none.
 std::string currentMaterialAsset(const DonTopo::GameObject& go, int materialIndex)
 {
     for (const DonTopo::MaterialOverride& ov : go.materialOverrides)
@@ -293,15 +295,15 @@ std::string currentMaterialAsset(const DonTopo::GameObject& go, int materialInde
     return {};
 }
 
-// El factor del OVERRIDE, CRUDO (el centinela -1.0f si no hay ninguno para
-// ese slot), simétrico a currentOverride() con las texturas -- y por el
-// mismo motivo: mat.metallic/mat.roughness son el valor YA APLICADO (FBX u
-// override), y usar ESO como "before" de un comando rompería el undo. Un
-// PropertyCommand<float> con before=valor-del-FBX y slot="antes no había
-// override" son datos distintos aunque el número coincida: deshacer tiene
-// que devolver "sin override" (el centinela), no re-escribir el valor del
-// FBX COMO override activo -- que es justo lo que nodeToJson serializa, y
-// clavaría el factor en el .scene aunque el usuario nunca lo hubiera tocado.
+// The OVERRIDE factor, RAW (the sentinel -1.0f if there is none for that
+// slot), symmetric to currentOverride() with textures—and for the same
+// reason: mat.metallic/mat.roughness are the value ALREADY APPLIED (FBX or
+// override), and using THAT as the "before" of a command would break undo.
+// A PropertyCommand<float> with before=FBX-value and slot="there was no
+// override" are different data even though the number matches: undo must
+// return "without override" (the sentinel), not rewrite the FBX value AS
+// the active override—which is exactly what nodeToJson serializes, and
+// would nail the factor in the .scene even though the user never touched it.
 float currentFactorOverride(const DonTopo::GameObject& go, int materialIndex,
                             DonTopo::MaterialFactorSlot slot)
 {
@@ -346,16 +348,16 @@ PropertiesPanel::~PropertiesPanel() = default;
 
 void PropertiesPanel::invalidateCaches()
 {
-    // TODOS de una sentencia, y por eso están en una struct. Un Undo/Redo muta
-    // los componentes EN SITIO (el puntero no cambia), así que un cache que no
-    // se resetee deja su sección mostrando el valor deshecho, y el próximo drag
-    // de OTRO campo reaplica ese valor stale y resucita el cambio que el
-    // usuario acababa de deshacer.
+    // ALL of one statement, and that is why they are in a struct. An Undo/Redo
+    // mutates components IN PLACE (the pointer does not change), so a cache
+    // that is not reset leaves its section showing the undone value, and the
+    // next drag of ANOTHER field reapplies that stale value and resurrects the
+    // change the user just undid.
     //
-    // Esta función se escribía enumerando miembro a miembro y se quedó corta
-    // cuatro veces: el Undo no funcionaba en Sphere, Capsule ni Plane Collider
-    // ni en Rigidbody, y solo se arreglaba el que alguien reportaba. Añadir el
-    // puntero a EditCaches ya basta.
+    // This function was written enumerating member by member and came up short
+    // four times: Undo did not work on Sphere, Capsule, or Plane Collider or
+    // on Rigidbody, and only was fixed when someone reported it. Adding the
+    // pointer to EditCaches is enough.
     m_caches = EditCaches{};
 }
 
@@ -364,24 +366,23 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, uint64_t ownerId,
 {
     if (!ctx.assetLoader || !ctx.scene) return;
 
-    // Resuelto por id en el momento de aplicar, nunca por ctx.selected: el
-    // diálogo de Browse no es modal y se drena varios frames después, con el
-    // Hierarchy clicable de por medio. Leer la selección aquí cargaba el FBX en
-    // el objeto equivocado. El drop pasa por aquí igual (con el id del objeto
-    // sobre el que se suelta), donde da lo mismo porque es inmediato.
+    // Resolved by id at the time of applying, never by ctx.selected: the Browse
+    // dialog is not modal and drains several frames later, with Hierarchy
+    // clickable in between. Reading the selection here loaded the FBX on the
+    // wrong object. The drop passes through here the same (with the id of the
+    // object it is dropped on), where it does not matter because it is immediate.
     GameObject* owner = ctx.scene->findById(ownerId);
     if (!owner)
     {
-        // En el log y no en silencio: el usuario ha navegado un diálogo entero
-        // y su elección no va a ninguna parte (mismo criterio que
-        // assignMaterialTexture).
+        // In the log and not silently: the user has navigated an entire dialog and
+        // their choice goes nowhere (same criterion as assignMaterialTexture).
         ctx.pushLog("The object that requested the mesh no longer exists; load discarded");
         return;
     }
 
-    // El guard de hasMesh() ya no basta: mientras la carga está en vuelo
-    // hasMesh() es falso, así que un segundo drop encolaría una carga duplicada
-    // y el segundo resultado pisaría al primero. pendingMeshJob != 0 lo corta.
+    // The hasMesh() guard is not enough anymore: while loading is in flight
+    // hasMesh() is false, so a second drop would queue a duplicate load and the
+    // second result would overwrite the first. pendingMeshJob != 0 cuts it off.
     if (owner->hasMesh() || owner->pendingMeshJob != 0)
         return;
 
@@ -392,12 +393,12 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, uint64_t ownerId,
         return;
     }
 
-    // No carga: encola. El registro en el Renderer (addSkinnedMesh/addStaticMesh)
-    // y el setMesh los hace EditorUI::onAssetsLoaded (vía applyLoadedMesh) cuando
-    // el worker termine y el pump por frame lo recoja.
+    // Does not load: queues it. Registration in the Renderer (addSkinnedMesh/
+    // addStaticMesh) and setMesh are done by EditorUI::onAssetsLoaded (via
+    // applyLoadedMesh) when the worker finishes and the frame pump picks it up.
     owner->pendingMeshJob = ctx.assetLoader->requestMesh(path, owner->id);
-    // Para que, al aterrizar, EditorUI sepa que esta carga es una edición y
-    // apile su undo (ver consumeUserMeshJob).
+    // So that, when it lands, EditorUI knows this load is an edit and stacks
+    // its undo (see consumeUserMeshJob).
     m_userMeshJobs[owner->id] = owner->pendingMeshJob;
     m_meshLoadError.clear();
     ctx.pushLog("Loading '" + path + "'...");
@@ -411,11 +412,11 @@ bool PropertiesPanel::consumeUserMeshJob(uint64_t targetId, uint64_t job)
     return true;
 }
 
-// Snapshot y restauración del AudioClipComponent, en un solo sitio: los usan
-// los sliders (comando al soltar el arrastre), los checkboxes (comando
-// inmediato) y el Add/Remove del componente. Aquí arriba y no junto a
-// drawAudioClipSection porque loadAudioClipForSelected, que está justo debajo,
-// ya los necesita.
+// Snapshot and restoration of AudioClipComponent, in one place: used by
+// sliders (command when drag ends), checkboxes (immediate command) and
+// Add/Remove of the component. Here at the top and not next to
+// drawAudioClipSection because loadAudioClipForSelected, which is right
+// below, already needs them.
 static AudioClipState audioClipStateOf(const AudioClipComponent& clip)
 {
     return AudioClipState{ clip.getVolume(), clip.getPitch(),
@@ -426,21 +427,22 @@ static AudioClipState audioClipStateOf(const AudioClipComponent& clip)
                             clip.getMute() };
 }
 
-// Resuelve el GameObject por id en cada aplicación, nunca captura el puntero:
-// así sobrevive a un undo de Delete que haya reconstruido el objeto entretanto.
+// Resolves the GameObject by id on each apply, never captures the pointer:
+// so it survives an undo of Delete that may have rebuilt the object in the
+// meantime.
 static void applyAudioClipState(Scene& scene, uint64_t ownerId, const AudioClipState& s)
 {
     GameObject* go = scene.findById(ownerId);
     if (!go || !go->hasAudioClip()) return;
     auto& clip = go->getAudioClip();
-    // loop e is3D primero: recargan el sonido (van en el FMOD_MODE) y ese
-    // reload reaplica las distancias del componente, así que escribirlas antes
-    // sería trabajo tirado. Los dos setters son no-op si el valor no cambia.
+    // loop and is3D first: reload the sound (they go in FMOD_MODE) and that
+    // reload reapplies the component's distances, so writing them before would
+    // be wasted work. The two setters are no-op if the value does not change.
     clip->setLoop(s.loop);
     clip->setIs3D(s.is3D);
     clip->setPlayOnAwake(s.playOnAwake);
     clip->setBus(s.bus);
-    // Recarga el sonido si cambia, como loop/is3D.
+    // Reloads the sound if it changes, like loop/is3D.
     clip->setLoadMode(s.loadMode);
     clip->setRolloff(s.rolloff);
     clip->setSpread(s.spread);
@@ -449,7 +451,7 @@ static void applyAudioClipState(Scene& scene, uint64_t ownerId, const AudioClipS
     clip->setMute(s.mute);
     clip->setVolume(s.volume);
     clip->setPitch(s.pitch);
-    // Max antes que min: los dos setters mantienen min <= max entre ellos.
+    // Max before min: the two setters keep min <= max between them.
     clip->setMaxDistance(s.maxDistance);
     clip->setMinDistance(s.minDistance);
 }
@@ -459,9 +461,9 @@ void PropertiesPanel::loadAudioClipForSelected(EditorContext& ctx, const std::st
     if (!ctx.selected || !ctx.audio || ctx.selected->hasAudioClip())
         return;
 
-    // La lista vive en AudioBus.h, compartida con la carga de escena y con el
-    // AddComponent de Lua: antes estaba solo aquí y las otras rutas aceptaban
-    // cualquier extensión.
+    // The list lives in AudioBus.h, shared with scene loading and Lua
+    // AddComponent: before it was here alone and other routes accepted any
+    // extension.
     std::string ext = std::filesystem::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     if (!isSupportedAudioExtension(ext))
@@ -476,19 +478,19 @@ void PropertiesPanel::loadAudioClipForSelected(EditorContext& ctx, const std::st
         m_audioLoadError = "Could not load the audio";
         return;
     }
-    // El alta pasa por el undo como el resto de componentes del panel. El
-    // estado es el del clip recién creado (todo por defecto): lo que hace útil
-    // el comando aquí no es conservar valores, es que el Ctrl+Z tras un drop
-    // accidental quite el componente en vez de no hacer nada.
+    // The addition goes through undo like the rest of the panel's components.
+    // The state is that of the newly created clip (all defaults): what makes
+    // the command useful here is not preserving values, it is that Ctrl+Z
+    // after an accidental drop removes the component instead of doing nothing.
     if (ctx.scene && ctx.undo)
     {
         auto cmd = std::make_unique<AudioClipComponentCommand>(
             *ctx.scene, *ctx.audio,
             "Add Audio Clip to '" + ctx.selected->name + "'", ctx.selected->id,
             /*add=*/true, path, audioClipStateOf(*clip));
-        // El componente ya está creado: se asigna aquí y el comando solo lo
-        // recrea si hace falta un redo. Crearlo dos veces cargaría el sonido
-        // dos veces.
+        // The component is already created: assigned here and the command only
+        // recreates it if a redo is needed. Creating it twice would load the sound
+        // twice.
         ctx.selected->setAudioClip(std::move(clip));
         ctx.undo->push(std::move(cmd));
         m_audioLoadError.clear();
@@ -505,24 +507,24 @@ void PropertiesPanel::drawAssetDropBox(EditorContext& ctx, const char* idSuffix,
                                        const std::function<void()>& onBrowse,
                                        const std::function<void(const std::string&)>& onDrop)
 {
-    // Deshabilitado durante la carga de escena, y aquí dentro para las 16 cajas
-    // de una vez. Es la mitad que COMUNICA: quien impide de verdad es
-    // acceptOrImportAsset al drenar el diálogo (un diálogo ya abierto sobrevive al
-    // modal, así que el botón gris no basta). Mismo reparto que el de la IO de
-    // escena en Play: widget deshabilitado avisa, guarda en la función que hace
-    // el trabajo impide.
+    // Disabled during scene load, and here inside for all 16 boxes at once.
+    // It is half of what COMMUNICATES: what really prevents is
+    // acceptOrImportAsset when draining the dialog (a dialog already open
+    // survives the modal, so a gray button is not enough). Same distribution
+    // as scene IO in Play: disabled widget warns, the function that does the
+    // work prevents.
     ImGui::BeginDisabled(ctx.editingLocked);
     if (ImGui::Button((std::string("Browse...##") + idSuffix).c_str()))
         onBrowse();
     ImGui::EndDisabled();
 
-    // Sin SameLine y con 40 px de alto: es el layout del Mesh, y las cajas de
-    // UI venían cada una con el suyo (ruta y botón en la misma línea, hijo de
-    // 34 px). Un único sitio del que salen las 16.
+    // No SameLine and 40 px tall: it is the Mesh layout, and the UI boxes
+    // each came with theirs (path and button on the same line, child of 34 px).
+    // One single place they all come from.
     ImGui::BeginChild((std::string("##DropZone") + idSuffix).c_str(), ImVec2(0, 40), true);
     ImGui::TextDisabled("%s", hint);
-    // Mismo veto de edición que el Mesh: con el modal de Load Scene activo no
-    // se aceptan drops nuevos.
+    // Same edit veto as Mesh: with the Load Scene modal active, new drops are
+    // not accepted.
     if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
@@ -543,41 +545,38 @@ void PropertiesPanel::draw(EditorContext& ctx)
         }
         else
         {
-            // Cuerpo simulado (Rigidbody no-kinematic): PhysX le mueve
-            // localTransform CADA frame, así que no puede entrar por la rama de
-            // "cambio externo" de abajo — se llevaría los valores de mundo que
-            // enseña su propia rama.
+            // Simulated body (non-kinematic Rigidbody): PhysX moves it localTransform
+            // EVERY frame, so it cannot enter the "external change" branch below—it
+            // would carry the world values shown by its own branch.
             const bool simulado = ctx.selected->hasAnyCollider() && ctx.selected->hasRigidbody()
                                   && !ctx.selected->getRigidbody()->getIsKinematic();
             const bool seleccionNueva = m_caches.props != ctx.selected;
-            // Alguien de FUERA de este panel movió el objeto sin cambiar la
-            // selección: el gizmo de traslación del viewport, un script, un
-            // Ctrl+Z. Sin esto los campos se quedaban en el valor de cuando se
-            // seleccionó y, peor, el siguiente toque a un DragFloat recomponía
-            // la matriz desde esa caché rancia y borraba el movimiento.
+            // Someone OUTSIDE this panel moved the object without changing the
+            // selection: the translation gizmo from the viewport, a script, a Ctrl+Z.
+            // Without this the fields stayed at the value from when it was selected
+            // and, worse, the next touch to a DragFloat recomposed the matrix from
+            // that stale cache and erased the movement.
             const bool movidoDeFuera = !simulado && !m_transformDragActive
                                        && ctx.selected->localTransform != m_transformCached;
 
-            // Lo que NO se hace es recomponer en cada frame: un valor
-            // intermedio inválido (p.ej. escala 0 mientras se teclea "0.5") se
-            // re-descompondría y rompería posición/rotación de forma
-            // permanente. De ahí el `!m_transformDragActive` de arriba, y el
-            // guardado de m_transformCached junto a cada escritura de la matriz
-            // más abajo, que impide que lo que escribe este mismo panel se lea
-            // como cambio externo en el frame siguiente.
+            // What is NOT done is recompose every frame: an invalid intermediate value
+            // (e.g. scale 0 while typing "0.5") would be re-decomposed and break
+            // position/rotation permanently. Hence the `!m_transformDragActive` above,
+            // and the saving of m_transformCached next to each matrix write below,
+            // which prevents what this same panel writes from being read as external
+            // change in the next frame.
             if (seleccionNueva || movidoDeFuera)
             {
                 glm::quat orientation;
-                // Sin mirar lo que devuelve decompose, una escala 0 dejaba aqui
-                // el cuaternion SIN INICIALIZAR, y eulerAngles lo convertia en
-                // los 90 grados que aparecian en X y en Z.
+                // Without looking at what decompose returns, a scale 0 left the quaternion
+                // here UNINITIALIZED, and eulerAngles converted it into the 90 degrees
+                // that appeared on X and Z.
                 decomposeTransform(ctx.selected->localTransform, &m_editPosition,
                                    &orientation, &m_editScale);
                 m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
                 m_transformCached = ctx.selected->localTransform;
-                // Los errores de carga son de la SELECCIÓN, no del transform:
-                // moverla con el gizmo no puede hacer desaparecer el mensaje de
-                // "no se pudo cargar el FBX".
+                // Load errors are from the SELECTION, not the transform: moving it with
+                // the gizmo cannot make the "could not load the FBX" message disappear.
                 if (seleccionNueva)
                 {
                     m_caches.props = ctx.selected;
@@ -586,18 +585,17 @@ void PropertiesPanel::draw(EditorContext& ctx)
                     m_textureLoadError.clear();
                 }
             }
-            // PhysX mueve worldTransform (y localTransform, ver traverse en el loop
-            // principal) cada frame, pero eso nunca toca este cache de edición — sin
-            // este refresco, Position/Rotation mostrados quedan congelados en el valor
-            // de cuando se seleccionó, aunque el objeto siga cayendo/rotando por
-            // física. Solo posición+rotación (la escala es puramente del editor, physx
-            // no la conoce); se salta mientras se está arrastrando un slider pa no
-            // pelear con el drag del usuario.
+            // PhysX moves worldTransform (and localTransform, see traverse in the main
+            // loop) every frame, but this never touches this edit cache—without this
+            // refresh, Position/Rotation shown stay frozen at the value from when it was
+            // selected, even though the object keeps falling/rotating by physics. Only
+            // position+rotation (scale is purely from the editor, physx does not know
+            // it); skipped while dragging a slider to not fight the user's drag.
             else if (simulado && !m_transformDragActive)
             {
                 glm::quat orientation;
-                // Mismo motivo que arriba: con una matriz singular decompose no
-                // escribe nada, y sin comprobarlo lo que se enseñaba era basura.
+                // Same reason as above: with a singular matrix decompose writes nothing,
+                // and without checking it what was shown was garbage.
                 decomposeTransform(ctx.selected->worldTransform, &m_editPosition, &orientation);
                 m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
             }
@@ -697,21 +695,19 @@ void PropertiesPanel::draw(EditorContext& ctx)
                 glm::mat4 r = glm::mat4_cast(glm::quat(glm::radians(m_editRotationDeg)));
                 glm::mat4 s = glm::scale(glm::mat4(1.0f), m_editScale);
                 ctx.selected->localTransform = t * r * s;
-                // Lo que acaba de escribir este panel no es un cambio externo:
-                // sin esta línea, el frame siguiente vería la matriz distinta
-                // de la cacheada y re-descompondría, convirtiendo un "370" que
-                // el usuario está tecleando en Rotation.X en un "10".
+                // What this panel just wrote is not an external change: without this line,
+                // the next frame would see the matrix different from the cached one and
+                // re-decompose, turning a "370" the user is typing in Rotation.X into a "10".
                 m_transformCached = ctx.selected->localTransform;
 
                 if (ctx.selected->hasAnyCollider())
                 {
                     ctx.selected->updateWorldTransforms(ctx.selected->parent ? ctx.selected->parent->worldTransform
                                                                            : glm::mat4(1.0f));
-                    // teleport() (no syncTransform): setGlobalPose sirve para
-                    // cualquier tipo de actor (static, kinematic o dinámico),
-                    // mientras syncTransform usa setKinematicTarget, sólo válido
-                    // en kinematic. anyCollider() da el único collider (los 4
-                    // tipos son mutuamente excluyentes).
+                    // teleport() (not syncTransform): setGlobalPose works for any actor type
+                    // (static, kinematic or dynamic), while syncTransform uses
+                    // setKinematicTarget, only valid on kinematic. anyCollider() gives the
+                    // only collider (the 4 types are mutually exclusive).
                     if (auto col = ctx.selected->anyCollider())
                         col->teleport(ctx.selected->worldTransform);
                 }
@@ -797,7 +793,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
 
 void PropertiesPanel::drawSsrSection(EditorContext& ctx)
 {
-    // Sin malla no hay superficie que refleje.
+    // Without a mesh there is no surface to reflect.
     if (!ctx.selected->hasMesh()) return;
 
     if (!ImGui::TreeNodeEx("Screen Space Reflections", ImGuiTreeNodeFlags_OpenOnArrow))
@@ -824,14 +820,15 @@ void PropertiesPanel::drawSsrSection(EditorContext& ctx)
     }
 
     ImGui::BeginDisabled(!ctx.selected->ssrEnabled);
-    // El "before" se lee ANTES de dibujar el slider: SliderFloat salta al valor
-    // bajo el cursor en el mismo frame del click, así que releerlo después daría
-    // ya el nuevo y el undo devolvería el valor del click, no el original.
+    // The "before" is read BEFORE drawing the slider: SliderFloat jumps to the
+    // value under the cursor in the same frame of the click, so reading it again
+    // after would already be the new one and undo would return the click value,
+    // not the original.
     const float beforeIntensity = ctx.selected->ssrIntensity;
     float       intensity       = ctx.selected->ssrIntensity;
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
-    // Reflectividad a incidencia normal: 1 = espejo desde cualquier ángulo,
-    // valores bajos reflejan sobre todo de canto (suelo pulido, agua).
+    // Reflectivity at normal incidence: 1 = mirror from any angle, low values
+    // reflect mostly edge-on (polished floor, water).
     if (ImGui::SliderFloat("Reflectivity", &intensity, 0.0f, 1.0f, "%.2f"))
         ctx.selected->ssrIntensity = intensity;
 
@@ -841,8 +838,8 @@ void PropertiesPanel::drawSsrSection(EditorContext& ctx)
         m_ssrDragBeforeIntensity = beforeIntensity;
         m_ssrDragOwnerId         = id;
     }
-    // El id del dueño evita aplicar un "before" ajeno si el drag se interrumpió
-    // sin commit (p.ej. un Ctrl+Z a mitad de arrastre reconstruye el GameObject).
+    // The owner id avoids applying a foreign "before" if the drag was interrupted
+    // without commit (e.g. a Ctrl+Z mid-drag rebuilds the GameObject).
     if (ImGui::IsItemDeactivatedAfterEdit() && m_ssrDragActive && m_ssrDragOwnerId == id)
     {
         m_ssrDragActive = false;
@@ -865,7 +862,7 @@ void PropertiesPanel::drawSsrSection(EditorContext& ctx)
 
 void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasReflectionProbe()) return;
 
     if (!ImGui::TreeNodeEx("Reflection Probe", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
@@ -878,9 +875,9 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
     ImGui::TextWrapped("The probe captures the surroundings from this object's position "
                        "and replaces the global IBL for whatever falls inside its radius.");
 
-    // Los "before" se leen ANTES de dibujar los sliders: SliderFloat salta al
-    // valor bajo el cursor en el mismo frame del click, así que releerlos
-    // después daría ya el nuevo y el undo devolvería el valor del click.
+    // The "before" values are read BEFORE drawing the sliders: SliderFloat jumps to
+    // the value under the cursor in the same frame of the click, so reading them
+    // again after would already be the new and undo would return the click value.
     const float beforeRadius    = probe->getRadius();
     const float beforeIntensity = probe->getIntensity();
 
@@ -942,8 +939,8 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
         }
     }
 
-    // El bake es un evento: el botón sólo ENCOLA. El Renderer lo ejecuta al
-    // principio del frame siguiente, que es donde puede esperar a la GPU.
+    // Baking is an event: the button only QUEUES it. The Renderer executes it at
+    // the start of the next frame, which is where it can wait for the GPU.
     if (ctx.renderer)
     {
         if (ImGui::Button("Bake"))
@@ -955,8 +952,8 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
         const float ms = ctx.renderer->probeBakeMs(id);
         if (ms < 0.0f) ImGui::TextUnformatted("not baked");
         else           ImGui::Text("%.2f ms of GPU", ms);
-        // Del backend activo, no del de Vulkan por su nombre: cada uno guarda
-        // recursos distintos por sonda (H51).
+        // From the active backend, not from Vulkan by name: each one stores
+        // different resources per probe (H51).
         ImGui::Text("Memory: %.2f MB",
                     (double)ctx.renderer->probeMemoryBytes() / (1024.0 * 1024.0));
     }
@@ -975,7 +972,7 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
 
 void PropertiesPanel::drawReverbZoneSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasReverbZone()) return;
 
     ImGui::Separator();
@@ -995,8 +992,8 @@ void PropertiesPanel::drawReverbZoneSection(EditorContext& ctx)
         if (ImGui::Checkbox("Enabled##reverb", &enabled))
             zone->setEnabled(enabled);
 
-        // Combo por NOMBRE: lo que se guarda en la escena es la cadena, asi que
-        // reordenar esta lista no cambia el ambiente de ningun proyecto.
+        // Combo by NAME: what is saved in the scene is the string, so reordering
+        // this list does not change the environment of any project.
         const auto& presets = AudioManager::reverbPresetNames();
         int current = 0;
         for (int i = 0; i < (int)presets.size(); ++i)
@@ -1028,8 +1025,8 @@ void PropertiesPanel::drawReverbZoneSection(EditorContext& ctx)
 
     if (removeClicked)
     {
-        // El recurso de FMOD lo suelta el sync del frame siguiente, que ve que
-        // este id ya no tiene zona (Scene::syncReverbZones -> retainReverbZones).
+        // The FMOD resource is released by the sync of the next frame, which sees
+        // this id no longer has a zone (Scene::syncReverbZones -> retainReverbZones).
         ctx.selected->setReverbZone(nullptr);
         ctx.pushLog("Reverb Zone component removed from '" + ctx.selected->name + "'");
     }
@@ -1037,7 +1034,7 @@ void PropertiesPanel::drawReverbZoneSection(EditorContext& ctx)
 
 void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasAudioListener()) return;
 
     ImGui::Separator();
@@ -1061,8 +1058,8 @@ void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
 
     if (removeClicked)
     {
-        // Con el enabled actual en el snapshot: quitar un listener DESHABILITADO
-        // y deshacer tiene que devolverlo deshabilitado, no habilitado.
+        // With the current enabled state in the snapshot: removing a DISABLED
+        // listener and undoing has to return it disabled, not enabled.
         if (ctx.scene && ctx.undo)
         {
             auto cmd = std::make_unique<AudioListenerComponentCommand>(
@@ -1082,7 +1079,7 @@ void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
 
 void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasCanvas()) return;
 
     ImGui::Separator();
@@ -1102,15 +1099,15 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
                            "safe area insets and cropped to the aspect ratio; that gives a single, "
                            "uniform scale for the whole tree.");
 
-        // Los campos se alcanzan por un accessor sin captura (function pointer)
-        // y no por puntero a miembro: así los cuatro insets del safe area, que
-        // viven un nivel más adentro, usan el MISMO helper que el resto.
+        // Fields are reached through a no-capture accessor (function pointer) and
+        // not through member pointer: so the four safe area insets, which live one
+        // level deeper, use the SAME helper as the rest.
         using FloatRef = float& (*)(CanvasComponent&);
         using Vec2Ref  = glm::vec2& (*)(CanvasComponent&);
         using EnumSet  = void (*)(CanvasComponent&, int);
 
-        // Los combos se commitean en el acto (un click = un cambio), igual que
-        // el Type de la luz.
+        // Combos are committed on the spot (one click = one change), like the
+        // Type of the light.
         auto comboEnum = [&](const char* label, int before, const char* const* items,
                              int count, EnumSet apply)
         {
@@ -1131,9 +1128,9 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
             }
         };
 
-        // Los escalares comparten el baile de siempre: el "before" se lee ANTES
-        // de dibujar, la sesión se abre en IsItemActivated y se commitea en
-        // IsItemDeactivatedAfterEdit, así un arrastre entero es UN paso de undo.
+        // Scalars share the usual dance: the "before" is read BEFORE drawing, the
+        // session opens in IsItemActivated and commits in IsItemDeactivatedAfterEdit,
+        // so an entire drag is ONE undo step.
         auto dragFloat = [&](const char* label, FloatRef acc, float speed,
                              float lo, float hi, const char* fmt)
         {
@@ -1322,10 +1319,10 @@ const std::vector<std::string>& PropertiesPanel::spriteNamesFor(EditorContext& c
 
     if (atlasPath.empty() || !ctx.renderer) return m_spriteNames;
 
-    // loadUiAtlas cachea por ruta, así que esto NO carga una segunda copia del
-    // atlas que ya está dibujándose: devuelve ese mismo. Y si la ruta no vale,
-    // el resultado (lista vacía) se queda cacheado hasta que cambie la ruta, en
-    // vez de reintentar el fichero en cada frame.
+    // loadUiAtlas caches by path, so this does NOT load a second copy of the
+    // atlas that is already being drawn: it returns the same one. And if the
+    // path is invalid, the result (empty list) stays cached until the path
+    // changes, instead of retrying the file every frame.
     if (const UiTextureAtlas* atlas = ctx.renderer->loadUiAtlas(atlasPath))
         m_spriteNames = atlas->spriteNames();
 
@@ -1337,9 +1334,9 @@ void PropertiesPanel::setButtonAssetPath(EditorContext& ctx, uint64_t ownerId, b
 {
     if (path.empty()) return;
 
-    // El filtro del file dialog ya restringe, pero un drop llega con lo que sea:
-    // el veto vive AQUÍ, en el punto por el que pasan todos los orígenes, y no
-    // repetido en cada caja.
+    // The file dialog filter already restricts, but a drop arrives with
+    // anything: the veto lives HERE, at the point where all sources pass, and not
+    // repeated in each box.
     if (!(isFont ? isUiFontPath(path) : isUiAtlasPath(path)))
     {
         m_buttonPathError = std::string("No es ") +
@@ -1377,9 +1374,9 @@ void PropertiesPanel::setButtonAssetPath(EditorContext& ctx, uint64_t ownerId, b
 
 void PropertiesPanel::drawButtonPathDialogs(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected/hasButton(): si no se drenan aquí, cambiar
-    // de selección con el diálogo abierto deja el flag atascado en true para
-    // siempre (mismo motivo que drawMeshDialog).
+    // Without conditioning on ctx.selected/hasButton(): if not drained here,
+    // changing selection with the dialog open leaves the flag stuck at true
+    // forever (same reason as drawMeshDialog).
     if (m_fontDlgOpen && m_fontFileDialog->Display("ButtonFontDlg"))
     {
         if (m_fontFileDialog->IsOk())
@@ -1405,7 +1402,7 @@ void PropertiesPanel::drawButtonPathDialogs(EditorContext& ctx)
 
 void PropertiesPanel::drawButtonSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasButton()) return;
 
     ImGui::Separator();
@@ -1425,8 +1422,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                            "and its state (Normal/Hover/Pressed/Disabled/Selected) is resolved by the "
                            "canvas itself from the mouse and focus.");
 
-        // Mismos accessors sin captura (function pointer) que el Canvas: así los
-        // campos de dentro de una struct usan el MISMO helper que el resto.
+        // Same no-capture accessors (function pointer) as Canvas: so fields inside
+        // a struct use the SAME helper as the rest.
         using FloatRef = float&       (*)(ButtonComponent&);
         using Vec2Ref  = glm::vec2&   (*)(ButtonComponent&);
         using Vec4Ref  = glm::vec4&   (*)(ButtonComponent&);
@@ -1434,7 +1431,7 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
         using BoolRef  = bool&        (*)(ButtonComponent&);
         using EnumSet  = void         (*)(ButtonComponent&, int);
 
-        // Combos y checkbox se commitean en el acto: un click = un cambio.
+        // Combos and checkbox commit on the spot: one click = one change.
         auto comboEnum = [&](const char* label, int before, const char* const* items,
                              int count, EnumSet apply)
         {
@@ -1474,9 +1471,9 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             }
         };
 
-        // Los escalares comparten el baile de siempre: "before" leído ANTES de
-        // dibujar, sesión abierta en IsItemActivated y commit en
-        // IsItemDeactivatedAfterEdit, así un arrastre entero es UN paso de undo.
+        // Scalars share the usual dance: "before" read BEFORE drawing, session
+        // open in IsItemActivated and commit in IsItemDeactivatedAfterEdit, so an
+        // entire drag is ONE undo step.
         auto dragFloat = [&](const char* label, FloatRef acc, float speed,
                              float lo, float hi, const char* fmt)
         {
@@ -1545,8 +1542,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             }
         };
 
-        // Los colores llevan alfa (los cinco estados y el texto lo usan para
-        // desvanecer), así que ColorEdit4 y no 3.
+        // Colors carry alpha (the five states and the text use it to fade), so
+        // ColorEdit4 and not 3.
         auto colorEdit = [&](const char* label, Vec4Ref acc)
         {
             const glm::vec4 before = acc(*b);
@@ -1580,8 +1577,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             }
         };
 
-        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
-        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        // An entire InputText (write and exit the field) is ONE undo step, not one
+        // per key: same criterion as dragging a DragFloat.
         auto inputText = [&](const char* label, StrRef acc)
         {
             const std::string before = acc(*b);
@@ -1617,10 +1614,10 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             }
         };
 
-        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
-        // (<atlas>.sprites.json) se elige de la lista; sin él se cae al campo de
-        // texto de siempre, que sigue valiendo para un atlas troceado a mano y
-        // para una escena que ya traía un nombre escrito.
+        // A sprite is a NAME inside the atlas, not free text. With sidecar
+        // (<atlas>.sprites.json) choose from the list; without it fall back to the
+        // text field of always, which still works for a hand-cut atlas and for a
+        // scene that already brought a written name.
         auto spriteField = [&](const char* label, StrRef acc)
         {
             const std::vector<std::string>& nombres = spriteNamesFor(ctx, b->atlasPath);
@@ -1628,8 +1625,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
 
             const std::string before = acc(*b);
 
-            // El vacío es "(imagen entera)": un atlas sin sprite se dibuja
-            // completo, que es lo que hace UiTextureAtlas::uvRect sin nombre.
+            // Empty is "(whole image)": an atlas without sprite is drawn complete,
+            // which is what UiTextureAtlas::uvRect does without a name.
             std::vector<const char*> items;
             items.reserve(nombres.size() + 2);
             items.push_back("(whole image)");
@@ -1639,9 +1636,9 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             for (size_t i = 0; i < nombres.size(); ++i)
                 if (nombres[i] == before) { current = (int)i + 1; break; }
 
-            // Un nombre que ya no está en el atlas NO se pierde ni se corrige
-            // solo: se enseña al final marcado, y el componente sigue diciendo
-            // lo que decía hasta que el usuario elija otra cosa.
+            // A name that is no longer in the atlas is NOT lost or auto-corrected:
+            // it is shown at the end marked, and the component keeps saying what it
+            // said until the user chooses something else.
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
@@ -1654,7 +1651,7 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::Combo(label, &idx, items.data(), (int)items.size()) && idx != current)
             {
-                // El huérfano no es un destino: elegirlo deja el valor como está.
+                // The orphan is not a destination: choosing it leaves the value as is.
                 const std::string after = (idx == 0)                    ? std::string()
                                         : (idx <= (int)nombres.size())  ? nombres[(size_t)idx - 1]
                                                                         : before;
@@ -1691,10 +1688,9 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                               "state color overrides it; it only applies with Sprite Swap.");
         checkBox("Visible", +[](ButtonComponent& c) -> bool& { return c.visible; });
 
-        // Ruta escribible a mano + la caja de asset común (drawAssetDropBox:
-        // botón y zona de drop, mismo layout que el Mesh). El veto por
-        // extensión no está aquí sino en setButtonAssetPath, que es por donde
-        // pasan los dos orígenes.
+        // Writable path by hand + the common asset box (drawAssetDropBox: button
+        // and drop zone, same layout as Mesh). The extension veto is not here but
+        // in setButtonAssetPath, which is where both sources pass through.
         auto assetBox = [&](const char* label, bool isFont, StrRef acc,
                             const char* dlgKey, const char* dlgTitle, const char* filters,
                             const char* hint)
@@ -1730,8 +1726,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                  +[](ButtonComponent& c) -> std::string& { return c.atlasPath; },
                  "ButtonAtlasDlg", "Choose atlas", ".png,.jpg,.jpeg,.bmp,.tga",
                  "Drop .png/.jpg/.bmp/.tga here");
-        // Sin atlas no hay nada que trocear, y el botón deshabilitado dice por
-        // qué mejor que su ausencia.
+        // Without an atlas there is nothing to cut, and the disabled button says why
+        // better than its absence.
         ImGui::BeginDisabled(b->atlasPath.empty() || !ctx.openSpriteEditor);
         if (ImGui::Button("Edit sprites...")) ctx.openSpriteEditor(b->atlasPath);
         ImGui::EndDisabled();
@@ -1808,8 +1804,8 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
 void PropertiesPanel::setTextFontPath(EditorContext& ctx, uint64_t ownerId,
                                        const std::string& path)
 {
-    // Mismo veto que el Button y por el mismo sitio: aquí pasan el drop y el
-    // file dialog, así que el filtro solo hay que ponerlo una vez.
+    // Same veto as Button and for the same reason: the drop and the file dialog
+    // pass here, so the filter only goes in once.
     if (!isUiFontPath(path))
     {
         m_textPathError = "Not a font (.ttf .otf .ttc): " +
@@ -1843,8 +1839,8 @@ void PropertiesPanel::setTextFontPath(EditorContext& ctx, uint64_t ownerId,
 
 void PropertiesPanel::drawTextPathDialog(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected/hasText(): si no se drena aquí, cambiar de
-    // selección con el diálogo abierto deja el flag atascado en true.
+    // Without conditioning on ctx.selected/hasText(): if not drained here,
+    // changing selection with the dialog open leaves the flag stuck at true.
     if (m_textFontDlgOpen && m_textFontFileDialog->Display("TextFontDlg"))
     {
         if (m_textFontFileDialog->IsOk())
@@ -1859,7 +1855,7 @@ void PropertiesPanel::drawTextPathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawTextSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasText()) return;
 
     ImGui::Separator();
@@ -1878,10 +1874,10 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
         ImGui::TextWrapped("2D UI label. It is drawn in the scene's Canvas tree. "
                            "The text accepts style tags: <color=#RRGGBB>, <size=N>, <b> and <i>.");
 
-        // Los mismos accessors sin captura (function pointer) y el mismo baile
-        // de undo que la sección del Button. Los labels llevan "##txt" porque un
-        // GameObject puede tener Button y Text a la vez: dos widgets con el
-        // MISMO id de ImGui en la misma ventana comparten estado.
+        // Same no-capture accessors (function pointer) and same undo dance as
+        // Button section. Labels carry "##txt" because a GameObject can have Button
+        // and Text at the same time: two widgets with the SAME ImGui id in the same
+        // window share state.
         using FloatRef = float&       (*)(TextComponent&);
         using Vec2Ref  = glm::vec2&   (*)(TextComponent&);
         using Vec4Ref  = glm::vec4&   (*)(TextComponent&);
@@ -2080,8 +2076,8 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
         ImGui::TextDisabled("Text");
         inputText("Text##txt", +[](TextComponent& c) -> std::string& { return c.text; });
 
-        // Ruta escribible a mano + la caja de asset común (drawAssetDropBox). El
-        // veto por extensión está en setTextFontPath, por donde pasan los dos.
+        // Writable path by hand + the common asset box (drawAssetDropBox). The
+        // extension veto is in setTextFontPath, where both sources pass through.
         inputText("Font##txt", +[](TextComponent& c) -> std::string& { return c.fontPath; });
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Empty = the project's default font");
@@ -2167,9 +2163,9 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
 
 namespace
 {
-    // Las tres rutas de imagen de la barra, en el mismo orden que el `field` que
-    // se pasea por el file dialog y por el drop. Un accessor sin captura para
-    // que el applier del undo (que sobrevive a la selección) no dependa de nada.
+    // The three image paths of the bar, in the same order as the `field` that
+    // goes through the file dialog and the drop. A no-capture accessor so the
+    // undo applier (which survives selection change) depends on nothing.
     std::string& barImagePathRef(ProgressBarComponent& c, int field)
     {
         if (field == 1) return c.backgroundPath;
@@ -2188,9 +2184,8 @@ namespace
 void PropertiesPanel::setProgressBarImagePath(EditorContext& ctx, uint64_t ownerId, int field,
                                                const std::string& path)
 {
-    // Mismo veto que el Button y el Text, y por el mismo sitio: aquí pasan el
-    // drop y el file dialog de las TRES cajas, así que el filtro solo hay que
-    // ponerlo una vez.
+    // Same veto as Button and Text, and for the same reason: the drop and
+    // file dialog of the THREE boxes pass here, so the filter only goes once.
     if (!isUiAtlasPath(path))
     {
         m_barPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
@@ -2225,8 +2220,8 @@ void PropertiesPanel::setProgressBarImagePath(EditorContext& ctx, uint64_t owner
 
 void PropertiesPanel::drawProgressBarPathDialog(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected/hasProgressBar(): si no se drena aquí,
-    // cambiar de selección con el diálogo abierto deja el flag atascado.
+    // Without conditioning on ctx.selected/hasProgressBar(): if not drained
+    // here, changing selection with the dialog open leaves the flag stuck.
     if (m_barAtlasDlgOpen && m_barAtlasFileDialog->Display("BarImageDlg"))
     {
         if (m_barAtlasFileDialog->IsOk())
@@ -2241,7 +2236,7 @@ void PropertiesPanel::drawProgressBarPathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasProgressBar()) return;
 
     ImGui::Separator();
@@ -2260,10 +2255,10 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
         ImGui::TextWrapped("2D UI progress bar. It is drawn in the Canvas tree "
                            "as background + fill; the fill comes from value against [min, max].");
 
-        // Los mismos accessors sin captura (function pointer) y el mismo baile
-        // de undo que las secciones del Button y del Text. Los labels llevan
-        // "##bar" porque un GameObject puede tener los tres componentes a la
-        // vez: dos widgets con el MISMO id de ImGui comparten estado.
+        // Same no-capture accessors (function pointer) and same undo dance as
+        // Button and Text sections. Labels carry "##bar" because a GameObject can
+        // have all three components at the same time: two widgets with the SAME
+        // ImGui id share state.
         using FloatRef = float&       (*)(ProgressBarComponent&);
         using Vec2Ref  = glm::vec2&   (*)(ProgressBarComponent&);
         using Vec4Ref  = glm::vec4&   (*)(ProgressBarComponent&);
@@ -2463,8 +2458,8 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
         checkBox("Visible##bar", +[](ProgressBarComponent& c) -> bool& { return c.visible; });
 
         ImGui::TextDisabled("Value");
-        // Sin tope por min/max a propósito: el componente no clampa nada (lo
-        // normaliza el sync), y el rango puede venir de un script.
+        // Without a ceiling by min/max on purpose: the component does not clamp
+        // anything (the sync normalizes it), and the range can come from a script.
         dragFloat("Value##bar", +[](ProgressBarComponent& c) -> float& { return c.value; },
                   0.01f, -1e9f, 1e9f, "%.3f");
         dragFloat("Min##bar", +[](ProgressBarComponent& c) -> float& { return c.minValue; },
@@ -2490,17 +2485,16 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
                   +[](ProgressBarComponent& c) -> glm::vec4& { return c.fillColor; });
 
         ImGui::TextDisabled("Images");
-        // Una ruta escribible a mano por campo + la caja de asset común
-        // (drawAssetDropBox). El veto por extensión está en
-        // setProgressBarImagePath, por donde pasan los tres campos y los dos
-        // caminos.
+        // One writable path per field + the common asset box (drawAssetDropBox).
+        // The extension veto is in setProgressBarImagePath, where the three fields
+        // and two sources pass through.
         auto assetBox = [&](const char* label, int field, StrRef acc,
                             const char* idSuffix, const char* tip)
         {
             inputText(label, acc);
             if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-            // El idSuffix es único por campo: dos cajas con el mismo id
-            // compartirían el estado de pulsado del botón.
+            // The idSuffix is unique per field: two boxes with the same id would
+            // share the pressed state of the button.
             drawAssetDropBox(ctx, idSuffix, "Drop .png/.jpg here",
                 [&]
                 {
@@ -2554,7 +2548,7 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
 
 void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasLayout()) return;
 
     ImGui::Separator();
@@ -2570,9 +2564,9 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
     if (sectionOpen)
     {
         LayoutComponent* l = ctx.selected->getLayout().get();
-        // El rect solo es suyo cuando no hay otro componente de UI en el objeto:
-        // con uno, el rect lo manda aquel y estos campos no se leen. Se DICE en
-        // vez de esconderlos: el editor no capa lo que el motor soporta.
+        // The rect is only its own when there is no other UI component on the
+        // object: with one, that one commands the rect and these fields are not read.
+        // It is STATED instead of hidden: the editor does not gate what the engine supports.
         const bool ownsRect = !ctx.selected->hasButton() && !ctx.selected->hasText() &&
                               !ctx.selected->hasProgressBar();
 
@@ -2580,11 +2574,10 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
                            "another UI component here, the container is a rect of its own that "
                            "groups and clips without being drawn.");
 
-        // Mismos accessors sin captura (function pointer) y mismo baile de undo
-        // que las secciones del Button, el Text y la ProgressBar. Los labels
-        // llevan "##layout" porque un GameObject puede tener los cuatro
-        // componentes a la vez: dos widgets con el MISMO id de ImGui comparten
-        // estado.
+        // Same no-capture accessors (function pointer) and same undo dance as Button,
+        // Text and ProgressBar sections. Labels carry "##layout" because a
+        // GameObject can have all four components at the same time: two widgets
+        // with the SAME ImGui id share state.
         using FloatRef = float&     (*)(LayoutComponent&);
         using Vec2Ref  = glm::vec2& (*)(LayoutComponent&);
         using BoolRef  = bool&      (*)(LayoutComponent&);
@@ -2697,8 +2690,8 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
             }
         };
 
-        // Las columnas son un ENTERO, no un float con formato: un DragInt evita
-        // que 3,4 columnas lleguen a la rejilla por el camino del redondeo.
+        // Columns are an INTEGER, not a float with formatting: a DragInt prevents
+        // 3.4 columns from reaching the grid by the rounding path.
         auto dragColumns = [&](const char* label)
         {
             const int before = (int)l->columns;
@@ -2781,9 +2774,9 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
             ImGui::SetTooltip("Alignment on the CROSS axis. Grid does not use it: the cell "
                               "already fixes both axes");
 
-        // Los dos campos de la rejilla se enseñan siempre, deshabilitados fuera
-        // de Grid: esconderlos cambiaría la FORMA del panel al tocar el modo, y
-        // eso es justo lo que hace que un campo parezca perdido.
+        // The two grid fields are always shown, disabled outside of Grid: hiding
+        // them would change the SHAPE of the panel when toggling the mode, and
+        // that is exactly what makes a field seem lost.
         const bool esGrid = l->mode == UiLayoutMode::Grid;
         if (!esGrid) ImGui::BeginDisabled();
         dragVec2("Cell Size##layout", +[](LayoutComponent& c) -> glm::vec2& { return c.cellSize; },
@@ -2828,8 +2821,8 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
 void PropertiesPanel::setPanelAtlasPath(EditorContext& ctx, uint64_t ownerId,
                                          const std::string& path)
 {
-    // Mismo veto que el Button, el Text y la barra, y por el mismo sitio: aquí
-    // pasan el drop y el file dialog, así que el filtro va una sola vez.
+    // Same veto as Button, Text and the bar, and for the same reason: the drop
+    // and file dialog pass here, so the filter goes once.
     if (!isUiAtlasPath(path))
     {
         m_panelPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
@@ -2863,9 +2856,9 @@ void PropertiesPanel::setPanelAtlasPath(EditorContext& ctx, uint64_t ownerId,
 
 void PropertiesPanel::drawPanelPathDialog(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected/hasPanel(): si no se drena aquí, cambiar de
-    // selección con el diálogo abierto deja el flag atascado en true para
-    // siempre (mismo motivo que drawMeshDialog).
+    // Without conditioning on ctx.selected/hasPanel(): if not drained here,
+    // changing selection with the dialog open leaves the flag stuck at true
+    // forever (same reason as drawMeshDialog).
     if (m_panelAtlasDlgOpen && m_panelAtlasFileDialog->Display("PanelAtlasDlg"))
     {
         if (m_panelAtlasFileDialog->IsOk())
@@ -2880,7 +2873,7 @@ void PropertiesPanel::drawPanelPathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawPanelSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasPanel()) return;
 
     ImGui::Separator();
@@ -2923,9 +2916,9 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
             }
         };
 
-        // "before" leído ANTES de dibujar, sesión abierta en IsItemActivated y
-        // commit en IsItemDeactivatedAfterEdit: un arrastre entero es UN paso de
-        // undo, no uno por frame.
+        // "before" read BEFORE drawing, session open in IsItemActivated and commit
+        // in IsItemDeactivatedAfterEdit: an entire drag is ONE undo step, not one
+        // per frame.
         auto dragVec2 = [&](const char* label, Vec2Ref acc, float speed,
                             float lo, float hi, const char* fmt)
         {
@@ -3028,9 +3021,9 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
             }
         };
 
-        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
-        // (<atlas>.sprites.json) se elige de la lista; sin él se cae al campo de
-        // texto, que sigue valiendo para un atlas troceado a mano.
+        // A sprite is a NAME inside the atlas, not free text. With sidecar
+        // (<atlas>.sprites.json) choose from the list; without it fall back to the
+        // text field, which still works for a hand-cut atlas.
         auto spriteField = [&](const char* label, StrRef acc)
         {
             const std::vector<std::string>& nombres = spriteNamesFor(ctx, p->atlasPath);
@@ -3047,8 +3040,8 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
             for (size_t i = 0; i < nombres.size(); ++i)
                 if (nombres[i] == before) { current = (int)i + 1; break; }
 
-            // Un nombre que ya no está en el atlas NO se pierde ni se corrige
-            // solo: se enseña al final marcado.
+            // A name that is no longer in the atlas is NOT lost or auto-corrected:
+            // it is shown at the end marked.
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
@@ -3121,8 +3114,8 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
             },
             [&](const std::string& dropped) { setPanelAtlasPath(ctx, id, dropped); });
 
-        // Sin atlas no hay nada que trocear, y el botón deshabilitado dice por
-        // qué mejor que su ausencia.
+        // Without an atlas there is nothing to cut, and the disabled button says why
+        // better than its absence.
         ImGui::BeginDisabled(p->atlasPath.empty() || !ctx.openSpriteEditor);
         if (ImGui::Button("Edit sprites...##panel")) ctx.openSpriteEditor(p->atlasPath);
         ImGui::EndDisabled();
@@ -3197,7 +3190,7 @@ void PropertiesPanel::drawImagePathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawImageSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasImage()) return;
 
     ImGui::Separator();
@@ -3496,9 +3489,9 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
         if (!m_imagePathError.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_imagePathError.c_str());
 
-        // Los tres bloques de abajo se enseñan SIEMPRE, no solo el del modo
-        // activo: los campos son del componente y siguen ahí al cambiar de modo,
-        // y esconderlos haría creer que se han perdido.
+        // The three blocks below are ALWAYS shown, not only the one of the active
+        // mode: the fields are of the component and stay there when changing mode,
+        // and hiding them would make it seem they are lost.
         ImGui::TextDisabled("Modo");
         static const char* kModes[] = { "Normal", "Tiled", "Sliced", "Filled" };
         comboEnum("Mode##image", (int)im->mode, kModes, IM_ARRAYSIZE(kModes),
@@ -3529,8 +3522,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Tiled");
         {
-            // maxTiles es un uint32 y no hay dragUint: se edita como entero con
-            // el mismo baile de undo que los demás.
+            // maxTiles is a uint32 and there is no dragUint: edited as an integer with
+            // the same undo dance as the rest.
             const int before = (int)im->maxTiles;
             int       v      = before;
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
@@ -3601,8 +3594,8 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
 void PropertiesPanel::setSliderAtlasPath(EditorContext& ctx, uint64_t ownerId,
                                        const std::string& path)
 {
-    // Mismo veto que el resto de componentes de UI, y por el mismo sitio: aqui
-    // pasan el drop y el file dialog, asi que el filtro va una sola vez.
+    // Same veto as the rest of UI components, and for the same reason: the
+    // drop and file dialog pass here, so the filter goes once.
     if (!isUiAtlasPath(path))
     {
         m_sliderPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
@@ -3636,8 +3629,8 @@ void PropertiesPanel::setSliderAtlasPath(EditorContext& ctx, uint64_t ownerId,
 
 void PropertiesPanel::drawSliderPathDialog(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected: si no se drena aqui, cambiar de seleccion
-    // con el dialogo abierto deja el flag atascado en true para siempre.
+    // Without conditioning on ctx.selected: if not drained here, changing
+    // selection with the dialog open leaves the flag stuck at true forever.
     if (m_sliderAtlasDlgOpen && m_sliderAtlasFileDialog->Display("SliderAtlasDlg"))
     {
         if (m_sliderAtlasFileDialog->IsOk())
@@ -3652,7 +3645,7 @@ void PropertiesPanel::drawSliderPathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawSliderSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasSlider()) return;
 
     ImGui::Separator();
@@ -3676,9 +3669,9 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
         using StrRef   = std::string& (*)(SliderComponent&);
         using BoolRef  = bool&        (*)(SliderComponent&);
         using EnumSet  = void         (*)(SliderComponent&, int);
-        (void)sizeof(EnumSet);   // no todos los widgets tienen enum
+        (void)sizeof(EnumSet);   // not all widgets have enum
 
-        // Combos y checkbox se commitean en el acto: un click = un cambio.
+        // Combos and checkbox commit on the spot: one click = one change.
         auto comboEnum = [&](const char* label, int before, const char* const* items,
                              int count, EnumSet apply)
         {
@@ -3719,9 +3712,9 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
             }
         };
 
-        // Los escalares comparten el baile de siempre: "before" leido ANTES de
-        // dibujar, sesion abierta en IsItemActivated y commit en
-        // IsItemDeactivatedAfterEdit, asi un arrastre entero es UN paso de undo.
+        // Scalars share the usual dance: "before" read BEFORE drawing, session
+        // open in IsItemActivated and commit in IsItemDeactivatedAfterEdit, so an
+        // entire drag is ONE undo step.
         auto dragFloat = [&](const char* label, FloatRef acc, float speed,
                              float lo, float hi, const char* fmt)
         {
@@ -3823,8 +3816,8 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
             }
         };
 
-        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
-        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        // An entire InputText (write and exit the field) is ONE undo step, not one
+        // per key: same criterion as dragging a DragFloat.
         auto inputText = [&](const char* label, StrRef acc)
         {
             const std::string before = acc(*sl);
@@ -3860,9 +3853,9 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
             }
         };
 
-        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
-        // (<atlas>.sprites.json) se elige de la lista; sin el se cae al campo de
-        // texto, que sigue valiendo para un atlas troceado a mano.
+        // A sprite is a NAME inside the atlas, not free text. With sidecar
+        // (<atlas>.sprites.json) choose from the list; without it fall back to the
+        // text field, which still works for a hand-cut atlas.
         auto spriteField = [&](const char* label, StrRef acc)
         {
             const std::vector<std::string>& nombres = spriteNamesFor(ctx, sl->atlasPath);
@@ -3879,8 +3872,8 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
             for (size_t i = 0; i < nombres.size(); ++i)
                 if (nombres[i] == before) { current = (int)i + 1; break; }
 
-            // Un nombre que ya no esta en el atlas NO se pierde ni se corrige
-            // solo: se ensena al final marcado.
+            // A name that is no longer in the atlas is NOT lost or auto-corrected:
+            // it is shown at the end marked.
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
@@ -4002,8 +3995,8 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
 void PropertiesPanel::setCheckboxAtlasPath(EditorContext& ctx, uint64_t ownerId,
                                        const std::string& path)
 {
-    // Mismo veto que el resto de componentes de UI, y por el mismo sitio: aqui
-    // pasan el drop y el file dialog, asi que el filtro va una sola vez.
+    // Same veto as the rest of UI components, and for the same reason: the
+    // drop and file dialog pass here, so the filter goes once.
     if (!isUiAtlasPath(path))
     {
         m_checkboxPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
@@ -4037,8 +4030,8 @@ void PropertiesPanel::setCheckboxAtlasPath(EditorContext& ctx, uint64_t ownerId,
 
 void PropertiesPanel::drawCheckboxPathDialog(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected: si no se drena aqui, cambiar de seleccion
-    // con el dialogo abierto deja el flag atascado en true para siempre.
+    // Without conditioning on ctx.selected: if not drained here, changing
+    // selection with the dialog open leaves the flag stuck at true forever.
     if (m_checkboxAtlasDlgOpen && m_checkboxAtlasFileDialog->Display("CheckboxAtlasDlg"))
     {
         if (m_checkboxAtlasFileDialog->IsOk())
@@ -4053,7 +4046,7 @@ void PropertiesPanel::drawCheckboxPathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasCheckbox()) return;
 
     ImGui::Separator();
@@ -4077,9 +4070,9 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
         using StrRef   = std::string& (*)(CheckboxComponent&);
         using BoolRef  = bool&        (*)(CheckboxComponent&);
         using EnumSet  = void         (*)(CheckboxComponent&, int);
-        (void)sizeof(EnumSet);   // no todos los widgets tienen enum
+        (void)sizeof(EnumSet);   // not all widgets have enum
 
-        // Combos y checkbox se commitean en el acto: un click = un cambio.
+        // Combos and checkbox commit on the spot: one click = one change.
         auto comboEnum = [&](const char* label, int before, const char* const* items,
                              int count, EnumSet apply)
         {
@@ -4120,9 +4113,9 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
             }
         };
 
-        // Los escalares comparten el baile de siempre: "before" leido ANTES de
-        // dibujar, sesion abierta en IsItemActivated y commit en
-        // IsItemDeactivatedAfterEdit, asi un arrastre entero es UN paso de undo.
+        // Scalars share the usual dance: "before" read BEFORE drawing, session
+        // open in IsItemActivated and commit in IsItemDeactivatedAfterEdit, so an
+        // entire drag is ONE undo step.
         auto dragFloat = [&](const char* label, FloatRef acc, float speed,
                              float lo, float hi, const char* fmt)
         {
@@ -4224,8 +4217,8 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
             }
         };
 
-        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
-        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        // An entire InputText (write and exit the field) is ONE undo step, not one
+        // per key: same criterion as dragging a DragFloat.
         auto inputText = [&](const char* label, StrRef acc)
         {
             const std::string before = acc(*cb);
@@ -4261,9 +4254,9 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
             }
         };
 
-        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
-        // (<atlas>.sprites.json) se elige de la lista; sin el se cae al campo de
-        // texto, que sigue valiendo para un atlas troceado a mano.
+        // A sprite is a NAME inside the atlas, not free text. With sidecar
+        // (<atlas>.sprites.json) choose from the list; without it fall back to the
+        // text field, which still works for a hand-cut atlas.
         auto spriteField = [&](const char* label, StrRef acc)
         {
             const std::vector<std::string>& nombres = spriteNamesFor(ctx, cb->atlasPath);
@@ -4280,8 +4273,8 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
             for (size_t i = 0; i < nombres.size(); ++i)
                 if (nombres[i] == before) { current = (int)i + 1; break; }
 
-            // Un nombre que ya no esta en el atlas NO se pierde ni se corrige
-            // solo: se ensena al final marcado.
+            // A name that is no longer in the atlas is NOT lost or auto-corrected:
+            // it is shown at the end marked.
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
@@ -4386,8 +4379,8 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
 void PropertiesPanel::setToggleAtlasPath(EditorContext& ctx, uint64_t ownerId,
                                        const std::string& path)
 {
-    // Mismo veto que el resto de componentes de UI, y por el mismo sitio: aqui
-    // pasan el drop y el file dialog, asi que el filtro va una sola vez.
+    // Same veto as the rest of UI components, and for the same reason: the
+    // drop and file dialog pass here, so the filter goes once.
     if (!isUiAtlasPath(path))
     {
         m_togglePathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
@@ -4421,8 +4414,8 @@ void PropertiesPanel::setToggleAtlasPath(EditorContext& ctx, uint64_t ownerId,
 
 void PropertiesPanel::drawTogglePathDialog(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected: si no se drena aqui, cambiar de seleccion
-    // con el dialogo abierto deja el flag atascado en true para siempre.
+    // Without conditioning on ctx.selected: if not drained here, changing
+    // selection with the dialog open leaves the flag stuck at true forever.
     if (m_toggleAtlasDlgOpen && m_toggleAtlasFileDialog->Display("ToggleAtlasDlg"))
     {
         if (m_toggleAtlasFileDialog->IsOk())
@@ -4437,7 +4430,7 @@ void PropertiesPanel::drawTogglePathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawToggleSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasToggle()) return;
 
     ImGui::Separator();
@@ -4461,9 +4454,9 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
         using StrRef   = std::string& (*)(ToggleComponent&);
         using BoolRef  = bool&        (*)(ToggleComponent&);
         using EnumSet  = void         (*)(ToggleComponent&, int);
-        (void)sizeof(EnumSet);   // no todos los widgets tienen enum
+        (void)sizeof(EnumSet);   // not all widgets have enum
 
-        // Combos y checkbox se commitean en el acto: un click = un cambio.
+        // Combos and checkbox commit on the spot: one click = one change.
         auto comboEnum = [&](const char* label, int before, const char* const* items,
                              int count, EnumSet apply)
         {
@@ -4504,9 +4497,9 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
             }
         };
 
-        // Los escalares comparten el baile de siempre: "before" leido ANTES de
-        // dibujar, sesion abierta en IsItemActivated y commit en
-        // IsItemDeactivatedAfterEdit, asi un arrastre entero es UN paso de undo.
+        // Scalars share the usual dance: "before" read BEFORE drawing, session
+        // open in IsItemActivated and commit in IsItemDeactivatedAfterEdit, so an
+        // entire drag is ONE undo step.
         auto dragFloat = [&](const char* label, FloatRef acc, float speed,
                              float lo, float hi, const char* fmt)
         {
@@ -4608,8 +4601,8 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
             }
         };
 
-        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
-        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        // An entire InputText (write and exit the field) is ONE undo step, not one
+        // per key: same criterion as dragging a DragFloat.
         auto inputText = [&](const char* label, StrRef acc)
         {
             const std::string before = acc(*tg);
@@ -4645,9 +4638,9 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
             }
         };
 
-        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
-        // (<atlas>.sprites.json) se elige de la lista; sin el se cae al campo de
-        // texto, que sigue valiendo para un atlas troceado a mano.
+        // A sprite is a NAME inside the atlas, not free text. With sidecar
+        // (<atlas>.sprites.json) choose from the list; without it fall back to the
+        // text field, which still works for a hand-cut atlas.
         auto spriteField = [&](const char* label, StrRef acc)
         {
             const std::vector<std::string>& nombres = spriteNamesFor(ctx, tg->atlasPath);
@@ -4664,8 +4657,8 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
             for (size_t i = 0; i < nombres.size(); ++i)
                 if (nombres[i] == before) { current = (int)i + 1; break; }
 
-            // Un nombre que ya no esta en el atlas NO se pierde ni se corrige
-            // solo: se ensena al final marcado.
+            // A name that is no longer in the atlas is NOT lost or auto-corrected:
+            // it is shown at the end marked.
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
@@ -4774,8 +4767,8 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
 void PropertiesPanel::setScrollbarAtlasPath(EditorContext& ctx, uint64_t ownerId,
                                        const std::string& path)
 {
-    // Mismo veto que el resto de componentes de UI, y por el mismo sitio: aqui
-    // pasan el drop y el file dialog, asi que el filtro va una sola vez.
+    // Same veto as the rest of UI components, and for the same reason: the drop and file dialog
+    // pass here, so the filter goes once.
     if (!isUiAtlasPath(path))
     {
         m_scrollbarPathError = "Not an image (.png .jpg .jpeg .bmp .tga): " +
@@ -4809,8 +4802,8 @@ void PropertiesPanel::setScrollbarAtlasPath(EditorContext& ctx, uint64_t ownerId
 
 void PropertiesPanel::drawScrollbarPathDialog(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected: si no se drena aqui, cambiar de seleccion
-    // con el dialogo abierto deja el flag atascado en true para siempre.
+    // Without conditioning on ctx.selected: if not drained here, changing selection with the dialog
+    // open leaves the flag stuck at true forever.
     if (m_scrollbarAtlasDlgOpen && m_scrollbarAtlasFileDialog->Display("ScrollbarAtlasDlg"))
     {
         if (m_scrollbarAtlasFileDialog->IsOk())
@@ -4825,7 +4818,7 @@ void PropertiesPanel::drawScrollbarPathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasScrollbar()) return;
 
     ImGui::Separator();
@@ -4849,9 +4842,9 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
         using StrRef   = std::string& (*)(ScrollbarComponent&);
         using BoolRef  = bool&        (*)(ScrollbarComponent&);
         using EnumSet  = void         (*)(ScrollbarComponent&, int);
-        (void)sizeof(EnumSet);   // no todos los widgets tienen enum
+        (void)sizeof(EnumSet);   // not all widgets have enum
 
-        // Combos y checkbox se commitean en el acto: un click = un cambio.
+        // Combos and checkbox commit on the spot: one click = one change.
         auto comboEnum = [&](const char* label, int before, const char* const* items,
                              int count, EnumSet apply)
         {
@@ -4892,9 +4885,9 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
             }
         };
 
-        // Los escalares comparten el baile de siempre: "before" leido ANTES de
-        // dibujar, sesion abierta en IsItemActivated y commit en
-        // IsItemDeactivatedAfterEdit, asi un arrastre entero es UN paso de undo.
+        // Scalars share the usual dance: "before" read BEFORE drawing, session open in
+        // IsItemActivated and commit in IsItemDeactivatedAfterEdit, so an entire drag is ONE undo
+        // step.
         auto dragFloat = [&](const char* label, FloatRef acc, float speed,
                              float lo, float hi, const char* fmt)
         {
@@ -4996,8 +4989,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
             }
         };
 
-        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
-        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        // An entire InputText (write and exit the field) is ONE undo step, not one per key: same
+        // criterion as dragging a DragFloat.
         auto inputText = [&](const char* label, StrRef acc)
         {
             const std::string before = acc(*sb);
@@ -5033,9 +5026,9 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
             }
         };
 
-        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
-        // (<atlas>.sprites.json) se elige de la lista; sin el se cae al campo de
-        // texto, que sigue valiendo para un atlas troceado a mano.
+        // A sprite is a NAME inside the atlas, not free text. With sidecar (<atlas>.sprites.json)
+        // choose from the list; without it fall back to the text field, which still works for a
+        // hand-cut atlas.
         auto spriteField = [&](const char* label, StrRef acc)
         {
             const std::vector<std::string>& nombres = spriteNamesFor(ctx, sb->atlasPath);
@@ -5052,8 +5045,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
             for (size_t i = 0; i < nombres.size(); ++i)
                 if (nombres[i] == before) { current = (int)i + 1; break; }
 
-            // Un nombre que ya no esta en el atlas NO se pierde ni se corrige
-            // solo: se ensena al final marcado.
+            // A name that is no longer in the atlas is NOT lost or auto-corrected: it is shown at
+            // the end marked.
             std::string huerfano;
             if (current == 0 && !before.empty())
             {
@@ -5114,8 +5107,8 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
                   +[](ScrollbarComponent& c, int v) { c.direction = (UiScrollbarDirection)v; });
 
         {
-            // numberOfSteps es un uint32 y no hay dragUint: se edita como entero
-            // con el mismo baile de undo que los demas.
+            // numberOfSteps is a uint32 and there is no dragUint: edited as an integer with the
+            // same undo dance as the rest.
             const int before = (int)sb->numberOfSteps;
             int       val    = before;
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
@@ -5241,8 +5234,8 @@ void PropertiesPanel::setInputFieldAtlasPath(EditorContext& ctx, uint64_t ownerI
 void PropertiesPanel::setInputFieldFontPath(EditorContext& ctx, uint64_t ownerId,
                                       const std::string& path)
 {
-    // Mismo veto y por el mismo sitio que el atlas: aqui pasan el drop y el file
-    // dialog, asi que el filtro va una sola vez.
+    // Same veto and for the same reason as atlas: the drop and file dialog pass here, so the filter
+    // goes once.
     if (!isUiFontPath(path))
     {
         m_inputFieldPathError = "Not a font (.ttf .otf .ttc): " +
@@ -5276,8 +5269,8 @@ void PropertiesPanel::setInputFieldFontPath(EditorContext& ctx, uint64_t ownerId
 
 void PropertiesPanel::drawInputFieldPathDialog(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected: si no se drena aqui, cambiar de seleccion
-    // con el dialogo abierto deja el flag atascado en true para siempre.
+    // Without conditioning on ctx.selected: if not drained here, changing selection with the dialog
+    // open leaves the flag stuck at true forever.
     if (m_inputFieldAtlasDlgOpen && m_inputFieldAtlasFileDialog->Display("InputFieldAtlasDlg"))
     {
         if (m_inputFieldAtlasFileDialog->IsOk())
@@ -5303,7 +5296,7 @@ void PropertiesPanel::drawInputFieldPathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasInputField()) return;
 
     ImGui::Separator();
@@ -5327,7 +5320,7 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
         using StrRef   = std::string& (*)(InputFieldComponent&);
         using BoolRef  = bool&        (*)(InputFieldComponent&);
         using EnumSet  = void         (*)(InputFieldComponent&, int);
-        (void)sizeof(EnumSet);   // no todos los widgets tienen enum
+        (void)sizeof(EnumSet);   // not all widgets have enum
 
         auto comboEnum = [&](const char* label, int before, const char* const* items,
                              int count, EnumSet apply)
@@ -5369,9 +5362,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
             }
         };
 
-        // "before" leido ANTES de dibujar, sesion abierta en IsItemActivated y
-        // commit en IsItemDeactivatedAfterEdit: un arrastre entero es UN paso de
-        // undo, no uno por frame.
+        // "before" read BEFORE drawing, session open in IsItemActivated and commit in
+        // IsItemDeactivatedAfterEdit: an entire drag is ONE undo step, not one per frame.
         auto dragFloat = [&](const char* label, FloatRef acc, float speed,
                              float lo, float hi, const char* fmt)
         {
@@ -5473,8 +5465,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
             }
         };
 
-        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
-        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        // An entire InputText (write and exit the field) is ONE undo step, not one per key: same
+        // criterion as dragging a DragFloat.
         auto inputText = [&](const char* label, StrRef acc)
         {
             const std::string before = acc(*fld);
@@ -5510,9 +5502,9 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
             }
         };
 
-        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
-        // (<atlas>.sprites.json) se elige de la lista; sin el se cae al campo de
-        // texto, que sigue valiendo para un atlas troceado a mano.
+        // A sprite is a NAME inside the atlas, not free text. With sidecar (<atlas>.sprites.json)
+        // choose from the list; without it fall back to the text field, which still works for a
+        // hand-cut atlas.
         auto spriteField = [&](const char* label, StrRef acc)
         {
             const std::vector<std::string>& nombres = spriteNamesFor(ctx, fld->atlasPath);
@@ -5599,8 +5591,8 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Filter");
         {
-            // characterLimit es un uint32 y no hay dragUint: se edita como entero
-            // con el mismo baile de undo que los demas.
+            // characterLimit is a uint32 and there is no dragUint: edited as an integer with the
+            // same undo dance as the rest.
             const int before = (int)fld->characterLimit;
             int       val    = before;
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
@@ -5755,8 +5747,8 @@ void PropertiesPanel::setDropdownAtlasPath(EditorContext& ctx, uint64_t ownerId,
 void PropertiesPanel::setDropdownFontPath(EditorContext& ctx, uint64_t ownerId,
                                       const std::string& path)
 {
-    // Mismo veto y por el mismo sitio que el atlas: aqui pasan el drop y el file
-    // dialog, asi que el filtro va una sola vez.
+    // Same veto and for the same reason as atlas: the drop and file dialog pass here, so the filter
+    // goes once.
     if (!isUiFontPath(path))
     {
         m_dropdownPathError = "Not a font (.ttf .otf .ttc): " +
@@ -5790,8 +5782,8 @@ void PropertiesPanel::setDropdownFontPath(EditorContext& ctx, uint64_t ownerId,
 
 void PropertiesPanel::drawDropdownPathDialog(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected: si no se drena aqui, cambiar de seleccion
-    // con el dialogo abierto deja el flag atascado en true para siempre.
+    // Without conditioning on ctx.selected: if not drained here, changing selection with the dialog
+    // open leaves the flag stuck at true forever.
     if (m_dropdownAtlasDlgOpen && m_dropdownAtlasFileDialog->Display("DropdownAtlasDlg"))
     {
         if (m_dropdownAtlasFileDialog->IsOk())
@@ -5817,7 +5809,7 @@ void PropertiesPanel::drawDropdownPathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasDropdown()) return;
 
     ImGui::Separator();
@@ -5841,7 +5833,7 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
         using StrRef   = std::string& (*)(DropdownComponent&);
         using BoolRef  = bool&        (*)(DropdownComponent&);
         using EnumSet  = void         (*)(DropdownComponent&, int);
-        (void)sizeof(EnumSet);   // no todos los widgets tienen enum
+        (void)sizeof(EnumSet);   // not all widgets have enum
 
         auto comboEnum = [&](const char* label, int before, const char* const* items,
                              int count, EnumSet apply)
@@ -5883,9 +5875,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             }
         };
 
-        // "before" leido ANTES de dibujar, sesion abierta en IsItemActivated y
-        // commit en IsItemDeactivatedAfterEdit: un arrastre entero es UN paso de
-        // undo, no uno por frame.
+        // "before" read BEFORE drawing, session open in IsItemActivated and commit in
+        // IsItemDeactivatedAfterEdit: an entire drag is ONE undo step, not one per frame.
         auto dragFloat = [&](const char* label, FloatRef acc, float speed,
                              float lo, float hi, const char* fmt)
         {
@@ -5987,8 +5978,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             }
         };
 
-        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
-        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        // An entire InputText (write and exit the field) is ONE undo step, not one per key: same
+        // criterion as dragging a DragFloat.
         auto inputText = [&](const char* label, StrRef acc)
         {
             const std::string before = acc(*dd);
@@ -6024,9 +6015,9 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             }
         };
 
-        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
-        // (<atlas>.sprites.json) se elige de la lista; sin el se cae al campo de
-        // texto, que sigue valiendo para un atlas troceado a mano.
+        // A sprite is a NAME inside the atlas, not free text. With sidecar (<atlas>.sprites.json)
+        // choose from the list; without it fall back to the text field, which still works for a
+        // hand-cut atlas.
         auto spriteField = [&](const char* label, StrRef acc)
         {
             const std::vector<std::string>& nombres = spriteNamesFor(ctx, dd->atlasPath);
@@ -6092,9 +6083,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Options");
         {
-            // La lista entera es UN paso de undo: anadir, quitar o renombrar
-            // empuja el vector completo. Por campo serian tres comandos para lo
-            // que el usuario vive como un cambio.
+            // The entire list is ONE undo step: add, remove or rename pushes the whole vector. Per
+            // field would be three commands for what the user experiences as one change.
             const std::vector<std::string> before = dd->options;
             bool cambiada = false;
 
@@ -6107,16 +6097,16 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
                 if (ImGui::InputText("##opt", buf, sizeof(buf)))
                 {
                     dd->options[k] = std::string(buf);
-                    // El renombrado NO se commitea por tecla: se empuja al salir
-                    // del campo, igual que cualquier otro InputText.
+                    // The rename does NOT commit per key: it is pushed when exiting the field, like
+                    // any other InputText.
                 }
                 if (ImGui::IsItemDeactivatedAfterEdit()) cambiada = true;
                 ImGui::SameLine();
                 if (ImGui::SmallButton("x"))
                 {
                     dd->options.erase(dd->options.begin() + (long)k);
-                    // Quitar la opcion elegida deja el valor apuntando a otra:
-                    // se acota aqui para que el combo no ensene vacio.
+                    // Removing the chosen option leaves the value pointing to another: clamped here
+                    // so the combo does not show empty.
                     if (dd->value >= (int)dd->options.size())
                         dd->value = (int)dd->options.size() - 1;
                     if (dd->value < 0) dd->value = 0;
@@ -6144,8 +6134,8 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
                             if (go->hasDropdown())
                             {
                                 go->getDropdown()->options = v;
-                                // El indice tambien se acota al deshacer: una
-                                // lista mas corta no puede dejarlo fuera.
+                                // The index is also clamped when undoing: a shorter list cannot
+                                // leave it out of range.
                                 int& val = go->getDropdown()->value;
                                 if (val >= (int)v.size()) val = (int)v.size() - 1;
                                 if (val < 0) val = 0;
@@ -6155,7 +6145,7 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
         }
 
         {
-            // El valor es el INDICE 0-based, igual que en C++ y en Lua.
+            // The value is the 0-based INDEX, like in C++ and Lua.
             const int before = dd->value;
             int       val    = before;
             const int maxIdx = dd->options.empty() ? 0 : (int)dd->options.size() - 1;
@@ -6344,8 +6334,8 @@ void PropertiesPanel::setScrollViewAtlasPath(EditorContext& ctx, uint64_t ownerI
 
 void PropertiesPanel::drawScrollViewPathDialog(EditorContext& ctx)
 {
-    // Sin condicionar a ctx.selected: si no se drena aqui, cambiar de seleccion
-    // con el dialogo abierto deja el flag atascado en true para siempre.
+    // Without conditioning on ctx.selected: if not drained here, changing selection with the dialog
+    // open leaves the flag stuck at true forever.
     if (m_scrollViewAtlasDlgOpen && m_scrollViewAtlasFileDialog->Display("ScrollViewAtlasDlg"))
     {
         if (m_scrollViewAtlasFileDialog->IsOk())
@@ -6360,7 +6350,7 @@ void PropertiesPanel::drawScrollViewPathDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasScrollView()) return;
 
     ImGui::Separator();
@@ -6384,7 +6374,7 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
         using StrRef   = std::string& (*)(ScrollViewComponent&);
         using BoolRef  = bool&        (*)(ScrollViewComponent&);
         using EnumSet  = void         (*)(ScrollViewComponent&, int);
-        (void)sizeof(EnumSet);   // no todos los widgets tienen enum
+        (void)sizeof(EnumSet);   // not all widgets have enum
 
         auto comboEnum = [&](const char* label, int before, const char* const* items,
                              int count, EnumSet apply)
@@ -6426,9 +6416,8 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
             }
         };
 
-        // "before" leido ANTES de dibujar, sesion abierta en IsItemActivated y
-        // commit en IsItemDeactivatedAfterEdit: un arrastre entero es UN paso de
-        // undo, no uno por frame.
+        // "before" read BEFORE drawing, session open in IsItemActivated and commit in
+        // IsItemDeactivatedAfterEdit: an entire drag is ONE undo step, not one per frame.
         auto dragFloat = [&](const char* label, FloatRef acc, float speed,
                              float lo, float hi, const char* fmt)
         {
@@ -6530,8 +6519,8 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
             }
         };
 
-        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
-        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        // An entire InputText (write and exit the field) is ONE undo step, not one per key: same
+        // criterion as dragging a DragFloat.
         auto inputText = [&](const char* label, StrRef acc)
         {
             const std::string before = acc(*sv);
@@ -6567,9 +6556,9 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
             }
         };
 
-        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
-        // (<atlas>.sprites.json) se elige de la lista; sin el se cae al campo de
-        // texto, que sigue valiendo para un atlas troceado a mano.
+        // A sprite is a NAME inside the atlas, not free text. With sidecar (<atlas>.sprites.json)
+        // choose from the list; without it fall back to the text field, which still works for a
+        // hand-cut atlas.
         auto spriteField = [&](const char* label, StrRef acc)
         {
             const std::vector<std::string>& nombres = spriteNamesFor(ctx, sv->atlasPath);
@@ -6704,7 +6693,7 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
 
 void PropertiesPanel::drawLightSection(EditorContext& ctx)
 {
-    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasLight()) return;
 
     if (!ImGui::TreeNodeEx("Light", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
@@ -6737,9 +6726,9 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
         }
     }
 
-    // Lo que el render sabe hacer con las sombras, dicho aquí en vez de que el
-    // usuario lo deduzca mirando una sombra que no cuadra. La regla no depende
-    // de qué luz esté seleccionada, así que se enseña siempre.
+    // What the renderer can do with shadows, said here instead of the user deducing it from a
+    // shadow that does not match. The rule does not depend on which light is selected, so it is
+    // shown always.
     ImGui::TextDisabled("Shadows: the FIRST light in the scene, and up to 4 more spot lights.");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
@@ -6753,16 +6742,15 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
             "scene's, not by brightness or proximity: if it depended on the camera,\n"
             "a light would gain and lose its shadow as you move.");
 
-    // Ya no hay aviso: los tres tipos tienen su sombra correcta. Una direccional
-    // proyecta en paralelo con cascadas, que es lo que corresponde a una luz en
-    // el infinito; un foco con una cara en perspectiva; y una de punto con las
-    // seis de un cubemap. Aqui vivia un TextColored naranja que decia "Su sombra
-    // es una aproximacion" y estuvo bien mientras lo fue.
+    // No longer any warning: all three types have their shadow correct. A directional projects in
+    // parallel with cascades, which is what matches a light at infinity; a spot with one face in
+    // perspective; and a point with the six of a cubemap. Here lived an orange TextColored that
+    // said "Its shadow is an approximation" and was right while it was.
 
     ImGui::Separator();
 
-    // El "before" se lee ANTES de dibujar: el picker cambia el valor en el mismo
-    // frame del click y releerlo después daría ya el nuevo.
+    // The "before" is read BEFORE drawing: the picker changes the value in the same frame of the
+    // click and reading it again after would already be the new one.
     const glm::vec3 beforeColor = light->getColor();
     glm::vec3       color       = beforeColor;
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
@@ -6788,10 +6776,9 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
         }
     }
 
-    // Los seis escalares comparten el mismo baile de undo (leer el "before"
-    // antes de dibujar, abrir sesión en IsItemActivated, commitear en
-    // IsItemDeactivatedAfterEdit), así que va una vez aquí y no seis veces.
-    // El campo en drag se identifica por su etiqueta: un bool no llega pa seis.
+    // All six scalars share the same undo dance (read the "before" before drawing, open session in
+    // IsItemActivated, commit in IsItemDeactivatedAfterEdit), so it goes once here not six times.
+    // The field in drag is identified by its label: a bool does not go for six.
     auto floatSlider = [&](const char* label, float lo, float hi, const char* fmt,
                            float (LightComponent::*getter)() const,
                            void (LightComponent::*setter)(float))
@@ -6808,8 +6795,8 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
             m_lightDragBefore  = before;
             m_lightDragField   = label;
         }
-        // El id del dueño y la etiqueta evitan aplicar un "before" ajeno si el
-        // drag se interrumpió sin commit (p.ej. un Ctrl+Z a mitad de arrastre).
+        // The owner id and the label prevent applying a foreign "before" if the drag was
+        // interrupted without commit (e.g. a Ctrl+Z mid-drag).
         if (ImGui::IsItemDeactivatedAfterEdit() && m_lightDragActive &&
             m_lightDragOwnerId == id && m_lightDragField &&
             std::strcmp(m_lightDragField, label) == 0)
@@ -6833,10 +6820,9 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
     floatSlider("Intensity", 0.0f, 20.0f, "%.2f",
                 &LightComponent::getIntensity, &LightComponent::setIntensity);
 
-    // Cada tipo enseña SOLO lo que usa: un cono no tiene tamaño de área y una
-    // directional no tiene alcance. Los campos que no salen siguen guardados en
-    // el componente (y en el .scene), así que cambiar de tipo y volver no
-    // pierde nada — se ocultan, no se resetean.
+    // Each type shows ONLY what it uses: a cone has no area size and a directional has no range.
+    // Fields that do not appear stay saved in the component (and in the .scene), so changing type
+    // and back loses nothing—they are hidden, not reset.
     switch (light->getType())
     {
         case LightType::Point:
@@ -6901,7 +6887,7 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
     }
     else if (ctx.selected->hasRigidbody() && !ctx.selected->getRigidbody()->getIsKinematic() && !m_colliderDragActive)
     {
-        // Cuerpo simulado: Center/Size se refrescan (estables bajo simulación).
+        // Simulated body: Center/Size refresh (stable under simulation).
         m_editColliderCenter = bc->getCenter();
         m_editColliderSize   = bc->getHalfExtents() * 2.0f;
     }
@@ -6973,9 +6959,9 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         sizeCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
-        // Material de física del collider. Mismo begin/commit que Center/Size:
-        // el snapshot se toma en IsItemActivated y el comando se empuja en
-        // IsItemDeactivatedAfterEdit, así un arrastre entero = un solo undo.
+        // Physics material of the collider. Same begin/commit as Center/Size: the snapshot is taken
+        // in IsItemActivated and the command is pushed in IsItemDeactivatedAfterEdit, so an entire
+        // drag = one undo.
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Static Friction##c3", &m_editColliderStaticFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
         dragActive |= ImGui::IsItemActive();
@@ -7135,7 +7121,7 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         radiusCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
-        // Material de física del collider; mismo begin/commit que Center/Radius.
+        // Physics material of the collider; same begin/commit as Center/Radius.
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Static Friction##s3", &m_editSphereStaticFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
         dragActive |= ImGui::IsItemActive();
@@ -7307,7 +7293,7 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         heightCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
-        // Material de física del collider; mismo begin/commit que Center/Radius.
+        // Physics material of the collider; same begin/commit as Center/Radius.
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Static Friction##k4", &m_editCapsuleStaticFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
         dragActive |= ImGui::IsItemActive();
@@ -7454,7 +7440,7 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
-        // Material de física del collider; mismo begin/commit que Center.
+        // Physics material of the collider; same begin/commit as Center.
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Static Friction##p2", &m_editPlaneStaticFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
         dragActive |= ImGui::IsItemActive();
@@ -7554,8 +7540,8 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
     Scene*   scene = ctx.scene;
     uint64_t id    = ctx.selected->id;
 
-    // Aplica un RigidbodyState al GameObject resuelto por id (sobrevive a
-    // undo-de-delete). Mismo patrón que applyBoxState.
+    // Applies a RigidbodyState to the GameObject resolved by id (survives undo-of-delete). Same
+    // pattern as applyBoxState.
     auto applyRbState = [scene, id](const RigidbodyState& s) {
         GameObject* go = scene->findById(id);
         if (!go || !go->hasRigidbody()) return;
@@ -7575,19 +7561,17 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
                                m_editRbCcd, m_editRbInterpolate };
     };
 
-    // --- Drag floats: snapshot al activar CUALQUIERA, comando al soltar
-    // CUALQUIERA. IsItemActivated/IsItemDeactivatedAfterEdit se consultan por
-    // widget y se acumulan (no una sola query final: esa sólo reflejaría el
-    // último DragFloat y dejaría Mass/Drag sin undo).
+    // --- Drag floats: snapshot when ANY activates, command when ANY deactivates.
+    // IsItemActivated/IsItemDeactivatedAfterEdit are checked per widget and accumulated
+    // (not a single final query: that would only reflect the last DragFloat and leave
+    // Mass/Drag without undo).
     //
-    // Sin gate por m_rigidbodyDragActive: sólo un widget de ImGui puede tener
-    // ActiveId a la vez, así que el gate no evitaba ningún re-snapshot real y a
-    // cambio dejaba el flag pegado cuando un click no llegaba a editar
-    // (IsItemDeactivatedAfterEdit exige edición previa, y DragFloat no edita si
-    // el ratón no se mueve). Con el flag pegado, la siguiente edición —incluso
-    // en OTRO GameObject— reutilizaba el snapshot viejo, y el Ctrl+Z escribía
-    // en el objeto nuevo la masa, gravedad, kinematic, drag, angular drag y
-    // constraints del anterior.
+    // Without a gate by m_rigidbodyDragActive: only one ImGui widget can have ActiveId at a
+    // time, so the gate prevented no real re-snapshot and instead left the flag stuck when a
+    // click did not reach editing (IsItemDeactivatedAfterEdit requires prior editing, and
+    // DragFloat does not edit if the mouse does not move). With the flag stuck, the next edit—
+    // even in ANOTHER GameObject—reused the stale snapshot, and Ctrl+Z wrote mass, gravity,
+    // kinematic, drag, angular drag and constraints of the previous one to the new object.
     auto snapshotBefore = [&]() {
         m_rigidbodyDragActive  = true;
         m_rigidbodyDragOwnerId = id;
@@ -7610,9 +7594,9 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
     if (ImGui::IsItemActivated()) snapshotBefore();
     floatCommitted |= ImGui::IsItemDeactivatedAfterEdit();
     if (floatChanged) { rb->setMass(m_editRbMass); rb->setDrag(m_editRbDrag); rb->setAngularDrag(m_editRbAngularDrag); }
-    // La guarda de propietario cubre el drag que empieza en un GameObject y
-    // acaba commiteando mientras el panel ya dibuja otro: sin ella se aplicaría
-    // el "before" del primero al segundo.
+    // The owner guard covers the drag starting in one GameObject and committing while the
+    // panel already draws another: without it the "before" of the first would be applied to
+    // the second.
     if (m_rigidbodyDragActive && floatCommitted && m_rigidbodyDragOwnerId == id)
     {
         m_rigidbodyDragActive = false;
@@ -7621,7 +7605,7 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
                 "Rigidbody of '" + ctx.selected->name + "'", m_rigidbodyBeforeEdit, currentState(), applyRbState));
     }
 
-    // --- Checkboxes: comando inmediato con before/after ---
+    // --- Checkboxes: immediate command with before/after ---
     {
         RigidbodyState before = currentState();
         if (ImGui::Checkbox("Use Gravity", &m_editRbUseGravity))
@@ -7720,9 +7704,8 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
 
 void PropertiesPanel::drawCameraSection(EditorContext& ctx)
 {
-    // Oculta hasta que se pulse Add: la sección solo existe si el componente
-    // existe, y el componente solo existe tras Add (mismo early-return que
-    // drawRigidbodySection).
+    // Hidden until Add is pressed: the section exists only if the component exists, and the
+    // component only exists after Add (same early-return as drawRigidbodySection).
     if (!ctx.selected || !ctx.selected->hasCameraComponent()) { m_caches.camera = nullptr; return; }
     CameraComponent* cam = ctx.selected->getCameraComponent().get();
     if (m_caches.camera != cam)
@@ -7742,14 +7725,14 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
     Scene*   scene = ctx.scene;
     uint64_t id    = ctx.selected->id;
 
-    // Aplica un CameraState al GameObject resuelto por id (sobrevive a
-    // undo-de-delete). Mismo patrón que applyRbState.
+    // Applies a CameraState to the GameObject resolved by id (survives undo-of-delete).
+    // Same pattern as applyRbState.
     auto applyCamState = [scene, id](const CameraState& s) {
         GameObject* go = scene->findById(id);
         if (!go || !go->hasCameraComponent()) return;
         auto c = go->getCameraComponent();
         c->setMode(s.mode);
-        // far antes que near: setNear clampa contra el far actual.
+        // far before near: setNear clamps against the current far.
         c->setFar(s.farPlane);
         c->setNear(s.nearPlane);
         c->setFov(s.fov);
@@ -7759,7 +7742,7 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
         return CameraState{ m_editCamMode, m_editCamFov, m_editCamOrthoSize, m_editCamNear, m_editCamFar };
     };
 
-    // --- Combo de modo: comando inmediato con before/after ---
+    // --- Combo of mode: immediate command with before/after ---
     {
         CameraState before = currentState();
         const char* modes[] = { "Perspective", "Orthographic" };
@@ -7777,13 +7760,12 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
         }
     }
 
-    // --- Drag floats: snapshot al activar CUALQUIERA, comando al soltar
-    // CUALQUIERA (mismo patrón acumulativo que Rigidbody).
+    // --- Drag floats: snapshot when ANY activates, command when ANY deactivates (same
+    // cumulative pattern as Rigidbody).
     //
-    // Sin gate por m_cameraDragActive, y con propietario: mismo motivo que en
-    // drawRigidbodySection — el gate dejaba el flag pegado cuando un click no
-    // llegaba a editar, y el siguiente drag en otro GameObject commiteaba el
-    // snapshot ajeno.
+    // Without a gate by m_cameraDragActive and with owner: same reason as in
+    // drawRigidbodySection—the gate left the flag stuck when a click did not reach editing,
+    // and the next drag on another GameObject committed the stale snapshot.
     auto snapshotBefore = [&]() {
         m_cameraDragActive  = true;
         m_cameraDragOwnerId = id;
@@ -7793,8 +7775,8 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
     bool floatChanged = false;
     bool floatCommitted = false;
 
-    // Solo se muestra el campo del modo activo: enseñar el otro sugeriría que
-    // hace algo, y no hace nada.
+    // Only the field of the active mode is shown: showing the other would suggest it does
+    // something, and it does not.
     if (m_editCamMode == CameraComponent::ProjectionMode::Orthographic)
     {
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6);
@@ -7823,9 +7805,8 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
     if (floatChanged)
     {
         applyCamState(currentState());
-        // Los clamps del componente pueden haber corregido el valor (p.ej. near
-        // por encima de far): se re-sincroniza el cache pa que el widget enseñe
-        // lo que de verdad quedó guardado, no lo que se arrastró.
+        // The component clamps can have corrected the value (e.g. near above far): the cache
+        // is re-synced so the widget shows what actually stayed saved, not what was dragged.
         m_editCamFov       = cam->getFov();
         m_editCamOrthoSize = cam->getOrthographicSize();
         m_editCamNear      = cam->getNear();
@@ -7841,9 +7822,8 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
 
     if (ImGui::Button("Remove Camera"))
     {
-        // Pasa por el stack igual que el Add (ver CameraComponentCommand): si el
-        // Remove no fuera deshacible, quitar la cámara sería una pérdida
-        // irreversible.
+        // Goes through the undo stack like Add (see CameraComponentCommand): if Remove were not
+        // undoable, removing the camera would be an irreversible loss.
         CameraState st = currentState();
         m_caches.camera = nullptr;
         ctx.pushLog("Camera component removed from '" + ctx.selected->name + "'");
@@ -7865,8 +7845,8 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
     ImGui::TreePop();
 }
 
-// El grafo NO se edita aquí: eso es del panel Animator (el canvas necesita su
-// propio zoom/pan). Esta sección solo resume y da la puerta de entrada.
+// The graph is NOT edited here: that is the Animator panel's (the canvas needs its own zoom/pan).
+// This section only summarizes and gives the entry point.
 void PropertiesPanel::drawAnimatorSection(EditorContext& ctx)
 {
     if (!ctx.selected || !ctx.selected->hasAnimator()) return;
@@ -7898,8 +7878,8 @@ void PropertiesPanel::drawAnimatorSection(EditorContext& ctx)
     ImGui::SameLine();
     if (ImGui::Button("Remove Animator"))
     {
-        // Pasa por el stack igual que el Add (ver AnimatorComponentCommand): el
-        // grafo se conserva en el comando pa que el Undo lo devuelva entero.
+        // Goes through the undo stack like Add (see AnimatorComponentCommand): the graph is
+        // preserved in the command so Undo returns it whole.
         const uint64_t id = ctx.selected->id;
         AnimatorComponent st = *anim;
         ctx.pushLog("Animator component removed from '" + ctx.selected->name + "'");
@@ -7923,8 +7903,8 @@ void PropertiesPanel::drawAnimatorSection(EditorContext& ctx)
 
 void PropertiesPanel::drawMeshSection(EditorContext& ctx)
 {
-    // Oculto por defecto: solo se dibuja si ya tiene mesh, o si se pulsó
-    // "Add > Mesh" para este GameObject concreto (m_meshAddRequestedFor).
+    // Hidden by default: only drawn if it already has mesh, or if "Add > Mesh" was pressed for this
+    // specific GameObject (m_meshAddRequestedFor).
     if (!ctx.selected->hasMesh() && m_meshAddRequestedFor != ctx.selected->id)
         return;
 
@@ -7940,9 +7920,9 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
         {
             ImGui::Text("%s", ctx.selected->getMesh()->name.c_str());
 
-            // Solo el dibujado: oculto no llega a la GPU (ni escena, ni sombras,
-            // ni AO), pero física, colisiones y selección en el viewport siguen
-            // igual. Vale para estático y skinned, que comparten esta sección.
+            // Only the drawn: hidden does not reach the GPU (not scene, not shadows, not AO), but
+            // physics, collisions and viewport selection still work the same. Works for static and
+            // skinned, which share this section.
             Scene*         meshScene = ctx.scene;
             const uint64_t meshId    = ctx.selected->id;
             bool           visible   = ctx.selected->meshVisible;
@@ -7969,17 +7949,16 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
 
         if (removeClicked && ctx.renderer && ctx.scene)
         {
-            // Por el stack de undo: el comando quita la malla, vacía
-            // materialOverrides y lo devuelve todo en un Ctrl+Z. El porqué de
-            // vaciar, y de la guarda por hasMesh(), vive en
-            // MeshComponentCommand (Command.h), que es quien lo hace.
+            // Through the undo stack: the command removes the mesh, empties materialOverrides and
+            // returns it all in a Ctrl+Z. The why of emptying, and the guard by hasMesh(), lives in
+            // MeshComponentCommand (Command.h), which is what does it.
             auto cmd = std::make_unique<MeshComponentCommand>(
                 *ctx.scene, ctx.renderer, "Remove Mesh from '" + ctx.selected->name + "'",
                 *ctx.selected, /*add=*/false);
             cmd->execute();
             if (ctx.undo) ctx.undo->push(std::move(cmd));
-            // Vuelve a ocultar la sección tras quitar el mesh — hay que
-            // pulsar "Add > Mesh" de nuevo para reabrirla.
+            // Hides the section again after removing the mesh—you have to press "Add > Mesh" again
+            // to open it.
             m_meshAddRequestedFor = 0;
             ctx.pushLog("Mesh component removed from '" + ctx.selected->name + "'");
         }
@@ -7988,15 +7967,15 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
     }
 
     ImGui::Text("Mesh");
-    // Mismo reparto que en drawAssetDropBox: el gris avisa, acceptOrImportAsset
-    // impide. Esta caja no sale de ese helper (tiene su propia drop zone), asi
-    // que el BeginDisabled hay que ponerlo a mano.
+    // Same distribution as drawAssetDropBox: the gray warns, acceptOrImportAsset prevents. This box
+    // does not come from that helper (it has its own drop zone), so BeginDisabled has to be set by
+    // hand.
     ImGui::BeginDisabled(ctx.editingLocked);
     if (ImGui::Button("Browse..."))
     {
         m_meshDlgOpen  = true;
-        // El dueño se fija AQUÍ, al abrir: cuando el diálogo se drene la
-        // selección puede ser otra (ver m_meshDlgOwner).
+        // The owner is set HERE, when opening: by the time the dialog drains the selection may be
+        // another (see m_meshDlgOwner).
         m_meshDlgOwner = ctx.selected->id;
         IGFD::FileDialogConfig cfg;
         cfg.path  = "assets";
@@ -8004,24 +7983,21 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
                     ImGuiFileDialogFlags_HideColumnDate |
                     ImGuiFileDialogFlags_DisableThumbnailMode |
                     ImGuiFileDialogFlags_DisablePlaceMode;
-        // Key sin prefijo "##": Display() construye el nombre interno de la
-        // ventana como título+"##"+key; con key="##AddMeshDlg" el resultado
-        // llevaba 4 almohadillas seguidas ("Choose Model####AddMeshDlg"), y
-        // ImGui trata "###" como separador especial de ID (todo lo posterior
-        // determina el ID, ignorando el resto) — se calculaba distinto en
-        // window->ID que en el ID guardado en settings al persistir el
-        // layout, y el mismatch disparaba
-        // "Assertion failed: settings->ID == window->ID" al redimensionar
-        // (momento en que se fuerza el guardado). El ejemplo oficial de IGFD
-        // usa keys planas (sin "##"), como aquí.
+        // Key without "##" prefix: Display() builds the window name as title+"##"+key; with
+        // key="##AddMeshDlg" the result carried 4 hashes in a row ("Choose Model####AddMeshDlg"),
+        // and ImGui treats "###" as a special ID separator (everything after determines the ID,
+        // ignoring the rest)—it was calculated differently in window->ID than in the ID saved in
+        // settings when persisting the layout, and the mismatch fired "Assertion failed:
+        // settings->ID == window->ID" when resizing (when save is forced). The official IGFD
+        // example uses plain keys (without "##"), like here.
         m_meshFileDialog->OpenDialog("AddMeshDlg", "Choose Model", ModelLoader::supportedModelFilter(), cfg);
     }
     ImGui::EndDisabled();
 
     ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
     ImGui::TextDisabled("Drop a model here");
-    // Veto de edición mientras el modal de carga está activo: no se aceptan
-    // drops nuevos hasta que Load Scene termine (o se cancele).
+    // Edit veto while the load modal is active: new drops are not accepted until Load Scene
+    // finishes (or is canceled).
     if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
@@ -8042,24 +8018,21 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
     const std::vector<const Material*> mats = materialsOfMesh(*ctx.selected);
     if (mats.empty()) return;
 
-    // Desplegada por defecto, como el propio TreeNode del Mesh. Plegada era
-    // invisible en la práctica: el material no es un componente aparte —no
-    // hay "Material" en el menú Add— así que quien lo busca mira ahí, no
-    // dentro del Mesh, y una cabecera cerrada bajo el checkbox Visible no
-    // dice que ahí esté. El coste es que la sección Mesh es más alta
-    // siempre, y bastante más en un skinned con varios materiales.
+    // Expanded by default, like the Mesh TreeNode itself. Collapsed was practically invisible: the
+    // material is not a separate component—there is no "Material" in the Add menu—so whoever looks
+    // for it checks there, not inside Mesh, and a closed header under the Visible checkbox does not
+    // say it is there. The cost is that the Mesh section is always taller, quite a bit more with a
+    // skinned with several materials.
     //
-    // "Material" y no "Textures": la sección ya no es solo de texturas desde
-    // que suma los sliders Metallic/Roughness de más abajo.
+    // "Material" and not "Textures": the section is no longer just textures since it adds the
+    // Metallic/Roughness sliders below.
     if (!ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
-    // Capturado UNA vez, no leído de ctx.selected en cada callback: el drop y
-    // el Clear son síncronos (se resuelven en este mismo frame, sobre el
-    // objeto que se está dibujando ahora mismo), pero el Browse no — su
-    // resultado llega varios frames después, cuando la selección ya pudo
-    // cambiar. Todos los callbacks de abajo pasan este id explícitamente en
-    // vez de volver a mirar ctx.selected, para que los seis caminos (drop y
-    // browse de los tres slots) usen la misma fuente de verdad.
+    // Captured ONCE, not read from ctx.selected in each callback: the drop and Clear are
+    // synchronous (resolved this same frame, on the object being drawn right now), but Browse is
+    // not—its result comes several frames later, when selection may have changed. All callbacks
+    // below pass this id explicitly instead of checking ctx.selected again, so the six paths (drop
+    // and browse of the three slots) use the same source of truth.
     const uint64_t ownerId = ctx.selected->id;
 
     struct SlotDesc { const char* nombre; MaterialTextureSlot slot; };
@@ -8071,19 +8044,17 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
 
     for (int m = 0; m < (int)mats.size(); ++m)
     {
-        // PushID por material: CollapsingHeader NO abre scope de ID propio (a
-        // diferencia de BeginMenu), así que sin esto los tres slots del
-        // material 0 y los del 1 colisionan entre sí y el drop de uno se lo
-        // come el otro.
+        // PushID by material: CollapsingHeader does NOT open its own ID scope (unlike BeginMenu),
+        // so without this the three slots of material 0 and those of 1 collide and the drop of one
+        // eats the other's.
         ImGui::PushID(m);
         if (mats.size() > 1)
             ImGui::Text("Material %d", m);
 
         for (const SlotDesc& d : kSlots)
         {
-            // PushID por slot, dentro del de material: los tres botones
-            // "Browse..."/"Clear" de un mismo material comparten nombre entre
-            // slots y colisionarían igual que los materiales entre sí.
+            // PushID by slot, inside the material one: the three "Browse..."/"Clear" buttons of one
+            // material share names across slots and would collide the same way.
             ImGui::PushID(d.nombre);
 
             const std::string actual = currentTexturePath(*mats[(size_t)m], d.slot);
@@ -8096,10 +8067,9 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
             drawAssetDropBox(
                 ctx, d.nombre, "Drop image here",
                 [this, &ctx, ownerId, materialIndex, slot]() {
-                    // Sin gate propio: este callback ya no puede correr con la
-                    // escena cargándose, porque drawAssetDropBox deshabilita el
-                    // botón para sus 16 cajas —el gate que aquí estaba
-                    // duplicado, mientras las otras 15 se quedaban sin él—.
+                    // No gate of its own: this callback can no longer run with the scene loading,
+                    // because drawAssetDropBox disables the button for its 16 boxes—the gate that
+                    // was here duplicated, while the other 15 were left without it.
                     m_textureDlgOpen     = true;
                     m_textureDlgOwner    = ownerId;
                     m_textureDlgMaterial = materialIndex;
@@ -8110,10 +8080,9 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                                 ImGuiFileDialogFlags_HideColumnDate |
                                 ImGuiFileDialogFlags_DisableThumbnailMode |
                                 ImGuiFileDialogFlags_DisablePlaceMode;
-                    // Key sin "##": Display() construye el nombre de la ventana
-                    // como título+"##"+key, y un "###" ahí rompe el ID que
-                    // guarda el layout (mismo motivo documentado en
-                    // drawMeshSection para "AddMeshDlg").
+                    // Key without "##": Display() builds the window name as title+"##"+key, and a
+                    // "###" there breaks the ID saved by the layout (same reason documented in
+                    // drawMeshSection for "AddMeshDlg").
                     m_textureFileDialog->OpenDialog("PickTextureDlg", "Choose image",
                                                      ".png,.jpg,.jpeg,.bmp,.tga", cfg);
                 },
@@ -8151,34 +8120,30 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
             ImGui::EndDisabled();
         }
 
-        // Metallic/Roughness del material: dos sliders, no una textura más,
-        // así que fuera del bucle kSlots de arriba pero dentro del mismo
-        // PushID(m) — sin él, "Metallic"/"Roughness" del material 0 y el 1
-        // colisionarían igual que los tres botones de textura.
+        // Metallic/Roughness of the material: two sliders, not another texture, so outside the
+        // kSlots loop above but inside the same PushID(m)—without it, "Metallic"/"Roughness" of
+        // material 0 and 1 would collide like the three texture buttons.
         {
             const Material& mat = *mats[(size_t)m];
-            // MISMA condición que miran los dos backends para decidir si el
-            // mapa manda (D3D12Renderer::addStaticMesh/rebuildStaticMesh,
-            // Renderer::createSharedGpuMesh), no !path.empty(): un modelo con
-            // el ORM EMBEBIDO (un .glb, metallicRoughnessPath vacío pero
-            // embeddedMetallicRoughness lleno) tiene mapa igual, y con el
-            // chequeo de solo-path los sliders salían habilitados sin avisar
-            // aunque los dos backends fuerzan 1.0 e ignoran el valor —un
-            // widget que no hacía nada.
+            // SAME condition the two backends look at to decide if the map commands
+            // (D3D12Renderer::addStaticMesh/rebuildStaticMesh, Renderer::createSharedGpuMesh), not
+            // !path.empty(): a model with the ORM EMBEDDED (a .glb, metallicRoughnessPath empty but
+            // embeddedMetallicRoughness full) has a map too, and with the check-only-path the
+            // sliders came out enabled without warning even though both backends force 1.0 and
+            // ignore the value—a widget that did nothing.
             const bool hasOrmMap = chooseTextureSource(mat.metallicRoughnessPath,
                                                         mat.embeddedMetallicRoughness) !=
                                    TextureSource::None;
             const int  materialIndex = m;
 
-            // Los dos sliders van por m_materialFactorSlider y no por un
-            // SliderFloat a pelo: el valor NO se escribe en el Material mientras
-            // se arrastra (solo se previsualiza en la GPU), y en ese caso ImGui
-            // no entrega el valor en el frame de soltar (ver DeferredSlider.h).
-            // Con el SliderFloat a pelo el commit leía una local que ese frame
-            // valía lo de antes del arrastre: no se creaba el comando, el slider
-            // volvía a 0 y el objeto se quedaba con lo último previsualizado.
-            // El helper también lee el "before" antes de dibujar, que SliderFloat
-            // salta al valor bajo el cursor en el mismo frame del clic.
+            // The two sliders go through m_materialFactorSlider not a bare SliderFloat: the value
+            // is NOT written to the Material while dragging (only previewed on the GPU), and in
+            // that case ImGui does not give the value on the frame it is released (see
+            // DeferredSlider.h). With the bare SliderFloat the commit read a local that that frame
+            // was worth the pre-drag: the command did not create, the slider went back to 0 and the
+            // object stayed with the last previewed. The helper also reads the "before" before
+            // drawing, which SliderFloat jumps to the value under the cursor in the same frame of
+            // the click.
             ImGui::BeginDisabled(ctx.editingLocked || hasOrmMap);
             const DeferredSliderFloat::Result rm =
                 m_materialFactorSlider.draw("Metallic", mat.metallic, 0.0f, 1.0f, "%.2f");
@@ -8194,24 +8159,20 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                 m_materialFactorDragSlot          = MaterialFactorSlot::Metallic;
                 m_materialFactorDragBefore        = rm.begin;
             }
-            // Guarda de propietario, mismo motivo que en Audio Clip: el
-            // ActiveId del slider sobrevive a un cambio de selección a mitad
-            // de arrastre, y sin comparar dueño+índice+slot el commit se
-            // aplicaría al objeto/material equivocado. La previsualización pasa
-            // por la misma guarda: sin ella, el arrastre empezado en un objeto
-            // se pintaría encima del que se seleccionó a mitad.
+            // Owner guard, same reason as Audio Clip: the slider's ActiveId survives a selection
+            // change mid-drag, and without comparing owner+index+slot the commit would apply to the
+            // wrong object/material. The preview goes through the same guard: without it, a drag
+            // started on one object would paint over the one selected mid-drag.
             const bool dragDeMetallic = m_materialFactorDragActive &&
                 m_materialFactorDragOwnerId == ownerId &&
                 m_materialFactorDragMaterialIndex == materialIndex &&
                 m_materialFactorDragSlot == MaterialFactorSlot::Metallic;
-            // El viewport sigue al slider mientras se arrastra. Roughness va tal
-            // cual está: el setter escribe los dos, así que hay que pasarle el
-            // que NO se está moviendo.
+            // The viewport follows the slider while dragging. Roughness goes as is: the setter
+            // writes both, so pass it the one NOT being moved.
             if (rm.active && dragDeMetallic)
                 previewMaterialFactors(ctx, ownerId, rm.value, mat.roughness);
-            // Soltar sin commit (un clic seco, o un arrastre de otro dueño) deja
-            // la GPU con lo último que se le empujó: se devuelve lo que dice el
-            // Material, que es lo que el arrastre nunca llegó a tocar.
+            // Release without commit (a dry click, or a drag of another owner) leaves the GPU with
+            // the last pushed: return what the Material says, which is what the drag never touched.
             if (rm.cancelled || (rm.committed && !dragDeMetallic))
                 previewMaterialFactors(ctx, ownerId, mat.metallic, mat.roughness);
             if (rm.committed && dragDeMetallic)
@@ -8219,14 +8180,12 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                 m_materialFactorDragActive = false;
                 if (!nearlyEqualF(m_materialFactorDragBefore, rm.value) && ctx.scene)
                 {
-                    // El "before" del comando es el override CRUDO (el
-                    // centinela si nunca hubo uno), no m_materialFactorDragBefore
-                    // (el valor EFECTIVO que se enseñaba antes del arrastre,
-                    // usado arriba solo para saber si algo cambió). Con el
-                    // efectivo como "before", deshacer la primera edición
-                    // escribiría el valor del FBX COMO OVERRIDE ACTIVO —
-                    // nodeToJson lo serializaría, clavando el factor en el
-                    // .scene aunque el usuario nunca lo hubiera tocado.
+                    // The command's "before" is the RAW override (the sentinel if there never was
+                    // one), not m_materialFactorDragBefore (the EFFECTIVE value shown before the
+                    // drag, used above only to know if something changed). With the effective as
+                    // "before", undoing the first edit would write the FBX value AS the ACTIVE
+                    // OVERRIDE—nodeToJson would serialize it, nailing the factor in the .scene even
+                    // though the user never touched it.
                     const float beforeOverride =
                         currentFactorOverride(*ctx.selected, materialIndex, MaterialFactorSlot::Metallic);
                     auto cmd = std::make_unique<MaterialFactorCommand>(
@@ -8254,7 +8213,7 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                 m_materialFactorDragSlot          = MaterialFactorSlot::Roughness;
                 m_materialFactorDragBefore        = rr.begin;
             }
-            // Mismo trío que en Metallic, con los papeles cambiados.
+            // Same trio as in Metallic, with roles reversed.
             const bool dragDeRoughness = m_materialFactorDragActive &&
                 m_materialFactorDragOwnerId == ownerId &&
                 m_materialFactorDragMaterialIndex == materialIndex &&
@@ -8268,8 +8227,7 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                 m_materialFactorDragActive = false;
                 if (!nearlyEqualF(m_materialFactorDragBefore, rr.value) && ctx.scene)
                 {
-                    // Mismo motivo que el bloque de Metallic: el override
-                    // CRUDO, no el efectivo.
+                    // Same reason as the Metallic block: the RAW override, not the effective one.
                     const float beforeOverride =
                         currentFactorOverride(*ctx.selected, materialIndex, MaterialFactorSlot::Roughness);
                     auto cmd = std::make_unique<MaterialFactorCommand>(
@@ -8290,20 +8248,19 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_textureLoadError.c_str());
 }
 
-// Empuja los factores a la GPU MIENTRAS se arrastra, sin tocar el Material de
-// CPU y sin pasar por el stack de undo. Las dos cosas son deliberadas:
+// Push the factors to the GPU WHILE dragging, without touching the CPU Material and without going
+// through the undo stack. Both deliberate:
 //
-//  - Sin tocar el Material porque el baseline (base*/base*Taken) se captura la
-//    PRIMERA vez que applyMaterialOverrides pisa el slot, y eso ocurre al
-//    soltar. Si el arrastre escribiera mat.metallic, esa captura tomaría como
-//    "original" el valor a medio arrastrar en vez del que trae el FBX, y un
-//    Clear posterior devolvería una posición cualquiera del slider.
-//  - Sin comando porque un arrastre son decenas de frames: uno por frame
-//    llenaría el historial y Ctrl+Z tendría que pulsarse cincuenta veces para
-//    deshacer un gesto. El comando lo empuja el commit, con el valor final.
+// - Without touching the Material because the baseline (base*/base*Taken) is captured the FIRST
+//    time applyMaterialOverrides hits the slot, and that happens when releasing. If the drag wrote
+//    mat.metallic, that capture would take as "original" the mid-drag value instead of what the FBX
+//    brings, and a later Clear would return some slider position.
+// - Without a command because a drag is dozens of frames: one per frame would flood the history and
+//    Ctrl+Z would have to be pressed fifty times to undo a gesture. The command pushes it on
+//    commit, with the final value.
 //
-// Solo estático: en skinned los factores viven por SUBMALLA y no hay setter para
-// eso, así que ahí se sigue aplicando al soltar (ver MaterialFactorCommand).
+// Static only: in skinned the factors live per SUBMESH and there is no setter for that, so it still
+// applies on release (see MaterialFactorCommand).
 void PropertiesPanel::previewMaterialFactors(EditorContext& ctx, uint64_t ownerId,
                                               float metallic, float roughness)
 {
@@ -8318,37 +8275,34 @@ void PropertiesPanel::previewMaterialFactors(EditorContext& ctx, uint64_t ownerI
 void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId, int materialIndex,
                                              MaterialTextureSlot slot, const std::string& path)
 {
-    // ctx.scene puede ser nullptr (m_scene por defecto en EditorUI): sin esta
-    // guarda, findById de abajo desreferenciaría null.
+    // ctx.scene may be nullptr (m_scene by default in EditorUI): without this guard, findById below
+    // would dereference null.
     if (!ctx.scene) return;
 
-    // Resuelto por id, NUNCA leído de ctx.selected: el resultado del diálogo
-    // de Browse llega varios frames después de abrirlo y ninguno de los
-    // diálogos de este panel es modal (cero ImGuiFileDialogFlags_Modal en todo
-    // el fichero), así que el Hierarchy sigue clicable mientras está abierto.
-    // Sin resolver por el id capturado al abrir, el resultado se aplicaría al
-    // objeto seleccionado EN ESE MOMENTO, no al que abrió el diálogo.
+    // Resolved by id, NEVER read from ctx.selected: the Browse dialog result comes several frames
+    // after opening and none of this panel's dialogs is modal (zero ImGuiFileDialogFlags_Modal in
+    // the whole file), so Hierarchy stays clickable while open. Without resolving by the id
+    // captured when opening, the result would apply to the object selected AT THAT MOMENT, not the
+    // one that opened the dialog.
     GameObject* go = ctx.scene->findById(ownerId);
     if (!go)
     {
-        // El objeto se borró (o el snapshot es de un undo/redo de por medio)
-        // mientras el diálogo seguía abierto: sin este aviso la elección se
-        // descartaría en silencio y parecería que Browse no hizo nada.
+        // The object was deleted (or the snapshot is from an undo/redo in between) while the dialog
+        // was still open: without this warning the choice would be silently discarded and Browse
+        // would seem to have done nothing.
         ctx.logModule("Mesh", "Could not apply the texture: the object no longer exists");
         return;
     }
     if (!go->hasMesh() || ctx.editingLocked) return;
 
-    // Segunda línea de defensa contra el mismo escenario de arriba: el diálogo
-    // se abrió sobre un material de UN objeto (p.ej. el índice 2 de un skinned
-    // con 3 materiales) y para cuando se cierra, ownerId resuelve a OTRO
-    // objeto con menos materiales. setMaterialTextureOverride no valida el
-    // índice (lo tolera a propósito para overrides de escenas con más
-    // materiales de los que trae el mesh cargado ahora mismo — ver los tests
-    // de índice fuera de rango), así que sin este corte aquí, en el panel, se
-    // escribiría un override que applyMaterialOverrides ignora en silencio hoy
-    // pero que nodeToJson serializa igual, y que dispararía el aviso de
-    // "índice fuera de rango" en la siguiente carga de escena.
+    // Second line of defense against the same scenario above: the dialog opened on a material of
+    // ONE object (e.g. index 2 of a skinned with 3 materials) and by the time it closes, ownerId
+    // resolves to ANOTHER object with fewer materials. setMaterialTextureOverride does not validate
+    // the index (tolerates it on purpose for overrides of scenes with more materials than the mesh
+    // loaded right now—see the tests for out-of-range index), so without this cut here, in the
+    // panel, an override would be written that applyMaterialOverrides silently ignores today but
+    // that nodeToJson serializes anyway, and that would fire the "out-of-range index" warning on
+    // the next scene load.
     const std::vector<const Material*> mats = materialsOfMesh(*go);
     if (materialIndex < 0 || materialIndex >= (int)mats.size())
     {
@@ -8357,8 +8311,8 @@ void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId
         return;
     }
 
-    // Clear entra con path vacío y sin comprobar extensión: no hay extensión
-    // que validar, y lo que se valida es lo que se ASIGNA, no lo que se quita.
+    // Clear enters with empty path and without checking extension: there is no extension to
+    // validate, and what is validated is what is ASSIGNED, not what is removed.
     if (!path.empty())
     {
         std::string ext = std::filesystem::path(path).extension().string();
@@ -8373,10 +8327,9 @@ void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId
     }
 
     const std::string antes = currentOverride(*go, materialIndex, slot);
-    // Misma textura que ya había: nada que hacer. Sin este corte, reasignar lo
-    // mismo apilaría un comando inerte (un Ctrl+Z que aparentemente no
-    // responde) y dispararía una resubida completa a GPU para nada. Mismo
-    // criterio que setButtonAssetPath.
+    // Same texture that was already there: nothing to do. Without this cut, reassigning the same
+    // would stack an inert command (a Ctrl+Z that apparently does not respond) and fire a complete
+    // reupload to GPU for nothing. Same criterion as setButtonAssetPath.
     if (antes == path) return;
     m_textureLoadError.clear();
 
@@ -8430,12 +8383,10 @@ void PropertiesPanel::assignMaterialAsset(EditorContext& ctx, uint64_t ownerId, 
 
 void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
 {
-    // Se ejecuta cada frame independientemente de ctx.selected/hasMesh(): si no
-    // se drena aquí, cambiar de selección (o deseleccionar) mientras el
-    // diálogo está abierto deja m_meshDlgOpen atascado en true para siempre.
-    // m_meshFileDialog es una instancia propia (no compartida con
-    // m_audioFileDialog), así que redimensionar este popup no toca el
-    // estado interno del diálogo de Audio ni viceversa.
+    // Executes every frame independently of ctx.selected/hasMesh(): if not drained here, changing
+    // selection (or deselecting) while the dialog is open leaves m_meshDlgOpen stuck at true
+    // forever. m_meshFileDialog is its own instance (not shared with m_audioFileDialog), so
+    // resizing this popup does not touch the internal state of the Audio dialog or vice versa.
     if (m_meshDlgOpen && m_meshFileDialog->Display("AddMeshDlg"))
     {
         if (m_meshFileDialog->IsOk())
@@ -8447,9 +8398,8 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
         m_meshDlgOpen = false;
     }
 
-    // Mismo drenado, mismo motivo, para el diálogo de Textures: instancia
-    // propia (m_textureFileDialog), así que redimensionar este popup no toca
-    // el estado interno del de Mesh ni el de Audio.
+    // Same draining, same reason, for the Textures dialog: own instance (m_textureFileDialog), so
+    // resizing this popup does not touch the internal state of the Mesh one or the Audio one.
     if (m_textureDlgOpen && m_textureFileDialog->Display("PickTextureDlg"))
     {
         if (m_textureFileDialog->IsOk())
@@ -8462,8 +8412,8 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
         m_textureDlgOpen = false;
     }
 
-    // Mismo drenado para el diálogo de "Material asset": instancia propia
-    // (m_matAssetFileDialog), mismo motivo que las de arriba.
+    // Same draining for the "Material asset" dialog: own instance (m_matAssetFileDialog), same
+    // reason as the ones above.
     if (m_matAssetDlgOpen && m_matAssetFileDialog->Display("PickMatAssetDlg"))
     {
         if (m_matAssetFileDialog->IsOk())
@@ -8476,9 +8426,8 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
 
 void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
 {
-    // Oculto por defecto: solo se dibuja si ya tiene AudioClip, o si se
-    // pulsó "Add > Audio Clip" para este GameObject concreto
-    // (m_audioClipAddRequestedFor).
+    // Hidden by default: only drawn if it already has AudioClip, or if "Add > Audio Clip" was
+    // pressed for this specific GameObject (m_audioClipAddRequestedFor).
     if (!ctx.selected->hasAudioClip() && m_audioClipAddRequestedFor != ctx.selected->id)
         return;
 
@@ -8496,11 +8445,10 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             std::string fname = std::filesystem::path(clip->getPath()).filename().string();
             ImGui::Text("%s", fname.c_str());
 
-            // El fallo de carga no se conoce al añadir el clip: FMOD lee en su
-            // hilo (FMOD_NONBLOCKING) y el error aparece frames después, así
-            // que se consulta cada vez que se dibuja la sección en vez de
-            // cachearse. Sin esto, un asset roto se veía aquí igual que uno
-            // bueno y solo se notaba porque no sonaba nada.
+            // Load failure is not known when adding the clip: FMOD reads in its thread
+            // (FMOD_NONBLOCKING) and the error appears frames later, so it is checked every time
+            // the section is drawn instead of cached. Without this, a broken asset looked the same
+            // as a good one here and you only noticed because nothing played.
             if (clip->hasLoadError())
             {
                 ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Could not load");
@@ -8520,12 +8468,11 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 clip->stop();
             ImGui::EndDisabled();
 
-            // Los tres checkboxes comparten el mismo camino de undo que los
-            // sliders (un PropertyCommand<AudioClipState> con el estado entero),
-            // pero se comprometen al instante en vez de al soltar: un checkbox
-            // no tiene arrastre. Importa sobre todo en Loop e Is 3D, que
-            // RECARGAN el sonido (is3D/loop van en el FMOD_MODE) y cortan lo que
-            // estuviera sonando: sin undo, ese corte era irreversible.
+            // The three checkboxes share the same undo path as the sliders (a
+            // PropertyCommand<AudioClipState> with the whole state), but commit instantly instead
+            // of on release: a checkbox has no drag. Matters most on Loop and Is 3D, which RELOAD
+            // the sound (is3D/loop go in FMOD_MODE) and cut anything playing: without undo, that
+            // cut was irreversible.
             const AudioClipState toggleBefore = audioClipStateOf(*clip);
             bool toggled = false;
 
@@ -8560,11 +8507,9 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 toggled = true;
             }
 
-            // Bus de salida. Comparte el camino de undo de los checkboxes (el
-            // mismo AudioClipState), porque también se compromete de golpe.
-            // El orden del array sigue al del enum AudioBus; lo que se guarda
-            // en la escena es el NOMBRE, así que reordenarlo aquí no rompe
-            // ningún proyecto.
+            // Output bus. Shares the undo path of the checkboxes (the same AudioClipState), because
+            // it also commits outright. The order of the array follows the enum AudioBus; what is
+            // saved in the scene is the NAME, so reordering it here does not break any project.
             const char* kBusNames[] = { "Master", "Music", "SFX" };
             int busIdx = static_cast<int>(clip->getBus());
             if (ImGui::Combo("Bus", &busIdx, kBusNames, IM_ARRAYSIZE(kBusNames)))
@@ -8577,8 +8522,8 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                                   "two.\nOnly affects the NEXT playback: the group is "
                                   "chosen when the voice starts.");
 
-            // Modo de carga. A diferencia del bus, este SI recarga el sonido
-            // (va en el FMOD_MODE) y corta lo que estuviera sonando.
+            // Load mode. Unlike the bus, this DOES reload the sound (goes in FMOD_MODE) and cuts
+            // what was playing.
             const char* kLoadModeNames[] = { "Sample (in RAM)", "Stream (from disk)" };
             int loadModeIdx = static_cast<int>(clip->getLoadMode());
             if (ImGui::Combo("Load Mode", &loadModeIdx, kLoadModeNames, IM_ARRAYSIZE(kLoadModeNames)))
@@ -8594,9 +8539,8 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                                   "Sample for effects.\nChanging it reloads the sound and cuts whatever "
                                   "is playing.");
 
-            // Curva de atenuacion. Como Load Mode, va en el FMOD_MODE y recarga.
-            // Solo se dibuja en 3D: en 2D no hay atenuacion por distancia que
-            // moldear, igual que las distancias min/max de mas abajo.
+            // Attenuation curve. Like Load Mode, goes in FMOD_MODE and reloads. Only drawn in 3D:
+            // in 2D there is no distance attenuation to shape, like the min/max distances below.
             if (is3D)
             {
                 const char* kRolloffNames[] = { "Inverse (realistic)", "Linear",
@@ -8625,18 +8569,15 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                     [sc, ownerId](const AudioClipState& s) { applyAudioClipState(*sc, ownerId, s); }));
             }
 
-            // --- Volume / Pitch: snapshot al activar cualquiera de los dos,
-            // un solo comando al soltar. Los valores se escriben en vivo
-            // mientras se arrastra (así se oye el cambio), y el comando sólo
-            // sirve para que Ctrl+Z devuelva el drag entero de una vez.
+            // --- Volume / Pitch: snapshot when any activates, one command on release. Values are
+            // written live while dragging (so you hear the change), and the command only serves so
+            // Ctrl+Z returns the entire drag at once.
             //
-            // SliderFloat (a diferencia de DragFloat) salta al valor bajo el
-            // cursor en el MISMO frame en que IsItemActivated() se vuelve
-            // true, así que el "before" no puede releerse del componente
-            // después de dibujar el widget: para entonces ya vale el valor
-            // nuevo. Por eso se hoistean las lecturas aquí, antes de los
-            // sliders, y el snapshot usa estas variables en vez de releer
-            // clip->getVolume()/getPitch().
+            // SliderFloat (unlike DragFloat) jumps to the value under the cursor in the SAME frame
+            // IsItemActivated() becomes true, so the "before" cannot be re-read from the component
+            // after drawing the widget: by then it is already the new value. That is why the reads
+            // are hoisted here, before the sliders, and the snapshot uses these variables instead
+            // of re-reading clip->getVolume()/getPitch().
             const float volumeBefore = clip->getVolume();
             const float pitchBefore  = clip->getPitch();
             const float minDistBefore = clip->getMinDistance();
@@ -8665,10 +8606,9 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             activated |= ImGui::IsItemActivated();
             committed |= ImGui::IsItemDeactivatedAfterEdit();
 
-            // Distancias de atenuación: solo tienen sentido en 3D (en 2D FMOD
-            // no atenúa por distancia), así que ni se dibujan con is3D
-            // desmarcado. El valor sigue guardado en el componente: al volver a
-            // marcar is3D reaparece lo que se hubiera editado.
+            // Attenuation distances: only make sense in 3D (in 2D FMOD does not attenuate by
+            // distance), so they are not drawn with is3D unchecked. The value stays saved in the
+            // component: when is3D is marked again the edits reappear.
             if (is3D)
             {
                 if (ImGui::SliderFloat("Min distance", &minDist, 0.1f, 50.0f, "%.2f"))
@@ -8679,14 +8619,14 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 if (ImGui::SliderFloat("Max distance", &maxDist, 1.0f, 1000.0f, "%.1f"))
                     clip->setMaxDistance(maxDist);
                 activated |= ImGui::IsItemActivated();
-                // El clamp de max >= min lo hace el propio setter del
-                // componente (no la UI), así que al soltar ya está aplicado.
+                // The clamp of max >= min is done by the component's own setter (not the UI), so on
+                // release it is already applied.
                 committed |= ImGui::IsItemDeactivatedAfterEdit();
 
-                // Spread y doppler son propiedades de la VOZ: no recargan nada,
-                // pero se leen al arrancar la reproducción, así que moverlos con
-                // algo ya sonando no se nota hasta el siguiente Play. Van por el
-                // mismo camino de undo que los otros sliders.
+                // Spread and doppler are voice properties: they do not reload anything, but they
+                // are read when starting playback, so moving them with something already playing
+                // does not take effect until the next Play. They go through the same undo path as
+                // the other sliders.
                 float spread = spreadBefore;
                 if (ImGui::SliderFloat("Spread", &spread, 0.0f, 360.0f, "%.0f deg"))
                     clip->setSpread(spread);
@@ -8708,8 +8648,8 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             }
             else
             {
-                // Paneo manual: SOLO en 2D. En 3D lo decide la posicion de la
-                // fuente, y ofrecerlo aqui haria creer que se puede forzar.
+                // Manual pan: ONLY in 2D. In 3D the source position decides it, and offering it
+                // here would make it seem you could force it.
                 float pan = panBefore;
                 if (ImGui::SliderFloat("Stereo pan", &pan, -1.0f, 1.0f, "%.2f"))
                     clip->setStereoPan(pan);
@@ -8720,20 +8660,19 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                                       "2D clips only.");
             }
 
-            // Sin gate por m_audioDragActive: solo un widget de ImGui puede
-            // tener ActiveId a la vez, así que el gate no aporta nada salvo
-            // un bug: IsItemDeactivatedAfterEdit() exige edición real, y un
-            // click que activa el slider sin moverlo nunca llega a
-            // "committed", dejando el flag pegado con un "before" rancio que
-            // la siguiente edición —incluso en otro GameObject— reutilizaría.
+            // Without a gate by m_audioDragActive: only one ImGui widget can have ActiveId at a
+            // time, so the gate adds nothing but a bug: IsItemDeactivatedAfterEdit() requires real
+            // editing, and a click that activates the slider without moving it never reaches
+            // "committed", leaving the flag stuck with a stale "before" that the next edit—even on
+            // another GameObject—would reuse.
             if (activated)
             {
                 m_audioDragActive  = true;
                 m_audioDragOwnerId = clipOwnerId;
-                // Estado actual del clip, pero con los CONTINUOS sustituidos por
-                // las lecturas hoisted de antes de dibujar: un SliderFloat ya ha
-                // saltado al valor bajo el cursor en el frame en que se activa,
-                // así que releerlos del componente daría el valor nuevo.
+                // Current state of the clip, but with the CONTINUOUS ones replaced by the hoisted
+                // reads from before drawing: a SliderFloat already jumped to the value under the
+                // cursor in the frame it activates, so reading them from the component would give
+                // the new value.
                 m_audioDragBefore              = audioClipStateOf(*clip);
                 m_audioDragBefore.volume       = volumeBefore;
                 m_audioDragBefore.pitch        = pitchBefore;
@@ -8744,14 +8683,12 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 m_audioDragBefore.dopplerLevel = dopplerBefore;
             }
 
-            // Guarda de propietario: el ActiveId de un slider de ImGui se
-            // conserva mientras el ratón sigue pulsado, aunque la selección
-            // cambie a mitad de arrastre (Hierarchy, atajo de teclado o un
-            // script) y el panel pase a dibujar el AudioClip de OTRO
-            // GameObject. Como el id del widget ("Volume"/"Pitch") es el
-            // mismo en ambos, ImGui seguiría considerándolo el mismo drag y
-            // el commit final llegaría para ese otro objeto; este id evita
-            // aplicarle un "before" que pertenece al GameObject original.
+            // Owner guard: the ActiveId of an ImGui slider is preserved while the mouse stays
+            // pressed, even if selection changes mid-drag (Hierarchy, keyboard shortcut or a
+            // script) and the panel passes to drawing the AudioClip of ANOTHER GameObject. Since
+            // the widget id ("Volume"/"Pitch") is the same in both, ImGui would still consider it
+            // the same drag and the final commit would apply to that other object; this id prevents
+            // applying a "before" that belongs to the original GameObject.
             if (committed && m_audioDragActive && m_audioDragOwnerId == clipOwnerId)
             {
                 m_audioDragActive = false;
@@ -8780,9 +8717,9 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
 
         if (removeClicked)
         {
-            // Por el stack de undo, no a pelo: el snapshot se toma ANTES de
-            // soltar el componente, así el Ctrl+Z devuelve el clip con su
-            // volumen, pitch y distancias, no uno recién creado con defaults.
+            // Through the undo stack, not bare: the snapshot is taken BEFORE releasing the
+            // component, so Ctrl+Z returns the clip with its volume, pitch and distances, not a
+            // freshly created one with defaults.
             if (ctx.scene && ctx.undo && ctx.audio)
             {
                 auto cmd = std::make_unique<AudioClipComponentCommand>(
@@ -8796,8 +8733,8 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             {
                 ctx.selected->setAudioClip(nullptr);
             }
-            // Vuelve a ocultar la sección tras quitar el clip — hay que
-            // pulsar "Add > Audio Clip" de nuevo para reabrirla.
+            // Hides the section again after removing the clip—you have to press "Add > Audio Clip"
+            // again to open it.
             m_audioClipAddRequestedFor = 0;
             ctx.pushLog("Audio Clip component removed from '" + ctx.selected->name + "'");
         }
@@ -8806,9 +8743,9 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
     }
 
     ImGui::Text("Audio Clip");
-    // Dos motivos para el gris, y ninguno tapa al otro: sin AudioManager no hay
-    // nada que cargar, y con la escena cargandose la eleccion se descartaria al
-    // drenar (acceptOrImportAsset).
+    // Two reasons for the gray, and neither hides the other: without AudioManager there is nothing
+    // to load, and with the scene loading the choice would be discarded when draining
+    // (acceptOrImportAsset).
     ImGui::BeginDisabled(ctx.audio == nullptr || ctx.editingLocked);
     if (ImGui::Button("Browse..."))
     {
@@ -8819,16 +8756,16 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                     ImGuiFileDialogFlags_HideColumnDate |
                     ImGuiFileDialogFlags_DisableThumbnailMode |
                     ImGuiFileDialogFlags_DisablePlaceMode;
-        // Key plana sin "##" (mismo motivo documentado en drawMeshSection
-        // para AddMeshDlg: con prefijo "##" el título concatenado generaba
-        // 4 almohadillas seguidas y rompía el ID persistido de ImGui).
+        // Plain key without "##" (same reason documented in drawMeshSection for AddMeshDlg: with
+        // "##" prefix the concatenated title generated 4 hashes in a row and broke the ID persisted
+        // by ImGui).
         m_audioFileDialog->OpenDialog("AddAudioDlg", "Choose Audio", ".wav,.mp3,.ogg,.flac", cfg);
     }
     ImGui::EndDisabled();
 
     ImGui::BeginChild("##AudioDropZone", ImVec2(0, 40), true);
     ImGui::TextDisabled("Drop audio here");
-    // Mismo veto que el drop de mesh: sin drops nuevos mientras carga la escena.
+    // Same veto as the mesh drop: no new drops while the scene loads.
     if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
@@ -8843,10 +8780,9 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
 
 void PropertiesPanel::drawAudioClipDialog(EditorContext& ctx)
 {
-    // Se ejecuta cada frame independientemente de ctx.selected/hasAudioClip():
-    // si no se drena aquí, cambiar de selección mientras el diálogo está
-    // abierto deja m_audioDlgOpen atascado en true (mismo motivo que
-    // drawMeshDialog).
+    // Executes every frame independently of ctx.selected/hasAudioClip(): if not drained here,
+    // changing selection while the dialog is open leaves m_audioDlgOpen stuck at true (same reason
+    // as drawMeshDialog).
     if (m_audioDlgOpen && m_audioFileDialog->Display("AddAudioDlg"))
     {
         if (m_audioFileDialog->IsOk())
@@ -8870,9 +8806,8 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
         ScriptComponent* comp = compPtr.get();
         ImGui::PushID(comp);
 
-        // TreeNodeEx (label estrecho) y no CollapsingHeader (frame de ancho
-        // completo): el header solaparía el botón "x" y se comería su click.
-        // Mismo patrón que las secciones de collider.
+        // TreeNodeEx (narrow label) not CollapsingHeader (full-width frame): the header would
+        // overlap the "x" button and eat its click. Same pattern as collider sections.
         ImGui::Separator();
         bool open = ImGui::TreeNodeEx((comp->scriptName + " (Script)").c_str(),
             ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
@@ -8894,7 +8829,7 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                 else
                     ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
                         "Script not found: %s.lua", comp->scriptName.c_str());
-                // Overrides intactos (spec: no se pierden datos)
+                // Overrides untouched (spec: data is not lost)
             }
             else
             {
@@ -8903,7 +8838,7 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
 
                 for (const ScriptProp& prop : cls.props)
                 {
-                    // Valor mostrado: instancia viva > override > default
+                    // Shown value: live instance > override > default
                     ScriptValue value = prop.defaultValue;
                     if (auto it = comp->overrides.find(prop.name); it != comp->overrides.end())
                         value = it->second;
@@ -8971,7 +8906,7 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                     comp->overrides.clear();
                     if (live)
                     {
-                        // Reaplica defaults del .lua a la instancia viva
+                        // Reapplies defaults from the .lua to the live instance
                         for (const ScriptProp& prop : cls.props)
                             std::visit([&](auto&& v) {
                                 using T = std::decay_t<decltype(v)>;
@@ -9017,7 +8952,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             ctx.selected->setBoxCollider(ctx.physics->createBoxColliderComponent(
                 glm::vec3(25.0f, 25.0f, 25.0f), glm::vec3(0.0f),
                 ctx.selected->worldTransform, /*dynamic=*/false));
-            // Owner opaco = GameObject, para que TriggerEvent.other lo resuelva.
+            // Opaque owner = GameObject, so TriggerEvent.other can resolve it.
             ctx.selected->getBoxCollider()->setOwner(ctx.selected);
             m_caches.box = nullptr;
             ctx.pushLog("Box Collider component added to '" + ctx.selected->name + "'");
@@ -9052,8 +8987,8 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
 
         ImGui::EndDisabled();
 
-        // Rigidbody: necesita un collider que aporte la forma; oculto si ya
-        // tiene uno o si no hay collider al que engancharlo.
+        // Rigidbody: needs a collider that brings the shape; hidden if it already has one or if
+        // there is no collider to hook it to.
         if (!ctx.selected->hasRigidbody() && ctx.selected->hasAnyCollider())
         {
             if (ImGui::Selectable("Rigidbody") && ctx.physics)
@@ -9079,9 +9014,9 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             m_audioClipAddRequestedFor = ctx.selected->id;
         ImGui::EndDisabled();
 
-        // Audio Listener: como mucho uno por escena, mismo criterio que la
-        // cámara — el gate pregunta a Scene::findAudioListener, no a un flag
-        // propio, y el existente no se toca (ni se borra ni se roba).
+        // Audio Listener: at most one per scene, same criterion as the camera—the gate asks
+        // Scene::findAudioListener, not a flag of its own, and the existing one is not touched
+        // (neither deleted nor stolen).
         GameObject* existingListener = ctx.scene ? ctx.scene->findAudioListener() : nullptr;
         ImGui::BeginDisabled(existingListener != nullptr);
         if (ImGui::Selectable("Audio Listener") && !existingListener)
@@ -9105,9 +9040,8 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             ImGui::SetTooltip("There is already an Audio Listener in the scene ('%s'): remove it from there "
                               "before adding another", existingListener->name.c_str());
 
-        // Reverb Zone: sin invariante de escena (caben varias, y FMOD mezcla
-        // las que se solapen), asi que el unico gate es no poner dos al mismo
-        // objeto.
+        // Reverb Zone: no scene invariant (several fit, and FMOD mixes the ones that overlap), so
+        // the only gate is not putting two on the same object.
         const bool alreadyHasReverb = ctx.selected->hasReverbZone();
         ImGui::BeginDisabled(alreadyHasReverb);
         if (ImGui::Selectable("Reverb Zone") && !alreadyHasReverb)
@@ -9117,10 +9051,9 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         }
         ImGui::EndDisabled();
 
-        // Canvas: raíz de la UI 2D. Sin invariante de escena (caben varios),
-        // así que el único gate es no añadir dos al mismo objeto. Pasa por el
-        // stack de undo como la cámara: el estado de los 10 campos se conserva
-        // en un Add-undo-redo.
+        // Canvas: root of 2D UI. No scene invariant (several fit), so the only gate is not adding
+        // two to the same object. Goes through the undo stack like the camera: the state of the 10
+        // fields is preserved in an Add-undo-redo.
         const bool alreadyHasCanvas = ctx.selected->hasCanvas();
         ImGui::BeginDisabled(alreadyHasCanvas);
         if (ImGui::Selectable("Canvas") && !alreadyHasCanvas && ctx.scene && ctx.undo)
@@ -9134,9 +9067,9 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         }
         ImGui::EndDisabled();
 
-        // Componentes de UI: solo existen colgando de un Canvas, así que un
-        // GameObject sin Canvas ni los ve. La lista está vacía hasta que se
-        // implementen los widgets; el gate ya es el definitivo.
+        // UI components: only exist hanging from a Canvas, so a GameObject without Canvas does not
+        // see them. The list is empty until the widgets are implemented; the gate is already the
+        // definitive one.
         if (uiComponentsAvailable(ctx.selected))
         {
             ImGui::Separator();
@@ -9165,7 +9098,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             }
             ImGui::EndDisabled();
 
-            // Panel primero: es el fondo, y en el sync se monta debajo de todo.
+            // Panel first: it is the background, and in the sync it is placed below everything.
             ImGui::BeginDisabled(ctx.selected->hasPanel());
             if (ImGui::Selectable("Panel") && ctx.scene && ctx.undo)
             {
@@ -9286,9 +9219,9 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             }
             ImGui::EndDisabled();
 
-            // Layout: el único de los cuatro que no dibuja nada. Sin otro
-            // componente de UI en el objeto monta su propio contenedor, así que
-            // también vale en un GameObject pelado que solo agrupe.
+            // Layout: the only one of the four that does not draw anything. Without another UI
+            // component on the object it mounts its own container, so it is also valid on a bare
+            // GameObject that just groups.
             ImGui::BeginDisabled(ctx.selected->hasLayout());
             if (ImGui::Selectable("Layout") && ctx.scene && ctx.undo)
             {
@@ -9302,11 +9235,10 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             ImGui::EndDisabled();
         }
 
-        // Cámara: como mucho una por escena, y el gate pregunta a la única
-        // fuente de verdad (Scene::findCamera), no a un flag propio. Deshabilitado
-        // y no oculto porque es lo que hacen los demás items de este popup — y el
-        // tooltip dice QUIÉN la tiene ya, que si no un item gris sin explicación
-        // es un callejón sin salida.
+        // Camera: at most one per scene, and the gate asks the only source of truth
+        // (Scene::findCamera), not a flag of its own. Disabled and not hidden because that is what
+        // the other items in this popup do—and the tooltip says WHO has it already, because a gray
+        // item with no explanation is a dead end.
         GameObject* existingCamera = ctx.scene ? ctx.scene->findCamera() : nullptr;
         ImGui::BeginDisabled(existingCamera != nullptr);
         if (ImGui::Selectable("Camera") && !existingCamera && ctx.scene && ctx.undo)
@@ -9325,10 +9257,9 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         if (existingCamera && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("There is already a camera in the scene ('%s')", existingCamera->name.c_str());
 
-        // Reflection Probe: sin invariante de unicidad (caben las que quepan en
-        // memoria), así que el único gate es no añadir dos a un mismo objeto.
-        // Al añadirla, el Renderer la detecta en el frame siguiente, le crea sus
-        // cubemaps y la bakea una vez: no hace falta pulsar Bake para verla.
+        // Reflection Probe: no uniqueness invariant (as many as fit in memory), so the only gate is
+        // not adding two to one object. When added, the Renderer detects it in the next frame,
+        // creates its cubemaps and bakes it once: no need to press Bake to see it.
         const bool alreadyHasProbe = ctx.selected->hasReflectionProbe();
         ImGui::BeginDisabled(alreadyHasProbe);
         if (ImGui::Selectable("Reflection Probe") && !alreadyHasProbe)
@@ -9338,9 +9269,9 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         }
         ImGui::EndDisabled();
 
-        // Light: sin invariante de unicidad por escena (caben varias del mismo
-        // tipo), así que el único gate es no añadir dos al mismo objeto. Las
-        // primeras MAX_LIGHTS en orden de escena son las que llegan al shader.
+        // Light: no scene uniqueness invariant (several of the same type fit), so the only gate is
+        // not adding two to the same object. The first MAX_LIGHTS in scene order are the ones that
+        // reach the shader.
         const bool alreadyHasLight = ctx.selected->hasLight();
         ImGui::BeginDisabled(alreadyHasLight);
         if (ImGui::Selectable("Light") && !alreadyHasLight)
@@ -9350,19 +9281,18 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         }
         ImGui::EndDisabled();
 
-        // Animator: desde los clips de propiedades (C14) vale para CUALQUIER
-        // objeto — una puerta, una luz, una cámara. Con malla skinned añade los
-        // clips del modelo; sin ella, solo los clips de propiedades.
+        // Animator: from property clips (C14) it works for ANY object—a door, a light, a camera.
+        // With skinned mesh it adds clips from the model; without it, only property clips.
         const bool canAnimate     = true;
         const bool alreadyHasAnim = ctx.selected->hasAnimator();
         ImGui::BeginDisabled(!canAnimate || alreadyHasAnim);
         if (ImGui::Selectable("Animator") && canAnimate && !alreadyHasAnim)
         {
-            // Fuera del stack de undo, igual que Script: el usuario construye el
-            // grafo por mutación directa (sin comandos), y un Ctrl+Z reflejo tras
-            // Add popparía el AnimatorComponentCommand y vaciaría el grafo entero
-            // vía setAnimator(nullptr). Remove sí pasa por el stack (ver más abajo
-            // en drawAnimatorSection) porque ahí no hay ese riesgo.
+            // Outside the undo stack, like Script: the user builds the graph by direct mutation
+            // (without commands), and a reflected Ctrl+Z after Add would pop the
+            // AnimatorComponentCommand and empty the entire graph via setAnimator(nullptr). Remove
+            // does go through the stack (see below in drawAnimatorSection) because there is no such
+            // risk there.
             ctx.selected->setAnimator(std::make_shared<AnimatorComponent>());
             ctx.pushLog("Animator component added to '" + ctx.selected->name + "'");
         }
@@ -9381,8 +9311,8 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                     {
                         auto comp = std::make_unique<ScriptComponent>(name, ctx.selected);
                         ctx.selected->addScript(std::move(comp));
-                        // En Play el lifecycle instancia y dispara Awake/Start
-                        // en el siguiente update (started == false).
+                        // In Play the lifecycle instantiates and fires Awake/Start in the next
+                        // update (started == false).
                         ctx.pushLog("Script component '" + name + "' added to '" + ctx.selected->name + "'");
                     }
                 }
@@ -9425,8 +9355,8 @@ void PropertiesPanel::drawNewScriptPopup(EditorContext& ctx)
     {
         const std::string name = m_newScriptNameBuffer;
 
-        // Identificador Lua válido: letra o '_' + alfanuméricos/'_' — el
-        // nombre del archivo es también el de la tabla global de la clase.
+        // Valid Lua identifier: letter or '_' + alphanumerics/'_'—the file name is also the name of
+        // the class's global table.
         bool validName = !name.empty() &&
             (std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_');
         for (size_t i = 1; validName && i < name.size(); ++i)
@@ -9459,12 +9389,11 @@ void PropertiesPanel::drawNewScriptPopup(EditorContext& ctx)
                 {
                     ctx.openScript(path);
 
-                    // El GameObject pudo borrarse mientras el popup estaba
-                    // abierto — resolver por id, que es lo único que distingue
-                    // "sigue vivo" de "otro objeto ha reciclado su dirección"
-                    // (ver m_newScriptTargetId). El traverse comparando
-                    // punteros que había aquí no lo distinguía, y el script se
-                    // añadía al recién llegado.
+                    // The GameObject may have been deleted while the popup was open—resolve by id,
+                    // which is the only thing that tells "still alive" from "another object
+                    // recycled its address" (see m_newScriptTargetId). The traverse comparing
+                    // pointers that was here did not tell them apart, and the script was added to
+                    // the newly arrived one.
                     GameObject* target = ctx.scene && m_newScriptTargetId
                                              ? ctx.scene->findById(m_newScriptTargetId)
                                              : nullptr;

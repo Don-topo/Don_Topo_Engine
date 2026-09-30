@@ -5,26 +5,26 @@
 
 namespace DonTopo {
 
-// Un fichero y su estado en un momento dado. Lo usan las miniaturas del Content
-// Browser para saber cuando regenerar: una miniatura depende de su asset y de lo
-// que ese asset lee (texturas externas, sidecar, .mtl).
+// A file and its state at a given moment. Used by the Content Browser thumbnails
+// to know when to regenerate: a thumbnail depends on its asset and on what
+// that asset reads (external textures, sidecar, .mtl).
 struct FileStamp
 {
     std::filesystem::path path;
     bool                  exists  = false;
-    int64_t               mtime   = 0;       // file_time_type::time_since_epoch().count(); 0 si no existe
-    bool                  stamped = false;   // false = solo la ruta, sin mirar aun el disco
+    int64_t               mtime   = 0;       // file_time_type::time_since_epoch().count(); 0 if it does not exist
+    bool                  stamped = false;   // false = path only, disk not looked at yet
 };
 
-// path, exists y mtime. `stamped` no cuenta: es como se obtuvo, no que fichero es.
+// path, exists and mtime. `stamped` does not count: it is how it was obtained, not which file it is.
 inline bool operator==(const FileStamp& a, const FileStamp& b)
 {
     return a.exists == b.exists && a.mtime == b.mtime && a.path == b.path;
 }
 
-// Estado de un fichero AHORA. Nunca lanza: si no se puede leer, exists = false.
-// Quien lee un fichero lo sella ANTES de leerlo: si cambia mientras tanto, el
-// sello viejo delata el cambio en la siguiente comprobacion.
+// State of a file NOW. Never throws: if it cannot be read, exists = false.
+// Whoever reads a file stamps it BEFORE reading it: if it changes in the meantime, the
+// old stamp reveals the change on the next check.
 inline FileStamp stampFile(const std::filesystem::path& path)
 {
     FileStamp s;

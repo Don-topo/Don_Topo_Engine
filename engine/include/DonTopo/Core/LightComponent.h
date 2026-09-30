@@ -4,22 +4,22 @@
 
 namespace DonTopo
 {
-    // Luz de escena: el GameObject que la lleva aporta un point, spot,
-    // directional o area a la iluminación del frame.
+    // Scene light: the GameObject that carries it contributes a point, spot,
+    // directional or area light to the frame's lighting.
     //
-    // NO guarda posición ni dirección: las dos salen del worldTransform del
-    // GameObject dueño (posición = columna 3, dirección = -Z local), igual que
-    // CameraComponent — mover o rotar el objeto mueve la luz. Sin invariante de
-    // unicidad por escena: caben varias del mismo tipo, y Scene se queda con
-    // las primeras MAX_LIGHTS en orden de escena.
+    // It does NOT store position or direction: both come from the worldTransform of the
+    // owner GameObject (position = column 3, direction = local -Z), just like
+    // CameraComponent — moving or rotating the object moves the light. No
+    // per-scene uniqueness invariant: several of the same type fit, and Scene keeps the
+    // first MAX_LIGHTS in scene order.
     //
-    // Data pura: sin Vulkan y sin conocer GameObject, misma regla que
-    // ReflectionProbeComponent y CameraComponent (la dependencia va Core ->
-    // resto). De UniformBufferObject.h solo usa el enum LightType, que es el
-    // mismo valor que viaja en direction.w del UBO.
+    // Pure data: no Vulkan and no knowledge of GameObject, same rule as
+    // ReflectionProbeComponent and CameraComponent (the dependency goes Core ->
+    // the rest). From UniformBufferObject.h it only uses the LightType enum, which is the
+    // same value that travels in direction.w of the UBO.
     //
-    // Header-only a propósito: son escalares con clamp, y así no hace falta
-    // añadir un .cpp a la lista de fuentes de DonTopoCore.
+    // Header-only on purpose: they are scalars with clamp, and this way there is no need to
+    // add a .cpp to the DonTopoCore source list.
     class LightComponent
     {
         public:
@@ -28,7 +28,7 @@ namespace DonTopo
             LightType getType() const { return m_type; }
             void      setType(LightType t) { m_type = t; }
 
-            // rgb sin premultiplicar por la intensidad: el shader multiplica.
+            // rgb not premultiplied by the intensity: the shader multiplies.
             const glm::vec3& getColor() const { return m_color; }
             void setColor(const glm::vec3& c)
             {
@@ -43,8 +43,8 @@ namespace DonTopo
                 m_intensity = i;
             }
 
-            // Alcance del point/spot. La directional lo ignora (no atenúa) y el
-            // area usa su ancho/2 como radio.
+            // Range of the point/spot. The directional ignores it (no attenuation) and the
+            // area uses its width/2 as the radius.
             float getRange() const { return m_range; }
             void  setRange(float r)
             {
@@ -53,9 +53,9 @@ namespace DonTopo
                 m_range = r;
             }
 
-            // Cono del spot, en GRADOS de semiángulo. Los clamps viven aquí (y
-            // no en la UI) pa que un .scene editado a mano tampoco pueda
-            // instalar un cono invertido: el interior nunca pasa del exterior.
+            // Spot cone, in DEGREES of half-angle. The clamps live here (and
+            // not in the UI) so that a hand-edited .scene cannot install an
+            // inverted cone either: the inner one never exceeds the outer one.
             float getInnerAngle() const { return m_innerAngle; }
             void  setInnerAngle(float deg)
             {
@@ -74,9 +74,9 @@ namespace DonTopo
                 if (m_innerAngle > m_outerAngle) m_innerAngle = m_outerAngle;
             }
 
-            // Lado del rectángulo del area light. La aproximación del shader la
-            // trata como un point de radio ancho/2, así que también hace de
-            // alcance.
+            // Side of the area light rectangle. The shader approximation
+            // treats it as a point of radius width/2, so it also acts as
+            // range.
             float getAreaWidth() const { return m_areaWidth; }
             void  setAreaWidth(float w)
             {
@@ -94,8 +94,8 @@ namespace DonTopo
             }
 
         private:
-            // Defaults a la escala de este repo (primitivas de 50 unidades, la
-            // cámara del sandbox a z=300), no a los de Unity.
+            // Defaults to this repo's scale (50-unit primitives, the
+            // sandbox camera at z=300), not Unity's.
             LightType m_type       = LightType::Point;
             glm::vec3 m_color      {1.0f, 1.0f, 1.0f};
             float     m_intensity  = 1.0f;

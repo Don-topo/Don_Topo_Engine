@@ -1,12 +1,12 @@
 #pragma once
 
-// Presets de ancla al estilo Unity. Es azúcar sobre anchorMin/anchorMax/pivot:
-// no hay ni un campo nuevo ni una rama nueva en el batcher, solo la combinación
-// de valores que ya sabe interpretar.
+// Unity-style anchor presets. This is sugar over anchorMin/anchorMax/pivot:
+// there is no new field and no new branch in the batcher, only a combination
+// of values it already knows how to interpret.
 //
-// Un preset NO toca ni position ni size a propósito: al cambiar de esquina se
-// conserva el offset que el usuario ya había puesto. En los presets de estirado
-// el eje estirado ignora size, y quien manda son los márgenes.
+// A preset deliberately touches neither position nor size: when switching
+// corners, the offset the user had already set is kept. In the stretch presets
+// the stretched axis ignores size, and the margins rule.
 
 #include "DonTopo/UI/UiCanvas.h"
 
@@ -25,19 +25,19 @@ namespace DonTopo
         BottomLeft,
         BottomCenter,
         BottomRight,
-        StretchHorizontal,   // estira en X, anclado al centro en Y
-        StretchVertical,     // estira en Y, anclado al centro en X
-        StretchAll           // estira en los dos ejes: el rect del padre menos los márgenes
+        StretchHorizontal,   // stretches in X, anchored to the center in Y
+        StretchVertical,     // stretches in Y, anchored to the center in X
+        StretchAll           // stretches on both axes: the parent's rect minus the margins
     };
 
     inline void applyAnchorPreset(UiElement& element, UiAnchorPreset preset)
     {
-        // min == max en un eje = punto de ancla; distintos = estirado.
+        // min == max on an axis = anchor point; different = stretched.
         glm::vec2 min{0.0f, 0.0f};
         glm::vec2 max{0.0f, 0.0f};
-        // El pivote acompaña al ancla: un elemento anclado a la esquina inferior
-        // derecha se mide desde SU esquina inferior derecha. En un eje estirado
-        // el pivote no se lee, pero se deja al centro por si el preset cambia.
+        // The pivot follows the anchor: an element anchored to the bottom-right
+        // corner is measured from ITS bottom-right corner. On a stretched axis
+        // the pivot is not read, but it is left at the center in case the preset changes.
         glm::vec2 pivot{0.0f, 0.0f};
 
         switch (preset)

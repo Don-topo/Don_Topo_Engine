@@ -5,10 +5,10 @@
 
 namespace DonTopo
 {
-    // Mismo criterio que AudioClipComponent: se rechazan los no-finitos ANTES
-    // del clamp (std::clamp(NaN, lo, hi) devuelve NaN) y el invariante
-    // min <= max vive aquí, no en la UI — un .scene editado a mano tampoco
-    // puede instalar una zona invertida.
+    // Same criterion as AudioClipComponent: non-finite values are rejected BEFORE
+    // the clamp (std::clamp(NaN, lo, hi) returns NaN) and the invariant
+    // min <= max lives here, not in the UI — a hand-edited .scene cannot
+    // install an inverted zone either.
     void ReverbZoneComponent::setMinDistance(float d)
     {
         if (!std::isfinite(d)) return;

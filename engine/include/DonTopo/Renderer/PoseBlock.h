@@ -6,15 +6,15 @@
 
 namespace DonTopo
 {
-    // Bloque de pose por personaje que lee bone_eval.comp (binding 10), en
-    // uints (los floats con sus bits). El backend guarda una copia por frame en
-    // vuelo y le pasa al shader el offset de la de este frame por push
-    // constant: así se reescribe cada frame sin pisar la que la GPU aún lee.
-    //   [0] layerCount  [1] sampleCount  [2..3] relleno
-    //   capas    [4 + 4L]              weight, mode, frozenWeight, hasMask
-    //   muestras [36 + 4k]             clipBase, time, weight, layer   (k < 48)
-    //   máscaras [228 + L*boneCount + hueso]   0 / 1
-    // Si cambia, cambia a la vez en bone_eval.comp (kLayers/kSamples/kMasks).
+    // Per-character pose block read by bone_eval.comp (binding 10), in
+    // uints (floats by their bits). The backend keeps one copy per frame in
+    // flight and passes the shader the offset of this frame's copy by push
+    // constant: this way it is rewritten every frame without overwriting the one the GPU still reads.
+    //   [0] layerCount  [1] sampleCount  [2..3] padding
+    //   layers  [4 + 4L]              weight, mode, frozenWeight, hasMask
+    //   samples [36 + 4k]             clipBase, time, weight, layer   (k < 48)
+    //   masks   [228 + L*boneCount + bone]   0 / 1
+    // If it changes, it changes at the same time in bone_eval.comp (kLayers/kSamples/kMasks).
     constexpr uint32_t kPoseBlockLayers  = 4;
     constexpr uint32_t kPoseBlockSamples = kPoseBlockLayers + 4 * kMaxLayersPose;
     constexpr uint32_t kPoseBlockMasks   = kPoseBlockSamples + 4 * kMaxLayersPose * kMaxPoseSamplesPerLayer;
@@ -33,9 +33,9 @@ namespace DonTopo
         return u;
     }
 
-    // Escribe la pose en dst (poseBlockUints(boneCount) uints). El clip de cada
-    // muestra sale como clipBase = clip * boneCount, el bloque de BoneInfos.
-    // Las máscaras de las capas sin máscara no se escriben: el shader no las lee.
+    // Writes the pose into dst (poseBlockUints(boneCount) uints). Each sample's
+    // clip comes out as clipBase = clip * boneCount, the BoneInfos block.
+    // The masks of layers without a mask are not written: the shader does not read them.
     inline void writePoseBlock(const AnimationPose& pose, uint32_t boneCount, uint32_t* dst)
     {
         const int nL = std::clamp(pose.layerCount, 1, kMaxLayersPose);

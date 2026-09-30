@@ -9,35 +9,35 @@
 
 namespace DonTopo
 {
-    // Quién entra en un pase. La decisión estaba escrita CUATRO veces dentro
-    // del backend de Vulkan —escena, sombras (por cascada), depth pre-pase y
-    // contorno de selección— y las cuatro tenían que dar el mismo resultado:
-    // si divergen, el AO oscurece contra geometría que no se dibuja, o queda
-    // una sombra flotando sin objeto que la eche. Divergir ahí no rompe nada
-    // que la capa de validación pueda ver.
+    // Who enters a pass. The decision was written FOUR times inside the Vulkan
+    // backend (scene, shadows (per cascade), depth pre-pass and selection
+    // outline) and all four had to give the same result: if they diverge, AO
+    // darkens against geometry that is not drawn, or a shadow is left floating
+    // with no object casting it. Diverging there breaks nothing the
+    // validation layer can see.
     //
-    // Sin nada de ninguna API gráfica más allá de los handles que ya trae
-    // SharedGpuMesh, igual que Culling (Frustum.h) y Batching
-    // (InstanceBatching.h): se puede ejercitar sin device.
+    // Nothing from any graphics API beyond the handles that SharedGpuMesh
+    // already brings, same as Culling (Frustum.h) and Batching
+    // (InstanceBatching.h): it can be exercised without a device.
     namespace Visibility
     {
-        // Las cuatro guardas de siempre, en el mismo orden que tenían:
+        // The four usual guards, in the same order they had:
         //
-        //  - obj.meshVisible: checkbox "Visible" del componente Mesh. Un mesh
-        //    oculto no se manda a la GPU en NINGÚN pase, así que tampoco
-        //    proyecta sombra ni ocluye.
-        //  - !gpu: la entrada se borró desde el editor.
-        //  - uploadTicket por delante del último completado: el upload sigue en
-        //    vuelo, sus texturas están todavía en TRANSFER_DST_OPTIMAL y
-        //    samplearlas sería leer basura. Aparece en cuanto la fence de su
-        //    batch señale.
-        //  - Fuera del frustum: no gasta ni ranura en el SSBO. Los objetos sin
-        //    AABB (mesh vacío, hasBounds = false) no se pueden acotar y pasan
-        //    siempre.
+        //  - obj.meshVisible: the "Visible" checkbox of the Mesh component. A hidden
+        //    mesh is not sent to the GPU in ANY pass, so it does not cast
+        //    a shadow or occlude either.
+        //  - !gpu: the entry was deleted from the editor.
+        //  - uploadTicket ahead of the last completed one: the upload is still in
+        //    flight, its textures are still in TRANSFER_DST_OPTIMAL and
+        //    sampling them would read garbage. It shows up as soon as its batch's
+        //    fence signals.
+        //  - Outside the frustum: it does not even spend a slot in the SSBO. Objects
+        //    without an AABB (empty mesh, hasBounds = false) cannot be bounded and
+        //    always pass.
         //
-        // El frustum lo elige el llamante: la cámara en el pase de escena, el
-        // de ESTA cascada en el de sombras. Un objeto que la cámara no ve puede
-        // seguir proyectando sombra sobre lo que sí se ve.
+        // The frustum is chosen by the caller: the camera in the scene pass, that
+        // of THIS cascade in the shadow pass. An object the camera does not see can
+        // still cast a shadow onto what is seen.
         inline bool objectVisible(const RenderObject& obj, const SharedGpuMesh* gpu,
                                   uint64_t lastCompletedTicket, const Culling::Frustum& frustum)
         {
@@ -53,21 +53,21 @@ namespace DonTopo
             return true;
         }
 
-        // Evalúa TODOS los objetos y deja el resultado en `out`, listo para
-        // Batching::buildInstanceBatches. Los invisibles también entran, con
-        // visible = false: el agrupado los salta, pero el panel Performance los
-        // cuenta como culleados.
+        // Evaluates ALL objects and leaves the result in `out`, ready for
+        // Batching::buildInstanceBatches. Invisible ones also go in, with
+        // visible = false: the grouping skips them, but the Performance panel
+        // counts them as culled.
         //
-        // ssrEnabled = false deja la fuerza de SSR a 0 en todos. Es lo que
-        // quieren los pases que no pintan color (sombras, profundidad): el SSR
-        // entra en la clave del agrupado, así que con un único valor salen
-        // menos draws y el mapa resultante es idéntico.
-        // colorPass gobierna los factores PBR y NO se puede fundir con
-        // ssrEnabled, por mucho que el llamante pase `colorPass && ssrEnabled`
-        // en el otro: ssrEnabled es el interruptor GLOBAL de SSR, así que
-        // apagarlo dejaría los factores a su valor por defecto en el pase que
-        // sí pinta color — todos los objetos con metallic 0 y roughness 0.5, la
-        // escena entera mate, por tocar un ajuste que no tiene nada que ver.
+        // ssrEnabled = false sets the SSR strength to 0 on all of them. That is what
+        // the passes that do not draw color (shadows, depth) want: SSR
+        // enters the grouping key, so with a single value fewer draws come out and
+        // the resulting map is identical.
+        // colorPass governs the PBR factors and CANNOT be merged with
+        // ssrEnabled, however much the caller passes `colorPass && ssrEnabled`
+        // in the other one: ssrEnabled is the GLOBAL SSR switch, so
+        // turning it off would leave the factors at their default value in the pass that
+        // does draw color (all objects with metallic 0 and roughness 0.5, the
+        // whole scene matte, for touching a setting that has nothing to do with it).
         inline void gatherCandidates(const std::vector<RenderObject>& objects,
                                      const SharedGpuMeshCache& meshes,
                                      uint64_t lastCompletedTicket,
@@ -83,9 +83,9 @@ namespace DonTopo
                 const SharedGpuMesh* gpu = meshes.get(obj.sharedIndex);
                 const bool visible = objectVisible(obj, gpu, lastCompletedTicket, frustum);
                 const float ssr    = ssrEnabled ? obj.ssrStrength : 0.0f;
-                // Los defaults de BatchCandidate y no los del objeto: es lo que
-                // colapsa los grupos en sombras y profundidad, donde el material
-                // no se lee.
+                // The defaults of BatchCandidate and not the object's: it is what
+                // collapses the groups in shadows and depth, where the material
+                // is not read.
                 const Batching::BatchCandidate neutro{};
                 const float metallic  = colorPass ? obj.metallic  : neutro.metallic;
                 const float roughness = colorPass ? obj.roughness : neutro.roughness;

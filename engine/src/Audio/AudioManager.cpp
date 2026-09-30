@@ -38,8 +38,8 @@ std::string AudioManager::outputWarningFor(int fmodOutputType)
 bool AudioManager::init()
 {
 #ifdef DT_FMOD_ENABLED
-    // Reentrada: sin esta guarda, un segundo init() pisaba los tres punteros
-    // dejando el System y los ChannelGroup anteriores vivos y sin dueño.
+    // Reentrancy: without this guard, a second init() overwrote the three pointers
+    // leaving the previous System and ChannelGroups alive and ownerless.
     if (m_system) return true;
 
     FMOD::System* sys = nullptr;
@@ -57,8 +57,8 @@ bool AudioManager::init()
         m_sfxGroup = sfx;
         m_musicGroup = music;
 
-        // init() "funciona" aunque no haya por donde sacar el sonido: FMOD cae a
-        // NOSOUND en silencio. Se pregunta la salida elegida para poder avisar.
+        // init() "works" even if there is nowhere to send the sound: FMOD falls back to
+        // NOSOUND silently. The chosen output is queried so that it can be warned about.
         FMOD_OUTPUTTYPE salida = FMOD_OUTPUTTYPE_AUTODETECT;
         if (sys->getOutput(&salida) == FMOD_OK)
             m_outputWarning = outputWarningFor((int)salida);
@@ -68,17 +68,17 @@ bool AudioManager::init()
     }
     catch (const std::exception& e)
     {
-        // m_system se asigna al FINAL, así que hasta aquí sigue a nullptr y
-        // shutdown() saldría por su guarda sin liberar nada: el System creado
-        // se quedaba sin cerrar para siempre si fallaba cualquier paso
-        // posterior a System_Create. release() cierra y libera.
+        // m_system is assigned at the END, so until here it is still nullptr and
+        // shutdown() would exit through its guard without releasing anything: the created System
+        // stayed unclosed forever if any step after System_Create
+        // failed. release() closes and frees.
         if (sys) sys->release();
-        // Sin dispositivo de salida (o con FMOD mal instalado) esto ANTES
-        // propagaba la excepción hasta el catch de main y el editor no
-        // arrancaba. Ahora el motor sigue vivo, mudo, y lo dice una vez. No hay
-        // canal al Log Console desde aquí (mismo motivo documentado en
-        // AudioClipComponent::setVolume); los hosts que quieran avisar en su UI
-        // tienen el bool de retorno y available().
+        // With no output device (or with FMOD badly installed) this BEFORE
+        // propagated the exception up to the catch in main and the editor did not
+        // start. Now the engine stays alive, muted, and says so once. There is no
+        // channel to the Log Console from here (same reason documented in
+        // AudioClipComponent::setVolume); hosts that want to warn in their UI
+        // have the return bool and available().
         std::cerr << "Audio disabled: " << e.what() << std::endl;
         return false;
     }
@@ -98,15 +98,15 @@ bool AudioManager::available() const
 
 #ifdef DT_FMOD_ENABLED
 namespace {
-// Tope de velocidad, en unidades de mundo por segundo. Por encima de esto no se
-// cree el dato: un teleport, una carga de escena o un frame larguísimo darían
-// una velocidad absurda, y el doppler la convertiría en un chirrido que dura lo
-// que dure la voz. Las primitivas de este repo miden 50 unidades, así que 2000
-// u/s es rapidísimo pero todavía plausible para un proyectil.
+// Speed cap, in world units per second. Above this the data is not
+// believed: a teleport, a scene load or a very long frame would give
+// an absurd velocity, and the doppler would turn it into a screech that lasts as
+// long as the voice. The primitives of this repo measure 50 units, so 2000
+// u/s is very fast but still plausible for a projectile.
 constexpr float kMaxSourceSpeed = 2000.0f;
 
-// Velocidad entre dos posiciones, o cero si no es de fiar (dt no positivo,
-// primer frame, o salto demasiado grande para ser movimiento real).
+// Velocity between two positions, or zero if it is not trustworthy (non-positive dt,
+// first frame, or a jump too large to be real movement).
 glm::vec3 safeVelocity(const glm::vec3& current, const glm::vec3& last, bool hasLast, float dt)
 {
     if (!hasLast || dt <= 0.0f) return glm::vec3(0.0f);
@@ -122,9 +122,9 @@ void AudioManager::update(const glm::vec3& pos, const glm::vec3& fwd, const glm:
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system) return;
-    // La velocidad del listener es la mitad del doppler (la otra es la de cada
-    // fuente). Antes iba fija a cero, así que no había efecto por mucho que se
-    // moviera la cámara.
+    // The listener velocity is half of the doppler (the other half is that of each
+    // source). Before it was fixed at zero, so there was no effect no matter how much
+    // the camera moved.
     const glm::vec3 v = safeVelocity(pos, m_lastListenerPos, m_hasLastListenerPos, dt);
     m_lastListenerPos = pos;
     m_hasLastListenerPos = true;
@@ -147,21 +147,21 @@ void AudioManager::shutdown()
     for (auto* s : m_sounds)    if (s) reinterpret_cast<FMOD::Sound*>(s)->release();
     m_sounds.clear(); m_sfxChannels.clear();
     m_soundPaths.clear(); m_soundFailureReported.clear();
-    // Los de la caché también: un init() posterior encontraría el mapa
-    // apuntando a slots que ya no existen y devolvería ids de sonidos muertos.
+    // The cache ones too: a later init() would find the map
+    // pointing to slots that no longer exist and would return ids of dead sounds.
     m_soundRefs.clear(); m_soundKeys.clear(); m_freeSlots.clear();
     m_soundByKey.clear(); m_pinnedSounds.clear();
     m_soundLastPos.clear(); m_soundHasLastPos.clear();
-    // Paralelos a m_sounds: si se quedaran, tras un init() posterior el id 0 nuevo
-    // heredaria los ajustes del sonido viejo (y push_back los desalinearia).
+    // Parallel to m_sounds: if they stayed, after a later init() the new id 0
+    // would inherit the settings of the old sound (and push_back would misalign them).
     m_soundImport.clear(); m_soundVolume.clear();
-    // Los DSP ANTES que los grupos de los que cuelgan: liberar el grupo primero
-    // dejaria los DSP colgando de algo que ya no existe. Son recursos nativos,
-    // no punteros sueltos.
+    // The DSPs BEFORE the groups they hang from: releasing the group first
+    // would leave the DSPs hanging from something that no longer exists. They are native resources,
+    // not loose pointers.
     for (auto& [key, dsp] : m_busEffects)
         if (dsp) reinterpret_cast<FMOD::DSP*>(dsp)->release();
     m_busEffects.clear();
-    // Las zonas de reverb son otro recurso nativo con el mismo trato.
+    // Reverb zones are another native resource with the same treatment.
     clearReverbZones();
     if (SFXG) SFXG->release();
     if (MUSICG) MUSICG->release();
@@ -175,12 +175,12 @@ void AudioManager::shutdown()
 std::string AudioManager::soundKey(const std::string& path, bool is3D, bool loop,
                                     AudioLoadMode loadMode, AudioRolloff rolloff)
 {
-    // Los flags delante del path: el path puede contener cualquier cosa, así que
-    // el separador va donde no pueda colisionar con su contenido. El modo de
-    // carga entra en la clave como is3D y loop: un sonido en streaming y el
-    // mismo fichero descomprimido en RAM son dos FMOD::Sound distintos.
-    // El rolloff tambien va en el FMOD_MODE, asi que entra en la clave: el
-    // mismo fichero con curva lineal y con curva inversa son dos sonidos.
+    // The flags before the path: the path can contain anything, so
+    // the separator goes where it cannot collide with its content. The load
+    // mode enters the key like is3D and loop: a streamed sound and the
+    // same file decompressed in RAM are two different FMOD::Sound.
+    // The rolloff is also in the FMOD_MODE, so it enters the key: the
+    // same file with a linear curve and with an inverse curve are two sounds.
     return std::string(is3D ? "3" : "2") + (loop ? "L" : "N")
          + (loadMode == AudioLoadMode::Stream ? "S" : "M")
          + audioRolloffToStr(rolloff)[0] + "|" + path;
@@ -230,7 +230,7 @@ AudioRolloff AudioManager::getSoundRolloff(int id) const
         return AudioRolloff::Inverse;
     if (mode & FMOD_3D_LINEARSQUAREROLLOFF) return AudioRolloff::LinearSquare;
     if (mode & FMOD_3D_LINEARROLLOFF)       return AudioRolloff::Linear;
-    // Sin flag explicito FMOD usa la inversa, que es nuestro default.
+    // Without an explicit flag FMOD uses inverse, which is our default.
     return AudioRolloff::Inverse;
 #else
     (void)id;
@@ -244,15 +244,15 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
 #ifdef DT_FMOD_ENABLED
     if (!m_system) return -1;
 
-    // ¿Ya está cargado ese mismo fichero con el mismo modo? Entonces se comparte
-    // el FMOD::Sound y solo sube el contador. Veinte objetos con el mismo
-    // disparo eran veinte copias descomprimidas en memoria.
+    // Is that same file already loaded with the same mode? Then the FMOD::Sound is
+    // shared and only the counter goes up. Twenty objects with the same
+    // shot were twenty decompressed copies in memory.
     const std::string key = soundKey(path, is3D, loop, loadMode, rolloff);
     if (auto it = m_soundByKey.find(key); it != m_soundByKey.end())
     {
         const int cached = it->second;
-        // El mapa podría tener una entrada rancia si algo la dejó sin limpiar;
-        // se comprueba el slot antes de devolverlo en vez de confiar.
+        // The map could have a stale entry if something left it uncleaned;
+        // the slot is checked before returning it instead of trusting.
         if (cached >= 0 && cached < (int)m_sounds.size() && m_sounds[cached])
         {
             ++m_soundRefs[cached];
@@ -261,33 +261,33 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
         m_soundByKey.erase(it);
     }
 
-    // FMOD arranca con FMOD_INIT_NORMAL (línea 29), que es la API thread-safe.
-    // NONBLOCKING descarga la lectura y decodificación al hilo interno de FMOD:
-    // createSound retorna al instante y no escribimos ni una línea de código de
-    // concurrencia. Es por lo que el audio no pasa por el JobSystem.
+    // FMOD starts with FMOD_INIT_NORMAL (line 29), which is the thread-safe API.
+    // NONBLOCKING offloads reading and decoding to FMOD's internal thread:
+    // createSound returns immediately and we do not write a single line of
+    // concurrency code. It is why audio does not go through the JobSystem.
     FMOD_MODE mode = (is3D ? FMOD_3D : FMOD_2D)
                    | (loop ? FMOD_LOOP_NORMAL : FMOD_LOOP_OFF)
                    | FMOD_NONBLOCKING;
-    // CREATESTREAM: el fichero se lee y decodifica sobre la marcha en vez de
-    // descomprimirse entero en RAM. A cambio, el sonido solo admite UNA voz a la
-    // vez (un solo buffer de decodificación), que es la razón por la que este
-    // modo es para música y no para efectos.
+    // CREATESTREAM: the file is read and decoded on the fly instead of
+    // being fully decompressed into RAM. In exchange, the sound only admits ONE voice at a
+    // time (a single decode buffer), which is the reason this
+    // mode is for music and not for effects.
     if (loadMode == AudioLoadMode::Stream) mode |= FMOD_CREATESTREAM;
-    // Curva de atenuación. Sin ninguno de estos flags FMOD aplica la inversa,
-    // que es justo AudioRolloff::Inverse: por eso ese caso no añade nada.
+    // Attenuation curve. Without any of these flags FMOD applies the inverse,
+    // which is exactly AudioRolloff::Inverse: that is why that case adds nothing.
     if (rolloff == AudioRolloff::Linear)            mode |= FMOD_3D_LINEARROLLOFF;
     else if (rolloff == AudioRolloff::LinearSquare) mode |= FMOD_3D_LINEARSQUAREROLLOFF;
     FMOD::Sound* snd;
     if (SYS->createSound(path.c_str(), mode, nullptr, &snd) != FMOD_OK) return -1;
-    // Ajustes de importacion del fichero (sidecar): solo al CREAR el sonido; un
-    // acierto de cache ya devolvio antes con los suyos.
+    // Import settings of the file (sidecar): only on CREATING the sound; a
+    // cache hit already returned earlier with its own.
     std::string importWarning;
     const AudioImportSettings importSettings = loadAudioImportSettings(path, &importWarning);
     if (!importWarning.empty())
         std::fprintf(stderr, "[AudioImport] %s: %s\n", path.c_str(), importWarning.c_str());
-    // Slot reciclado si lo hay: los ids no se reutilizaban nunca y los vectores
-    // crecían una entrada por clip en CADA ciclo Play->Stop (que recrea la
-    // escena entera desde el snapshot).
+    // Recycled slot if there is one: ids were never reused and the vectors
+    // grew one entry per clip on EVERY Play->Stop cycle (which recreates the
+    // whole scene from the snapshot).
     int id;
     if (!m_freeSlots.empty())
     {
@@ -330,9 +330,9 @@ void AudioManager::unloadSound(int id)
 #ifdef DT_FMOD_ENABLED
     if (!m_system || id < 0 || id >= (int)m_sounds.size() || !m_sounds[id]) return;
 
-    // Cuenta de referencias: el sonido lo pueden estar usando varios
-    // AudioClipComponent (misma ruta y mismo modo). Soltarlo con el primer
-    // destructor sería un use-after-free para todos los demás.
+    // Reference count: the sound may be in use by several
+    // AudioClipComponents (same path and same mode). Releasing it with the first
+    // destructor would be a use-after-free for all the others.
     if (--m_soundRefs[id] > 0) return;
 
     reinterpret_cast<FMOD::Sound*>(m_sounds[id])->release();
@@ -341,9 +341,9 @@ void AudioManager::unloadSound(int id)
     m_soundPaths[id].clear();
     m_soundFailureReported[id] = 0;
     m_soundRefs[id] = 0;
-    // Fuera del mapa ANTES de marcar el slot como libre: si no, un loadSound
-    // posterior con esa misma clave encontraría la entrada rancia apuntando a un
-    // slot que ya es de otro sonido.
+    // Out of the map BEFORE marking the slot as free: otherwise, a later loadSound
+    // with that same key would find the stale entry pointing to a
+    // slot that already belongs to another sound.
     m_soundByKey.erase(m_soundKeys[id]);
     m_soundKeys[id].clear();
     m_soundHasLastPos[id] = 0;
@@ -360,20 +360,20 @@ AudioManager::SoundLoadState AudioManager::getSoundState(int id) const
         return SoundLoadState::Missing;
     auto* snd = reinterpret_cast<FMOD::Sound*>(m_sounds[id]);
     FMOD_OPENSTATE st;
-    // Cuando la carga falla, FMOD devuelve el código del error como valor de
-    // retorno de getOpenState y *st puede no haberse escrito, así que se mira
-    // el retorno PRIMERO. Comprobado con las dos formas de fallo que se dan en
-    // la práctica —path inexistente y fichero que existe pero no es audio—: las
-    // dos salen por aquí (ver los dos tests de audio_tests.cpp, que se
-    // escribieron con un sabotaje a esta línea).
+    // When loading fails, FMOD returns the error code as the return value
+    // of getOpenState and *st may not have been written, so the return is looked at
+    // FIRST. Checked with the two forms of failure that occur in
+    // practice —non-existent path and a file that exists but is not audio—: both
+    // go out through here (see the two tests in audio_tests.cpp, which were
+    // written with a sabotage of this line).
     if (snd->getOpenState(&st, nullptr, nullptr, nullptr) != FMOD_OK)
         return SoundLoadState::Failed;
     if (st == FMOD_OPENSTATE_LOADING) return SoundLoadState::Loading;
-    // Defensiva y SIN cobertura de test: no se ha conseguido provocar un
-    // getOpenState que devuelva FMOD_OK con el estado en ERROR (los dos
-    // sabotajes a esta línea pasaron los tests). Se deja porque la doc de FMOD
-    // define el estado y quitarla sería apostar a que nunca ocurre; no se
-    // presenta como camino probado.
+    // Defensive and WITHOUT test coverage: it has not been possible to provoke a
+    // getOpenState that returns FMOD_OK with state ERROR (the two
+    // sabotages of this line passed the tests). It stays because the FMOD docs
+    // define the state and removing it would be betting that it never happens; it is
+    // not presented as a tested path.
     if (st == FMOD_OPENSTATE_ERROR)   return SoundLoadState::Failed;
     return SoundLoadState::Ready;
 #else
@@ -399,8 +399,8 @@ void AudioManager::pollLoadFailures(std::vector<std::string>& out)
 }
 
 #ifdef DT_FMOD_ENABLED
-// El Channel* guardado para id, sólo si sigue sonando y sigue siendo el canal
-// de ESE sonido. Devuelve nullptr en cualquier otro caso.
+// The Channel* stored for id, only if it is still playing and is still the channel
+// of THAT sound. Returns nullptr in any other case.
 static FMOD::Channel* liveChannel(void* raw, void* expectedSound)
 {
     auto* ch = reinterpret_cast<FMOD::Channel*>(raw);
@@ -418,16 +418,16 @@ static FMOD::Channel* liveChannel(void* raw, void* expectedSound)
 #endif
 
 #ifdef DT_FMOD_ENABLED
-// Mezcla a mono la voz de un sonido marcado forceMono: cada una de las dos
-// salidas frontales recibe la suma de TODAS las entradas a 1/N (el pico no pasa
-// de 1 aunque las entradas vayan en fase); el resto de salidas (surround, LFE)
-// queda en silencio. Solo sonidos 2D: en 3D el panner espacial de FMOD manda
-// sobre la matriz y un emisor 3D con spread 0 ya suena como un punto. Un clip
-// de un canal, o cualquier fallo al leer la matriz, deja la voz como esta.
-// Dimensiones de la matriz de mezcla de una voz de `snd`: entradas = canales del
-// sonido, salidas = canales de la salida del sistema. NO se le preguntan al canal:
-// getMixMatrix(nullptr, ...) devuelve OK con 0 y 0 en una voz recien creada que
-// aun no tiene matriz propia.
+// Mixes to mono the voice of a sound marked forceMono: each of the two front
+// outputs receives the sum of ALL the inputs at 1/N (the peak does not exceed
+// 1 even if the inputs are in phase); the rest of the outputs (surround, LFE)
+// are left silent. 2D sounds only: in 3D FMOD's spatial panner takes
+// precedence over the matrix and a 3D emitter with spread 0 already sounds like a point. A
+// single-channel clip, or any failure reading the matrix, leaves the voice as it is.
+// Dimensions of the mix matrix of a voice of `snd`: inputs = channels of the
+// sound, outputs = channels of the system output. They are NOT asked of the channel:
+// getMixMatrix(nullptr, ...) returns OK with 0 and 0 on a newly created voice that
+// does not yet have its own matrix.
 static bool mixMatrixDims(FMOD::System* sys, FMOD::Sound* snd, int& out, int& in)
 {
     FMOD_SPEAKERMODE speakerMode = FMOD_SPEAKERMODE_DEFAULT;
@@ -437,10 +437,10 @@ static bool mixMatrixDims(FMOD::System* sys, FMOD::Sound* snd, int& out, int& in
     return true;
 }
 
-// `stereoPan` [-1, 1] va DENTRO de la matriz: Channel::setPan de FMOD reemplaza
-// la matriz entera, asi que un setPan posterior deshacia el mono en silencio. Por
-// eso esta funcion se llama DESPUES del setPan y aplica ella el paneo: ley de
-// balance (el lado contrario al pan se atenua linealmente, el centro no toca nada).
+// `stereoPan` [-1, 1] goes INSIDE the matrix: FMOD's Channel::setPan replaces
+// the whole matrix, so a later setPan silently undid the mono. That is
+// why this function is called AFTER setPan and applies the panning itself: balance
+// law (the side opposite to the pan is attenuated linearly, the center does not touch anything).
 static void applyForceMono(FMOD::System* sys, FMOD::Channel* ch, FMOD::Sound* snd, float stereoPan)
 {
     FMOD_MODE mode = 0;
@@ -469,7 +469,7 @@ void AudioManager::setChannelVolume(int id, float volume)
 #ifdef DT_FMOD_ENABLED
     if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
         id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
-    m_soundVolume[id] = volume;                       // lo ultimo que pidio el componente
+    m_soundVolume[id] = volume;                       // the last thing the component asked for
     if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
         ch->setVolume(voiceVolume(id, volume));
 #else
@@ -512,8 +512,8 @@ void AudioManager::refreshImportSettings(const std::string& path)
         m_soundImport[i] = loadAudioImportSettings(m_soundPaths[i], &warning);
         if (!warning.empty())
             std::fprintf(stderr, "[AudioImport] %s: %s\n", m_soundPaths[i].c_str(), warning.c_str());
-        // La voz viva se reajusta al momento con el volumen del COMPONENTE, no con
-        // el del canal. El mono aplica desde la siguiente reproduccion.
+        // The live voice is readjusted right away with the COMPONENT's volume, not with
+        // the channel's. Mono applies from the next playback.
         if (FMOD::Channel* ch = liveChannel(m_sfxChannels[i], m_sounds[i]))
             ch->setVolume(voiceVolume(static_cast<int>(i), m_soundVolume[i]));
     }
@@ -534,13 +534,13 @@ bool AudioManager::isVoiceForcedMono(int id) const
     const int wantOut = out, wantIn = in;
     std::vector<float> m(static_cast<size_t>(out) * in, 0.0f);
     if (ch->getMixMatrix(m.data(), &out, &in, in) != FMOD_OK) return false;
-    // FMOD puede devolver otras dimensiones que las pedidas: sin re-comprobar,
-    // un 0,0 daria "true" con los dos bucles vacios.
+    // FMOD may return dimensions other than the ones requested: without re-checking,
+    // a 0,0 would give "true" with both loops empty.
     if (out != wantOut || in != wantIn) return false;
-    // Mono = cada una de las dos filas frontales lleva el MISMO valor en todas las
-    // entradas (con paneo la fila del lado contrario esta atenuada, asi que no se
-    // compara contra 1/N), y alguna de las dos no es cero. Una matriz de fabrica
-    // (identidad) tiene filas [1,0]: no es constante.
+    // Mono = each of the two front rows carries the SAME value in all the
+    // inputs (with panning the row of the opposite side is attenuated, so it is not
+    // compared against 1/N), and one of the two is not zero. A factory matrix
+    // (identity) has rows [1,0]: it is not constant.
     bool anyNonZero = false;
     for (int row = 0; row < std::min(out, 2); ++row)
     {
@@ -579,14 +579,14 @@ void AudioManager::setSound3DMinMaxDistance(int id, float minDistance, float max
     auto* snd = reinterpret_cast<FMOD::Sound*>(m_sounds[id]);
     FMOD_MODE mode = 0; snd->getMode(&mode);
     if (!(mode & FMOD_3D)) return;
-    // SOLO al canal, nunca al FMOD::Sound. Antes se escribía en los dos, y eso
-    // dejó de ser correcto en cuanto el sonido se comparte entre varios
-    // AudioClipComponent: ajustar la atenuación de un altavoz le cambiaría el
-    // radio a todos los demás objetos que usen el mismo fichero.
+    // ONLY to the channel, never to the FMOD::Sound. Before it was written to both, and that
+    // stopped being correct as soon as the sound is shared among several
+    // AudioClipComponents: adjusting the attenuation of one speaker would change the
+    // radius of all the other objects that use the same file.
     //
-    // La contrapartida es que un sonido recién creado ya no hereda estas
-    // distancias: las aplica AudioClipComponent::play, que llama a
-    // applyDistances() justo después de arrancar la voz.
+    // The flip side is that a newly created sound no longer inherits these
+    // distances: they are applied by AudioClipComponent::play, which calls
+    // applyDistances() right after starting the voice.
     if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
         ch->set3DMinMaxDistance(minDistance, maxDistance);
 #else
@@ -603,25 +603,25 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
         id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
     FMOD::Channel* ch;
     auto* snd = reinterpret_cast<FMOD::Sound*>(m_sounds[id]);
-    // Con NONBLOCKING, el Sound existe pero puede estar todavía cargando. Un
-    // playSound sobre él devuelve FMOD_ERR_NOTREADY. Se ignora en silencio en
-    // vez de escupir un error: el usuario ha pedido reproducir algo que aún no
-    // está, y el caso normal es que dé a Play nada más soltar el fichero.
+    // With NONBLOCKING, the Sound exists but may still be loading. A
+    // playSound on it returns FMOD_ERR_NOTREADY. It is silently ignored instead
+    // of spitting out an error: the user asked to play something that is not
+    // there yet, and the normal case is pressing Play right after dropping the file.
     FMOD_OPENSTATE state;
     if (snd->getOpenState(&state, nullptr, nullptr, nullptr) == FMOD_OK
         && state == FMOD_OPENSTATE_LOADING)
         return;
-    // paused = true: hay que dejar volumen, pitch y posición puestos ANTES de
-    // que suene la primera muestra. Arrancándolo sonando, un clip 3D se oye un
-    // instante desde el origen del mundo y con el volumen del canal anterior.
+    // paused = true: volume, pitch and position have to be set BEFORE
+    // the first sample plays. Starting it playing, a 3D clip is heard for an
+    // instant from the world origin and with the volume of the previous channel.
     auto* group = reinterpret_cast<FMOD::ChannelGroup*>(groupForBus(bus));
     if (SYS->playSound(snd, group, true, &ch) != FMOD_OK) return;
-    // Si el id ya tenía una voz sonando de una reproducción anterior, se para
-    // antes de pisar la referencia: si no, ese canal queda huérfano (sin
-    // referencia) y sigue sonando indefinidamente si tiene loop, sin que
-    // stop() ni los setters de volumen/pitch puedan alcanzarlo ya. Misma
-    // semántica que AudioSource.Play() en Unity: un Play() nuevo corta el
-    // anterior.
+    // If the id already had a voice playing from a previous playback, it is stopped
+    // before overwriting the reference: otherwise that channel is left orphaned (without
+    // a reference) and keeps playing indefinitely if it loops, without
+    // stop() or the volume/pitch setters being able to reach it any more. Same
+    // semantics as AudioSource.Play() in Unity: a new Play() cuts the
+    // previous one.
     if (FMOD::Channel* prev = liveChannel(m_sfxChannels[id], m_sounds[id])) prev->stop();
     m_sfxChannels[id] = ch;
 
@@ -634,20 +634,20 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
         FMOD_VECTOR p = { worldPos.x, worldPos.y, worldPos.z };
         FMOD_VECTOR v = { 0, 0, 0 };
         ch->set3DAttributes(&p, &v);
-        // A la VOZ, no al FMOD::Sound: el sonido se comparte entre clips y
-        // escribirlas alli le cambiaria el radio a todos los demas.
+        // To the VOICE, not to the FMOD::Sound: the sound is shared between clips and
+        // writing them there would change the radius for all the others.
         ch->set3DMinMaxDistance(minDistance, maxDistance);
-        // Ensanchado estereo y sensibilidad al doppler, tambien por voz.
+        // Stereo widening and doppler sensitivity, also per voice.
         ch->set3DSpread(spread);
         ch->set3DDopplerLevel(dopplerLevel);
     }
-    // El paneo manual solo tiene sentido en 2D: en 3D lo decide la posicion, y
-    // escribirlo ahi pelearia con el paneo espacial de FMOD. Fuera del if, con
-    // su propia condicion, para que quede claro que NO es una propiedad 3D.
+    // Manual panning only makes sense in 2D: in 3D the position decides, and
+    // writing it there would fight FMOD's spatial panning. Outside the if, with
+    // its own condition, to make clear that it is NOT a 3D property.
     if (!(mode & FMOD_3D) && stereoPan != 0.0f)
         ch->setPan(stereoPan);
-    // DESPUES del setPan: este reemplaza la matriz de mezcla entera, y el mono es
-    // una matriz. applyForceMono lleva el paneo dentro.
+    // AFTER setPan: this replaces the whole mix matrix, and mono is
+    // a matrix. applyForceMono carries the panning inside.
     if (m_soundImport[id].forceMono) applyForceMono(SYS, ch, snd, stereoPan);
 
     ch->setPaused(false);
@@ -740,9 +740,9 @@ void AudioManager::setSoundTime(int id, float seconds)
 void AudioManager::setAudioPaused(bool paused)
 {
 #ifdef DT_FMOD_ENABLED
-    // Sobre el master, no sobre cada bus: los otros dos cuelgan de él, así que
-    // uno solo los congela a todos —incluidas las voces sueltas de PlayOneShot,
-    // que no se pueden alcanzar de otra forma.
+    // On the master, not on each bus: the other two hang from it, so
+    // a single one freezes them all —including the loose PlayOneShot voices,
+    // which cannot be reached any other way.
     if (auto* g = reinterpret_cast<FMOD::ChannelGroup*>(groupForBus(AudioBus::Master)))
         g->setPaused(paused);
 #else
@@ -771,15 +771,15 @@ void AudioManager::setSoundPosition(int id, const glm::vec3& worldPos, float dt)
         id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
     auto* snd = reinterpret_cast<FMOD::Sound*>(m_sounds[id]);
     FMOD_MODE mode = 0; snd->getMode(&mode);
-    // En 2D no hay nada que posicionar: set3DAttributes sobre una voz 2D no
-    // hace nada útil y este método se llama por frame y por clip.
+    // In 2D there is nothing to position: set3DAttributes on a 2D voice does
+    // nothing useful and this method is called per frame and per clip.
     if (!(mode & FMOD_3D)) return;
     FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]);
     if (!ch) return;
-    // La velocidad de la fuente sale de su posición del frame anterior; es la
-    // otra mitad del doppler (la del listener la lleva update()). safeVelocity
-    // descarta el primer frame y los saltos imposibles, que es lo que evita el
-    // chirrido de un teleport.
+    // The source velocity comes from its position in the previous frame; it is the
+    // other half of the doppler (the listener's is carried by update()). safeVelocity
+    // discards the first frame and impossible jumps, which is what avoids the
+    // screech of a teleport.
     const glm::vec3 vel = safeVelocity(worldPos, m_soundLastPos[id],
                                         m_soundHasLastPos[id] != 0, dt);
     m_soundLastPos[id]    = worldPos;
@@ -800,23 +800,23 @@ void AudioManager::playSoundOneShot(int id, const glm::vec3& worldPos, float vol
 #ifdef DT_FMOD_ENABLED
     if (!m_system || id < 0 || id >= (int)m_sounds.size() || !m_sounds[id]) return;
     auto* snd = reinterpret_cast<FMOD::Sound*>(m_sounds[id]);
-    // Mismo silencio que playSound mientras el sonido sigue cargando: no es un
-    // error, es que aún no está.
+    // Same silence as playSound while the sound is still loading: it is not an
+    // error, it is just not there yet.
     FMOD_OPENSTATE state;
     if (snd->getOpenState(&state, nullptr, nullptr, nullptr) == FMOD_OK
         && state == FMOD_OPENSTATE_LOADING)
         return;
 
     FMOD::Channel* ch;
-    // paused = true por lo mismo que en playSound: volumen, pitch y posición
-    // tienen que estar puestos antes de la primera muestra.
+    // paused = true for the same reason as in playSound: volume, pitch and position
+    // have to be set before the first sample.
     auto* group = reinterpret_cast<FMOD::ChannelGroup*>(groupForBus(bus));
     if (SYS->playSound(snd, group, true, &ch) != FMOD_OK) return;
 
-    // Y AQUÍ la diferencia con playSound: ni se para la voz anterior ni se
-    // guarda esta en m_sfxChannels. Es lo que permite el solapamiento. La
-    // ganancia del fichero se aplica igual, pero m_soundVolume no se toca: esta
-    // voz no se puede alcanzar despues.
+    // And HERE is the difference from playSound: the previous voice is neither stopped nor
+    // is this one stored in m_sfxChannels. It is what allows overlapping. The
+    // file gain is applied all the same, but m_soundVolume is not touched: this
+    // voice cannot be reached afterwards.
     ch->setVolume(voiceVolume(id, volume));
     ch->setPitch(pitch);
 
@@ -825,23 +825,23 @@ void AudioManager::playSoundOneShot(int id, const glm::vec3& worldPos, float vol
         FMOD_VECTOR p = { worldPos.x, worldPos.y, worldPos.z };
         FMOD_VECTOR v = { 0, 0, 0 };
         ch->set3DAttributes(&p, &v);
-        // A la VOZ, no al FMOD::Sound: el sonido se comparte entre clips y
-        // escribirlas alli le cambiaria el radio a todos los demas.
+        // To the VOICE, not to the FMOD::Sound: the sound is shared between clips and
+        // writing them there would change the radius for all the others.
         ch->set3DMinMaxDistance(minDistance, maxDistance);
-        // Ensanchado estereo y sensibilidad al doppler, tambien por voz.
+        // Stereo widening and doppler sensitivity, also per voice.
         ch->set3DSpread(spread);
         ch->set3DDopplerLevel(dopplerLevel);
     }
-    // El paneo manual solo tiene sentido en 2D: en 3D lo decide la posicion, y
-    // escribirlo ahi pelearia con el paneo espacial de FMOD. Fuera del if, con
-    // su propia condicion, para que quede claro que NO es una propiedad 3D.
+    // Manual panning only makes sense in 2D: in 3D the position decides, and
+    // writing it there would fight FMOD's spatial panning. Outside the if, with
+    // its own condition, to make clear that it is NOT a 3D property.
     if (!(mode & FMOD_3D) && stereoPan != 0.0f)
         ch->setPan(stereoPan);
-    // DESPUES del setPan: este reemplaza la matriz de mezcla entera (ver playSound).
+    // AFTER setPan: this replaces the whole mix matrix (see playSound).
     if (m_soundImport[id].forceMono) applyForceMono(SYS, ch, snd, stereoPan);
-    // Sin referencia guardada, esta voz tampoco la alcanza el seguimiento 3D
-    // por frame (setSoundPosition): un one-shot suena donde se disparó. Para
-    // clips cortos —que es su caso de uso— la diferencia no se oye.
+    // With no stored reference, this voice is not reached by the per-frame 3D
+    // tracking (setSoundPosition) either: a one-shot sounds where it was fired. For
+    // short clips —which is its use case— the difference is not audible.
     ch->setPaused(false);
 #else
     (void)id; (void)worldPos; (void)volume; (void)pitch;
@@ -852,10 +852,10 @@ void AudioManager::stopSound(int id)
 {
 #ifdef DT_FMOD_ENABLED
     if (id < 0 || id >= (int)m_sfxChannels.size() || id >= (int)m_sounds.size()) return;
-    // Vía liveChannel, igual que los setters de volumen/pitch: FMOD recicla los
-    // Channel* de las voces que terminan, así que el puntero guardado aquí puede
-    // apuntar ya a la voz de OTRO sonido. Parándolo a ciegas, un stopSound(id)
-    // sobre un clip que hace rato que acabó corta el que esté sonando ahora.
+    // Via liveChannel, like the volume/pitch setters: FMOD recycles the
+    // Channel* of voices that finish, so the pointer stored here may already
+    // point to the voice of ANOTHER sound. Stopping it blindly, a stopSound(id)
+    // on a clip that ended a while ago cuts the one that is playing now.
     if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id])) ch->stop();
 #else
     (void)id;
@@ -863,24 +863,24 @@ void AudioManager::stopSound(int id)
 }
 
 #ifdef DT_FMOD_ENABLED
-// Carga (o reutiliza) el sonido de una ruta y lo deja RETENIDO en la caché,
-// devolviendo su id. Lo comparten preloadClip y playClipAtPoint: tener un solo
-// sitio que cargue evita el doble loadSound que había aquí antes, con su
-// unloadSound de compensación detrás — dos llamadas que se anulaban y que solo
-// servían para que el refcount cuadrara.
+// Loads (or reuses) the sound of a path and leaves it RETAINED in the cache,
+// returning its id. It is shared by preloadClip and playClipAtPoint: having a single
+// place that loads avoids the double loadSound that was here before, with its
+// compensating unloadSound behind — two calls that cancelled each other and only
+// served to make the refcount add up.
 //
-// 3D y sin bucle: es el perfil de un one-shot posicional. El mismo fichero en
-// 2D es otro sonido, y lo carga el AudioClipComponent que lo pida.
+// 3D and without loop: it is the profile of a positional one-shot. The same file in
+// 2D is another sound, and it is loaded by the AudioClipComponent that asks for it.
 int AudioManager::acquirePinnedSound(const std::string& path)
 {
     if (!m_system) return -1;
     const int id = loadSound(path, /*is3D=*/true, /*loop=*/false, AudioLoadMode::Sample);
     if (id < 0) return -1;
-    // insert devuelve false si ya estaba retenido: ese loadSound solo ha subido
-    // el refcount otra vez, y se deshace para que el pin siga contando UNA sola
-    // referencia. Sin esto el sonido seguiría vivo igual (el pin no se suelta
-    // nunca), pero el contador crecería sin techo y dejaría de describir la
-    // realidad para cualquiera que lo mire después.
+    // insert returns false if it was already retained: that loadSound only raised
+    // the refcount again, and it is undone so that the pin keeps counting a SINGLE
+    // reference. Without this the sound would stay alive anyway (the pin is never
+    // released), but the counter would grow without a ceiling and would stop describing
+    // reality for anyone who looks at it afterwards.
     if (!m_pinnedSounds.insert(id).second)
         unloadSound(id);
     return id;
@@ -910,16 +910,16 @@ void AudioManager::playClipAtPoint(const std::string& path, const glm::vec3& wor
 #endif
 }
 
-// SIN COBERTURA DE TEST, y conviene saberlo: que playSound mande la voz al
-// grupo correcto no se puede observar desde un test headless — FMOD no expone
-// "por qué bus está sonando esto" de una forma que no obligue a inventar un
-// getter que nadie más usaría. Un sabotaje que ignorara el bus y enrutara todo
-// a SFX pasa la suite entera. Lo que sí está cubierto es todo lo demás del
-// camino: el round-trip del bus por el .scene, la back-compat, el nombre
-// desconocido, y que los tres volúmenes son independientes.
+// WITHOUT TEST COVERAGE, and it is worth knowing: that playSound sends the voice to the
+// right group cannot be observed from a headless test — FMOD does not expose
+// "through which bus is this playing" in a way that does not force inventing a
+// getter nobody else would use. A sabotage that ignored the bus and routed everything
+// to SFX passes the whole suite. What is covered is everything else on the
+// path: the round-trip of the bus through the .scene, the back-compat, the unknown
+// name, and that the three volumes are independent.
 //
-// Verificación manual: poner un clip en Music, bajar Music Volume a 0 y
-// comprobar que enmudece mientras otro clip en SFX se sigue oyendo.
+// Manual verification: put a clip on Music, lower Music Volume to 0 and
+// check that it goes silent while another clip on SFX is still heard.
 #ifdef DT_FMOD_ENABLED
 void* AudioManager::groupForBus(AudioBus bus) const
 {
@@ -931,8 +931,8 @@ void* AudioManager::groupForBus(AudioBus bus) const
         case AudioBus::Master:
         default:
         {
-            // El master no se crea aquí: lo da FMOD y es el padre de los otros
-            // dos, así que su volumen escala a ambos.
+            // The master is not created here: FMOD provides it and it is the parent of the other
+            // two, so its volume scales both.
             FMOD::ChannelGroup* master = nullptr;
             if (SYS->getMasterChannelGroup(&master) != FMOD_OK) return nullptr;
             return master;
@@ -943,8 +943,8 @@ void* AudioManager::groupForBus(AudioBus bus) const
 
 #ifdef DT_FMOD_ENABLED
 namespace {
-// Tipo de DSP de FMOD para cada efecto nuestro. Todos son de FMOD Core: nada de
-// esto necesita FMOD Studio.
+// FMOD DSP type for each of our effects. All are FMOD Core: none of
+// this needs FMOD Studio.
 FMOD_DSP_TYPE fmodDspType(AudioEffect e)
 {
     switch (e)
@@ -957,32 +957,32 @@ FMOD_DSP_TYPE fmodDspType(AudioEffect e)
     }
 }
 
-// Traduce el [0, 1] de la API pública a las unidades de cada DSP. En UN SOLO
-// sitio: si esto se repartiera por la UI y por Lua, los dos rangos acabarían
-// desincronizados en cuanto alguien tocara uno.
+// Translates the [0, 1] of the public API to the units of each DSP. In ONE
+// place: if this were spread across the UI and Lua, the two ranges would end up
+// out of sync as soon as someone touched one.
 void applyEffectAmount(FMOD::DSP* dsp, AudioEffect e, float amount)
 {
     const float a = std::clamp(amount, 0.0f, 1.0f);
     switch (e)
     {
         case AudioEffect::LowPass:
-            // 0 -> muy cerrado (400 Hz, "debajo del agua"); 1 -> casi
-            // transparente (22 kHz). Logarítmico porque el oído lo es: lineal
-            // dejaba todo el efecto apelotonado en el último 10% del slider.
+            // 0 -> very closed (400 Hz, "underwater"); 1 -> almost
+            // transparent (22 kHz). Logarithmic because the ear is: linear
+            // left the whole effect bunched up in the last 10% of the slider.
             dsp->setParameterFloat(FMOD_DSP_LOWPASS_CUTOFF,
                                    400.0f * std::pow(55.0f, a));
             break;
         case AudioEffect::HighPass:
-            // Al revés: 0 no corta nada, 1 se lleva todos los graves.
+            // The other way round: 0 cuts nothing, 1 takes away all the lows.
             dsp->setParameterFloat(FMOD_DSP_HIGHPASS_CUTOFF,
                                    10.0f * std::pow(500.0f, a));
             break;
         case AudioEffect::Echo:
-            // Retardo entre repeticiones, de casi seguido a casi medio segundo.
+            // Delay between repetitions, from almost back-to-back to almost half a second.
             dsp->setParameterFloat(FMOD_DSP_ECHO_DELAY, 10.0f + a * 490.0f);
             break;
         case AudioEffect::Reverb:
-            // Tamaño de la cola, de una sala pequeña a una catedral.
+            // Size of the tail, from a small room to a cathedral.
             dsp->setParameterFloat(FMOD_DSP_SFXREVERB_DECAYTIME, 100.0f + a * 9900.0f);
             break;
     }
@@ -992,9 +992,9 @@ void applyEffectAmount(FMOD::DSP* dsp, AudioEffect e, float amount)
 
 const std::vector<std::string>& AudioManager::reverbPresetNames()
 {
-    // Un subconjunto de los FMOD_PRESET_*: los ambientes que se piden de
-    // verdad. Ampliar la lista es añadir el nombre aquí y su caso en
-    // fmodReverbPreset. El orden es el del combo del inspector.
+    // A subset of the FMOD_PRESET_*: the ambiences that are actually
+    // requested. Extending the list is adding the name here and its case in
+    // fmodReverbPreset. The order is that of the inspector combo.
     static const std::vector<std::string> names = {
         "off", "generic", "room", "bathroom", "stoneroom", "auditorium",
         "concerthall", "cave", "arena", "hangar", "hallway", "alley",
@@ -1005,8 +1005,8 @@ const std::vector<std::string>& AudioManager::reverbPresetNames()
 
 #ifdef DT_FMOD_ENABLED
 namespace {
-// Nombre -> properties de FMOD. Devuelve false si el nombre no existe, para que
-// quien llama pueda avisar en vez de instalar un ambiente arbitrario.
+// Name -> FMOD properties. Returns false if the name does not exist, so that
+// the caller can warn instead of installing an arbitrary ambience.
 bool fmodReverbPreset(const std::string& name, FMOD_REVERB_PROPERTIES& out)
 {
     if (name == "off")         { out = FMOD_PRESET_OFF;         return true; }
@@ -1039,8 +1039,8 @@ bool AudioManager::syncReverbZone(uint64_t ownerId, const glm::vec3& worldPos,
     if (!m_system) return false;
 
     FMOD_REVERB_PROPERTIES props;
-    // El preset se valida ANTES de crear nada: con un nombre inventado no se
-    // instala una zona con un ambiente cualquiera, se dice que no y ya.
+    // The preset is validated BEFORE creating anything: with an invented name a
+    // zone with some random ambience is not installed, it just says no.
     if (!fmodReverbPreset(preset, props)) return false;
 
     FMOD::Reverb3D* zone = nullptr;
@@ -1050,8 +1050,8 @@ bool AudioManager::syncReverbZone(uint64_t ownerId, const glm::vec3& worldPos,
     }
     else
     {
-        // FMOD limita cuántas instancias 3D puede haber a la vez; si no da más,
-        // se devuelve false y quien llama decide si avisar.
+        // FMOD limits how many 3D instances there can be at once; if it gives no more,
+        // false is returned and the caller decides whether to warn.
         if (SYS->createReverb3D(&zone) != FMOD_OK || !zone) return false;
         m_reverbZones[ownerId] = zone;
     }
@@ -1059,8 +1059,8 @@ bool AudioManager::syncReverbZone(uint64_t ownerId, const glm::vec3& worldPos,
     FMOD_VECTOR p = { worldPos.x, worldPos.y, worldPos.z };
     zone->set3DAttributes(&p, minDistance, maxDistance);
     zone->setProperties(&props);
-    // Deshabilitada se queda creada pero sin efecto: así alternar la casilla no
-    // cuesta crear y destruir el recurso cada vez.
+    // Disabled it stays created but without effect: this way toggling the checkbox does not
+    // cost creating and destroying the resource every time.
     zone->setActive(enabled);
     return true;
 #else
@@ -1091,8 +1091,8 @@ void AudioManager::retainReverbZones(const std::vector<uint64_t>& aliveOwnerIds)
         const bool alive = std::find(aliveOwnerIds.begin(), aliveOwnerIds.end(), it->first)
                             != aliveOwnerIds.end();
         if (alive) { ++it; continue; }
-        // El GameObject que la sostenía ya no está: sin esto su reverb seguiría
-        // aplicándose al resto de la escena para siempre.
+        // The GameObject that held it is no longer there: without this its reverb would keep
+        // being applied to the rest of the scene forever.
         if (it->second) reinterpret_cast<FMOD::Reverb3D*>(it->second)->release();
         it = m_reverbZones.erase(it);
     }
@@ -1126,8 +1126,8 @@ void AudioManager::setBusEffect(AudioBus bus, AudioEffect effect, float amount)
     if (!group) return;
 
     const int key = effectKey(bus, effect);
-    // Ya colgado: solo se reajusta el mando. Sin esta rama, mover un slider
-    // encadenaría un DSP nuevo por frame hasta ahogar el mezclador.
+    // Already hung: only the knob is readjusted. Without this branch, moving a slider
+    // would chain a new DSP per frame until choking the mixer.
     if (auto it = m_busEffects.find(key); it != m_busEffects.end())
     {
         applyEffectAmount(reinterpret_cast<FMOD::DSP*>(it->second), effect, amount);
@@ -1137,8 +1137,8 @@ void AudioManager::setBusEffect(AudioBus bus, AudioEffect effect, float amount)
     FMOD::DSP* dsp = nullptr;
     if (SYS->createDSPByType(fmodDspType(effect), &dsp) != FMOD_OK || !dsp) return;
     applyEffectAmount(dsp, effect, amount);
-    // Si el DSP no se puede enganchar hay que liberarlo aquí mismo: guardarlo
-    // sin conectar dejaría un recurso nativo vivo que nadie volvería a mirar.
+    // If the DSP cannot be attached it has to be released right here: storing it
+    // unconnected would leave a live native resource that nobody would look at again.
     if (group->addDSP(FMOD_CHANNELCONTROL_DSP_HEAD, dsp) != FMOD_OK)
     {
         dsp->release();
@@ -1157,8 +1157,8 @@ void AudioManager::clearBusEffect(AudioBus bus, AudioEffect effect)
     auto it = m_busEffects.find(key);
     if (it == m_busEffects.end()) return;
     auto* dsp = reinterpret_cast<FMOD::DSP*>(it->second);
-    // Desconectar ANTES de liberar: soltar un DSP todavía enganchado al grupo
-    // deja al mezclador con un puntero muerto en su cadena.
+    // Disconnect BEFORE releasing: releasing a DSP still attached to the group
+    // leaves the mixer with a dead pointer in its chain.
     if (auto* group = reinterpret_cast<FMOD::ChannelGroup*>(groupForBus(bus)))
         group->removeDSP(dsp);
     dsp->release();
@@ -1230,8 +1230,8 @@ float AudioManager::getBusVolume(AudioBus bus) const
         float v = 1.0f;
         if (reinterpret_cast<FMOD::ChannelGroup*>(g)->getVolume(&v) == FMOD_OK) return v;
     }
-    // Sin sistema (o si FMOD falla) el neutro: es lo que la UI debe dibujar
-    // para no sugerir que el audio está bajado cuando lo que pasa es que no hay
+    // Without a system (or if FMOD fails) the neutral one: it is what the UI should draw
+    // so as not to suggest that the audio is turned down when what is happening is that there is no
     // audio.
     return 1.0f;
 #else

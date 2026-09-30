@@ -12,11 +12,11 @@ namespace DonTopo
 {
     class ScrollViewComponent;
 
-    // Lo que una vista tiene EN VIVO y no se serializa. Mismo papel y mismos
-    // motivos que UiButtonRuntime. El callback lleva DOS floats (la posición
-    // normalizada de los dos ejes) y no un vec2 porque en Lua no hay vec2: los
-    // vectores viajan como varios valores de vuelta, igual que los Get* del
-    // resto de componentes.
+    // What a view has LIVE and is not serialized. Same role and same
+    // reasons as UiButtonRuntime. The callback carries TWO floats (the normalized
+    // position of both axes) and not a vec2 because Lua has no vec2: vectors
+    // travel as several return values, just like the Get* of the
+    // rest of the components.
     struct UiScrollViewRuntime
     {
         std::function<void(float, float)> onValueChanged;
@@ -36,20 +36,20 @@ namespace DonTopo
         bool operator==(const UiScrollViewCallbackSlot&) const { return true; }
     };
 
-    // Una vista desplazable de la UI 2D como componente de GameObject, con el
-    // MISMO contrato que el resto: SOLO DATOS. El ScrollView del núcleo
-    // (UiWidgets.h) es un stub SIN campos, así que el widget se monta por
-    // COMPOSICIÓN: el viewport es el nodo raíz (de tipo ScrollView, con
-    // clipChildren) y de él cuelga el contenido, que es el que se mueve.
+    // A scrollable view of the 2D UI as a GameObject component, with the
+    // SAME contract as the rest: DATA ONLY. The core ScrollView
+    // (UiWidgets.h) is a stub with NO fields, so the widget is assembled by
+    // COMPOSITION: the viewport is the root node (of type ScrollView, with
+    // clipChildren) and the content hangs from it, which is what moves.
     //
-    // Es el único cuyo nodo PRINCIPAL no es el que recibe el ratón: los hijos de
-    // la escena cuelgan del CONTENIDO, no del viewport. Si colgaran del viewport,
-    // desplazarse no los arrastraría y el scroll no serviría de nada.
+    // It is the only one whose MAIN node is not the one that receives the mouse: the scene's
+    // children hang from the CONTENT, not from the viewport. If they hung from the viewport,
+    // scrolling would not drag them along and the scroll would be useless.
     //
-    // NO tiene una referencia a un Scrollbar. Enlazarlos es una línea de script
-    // (`barra:OnValueChanged(...)`), y una referencia entre componentes de la
-    // escena obligaría a serializar el id del otro GameObject y a mantenerlo vivo
-    // en el clone, el undo y el borrado — mucho aparato para lo que resuelve.
+    // It has NO reference to a Scrollbar. Linking them is one line of script
+    // (`barra:OnValueChanged(...)`), and a reference between scene components
+    // would force serializing the other GameObject's id and keeping it alive
+    // in clone, undo and delete. Too much machinery for what it solves.
     class ScrollViewComponent
     {
         public:
@@ -57,50 +57,50 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};      // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};      // px, relative to the anchor
             glm::vec2 size{200.0f, 200.0f};      // px: el VIEWPORT
             glm::vec4 color{0.1f, 0.1f, 0.1f, 1.0f};
             bool      visible = true;
 
-            // --- Ejes -----------------------------------------------------------
-            // Un eje apagado no se mueve aunque el contenido sea más grande.
+            // --- Axes -----------------------------------------------------------
+            // A turned-off axis does not move even if the content is bigger.
             bool horizontal = false;
             bool vertical   = true;
 
-            // --- Contenido ------------------------------------------------------
-            // Tamaño del área desplazable. Es un CAMPO y no algo medido de los
-            // hijos a propósito: medir el subárbol cada frame para decidir cuánto
-            // se puede desplazar acopla el scroll al layout y hace que el
-            // recorrido cambie solo cuando alguien mueve un hijo.
+            // --- Content --------------------------------------------------------
+            // Size of the scrollable area. It is a FIELD and deliberately not something measured from the
+            // children: measuring the subtree every frame to decide how much
+            // can be scrolled couples the scroll to the layout and makes the
+            // travel change only when someone moves a child.
             glm::vec2 contentSize{200.0f, 400.0f};
 
-            // 0 = principio, 1 = final, por eje. Sin clamp AQUÍ (el componente no
-            // interpreta nada); quien acota es la rueda y contentOffset().
+            // 0 = start, 1 = end, per axis. No clamp HERE (the component interprets
+            // nothing); whoever bounds it is the wheel and contentOffset().
             glm::vec2 normalizedPosition{0.0f, 0.0f};
 
-            // Píxeles que mueve la rueda por muesca. En píxeles y no en fracción
-            // porque una lista de 50 filas y otra de 5 quieren el mismo recorrido
-            // por muesca, no la misma fracción.
+            // Pixels the wheel moves per notch. In pixels and not as a fraction
+            // because a list of 50 rows and one of 5 want the same travel
+            // per notch, not the same fraction.
             float scrollSensitivity = 40.0f;
 
             // --- Sprites --------------------------------------------------------
             std::string atlasPath;
             std::string backgroundSprite;
 
-            // --- Runtime (no se serializa) --------------------------------------
+            // --- Runtime (not serialized) ---------------------------------------
             UiScrollViewCallbackSlot callbacks;
 
-            // Cuánto se puede desplazar por eje, en píxeles. Un contenido más
-            // pequeño que el viewport da 0: no hay nada que desplazar.
+            // How much can be scrolled per axis, in pixels. Content smaller
+            // than the viewport gives 0: there is nothing to scroll.
             glm::vec2 scrollRange() const
             {
                 return glm::vec2(horizontal ? std::max(contentSize.x - size.x, 0.0f) : 0.0f,
                                  vertical   ? std::max(contentSize.y - size.y, 0.0f) : 0.0f);
             }
 
-            // Desplazamiento del contenido dentro del viewport, en coordenadas
-            // del viewport. Siempre <= 0: empujar el contenido hacia dentro
-            // dejaría un hueco arriba que nadie ha pedido.
+            // Offset of the content inside the viewport, in viewport
+            // coordinates. Always <= 0: pushing the content inward
+            // would leave a gap at the top that nobody asked for.
             glm::vec2 contentOffset() const
             {
                 const glm::vec2 r = scrollRange();
@@ -108,8 +108,8 @@ namespace DonTopo
                                  -r.y * std::clamp(normalizedPosition.y, 0.0f, 1.0f));
             }
 
-            // Vuelca el rect y el viewport en el nodo vivo. NO toca `atlas` (es un
-            // puntero a GPU: lo resuelve el sync).
+            // Dumps the rect and the viewport into the live node. Does NOT touch `atlas` (it is a
+            // GPU pointer: the sync resolves it).
             void applyTo(ScrollView& v) const
             {
                 v.anchorMin = anchorMin;
@@ -120,10 +120,10 @@ namespace DonTopo
                 v.color     = color;
                 v.visible   = visible;
                 v.sprite    = backgroundSprite;
-                // Recorta a TODO lo que cuelgue: es lo que hace que el contenido
-                // no se salga por los bordes al desplazarse.
+                // Clips EVERYTHING that hangs from it: this is what makes the content
+                // not stick out over the edges when scrolling.
                 v.clipChildren  = true;
-                // Y sí recibe el ratón: la rueda es suya.
+                // And it does receive the mouse: the wheel is its own.
                 v.raycastTarget = true;
             }
 
@@ -137,16 +137,16 @@ namespace DonTopo
                 c.position  = off;
                 c.size      = contentSize;
                 c.visible   = true;
-                // Agrupa y mueve, pero no pinta: sin esto saldría un quad de
-                // color liso TAPANDO a todo lo que lleve dentro.
+                // It groups and moves, but does not paint: without this a flat
+                // color quad would come out COVERING everything it contains.
                 c.drawable  = false;
-                // Y no recibe el ratón: la rueda la quiere el viewport, y un
-                // contenedor que no pinta comiéndose los clics no habría forma de
-                // verlo.
+                // And it does not receive the mouse: the viewport wants the wheel, and a
+                // container that does not paint while swallowing clicks would have no way
+                // of being seen.
                 c.raycastTarget = false;
             }
 
-            // El sync lo usa para saber si hay algo que volcar.
+            // The sync uses it to know whether there is anything to dump.
             bool operator==(const ScrollViewComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -161,17 +161,17 @@ namespace DonTopo
             bool operator!=(const ScrollViewComponent& o) const { return !(*this == o); }
     };
 
-    // Nombre del nodo vivo de un ScrollView dentro del canvas. "scv:" y no
-    // "scr:", que es del Scrollbar: comparten las tres primeras letras y son dos
-    // widgets distintos, así que confundirlos haría que el picking devolviera el
-    // GameObject que no toca.
+    // Name of a ScrollView's live node inside the canvas. "scv:" and not
+    // "scr:", which is the Scrollbar's: they share the first three letters and are two
+    // different widgets, so mixing them up would make picking return the
+    // wrong GameObject.
     inline std::string uiScrollViewNodeName(uint64_t ownerId)
     {
         return "scv:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiScrollViewNodeName. Devuelve 0 si el nombre no es de una
-    // vista. El corte por '/' hace que el contenido devuelva también a su dueño.
+    // Inverse of uiScrollViewNodeName. Returns 0 if the name is not a
+    // view's. Cutting at '/' makes the content also return its owner.
     inline uint64_t uiScrollViewOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("scv:", 0) != 0) return 0;

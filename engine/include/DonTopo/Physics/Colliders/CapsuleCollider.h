@@ -4,15 +4,15 @@
 
 namespace DonTopo {
 
-// Componente único de física de tipo cápsula. Mismo patrón que BoxCollider
-// (PxRigidStatic sin Rigidbody, PxRigidDynamic con Rigidbody). PhysX orienta
-// PxCapsuleGeometry por defecto a lo largo del eje X local del shape; aquí se
-// compone una rotación fija de 90° sobre Z en el localPose para que la
-// "altura" quede en Y (cápsula de pie, tipo personaje).
+// Unique physics component of capsule type. Same pattern as BoxCollider
+// (PxRigidStatic without Rigidbody, PxRigidDynamic with Rigidbody). PhysX orients
+// PxCapsuleGeometry by default along the local X axis of the shape; here a
+// fixed 90° rotation about Z is composed into the localPose so that the
+// "height" ends up in Y (upright capsule, character style).
 class CapsuleCollider : public Collider {
 public:
-    // actor/shape ya creados por PhysicsManager, con localPose ya puesto a
-    // partir de center + la rotación fija de corrección de eje.
+    // actor/shape already created by PhysicsManager, with localPose already set from
+    // center + the fixed axis-correction rotation.
     CapsuleCollider(void* actor, void* shape, float radius, float halfHeight,
                      const glm::vec3& center);
     ~CapsuleCollider();
@@ -20,20 +20,20 @@ public:
     CapsuleCollider(const CapsuleCollider&)            = delete;
     CapsuleCollider& operator=(const CapsuleCollider&) = delete;
 
-    // Offset local de la shape dentro del actor. Reaplica siempre la
-    // rotación fija de corrección de eje junto con la traslación.
+    // Local offset of the shape inside the actor. It always reapplies the
+    // fixed axis-correction rotation together with the translation.
     void setCenter(const glm::vec3& center);
-    // Radio de la cápsula (PxShape::setGeometry con nueva PxCapsuleGeometry).
+    // Radius of the capsule (PxShape::setGeometry with a new PxCapsuleGeometry).
     void setRadius(float radius);
-    // Medio-alto de la cápsula (distancia entre los centros de las dos
-    // semiesferas; PxShape::setGeometry con nueva PxCapsuleGeometry).
+    // Half-height of the capsule (distance between the centers of the two
+    // hemispheres; PxShape::setGeometry with a new PxCapsuleGeometry).
     void setHalfHeight(float halfHeight);
-    // Escala del Transform del GameObject. PxTransform no admite escala, así
-    // que se hornea en la geometría: el radio va con el mayor de los dos ejes
-    // transversales (max(abs(x), abs(z)) — la cápsula está de pie en Y por la
-    // rotación de corrección) y el medio-alto con abs(y). m_radius/m_halfHeight
-    // —lo que ve el inspector y lo que se serializa— no cambian. Idempotente:
-    // con la misma escala no toca nada.
+    // Scale of the GameObject's Transform. PxTransform does not support scale, so
+    // it is baked into the geometry: the radius goes with the larger of the two
+    // transverse axes (max(abs(x), abs(z)) — the capsule stands upright in Y because of the
+    // correction rotation) and the half-height with abs(y). m_radius/m_halfHeight
+    // —what the inspector sees and what is serialized— do not change. Idempotent:
+    // with the same scale it touches nothing.
     void setWorldScale(const glm::vec3& scale);
 
     glm::vec3 getCenter() const      { return m_center; }
@@ -52,8 +52,8 @@ protected:
 
 private:
 #ifdef DT_PHYSX_ENABLED
-    // Sube a PhysX m_radius/m_halfHeight con m_worldScale ya aplicada.
-    // Requiere m_shape.
+    // Pushes m_radius/m_halfHeight to PhysX with m_worldScale already applied.
+    // Requires m_shape.
     void applyScaledGeometry();
 
     void* m_actor = nullptr; // physx::PxRigidActor* (static o dynamic)
@@ -62,7 +62,7 @@ private:
     float     m_radius;
     float     m_halfHeight;
     glm::vec3 m_center;
-    // m_worldScale vive en la base Collider; ver nota en BoxCollider.h.
+    // m_worldScale lives in the Collider base; see note in BoxCollider.h.
 };
 
 } // namespace DonTopo

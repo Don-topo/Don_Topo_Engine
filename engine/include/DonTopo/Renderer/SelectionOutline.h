@@ -3,21 +3,21 @@
 
 namespace DonTopo
 {
-    // Grosor del contorno de seleccion, PROPORCIONAL al tamano del objeto.
+    // Thickness of the selection outline, PROPORTIONAL to the object's size.
     //
-    // Con un grosor fijo, un objeto grande apenas mostraria borde y uno pequeno
-    // quedaria engullido por el. El minimo de una unidad evita que una malla
-    // diminuta se quede sin contorno.
+    // With a fixed thickness, a large object would barely show a border and a small one
+    // would be swallowed by it. The minimum of one unit keeps a tiny mesh
+    // from ending up without an outline.
     //
-    // Compartido por los dos backends: estaba escrito dos veces con el mismo
-    // factor. Que se descuadren no rompe nada —el contorno solo se ve mas gordo
-    // o mas fino en un backend—, y por eso mismo pasaria desapercibido.
+    // Shared by both backends: it was written twice with the same
+    // factor. If they drift apart nothing breaks (the outline just looks thicker
+    // or thinner in one backend), and for that very reason it would go unnoticed.
     constexpr float OUTLINE_FACTOR = 0.009f;
 
-    // localExtent = media dimension mayor de la malla en su espacio local, sin
-    // escalar. transform = su matriz de mundo, de la que se saca la escala
-    // efectiva: la mayor de las tres columnas, para que una escala no uniforme
-    // no adelgace el contorno por el eje corto.
+    // localExtent = half the largest dimension of the mesh in its local space,
+    // unscaled. transform = its world matrix, from which the effective scale is
+    // taken: the largest of the three columns, so that a non-uniform scale
+    // does not thin the outline along the short axis.
     inline float outlineThickness(float localExtent, const glm::mat4& transform)
     {
         const float escala = (glm::max)(

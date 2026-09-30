@@ -8,40 +8,40 @@ class GpuDevice;
 class GpuResources;
 class RendererState;
 
-// Motion blur de camara. El pase entero -pipeline, imagenes intermedias,
-// descriptor sets y grabacion- vive aqui; el Renderer sigue siendo el dueno de
-// la instancia y el que decide CUANDO se llama a cada cosa.
+// Camera motion blur. The whole pass (pipeline, intermediate images,
+// descriptor sets and recording) lives here; the Renderer remains the owner of
+// the instance and the one that decides WHEN each thing is called.
 class MotionBlurPass {
 public:
-    // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
+    // It must match Renderer::MAX_FRAMES (checked with static_assert in Renderer.cpp).
     static constexpr int kFramesInFlight = 2;
 
-    // Lo que el pase necesita del Renderer y NO es suyo. Se construye en el
-    // sitio de llamada y se pasa por referencia: nada de guardarlo, que los
-    // handles se recrean con el swapchain.
+    // What the pass needs from the Renderer and is NOT its own. It is built at the
+    // call site and passed by reference: do not store it, since the
+    // handles are recreated with the swapchain.
     struct Context {
         GpuDevice&           gpu;
         GpuResources&        res;
         const RendererState& state;
-        // Resolucion INTERNA del render (la del HDR), no la del swapchain.
+        // INTERNAL render resolution (the HDR's), not the swapchain's.
         const VkExtent2D&    renderExtent;
         int                  currentFrame;
-        // Formato del target de escena: la imagen intermedia lo copia tal cual.
+        // Scene target format: the intermediate image copies it as is.
         VkFormat             hdrFormat;
         const VkImage*       hdrImage;       // [kFramesInFlight]
         const VkImageView*   hdrView;        // [kFramesInFlight]
         const VkImageView*   ssaoDepthView;  // [kFramesInFlight]
-        // Sin sampler propio: el color va con el del SSR y la profundidad con
-        // el del SSAO.
+        // No sampler of its own: the color goes with SSR's and the depth with
+        // SSAO's.
         VkSampler            ssrSampler;
         VkSampler            ssaoSampler;
-        // Las MISMAS matrices que reproyecta el TAA. Se actualizan todos los
-        // frames, este el TAA activo o no.
+        // The SAME matrices that TAA reprojects with. They are updated every
+        // frame, whether TAA is active or not.
         const glm::mat4&     taaCurrViewProj;
         const glm::mat4&     taaPrevViewProj;
-        // Medicion del coste en GPU, igual que en el bloom. Sin esto el pase
-        // era el UNICO que no se media, o sea que el motion blur se encendia
-        // a ciegas pese a ser de los caros.
+        // GPU cost measurement, as in the bloom. Without this the pass
+        // was the ONLY one that was not measured, that is, motion blur was turned on
+        // blindly despite being one of the expensive ones.
         bool                 timestampsSupported;
         float                timestampPeriod;
     };
@@ -50,29 +50,29 @@ public:
     MotionBlurPass(const MotionBlurPass&)            = delete;
     MotionBlurPass& operator=(const MotionBlurPass&) = delete;
 
-    // Lo que no depende del tamano: layout, pool, pipeline layout y pipeline.
-    // Una sola vez, en el init.
+    // What does not depend on the size: layout, pool, pipeline layout and pipeline.
+    // Only once, in init.
     void createPipeline(const Context& ctx);
-    // Contrapartida de createPipeline, en el cleanup.
+    // Counterpart of createPipeline, in cleanup.
     void destroyPipeline(const Context& ctx);
-    // Imagenes intermedias y descriptor sets: van con el swapchain, porque
-    // referencian hdrView y ssaoDepthView, que se recrean con el.
+    // Intermediate images and descriptor sets: they go with the swapchain, because
+    // they reference hdrView and ssaoDepthView, which are recreated with it.
     void createImages(const Context& ctx);
     void destroyImages(const Context& ctx);
-    // Un dispatch a una imagen aparte mas la copia de vuelta. Va DESPUES
-    // de la niebla y ANTES del bloom: la estela arrastra los highlights
-    // y florece con ellos. Apagado no graba ni un comando.
+    // A dispatch to a separate image plus the copy back. It goes AFTER
+    // the fog and BEFORE the bloom: the trail drags the highlights
+    // and blooms with them. Off, it records not a single command.
     void record(const Context& ctx, VkCommandBuffer cmd);
     bool active(const Context& ctx) const;
-    // ms de GPU del ultimo frame medido. 0 si no hay timestamps o si el
-    // efecto esta apagado.
+    // GPU ms of the last measured frame. 0 if there are no timestamps or if the
+    // effect is off.
     float gpuMs() const { return m_gpuMs; }
 
 private:
-    // Imagen intermedia del mismo formato y tamano que el HDR: el shader
-    // lee pixeles arbitrarios a lo largo de la velocidad, asi que no
-    // puede escribir sobre la imagen que muestrea. La copia de vuelta la
-    // hace un vkCmdCopyImage, no un segundo dispatch.
+    // Intermediate image of the same format and size as the HDR: the shader
+    // reads arbitrary pixels along the velocity, so it cannot
+    // write onto the image it samples. The copy back is done
+    // by a vkCmdCopyImage, not a second dispatch.
     VkQueryPool           m_queryPool               = VK_NULL_HANDLE;
     bool                  m_queryPending[kFramesInFlight] = {};
     float                 m_gpuMs                   = 0.0f;

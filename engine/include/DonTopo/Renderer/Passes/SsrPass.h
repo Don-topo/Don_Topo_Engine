@@ -8,49 +8,49 @@ class GpuDevice;
 class GpuResources;
 class RendererState;
 
-// Reflejos en espacio de pantalla. El pase entero -pipelines, imagen del
-// reflejo, sampler, descriptor sets, queries de tiempo y grabacion- vive aqui;
-// el Renderer sigue siendo el dueno de la instancia y el que decide CUANDO se
-// llama a cada cosa.
+// Screen-space reflections. The whole pass (pipelines, reflection image,
+// sampler, descriptor sets, time queries and recording) lives here;
+// the Renderer remains the owner of the instance and the one that decides WHEN
+// each thing is called.
 //
-// Dos ataduras con codigo que NO es de este pase, y por eso salen a la
-// interfaz publica:
-//  - queryPool(): el par de timestamps [0,1] lo escribe el depth PRE-PASS, que
-//    graba el Renderer (recordSsaoPass), no este pase.
-//  - sampler(): lo creo el SSR pero tambien lo usa el motion blur.
+// Two ties with code that is NOT this pass's, and that is why they come out in the
+// public interface:
+//  - queryPool(): the timestamp pair [0,1] is written by the depth PRE-PASS, which
+//    the Renderer records (recordSsaoPass), not this pass.
+//  - sampler(): created by SSR but also used by motion blur.
 class SsrPass {
 public:
-    // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
+    // It must match Renderer::MAX_FRAMES (checked with static_assert in Renderer.cpp).
     static constexpr int kFramesInFlight = 2;
 
-    // Lo que el pase necesita del Renderer y NO es suyo. Se construye en el
-    // sitio de llamada y se pasa por referencia: nada de guardarlo, que los
-    // handles se recrean con el swapchain.
+    // What the pass needs from the Renderer and is NOT its own. It is built at the
+    // call site and passed by reference: do not store it, since the
+    // handles are recreated with the swapchain.
     struct Context {
         GpuDevice&           gpu;
         GpuResources&        res;
         const RendererState& state;
-        // Resolucion INTERNA del render (la del HDR), no la del swapchain.
+        // INTERNAL render resolution (the HDR's), not the swapchain's.
         const VkExtent2D&    renderExtent;
-        // La del swapchain, solo para el informe de medida.
+        // The swapchain's, only for the measurement report.
         const VkExtent2D&    swapChainExtent;
         int                  currentFrame;
-        // Formato del target de escena: el reflejo comparte formato con el HDR.
+        // Scene target format: the reflection shares its format with the HDR.
         VkFormat             hdrFormat;
         const VkImage*       hdrImage;       // [kFramesInFlight]
         const VkImageView*   hdrView;        // [kFramesInFlight]
         const VkImageView*   ssaoDepthView;  // [kFramesInFlight]
-        // La profundidad se muestrea con el del SSAO (NEAREST), no con el suyo.
+        // The depth is sampled with SSAO's (NEAREST), not with its own.
         VkSampler            ssaoSampler;
-        // Los resolvio el bloom; aqui solo se leen.
+        // They were resolved by the bloom; here they are only read.
         bool                 timestampsSupported;
         float                timestampPeriod;
-        // Hay al menos un objeto visible con ssrStrength > 0. Lo calcula el
-        // Renderer: recorre sus propias listas de objetos, que no son de este
-        // pase.
+        // There is at least one visible object with ssrStrength > 0. The
+        // Renderer computes it: it traverses its own object lists, which are not this
+        // pass's.
         bool                 anyObjectWithSsr;
-        // recordSsaoPass dejo escritos los timestamps [0,1] de este frame. Sin
-        // eso la lectura de los cuatro daria NOT_READY.
+        // recordSsaoPass left this frame's timestamps [0,1] written. Without
+        // that, reading all four would give NOT_READY.
         bool                 stampedPrepass;
     };
 
@@ -58,46 +58,46 @@ public:
     SsrPass(const SsrPass&)            = delete;
     SsrPass& operator=(const SsrPass&) = delete;
 
-    // Lo que no depende del tamano: sampler, layout, pool, los dos pipelines y
-    // el pool de queries. Una sola vez, en el init.
+    // What does not depend on the size: sampler, layout, pool, the two pipelines and
+    // the query pool. Only once, in init.
     void createPipelines(const Context& ctx);
-    // Contrapartida de createPipelines, en el cleanup.
+    // Counterpart of createPipelines, in cleanup.
     void destroyPipelines(const Context& ctx);
-    // La imagen del reflejo y los dos sets por frame: van con el swapchain,
-    // porque referencian hdrView y ssaoDepthView, que se recrean con el.
+    // The reflection image and the two sets per frame: they go with the swapchain,
+    // because they reference hdrView and ssaoDepthView, which are recreated with it.
     void createImages(const Context& ctx);
     void destroyImages(const Context& ctx);
-    // Los dos dispatches (marcha + suma sobre el HDR). Va DESPUES del pass de
-    // escena -necesita el color ya iluminado- y ANTES del bloom, para que el
-    // reflejo pase por el umbral del bloom y por el tonemap como el resto de
-    // la imagen.
+    // The two dispatches (march + sum onto the HDR). It goes AFTER the scene pass
+    // (it needs the already lit color) and BEFORE the bloom, so that the
+    // reflection goes through the bloom threshold and the tonemap like the rest of
+    // the image.
     void record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& proj);
-    // true si hay algo que grabar: interruptor global puesto Y al menos un
-    // objeto visible con fuerza > 0. Con cualquiera de las dos cosas en falso
-    // no se graba ni un dispatch (ni se calcula multiplicando por cero), asi
-    // que el coste GPU cae a cero.
+    // true if there is something to record: global switch on AND at least one
+    // visible object with strength > 0. With either of the two false
+    // not a single dispatch is recorded (nor is it computed by multiplying by zero), so
+    // the GPU cost drops to zero.
     bool active(const Context& ctx) const;
 
-    // Coste GPU del SSR en ms: los dos dispatches, mas el depth pre-pass
-    // cuando es el SSR quien lo pide.
+    // GPU cost of SSR in ms: the two dispatches, plus the depth pre-pass
+    // when SSR is the one requesting it.
     float gpuMs() const { return m_gpuMs; }
-    // Las dos ataduras de arriba.
+    // The two ties above.
     VkQueryPool queryPool() const { return m_queryPool; }
     VkSampler   sampler()   const { return m_sampler; }
 
 private:
-    // Reflejo aislado, a resolucion completa y en el MISMO formato que el
-    // HDR: ssr_resolve.comp lo suma sobre el HDR y los dos son storage images
-    // con el mismo qualifier rgba16f.
+    // Isolated reflection, at full resolution and in the SAME format as the
+    // HDR: ssr_resolve.comp adds it onto the HDR and both are storage images
+    // with the same rgba16f qualifier.
     VkImage               m_image[kFramesInFlight]  = {};
     VkDeviceMemory        m_memory[kFramesInFlight] = {};
     VkImageView           m_view[kFramesInFlight]   = {};
-    // LINEAR: a diferencia del SSAO, el impacto del rayo cae entre texeles y
-    // el color de la escena si tiene garantizado el filtrado lineal en
+    // LINEAR: unlike SSAO, the ray hit falls between texels and the
+    // scene color does have guaranteed linear filtering in
     // R16G16B16A16_SFLOAT.
     VkSampler             m_sampler                 = VK_NULL_HANDLE;
-    // Un unico layout para los dos pipelines: ssr_resolve.comp declara el
-    // binding 1 y simplemente no lo lee.
+    // A single layout for the two pipelines: ssr_resolve.comp declares
+    // binding 1 and simply does not read it.
     VkDescriptorSetLayout m_descLayout              = VK_NULL_HANDLE;
     VkDescriptorPool      m_descPool                = VK_NULL_HANDLE;
     VkPipelineLayout      m_pipelineLayout          = VK_NULL_HANDLE;
@@ -105,9 +105,9 @@ private:
     VkPipeline            m_resolvePipeline         = VK_NULL_HANDLE;
     VkDescriptorSet       m_sets[kFramesInFlight]        = {};
     VkDescriptorSet       m_resolveSets[kFramesInFlight] = {};
-    // Cuatro queries por frame: [0,1] el depth pre-pass cuando es el SSR
-    // quien lo pide, [2,3] los dos dispatches. Reutilizar las del SSAO o
-    // las del bloom mezclaria dos medidas.
+    // Four queries per frame: [0,1] the depth pre-pass when SSR is the one
+    // requesting it, [2,3] the two dispatches. Reusing SSAO's or
+    // the bloom's would mix two measurements.
     VkQueryPool           m_queryPool                     = VK_NULL_HANDLE;
     bool                  m_queryPending[kFramesInFlight] = {};
     float                 m_gpuMs                         = 0.0f;

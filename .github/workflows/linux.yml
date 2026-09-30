@@ -22,19 +22,19 @@ jobs:
             ~/.cache/ccache
           key: linux-${{ hashFiles('CMakeLists.txt', 'cmake/**') }}-${{ github.sha }}
           restore-keys: linux-${{ hashFiles('CMakeLists.txt', 'cmake/**') }}-
-      # Sin FMOD: su licencia impide descargarlo aqui. Todo tiene que compilar y
-      # pasar tambien sin audio.
+      # No FMOD: its license forbids downloading it here. Everything has to build and
+      # pass without audio too.
       - name: Configurar
         run: ./configure.sh linux-release 2>&1 | tee configure.log; exit ${PIPESTATUS[0]}
         env:
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
       - name: Compilar
-        # -k 0: seguir tras el primer fallo, para ver TODOS los errores en un run
-        # (con el valor por defecto Ninja para en el primer fichero).
+        # -k 0: keep going after the first failure, to see ALL the errors in one run
+        # (with the default value Ninja stops at the first file).
         run: cmake --build --preset linux-release -- -k 0 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
-      # Los errores del compilador como UNA anotacion: se leen desde la API de
-      # GitHub sin descargar el log entero.
+      # Compiler errors as ONE annotation: they can be read from the GitHub
+      # API without downloading the whole log.
       - name: Resumen de errores
         if: failure()
         run: |

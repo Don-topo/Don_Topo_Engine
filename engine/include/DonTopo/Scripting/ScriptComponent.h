@@ -8,12 +8,12 @@ namespace DonTopo {
 
 class GameObject;
 
-// Valor de una prop serializable de script (los 3 tipos que detecta
-// ScriptManager en la tabla clase).
+// Value of a serializable script prop (the 3 types ScriptManager detects
+// in the class table).
 using ScriptValue = std::variant<double, bool, std::string>;
 
-// Un script Lua adjunto a un GameObject. La instancia (tabla Lua) solo
-// existe en Play Mode; en Edit Mode el componente es solo nombre + overrides.
+// A Lua script attached to a GameObject. The instance (Lua table) only
+// exists in Play Mode; in Edit Mode the component is just name + overrides.
 class ScriptComponent {
 public:
     ScriptComponent(std::string name, GameObject* ownerGo)
@@ -25,26 +25,26 @@ public:
     std::string scriptName;
     GameObject* owner = nullptr;
 
-    // Tabla instancia Lua — inválida (default) fuera de Play Mode.
+    // Lua instance table: invalid (default) outside Play Mode.
     sol::table instance;
     bool started = false;
-    // Error runtime en un callback: deja de recibir callbacks hasta hot
-    // reload o Stop (evita spam de errores y crash loop).
+    // Runtime error in a callback: it stops receiving callbacks until hot
+    // reload or Stop (avoids error spam and a crash loop).
     bool hasError = false;
-    // RemoveComponent desde Lua en mitad de Update se difiere al final del
-    // frame (misma razón que la cola de destroy de entities).
+    // RemoveComponent from Lua in the middle of Update is deferred to the end of
+    // the frame (same reason as the entity destroy queue).
     bool pendingRemove = false;
 
-    // Cache de qué callbacks define el script — se calcula una vez al
-    // instanciar, no cada frame (spec).
+    // Cache of which callbacks the script defines. It is computed once when
+    // instantiating, not every frame (spec).
     bool hasAwake = false, hasStart = false, hasUpdate = false,
          hasFixedUpdate = false, hasLateUpdate = false, hasOnDestroy = false;
-    // Callbacks de trigger (estilo Unity): reciben la Entity que provocó el
-    // solape. Solo el lado trigger del par los recibe.
+    // Trigger callbacks (Unity style): they receive the Entity that caused the
+    // overlap. Only the trigger side of the pair receives them.
     bool hasOnTriggerEnter = false, hasOnTriggerStay = false, hasOnTriggerExit = false;
 
-    // Props editadas en el editor que difieren del default del .lua.
-    // Solo esto se serializa — los defaults viven en el script.
+    // Props edited in the editor that differ from the .lua default.
+    // Only this is serialized; the defaults live in the script.
     std::map<std::string, ScriptValue> overrides;
 };
 

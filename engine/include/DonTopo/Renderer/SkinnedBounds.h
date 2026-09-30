@@ -4,25 +4,25 @@ namespace DonTopo
 {
     struct SkinnedMesh;
 
-    // Cota de culling para las mallas con huesos, sin nada de ninguna API
-    // grafica: vive al lado de Frustum.h por el mismo motivo que aquel, y por
-    // el mismo camino (salio de Renderer cuando ese fichero se partio en pases).
+    // Culling bound for bone meshes, with nothing from any graphics API:
+    // it lives next to Frustum.h for the same reason as that one, and by
+    // the same path (it came out of Renderer when that file was split into passes).
     namespace Culling
     {
-        // Radio de una esfera centrada en el ORIGEN LOCAL del modelo que
-        // contiene la malla en CUALQUIER pose de cualquiera de sus clips.
+        // Radius of a sphere centered on the model's LOCAL ORIGIN that
+        // contains the mesh in ANY pose of ANY of its clips.
         //
-        // La AABB en reposo no vale: el compute deforma los vertices y un brazo
-        // levantado se sale de la caja, asi que cullear con ella haria
-        // desaparecer al personaje — el peor fallo posible aqui.
+        // The rest-pose AABB is not enough: the compute deforms the vertices and a raised
+        // arm sticks out of the box, so culling with it would make
+        // the character disappear, the worst possible failure here.
         //
-        // No evalua ninguna pose: acota hueso a hueso con los valores extremos
-        // de las keys y propaga por la jerarquia, asi que la cota vale tambien
-        // entre keyframes. Es conservadora (puede sobrar), nunca corta de menos.
+        // It does not evaluate any pose: it bounds bone by bone with the extreme values
+        // of the keys and propagates through the hierarchy, so the bound also holds
+        // between keyframes. It is conservative (it may be too large), never too small.
         //
-        // Devuelve 0 si no hay con que acotar (sin huesos, sin vertices, o con
-        // un NaN colado desde el modelo); el llamante lo trata como "sin cota" y
-        // no culea.
+        // Returns 0 if there is nothing to bound with (no bones, no vertices, or with
+        // a NaN leaked in from the model); the caller treats it as "no bound" and
+        // does not cull.
         float skinnedBoundRadius(const SkinnedMesh& mesh);
     }  // namespace Culling
 }  // namespace DonTopo

@@ -13,22 +13,22 @@ namespace DonTopo {
 
 class Scene;
 
-// Un asset que el paquete exportado debe contener.
+// An asset that the exported package must contain.
 struct ExportAsset {
-    // Ruta absoluta en disco, resuelta con weakly_canonical (no canonical:
-    // tolera que el último componente no exista, necesario para los casos con
-    // existsOnDisk == false). Origen de la copia.
+    // Absolute path on disk, resolved with weakly_canonical (not canonical:
+    // it tolerates the last component not existing, needed for the cases with
+    // existsOnDisk == false). Source of the copy.
     std::string sourcePath;
-    // Ruta relativa a la raíz del paquete, con '/' como separador:
-    // "assets/model.fbx". Destino de la copia y valor que acaba en el
-    // .scene exportado.
+    // Path relative to the package root, with '/' as separator:
+    // "assets/model.fbx". Destination of the copy and the value that ends up in the
+    // exported .scene.
     std::string packagePath;
-    // false si sourcePath no existe en disco: dispara el aborto del export
-    // antes de copiar nada.
+    // false if sourcePath does not exist on disk: it triggers the export abort
+    // before copying anything.
     bool        existsOnDisk = false;
 };
 
-// Resultado de escribir el paquete, para volcar al Log Console.
+// Result of writing the package, to dump into the Log Console.
 struct ExportResult {
     bool                     ok         = false;
     int                      fileCount  = 0;
@@ -36,35 +36,35 @@ struct ExportResult {
     std::vector<std::string> messages;
 };
 
-// Clave canónica de un path para comparar y deduplicar: weakly_canonical +
-// minúsculas + '/' como separador. Windows es case-insensitive pero
-// std::filesystem::path::operator== no lo es, y los paths llegan mezclados
-// (absolutos de IGFD, relativos de un .scene editado a mano). Mismo criterio
-// que samePath() en ContentBrowserPanel.cpp:25, expuesto aquí porque
-// rewriteScenePaths y sus tests necesitan generar exactamente la misma clave.
+// Canonical key of a path to compare and deduplicate: weakly_canonical +
+// lowercase + '/' as separator. Windows is case-insensitive but
+// std::filesystem::path::operator== is not, and the paths arrive mixed
+// (absolute from IGFD, relative from a hand-edited .scene). Same criterion
+// as samePath() in ContentBrowserPanel.cpp:25, exposed here because
+// rewriteScenePaths and its tests need to generate exactly the same key.
 std::string exportPathKey(const std::string& path);
 
-// Todos los assets que la escena referencia: meshes de origen, fuentes de
-// animación, texturas de material, audio clips y los .lua de los
-// ScriptComponent. Deduplicado y ordenado por packagePath.
+// All the assets the scene references: source meshes, animation
+// sources, material textures, audio clips and the .lua files of the
+// ScriptComponents. Deduplicated and sorted by packagePath.
 //
-// scriptPaths mapea ScriptComponent::scriptName -> fichero .lua (lo construye
-// el llamador desde ScriptManager::getRegistry()). Un nombre ausente se
-// ignora en silencio: el .lua llega igual al paquete porque Scripts/ se copia
-// entera.
+// scriptPaths maps ScriptComponent::scriptName -> .lua file (built by
+// the caller from ScriptManager::getRegistry()). A missing name is
+// silently ignored: the .lua reaches the package anyway because Scripts/ is copied
+// whole.
 //
-// NO incluye el skybox, los shaders, Scripts/ ni el ejecutable: eso lo añade
-// writeExportPackage. Esta función responde solo a "qué referencia la escena".
+// It does NOT include the skybox, the shaders, Scripts/ or the executable: that is added by
+// writeExportPackage. This function answers only "what does the scene reference".
 std::vector<ExportAsset> collectSceneAssets(
     Scene& scene,
     const std::filesystem::path& projectRoot,
     const std::map<std::string, std::filesystem::path>& scriptPaths);
 
-// Reescribe in-place mesh.sourcePath, mesh.animationSources[].path y
-// audioClip.path de todo el árbol a su packagePath. sourceToPackage va
-// keyeado por exportPathKey(sourcePath). Devuelve cuántos paths se
-// reescribieron. Las texturas no aparecen aquí porque el .scene no las
-// serializa: ModelLoader las deriva como dirname(fbx)/filename.
+// Rewrites in place mesh.sourcePath, mesh.animationSources[].path and
+// audioClip.path of the whole tree to their packagePath. sourceToPackage is
+// keyed by exportPathKey(sourcePath). Returns how many paths were
+// rewritten. Textures do not appear here because the .scene does not
+// serialize them: ModelLoader derives them as dirname(fbx)/filename.
 //
 // assetRoot is the Scene's (Scene::assetRoot): the paths toJson stored relative
 // to it (matAsset, texture overrides) are resolved against it before the lookup,
@@ -74,68 +74,68 @@ int rewriteScenePaths(nlohmann::json& sceneJson,
                       const std::map<std::string, std::string>& sourceToPackage,
                       const std::string& assetRoot);
 
-// Valida que 'name' sea un componente de ruta seguro para construir
-// destDir / name. Rellena 'reason' con el motivo cuando devuelve false.
+// Validates that 'name' is a safe path component to build
+// destDir / name. Fills 'reason' with the cause when it returns false.
 //
-// Vive aquí y no en la UI porque quien lo necesita es el código que va a
-// borrar: writeExportPackage() construye destDir/gameName y hace remove_all()
-// sobre esa ruta. ".." sube un nivel, un nombre absoluto como "C:\Windows"
-// hace que operator/ IGNORE destDir por completo (así trata operator/ una
-// ruta absoluta), y Win32 descarta espacios/puntos finales del último
-// componente al crear la carpeta, colapsando el destino real sobre la carpeta
-// padre aunque el string en pantalla parezca inofensivo.
+// It lives here and not in the UI because whoever needs it is the code that is going to
+// delete: writeExportPackage() builds destDir/gameName and does remove_all()
+// on that path. ".." goes up one level, an absolute name like "C:\Windows"
+// makes operator/ IGNORE destDir entirely (that is how operator/ treats an
+// absolute path), and Win32 drops trailing spaces/dots from the last
+// component when creating the folder, collapsing the real destination onto the
+// parent folder even if the string on screen looks harmless.
 bool isValidExportGameName(const std::string& name, std::string& reason);
 
-// Estado del directorio destino de un export, para decidir si es seguro
-// borrarlo. El criterio es inverso al que había antes (enumerar a mano los
-// sitios prohibidos: dentro del proyecto, dentro de Scripts...): esa lista
-// siempre dejaba fuera un caso — el último, <repo>/assets, borraba los assets
-// fuente y encima reportaba éxito. Aquí no se pregunta "¿dónde está el
-// destino?" sino "¿qué hay dentro?", que es lo único que determina si un
-// remove_all() destruye trabajo ajeno.
+// State of an export's destination directory, to decide whether it is safe
+// to delete it. The criterion is the inverse of the earlier one (manually enumerating the
+// forbidden places: inside the project, inside Scripts...): that list
+// always left one case out, the last one, <repo>/assets, which deleted the source
+// assets and on top of that reported success. Here the question is not "where is the
+// destination?" but "what is inside?", which is the only thing that determines whether a
+// remove_all() destroys someone else's work.
 enum class ExportTargetState {
-    Missing,        // no existe: se crea, nada que borrar
-    Empty,          // existe y está vacío: seguro
-    PriorPackage,   // existe y contiene game.scene: paquete de un export anterior, seguro
-    Occupied        // existe con contenido ajeno: NUNCA se borra
+    Missing,        // does not exist: it is created, nothing to delete
+    Empty,          // exists and is empty: safe
+    PriorPackage,   // exists and contains game.scene: package from a previous export, safe
+    Occupied        // exists with foreign content: NEVER deleted
 };
 
-// Clasifica el directorio de paquete 'pkg' (== destDir/gameName). Si el
-// estado no se puede determinar (permisos, path inválido, cualquier error del
-// sistema de ficheros) devuelve Occupied: falla en cerrado, porque el coste de
-// equivocarse hacia el otro lado es borrar datos del usuario.
+// Classifies the package directory 'pkg' (== destDir/gameName). If the
+// state cannot be determined (permissions, invalid path, any filesystem
+// error) it returns Occupied: it fails closed, because the cost of
+// being wrong in the other direction is deleting user data.
 ExportTargetState inspectExportTarget(const std::filesystem::path& pkg);
 
-// Crea <destDir>/<gameName>/, copia el runtime, los assets, el skybox,
-// shaders/*.spv, Scripts/ y fmod.dll, y escribe game.scene.
+// Creates <destDir>/<gameName>/, copies the runtime, the assets, the skybox,
+// shaders/*.spv, Scripts/ and fmod.dll, and writes game.scene.
 //
-// Llama a inspectExportTarget() por su cuenta y aborta sin tocar nada si el
-// destino está Occupied: es autoritativo, no da por hecho que la UI haya
-// mirado. Con Missing/Empty/PriorPackage sí hace remove_all() + recreado, para
-// que el paquete no arrastre assets huérfanos de un export anterior (pedir
-// confirmación en el caso PriorPackage sigue siendo cosa de la UI).
+// It calls inspectExportTarget() on its own and aborts without touching anything if the
+// destination is Occupied: it is authoritative, it does not assume the UI has
+// looked. With Missing/Empty/PriorPackage it does remove_all() + recreate, so
+// that the package does not carry orphan assets from a previous export (asking for
+// confirmation in the PriorPackage case is still the UI's job).
 //
-// 'backend' solo decide lo que se escribe en game.cfg y si la ausencia de
-// .dxil se avisa: los shaders de los dos backends se copian siempre, para que
-// el paquete siga arrancando si alguien edita ese campo a mano.
-// Que lleva el paquete exportado en cada plataforma. writeExportPackage recorre
-// esto en vez de tener ramas por sistema: macOS sera otra fila.
+// 'backend' only decides what is written to game.cfg and whether the absence of
+// .dxil is warned about: the shaders of both backends are always copied, so that
+// the package still starts if someone edits that field by hand.
+// What the exported package carries on each platform. writeExportPackage walks
+// this instead of having per-system branches: macOS will be another row.
 struct ExportPlatform {
     std::string              executableSuffix;   // ".exe" | ""
-    bool                     setExecutableBit;   // chmod +x al ejecutable
-    std::vector<std::string> audioLibPrefixes;   // fichero exacto; si acaba en ".", + un numero
-    bool                     copyMsvcCrt;        // msvcp140* / vcruntime140* junto al editor
-    bool                     warnDebugCrt;       // aviso de CRT de depuracion no redistribuible
-    bool                     warnGlibc;          // aviso de version minima de glibc
+    bool                     setExecutableBit;   // chmod +x on the executable
+    std::vector<std::string> audioLibPrefixes;   // exact file; if it ends in ".", + a number
+    bool                     copyMsvcCrt;        // msvcp140* / vcruntime140* next to the editor
+    bool                     warnDebugCrt;       // warning about the non-redistributable debug CRT
+    bool                     warnGlibc;          // warning about the minimum glibc version
 };
 
 ExportPlatform exportPlatformFor(platform::Os os);
 
-// ¿Es `fileName` una biblioteca de audio que el paquete debe llevar? Una entrada
-// que acaba en "." admite solo ese prefijo mas un numero: "libfmod.so." acepta
-// libfmod.so.14 (el soname, lo que pide el binario) y no libfmod.so ni
-// libfmod.so.14.14, que son el mismo fichero repetido. La variante de logging de
-// FMOD (libfmodL, fmodL.dll) no entra.
+// Is `fileName` an audio library that the package must carry? An entry
+// that ends in "." admits only that prefix plus a number: "libfmod.so." accepts
+// libfmod.so.14 (the soname, what the binary asks for) and neither libfmod.so nor
+// libfmod.so.14.14, which are the same file repeated. FMOD's logging
+// variant (libfmodL, fmodL.dll) is not included.
 bool isAudioLibFile(const std::string& fileName, const ExportPlatform& plat);
 
 ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
@@ -146,24 +146,24 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const std::filesystem::path& scriptsDir,
                                 const std::filesystem::path& runtimeExe,
                                 RenderBackend backend = RenderBackend::Vulkan,
-                                // Carpeta de la que salen las 6 caras del cielo,
-                                // relativa al proyecto. El destino dentro del paquete
-                                // es SIEMPRE assets/skybox, que es donde el runtime
-                                // las busca, asi que cambiar de cielo en el editor no
-                                // obliga a tocar el runtime.
+                                // Folder the 6 sky faces come from,
+                                // relative to the project. The destination inside the package
+                                // is ALWAYS assets/skybox, which is where the runtime
+                                // looks for them, so changing the sky in the editor does not
+                                // force touching the runtime.
                                 const std::string& skyboxFolder = "assets/skybox",
-                                // Para que plataforma es el paquete. Por defecto, la
-                                // del editor que exporta; los tests escriben el de
-                                // otra para cubrir las dos filas desde cualquier SO.
+                                // Which platform the package is for. By default, that of
+                                // the exporting editor; the tests write that of
+                                // another to cover both rows from any OS.
                                 const ExportPlatform& plat = exportPlatformFor(platform::currentOs()));
 
-// Export completo: valida, recolecta, reescribe y escribe el paquete.
-// Los mensajes para el usuario van en ExportResult::messages; el llamador
-// decide dónde mostrarlos (el editor los vuelca al Log Console).
+// Full export: validates, collects, rewrites and writes the package.
+// User messages go in ExportResult::messages; the caller
+// decides where to show them (the editor dumps them into the Log Console).
 //
-// Está aquí y no en EditorUI porque no dibuja nada: es orquestación de export
-// y aritmética de rutas. Que viva en el módulo es lo que permite a
-// exporter_tests ejercitar los caminos destructivos sin abrir una ventana.
+// It is here and not in EditorUI because it draws nothing: it is export orchestration
+// and path arithmetic. Living in the module is what lets
+// exporter_tests exercise the destructive paths without opening a window.
 ExportResult exportGame(Scene& scene,
                         const std::map<std::string, std::filesystem::path>& scriptPaths,
                         const std::filesystem::path& destDir,

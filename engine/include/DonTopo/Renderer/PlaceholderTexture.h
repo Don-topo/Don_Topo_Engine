@@ -4,30 +4,30 @@
 
 namespace DonTopo {
 
-// Los dos rellenos que se ponen cuando un material no acaba dando una textura.
-// Son DOS y no uno a proposito, porque las dos situaciones no son la misma:
+// The two fillers used when a material does not end up giving a texture.
+// There are TWO and not one on purpose, because the two situations are not the same:
 //
-//  - Una primitiva procedural (cubo, esfera, plano...) no lleva textura porque
-//    no le corresponde. Ahi el relleno correcto es blanco: el shader multiplica
-//    por el y el objeto sale con su color base, sin decorar nada.
+//  - A procedural primitive (cube, sphere, plane...) carries no texture because
+//    it does not need one. There the right filler is white: the shader multiplies
+//    by it and the object comes out with its base color, decorating nothing.
 //
-//  - Una textura que el material SI declara pero que no se ha podido leer -el
-//    fichero no esta, o esta corrupto- es un fallo, y tiene que verse. Ahi va el
-//    damero, que es la convencion de "aqui falta algo".
+//  - A texture that the material DOES declare but that could not be read (the
+//    file is missing, or corrupt) is a failure, and it has to be visible. There goes the
+//    checkerboard, which is the "something is missing here" convention.
 //
-// Confundirlas es lo que hacia cada backend por su lado y en direcciones
-// contrarias: Vulkan pintaba damero tambien en el caso legitimo, y DirectX 12
-// pintaba blanco tambien en el caso de fallo, con lo que un fichero que faltaba
-// no se notaba. De paso, una superficie blanca y lisa no deja juzgar nada que
-// dependa del detalle -por ejemplo si el shadow map ha cambiado de resolucion-.
+// Confusing them is what each backend did on its own and in opposite
+// directions: Vulkan also painted the checkerboard in the legitimate case, and DirectX 12
+// also painted white in the failure case, so a missing file
+// went unnoticed. Besides, a plain white surface does not let you judge anything that
+// depends on detail (for example whether the shadow map changed resolution).
 
-// Lado del damero, en texeles, y lado de cada tesela.
+// Side of the checkerboard, in texels, and side of each tile.
 constexpr int kMissingTextureSize = 64;
 constexpr int kMissingTextureTile = 8;
 
-// RGBA8, kMissingTextureSize x kMissingTextureSize. Grises y no magenta: el
-// magenta saturado se confunde con un material emisivo, y el objetivo es que se
-// lea como "textura ausente", no como un color de la escena.
+// RGBA8, kMissingTextureSize x kMissingTextureSize. Grays and not magenta: saturated
+// magenta is confused with an emissive material, and the goal is for it to
+// read as "missing texture", not as a color of the scene.
 inline std::vector<uint8_t> makeMissingTextureRgba()
 {
     std::vector<uint8_t> px(static_cast<size_t>(kMissingTextureSize) * kMissingTextureSize * 4);

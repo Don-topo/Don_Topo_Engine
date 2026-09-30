@@ -6,21 +6,21 @@
 using namespace physx;
 
 namespace {
-    // El collider dueño del actor. PhysicsManager deja en userData el Collider*
-    // base al crear/reconstruir el actor, así que es el camino de vuelta
-    // Rigidbody -> Collider sin guardar un puntero extra ni tocar bindActor.
-    // Lo usa la interpolación, que es propiedad del Rigidbody pero la ejecuta
-    // el collider.
+    // The collider that owns the actor. PhysicsManager leaves the base Collider* in userData
+    // when creating/rebuilding the actor, so it is the way back
+    // Rigidbody -> Collider without storing an extra pointer or touching bindActor.
+    // It is used by interpolation, which is a property of the Rigidbody but is executed
+    // by the collider.
     DonTopo::Collider* colliderOf(void* actor)
     {
         if (!actor) return nullptr;
         return static_cast<DonTopo::Collider*>(static_cast<PxRigidDynamic*>(actor)->userData);
     }
 
-    // eENABLE_CCD real del actor. PhysX no soporta CCD en cuerpos kinematic
-    // (avisa y lo ignora), así que el flag efectivo es "lo que pidió el usuario
-    // Y no es kinematic". La intención se guarda en Rigidbody::m_ccd y se
-    // re-aplica cada vez que cambia el modo kinematic.
+    // Real eENABLE_CCD of the actor. PhysX does not support CCD on kinematic bodies
+    // (it warns and ignores it), so the effective flag is "what the user asked for
+    // AND it is not kinematic". The intent is stored in Rigidbody::m_ccd and
+    // re-applied every time the kinematic mode changes.
     void applyCcdFlag(PxRigidDynamic* actor, bool ccd, bool kinematic)
     {
         actor->setRigidBodyFlag(PxRigidBodyFlag::eENABLE_CCD, ccd && !kinematic);
@@ -38,8 +38,8 @@ namespace {
         return f;
     }
 
-    // ForceMode (Rigidbody.h) -> PxForceMode. Cualquier valor fuera del enum
-    // cae en eFORCE, que es el comportamiento histórico.
+    // ForceMode (Rigidbody.h) -> PxForceMode. Any value outside the enum
+    // falls to eFORCE, which is the historical behavior.
     physx::PxForceMode::Enum toPxForceMode(DonTopo::ForceMode m) {
         switch (m) {
             case DonTopo::ForceMode::Acceleration:   return PxForceMode::eACCELERATION;
@@ -60,7 +60,7 @@ void Rigidbody::bindActor(void* actor)
 #ifdef DT_PHYSX_ENABLED
     if (!m_actor) return;
     auto* a = static_cast<PxRigidDynamic*>(m_actor);
-    // setMassAndUpdateInertia recalcula la inercia a partir de las shapes.
+    // setMassAndUpdateInertia recomputes the inertia from the shapes.
     PxRigidBodyExt::setMassAndUpdateInertia(*a, m_mass);
     a->setLinearDamping(m_drag);
     a->setAngularDamping(m_angularDrag);
@@ -68,9 +68,9 @@ void Rigidbody::bindActor(void* actor)
     a->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, m_isKinematic);
     a->setRigidDynamicLockFlags(toLockFlags(m_constraints));
     applyCcdFlag(a, m_ccd, m_isKinematic);
-    // La interpolación la ejecuta el collider: al (re)enlazar el actor hay que
-    // volver a empujársela, porque tras un rebuild static<->dynamic el collider
-    // sigue siendo el mismo pero la config vive aquí.
+    // Interpolation is executed by the collider: when (re)linking the actor it has to be
+    // pushed to it again, because after a static<->dynamic rebuild the collider
+    // is still the same one but the config lives here.
     if (auto* col = colliderOf(m_actor)) col->setInterpolate(m_interpolate);
     if (!m_isKinematic) a->wakeUp();
 #endif
@@ -91,8 +91,8 @@ void Rigidbody::setUseGravity(bool enabled)
     if (!m_actor) return;
     auto* a = static_cast<PxRigidDynamic*>(m_actor);
     a->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !enabled);
-    // Reactivar gravedad sobre un cuerpo dormido no lo despierta solo: sin
-    // wakeUp se queda congelado hasta que algo lo perturbe.
+    // Re-enabling gravity on a sleeping body does not wake it by itself: without
+    // wakeUp it stays frozen until something disturbs it.
     if (enabled && !m_isKinematic) a->wakeUp();
 #endif
 }
@@ -103,16 +103,16 @@ void Rigidbody::setIsKinematic(bool enabled)
 #ifdef DT_PHYSX_ENABLED
     if (!m_actor) return;
     auto* a = static_cast<PxRigidDynamic*>(m_actor);
-    // El CCD efectivo depende del modo, y el ORDEN importa: PhysX valida el
-    // par (kinematic, CCD) en cuanto se toca cualquiera de los dos, así que el
-    // flag de CCD se quita ANTES de entrar en kinematic y se devuelve DESPUÉS
-    // de salir. Al revés funciona igual pero escupe
-    // "kinematic bodies with CCD enabled are not supported" por el error stream.
+    // The effective CCD depends on the mode, and the ORDER matters: PhysX validates the
+    // (kinematic, CCD) pair as soon as either of the two is touched, so the
+    // CCD flag is removed BEFORE entering kinematic and given back AFTER
+    // leaving. The other way round it works the same but spits out
+    // "kinematic bodies with CCD enabled are not supported" on the error stream.
     if (enabled) applyCcdFlag(a, m_ccd, true);
     a->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, enabled);
     if (!enabled) applyCcdFlag(a, m_ccd, false);
-    // Al pasar de kinematic a dinámico, despertarlo para que la simulación lo
-    // retome (si no, cae sólo tras la primera perturbación).
+    // When going from kinematic to dynamic, wake it up so that the simulation
+    // picks it up again (otherwise it only falls after the first disturbance).
     if (!enabled) a->wakeUp();
 #endif
 }
@@ -170,7 +170,7 @@ void Rigidbody::setVelocity(const glm::vec3& v)
 #ifdef DT_PHYSX_ENABLED
     if (!m_actor) return;
     auto* a = static_cast<PxRigidDynamic*>(m_actor);
-    if (a->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC) return; // PhysX prohíbe setear velocidad a kinematic
+    if (a->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC) return; // PhysX forbids setting velocity on a kinematic
     a->setLinearVelocity(PxVec3(v.x, v.y, v.z));
 #else
     (void)v;

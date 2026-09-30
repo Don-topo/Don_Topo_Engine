@@ -75,47 +75,47 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-// Un vértice de la geometría de gizmos: es EXACTAMENTE lo que declara
-// shaders/gizmo.vert (location 0 = posición, location 1 = color), y por eso el
-// input layout puede ir contra el DXIL traducido sin adaptar nada.
+// A vertex of the gizmo geometry: it is EXACTLY what shaders/gizmo.vert declares
+// (location 0 = position, location 1 = color), and that is why the input layout
+// can go against the translated DXIL without adapting anything.
 struct GizmoVertex {
     float pos[3];
     float color[3];
 };
 
-// Bloque de luz del UBO. Mismo layout que DonTopo::Light y que el struct Light
-// de shaders/triangle.frag.
+// Light block of the UBO. Same layout as DonTopo::Light and as the Light struct
+// in shaders/triangle.frag.
 struct ShaderLight {
     float position[4];
     float color[4];
-    float direction[4];  // .w = tipo: 0 point, 1 spot, 2 directional, 3 area
-    float params[4];     // range, cos interior, cos exterior, ancho
+    float direction[4];  // .w = type: 0 point, 1 spot, 2 directional, 3 area
+    float params[4];     // range, inner cos, outer cos, width
 };
 
-// El UBO de set 0 binding 0, con los offsets EXACTOS que spirv-cross genera al
-// traducir el GLSL. Los static_assert de abajo son la única defensa real: un
-// desajuste de offsets CPU/GPU no da error en ninguna capa de validación, solo
-// píxeles raros.
+// The set 0 binding 0 UBO, with the EXACT offsets that spirv-cross generates when
+// translating the GLSL. The static_asserts below are the only real defense: a
+// CPU/GPU offset mismatch raises no error in any validation layer, only odd
+// pixels.
 //
-// Los registros concretos van en cada campo y NO en esta lista, que se quedaba
-// vieja cada vez que el bloque crecía: los de aquí eran los de antes de que
-// lightSpaceMatrix pasara a 12 matrices y MAX_LIGHTS a 64.
+// The concrete registers go on each field and NOT in this list, which went
+// stale every time the block grew: the ones here were those from before
+// lightSpaceMatrix became 12 matrices and MAX_LIGHTS became 64.
 struct SceneUbo {
     glm::mat4   view;                    // c0
     glm::mat4   proj;                    // c4
-    // SEIS y no cuatro: es el maximo entre las 4 cascadas de una direccional y
-    // las 6 caras del cubemap de una de punto, que nunca coexisten. Al crecer
-    // desplaza 128 bytes TODO lo que va detras, y de ahi los offsets de abajo.
-    // DIEZ: seis de la luz key (4 cascadas, o 6 caras de cubemap, o 1 de foco)
-    // mas cuatro focos secundarios de una capa cada uno. Al crecer desplaza todo
-    // lo que va detras, y de ahi los offsets.
+    // SIX and not four: it is the maximum between the 4 cascades of a directional and
+    // the 6 faces of a point light's cubemap, which never coexist. When it grows it
+    // shifts EVERYTHING behind it by 128 bytes, hence the offsets below.
+    // TEN: six from the key light (4 cascades, or 6 cubemap faces, or 1 for a spot)
+    // plus four secondary spots of one layer each. When it grows it shifts everything
+    // behind it, hence the offsets.
     glm::mat4   lightSpaceMatrix[SHADOW_MATRICES];   // c8
     glm::vec4   cascadeSplits;           // c56
     ShaderLight lights[MAX_LIGHTS];      // c57
     glm::vec4   viewPos;                 // c313
     int         numLights;               // c314
-    // En el hueco de padding que ya había detrás de numLights, igual que en
-    // GLSL: ningún offset anterior se mueve.
+    // In the padding gap that was already behind numLights, just like in
+    // GLSL: no earlier offset moves.
     float       ambientIntensity;
 };
 
@@ -124,20 +124,20 @@ static_assert(offsetof(SceneUbo, proj) == 64, "UBO: proj must be at c4");
 static_assert(offsetof(SceneUbo, lightSpaceMatrix) == 128, "UBO: lightSpaceMatrix must be at c8");
 static_assert(offsetof(SceneUbo, cascadeSplits) == 896, "UBO: cascadeSplits must be at c56");
 static_assert(offsetof(SceneUbo, lights) == 912, "UBO: lights must be at c57");
-// Los tres de detras del array se movieron 3072 bytes al pasar MAX_LIGHTS de 16
-// a 64 (48 luces mas x 64 bytes): 1936 -> 5008, 1952 -> 5024, 1956 -> 5028.
+// The three behind the array moved 3072 bytes when MAX_LIGHTS went from 16
+// to 64 (48 more lights x 64 bytes): 1936 -> 5008, 1952 -> 5024, 1956 -> 5028.
 static_assert(offsetof(SceneUbo, viewPos) == 5008, "UBO: viewPos must be at c313");
 static_assert(offsetof(SceneUbo, numLights) == 5024, "UBO: numLights must be at c314");
 static_assert(offsetof(SceneUbo, ambientIntensity) == 5028,
               "UBO: ambientIntensity sits right after numLights");
-// Los offsets de arriba son números fijos A PROPÓSITO: describen el layout que
-// declaran los packoffset del HLSL, que no salen de este fichero. Calcularlos a
-// partir de MAX_LIGHTS los haría seguir al array y dejarían de cazar justo el
-// fallo que vigilan — que C++ y el shader dejen de contar lo mismo.
+// The offsets above are fixed numbers ON PURPOSE: they describe the layout that
+// the HLSL packoffsets declare, which does not come from this file. Computing them
+// from MAX_LIGHTS would make them follow the array and they would stop catching exactly
+// the failure they guard against: C++ and the shader no longer counting the same thing.
 //
-// Este assert es el que avisa: subir el tope desplaza viewPos y numLights, así
-// que hay que tocar los seis GLSL, el HLSL traducido y los tres offsets de
-// arriba EN LA MISMA commit. Sin él, el UBO se leería desplazado y en silencio.
+// This assert is the one that warns: raising the cap shifts viewPos and numLights, so
+// the six GLSL files, the translated HLSL and the three offsets above must be touched
+// IN THE SAME commit. Without it, the UBO would be read shifted and silently.
 static_assert(MAX_LIGHTS == 64,
               "MAX_LIGHTS changed: adjust the offsets above and the "
               "#define in shaders/lights_config.glsl, or the shader will read a "
@@ -148,29 +148,29 @@ struct PushData {
     glm::mat4 transform;
     float     metallic;
     float     roughness;
-    glm::vec2 flags;  // x: 1 = coger el model del SSBO de instancias
+    glm::vec2 flags;  // x: 1 = take the model from the instance SSBO
 };
 static_assert(sizeof(PushData) == 80, "PushData must take 80 bytes (20 root constants)");
 
-// Push constants de los tres compute de animación. Los tres comparten bloque de
-// 16 bytes; en bone_hierarchy y skinning el cuarto campo no se lee.
-// Espejo de SkinningPass::Push (Vulkan): los dos backends compilan LOS MISMOS
-// .comp, así que este bloque y aquél tienen que coincidir campo a campo.
+// Push constants of the three animation computes. The three share a 16-byte
+// block; in bone_hierarchy and skinning the fourth field is not read.
+// Mirror of SkinningPass::Push (Vulkan): both backends compile THE SAME
+// .comp files, so this block and that one must match field by field.
 struct ComputePush {
     uint32_t boneCount;
     uint32_t vertexCount;
-    // --- Solo los lee bone_eval.comp ---
-    uint32_t rootMotionMode;    // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
-    uint32_t poseBlockOffset;   // en uints: copia del bloque de pose del frame
+    // --- Only read by bone_eval.comp ---
+    uint32_t rootMotionMode;    // 0 free, 1 root pinned to bind, 2 only X and Z
+    uint32_t poseBlockOffset;   // in uints: copy of the frame's pose block
     // --- bone_ik.comp y bone_hierarchy.comp ---
-    uint32_t ikBlockOffset;     // en uints: copia del bloque de IK del frame
-    uint32_t flags;             // bit 0: la jerarquía escribe solo mundo
+    uint32_t ikBlockOffset;     // in uints: copy of the frame's IK block
+    uint32_t flags;             // bit 0: the hierarchy writes world only
 };
 static_assert(sizeof(ComputePush) == 24, "ComputePush: mirror of SkinningPass::Push and of the 4 .comp shaders");
 
-// Medio flotante a mano: los neutros del IBL son cuatro texels y no compensa
-// arrastrar DirectXMath por ellos. Vale para valores normales y pequeños, que
-// es lo único que se le pasa.
+// Half float by hand: the IBL neutrals are four texels and it is not worth
+// dragging in DirectXMath for them. It works for normal and small values, which
+// is all that is passed to it.
 inline uint16_t floatToHalf(float value)
 {
     const bool  negative = value < 0.0f;
@@ -194,32 +194,32 @@ inline uint16_t floatToHalf(float value)
     return static_cast<uint16_t>((negative ? 0x8000u : 0u) | (biased << 10) | mantissa);
 }
 
-// IBL. Los tamaños viven en RenderConstants.h, compartidos con el camino
-// Vulkan: estaban duplicados aquí con un comentario que decía que eran "los
-// mismos", que era la única defensa contra que dejaran de serlo.
+// IBL. The sizes live in RenderConstants.h, shared with the Vulkan path: they
+// were duplicated here with a comment saying they were "the same", which was
+// the only defense against them ceasing to be.
 constexpr UINT kIblIrradianceSize = IBL_IRRADIANCE_SIZE;
 constexpr UINT kIblPrefilterSize  = IBL_PREFILTER_SIZE;
 constexpr UINT kIblPrefilterMips  = IBL_PREFILTER_MIPS;
 
-// Lado de cada cara al capturar una sonda. 128 es lo que usa el camino de
-// Vulkan: entra de sobra en el prefiltrado y seis caras a más resolución no se
-// notan en un reflejo, que ya va emborronado por la rugosidad.
+// Side of each face when capturing a probe. 128 is what the Vulkan path uses: it
+// is more than enough for the prefiltering and six faces at higher resolution are
+// not noticeable in a reflection, which is already blurred by roughness.
 constexpr UINT kProbeFaceSize = 128;
 
-// Forward+. Mismos valores que Renderer.h: la rejilla, el tope por celda y el
-// de luces los dan por hecho los dos compute de culling y pbr.frag.
+// Forward+. Same values as Renderer.h: the grid, the per-cell cap and the
+// light cap are taken for granted by both culling computes and pbr.frag.
 constexpr uint32_t kFpMaxLights     = 256;
 constexpr uint32_t kFpMaxPerCell    = 64;
-// Palabras del bloque de estadisticas del culling, el mismo layout que declara
-// light_cull_tiled.comp: [0] luces repartidas, [1] celdas con alguna luz,
-// [2] celdas desbordadas, [3] sin usar.
+// Words of the culling statistics block, the same layout that
+// light_cull_tiled.comp declares: [0] lights distributed, [1] cells with any light,
+// [2] overflowed cells, [3] unused.
 constexpr uint32_t kFpStatsWords    = 4;
 constexpr uint32_t kFpTileSize      = 16;  // tiled
 constexpr uint32_t kFpClusterTile   = 64;  // clustered, XY
 constexpr uint32_t kFpClusterSlices = 24;  // clustered, Z
 
-// Una luz tal y como la quiere el culling: la misma que en el UBO más el radio
-// y su posición en view space, que es lo que evita recalcularla por celda.
+// A light as culling wants it: the same as in the UBO plus the radius
+// and its view space position, which avoids recomputing it per cell.
 struct FpLightGpu {
     glm::vec4 posRadius;
     glm::vec4 color;
@@ -228,183 +228,183 @@ struct FpLightGpu {
     glm::vec4 params;
 };
 
-// Bloque de parámetros que leen el culling y pbr.frag.
+// Parameter block read by the culling and pbr.frag.
 struct FpParamsGpu {
     uint32_t mode, gridX, gridY, gridZ;
     uint32_t tileSize, maxPerCell, numLights, pad0;
     float    zNear, zFar, sliceScale, sliceBias;
 };
 
-// Push del culling: los cuatro coeficientes de la proyección y el tamaño de
-// pantalla.
+// Culling push: the four projection coefficients and the screen
+// size.
 struct FpPush {
     float    p00, p11, p22, p32;
     uint32_t screenW, screenH, pad0, pad1;
 };
 
-// Sombras en cascada. Los tres salen de UniformBufferObject.h, que este fichero
-// ya incluye: estaban copiados aquí con su valor a fuego, y nada obligaba a que
-// siguieran coincidiendo. Los static_assert del SceneUbo NO lo habrían cazado:
-// vigilan los offsets del bloque, no cuántas capas tiene el shadow map.
+// Cascaded shadows. All three come from UniformBufferObject.h, which this file
+// already includes: they were copied here with their value hardcoded, and nothing forced
+// them to keep matching. The SceneUbo static_asserts would NOT have caught it:
+// they guard the block offsets, not how many layers the shadow map has.
 constexpr int   kShadowCascades    = SHADOW_CASCADES;
 constexpr int   kShadowLayers      = SHADOW_MATRICES;
 constexpr int   kShadowKeyLayers   = SHADOW_KEY_MATRICES;
-// Lado del shadow map POR DEFECTO. El que se usa vive en RendererState
-// (shadowResolution) y lo aplica applyPendingShadowSize.
+// DEFAULT side of the shadow map. The one in use lives in RendererState
+// (shadowResolution) and is applied by applyPendingShadowSize.
 constexpr UINT  kShadowMapSizeDefault = 2048;
-// kCascadeLambda y kShadowMaxDistance ya no viven aqui: los elige el usuario y
-// salen de RendererState (cascadeLambda/shadowDistance), igual que en Vulkan.
+// kCascadeLambda and kShadowMaxDistance no longer live here: the user chooses them and
+// they come from RendererState (cascadeLambda/shadowDistance), just like in Vulkan.
 
-// Bloom: niveles de la cadena de reducción. Mismo número que usa el camino
-// Vulkan (su log dice "5 mips").
+// Bloom: levels of the reduction chain. Same number the Vulkan path
+// uses (its log says "5 mips").
 constexpr int kBloomMips = BLOOM_MIPS;
 
-// Formato del target donde se dibuja la escena. Coma flotante y no UNORM: el
-// umbral del bloom solo tiene sentido si el color puede pasar de 1.0, que es
-// justo lo que un backbuffer normalizado recorta.
+// Format of the target the scene is drawn into. Floating point and not UNORM: the
+// bloom threshold only makes sense if the color can exceed 1.0, which is
+// exactly what a normalized backbuffer clips.
 constexpr DXGI_FORMAT kHdrFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-// Destino de la composición, ya con el tone mapping aplicado. De aquí lee el
-// pase final (FXAA/TAA/SSAA) para escribir el backbuffer.
+// Composition target, with tone mapping already applied. The final pass
+// (FXAA/TAA/SSAA) reads from here to write the backbuffer.
 constexpr DXGI_FORMAT kLdrFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
-// Push compartido por bloom_down y bloom_up: vec2 + 3 float + int = 24 bytes.
+// Push shared by bloom_down and bloom_up: vec2 + 3 float + int = 24 bytes.
 struct BloomPush {
-    float srcTexel[2];  // 1 / tamaño del nivel de ORIGEN
+    float srcTexel[2];  // 1 / size of the SOURCE level
     float threshold;
     float knee;
     float radius;    // solo lo usa el upsample
-    int   prefilter; // != 0 solo en el primer nivel del downsample
+    int   prefilter; // != 0 only on the first downsample level
 };
 static_assert(sizeof(BloomPush) == 24, "BloomPush must take 24 bytes");
 
-// Reparto del heap de descriptores. Los tres primeros tienen que ir seguidos
-// porque el shader de malla los pide como t1..t3, y sceneHdr/bloomMip0 también
-// porque el de composición los pide como t0..t1.
+// Layout of the descriptor heap. The first three must be contiguous
+// because the mesh shader asks for them as t1..t3, and sceneHdr/bloomMip0 too
+// because the composition one asks for them as t0..t1.
 constexpr UINT kSrvBaseColor = 0;
 constexpr UINT kSrvNormalMap = 1;
 constexpr UINT kSrvShadowMap = 2;
-// t4..t7 del bloque global. Son los neutros: metallic-roughness a blanco
-// (ao = 1 y los factores del push sin escalar), los dos cubemaps con un
-// ambiente plano y la oclusión a 1. pbr.frag los muestrea SIEMPRE, así que
-// tienen que existir aunque no haya ni material ni entorno ni SSAO.
+// t4..t7 of the global block. They are the neutrals: metallic-roughness at white
+// (ao = 1 and the push factors unscaled), the two cubemaps with a flat
+// ambient and occlusion at 1. pbr.frag ALWAYS samples them, so they
+// have to exist even when there is no material, environment or SSAO.
 constexpr UINT kSrvMetalRough = 3;
 constexpr UINT kSrvIrradiance = 4;
 constexpr UINT kSrvPrefilter  = 5;
 constexpr UINT kSrvSsao       = 6;
 constexpr UINT kSrvSceneHdr   = 7;
-constexpr UINT kSrvBloomMip  = kSrvSceneHdr + 1;            // + nivel
-constexpr UINT kUavBloomMip  = kSrvBloomMip + kBloomMips;   // + nivel
-constexpr UINT kSrvDepth     = kUavBloomMip + kBloomMips;   // profundidad, para la niebla
-constexpr UINT kUavSceneHdr  = kSrvDepth + 1;               // la niebla escribe sobre la escena
-constexpr UINT kSrvLdr       = kUavSceneHdr + 1;            // salida de la composición, para FXAA
-// Rango reservado para ImGui. No basta con uno: desde la 1.92 su backend de
-// DX12 pide descriptores por su cuenta (uno por textura, no solo la fuente) a
-// través de los callbacks de reserva que se le pasan al inicializarlo.
+constexpr UINT kSrvBloomMip  = kSrvSceneHdr + 1;            // + level
+constexpr UINT kUavBloomMip  = kSrvBloomMip + kBloomMips;   // + level
+constexpr UINT kSrvDepth     = kUavBloomMip + kBloomMips;   // depth, for the fog
+constexpr UINT kUavSceneHdr  = kSrvDepth + 1;               // the fog writes over the scene
+constexpr UINT kSrvLdr       = kUavSceneHdr + 1;            // composition output, for FXAA
+// Range reserved for ImGui. One is not enough: since 1.92 its DX12 backend
+// asks for descriptors on its own (one per texture, not just the font) through
+// the allocation callbacks passed to it when it is initialized.
 constexpr UINT kSrvImGui      = kSrvLdr + 1;
 constexpr UINT kImGuiReserved = 16;
 
-// Bloque de descriptores por objeto. pbr.frag pide t1..t7 como UNA tabla
-// contigua, así que cada malla necesita sus siete huecos seguidos, en este
-// orden: color base, normales, sombras, metallic-roughness, irradiancia,
-// prefiltrado y oclusión de pantalla. Los cuatro últimos y el de sombras son
-// recursos compartidos: se les crea la vista otra vez dentro de cada bloque,
-// que es legal y evita partir la root signature (copiar descriptores desde un
-// heap visible al shader no lo permite la API).
+// Per-object descriptor block. pbr.frag asks for t1..t7 as ONE contiguous
+// table, so each mesh needs its seven slots in a row, in this
+// order: base color, normals, shadows, metallic-roughness, irradiance,
+// prefiltered and screen-space occlusion. The last four and the shadow one are
+// shared resources: their view is created again inside each block,
+// which is legal and avoids splitting the root signature (copying descriptors from a
+// shader-visible heap is not allowed by the API).
 //
-// Los objetos que pasen del tope se dibujan con el bloque global, que lleva
-// los neutros: se ven planos, pero nunca se sale del heap.
+// Objects beyond the cap are drawn with the global block, which carries
+// the neutrals: they look flat, but the heap is never exceeded.
 constexpr UINT kSrvPerObject   = 7;
 constexpr UINT kMaxObjectSlots = 512;
 constexpr UINT kSrvObjects     = kSrvImGui + kImGuiReserved;
 
-// Y otro tanto para la malla skinned, que se dibuja por submallas: cada una
-// tiene su material en el FBX y por tanto su propio bloque.
+// And the same for the skinned mesh, which is drawn by submeshes: each one
+// has its material in the FBX and therefore its own block.
 constexpr UINT kMaxSkinnedSlots = 16;
 constexpr UINT kSrvSkinned      = kSrvObjects + kMaxObjectSlots * kSrvPerObject;
 
-// Cubemap del cielo: una sola vista, la del TextureCube que muestrea t0 de
+// Sky cubemap: a single view, that of the TextureCube sampled by t0 of
 // skybox.frag.
 constexpr UINT kSrvSkybox   = kSrvSkinned + kMaxSkinnedSlots * kSrvPerObject;
 
-// Destinos de los dos compute de IBL: la irradiancia entera y un nivel del
-// prefiltrado por mip. Son de escritura, así que van como UAV y no comparten
-// hueco con las vistas de lectura que usa pbr.frag.
+// Targets of the two IBL computes: the whole irradiance and one level of the
+// prefiltered map per mip. They are write targets, so they go as UAVs and do not share
+// a slot with the read views used by pbr.frag.
 constexpr UINT kUavIrradiance = kSrvSkybox + 1;
 constexpr UINT kUavPrefilter  = kUavIrradiance + 1;  // + mip
 
-// SSAO: la profundidad del pre-pase, el mapa crudo y el emborronado. El
-// resultado final lo leen los bloques por objeto en su hueco t7; estos son los
-// de la cadena que lo produce.
+// SSAO: the pre-pass depth, the raw map and the blurred one. The
+// final result is read by the per-object blocks in their t7 slot; these are
+// those of the chain that produces it.
 constexpr UINT kSrvPrepassDepth = kUavPrefilter + kIblPrefilterMips;
 constexpr UINT kUavSsaoRaw      = kSrvPrepassDepth + 1;
 constexpr UINT kSrvSsaoRaw      = kUavSsaoRaw + 1;
 constexpr UINT kUavSsaoBlur     = kSrvSsaoRaw + 1;
 
-// Reflejos en pantalla: el destino del trazado, que luego el resolve suma
-// sobre la escena.
+// Screen-space reflections: the trace target, which the resolve then adds
+// onto the scene.
 constexpr UINT kUavSsr = kUavSsaoBlur + 1;
 constexpr UINT kSrvSsr = kUavSsr + 1;
 
-// Motion blur: destino del emborronado. El shader lee píxeles arbitrarios de la
-// escena a lo largo de la velocidad, así que no puede escribir sobre la imagen
-// que muestrea; de aquí sale la copia de vuelta. Solo UAV: la copia no necesita
-// vista.
+// Motion blur: blur target. The shader reads arbitrary pixels of the
+// scene along the velocity, so it cannot write over the image it
+// samples; the copy back comes from here. UAV only: the copy does not need a
+// view.
 constexpr UINT kUavMotionBlur = kSrvSsr + 1;
 
-// Historial del TAA: dos imágenes que se alternan, porque el mismo pase lee la
-// del frame anterior y escribe la de este.
-constexpr UINT kSrvTaaHistory = kUavMotionBlur + 1;  // + índice (0 o 1)
+// TAA history: two images that alternate, because the same pass reads the
+// one from the previous frame and writes this frame's.
+constexpr UINT kSrvTaaHistory = kUavMotionBlur + 1;  // + index (0 or 1)
 
-// Imagen del viewport: la escena ya compuesta, cuando en vez de ir al
-// backbuffer tiene que acabar dentro de un panel de la interfaz.
+// Viewport image: the already composed scene, when instead of going to the
+// backbuffer it has to end up inside an interface panel.
 constexpr UINT kSrvViewport = kSrvTaaHistory + 2;
 
-// Atlas de la UI 2D: uno por sprite-sheet y uno por fuente. El tope es de
-// verdad —pasado él la UI se dibuja sin su textura, no se sale del heap— y con
-// 16 sobra para una interfaz de juego con varias fuentes.
+// 2D UI atlases: one per sprite-sheet and one per font. The cap is
+// real (past it the UI is drawn without its texture, the heap is not exceeded) and with
+// 16 there is plenty for a game interface with several fonts.
 constexpr UINT kSrvUiAtlas    = kSrvViewport + 1;
 constexpr UINT kMaxUiAtlases  = 16;
 
-// Atlas compartido de miniaturas del Content Browser: UN hueco propio, para no
-// gastar uno de los 16 de la UI 2D del juego.
+// Shared thumbnail atlas of the Content Browser: ONE slot of its own, so as not to
+// spend one of the 16 of the game's 2D UI.
 constexpr UINT kSrvThumbAtlas = kSrvUiAtlas + kMaxUiAtlases;
 
-// ─── Sondas de reflexión ─────────────────────────────────────────────────────
-// Cada sonda tiene lo mismo que el IBL global —irradiancia y entorno
-// prefiltrado— más el cubemap donde se captura la escena antes de
-// convolucionarla. Ocho por escena: cada una ocupa ~1 MB entre las tres
-// imágenes, y pasado el tope los objetos se quedan con el IBL global, que es
-// degradarse, no fallar.
+// ─── Reflection probes ───────────────────────────────────────────────────────
+// Each probe has the same as the global IBL (irradiance and prefiltered
+// environment) plus the cubemap where the scene is captured before
+// convolving it. Eight per scene: each takes ~1 MB across the three
+// images, and past the cap the objects keep the global IBL, which is
+// degrading, not failing.
 constexpr UINT kMaxProbes = 8;
 
-// Huecos por sonda, en este orden: captura (SRV), irradiancia (SRV+UAV) y
-// prefiltrado (SRV + un UAV por mip, que cada nivel es una rugosidad distinta y
-// se dispara por separado).
-constexpr UINT kSrvPerProbe = 1                     // captura
-                            + 1 + 1                 // irradiancia: lectura y escritura
-                            + 1 + kIblPrefilterMips;// prefiltrado: lectura y un UAV por mip
+// Slots per probe, in this order: capture (SRV), irradiance (SRV+UAV) and
+// prefiltered (SRV + one UAV per mip, since each level is a different roughness and
+// is dispatched separately).
+constexpr UINT kSrvPerProbe = 1                     // capture
+                            + 1 + 1                 // irradiance: read and write
+                            + 1 + kIblPrefilterMips;// prefiltered: read and one UAV per mip
 constexpr UINT kSrvProbes   = kSrvThumbAtlas + 1;
 
-// Pareja contigua para componer con el bloom APAGADO. bloom_composite.frag
-// hace `color += bloom * intensity` SIEMPRE, y su tabla pide [escena, bloom]
-// seguidos, así que apagar el efecto no se puede resolver mandando intensity=0:
-// la cadena de mips sale de un heap sin poner a cero y en R16G16B16A16_FLOAT
-// eso puede ser un inf, con lo que `inf * 0` da NaN. Vulkan lo evita limpiando
-// la cadena a negro (ver Renderer::setBloomEnabled); aquí sale más barato tener
-// una segunda pareja —la misma escena y un negro de 1x1— y no grabar ni un
-// comando con el bloom apagado.
-constexpr UINT kSrvCompositeOff = kSrvProbes + kMaxProbes * kSrvPerProbe;  // +0 escena, +1 negro
+// Contiguous pair to compose with bloom OFF. bloom_composite.frag
+// does `color += bloom * intensity` ALWAYS, and its table asks for [scene, bloom]
+// in a row, so turning the effect off cannot be solved by sending intensity=0:
+// the mip chain comes from a heap that was not zeroed and in R16G16B16A16_FLOAT
+// that can be an inf, so `inf * 0` gives NaN. Vulkan avoids it by clearing
+// the chain to black (see Renderer::setBloomEnabled); here it is cheaper to have
+// a second pair (the same scene and a 1x1 black) and not record a single
+// command with bloom off.
+constexpr UINT kSrvCompositeOff = kSrvProbes + kMaxProbes * kSrvPerProbe;  // +0 scene, +1 black
 
 // The startup splash logo (beginSplash).
 constexpr UINT kSrvSplash = kSrvCompositeOff + 2;
 
 constexpr UINT kSrvHeapSize = kSrvSplash + 1;
 
-// Push de ssao.comp y ssao_blur.comp: los dos comparten el bloque, así que el
-// rango de root constants tiene que ser el mismo para los dos pipelines.
+// Push of ssao.comp and ssao_blur.comp: both share the block, so the
+// root constants range has to be the same for both pipelines.
 struct SsaoPush {
-    glm::vec4 projParams;  // p00, p11, p22, p32 de la proyección del frame
+    glm::vec4 projParams;  // p00, p11, p22, p32 of the frame's projection
     glm::vec2 invRes;
     float     radius;
     float     bias;
@@ -413,21 +413,21 @@ struct SsaoPush {
 };
 static_assert(sizeof(SsaoPush) == 40, "SsaoPush must take 40 bytes");
 
-// Push de ssr.comp y ssr_resolve.comp, que comparten bloque igual que los dos
-// del SSAO.
+// Push of ssr.comp and ssr_resolve.comp, which share a block just like the two
+// of SSAO.
 struct SsrPush {
     glm::vec4 projParams;
     glm::vec2 invRes;
     float     maxDistance;
     float     thickness;
     int32_t   maxSteps;
-    int32_t   refineSteps;  // búsqueda binaria sobre el último tramo
+    int32_t   refineSteps;  // binary search over the last segment
     float     edgeFade;
     float     intensity;
 };
 static_assert(sizeof(SsrPush) == 48, "SsrPush must take 48 bytes");
 
-// Push de taa.frag: la reproyección al frame anterior y el peso del historial.
+// Push of taa.frag: the reprojection to the previous frame and the history weight.
 struct TaaPush {
     glm::mat4 reproject;
     glm::vec2 invRes;
@@ -436,24 +436,24 @@ struct TaaPush {
 };
 static_assert(sizeof(TaaPush) == 80, "TaaPush must take 80 bytes");
 
-// Push de motion_blur.comp: la misma reproyección que el TAA más los tres
-// ajustes del efecto.
+// Push of motion_blur.comp: the same reprojection as TAA plus the three
+// settings of the effect.
 struct MotionBlurPush {
     glm::mat4 reproject;
     glm::vec2 invRes;
     float     intensity;
-    float     maxRadius;  // tope de la estela, en píxeles
+    float     maxRadius;  // cap of the trail, in pixels
     int32_t   samples;
 };
 static_assert(sizeof(MotionBlurPush) == 84, "MotionBlurPush must take 84 bytes");
 
-// Niebla volumétrica: push propio de 128 bytes.
+// Volumetric fog: its own 128-byte push.
 struct FogPush {
     glm::mat4 invViewProj;
-    glm::vec4 camPosDensity;      // xyz = cámara en mundo, w = densidad base
-    glm::vec4 lightDirFalloff;    // xyz = dirección de la luz key, w = caída por altura
-    glm::vec4 scatterBaseHeight;  // rgb = scattering ya multiplicado por la luz, a = altura ref.
-    glm::vec4 gStepsRes;          // x = anisotropía, y = pasos, zw = resolución
+    glm::vec4 camPosDensity;      // xyz = camera in world, w = base density
+    glm::vec4 lightDirFalloff;    // xyz = key light direction, w = height falloff
+    glm::vec4 scatterBaseHeight;  // rgb = scattering already multiplied by the light, a = reference height
+    glm::vec4 gStepsRes;          // x = anisotropy, y = steps, zw = resolution
 };
 static_assert(sizeof(FogPush) == 128, "FogPush must take 128 bytes");
 
@@ -466,19 +466,19 @@ struct FxaaPush {
 };
 static_assert(sizeof(FxaaPush) == 20, "FxaaPush must take 20 bytes");
 
-// Push de ssaa_resolve.frag: el inverso del tamaño de la imagen GRANDE (la
-// fuente) y cuántas muestras por eje hay que promediar.
+// Push of ssaa_resolve.frag: the inverse of the size of the LARGE image (the
+// source) and how many samples per axis to average.
 struct SsaaPush {
     float invSrc[2];
     int   taps;
 };
 static_assert(sizeof(SsaaPush) == 12, "SsaaPush must take 12 bytes");
 
-// Stride del vértice que escribe skinning.comp: 5 vec4 (pos, color, uv, normal,
-// tangent). No hay struct C++ equivalente en el motor, se usa el tamaño literal.
+// Stride of the vertex written by skinning.comp: 5 vec4 (pos, color, uv, normal,
+// tangent). There is no equivalent C++ struct in the engine, so the literal size is used.
 constexpr UINT kSkinnedOutputStride = 5 * sizeof(glm::vec4);
 
-// Los constant buffers se enlazan con la dirección alineada a 256 bytes.
+// Constant buffers are bound with the address aligned to 256 bytes.
 constexpr UINT64 kCbvAlignment = 256;
 
 UINT64 alignUp(UINT64 value, UINT64 alignment)
@@ -504,41 +504,41 @@ std::vector<char> readBinaryFile(const std::string& path)
     return data;
 }
 
-// Triple buffer: dos frames en vuelo mientras la GPU trabaja en el tercero. Es
-// el mismo criterio que usa la swapchain de Vulkan del motor.
+// Triple buffering: two frames in flight while the GPU works on the third. It is
+// the same criterion used by the engine's Vulkan swapchain.
 constexpr UINT kFrameCount = 3;
 
-// ── Reparto del heap de RTV ─────────────────────────────────────────────────
+// ── RTV heap layout ─────────────────────────────────────────────────────────
 //
-// El heap de SRV lleva desde el principio sus índices con nombre (kSrvObjects,
-// kUavPrefilter…); el de RTV se habia quedado sin ellos. Se pedia
-// `kFrameCount + 6 + 6` y los trece sitios que lo usan sumaban su offset a mano
-// —`kFrameCount + 2`, `kFrameCount + 3 + i`, `kFrameCount + 5`…—, sin un solo
-// static_assert. Encajaba exacto por casualidad, y ese `6 + 6` no significaba
-// lo que parecia: el primer 6 son CINCO targets mas uno, no un grupo (H44).
+// The SRV heap has had named indices from the start (kSrvObjects,
+// kUavPrefilter…); the RTV one had been left without them. It asked for
+// `kFrameCount + 6 + 6` and the thirteen places that use it added their offset by hand
+// (`kFrameCount + 2`, `kFrameCount + 3 + i`, `kFrameCount + 5`…), without a single
+// static_assert. It fit exactly by chance, and that `6 + 6` did not mean
+// what it looked like: the first 6 is FIVE targets plus one, not a group (H44).
 //
-// Añadir un target era escribir fuera del heap, que en D3D12 no da error al
-// crear la vista: la escritura cae en memoria de otro descriptor y el fallo
-// aparece luego, en otro sitio y sin relacion aparente.
-constexpr UINT kRtvBackBuffer  = 0;                  // uno por imagen del swapchain
-constexpr UINT kRtvSceneHdr    = kFrameCount;        // color HDR de la escena
-constexpr UINT kRtvLdr         = kRtvSceneHdr + 1;   // resultado tras el tonemap
-constexpr UINT kRtvSceneMsaa   = kRtvLdr + 1;        // escena multimuestreada
-// Historial del TAA: dos, y se alternan por frame (ping-pong).
+// Adding a target meant writing outside the heap, which in D3D12 raises no error when
+// creating the view: the write lands in another descriptor's memory and the failure
+// shows up later, somewhere else and with no apparent relation.
+constexpr UINT kRtvBackBuffer  = 0;                  // one per swapchain image
+constexpr UINT kRtvSceneHdr    = kFrameCount;        // HDR color of the scene
+constexpr UINT kRtvLdr         = kRtvSceneHdr + 1;   // result after the tonemap
+constexpr UINT kRtvSceneMsaa   = kRtvLdr + 1;        // multisampled scene
+// TAA history: two of them, alternating per frame (ping-pong).
 constexpr UINT kRtvTaaHistory      = kRtvSceneMsaa + 1;
 constexpr UINT kRtvTaaHistoryCount = 2;
-// Textura a la que dibuja el viewport del editor cuando no se presenta directo.
+// Texture the editor viewport draws to when it is not presented directly.
 constexpr UINT kRtvViewport    = kRtvTaaHistory + kRtvTaaHistoryCount;
-// Las seis caras de UNA sonda: se rehacen para cada sonda que se hornea, que va
-// de una en una.
+// The six faces of ONE probe: they are redone for each probe that gets baked, which goes
+// one at a time.
 constexpr UINT kRtvProbeFace   = kRtvViewport + 1;
 constexpr UINT kRtvProbeFaces  = 6;
 // sRGB views of the swapchain images, one per image, used only by the startup
 // splash: the swapchain is UNORM, and writing through an sRGB view is what makes
 // the splash look exactly like the Vulkan one (sRGB swapchain there).
 constexpr UINT kRtvSplash      = kRtvProbeFace + kRtvProbeFaces;
-// Lo que hay que pedir. Derivado, para que añadir un target arriba lo mueva
-// solo en vez de obligar a acordarse.
+// What has to be requested. Derived, so that adding a target above moves it
+// by itself instead of forcing someone to remember.
 constexpr UINT kRtvCount       = kRtvSplash + kFrameCount;
 
 static_assert(kRtvCount == 2 * kFrameCount + 12,
@@ -552,20 +552,20 @@ std::string hresultToString(HRESULT hr)
     return buf;
 }
 
-// ─── Diagnóstico: log a FICHERO ──────────────────────────────────────────────
-// El editor se lanza desde el explorador y su stdout no lo ve nadie; la capa de
-// depuración de D3D12 escribe por OutputDebugString, que sin depurador tampoco
-// se ve. Todo lo de aquí va ADEMÁS a un fichero junto al ejecutable, que es lo
-// único que el usuario puede traer cuando lo que ve es "una ventana de error
-// sin mensaje".
+// ─── Diagnostics: log to FILE ────────────────────────────────────────────────
+// The editor is launched from the explorer and nobody sees its stdout; the D3D12
+// debug layer writes through OutputDebugString, which is not visible without a debugger
+// either. Everything here goes ADDITIONALLY to a file next to the executable, which is the
+// only thing the user can bring when what they see is "an error window
+// with no message".
 //
-// Es INSTRUMENTACIÓN: no cambia el comportamiento del render, solo cuenta lo
-// que pasa cuando algo va mal.
+// It is INSTRUMENTATION: it does not change render behavior, it only reports
+// what happens when something goes wrong.
 std::ofstream& diagStream()
 {
-    // Estático de función: se abre la primera vez que alguien escribe y se
-    // cierra al salir del proceso. `app` y no `trunc`: si el editor se
-    // relanzara, el log de la sesión anterior sigue ahí.
+    // Function static: it is opened the first time someone writes and
+    // closed when the process exits. `app` and not `trunc`: if the editor were
+    // relaunched, the log of the previous session is still there.
     static std::ofstream out("d3d12_diag.log", std::ios::out | std::ios::app);
     return out;
 }
@@ -580,17 +580,17 @@ void diagLog(const std::string& line)
     localtime_s(&tm, &ahora);
     char sello[32] = {};
     std::snprintf(sello, sizeof(sello), "%02d:%02d:%02d ", tm.tm_hour, tm.tm_min, tm.tm_sec);
-    // flush en cada línea: si el proceso muere a la siguiente instrucción, lo
-    // que se acaba de escribir tiene que estar YA en el disco.
+    // flush on every line: if the process dies at the next instruction, what
+    // was just written has to be ALREADY on disk.
     out << sello << line << std::endl;
-    // Y también por la salida estándar, para quien sí tenga consola.
+    // And also to standard output, for whoever does have a console.
     std::fputs((std::string(sello) + line + "\n").c_str(), stderr);
 }
 
-// Gancho al volcado de DRED. Lo instala Impl::init cuando el device existe, y
-// lo llama throwIfFailed —que es una función libre y no tiene device— cuando el
-// HRESULT que la aborta es una pérdida del dispositivo. Sin esto, el único
-// sitio que mira DXGI_ERROR_DEVICE_REMOVED sería el Present.
+// Hook to the DRED dump. Impl::init installs it when the device exists, and
+// throwIfFailed calls it (it is a free function and has no device) when the
+// HRESULT that aborts it is a device loss. Without this, the only
+// place that looks at DXGI_ERROR_DEVICE_REMOVED would be Present.
 void (*g_volcarDeviceRemoved)(const char*, HRESULT) = nullptr;
 
 bool esPerdidaDeDevice(HRESULT hr)
@@ -600,15 +600,15 @@ bool esPerdidaDeDevice(HRESULT hr)
            hr == DXGI_ERROR_INVALID_CALL;
 }
 
-// Todo fallo de creación aborta el init con el paso concreto que falló: un
-// device a medias no se puede usar y esconder el HRESULT solo mueve el crash
-// más adelante.
+// Every creation failure aborts init with the specific step that failed: a
+// half-built device cannot be used and hiding the HRESULT only moves the crash
+// further along.
 void throwIfFailed(HRESULT hr, const char* step)
 {
     if (FAILED(hr)) {
-        // El volcado ANTES de lanzar: la excepción sube hasta main y de ahí a
-        // la terminación del proceso, y para entonces el device ya no está para
-        // que nadie le pregunte nada.
+        // The dump BEFORE throwing: the exception goes up to main and from there to
+        // process termination, and by then the device is no longer there for
+        // anyone to ask it anything.
         if (esPerdidaDeDevice(hr) && g_volcarDeviceRemoved)
             g_volcarDeviceRemoved(step, hr);
         throw std::runtime_error(std::string("D3D12: ") + step + " failed (HRESULT " +
@@ -616,10 +616,10 @@ void throwIfFailed(HRESULT hr, const char* step)
     }
 }
 
-// narrow() vivía aquí, copiada byte a byte de D3D12Support.cpp (H48). Ahora
-// solo hay una, declarada en D3D12Support.h: las dos convertían texto que
-// acaba en el mismo log, así que divergir habría dado dos codificaciones
-// distintas para la misma cadena sin que nada avisara.
+// narrow() used to live here, copied byte for byte from D3D12Support.cpp (H48). Now
+// there is only one, declared in D3D12Support.h: both converted text that
+// ends up in the same log, so diverging would have produced two different
+// encodings for the same string without anything warning.
 using DonTopo::D3D12::narrow;
 
 }  // namespace
@@ -631,67 +631,67 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12CommandQueue>  queue;
     ComPtr<IDXGISwapChain3>     swapChain;
 
-    // D3D12MemoryAllocator lleva su propio contador de referencias con
-    // Release(), no es un objeto COM al uso: no vale ComPtr.
+    // D3D12MemoryAllocator keeps its own reference counter with
+    // Release(), it is not a regular COM object: ComPtr does not work.
     D3D12MA::Allocator* allocator = nullptr;
 
-    // Geometría de gizmos: la ruta más simple que ya usa la escena. Su vertex
-    // buffer vive en un heap DEFAULT suballocado por D3D12MA.
+    // Gizmo geometry: the simplest path the scene already uses. Its vertex
+    // buffer lives in a DEFAULT heap suballocated by D3D12MA.
     ComPtr<ID3D12RootSignature> rootSignature;
     ComPtr<ID3D12PipelineState> gizmoPipeline;
     D3D12MA::Allocation*        gridAllocation = nullptr;
     D3D12_VERTEX_BUFFER_VIEW    gridVertexBufferView{};
     UINT                        gridVertexCount = 0;
 
-    // ── Malla con material: la ruta de triangle.vert/triangle.frag ──────────
+    // ── Mesh with material: the triangle.vert/triangle.frag path ────────────
     ComPtr<ID3D12RootSignature> meshRootSignature;
     ComPtr<ID3D12PipelineState> meshPipeline;
-    // Los mismos shaders y la misma root signature, pero rellenando solo las
-    // aristas. Se crean junto a los sólidos para no rehacer nada al cambiar de
-    // modo: el interruptor solo elige cuál se enlaza.
+    // The same shaders and the same root signature, but filling only the
+    // edges. They are created alongside the solid ones so nothing has to be redone when changing
+    // mode: the switch only chooses which one is bound.
     ComPtr<ID3D12PipelineState> meshWirePipeline;
 
-    // Casco invertido del objeto seleccionado: la misma malla extruida por su
-    // normal y con las caras frontales descartadas, así que solo asoma el
-    // reborde. Comparte root signature con la malla —outline.vert declara el
-    // mismo UBO y el mismo push—, y por eso no necesita nada propio.
-    // Líneas de depuración del frame: colliders, ejes, rayos. Se envían desde
-    // fuera antes de dibujar y NO persisten al frame siguiente, igual que en el
-    // camino de Vulkan.
+    // Inverted hull of the selected object: the same mesh extruded along its
+    // normal and with front faces discarded, so only the
+    // rim shows. It shares the root signature with the mesh (outline.vert declares the
+    // same UBO and the same push), and that is why it needs nothing of its own.
+    // Debug lines of the frame: colliders, axes, rays. They are sent from
+    // outside before drawing and do NOT persist to the next frame, just like in the
+    // Vulkan path.
     D3D12MA::Allocation*     debugLinesAllocation = nullptr;
     void*                    debugLinesMapped     = nullptr;
-    size_t                   debugLinesCapacity   = 0;   // en vértices
-    UINT                     debugLineVertices    = 0;   // los de ESTE frame
+    size_t                   debugLinesCapacity   = 0;   // in vertices
+    UINT                     debugLineVertices    = 0;   // those of THIS frame
     D3D12_VERTEX_BUFFER_VIEW debugLinesView{};
 
     void ensureDebugLineBuffer(size_t vertexCount);
 
     ComPtr<ID3D12PipelineState> outlinePipeline;
     ComPtr<ID3D12PipelineState> outlineSkinnedPipeline;
-    // Los mismos contra el target LDR, que es donde se dibuja el contorno: va
-    // DESPUÉS del tone mapping para que su naranja no pase por ACES. Los de
-    // arriba se quedan porque son los que fija el formato HDR y las muestras
-    // del pase de escena, de donde estos heredan todo lo demás.
+    // The same ones against the LDR target, which is where the outline is drawn: it goes
+    // AFTER tone mapping so its orange does not go through ACES. The ones
+    // above stay because they are the ones fixed by the HDR format and the scene pass
+    // samples, from which these inherit everything else.
     ComPtr<ID3D12PipelineState> outlineLdrPipeline;
     ComPtr<ID3D12PipelineState> outlineSkinnedLdrPipeline;
 
-    // Dibuja el casco invertido de lo seleccionado sobre el target LDR, con la
-    // profundidad de la escena para que solo asome por donde de verdad se ve.
+    // Draws the inverted hull of the selection onto the LDR target, with the
+    // scene's depth so that it only shows where it is really visible.
     void recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv);
-    // Si hay algo seleccionado que dibujar. Lo consulta el pre-pase: con MSAA,
-    // la profundidad del pase de escena es multimuestra y el contorno necesita
-    // una de una muestra, que es justo la que produce ese pre-pase.
+    // Whether there is something selected to draw. The pre-pass queries it: with MSAA,
+    // the scene pass depth is multisampled and the outline needs
+    // a single-sample one, which is exactly what that pre-pass produces.
     bool hasOutlineSelection() const;
-    int   selectedObject  = -1;   // índice en objects, -1 sin selección
-    int   selectedSkinned = -1;   // índice en skinnedObjects
-    // En unidades de mundo: con mallas de detalle fino un casco grueso asoma
-    // también por las rendijas interiores y el contorno deja de leerse como
-    // silueta. 1 cm va bien para personajes de escala humana.
+    int   selectedObject  = -1;   // index into objects, -1 with no selection
+    int   selectedSkinned = -1;   // index into skinnedObjects
+    // In world units: with fine-detail meshes a thick hull also shows through
+    // the inner gaps and the outline stops reading as a
+    // silhouette. 1 cm works well for human-scale characters.
     float outlineWidth    = 0.01f;
 
-    // Geometría estática de la escena. Cada entrada es una malla subida a VRAM
-    // con su transformación; el índice que devuelve addStaticMesh es la
-    // posición en este vector, igual que en el Renderer de Vulkan.
+    // Static geometry of the scene. Each entry is a mesh uploaded to VRAM
+    // with its transform; the index that addStaticMesh returns is the
+    // position in this vector, just like in the Vulkan Renderer.
     struct StaticObject {
         D3D12MA::Allocation*     vertexAllocation = nullptr;
         D3D12MA::Allocation*     indexAllocation  = nullptr;
@@ -701,223 +701,223 @@ struct D3D12Renderer::Impl {
         glm::mat4                transform{1.0f};
         bool                     meshVisible = true;
 
-        // Texturas propias del material, o nullptr si la malla no trae (o el
-        // fichero no se pudo leer): en ese caso la terna apunta a las 1x1
-        // globales y el objeto sale con color plano, como hasta ahora.
+        // The material's own textures, or nullptr if the mesh has none (or the
+        // file could not be read): in that case the triplet points at the global 1x1
+        // ones and the object comes out with a flat color, as before.
         D3D12MA::Allocation* baseColorAllocation  = nullptr;
         D3D12MA::Allocation* normalMapAllocation  = nullptr;
         D3D12MA::Allocation* metalRoughAllocation = nullptr;
 
-        // Primer hueco de su terna en el heap. kSrvBaseColor = la global.
+        // First slot of its triplet in the heap. kSrvBaseColor = the global one.
         UINT  srvBase   = kSrvBaseColor;
         float metallic  = 0.0f;
         float roughness = 0.6f;
-        // Si el material trae mapa ORM. Se decide al registrar y al reconstruir,
-        // que es donde esta el material delante, y lo consulta
-        // setObjectMaterialFactors: con mapa, los sliders no pueden pisar la
-        // textura y los dos factores se quedan en 1.0.
+        // Whether the material has an ORM map. It is decided on register and on rebuild,
+        // which is where the material is at hand, and setObjectMaterialFactors
+        // queries it: with a map, the sliders cannot override the
+        // texture and both factors stay at 1.0.
         bool  hasOrmMap = false;
 
-        // Fuerza de reflejo del objeto. pbr.frag la vuelca al alfa de la
-        // escena, y de ahí la lee el trazado: a cero, ese píxel no refleja.
+        // Reflection strength of the object. pbr.frag dumps it into the scene's
+        // alpha, and from there the trace reads it: at zero, that pixel does not reflect.
         float ssrStrength = 0.0f;
 
-        // Caja envolvente en espacio LOCAL, para el frustum culling. Se calcula
-        // al subir la malla porque no depende de dónde esté el objeto. Una
-        // malla sin vértices no se puede acotar: hasBounds = false y entonces se
-        // dibuja siempre, que es el fallo seguro.
+        // Bounding box in LOCAL space, for frustum culling. It is computed
+        // when uploading the mesh because it does not depend on where the object is. A
+        // mesh without vertices cannot be bounded: hasBounds = false and then it is
+        // always drawn, which is the safe failure.
         glm::vec3 aabbMin{0.0f};
         glm::vec3 aabbMax{0.0f};
         bool      hasBounds = false;
 
-        // ── Malla compartida ────────────────────────────────────────────────
-        // Índice del objeto que SUBIÓ estos buffers y estas texturas. Cien
-        // cubos iguales apuntan todos al primero: los vertexBufferView de
-        // arriba son copias del suyo, no recursos propios. Sin esto, agrupar
-        // "por misma malla" agruparía cero objetos, porque cada uno tendría su
-        // propia copia en VRAM.
+        // ── Shared mesh ─────────────────────────────────────────────────────
+        // Index of the object that UPLOADED these buffers and these textures. A hundred
+        // identical cubes all point to the first one: the vertexBufferViews
+        // above are copies of its own, not resources of their own. Without this, grouping
+        // "by same mesh" would group zero objects, because each one would have its
+        // own copy in VRAM.
         int  sharedMesh = -1;
-        // Solo el dueño libera. Un duplicado que soltara los buffers dejaría a
-        // los demás dibujando con memoria liberada, y eso no lo avisa nadie.
+        // Only the owner releases. A duplicate that released the buffers would leave
+        // the others drawing with freed memory, and nobody warns about that.
         bool ownsGpu = true;
-        // Cuántos objetos vivos apuntan a ESTA malla. Solo lo lleva el dueño
-        // (los duplicados se quedan a 0). Hoy nadie borra objetos de uno en uno
-        // —removeGameObject los apaga, ver setObjectMeshVisible— así que el
-        // único que libera es clearStaticMeshes y se lo lleva todo; el contador
-        // está para que el día que aparezca un borrado suelto NO pueda soltar
-        // los buffers con duplicados todavía dibujándolos. La guarda vive en
-        // releaseStaticObject, que es quien borra, y no en una lista de sitios
-        // desde los que está permitido llamar.
+        // How many live objects point to THIS mesh. Only the owner keeps it
+        // (duplicates stay at 0). Today nobody deletes objects one by one
+        // (removeGameObject turns them off, see setObjectMeshVisible) so the
+        // only one that releases is clearStaticMeshes and it takes everything; the counter
+        // is there so that the day a standalone delete appears it CANNOT release
+        // the buffers with duplicates still drawing them. The guard lives in
+        // releaseStaticObject, which is what deletes, and not in a list of places
+        // from which calling is allowed.
         int  sharedRefs = 0;
-        // Clave de contenido con la que este objeto entró en sharedMeshOwner,
-        // vacía si no es el dueño. Al liberarlo hay que sacar esa entrada del
-        // mapa: si no, una malla nueva con la misma clave reusaría los buffers
-        // de un hueco ya reciclado, que a esas alturas contiene OTRA malla.
+        // Content key with which this object entered sharedMeshOwner,
+        // empty if it is not the owner. When releasing it that entry has to be removed from the
+        // map: otherwise, a new mesh with the same key would reuse the buffers
+        // of an already recycled slot, which by then contains ANOTHER mesh.
         std::string sharedKey;
-        // Dueño retirado con duplicados todavía vivos. No puede soltar sus
-        // buffers ni ceder su hueco (los duplicados los siguen dibujando), así
-        // que se queda de almacén; el último duplicado en morir lo remata.
+        // Retired owner with duplicates still alive. It cannot release its
+        // buffers or give up its slot (the duplicates are still drawing them), so
+        // it stays as storage; the last duplicate to die finishes it off.
         bool pendingRelease = false;
-        // El hueco está en el pool. Evita que un segundo removeGameObject sobre
-        // el mismo subárbol vuelva a entrar aquí.
+        // The slot is in the pool. Prevents a second removeGameObject on
+        // the same subtree from getting in here again.
         bool slotFree = false;
 
-        // Grupo de dibujo: misma malla Y bloque de descriptores equivalente.
-        // Los objetos de un grupo se pintan de un solo draw instanciado. -1
-        // mientras no se hayan reconstruido los grupos.
+        // Draw group: same mesh AND equivalent descriptor block.
+        // The objects of a group are painted with a single instanced draw. -1
+        // while the groups have not been rebuilt.
         int  drawGroup = -1;
 
-        // Sube cada vez que a este objeto se le cambia una textura por el
-        // neutro de "no se pudo leer". Entra en la clave del grupo: dos objetos
-        // con la misma malla pero distinto relleno ya no ven lo mismo, así que
-        // no pueden compartir el draw.
+        // Goes up every time one of this object's textures is swapped for the
+        // "could not be read" neutral. It enters the group key: two objects
+        // with the same mesh but different filler no longer see the same thing, so
+        // they cannot share the draw.
         uint32_t materialVariant = 0;
     };
     std::vector<StaticObject> objects;
 
-    // Clave de contenido -> objeto que subió esa malla. La entrada se borra
-    // cuando ese objeto se libera: desde que los huecos se reciclan (P11), un
-    // índice viejo puede apuntar a una malla completamente distinta.
+    // Content key -> object that uploaded that mesh. The entry is deleted
+    // when that object is released: since slots are recycled (P11), an old
+    // index can point to a completely different mesh.
     std::unordered_map<std::string, int> sharedMeshOwner;
 
-    // Huecos libres de `objects`. Reciclarlos recicla ADEMÁS su bloque de
-    // descriptores, porque el bloque se deriva del índice
-    // (kSrvObjects + índice * kSrvPerObject).
+    // Free slots of `objects`. Recycling them ALSO recycles their descriptor
+    // block, because the block is derived from the index
+    // (kSrvObjects + index * kSrvPerObject).
     SlotPool objectSlots;
-    // Ternas del rango skinned que han quedado libres, por srvBase absoluto.
-    // Van aparte de `nextSkinnedSlot` porque se reparten por SUBMALLA y un
-    // personaje se lleva tantas como materiales tenga.
+    // Triplets of the skinned range that have become free, by absolute srvBase.
+    // They are kept apart from `nextSkinnedSlot` because they are handed out per SUBMESH and a
+    // character takes as many as it has materials.
     std::vector<UINT> freeSkinnedSrv;
     SlotPool          skinnedSlots;
 
-    // Suelta los recursos del objeto `index` y devuelve su hueco al pool.
-    // Devuelve si el hueco quedó libre: un dueño con duplicados vivos NO puede
-    // cederlo, y entonces se queda apagado hasta que muera el último duplicado.
+    // Releases the resources of object `index` and returns its slot to the pool.
+    // Returns whether the slot became free: an owner with live duplicates CANNOT give
+    // it up, and then it stays turned off until the last duplicate dies.
     bool releaseObjectSlot(size_t index);
-    // Lo mismo para un personaje. Además devuelve al pool las ternas de sus
-    // submallas.
+    // The same for a character. It also returns the triplets of its submeshes
+    // to the pool.
     bool releaseSkinnedSlot(size_t index);
 
-    // Un representante por grupo de dibujo: de él salen los buffers, la terna de
-    // descriptores y los factores PBR, que son iguales para todo el grupo.
+    // One representative per draw group: the buffers, the descriptor triplet and
+    // the PBR factors come from it, which are the same for the whole group.
     std::vector<int> drawGroupRep;
     bool             drawGroupsDirty = true;
     void             rebuildDrawGroups();
 
-    // El ÚNICO sitio que suelta los recursos de un objeto estático. La decisión
-    // de si se puede o no vive aquí dentro, y no en una lista de llamantes
-    // autorizados: un duplicado nunca posee nada, y el dueño solo suelta cuando
-    // no queda nadie más apuntando a su malla. Devuelve si liberó.
+    // The ONLY place that releases the resources of a static object. The decision
+    // of whether it can or not lives in here, and not in a list of authorized
+    // callers: a duplicate never owns anything, and the owner only releases when
+    // nobody else is left pointing at its mesh. Returns whether it released.
     bool releaseStaticObject(StaticObject& object);
 
-    // Matrices por instancia de la escena. shadow.vert saca el model de aquí
-    // SIEMPRE —no tiene ruta de push constant— y triangle.vert cuando el draw
-    // va instanciado. Va en heap de subida y mapeado: se reescribe cada frame
-    // porque los transforms cambian.
+    // Per-instance matrices of the scene. shadow.vert takes the model from here
+    // ALWAYS (it has no push constant path) and triangle.vert when the draw
+    // is instanced. It goes in an upload heap and mapped: it is rewritten every frame
+    // because transforms change.
     //
-    // UNO POR FRAME EN VUELO, y no uno solo: desde que el reparto lo decide el
-    // agrupado, el CONTENIDO cambia de frame a frame (el culling mueve a los
-    // objetos de tramo). Reescribir un único buffer mientras la GPU lee el
-    // frame anterior mezclaría los dos repartos, y el síntoma sería geometría
-    // apareciendo en el sitio de otra.
+    // ONE PER FRAME IN FLIGHT, and not a single one: since the split is decided by
+    // grouping, the CONTENT changes from frame to frame (culling moves
+    // objects between ranges). Rewriting a single buffer while the GPU reads the
+    // previous frame would mix both splits, and the symptom would be geometry
+    // showing up in another one's place.
     std::array<D3D12MA::Allocation*, kFrameCount> sceneInstanceAllocations{};
     std::array<void*, kFrameCount>                sceneInstanceMapped{};
     std::array<size_t, kFrameCount>               sceneInstanceCapacity{};
 
-    // El buffer va en dos tramos de este tamaño: el 0 para sombras y pre-pase
-    // (todo lo visible) y el 1 para el pase principal (lo que además pasa el
-    // frustum). Dos repartos distintos del mismo conjunto de objetos.
+    // The buffer goes in two ranges of this size: 0 for shadows and pre-pass
+    // (everything visible) and 1 for the main pass (what also passes the
+    // frustum). Two different splits of the same set of objects.
     size_t instanceRegionStride = 0;
     static constexpr uint32_t kInstanceRegionShadow = 0;
     static constexpr uint32_t kInstanceRegionScene  = 1;
 
     void ensureSceneInstanceBuffer(size_t count);
-    // Dirección GPU de la matriz `index` del buffer de ESTE frame. Los draws
-    // instanciados apuntan el root SRV al principio del rango de su grupo y
-    // dibujan con StartInstanceLocation = 0, en vez de dejar la vista al
-    // principio del buffer y mover la instancia base.
+    // GPU address of matrix `index` in THIS frame's buffer. Instanced draws
+    // point the root SRV at the start of their group's range and
+    // draw with StartInstanceLocation = 0, instead of leaving the view at the
+    // start of the buffer and moving the base instance.
     //
-    // El motivo: el shader viene de GLSL, donde gl_InstanceIndex SÍ incluye la
-    // instancia base por especificación, y spirv-cross lo traduce a
-    // SV_InstanceID, donde eso no está garantizado igual. En la máquina en que
-    // se probó funciona de las dos formas —se comprobó comparando el render
-    // contra el camino por objeto— pero desplazar la vista cuesta lo mismo y no
-    // depende del driver.
+    // The reason: the shader comes from GLSL, where gl_InstanceIndex DOES include the
+    // base instance by specification, and spirv-cross translates it to
+    // SV_InstanceID, where that is not guaranteed to be the same. On the machine where
+    // it was tested it works both ways (checked by comparing the render
+    // against the per-object path) but shifting the view costs the same and
+    // does not depend on the driver.
     D3D12_GPU_VIRTUAL_ADDRESS instanceAddress(uint32_t index) const;
 
-    // Candidatos y grupos del frame. Son miembros y no locales para no
-    // reasignar sus vectores en cada pase de cada frame.
+    // Candidates and groups of the frame. They are members and not locals so as not to
+    // reallocate their vectors on every pass of every frame.
     std::vector<Batching::BatchCandidate> batchCandidates;
     std::vector<Batching::InstanceBatch>  shadowBatches;
     std::vector<Batching::InstanceBatch>  sceneBatches;
 
-    // Llena el tramo 0 con todo lo visible. Lo comparten el pase de sombras
-    // (que dibuja las cuatro cascadas del mismo reparto) y el pre-pase de
-    // profundidad, que ven el mismo conjunto.
+    // Fills range 0 with everything visible. It is shared by the shadow pass
+    // (which draws the four cascades of the same split) and the depth
+    // pre-pass, which see the same set.
     void buildShadowBatches();
 
-    // Matrices por instancia (set 1, binding 0 en GLSL → t0 space1 en HLSL).
+    // Per-instance matrices (set 1, binding 0 in GLSL → t0 space1 in HLSL).
     D3D12MA::Allocation* instanceAllocation = nullptr;
 
-    // UBO de escena: uno por frame en vuelo, mapeado de forma persistente. Sin
-    // separar por slot, escribirlo mientras la GPU lee el frame anterior daría
-    // una imagen a medio actualizar.
+    // Scene UBO: one per frame in flight, persistently mapped. Without
+    // separating by slot, writing it while the GPU reads the previous frame would give
+    // a half-updated image.
     std::array<D3D12MA::Allocation*, kFrameCount> sceneUboAllocations{};
     std::array<void*, kFrameCount>                sceneUboMapped{};
 
-    // Texturas del material. Hoy son 1x1 generadas: el cubo del motor es
-    // procedural y no trae ninguna, pero los shaders las exigen igual.
+    // Material textures. Today they are generated 1x1: the engine's cube is
+    // procedural and has none, but the shaders require them anyway.
     D3D12MA::Allocation* baseColorAllocation = nullptr;
-    // El damero de "falta esta textura". Aparte del blanco de arriba a
-    // proposito: el blanco es el relleno legitimo de una primitiva sin
-    // material, y este es la senal de que un fichero declarado no se pudo
-    // leer. Ver PlaceholderTexture.h.
+    // The "this texture is missing" checkerboard. Separate from the white one above on
+    // purpose: white is the legitimate filler of a primitive without
+    // material, and this one is the signal that a declared file could not be
+    // read. See PlaceholderTexture.h.
     D3D12MA::Allocation* missingTextureAllocation = nullptr;
     D3D12MA::Allocation* normalMapAllocation = nullptr;
     D3D12MA::Allocation* shadowMapAllocation = nullptr;
 
-    // Neutros de t4..t7: existen siempre, y son lo que ve una malla sin
-    // material de metallic-roughness o una escena sin entorno.
+    // Neutrals of t4..t7: they always exist, and they are what a mesh without a
+    // metallic-roughness material or a scene without an environment sees.
     D3D12MA::Allocation* metalRoughAllocation = nullptr;
     D3D12MA::Allocation* irradianceAllocation = nullptr;
     D3D12MA::Allocation* prefilterAllocation  = nullptr;
-    // Mips que tiene AHORA el prefiltrado: uno con el neutro, y los de verdad
-    // cuando lo genere el compute. Una vista que declare más mips de los que
-    // tiene el recurso es un descriptor inválido: no falla al crearla, se lleva
-    // el device por delante cuando algo lo usa.
+    // Mips the prefilter has NOW: one with the neutral, and the real ones
+    // once the compute generates it. A view that declares more mips than the
+    // resource has is an invalid descriptor: it does not fail when created, it takes
+    // the device down when something uses it.
     UINT                 prefilterMips        = 1;
     D3D12MA::Allocation* ssaoAllocation       = nullptr;
-    // Negro de 1x1 en formato HDR: el "bloom" que lee la composición cuando el
-    // efecto está apagado (ver kSrvCompositeOff).
+    // 1x1 black in HDR format: the "bloom" that the composition reads when the
+    // effect is off (see kSrvCompositeOff).
     D3D12MA::Allocation* bloomBlackAllocation = nullptr;
 
-    // Forward+ apagado, pero los cuatro buffers de space2 EXISTEN: pbr.frag los
-    // declara sin rama, y un root SRV a cero es una lectura fuera de recurso.
-    // Con mode = 0 el shader ni los mira, pero tienen que estar enlazados.
+    // Forward+ off, but the four space2 buffers EXIST: pbr.frag declares them
+    // without a branch, and a root SRV at zero is an out-of-resource read.
+    // With mode = 0 the shader does not even look at them, but they have to be bound.
     D3D12MA::Allocation* fpParamsAllocation  = nullptr;
     D3D12MA::Allocation* fpLightsAllocation  = nullptr;
-    // Alcance por luz que manda el llamante, en el mismo orden que setLights.
-    // Vacío —o más corto que la lista de luces— significa "para esa luz, el
-    // radio global de RendererState". Mismo criterio que ForwardPlusPass en
-    // Vulkan: es el único dato que Light no lleva en el UBO, porque no cabe sin
-    // mover el layout std140 que declaran 5 shaders.
+    // Per-light range sent by the caller, in the same order as setLights.
+    // Empty (or shorter than the light list) means "for that light, the global
+    // radius from RendererState". Same criterion as ForwardPlusPass in
+    // Vulkan: it is the only piece of data Light does not carry in the UBO, because it does not fit without
+    // moving the std140 layout that 5 shaders declare.
     std::vector<float> lightRadii;
     D3D12MA::Allocation* fpCellsAllocation   = nullptr;
     D3D12MA::Allocation* fpIndicesAllocation = nullptr;
 
-    // t1..t7 de space0, en este orden.
+    // t1..t7 of space0, in this order.
     ComPtr<ID3D12DescriptorHeap> srvHeap;
     UINT                         srvSize = 0;
 
-    // Profundidad. Se recrea con la ventana.
+    // Depth. It is recreated with the window.
     ComPtr<ID3D12DescriptorHeap> dsvHeap;
     D3D12MA::Allocation*         depthAllocation = nullptr;
 
-    // ── Personaje animado por compute ───────────────────────────────────────
-    // Tres pases encadenados, los mismos que el camino Vulkan:
-    //   bone_eval      claves de animación -> transformaciones locales
-    //   bone_hierarchy locales + jerarquía -> matrices finales de hueso
-    //   skinning       vértices + matrices -> vértices ya deformados
+    // ── Character animated by compute ───────────────────────────────────────
+    // Three chained passes, the same ones as the Vulkan path:
+    //   bone_eval      animation keys -> local transforms
+    //   bone_hierarchy locals + hierarchy -> final bone matrices
+    //   skinning       vertices + matrices -> already deformed vertices
     ComPtr<ID3D12RootSignature> boneEvalRootSignature;
     ComPtr<ID3D12RootSignature> boneHierarchyRootSignature;
     ComPtr<ID3D12RootSignature> boneIkRootSignature;
@@ -929,28 +929,28 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> skinnedMeshPipeline;
     ComPtr<ID3D12PipelineState> skinnedMeshWirePipeline;
 
-    // Submallas de un personaje: el FBX trae un material por trozo (cuerpo,
-    // pelo, ropa…), y dibujarlo de una tirada obligaba a darles a todas la
-    // misma textura. Un draw por rango con su terna.
+    // Submeshes of a character: the FBX brings one material per piece (body,
+    // hair, clothes…), and drawing it in one go forced giving all of them the
+    // same texture. One draw per range with its triplet.
     struct SkinnedSubMesh {
         UINT indexStart = 0;
         UINT indexCount = 0;
         UINT srvBase    = kSrvBaseColor;
-        // Por SUBMALLA y no por personaje, porque es lo que son: un material
-        // por submalla, igual que la terna de texturas de al lado. Mientras
-        // vivieron fuera de aquí eran dos constantes en el pase de dibujo
-        // (0.0 y 0.7), así que en este backend un personaje no podía ser
-        // metálico ni con el slider ni con un mapa ORM — el bug que motivó la
-        // feature de factores, vivo solo para skinned. Los defaults son los de
-        // Material (Material.h) para que una submalla que no llegue a
-        // rellenarse se vea como la malla sin tocar, no como un valor inventado.
+        // Per SUBMESH and not per character, because that is what they are: one material
+        // per submesh, just like the texture triplet next to it. While
+        // they lived outside of here they were two constants in the draw pass
+        // (0.0 and 0.7), so in this backend a character could not be
+        // metallic, neither with the slider nor with an ORM map: the bug that motivated the
+        // factors feature, alive only for skinned. The defaults are those of
+        // Material (Material.h) so that a submesh that never gets
+        // filled in looks like the untouched mesh, not like an invented value.
         float metallic  = 0.0f;
         float roughness = 0.5f;
     };
 
-    // Un personaje animado. Cada uno tiene su esqueleto, sus claves y su
-    // buffer de vértices deformados: el compute de skinning escribe ahí, y el
-    // pase gráfico lo lee como vertex buffer en el mismo frame.
+    // An animated character. Each one has its skeleton, its keys and its
+    // buffer of deformed vertices: the skinning compute writes there, and the
+    // graphics pass reads it as a vertex buffer in the same frame.
     struct SkinnedObject {
         D3D12MA::Allocation* posKeys     = nullptr;
         D3D12MA::Allocation* rotKeys     = nullptr;
@@ -959,17 +959,17 @@ struct D3D12Renderer::Impl {
         D3D12MA::Allocation* inputVerts  = nullptr;
         D3D12MA::Allocation* localXforms = nullptr;
         D3D12MA::Allocation* finalBones  = nullptr;
-        // TRS de la pose (lo escribe bone_eval) y la congelada, 3 vec4 por hueso.
+        // TRS of the pose (written by bone_eval) and the frozen one, 3 vec4 per bone.
         D3D12MA::Allocation* poseTrs     = nullptr;
         D3D12MA::Allocation* frozenTrs   = nullptr;
-        // Bloque de pose (PoseBlock.h), una copia por frame en vuelo, en un
-        // heap UPLOAD mapeado para siempre.
+        // Pose block (PoseBlock.h), one copy per frame in flight, in an
+        // UPLOAD heap mapped forever.
         D3D12MA::Allocation* poseBlock   = nullptr;
         void*                poseBlockMapped = nullptr;
-        // Copia de las máscaras de la pose (la del Animator solo vale durante
+        // Copy of the pose masks (the Animator's only lasts during
         // setAnimationPose).
         std::vector<uint8_t> poseMasks[kMaxLayersPose];
-        // IK: lo que manda el Animator y su bloque, con una copia por frame.
+        // IK: what the Animator sends and its block, with one copy per frame.
         AnimationIk          ik;
         D3D12MA::Allocation* ikBlock = nullptr;
         void*                ikBlockMapped = nullptr;
@@ -981,35 +981,35 @@ struct D3D12Renderer::Impl {
         UINT                     indexCount  = 0;
         uint32_t                 boneCount   = 0;
         uint32_t                 vertexCount = 0;
-        // Bloques de clip del SSBO de BoneInfos, para acotar el índice que
-        // llega de fuera antes de multiplicarlo por boneCount (clampClipIndex).
+        // Clip blocks of the BoneInfos SSBO, to bound the index that
+        // comes from outside before multiplying it by boneCount (clampClipIndex).
         uint32_t                 clipCount   = 1;
-        // Lado mayor de la caja de la POSE EN REPOSO, en espacio local. Lo usa
-        // el grosor del contorno, que es proporcional al tamano del objeto.
+        // Longest side of the REST POSE box, in local space. Used by
+        // the outline thickness, which is proportional to the object's size.
         float                    restMaxExtent = 0.0f;
 
-        // boneInfos va en layout [clip][hueso]: el offset del clip activo es
+        // boneInfos uses a [clip][bone] layout: the offset of the active clip is
         // clip * boneCount.
         uint32_t clipBase     = 0;
-        // animTime y animDuration van en TICKS de Assimp, que es lo que lee el
-        // compute. Sin ticksPerSecond no se puede pasar de los segundos del
-        // frame a ticks: faltaba, y por eso este backend reproducía el camino
-        // sin Animator entre 24 y 30 veces más lento (A13).
+        // animTime and animDuration are in Assimp TICKS, which is what the
+        // compute reads. Without ticksPerSecond one cannot go from the frame's seconds
+        // to ticks: it was missing, and that is why this backend played the path
+        // without an Animator between 24 and 30 times slower (A13).
         float    animTime       = 0.0f;
         float    animDuration   = 0.0f;
         float    ticksPerSecond = 0.0f;
-        // La pose que manda un Animator (setAnimationPose). Sin ella, una sola
-        // muestra: clipBase en animTime.
+        // The pose sent by an Animator (setAnimationPose). Without it, a single
+        // sample: clipBase at animTime.
         AnimationPose pose;
         bool          hasPose = false;
-        // Quién manda en animTime. En cuanto alguien de fuera lo mueve
-        // —updateAnimation o setAnimationState— el backend deja de avanzarlo por
-        // su cuenta: los dos relojes sumando dejarían el clip al doble.
+        // Who is in charge of animTime. As soon as someone outside moves it
+        // (updateAnimation or setAnimationState) the backend stops advancing it on
+        // its own: both clocks adding up would leave the clip at double.
         bool     externalClock = false;
 
         glm::mat4 transform{1.0f};
         bool      visible = true;
-        // Su hueco está en el pool: ver releaseSkinnedSlot.
+        // Its slot is in the pool: see releaseSkinnedSlot.
         bool      slotFree = false;
         float     ssrStrength = 0.0f;
 
@@ -1017,55 +1017,55 @@ struct D3D12Renderer::Impl {
         std::vector<D3D12MA::Allocation*> textures;
     };
     std::vector<SkinnedObject> skinnedObjects;
-    // Texturas de material de los personajes, compartidas entre los que salen
-    // del mismo FBX (antes cada uno subía su copia: ~218 MB por personaje con
-    // modelAnimation.fbx). Las vistas siguen siendo de la terna de cada uno.
+    // Material textures of the characters, shared among those coming
+    // from the same FBX (before, each one uploaded its own copy: ~218 MB per character with
+    // modelAnimation.fbx). The views are still from each one's triplet.
     SharedTextureCache<D3D12MA::Allocation*> skinnedTextures;
 
-    // Huecos del rango skinned ya repartidos, en ternas. No se reaprovechan al
-    // borrar un objeto suelto porque los personajes se cargan de golpe con la
-    // escena; clearSkinnedMeshes lo devuelve a cero.
+    // Slots of the skinned range already handed out, in triplets. They are not reused when
+    // deleting a single object because characters are loaded all at once with the
+    // scene; clearSkinnedMeshes returns it to zero.
     UINT nextSkinnedSlot = 0;
 
-    // Matrices de los personajes para el pase de sombras, por lo mismo que
-    // sceneInstanceAllocation: shadow.vert saca el model del SSBO siempre.
-    // Uno por frame en vuelo, por el mismo motivo que el de la escena: se
-    // reescribe desde CPU cada frame mientras la GPU puede seguir leyendo el
-    // anterior. Aquí el reparto es fijo (una matriz por personaje, en su
-    // índice), así que lo peor que daba el buffer único era una sombra con el
-    // transform de un frame antes; con un solo buffer eso no se puede ni
-    // detectar ni descartar, y cuesta lo mismo hacerlo bien.
+    // Character matrices for the shadow pass, for the same reason as
+    // sceneInstanceAllocation: shadow.vert always takes the model from the SSBO.
+    // One per frame in flight, for the same reason as the scene's: it is
+    // rewritten from the CPU every frame while the GPU may still be reading the
+    // previous one. Here the split is fixed (one matrix per character, at its
+    // index), so the worst the single buffer produced was a shadow with the
+    // transform of one frame earlier; with a single buffer that can neither be
+    // detected nor ruled out, and doing it right costs the same.
     std::array<D3D12MA::Allocation*, kFrameCount> skinnedInstanceAllocations{};
     std::array<void*, kFrameCount>                skinnedInstanceMapped{};
     std::array<size_t, kFrameCount>               skinnedInstanceCapacity{};
 
-    // Dirección de la matriz del personaje `index`. Igual que instanceAddress:
-    // se desplaza la vista en vez de mover la instancia base, que en HLSL no
-    // está garantizado que llegue a SV_InstanceID.
+    // Address of the matrix of character `index`. Like instanceAddress:
+    // the view is shifted instead of moving the base instance, which in HLSL is not
+    // guaranteed to reach SV_InstanceID.
     D3D12_GPU_VIRTUAL_ADDRESS skinnedInstanceAddress(size_t index) const
     {
         return skinnedInstanceAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress() +
                static_cast<UINT64>(index) * sizeof(glm::mat4);
     }
 
-    // ── Cielo ───────────────────────────────────────────────────────────
+    // ── Sky ─────────────────────────────────────────────────────────────
     ComPtr<ID3D12RootSignature> skyboxRootSignature;
     ComPtr<ID3D12PipelineState> skyboxPipeline;
     D3D12MA::Allocation*        skyboxAllocation = nullptr;
 
-    // Carga las seis caras y monta el cubemap. Silenciosa si falta alguna: el
-    // fondo se queda en el color de limpieza, que es lo que había antes.
-    // Las seis caras del cielo. Por defecto las de siempre, para que un
-    // llamante que nunca use initSkybox se comporte igual que antes.
+    // Loads the six faces and builds the cubemap. Silent if any is missing: the
+    // background stays at the clear color, which is what there was before.
+    // The six faces of the sky. By default the usual ones, so that a
+    // caller that never uses initSkybox behaves as before.
     std::array<std::string, 6> skyboxFacePaths = {
         "assets/skybox/px.png", "assets/skybox/nx.png", "assets/skybox/py.png",
         "assets/skybox/ny.png", "assets/skybox/pz.png", "assets/skybox/nz.png"};
-    // Solo el cubemap y su vista, sin el pipeline: es lo unico que hay que
-    // rehacer al cambiar de cielo, y asi la recarga no filtra el PSO.
+    // Only the cubemap and its view, without the pipeline: it is the only thing that has to be
+    // redone when changing sky, and this way the reload does not leak the PSO.
     bool loadSkyboxCubemap();
     void createSkyboxResources();
-    // Solo la root signature y el pipeline: se rehacen al cambiar de muestras,
-    // sin volver a cargar las seis caras.
+    // Only the root signature and the pipeline: they are redone when changing sample count,
+    // without reloading the six faces.
     void createSkyboxPipelineOnly();
     void recordSkybox();
 
@@ -1073,26 +1073,26 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> iblIrradiancePipeline;
     ComPtr<ID3D12PipelineState> iblPrefilterPipeline;
 
-    // Convoluciona el cubemap del cielo en los dos mapas que consume pbr.frag:
-    // irradiancia para el difuso y prefiltrado por rugosidad para el especular.
-    // Sustituye a los neutros; sin cielo cargado no hace nada.
+    // Convolves the sky cubemap into the two maps that pbr.frag consumes:
+    // irradiance for the diffuse and roughness-prefiltered for the specular.
+    // It replaces the neutrals; with no sky loaded it does nothing.
     void precomputeIbl();
 
-    // Entorno plano para cuando no hay cubemap, y los cuatro buffers de
-    // Forward+ que pbr.frag declara sin rama.
+    // Flat environment for when there is no cubemap, and the four Forward+
+    // buffers that pbr.frag declares without a branch.
     void createNeutralIblCubes();
     void createForwardPlusBuffers();
 
-    // Enlaza los cuatro root SRV de space2. Los tres pases que usan la root
-    // signature de malla (estáticos, suelo y personajes) los necesitan.
+    // Binds the four space2 root SRVs. The three passes that use the mesh root
+    // signature (statics, ground and characters) need them.
     void bindForwardPlus();
 
-    // ── Oclusión ambiental en pantalla ──────────────────────────────────
-    // El pre-pase escribe SU profundidad, no la del pase de escena: los dos
-    // compute la leen como textura, y el pase de escena todavía no ha corrido
-    // cuando hace falta (pbr.frag consume el resultado).
-    ComPtr<ID3D12PipelineState> depthPrepassPipeline;         // vértices del motor
-    ComPtr<ID3D12PipelineState> depthPrepassSkinnedPipeline;  // salida del skinning
+    // ── Screen-space ambient occlusion ──────────────────────────────────
+    // The pre-pass writes ITS depth, not the scene pass's: both computes
+    // read it as a texture, and the scene pass has not yet run
+    // when it is needed (pbr.frag consumes the result).
+    ComPtr<ID3D12PipelineState> depthPrepassPipeline;         // engine vertices
+    ComPtr<ID3D12PipelineState> depthPrepassSkinnedPipeline;  // skinning output
     ComPtr<ID3D12RootSignature> depthPrepassRootSignature;
     ComPtr<ID3D12DescriptorHeap> prepassDsvHeap;
     D3D12MA::Allocation*         prepassDepthAllocation = nullptr;
@@ -1112,25 +1112,25 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> motionBlurPipeline;
     D3D12MA::Allocation*        motionBlurAllocation = nullptr;
 
-    // Muestras CONSTRUIDAS ahora mismo en los targets y en los pipelines del
-    // pase de escena. Lo que pide el usuario vive en el estado compartido; los
-    // dos solo coinciden después de recrear, y eso pasa entre frames.
+    // Samples BUILT right now in the targets and in the scene pass
+    // pipelines. What the user requests lives in the shared state; the
+    // two only match after recreating, and that happens between frames.
     UINT sampleCount = 1;
 
-    // Color y profundidad multimuestra. Solo existen con MSAA activo: el pase
-    // de escena dibuja ahí y al cerrarlo se resuelve sobre el HDR de siempre,
-    // que es el que consumen el SSR, la niebla, el bloom y la composición.
+    // Multisampled color and depth. They only exist with MSAA active: the scene pass
+    // draws there and on closing it is resolved onto the usual HDR,
+    // which is the one consumed by SSR, fog, bloom and composition.
     D3D12MA::Allocation* hdrMsAllocation   = nullptr;
     D3D12MA::Allocation* depthMsAllocation = nullptr;
 
-    // Muestras que pide el estado, ya validadas contra lo que soporta el
-    // device: 1 si el modo no es MSAA.
+    // Samples requested by the state, already validated against what the
+    // device supports: 1 if the mode is not MSAA.
     UINT desiredSampleCount() const;
 
-    // La profundidad que pueden LEER la niebla y los reflejos. Con MSAA la del
-    // pase de escena es multimuestra y no se muestrea como una textura normal,
-    // así que se usa la del pre-pase, que por eso se graba también cuando el
-    // SSAO está apagado.
+    // The depth that fog and reflections can READ. With MSAA the scene
+    // pass one is multisampled and is not sampled like a normal texture,
+    // so the pre-pass one is used, which is why it is also recorded when
+    // SSAO is off.
     ID3D12Resource* readableDepth() const
     {
         if (sampleCount > 1 && prepassDepthAllocation)
@@ -1141,72 +1141,72 @@ struct D3D12Renderer::Impl {
     {
         return (sampleCount > 1 && prepassDepthAllocation) ? kSrvPrepassDepth : kSrvDepth;
     }
-    // Y en qué estado está fuera de esos pases: el del pre-pase lo deja su
-    // propio grabado, el de la escena vive en escritura de profundidad.
+    // And what state it is in outside those passes: the pre-pass one is left by its
+    // own recording, the scene one lives in depth-write.
     D3D12_RESOURCE_STATES readableDepthState() const
     {
         return D3D12_RESOURCE_STATE_DEPTH_WRITE;
     }
-    void applyPendingSampleCount();  // recrea targets y pipelines si cambió
+    void applyPendingSampleCount();  // recreates targets and pipelines if it changed
 
     ComPtr<ID3D12RootSignature> fpCullRootSignature;
     ComPtr<ID3D12PipelineState> fpTiledPipeline;
     ComPtr<ID3D12PipelineState> fpClusteredPipeline;
 
-    // Los dos de entrada van mapeados: se reescriben cada frame con la cámara y
-    // las luces vivas. Los tres de salida los llena el culling en la GPU.
+    // The two input ones are mapped: they are rewritten every frame with the camera and
+    // the live lights. The three output ones are filled by the culling on the GPU.
     void*  fpParamsMapped = nullptr;
     void*  fpLightsMapped = nullptr;
     D3D12MA::Allocation* fpStatsAllocation = nullptr;
-    // Lectura de las estadisticas del culling. El compute las acumula con
-    // atomicAdd en fpStatsAllocation, que vive en heap DEFAULT y la CPU no
-    // puede leer: se copian a un buffer READBACK con una region por frame en
-    // vuelo y se leen kFrameCount frames despues, exactamente igual que los
-    // timestamps (ver readTimestamps).
+    // Reading the culling statistics. The compute accumulates them with
+    // atomicAdd in fpStatsAllocation, which lives in a DEFAULT heap and the CPU cannot
+    // read: they are copied to a READBACK buffer with one region per frame in
+    // flight and read kFrameCount frames later, exactly the same as the
+    // timestamps (see readTimestamps).
     ComPtr<ID3D12Resource> fpStatsReadback;
     const uint32_t*        fpStatsMapped = nullptr;
-    // Cuatro ceros en heap UPLOAD. El shader ACUMULA, asi que el buffer tiene
-    // que ir a cero antes de cada dispatch, y en D3D12 un buffer DEFAULT no se
-    // puede memsetear desde la CPU: se le copia esto encima.
+    // Four zeros in an UPLOAD heap. The shader ACCUMULATES, so the buffer has
+    // to be at zero before every dispatch, and in D3D12 a DEFAULT buffer cannot
+    // be memset from the CPU: this is copied over it.
     D3D12MA::Allocation*   fpStatsZeros       = nullptr;
     void*                  fpStatsZerosMapped = nullptr;
     float                  fpAvgPerCell       = 0.0f;
     uint32_t               fpOverflowCells    = 0;
-    uint32_t fpCellCount = 0;  // celdas para las que están dimensionados los de salida
+    uint32_t fpCellCount = 0;  // cells the output ones are sized for
 
-    // Las listas se quedan como lectura mientras el pase de escena las consume;
-    // el frame siguiente las devuelve a escritura antes de rehacerlas.
+    // The lists stay as read while the scene pass consumes them;
+    // the next frame returns them to write before rebuilding them.
     bool fpListsInPixelState = false;
 
     void createForwardPlusPipelines();
     void ensureForwardPlusGrid(uint32_t cells);
-    void updateForwardPlus();   // parámetros y luces del frame
+    void updateForwardPlus();   // parameters and lights of the frame
     void recordForwardPlusCull();
 
-    // Árbol de la interfaz 2D del juego, UNO por CanvasComponent de la
-    // escena — mismo esquema que el Renderer de Vulkan (UiCanvasSlot,
-    // emparejado por ownerId con matchUiCanvasSlots). El editor sigue
-    // editando el de pantalla vía uiCanvas() sin preguntar con qué backend
-    // corre.
+    // Tree of the game's 2D interface, ONE per CanvasComponent in the
+    // scene, same scheme as the Vulkan Renderer (UiCanvasSlot,
+    // matched by ownerId with matchUiCanvasSlots). The editor keeps
+    // editing the screen one via uiCanvas() without asking which backend it
+    // runs on.
     std::vector<std::unique_ptr<UiCanvasSlot>> uiSlots;
-    // Repliegue de uiCanvas() sin ningún canvas de pantalla en la escena.
-    // Persistente y vacío: una referencia a un temporal dejaría al editor
-    // leyendo memoria muerta.
+    // Fallback of uiCanvas() with no screen canvas in the scene.
+    // Persistent and empty: a reference to a temporary would leave the editor
+    // reading dead memory.
     UiCanvas uiCanvasFallback;
 
-    // Capa de interfaz del editor, si la hay. No es propiedad de este backend.
+    // Editor interface layer, if there is one. It is not owned by this backend.
     UiLayer* uiLayer = nullptr;
 
-    // La escena y su raíz, guardadas para quien las pregunte. Este backend no
-    // las recorre: la geometría entra por registerGameObject.
+    // The scene and its root, stored for whoever asks. This backend does not
+    // walk them: the geometry comes in through registerGameObject.
     Scene*      scene     = nullptr;
     GameObject* sceneRoot = nullptr;
 
-    // Guardado para que el panel conserve el valor; este backend no dibuja a
-    // más resolución todavía.
+    // Stored so the panel keeps the value; this backend does not draw at
+    // higher resolution yet.
 
-    // Destino alternativo del pase final. Con esto encendido el backbuffer solo
-    // lleva interfaz, y la escena viaja como textura a quien la dibuje.
+    // Alternative target of the final pass. With this on, the backbuffer only
+    // carries interface, and the scene travels as a texture to whoever draws it.
     D3D12MA::Allocation* viewportAllocation = nullptr;
     bool                 renderToTexture    = false;
 
@@ -1214,28 +1214,28 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> taaPipeline;
     std::array<D3D12MA::Allocation*, 2> taaHistoryAllocations{};
 
-    // Cuál de las dos historias se escribe este frame. La otra es la que se lee.
+    // Which of the two histories is written this frame. The other one is read.
     UINT      taaHistoryIndex = 0;
     bool      taaHistoryValid = false;
-    // ─── Estreno de render targets ───────────────────────────────────────────
-    // D3D12MA reserva con D3D12_HEAP_FLAG_CREATE_NOT_ZEROED, y el primer uso de
-    // un render target salido de un heap así exige un Discard/Clear/Copy ANTES
-    // del draw —aunque el draw lo cubra entero—. Sin eso, la capa de depuración
-    // suelta un id=1422 por recurso en el arranque y en CADA recreación por
-    // resize, y esos errores entierran los de verdad en d3d12_diag.log.
+    // ─── First use of render targets ─────────────────────────────────────────
+    // D3D12MA allocates with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED, and the first use of
+    // a render target coming from such a heap requires a Discard/Clear/Copy BEFORE
+    // the draw (even if the draw covers it entirely). Without that, the debug layer
+    // emits an id=1422 per resource at startup and on EVERY recreation on
+    // resize, and those errors bury the real ones in d3d12_diag.log.
     //
-    // Uno por recurso porque cada uno se estrena en un momento distinto: el
-    // historial del TAA hace ping-pong y estrena el 0 en un frame y el 1 en el
-    // siguiente. ldrAllocation se declara más abajo, con el resto del post.
+    // One per resource because each one is first used at a different moment: the
+    // TAA history does ping-pong and first uses 0 in one frame and 1 in the
+    // next. ldrAllocation is declared further below, with the rest of the post.
     std::array<bool, 2> taaHistoryInicializada{};
     bool                viewportInicializado = false;
     bool                ldrInicializado      = false;
 
-    // Estrena `recurso` si no lo estaba. Hay que llamarlo con el recurso YA en
-    // RENDER_TARGET: es lo que DiscardResource exige. Discard y no Clear porque
-    // el draw que viene detrás escribe todos los píxeles, así que no hace falta
-    // pagar el relleno; lo único que hace falta es dejar de mentirle a la API
-    // sobre si el contenido importa.
+    // First-uses `resource` if it had not been. It must be called with the resource ALREADY in
+    // RENDER_TARGET: that is what DiscardResource requires. Discard and not Clear because
+    // the draw that follows writes every pixel, so there is no need to
+    // pay for the fill; all that is needed is to stop lying to the API
+    // about whether the contents matter.
     void estrenarRenderTarget(ID3D12Resource* recurso, bool& estrenado)
     {
         if (estrenado || !recurso)
@@ -1246,8 +1246,8 @@ struct D3D12Renderer::Impl {
     uint32_t  taaJitterIndex  = 0;
     glm::mat4 taaCurrViewProj{1.0f};
     glm::mat4 taaPrevViewProj{1.0f};
-    // Proyección del frame CON el desplazamiento de subpíxel. Fuera de TAA es
-    // la de la cámara tal cual.
+    // Projection of the frame WITH the subpixel offset. Outside TAA it is
+    // the camera's as is.
     glm::mat4 taaJitteredProj{1.0f};
 
     void createTaaPipeline();
@@ -1257,51 +1257,51 @@ struct D3D12Renderer::Impl {
     void recordSsr();
     void createMotionBlurPipeline();
     void recordMotionBlur();
-    // Encendido, con recursos y con taps que promediar. Lo consultan el pase y
-    // el pre-pase de profundidad, que con MSAA es de donde sale el depth.
+    // On, with resources and with taps to average. Queried by the pass and by
+    // the depth pre-pass, which with MSAA is where the depth comes from.
     bool motionBlurActive() const;
 
     void createSsaoPipelines();
-    void createSsaoTargets();    // depende del tamaño: se rehace al redimensionar
+    void createSsaoTargets();    // depends on the size: it is redone on resize
     void releaseSsaoTargets();
     void recordDepthPrepassAndSsao();
 
-    // El emborronado se queda como recurso de lectura mientras el pase de
-    // escena lo muestrea; el frame siguiente tiene que devolverlo a escritura
-    // antes de volver a dispararlo.
+    // The blur stays as a read resource while the scene pass
+    // samples it; the next frame has to return it to write
+    // before dispatching it again.
     bool ssaoBlurNeedsUav = false;
 
-    // ── Luces ───────────────────────────────────────────────────────────
-    // Las de la escena, tal cual las manda quien la carga. Vacío = ninguna
-    // escena las ha puesto todavía, y entonces se usa la direccional de
-    // relleno del backend, que es lo que ilumina la escena de arranque.
+    // ── Lights ──────────────────────────────────────────────────────────
+    // Those of the scene, as sent by whoever loads it. Empty = no
+    // scene has set them yet, and then the backend's filler directional is
+    // used, which is what lights the startup scene.
     std::vector<ShaderLight> sceneLights;
 
-    // ── Cámara ──────────────────────────────────────────────────────────
-    // Un solo sitio: la rejilla, la malla, la niebla y el reparto de cascadas
-    // tenían cada uno su lookAt copiado, y bastaba con tocar uno para que el
-    // suelo dejara de caer bajo los objetos.
+    // ── Camera ──────────────────────────────────────────────────────────
+    // A single place: the grid, the mesh, the fog and the cascade split
+    // each had their own copied lookAt, and touching just one was enough to make the
+    // ground stop falling under the objects.
     glm::vec3 cameraPos{6.0f, 4.5f, 8.0f};
     glm::mat4 cameraView =
         glm::lookAtRH(glm::vec3(6.0f, 4.5f, 8.0f), glm::vec3(0.0f, 0.5f, 0.0f),
                       glm::vec3(0.0f, 1.0f, 0.0f));
     float cameraFovDeg = 60.0f;
 
-    // Tamaño característico de la escena, del que salen near y far en edición
-    // (near = /1000, far = ×3), igual que en el camino de Vulkan. Lo recalcula
-    // refitCameraRange cuando cambia la geometría; antes de eso el rango estaba
-    // clavado a 0.1-500 y una escena más profunda se recortaba.
+    // Characteristic size of the scene, from which near and far come in edit mode
+    // (near = /1000, far = x3), just like in the Vulkan path. It is recomputed by
+    // refitCameraRange when the geometry changes; before that the range was
+    // pinned to 0.1-500 and a deeper scene got clipped.
     float cameraDistance = 200.0f;
 
-    // perspectiveRH_ZO, no perspective a secas: D3D12 clipea en z=[0,1] igual
-    // que Vulkan, y con la convención de OpenGL se pierde la mitad cercana.
-    // Proyección con la que se dibuja. Manda, por este orden:
-    //   1. la cara de una sonda que se está horneando —90°, cuadrada y con el
-    //      rango largo—, que tiene que verla TODO lo que dibuja esa cara;
-    //   2. el CameraComponent de la escena, mientras corre Play;
-    //   3. la de edición, con el fov que empuja el editor.
-    // Resolverlo aquí y no por parámetro es lo que hace que el UBO, la niebla,
-    // el cielo y el culling no puedan discrepar.
+    // perspectiveRH_ZO, not plain perspective: D3D12 clips at z=[0,1] just
+    // like Vulkan, and with the OpenGL convention the near half is lost.
+    // Projection used to draw. It is decided, in this order, by:
+    //   1. the face of a probe being baked (90 degrees, square and with the
+    //      long range), which EVERYTHING drawn by that face has to see;
+    //   2. the scene's CameraComponent, while Play runs;
+    //   3. the edit one, with the fov pushed by the editor.
+    // Resolving it here and not through a parameter is what keeps the UBO, the fog,
+    // the sky and the culling from disagreeing.
     glm::mat4 cameraProj() const
     {
         if (probeFaceProj)
@@ -1318,25 +1318,25 @@ struct D3D12Renderer::Impl {
     }
     std::optional<glm::mat4> probeFaceProj;
 
-    // Proyección del CameraComponent, mientras manda. Se resuelve una vez por
-    // frame (resolveFrameCamera) y no en cada consulta: cameraProj() se llama
-    // una decena de veces por frame y buscar la cámara en el árbol cada vez
-    // sería recorrer la escena diez veces para nada.
+    // Projection of the CameraComponent, while it is in charge. It is resolved once per
+    // frame (resolveFrameCamera) and not on every query: cameraProj() is called
+    // about ten times per frame and looking for the camera in the tree every time
+    // would be walking the scene ten times for nothing.
     std::optional<glm::mat4> sceneCameraProj;
     void                     resolveFrameCamera();
 
     void ensureSkinnedInstanceBuffer(size_t count);
 
-    // Suelta los recursos GPU de todos los personajes. NO espera a la GPU: los
-    // dos sitios que la llaman (shutdown y clearSkinnedMeshes) ya lo han hecho.
+    // Releases the GPU resources of all characters. It does NOT wait for the GPU: the
+    // two places that call it (shutdown and clearSkinnedMeshes) have already done so.
     void releaseSkinnedObjects();
 
     LARGE_INTEGER lastTick{};
     LARGE_INTEGER tickFrequency{};
 
-    // ── Suelo sólido ────────────────────────────────────────────────────────
-    // La rejilla son líneas y no recibe sombra: hace falta una superficie de
-    // verdad para que se vea algo proyectado.
+    // ── Solid ground ────────────────────────────────────────────────────────
+    // The grid is lines and does not receive shadow: a real surface is needed
+    // for anything projected to be visible.
     D3D12MA::Allocation*     groundVertexAllocation = nullptr;
     D3D12MA::Allocation*     groundIndexAllocation  = nullptr;
     D3D12MA::Allocation*     groundInstanceAllocation = nullptr;
@@ -1344,52 +1344,52 @@ struct D3D12Renderer::Impl {
     D3D12_INDEX_BUFFER_VIEW  groundIndexBufferView{};
     UINT                     groundIndexCount = 0;
 
-    // ── Sombras en cascada ──────────────────────────────────────────────────
+    // ── Cascaded shadows ────────────────────────────────────────────────────
     ComPtr<ID3D12RootSignature> shadowRootSignature;
-    ComPtr<ID3D12PipelineState> shadowPipeline;         // vértices del motor (56 B)
-    ComPtr<ID3D12PipelineState> shadowSkinnedPipeline;  // salida del compute (80 B)
-    ComPtr<ID3D12DescriptorHeap> shadowDsvHeap;         // un DSV por cascada
+    ComPtr<ID3D12PipelineState> shadowPipeline;         // engine vertices (56 B)
+    ComPtr<ID3D12PipelineState> shadowSkinnedPipeline;  // compute output (80 B)
+    ComPtr<ID3D12DescriptorHeap> shadowDsvHeap;         // one DSV per cascade
     D3D12MA::Allocation*         shadowMapArrayAllocation = nullptr;
-    // Lado del mapa que hay MONTADO ahora mismo, y el que pide la UI y aun no
-    // se ha aplicado (0 = nada pendiente). El cambio no se hace donde se pide:
-    // soltar el mapa en mitad de un frame lo quitaria de debajo de la lista de
-    // comandos en vuelo.
+    // Side of the map that is BUILT right now, and the one the UI requests and has not yet
+    // been applied (0 = nothing pending). The change is not made where it is requested:
+    // releasing the map in the middle of a frame would pull it from under the
+    // in-flight command list.
     UINT shadowMapSize        = kShadowMapSizeDefault;
     UINT pendingShadowMapSize = 0;
-    // Ultimo lado del que ya se dejo constancia en el log, para no repetir la
-    // linea en cada frame.
+    // Last side already recorded in the log, so as not to repeat the
+    // line every frame.
     UINT loggedShadowSize     = 0;
     void applyPendingShadowSize();
     UINT                         dsvSize = 0;
 
     glm::mat4 cascadeMatrices[kShadowLayers]{};
     glm::vec4 cascadeSplits{0.0f};
-    // Cuantas capas del mapa tienen matriz valida en ESTE frame: 4 con las
-    // cascadas de una direccional, 1 con la cara en perspectiva de un foco, 0
-    // sin luces. Solo acota los DRAWS — el clear de cada capa se hace igual.
-    // El adaptador permite presentar sin esperar al refresco. Se resuelve al
-    // crear el swapchain, que es cuando hay que pedir el flag.
+    // How many layers of the map have a valid matrix in THIS frame: 4 with the
+    // cascades of a directional, 1 with the perspective face of a spot, 0
+    // with no lights. It only bounds the DRAWS; the clear of each layer is done anyway.
+    // The adapter allows presenting without waiting for the refresh. It is resolved when
+    // creating the swapchain, which is when the flag has to be requested.
     bool      tearingDisponible = false;
 
     UINT      activeLayers = 0;
-    // Focos secundarios con ranura. Ocupan las capas [kShadowKeyLayers, +extra).
+    // Secondary spots with a slot. They take layers [kShadowKeyLayers, +extra).
     UINT      extraLayers  = 0;
-    // Ranura de cada luz, o -1 si no proyecta. La 0 siempre -1: la key usa las
-    // kShadowKeyLayers primeras.
+    // Slot of each light, or -1 if it casts none. Light 0 is always -1: the key uses the
+    // first kShadowKeyLayers.
     int       shadowSlot[MAX_LIGHTS] = {};
-    // Caras que se llevo cada luz: 1 una cara, SHADOW_KEY_MATRICES un cubemap.
+    // Faces each light took: 1 one face, SHADOW_KEY_MATRICES a cubemap.
     int       shadowFaces[MAX_LIGHTS] = {};
-    // Dirección de la luz: la misma que se escribe en el UBO. La posición solo
-    // sirve para orientar, igual que en computeCascades.
+    // Light direction: the same one written to the UBO. The position is only
+    // used for orientation, just like in computeCascades.
     glm::vec3 lightDirection{-0.4f, -1.0f, -0.5f};
 
-    // ── Escena fuera de pantalla y bloom ────────────────────────────────────
-    // La escena ya no va directa al backbuffer: se dibuja en un target HDR, el
-    // bloom trabaja sobre él y un pase de composición escribe el resultado.
+    // ── Offscreen scene and bloom ───────────────────────────────────────────
+    // The scene no longer goes straight to the backbuffer: it is drawn into an HDR target, the
+    // bloom works on it and a composition pass writes the result.
     D3D12MA::Allocation* hdrAllocation = nullptr;
-    // Niveles con tamano util. La reserva es siempre kBloomMips —el reparto de
-    // descriptores lo da por hecho—, pero con el viewport pequeno se usan menos,
-    // igual que en Vulkan.
+    // Levels with a useful size. The reservation is always kBloomMips (the descriptor
+    // layout takes it for granted), but with a small viewport fewer are used,
+    // just like in Vulkan.
     UINT                 bloomMipCount = 0;
     D3D12MA::Allocation* bloomMipAllocations[kBloomMips]{};
     UINT                 bloomMipWidth[kBloomMips]{};
@@ -1401,19 +1401,19 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12RootSignature> compositeRootSignature;
     ComPtr<ID3D12PipelineState> compositePipeline;
 
-    // Estado de calidad y efectos compartido con el backend de Vulkan. Es el
-    // propio D3D12Renderer: el Impl no lo copia, lo consulta, para que un
-    // setBloomIntensity() desde fuera se vea en el frame siguiente sin
-    // sincronizar nada.
+    // Quality and effects state shared with the Vulkan backend. It is
+    // D3D12Renderer itself: the Impl does not copy it, it queries it, so that a
+    // setBloomIntensity() from outside shows up in the next frame without
+    // synchronizing anything.
     RendererState* state = nullptr;
 
-    // El radio del tent del bloom NO está en RendererState: el Renderer de
-    // Vulkan no lo expone como ajuste, así que sigue siendo local.
+    // The bloom tent radius is NOT in RendererState: the Vulkan
+    // Renderer does not expose it as a setting, so it stays local.
     float bloomRadius = 1.0f;
 
-    // ── Niebla y FXAA ───────────────────────────────────────────────────────
-    // La niebla escribe SOBRE el target HDR antes del bloom; FXAA va al final,
-    // sobre el resultado ya compuesto y en rango LDR.
+    // ── Fog and FXAA ────────────────────────────────────────────────────────
+    // The fog writes ON the HDR target before the bloom; FXAA goes last,
+    // on the already composed result and in LDR range.
     ComPtr<ID3D12RootSignature> fogRootSignature;
     ComPtr<ID3D12PipelineState> fogPipeline;
     ComPtr<ID3D12RootSignature> fxaaRootSignature;
@@ -1427,21 +1427,21 @@ struct D3D12Renderer::Impl {
     D3D12MA::Allocation*        splashLogo       = nullptr;
     float                       splashLogoAspect = 1.0f;
 
-    // ─── UI 2D del juego ─────────────────────────────────────────────────────
-    // Los quads los arma UiCanvas en CPU (buildDrawData, que no sabe de ninguna
-    // API) y aquí solo se suben y se dibujan. Un par de buffers por frame en
-    // vuelo, mapeados y con crecimiento por duplicación: el contenido cambia
-    // entero cada frame y no compensa un staging.
+    // ─── Game 2D UI ──────────────────────────────────────────────────────────
+    // The quads are built by UiCanvas on the CPU (buildDrawData, which knows of no
+    // API) and here they are only uploaded and drawn. A pair of buffers per frame in
+    // flight, mapped and growing by doubling: the content changes
+    // entirely every frame and a staging buffer does not pay off.
     ComPtr<ID3D12RootSignature> uiRootSignature;
     ComPtr<ID3D12PipelineState> uiPipeline;
 
-    // Las DOS variantes de canvas de MUNDO. Comparten root signature, shaders y
-    // layout de vértice con la de pantalla; lo único que cambia es que dibujan
-    // en el target de la ESCENA (kHdrFormat + D32_FLOAT + sampleCount) y el test
-    // de profundidad: una para que una pared tape el cartel y otra para lo que
-    // va siempre encima, como una barra de vida.
-    ComPtr<ID3D12PipelineState> uiWorldPipelineDepth;    // lo tapa la geometría
-    ComPtr<ID3D12PipelineState> uiWorldPipelineNoDepth;  // siempre encima
+    // The TWO variants of WORLD canvas. They share root signature, shaders and
+    // vertex layout with the screen one; the only thing that changes is that they draw
+    // into the SCENE target (kHdrFormat + D32_FLOAT + sampleCount) and the depth
+    // test: one so that a wall hides the sign and another for what
+    // always goes on top, like a health bar.
+    ComPtr<ID3D12PipelineState> uiWorldPipelineDepth;    // geometry hides it
+    ComPtr<ID3D12PipelineState> uiWorldPipelineNoDepth;  // always on top
 
     std::array<D3D12MA::Allocation*, kFrameCount> uiVertexAllocations{};
     std::array<void*, kFrameCount>                uiVertexMapped{};
@@ -1450,172 +1450,172 @@ struct D3D12Renderer::Impl {
     std::array<void*, kFrameCount>                uiIndexMapped{};
     std::array<UINT, kFrameCount>                 uiIndexCapacity{};
 
-    // Cursores de sub-asignación DENTRO del buffer del frame en curso. Son
-    // MIEMBROS y no locales de una función porque los comparten dos pases: los
-    // canvas de mundo se graban en el de escena y los de pantalla en el de
-    // composición, y el segundo tiene que seguir donde lo dejó el primero. Con
-    // un cursor local a cada uno, los de pantalla escribirían encima de los
-    // vértices de los de mundo — que la GPU todavía no ha leído, porque lee el
-    // buffer al EJECUTAR el command list, no al grabarlo. beginUiFrame() los
-    // pone a 0 una vez por frame.
+    // Suballocation cursors INSIDE the buffer of the current frame. They are
+    // MEMBERS and not locals of a function because two passes share them: the
+    // world canvases are recorded in the scene one and the screen ones in the
+    // composition one, and the second has to continue where the first left off. With
+    // a cursor local to each one, the screen ones would write over the
+    // vertices of the world ones, which the GPU has not read yet, because it reads the
+    // buffer when the command list EXECUTES, not when it is recorded. beginUiFrame() sets them
+    // to 0 once per frame.
     UINT uiVertexCursor = 0;
     UINT uiIndexCursor  = 0;
-    // Lo que dejó contado beginUiFrame() para los canvas de PANTALLA: son los
-    // únicos que graba recordUiCanvas(), y con 0 no hay nada que dibujar.
+    // What beginUiFrame() counted for the SCREEN canvases: they are the
+    // only ones recorded by recordUiCanvas(), and with 0 there is nothing to draw.
     UINT uiScreenVertices = 0;
     UINT uiScreenIndices  = 0;
-    // Los de mundo en orden de pintado, de lejos a cerca. Miembro y no local
-    // para no reasignar el vector cada frame.
+    // The world ones in paint order, far to near. A member and not a local
+    // so as not to reallocate the vector every frame.
     std::vector<UiCanvasSlot*> uiWorldOrder;
 
-    // El pase de geometría entero, para poder repetirlo desde otra cámara: es
-    // lo que necesita el horneado de una sonda de reflexión.
+    // The whole geometry pass, so it can be repeated from another camera: it is
+    // what the baking of a reflection probe needs.
     void recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv, D3D12_CPU_DESCRIPTOR_HANDLE dsv,
                              UINT targetWidth, UINT targetHeight);
 
     void createUiPipeline();
-    // Las dos variantes de mundo, contra el target de la ESCENA. Sirve también
-    // de "recreate": si ya había, las suelta antes de compilar las nuevas. Hay
-    // que llamarla CADA VEZ que cambia sampleCount, o el PSO queda compilado
-    // para un número de muestras que ya no es el del target — y eso en D3D12 se
-    // manifiesta como device lost, no como error de la capa de depuración.
+    // The two world variants, against the SCENE target. It also serves as
+    // "recreate": if there were any, it releases them before compiling the new ones. It
+    // has to be called EVERY TIME sampleCount changes, or the PSO stays compiled
+    // for a sample count that is no longer the target's, and in D3D12 that
+    // shows up as device lost, not as a debug layer error.
     void createUiWorldPipelines();
     void ensureUiBuffers(UINT vertexCount, UINT indexCount);
 
-    // UNA vez por frame, ANTES del pase de escena (que es donde se graban los
-    // canvas de mundo). Construye el draw data de TODOS los canvas, calcula la
-    // matriz de modelo de los de mundo, dimensiona el par de buffers con el
-    // total del frame entero y pone los cursores a 0. Ver el comentario de
-    // uiVertexCursor: partirlo en dos llamadas, una por pase, corrompe el
-    // buffer en silencio.
+    // ONCE per frame, BEFORE the scene pass (which is where the world
+    // canvases are recorded). It builds the draw data of ALL canvases, computes the
+    // model matrix of the world ones, sizes the buffer pair with the
+    // total of the whole frame and sets the cursors to 0. See the comment on
+    // uiVertexCursor: splitting it into two calls, one per pass, silently corrupts the
+    // buffer.
     void beginUiFrame();
 
-    // Sub-asigna el hueco de este canvas en el buffer del frame, comprueba que
-    // cabe, copia y bindea las dos vistas. Devuelve false si no cabe: mejor no
-    // dibujar ese canvas que escribir FUERA de la memoria mapeada, que es una
-    // escritura de HOST que ninguna capa de validación ve. Uno solo para las dos
-    // rutas —mundo y pantalla— para que la guarda no pueda quedarse en una.
+    // Suballocates this canvas's slot in the frame buffer, checks that it
+    // fits, copies and binds the two views. Returns false if it does not fit: better not to
+    // draw that canvas than to write OUTSIDE the mapped memory, which is a
+    // HOST write that no validation layer sees. A single one for both
+    // paths (world and screen) so the guard cannot stay in only one.
     bool bindUiCanvasGeometry(const UiDrawData& data);
 
-    // Los canvas de MUNDO, al final del pase de escena: después de la geometría
-    // y del cielo, para que el depth ya escrito los ocluya.
+    // The WORLD canvases, at the end of the scene pass: after the geometry
+    // and the sky, so the depth already written occludes them.
     void recordWorldCanvases(UINT targetWidth, UINT targetHeight);
 
-    // transform es proj*view*model ya multiplicada: para los canvas de pantalla
-    // es la ortográfica de siempre (la calcula quien llama), y para uno de
-    // mundo lleva también la cámara y la matriz del canvas.
+    // transform is proj*view*model already multiplied: for screen canvases it
+    // is the usual orthographic (computed by the caller), and for a world
+    // one it also carries the camera and the canvas matrix.
     void recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, const glm::mat4& transform);
 
-    // Atlas y fuentes de la UI. El backend es su dueño: los widgets solo
-    // guardan el puntero, que es también la clave con la que el lote dice qué
-    // textura quiere.
+    // UI atlases and fonts. The backend owns them: the widgets only
+    // keep the pointer, which is also the key with which the batch says which
+    // texture it wants.
     std::vector<std::unique_ptr<UiTextureAtlas>>          uiAtlases;
     std::vector<std::unique_ptr<UiFont>>                  uiFonts;
-    // Por RUTA: la misma imagen pedida dos veces es el mismo atlas, y así el
-    // editor toca los sprites del atlas que se está dibujando, no los de una
-    // copia. Mismo criterio que el backend de Vulkan.
+    // By PATH: the same image requested twice is the same atlas, and this way the
+    // editor touches the sprites of the atlas being drawn, not those of a
+    // copy. Same criterion as the Vulkan backend.
     std::unordered_map<std::string, UiTextureAtlas*>      uiAtlasByPath;
     std::unordered_map<const UiTextureAtlas*, UINT>       uiAtlasSrv;
     std::vector<D3D12MA::Allocation*>                     uiAtlasTextures;
     UINT                                                  uiNextAtlasSlot = 0;
 
-    // Atlas compartido de miniaturas (ver EditorRenderer::uiThumbnailAtlasId). Se
-    // crea la primera vez que se pide; si falla, no se reintenta cada frame.
+    // Shared thumbnail atlas (see EditorRenderer::uiThumbnailAtlasId). It is
+    // created the first time it is requested; if it fails, it is not retried every frame.
     D3D12MA::Allocation* thumbAtlas       = nullptr;
     bool                 thumbAtlasFailed = false;
     bool ensureThumbAtlas();
     bool uploadThumbnailTiles(const ThumbnailTile* tiles, size_t count);
 
-    // Sube los píxeles que el atlas ya tiene cargados y le crea su SRV. false
-    // si no hay hueco o la subida falla: el lote se dibujará con la 1x1 blanca.
+    // Uploads the pixels the atlas already has loaded and creates its SRV. false
+    // if there is no slot or the upload fails: the batch will be drawn with the 1x1 white.
     bool registerUiAtlas(UiTextureAtlas& atlas);
 
-    // ─── Sondas de reflexión ─────────────────────────────────────────────────
+    // ─── Reflection probes ───────────────────────────────────────────────────
     struct GpuProbe {
-        uint64_t  ownerId  = 0;   // GameObject::id de la sonda
+        uint64_t  ownerId  = 0;   // GameObject::id of the probe
         glm::vec3 position{0.0f};
         float     radius    = 0.0f;
         float     intensity = 1.0f;
 
-        // Las tres imágenes: la captura de la escena y las dos que salen de
-        // convolucionarla, que son las que acaban en t4 y t5 de los objetos.
+        // The three images: the scene capture and the two that come out of
+        // convolving it, which are the ones that end up in t4 and t5 of the objects.
         D3D12MA::Allocation* captureAllocation    = nullptr;
         D3D12MA::Allocation* irradianceAllocation = nullptr;
         D3D12MA::Allocation* prefilterAllocation  = nullptr;
 
-        // Primer hueco de su bloque en el heap. El resto sale de sumar, en el
-        // orden que fija kSrvPerProbe.
+        // First slot of its block in the heap. The rest comes from adding, in the
+        // order set by kSrvPerProbe.
         UINT srvBase = 0;
 
-        bool  baked  = false;  // false: todavía enseña el IBL global
-        float bakeMs = 0.0f;   // último horneado, medido con los timestamps
+        bool  baked  = false;  // false: still shows the global IBL
+        float bakeMs = 0.0f;   // last bake, measured with the timestamps
 
-        // El horneado se quedó a medias (la GPU rechazó una lista). Sin esto,
-        // "no horneada" haría que se reintentara en CADA frame, y cada intento
-        // espera a la GPU siete veces: un fallo permanente dejaría el editor a
-        // rastras. Se limpia cuando la sonda cambia, que es cuando vuelve a
-        // tener sentido intentarlo.
+        // The bake was left half done (the GPU rejected a list). Without this,
+        // "not baked" would make it retry on EVERY frame, and each attempt
+        // waits on the GPU seven times: a permanent failure would leave the editor
+        // crawling. It is cleared when the probe changes, which is when trying
+        // again makes sense once more.
         bool  bakeFailed = false;
     };
     std::vector<GpuProbe> probes;
 
-    // Índices dentro del bloque de una sonda.
+    // Indices inside a probe's block.
     static constexpr UINT kProbeCaptureSrv    = 0;
     static constexpr UINT kProbeIrradianceSrv = 1;
     static constexpr UINT kProbeIrradianceUav = 2;
     static constexpr UINT kProbePrefilterSrv  = 3;
     static constexpr UINT kProbePrefilterUav  = 4;  // + mip
 
-    // Crea las tres imágenes de una sonda y sus vistas. false si no queda hueco
-    // en el heap o la GPU no da la memoria.
+    // Creates the three images of a probe and their views. false if there is no slot left
+    // in the heap or the GPU does not give the memory.
     bool createProbeResources(GpuProbe& probe);
     void releaseProbe(GpuProbe& probe);
 
-    // Reconcilia la lista con los ReflectionProbeComponent de la escena: crea
-    // las nuevas, suelta las que ya no están y refresca posición, radio e
-    // intensidad. Por frame, y sale enseguida cuando no hay ninguna.
+    // Reconciles the list with the scene's ReflectionProbeComponents: creates
+    // the new ones, releases those that are gone and refreshes position, radius and
+    // intensity. Per frame, and returns right away when there are none.
     void syncProbes();
 
-    // Los dos compute del IBL sobre una entrada y unos destinos cualesquiera:
-    // lo usa el cielo global y lo usa cada sonda.
+    // The two IBL computes over any input and destinations:
+    // used by the global sky and by each probe.
     void recordIblConvolution(UINT sourceSrv, UINT irradianceUav, UINT prefilterUav,
                               float intensity);
 
-    // Captura la escena desde la sonda —seis caras— y convoluciona el resultado
-    // en sus dos cubemaps. Es un EVENTO, no un pase del frame: espera a la GPU,
-    // se toma su tiempo y deja la sonda marcada como horneada.
+    // Captures the scene from the probe (six faces) and convolves the result
+    // into its two cubemaps. It is an EVENT, not a pass of the frame: it waits on the GPU,
+    // takes its time and leaves the probe marked as baked.
     void bakeProbe(GpuProbe& probe);
 
-    // Profundidad propia del horneado: el buffer del frame tiene el tamaño del
-    // render y aquí las caras son de kProbeFaceSize.
+    // Depth of the bake's own: the frame's buffer has the size of the
+    // render and here the faces are kProbeFaceSize.
     D3D12MA::Allocation* probeDepthAllocation = nullptr;
     void createProbeDepth();
 
-    // Peticiones pendientes: el editor pide hornear y se atiende en el frame
-    // siguiente, fuera de cualquier grabado a medias.
+    // Pending requests: the editor asks to bake and it is handled in the next
+    // frame, outside any half-done recording.
     std::vector<uint64_t> probeBakeQueue;
     bool                  probeBakeAllQueued = false;
     float                 probeLastBakeMs    = 0.0f;
 
-    // Qué sonda mira cada objeto, por su índice en `probes`; -1 = el IBL global.
-    // Se guarda para no reescribir descriptores en un frame en el que nada
-    // cambió, que es el caso normal.
+    // Which probe each object looks at, by its index in `probes`; -1 = the global IBL.
+    // It is stored so as not to rewrite descriptors in a frame where nothing
+    // changed, which is the normal case.
     std::vector<int> probeAssignStatic;
     std::vector<int> probeAssignSkinned;
 
-    // La sonda que le toca a un punto del mundo: la más cercana de las que lo
-    // contienen. -1 si ninguna llega.
+    // The probe that applies to a world point: the nearest of those that
+    // contain it. -1 if none reaches it.
     int  pickProbeFor(const glm::vec3& worldPos) const;
-    // Reescribe t4 y t5 de los bloques cuya sonda haya cambiado. Devuelve
-    // cuántos se tocaron.
+    // Rewrites t4 and t5 of the blocks whose probe has changed. Returns
+    // how many were touched.
     int  refreshProbeAssignment();
-    // Deja t4/t5 de ese bloque apuntando a la sonda dada, o al IBL global.
+    // Leaves t4/t5 of that block pointing at the given probe, or at the global IBL.
     void writeProbeSlots(UINT blockBase, int probeIndex);
     D3D12MA::Allocation*        ldrAllocation = nullptr;
 
-    // Los parámetros de niebla y FXAA también salen de RendererState.
+    // The fog and FXAA parameters also come from RendererState.
 
-    // Interfaz de usuario. La dibuja quien conoce ImGui, no este backend.
+    // User interface. It is drawn by whoever knows ImGui, not this backend.
     std::function<void()> uiDrawCallback;
 
     ComPtr<ID3D12DescriptorHeap> rtvHeap;
@@ -1625,16 +1625,16 @@ struct D3D12Renderer::Impl {
     std::array<ComPtr<ID3D12CommandAllocator>, kFrameCount> allocators;
     ComPtr<ID3D12GraphicsCommandList>                       commandList;
 
-    // Un valor de fence por slot: el frame N solo puede reusar su allocator
-    // cuando la GPU ha pasado del valor que se le asignó la última vez.
+    // One fence value per slot: frame N can only reuse its allocator
+    // when the GPU has passed the value assigned to it the last time.
     ComPtr<ID3D12Fence>                fence;
     std::array<UINT64, kFrameCount>    fenceValues{};
     HANDLE                             fenceEvent = nullptr;
 
-    // ─── Tiempos de GPU ──────────────────────────────────────────────────────
-    // Dos marcas por pase (entrada y salida) y un par más para el frame entero.
-    // El panel de rendimiento los pide uno a uno, así que se guardan por pase y
-    // no como un total.
+    // ─── GPU times ───────────────────────────────────────────────────────────
+    // Two marks per pass (entry and exit) and one more pair for the whole frame.
+    // The performance panel asks for them one by one, so they are stored per pass and
+    // not as a total.
     enum TimestampSlot : UINT {
         TsFrame       = 0,
         TsShadow      = 2,
@@ -1645,8 +1645,8 @@ struct D3D12Renderer::Impl {
         TsFog         = 12,
         TsBloom       = 14,
         TsAa          = 16,
-        // El motion blur se media en NINGUN backend: el pase existia desde
-        // hace tiempo y su coste no aparecia en el panel.
+        // Motion blur was measured in NO backend: the pass had existed for
+        // a long time and its cost did not show up in the panel.
         TsMotionBlur  = 18,
         TsCount       = 20,
     };
@@ -1658,44 +1658,44 @@ struct D3D12Renderer::Impl {
 
     void createTimestampResources();
     void markTimestamp(UINT slot);
-    // Interruptor del PerformancePanel. Con el panel cerrado no se graban
-    // queries ni se cuentan draws: en Vulkan ya era asi (m_perfCapture) y aqui
-    // era un no-op, con lo que el interruptor mentia y las cuentas de los dos
-    // backends no se podian comparar.
+    // PerformancePanel switch. With the panel closed no queries are recorded
+    // nor draws counted: in Vulkan it was already so (m_perfCapture) and here
+    // it was a no-op, so the switch lied and the counts of the two
+    // backends could not be compared.
     bool perfCapture = true;
-    void readTimestamps();     // los del frame anterior, antes de sobrescribir
-    void resolveTimestamps();  // vuelca los de este frame al buffer de lectura
+    void readTimestamps();     // those of the previous frame, before overwriting
+    void resolveTimestamps();  // dumps this frame's into the read buffer
 
-    // Cuentas del frame, para el panel: se rellenan al grabar el pase principal.
+    // Frame counts, for the panel: they are filled in when recording the main pass.
     int statDraws       = 0;
     int statInstanced   = 0;
     int statCulledCount = 0;
 
-    // Sin editor delante: se apagan la rejilla y los gizmos, que son suyos. Lo
-    // enciende el runtime antes de arrancar.
+    // With no editor in front: the grid and gizmos, which belong to it, are turned off. The
+    // runtime turns it on before starting.
     bool headless = false;
 
     UINT frameIndex = 0;
-    // Tamaño al que se DIBUJA la escena: profundidad, HDR, oclusión, bloom y el
-    // LDR van a este. Con SSAA es un múltiplo del de salida.
+    // Size at which the scene is DRAWN: depth, HDR, occlusion, bloom and the
+    // LDR go at this one. With SSAA it is a multiple of the output one.
     UINT width      = 0;
     UINT height     = 0;
-    // Tamaño al que se ENTREGA la imagen: el backbuffer o la textura del panel.
-    // Sin SSAA coincide con el de render, y entonces el pase final es un blit
-    // con filtro; con SSAA es más pequeño y ese pase promedia.
+    // Size at which the image is DELIVERED: the backbuffer or the panel's texture.
+    // Without SSAA it matches the render one, and then the final pass is a blit
+    // with filtering; with SSAA it is smaller and that pass averages.
     UINT outWidth   = 0;
     UINT outHeight  = 0;
 
-    // Tamaño anotado por el callback de la ventana, pendiente de aplicar. Ver
-    // el comentario de resize() en la cabecera: el trabajo de DXGI no puede
-    // hacerse dentro del WindowProc.
-    // Tamaño de la swapchain, que es el de la ventana. width y height son el
-    // tamaño de RENDER: coinciden con este salvo cuando la escena va a un
-    // panel, y entonces mandan las medidas del panel.
+    // Size recorded by the window callback, pending to apply. See
+    // the comment of resize() in the header: the DXGI work cannot be
+    // done inside the WindowProc.
+    // Size of the swapchain, which is the window's. width and height are the
+    // RENDER size: they match this one except when the scene goes to a
+    // panel, and then the panel's measurements rule.
     UINT swapWidth  = 0;
     UINT swapHeight = 0;
 
-    // Tamaño de render pedido desde fuera, pendiente de aplicar entre frames.
+    // Render size requested from outside, pending to apply between frames.
     UINT pendingRenderWidth  = 0;
     UINT pendingRenderHeight = 0;
 
@@ -1705,56 +1705,56 @@ struct D3D12Renderer::Impl {
     UINT pendingHeight  = 0;
     bool resizePending  = false;
 
-    // Color de fondo en espacio LINEAL, que es lo que espera el target HDR. El
-    // pase de composición le aplica ACES y gamma 2.2, así que un 0,10 de antes
-    // —cuando la escena iba directa al backbuffer— saldría ahora como un gris
-    // medio. Estos valores son los que dan en pantalla el fondo de siempre.
+    // Background color in LINEAR space, which is what the HDR target expects. The
+    // composition pass applies ACES and gamma 2.2 to it, so the 0.10 from before
+    // (when the scene went straight to the backbuffer) would now come out as a mid
+    // gray. These values are the ones that give the usual background on screen.
     float       clearColor[4] = {0.02f, 0.02f, 0.025f, 1.0f};
     std::string adapterName;
     HWND        hwnd        = nullptr;
     bool        initialized = false;
 
-    // ─── Diagnóstico ─────────────────────────────────────────────────────────
-    // La cola de mensajes de la capa de depuración, para poder DRENARLA a
-    // fichero: por sí sola solo escribe por OutputDebugString.
+    // ─── Diagnostics ─────────────────────────────────────────────────────────
+    // The message queue of the debug layer, so it can be DRAINED to a
+    // file: by itself it only writes through OutputDebugString.
     ComPtr<ID3D12InfoQueue> infoQueue;
-    // El volcado de DRED se hace UNA vez: la pérdida del device la detectan
-    // varios sitios seguidos (Present, throwIfFailed, shutdown) y repetir el
-    // mismo listado de migas solo entierra el primero, que es el bueno.
+    // The DRED dump is done ONCE: the device loss is detected by
+    // several places in a row (Present, throwIfFailed, shutdown) and repeating the
+    // same breadcrumb listing only buries the first one, which is the good one.
     bool deviceRemovedVolcado = false;
 
-    // El protocolo del fence se rompió. Importa porque TODOS los llamantes de
-    // waitForGpu() liberan recursos justo después de que vuelva: si el Signal
-    // falló, la espera no esperó a nadie y lo que se suelta puede seguir en
-    // manos de la GPU. A partir de aquí no se envía más trabajo.
+    // The fence protocol broke. It matters because ALL callers of
+    // waitForGpu() release resources right after it returns: if the Signal
+    // failed, the wait waited for nobody and what gets released may still be
+    // in the GPU's hands. From here on no more work is submitted.
     //
-    // El aviso NO se da lanzando desde waitForGpu/moveToNextFrame: el
-    // destructor (~D3D12Renderer) pasa por shutdown() y de ahí a waitForGpu(),
-    // y una excepción que sale de un destructor es std::terminate. Se marca
-    // aquí y lo lanza drawFrame, que sí está fuera de ese camino y es donde el
-    // Present ya lanza por lo mismo.
+    // The warning is NOT given by throwing from waitForGpu/moveToNextFrame: the
+    // destructor (~D3D12Renderer) goes through shutdown() and from there to waitForGpu(),
+    // and an exception leaving a destructor is std::terminate. It is flagged
+    // here and drawFrame throws it, which is outside that path and is where
+    // Present already throws for the same reason.
     bool        deviceLost      = false;
     HRESULT     deviceLostHr    = S_OK;
     const char* deviceLostDonde = nullptr;
 
-    // Frames seguidos que no se pudieron grabar ni enviar. Un Reset o un Close
-    // que fallan sueltos son un frame perdido y poco más —no se envía nada, así
-    // que no hay estado a medias en la GPU—, pero encadenados son un device que
-    // ya no responde, y seguir intentándolo solo entierra el primer error.
+    // Consecutive frames that could be neither recorded nor submitted. A Reset or a Close
+    // that fails in isolation is a lost frame and little else (nothing is submitted, so
+    // there is no half-done state on the GPU), but chained they are a device that
+    // no longer responds, and continuing to try only buries the first error.
     int                  framesDescartadosSeguidos = 0;
     static constexpr int kMaxFramesDescartados     = 3;
 
-    // Pasa a fichero lo que la capa de depuración haya acumulado desde la
-    // última vez, y vacía la cola.
+    // Writes to file whatever the debug layer has accumulated since the
+    // last time, and empties the queue.
     void drainInfoQueue();
-    // Motivo de la pérdida + auto-breadcrumbs de DRED (qué operaciones completó
-    // la GPU y cuál se quedó a medias) + página fallida, si la hay.
+    // Reason for the loss + DRED auto-breadcrumbs (which operations the GPU
+    // completed and which one was left half done) + failed page, if any.
     void dumpDeviceRemoved(const char* donde, HRESULT hr);
-    // Fallo que rompe el protocolo del fence: deja constancia, drena la capa de
-    // depuración y marca el device como perdido. NO lanza (ver deviceLost).
+    // Failure that breaks the fence protocol: records it, drains the debug
+    // layer and marks the device as lost. It does NOT throw (see deviceLost).
     void notarDeviceLost(const char* donde, HRESULT hr);
-    // Frame que no se pudo grabar ni enviar. Deja constancia y, si se repite
-    // kMaxFramesDescartados veces seguidas, escala a pérdida de device.
+    // Frame that could be neither recorded nor submitted. Records it and, if it repeats
+    // kMaxFramesDescartados times in a row, escalates to device loss.
     void notarFrameDescartado(const char* donde, HRESULT hr);
 
     void waitForGpu();
@@ -1763,52 +1763,52 @@ struct D3D12Renderer::Impl {
     void releaseRenderTargets();
     void applyPendingResize();
 
-    // Sube `size` bytes a un buffer en heap DEFAULT y lo deja en `finalState`.
-    // Síncrono: graba la copia, la ejecuta y espera. Solo se usa en init, donde
-    // bloquear no cuesta nada; la subida en streaming es de otra fase.
+    // Uploads `size` bytes to a buffer in a DEFAULT heap and leaves it in `finalState`.
+    // Synchronous: records the copy, executes it and waits. It is only used in init, where
+    // blocking costs nothing; streaming upload belongs to another phase.
     D3D12MA::Allocation* uploadBuffer(const void* data, size_t size,
                                       D3D12_RESOURCE_STATES finalState);
 
     void createGizmoPipeline();
     void createGridGeometry();
 
-    // Sube una textura 2D (o un array de slices 1x1) y le crea su SRV en el
-    // hueco `srvIndex` del heap.
-    // `mips` son los niveles 1..N-1 de una textura 2D (arraySize == 1); con
-    // arraySize > 1 no se usan.
+    // Uploads a 2D texture (or an array of 1x1 slices) and creates its SRV in the
+    // `srvIndex` slot of the heap.
+    // `mips` are levels 1..N-1 of a 2D texture (arraySize == 1); with
+    // arraySize > 1 they are not used.
     D3D12MA::Allocation* uploadTexture(const void* pixels, UINT width, UINT height,
                                        UINT arraySize, DXGI_FORMAT format,
                                        UINT bytesPerPixel, UINT srvIndex,
                                        const TextureMip* mips = nullptr, size_t mipCount = 0);
 
-    // Decodifica la textura del material (embebida o de fichero), la sube y le
-    // crea el SRV en `srvIndex`. nullptr si no hay textura o no se pudo leer:
-    // quien llama pone ahí la vista de la 1x1 global. El formato lo decide
-    // resolveSrgb: el slot (`kind`) da el valor por defecto y el sidecar puede
-    // pisarlo.
+    // Decodes the material texture (embedded or from file), uploads it and creates its
+    // SRV at `srvIndex`. nullptr if there is no texture or it could not be read:
+    // the caller puts the global 1x1 view there. The format is decided by
+    // resolveSrgb: the slot (`kind`) gives the default value and the sidecar can
+    // override it.
     D3D12MA::Allocation* uploadMaterialTexture(const std::string& path,
                                                const std::vector<uint8_t>& embedded,
                                                TextureKind kind, UINT srvIndex);
 
-    // Vista de una textura 2D ya subida en un hueco cualquiera. Para repetir
-    // las 1x1 globales dentro de la terna de un objeto sin volver a subirlas.
+    // View of an already uploaded 2D texture in any slot. To repeat
+    // the global 1x1s inside an object's triplet without uploading them again.
     void createTexture2DSrv(ID3D12Resource* resource, DXGI_FORMAT format, UINT srvIndex);
 
-    // Vista del array de cascadas (o de su relleno 1x1 mientras no exista) en
-    // el hueco dado. El bloque de cada objeto necesita la suya.
+    // View of the cascade array (or of its 1x1 filler while it does not exist) in
+    // the given slot. Each object's block needs its own.
     void createShadowMapSrv(UINT srvIndex);
 
-    // Vista de un cubemap ya subido en el hueco dado, con sus mips.
+    // View of an already uploaded cubemap in the given slot, with its mips.
     void createCubeSrv(ID3D12Resource* resource, DXGI_FORMAT format, UINT mipLevels,
                        UINT srvIndex);
 
-    // Rellena t3..t7 de un bloque con los recursos compartidos: sombras,
-    // los dos cubemaps de entorno y la oclusión. Lo que cambia por objeto son
-    // t1 y t2, que los escribe quien lo sube.
+    // Fills t3..t7 of a block with the shared resources: shadows,
+    // the two environment cubemaps and occlusion. What changes per object are
+    // t1 and t2, which are written by whoever uploads it.
     void fillSharedSlots(UINT blockBase);
 
-    // t7 de un bloque: el mapa de oclusion si el SSAO corre, la 1x1 blanca si
-    // no. Y el refresco de todos cuando el interruptor cambia.
+    // t7 of a block: the occlusion map if SSAO runs, the white 1x1 if
+    // not. And the refresh of all of them when the switch changes.
     void writeAoSlot(UINT blockBase);
     void refreshAoSlots();
     bool aoSlotsUseMap = false;
@@ -1818,22 +1818,22 @@ struct D3D12Renderer::Impl {
     void createDepthBuffer();
     void updateSceneUbo();
 
-    // Crea un buffer vacío en VRAM con acceso de escritura desordenada, que es
-    // lo que necesitan los destinos de los tres compute.
+    // Creates an empty buffer in VRAM with unordered access, which is
+    // what the destinations of the three computes need.
     D3D12MA::Allocation* createStorageBuffer(UINT64 size, D3D12_RESOURCE_STATES initialState);
 
     void createSkinningPipelines();
-    // Sube un personaje y devuelve su índice en skinnedObjects, o -1 si la
-    // malla no tiene esqueleto, vértices o claves que evaluar.
+    // Uploads a character and returns its index in skinnedObjects, or -1 if the
+    // mesh has no skeleton, vertices or keys to evaluate.
     int  createSkinnedObject(const SkinnedMesh& mesh);
-    void recordSkinning();  // los tres dispatch por personaje, con sus barreras
+    void recordSkinning();  // the three dispatches per character, with their barriers
 
     void createShadowResources();
-    void computeCascades();   // reparte el frustum y saca una matriz por cascada
+    void computeCascades();   // splits the frustum and produces one matrix per cascade
     void recordShadowPasses();
 
-    // Target HDR de la escena y niveles del bloom. Dependen del tamaño de la
-    // ventana, así que se rehacen en cada resize.
+    // HDR target of the scene and bloom levels. They depend on the window
+    // size, so they are redone on every resize.
     void createHdrTargets();
     void releaseHdrTargets();
     void createBloomPipelines();
@@ -1841,8 +1841,8 @@ struct D3D12Renderer::Impl {
     void createFogAndFxaaPipelines();
     void recordFog();
 
-    // Matriz de cámara del frame. Se recalcula en cada resize porque el aspecto
-    // depende del tamaño de la ventana.
+    // Camera matrix of the frame. It is recomputed on every resize because the aspect
+    // depends on the window size.
     glm::mat4 viewProj{1.0f};
     void      updateViewProj();
 };
@@ -1850,10 +1850,10 @@ struct D3D12Renderer::Impl {
 namespace {
 
 #ifndef NDEBUG
-// Nombre legible de cada operación que DRED anota. Sin esto, las migas salen
-// como números y hay que ir al d3d12.h a traducirlas a mano. Va bajo la misma
-// guarda que las migas: en Release no se graban, así que no hay nada que
-// traducir y esto sería una función muerta.
+// Readable name of each operation that DRED records. Without this, the breadcrumbs come out
+// as numbers and one has to go to d3d12.h to translate them by hand. It goes under the same
+// guard as the breadcrumbs: in Release they are not recorded, so there is nothing to
+// translate and this would be a dead function.
 const char* nombreDeOperacion(D3D12_AUTO_BREADCRUMB_OP op)
 {
     switch (op) {
@@ -1946,13 +1946,13 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
                                                          : "other") +
             ")");
 
-    // Lo que la capa de depuración tuviera guardado: suele explicar el porqué
-    // mucho mejor que las migas.
+    // Whatever the debug layer had stored: it usually explains the why
+    // much better than the breadcrumbs.
     drainInfoQueue();
 
-    // El motivo de arriba y la cola de la capa salen en las DOS
-    // configuraciones: son baratos y es lo primero que uno quiere leer. Lo que
-    // cambia de una a otra son las migas, que en Release ni se graban.
+    // The reason above and the layer's queue come out in BOTH
+    // configurations: they are cheap and are the first thing one wants to read. What
+    // changes from one to the other are the breadcrumbs, which are not even recorded in Release.
     ComPtr<ID3D12DeviceRemovedExtendedData1> dred1;
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dred1)))) {
 #ifndef NDEBUG
@@ -1964,8 +1964,8 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
             for (; nodo != nullptr; nodo = nodo->pNext) {
                 const UINT total  = nodo->BreadcrumbCount;
                 const UINT hechas = nodo->pLastBreadcrumbValue ? *nodo->pLastBreadcrumbValue : 0;
-                // Una lista con TODAS las migas hechas terminó bien: no es la
-                // culpable y solo estorba en el log.
+                // A list with ALL its breadcrumbs done finished fine: it is not the
+                // culprit and only gets in the way in the log.
                 if (total == 0 || hechas == total)
                     continue;
                 ++listas;
@@ -1975,17 +1975,17 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
                         (nodo->pCommandQueueDebugNameA ? nodo->pCommandQueueDebugNameA : "(unnamed)") +
                         "': completed " + std::to_string(hechas) + " of " +
                         std::to_string(total) + " operations.");
-                // Ventana alrededor del corte: lo justo para ver qué venía
-                // antes y qué se quedó sin ejecutar.
+                // Window around the cut: just enough to see what came
+                // before and what was left unexecuted.
                 const UINT desde = hechas > 12 ? hechas - 12 : 0;
                 const UINT hasta = (hechas + 4 < total) ? hechas + 4 : total;
                 for (UINT i = desde; i < hasta; ++i) {
                     const char* marca = (i < hechas) ? "  ok  " : (i == hechas ? " >>>> " : "  --  ");
                     std::string linea = std::string(marca) + "[" + std::to_string(i) + "] " +
                                         nombreDeOperacion(nodo->pCommandHistory[i]);
-                    // Contextos: los cuelga SetBreadcrumbContext, que este
-                    // backend no usa todavía, pero si algún día lo hace salen
-                    // aquí y dicen QUÉ canvas o QUÉ malla era.
+                    // Contexts: they are attached by SetBreadcrumbContext, which this
+                    // backend does not use yet, but if one day it does they come out
+                    // here and say WHICH canvas or WHICH mesh it was.
                     for (UINT c = 0; c < nodo->BreadcrumbContextsCount; ++c) {
                         if (nodo->pBreadcrumbContexts[c].BreadcrumbIndex != i)
                             continue;
@@ -2000,17 +2000,17 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
             diagLog("GetAutoBreadcrumbsOutput1 failed: DRED never got enabled.");
         }
 #else
-        // Sin migas, pero dicho en voz alta: quien lea este log en Release tiene
-        // que saber que la lista de operaciones NO falta por un fallo, sino
-        // porque no se graba (ver el comentario de init), y que reproducirlo en
-        // Debug le da el comando exacto.
+        // No breadcrumbs, but said out loud: whoever reads this log in Release has
+        // to know that the list of operations is NOT missing due to a failure, but
+        // because it is not recorded (see the comment in init), and that reproducing it in
+        // Debug gives them the exact command.
         diagLog("Auto-breadcrumbs not available: they are not recorded in Release (they cost a "
                 "WriteBufferImmediate per command). Repeating this in Debug gives the "
                 "exact operation that was left half-done.");
 #endif
 
-        // El fallo de página SÍ va en las dos: no cuesta por frame y es lo que
-        // dice qué objeto había —o acababa de morir— en la dirección que reventó.
+        // The page fault DOES go in both: it costs nothing per frame and it is what
+        // says which object was in the address that blew up (or had just died).
         D3D12_DRED_PAGE_FAULT_OUTPUT fallo{};
         if (SUCCEEDED(dred1->GetPageFaultAllocationOutput(&fallo)) &&
             fallo.PageFaultVA != 0) {
@@ -2035,15 +2035,15 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
 
 void D3D12Renderer::Impl::notarDeviceLost(const char* donde, HRESULT hr)
 {
-    // El HRESULT de la llamada que falló suele ser la consecuencia, no la
-    // causa: un Signal sobre un device caído devuelve E_FAIL y quien sabe el
-    // motivo de verdad es GetDeviceRemovedReason().
+    // The HRESULT of the call that failed is usually the consequence, not the
+    // cause: a Signal on a dead device returns E_FAIL and the one that knows the real
+    // reason is GetDeviceRemovedReason().
     const HRESULT motivo = device ? device->GetDeviceRemovedReason() : S_OK;
     const HRESULT culpa  = FAILED(motivo) ? motivo : hr;
 
-    // Se registra SIEMPRE, aunque ya estuviera marcado: el sitio donde se
-    // detecta la segunda vez dice por dónde siguió el motor tras el primer
-    // fallo, que es justo lo que hoy no se ve.
+    // It is ALWAYS logged, even if it was already marked: the place where it is
+    // detected the second time says how the engine continued after the first
+    // failure, which is exactly what is not visible today.
     std::string linea = std::string("UNRECOVERABLE FAILURE at ") + (donde ? donde : "?") +
                         ": HRESULT " + hresultToString(hr);
     if (FAILED(motivo) && motivo != hr)
@@ -2056,9 +2056,9 @@ void D3D12Renderer::Impl::notarDeviceLost(const char* donde, HRESULT hr)
         deviceLost      = true;
         deviceLostHr    = culpa;
         deviceLostDonde = donde;
-        // dumpDeviceRemoved ya tiene su propio pestillo, pero solo se le
-        // pregunta a la GPU cuando hay motivo para creer que se ha ido: un
-        // E_INVALIDARG por grabar mal una lista no tiene migas que enseñar.
+        // dumpDeviceRemoved already has its own latch, but the GPU is only
+        // asked when there is reason to believe it is gone: an
+        // E_INVALIDARG from recording a list wrong has no breadcrumbs to show.
         if (esPerdidaDeDevice(hr) || FAILED(motivo))
             dumpDeviceRemoved(donde, culpa);
     }
@@ -2076,16 +2076,16 @@ void D3D12Renderer::Impl::notarFrameDescartado(const char* donde, HRESULT hr)
         notarDeviceLost(donde, hr);
 }
 
-// Espera a que la GPU vacíe TODO lo enviado. Solo para resize y shutdown: por
-// frame se usa moveToNextFrame, que no serializa CPU y GPU.
+// Waits for the GPU to drain EVERYTHING submitted. Only for resize and shutdown: per
+// frame moveToNextFrame is used, which does not serialize CPU and GPU.
 void D3D12Renderer::Impl::waitForGpu()
 {
     if (!queue || !fence || fenceEvent == nullptr)
         return;
 
     const UINT64 target = fenceValues[frameIndex];
-    // Sin Signal no hay a qué esperar, y quien llama libera recursos en cuanto
-    // esto vuelve. Volver callando es corrupción silenciosa, no un aviso.
+    // Without a Signal there is nothing to wait for, and the caller releases resources as soon as
+    // this returns. Returning silently is silent corruption, not a warning.
     if (const HRESULT hr = queue->Signal(fence.Get(), target); FAILED(hr)) {
         notarDeviceLost("ID3D12CommandQueue::Signal (waitForGpu)", hr);
         return;
@@ -2093,11 +2093,11 @@ void D3D12Renderer::Impl::waitForGpu()
 
     if (fence->GetCompletedValue() < target) {
         if (SUCCEEDED(fence->SetEventOnCompletion(target, fenceEvent))) {
-            // Se sigue esperando SIN LÍMITE —salir antes de tiempo soltaría
-            // recursos que la GPU todavía lee—, pero por tramos: si la GPU se
-            // cuelga (TDR), este fence no se señala jamás y el editor se queda
-            // tieso sin decir una palabra. Cada tramo que vence deja escrito el
-            // motivo. 5 s son dos veces el TDR por defecto (2 s).
+            // It keeps waiting WITHOUT LIMIT (leaving early would release
+            // resources the GPU is still reading), but in slices: if the GPU
+            // hangs (TDR), this fence is never signaled and the editor freezes
+            // without saying a word. Each slice that expires writes down the
+            // reason. 5 s is twice the default TDR (2 s).
             while (WaitForSingleObjectEx(fenceEvent, 5000, FALSE) == WAIT_TIMEOUT) {
                 diagLog("waitForGpu: the fence is still not signaled (expected " +
                         std::to_string(target) + ", completed " +
@@ -2112,11 +2112,11 @@ void D3D12Renderer::Impl::waitForGpu()
 
 void D3D12Renderer::Impl::createTimestampResources()
 {
-    // La frecuencia es de la COLA, no del device: es lo que convierte los ticks
-    // en segundos. Una cola de copia tendría otra distinta.
+    // The frequency belongs to the QUEUE, not the device: it is what converts ticks
+    // into seconds. A copy queue would have a different one.
     if (FAILED(queue->GetTimestampFrequency(&timestampFreq)) || timestampFreq == 0) {
-        // Sin reloj no hay medidas, pero tampoco hay motivo para no dibujar: el
-        // panel enseñará ceros.
+        // Without a clock there are no measurements, but there is no reason not to draw either: the
+        // panel will show zeros.
         timestampFreq = 0;
         return;
     }
@@ -2129,8 +2129,8 @@ void D3D12Renderer::Impl::createTimestampResources()
         return;
     }
 
-    // El destino del resolve va en un heap de lectura: es el único desde el que
-    // la CPU puede leer sin copia intermedia.
+    // The resolve destination goes in a readback heap: it is the only one from which
+    // the CPU can read without an intermediate copy.
     D3D12_HEAP_PROPERTIES readbackHeap{};
     readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
 
@@ -2152,8 +2152,8 @@ void D3D12Renderer::Impl::createTimestampResources()
         return;
     }
 
-    // Mapeado de una vez y para siempre: se lee cuando la fence del slot dice
-    // que la GPU ya escribió, así que no hace falta mapear y desmapear por
+    // Mapped once and forever: it is read when the slot's fence says
+    // the GPU has already written, so there is no need to map and unmap per
     // frame.
     void* mapped = nullptr;
     if (FAILED(timestampReadback->Map(0, nullptr, &mapped))) {
@@ -2178,8 +2178,8 @@ void D3D12Renderer::Impl::readTimestamps()
     if (!timestampMapped || timestampFreq == 0)
         return;
 
-    // Este slot ya pasó por moveToNextFrame, que esperó su fence: lo que hay en
-    // el buffer es del último frame que lo usó, y está completo.
+    // This slot already went through moveToNextFrame, which waited on its fence: what is in
+    // the buffer belongs to the last frame that used it, and it is complete.
     const UINT64* base    = timestampMapped + static_cast<size_t>(frameIndex) * TsCount;
     const double  toMs    = 1000.0 / static_cast<double>(timestampFreq);
 
@@ -2204,9 +2204,9 @@ void D3D12Renderer::Impl::resolveTimestamps()
 void D3D12Renderer::Impl::moveToNextFrame()
 {
     const UINT64 current = fenceValues[frameIndex];
-    // Igual que en waitForGpu: si esto falla, el frame siguiente resetearía un
-    // allocator cuyas listas pueden seguir ejecutándose, porque ni frameIndex
-    // ni fenceValues llegan a avanzar.
+    // Same as in waitForGpu: if this fails, the next frame would reset an
+    // allocator whose lists may still be executing, because neither frameIndex
+    // nor fenceValues get to advance.
     if (const HRESULT hr = queue->Signal(fence.Get(), current); FAILED(hr)) {
         notarDeviceLost("ID3D12CommandQueue::Signal (moveToNextFrame)", hr);
         return;
@@ -2214,13 +2214,13 @@ void D3D12Renderer::Impl::moveToNextFrame()
 
     frameIndex = swapChain->GetCurrentBackBufferIndex();
 
-    // Solo se espera si este slot todavía está en la GPU. Con triple buffer, lo
-    // normal es que ya haya terminado y no se bloquee nada.
+    // It only waits if this slot is still on the GPU. With triple buffering, the
+    // normal case is that it has already finished and nothing blocks.
     if (fence->GetCompletedValue() < fenceValues[frameIndex]) {
         if (SUCCEEDED(fence->SetEventOnCompletion(fenceValues[frameIndex], fenceEvent))) {
-            // Mismo tramo y mismo motivo que en waitForGpu: se espera igual de
-            // largo, pero un fence que no avanza deja rastro en vez de congelar
-            // el bucle de frame en silencio.
+            // Same slice and same reason as in waitForGpu: it waits just as
+            // long, but a fence that does not advance leaves a trace instead of freezing
+            // the frame loop silently.
             while (WaitForSingleObjectEx(fenceEvent, 5000, FALSE) == WAIT_TIMEOUT) {
                 diagLog("moveToNextFrame: the fence is still not signaled (expected " +
                         std::to_string(fenceValues[frameIndex]) + ", completed " +
@@ -2258,8 +2258,8 @@ void D3D12Renderer::Impl::createRenderTargetViews()
 
 void D3D12Renderer::Impl::releaseRenderTargets()
 {
-    // ResizeBuffers exige que no quede NINGUNA referencia viva a los buffers
-    // antiguos; si queda, devuelve E_INVALIDARG y la swapchain se queda rota.
+    // ResizeBuffers requires that NO live reference remain to the old
+    // buffers; if one remains, it returns E_INVALIDARG and the swapchain is left broken.
     for (auto& rt : renderTargets)
         rt.Reset();
 }
@@ -2277,8 +2277,8 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadBuffer(const void* data, size_t 
     bufferDesc.SampleDesc.Count = 1;
     bufferDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-    // Destino en VRAM. Nace en COPY_DEST porque lo primero que recibe es la
-    // copia desde el staging.
+    // Destination in VRAM. It is born in COPY_DEST because the first thing it receives is the
+    // copy from the staging buffer.
     D3D12MA::ALLOCATION_DESC defaultDesc{};
     defaultDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -2288,8 +2288,8 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadBuffer(const void* data, size_t 
                                             &destination, IID_NULL, nullptr),
                   "D3D12MA::Allocator::CreateResource(DEFAULT)");
 
-    // Staging en memoria visible por CPU. Se libera al salir de la función: la
-    // copia ya habrá terminado porque se espera antes de volver.
+    // Staging in CPU-visible memory. It is released on leaving the function: the
+    // copy will already have finished because it is waited on before returning.
     D3D12MA::ALLOCATION_DESC uploadDesc{};
     uploadDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
 
@@ -2303,7 +2303,7 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadBuffer(const void* data, size_t 
     }
 
     void*             mapped = nullptr;
-    const D3D12_RANGE noRead{0, 0};  // no se lee nada de vuelta
+    const D3D12_RANGE noRead{0, 0};  // nothing is read back
     hr = staging->GetResource()->Map(0, &noRead, &mapped);
     if (FAILED(hr)) {
         staging->Release();
@@ -2313,8 +2313,8 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadBuffer(const void* data, size_t 
     std::memcpy(mapped, data, size);
     staging->GetResource()->Unmap(0, nullptr);
 
-    // Copia en su propio envío. El command list se reutiliza: hay que dejarlo
-    // cerrado, que es como lo espera drawFrame.
+    // Copy in its own submission. The command list is reused: it has to be left
+    // closed, which is how drawFrame expects it.
     throwIfFailed(allocators[frameIndex]->Reset(), "ID3D12CommandAllocator::Reset(upload)");
     throwIfFailed(commandList->Reset(allocators[frameIndex].Get(), nullptr),
                   "ID3D12GraphicsCommandList::Reset(upload)");
@@ -2334,7 +2334,7 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadBuffer(const void* data, size_t 
     ID3D12CommandList* lists[] = {commandList.Get()};
     queue->ExecuteCommandLists(1, lists);
 
-    // Sin esperar aquí, el staging se destruiría con la copia todavía en vuelo.
+    // Without waiting here, the staging buffer would be destroyed with the copy still in flight.
     waitForGpu();
 
     staging->Release();
@@ -2346,12 +2346,12 @@ void D3D12Renderer::Impl::ensureDebugLineBuffer(size_t vertexCount)
     if (vertexCount <= debugLinesCapacity)
         return;
 
-    // Se crece por bloques: una escena con colliders visibles manda miles de
-    // vértices y el número sube y baja entre frames.
+    // It grows in blocks: a scene with visible colliders sends thousands of
+    // vertices and the number goes up and down between frames.
     const size_t newCapacity = (std::max)(vertexCount, debugLinesCapacity * 2 + 1024);
 
     if (debugLinesAllocation) {
-        // Puede estar en uso por el frame anterior.
+        // It may be in use by the previous frame.
         waitForGpu();
         if (debugLinesMapped) {
             debugLinesAllocation->GetResource()->Unmap(0, nullptr);
@@ -2389,9 +2389,9 @@ void D3D12Renderer::Impl::ensureDebugLineBuffer(size_t vertexCount)
 
 void D3D12Renderer::Impl::createGizmoPipeline()
 {
-    // Root signature: los 16 floats de la matriz como root constants. Es el
-    // equivalente directo del push_constant de shaders/gizmo.vert, y evita
-    // tener que crear un constant buffer y su descriptor para 64 bytes.
+    // Root signature: the 16 floats of the matrix as root constants. It is the
+    // direct equivalent of the push_constant in shaders/gizmo.vert, and avoids
+    // having to create a constant buffer and its descriptor for 64 bytes.
     D3D12_ROOT_PARAMETER viewProjParam{};
     viewProjParam.ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     viewProjParam.Constants.ShaderRegister = 0;  // b0
@@ -2422,13 +2422,13 @@ void D3D12Renderer::Impl::createGizmoPipeline()
                                               IID_PPV_ARGS(&rootSignature)),
                   "ID3D12Device::CreateRootSignature");
 
-    // Los .dxil los produce el build traduciendo el SPIR-V de los mismos .vert
-    // y .frag que usa Vulkan, así que se buscan donde los .spv.
+    // The .dxil files are produced by the build by translating the SPIR-V of the same .vert
+    // and .frag that Vulkan uses, so they are looked for where the .spv are.
     const std::vector<char> vertexShader = readBinaryFile("shaders/gizmo.vert.dxil");
     const std::vector<char> pixelShader  = readBinaryFile("shaders/gizmo.frag.dxil");
 
-    // Semánticas TEXCOORD0/TEXCOORD1: es como spirv-cross traduce
-    // layout(location = N), no una elección nuestra.
+    // TEXCOORD0/TEXCOORD1 semantics: it is how spirv-cross translates
+    // layout(location = N), not a choice of ours.
     const D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(GizmoVertex, pos),
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -2456,8 +2456,8 @@ void D3D12Renderer::Impl::createGizmoPipeline()
     for (auto& rt : psoDesc.BlendState.RenderTarget)
         rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-    // La rejilla sí se compara contra la profundidad: es el suelo, y lo que
-    // haya delante tiene que taparla.
+    // The grid IS compared against depth: it is the ground, and whatever is
+    // in front of it has to cover it.
     psoDesc.DepthStencilState.DepthEnable    = TRUE;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
@@ -2469,9 +2469,9 @@ void D3D12Renderer::Impl::createGizmoPipeline()
 
 void D3D12Renderer::Impl::createGridGeometry()
 {
-    // Rejilla del suelo, la misma referencia visual que dibuja el editor con
-    // Vulkan: 41 líneas por eje separadas 1 unidad, con los ejes X y Z
-    // marcados en color para que se note la orientación.
+    // Ground grid, the same visual reference the editor draws with
+    // Vulkan: 41 lines per axis spaced 1 unit apart, with the X and Z axes
+    // marked in color so the orientation is noticeable.
     constexpr int   kHalf    = 20;
     constexpr float kSpacing = 1.0f;
 
@@ -2508,8 +2508,8 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
                                                         UINT srvIndex,
                                                         const TextureMip* mips, size_t mipCount)
 {
-    // Con array de slices no hay mips (los del array los usa el cubemap del cielo
-    // y las sombras, que son de un nivel).
+    // With a slice array there are no mips (the array's ones are used by the sky cubemap
+    // and the shadows, which are single-level).
     const UINT mipLevels    = 1 + (arraySize == 1 ? static_cast<UINT>(mipCount) : 0);
     const UINT subresources = mipLevels * arraySize;
 
@@ -2532,9 +2532,9 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
                                             &destination, IID_NULL, nullptr),
                   "D3D12MA::Allocator::CreateResource(texture)");
 
-    // El staging no se escribe fila a fila como en memoria: cada fila va
-    // alineada a D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, y cada slice del array es
-    // un subrecurso propio con su footprint.
+    // The staging buffer is not written row by row as in memory: each row is
+    // aligned to D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, and each slice of the array is
+    // its own subresource with its footprint.
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(subresources);
     std::vector<UINT>                               rowCounts(subresources);
     std::vector<UINT64>                             rowSizes(subresources);
@@ -2573,8 +2573,8 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
         throwIfFailed(hr, "ID3D12Resource::Map(texture staging)");
     }
 
-    // Subrecurso i = nivel + slice * mipLevels. El nivel 0 sale de `pixels`
-    // (slice a slice) y los demas de `mips`, cada uno con su propio ancho.
+    // Subresource i = level + slice * mipLevels. Level 0 comes from `pixels`
+    // (slice by slice) and the others from `mips`, each with its own width.
     const auto* source = static_cast<const uint8_t*>(pixels);
     for (UINT i = 0; i < subresources; ++i) {
         const UINT slice = i / mipLevels;
@@ -2648,24 +2648,24 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadMaterialTexture(
 {
     const DecodedTexture tex = decodeMaterialTexture(path, embedded);
     if (!tex)
-        return nullptr;  // el caller (fuera de esta función) pone su relleno
+        return nullptr;  // the caller (outside this function) puts its filler
 
-    // El slot da el valor por defecto (sRGB el color base, lineal las normales:
-    // una normal interpretada como color se descodifica con gamma y apunta a otro
-    // sitio) y el sidecar de importacion puede pisarlo. resolveSrgb es el unico
-    // sitio que lo decide.
+    // The slot gives the default value (sRGB for base color, linear for normals:
+    // a normal interpreted as color is decoded with gamma and points somewhere
+    // else) and the import sidecar can override it. resolveSrgb is the only
+    // place that decides it.
     const bool srgb = resolveSrgb(kind, tex.colorSpace);
     const DXGI_FORMAT format =
         srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
 
-    // `tex` suelta los píxeles al salir, también si uploadTexture lanza: el
-    // try/catch que había aquí solo existía para no fugarlos en ese caso.
+    // `tex` releases the pixels on exit, also if uploadTexture throws: the
+    // try/catch that was here only existed so as not to leak them in that case.
     return uploadTexture(tex.pixels.get(), static_cast<UINT>(tex.w), static_cast<UINT>(tex.h), 1,
                          format, 4, srvIndex, tex.mips.data(), tex.mips.size());
 }
 
-// El formato con el que se creo el recurso: las vistas de reuso lo leen de aqui
-// en vez de suponerlo por el slot (el sidecar puede haberlo cambiado).
+// The format the resource was created with: the reuse views read it from here
+// instead of assuming it from the slot (the sidecar may have changed it).
 static DXGI_FORMAT formatOf(D3D12MA::Allocation* a)
 {
     return a->GetResource()->GetDesc().Format;
@@ -2678,8 +2678,8 @@ void D3D12Renderer::Impl::createTexture2DSrv(ID3D12Resource* resource, DXGI_FORM
     srvDesc.Format                  = format;
     srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    // -1 = todos los niveles del recurso: 1 para las 1x1 globales, N para una
-    // textura de material con mips.
+    // -1 = all levels of the resource: 1 for the global 1x1s, N for a
+    // material texture with mips.
     srvDesc.Texture2D.MipLevels     = static_cast<UINT>(-1);
 
     D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -2689,8 +2689,8 @@ void D3D12Renderer::Impl::createTexture2DSrv(ID3D12Resource* resource, DXGI_FORM
 
 void D3D12Renderer::Impl::createShadowMapSrv(UINT srvIndex)
 {
-    // El array de cascadas si ya existe; si no, el relleno 1x1, que se creó
-    // con las mismas cuatro slices y el mismo formato.
+    // The cascade array if it already exists; otherwise, the 1x1 filler, which was created
+    // with the same four slices and the same format.
     ID3D12Resource* resource = shadowMapArrayAllocation ? shadowMapArrayAllocation->GetResource()
                                                         : shadowMapAllocation->GetResource();
     if (!resource)
@@ -2742,15 +2742,15 @@ void D3D12Renderer::Impl::fillSharedSlots(UINT blockBase)
 
 void D3D12Renderer::Impl::writeAoSlot(UINT blockBase)
 {
-    // t7 = oclusión ambiental. Con el SSAO ENCENDIDO, el mapa del frame; con él
-    // apagado, la 1x1 blanca.
+    // t7 = ambient occlusion. With SSAO ON, the frame's map; with it
+    // off, the white 1x1.
     //
-    // Esto último no es cosmético: si el SSAO no corre, su mapa no se escribe
-    // NUNCA —una textura recién creada en D3D12 no está inicializada— y el
-    // shader multiplica el ambiente por lo que haya ahí, que es cero. El
-    // síntoma era que todo lo que no recibiera luz directa salía NEGRO, con el
-    // IBL bien calculado y subir la intensidad del ambiente sin efecto ninguno:
-    // cualquier cosa por cero sigue siendo cero.
+    // The latter is not cosmetic: if SSAO does not run, its map is NEVER
+    // written (a freshly created texture in D3D12 is not initialized) and the
+    // shader multiplies the ambient by whatever is there, which is zero. The
+    // symptom was that everything not receiving direct light came out BLACK, with the
+    // IBL correctly computed and raising the ambient intensity having no effect at all:
+    // anything times zero is still zero.
     const bool useMap = state->ssaoEnabled() && ssaoBlurAllocation != nullptr;
     if (useMap) {
         createTexture2DSrv(ssaoBlurAllocation->GetResource(), DXGI_FORMAT_R32_FLOAT,
@@ -2768,7 +2768,7 @@ void D3D12Renderer::Impl::refreshAoSlots()
     if (useMap == aoSlotsUseMap)
         return;
 
-    // Los descriptores pueden estar en uso por el frame en vuelo.
+    // The descriptors may be in use by the in-flight frame.
     waitForGpu();
     aoSlotsUseMap = useMap;
 
@@ -2793,16 +2793,16 @@ void D3D12Renderer::Impl::createDepthBuffer()
     depthDesc.Height           = height;
     depthDesc.DepthOrArraySize = 1;
     depthDesc.MipLevels        = 1;
-    // TYPELESS y no D32_FLOAT: la niebla necesita LEER esta profundidad como
-    // textura, y el mismo recurso no puede declararse a la vez con formato de
-    // profundidad y de muestreo.
+    // TYPELESS and not D32_FLOAT: the fog needs to READ this depth as a
+    // texture, and the same resource cannot be declared at once with a depth
+    // format and a sampling one.
     depthDesc.Format           = DXGI_FORMAT_R32_TYPELESS;
     depthDesc.SampleDesc.Count = 1;
     depthDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
-    // El valor de limpieza va declarado: si el del ClearDepthStencilView no
-    // coincide con este, la capa de validación lo señala y la GPU pierde la
-    // ruta rápida de limpieza.
+    // The clear value is declared: if the one in ClearDepthStencilView does not
+    // match this one, the validation layer flags it and the GPU loses the
+    // fast clear path.
     D3D12_CLEAR_VALUE clearValue{};
     clearValue.Format               = DXGI_FORMAT_D32_FLOAT;
     clearValue.DepthStencil.Depth   = 1.0f;
@@ -2821,9 +2821,9 @@ void D3D12Renderer::Impl::createDepthBuffer()
     device->CreateDepthStencilView(depthAllocation->GetResource(), &dsvDesc,
                                    dsvHeap->GetCPUDescriptorHandleForHeapStart());
 
-    // Vista de muestreo del mismo recurso, para la niebla. El heap todavía no
-    // existe en la primera llamada (init crea el depth antes que el heap): en
-    // ese caso la crea createHdrTargets, que corre después.
+    // Sampling view of the same resource, for the fog. The heap does not yet
+    // exist on the first call (init creates the depth before the heap): in
+    // that case createHdrTargets creates it, which runs afterwards.
     if (srvHeap) {
         D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv{};
         depthSrv.Format                  = DXGI_FORMAT_R32_FLOAT;
@@ -2839,13 +2839,13 @@ void D3D12Renderer::Impl::createDepthBuffer()
 
 void D3D12Renderer::Impl::createMeshPipeline()
 {
-    // Root signature de triangle.vert/triangle.frag:
-    //   b0 space0  UBO de escena          -> root CBV
+    // Root signature of triangle.vert/triangle.frag:
+    //   b0 space0  scene UBO              -> root CBV
     //   b1 space0  push constants         -> 20 root constants
-    //   t1..t3     base, normal, sombras  -> tabla de descriptores
-    //   t0 space1  matrices por instancia -> root SRV
-    // El UBO declara b0 explícitamente y el bloque de push constants no declara
-    // registro, así que DXC le asigna el siguiente libre: b1.
+    //   t1..t3     base, normal, shadows  -> descriptor table
+    //   t0 space1  per-instance matrices  -> root SRV
+    // The UBO declares b0 explicitly and the push constants block declares no
+    // register, so DXC assigns it the next free one: b1.
     D3D12_DESCRIPTOR_RANGE textureRange{};
     textureRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     textureRange.NumDescriptors     = kSrvPerObject;
@@ -2853,8 +2853,8 @@ void D3D12Renderer::Impl::createMeshPipeline()
     textureRange.RegisterSpace      = 0;
     textureRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // Forward+ vive en su propio space: cuatro ByteAddressBuffer que van como
-    // root SRV, sin tabla ni descriptores.
+    // Forward+ lives in its own space: four ByteAddressBuffers that go as
+    // root SRVs, with no table or descriptors.
     D3D12_ROOT_PARAMETER params[8]{};
     params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor.ShaderRegister = 0;
@@ -2882,10 +2882,10 @@ void D3D12Renderer::Impl::createMeshPipeline()
         params[4 + i].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
     }
 
-    // Samplers estáticos: los shaders no eligen filtro ni wrap en tiempo de
-    // ejecución, así que no hace falta un heap de samplers ni descriptores.
-    // s1, s2 y s4: texturas de material, que se repiten con el UV. s5, s6 y s7
-    // van a borde fijo — un cubemap o un mapa de pantalla no se repiten.
+    // Static samplers: the shaders do not choose filter or wrap at run
+    // time, so no sampler heap or descriptors are needed.
+    // s1, s2 and s4: material textures, which repeat with the UV. s5, s6 and s7
+    // use a fixed border: a cubemap or a screen map do not repeat.
     D3D12_STATIC_SAMPLER_DESC samplers[7]{};
     const UINT                wrapRegisters[3]  = {1, 2, 4};
     const UINT                clampRegisters[3] = {5, 6, 7};
@@ -2908,7 +2908,7 @@ void D3D12Renderer::Impl::createMeshPipeline()
         sampler.ShaderRegister   = clampRegisters[i];
         sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     }
-    // s3 es el del sampler2DArrayShadow: comparación, no filtrado normal.
+    // s3 is that of the sampler2DArrayShadow: comparison, not normal filtering.
     samplers[6].Filter           = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
     samplers[6].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     samplers[6].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -2946,8 +2946,8 @@ void D3D12Renderer::Impl::createMeshPipeline()
     const std::vector<char> vertexShader = readBinaryFile("shaders/triangle.vert.dxil");
     const std::vector<char> pixelShader  = readBinaryFile("shaders/pbr.frag.dxil");
 
-    // El orden y los offsets salen de DonTopo::Vertex; las semánticas, de cómo
-    // spirv-cross traduce layout(location = N).
+    // The order and offsets come from DonTopo::Vertex; the semantics, from how
+    // spirv-cross translates layout(location = N).
     const D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, pos),
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -2976,9 +2976,9 @@ void D3D12Renderer::Impl::createMeshPipeline()
     psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
     psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_BACK;
     psoDesc.RasterizerState.DepthClipEnable = TRUE;
-    // El motor genera los triángulos con el criterio de Vulkan; en D3D12 el
-    // eje Y de pantalla va al revés, así que lo que allí es antihorario aquí
-    // se ve horario. Sin esto, el cubo se dibuja del revés y desaparece.
+    // The engine generates the triangles with the Vulkan convention; in D3D12 the
+    // screen Y axis goes the other way, so what is counterclockwise there
+    // looks clockwise here. Without this, the cube is drawn inside out and disappears.
     psoDesc.RasterizerState.FrontCounterClockwise = TRUE;
 
     for (auto& rt : psoDesc.BlendState.RenderTarget)
@@ -2988,16 +2988,16 @@ void D3D12Renderer::Impl::createMeshPipeline()
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
 
-    // El de alambre, con lo único que cambia: el relleno. Sin cara trasera
-    // descartada, que en alambre esconde la mitad de las aristas.
+    // The wireframe one, with the only thing that changes: the fill. Without back
+    // face culling, which in wireframe hides half of the edges.
     D3D12_GRAPHICS_PIPELINE_STATE_DESC wireDesc = psoDesc;
     wireDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
     wireDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     throwIfFailed(device->CreateGraphicsPipelineState(&wireDesc, IID_PPV_ARGS(&meshWirePipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(wireframe mesh)");
 
-    // El contorno: mismos vértices, otro par de shaders y la cara CONTRARIA
-    // descartada.
+    // The outline: same vertices, another pair of shaders and the OPPOSITE face
+    // culled.
     {
         const std::vector<char> outlineVs = readBinaryFile("shaders/outline.vert.dxil");
         const std::vector<char> outlinePs = readBinaryFile("shaders/outline.frag.dxil");
@@ -3006,18 +3006,18 @@ void D3D12Renderer::Impl::createMeshPipeline()
         outlineDesc.VS = {outlineVs.data(), outlineVs.size()};
         outlineDesc.PS = {outlinePs.data(), outlinePs.size()};
         outlineDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
-        // LESS estricto y no LESS_EQUAL como la malla: el casco cae a la MISMA
-        // profundidad que la superficie en las zonas planas, y con el igual
-        // incluido pasaría el test y la taparía entera.
+        // Strict LESS and not LESS_EQUAL like the mesh: the hull falls at the SAME
+        // depth as the surface in flat areas, and with equality
+        // included it would pass the test and cover it entirely.
         outlineDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
         throwIfFailed(device->CreateGraphicsPipelineState(&outlineDesc,
                                                           IID_PPV_ARGS(&outlinePipeline)),
                       "ID3D12Device::CreateGraphicsPipelineState(outline)");
 
-        // El mismo, pero contra el target LDR: ahí es donde se dibuja de
-        // verdad, DESPUÉS del tone mapping, para que su naranja llegue plano en
-        // vez de pasar por ACES. Siempre una muestra —el LDR no es
-        // multimuestra— y sin escribir profundidad, que ya no es suya.
+        // The same one, but against the LDR target: that is where it is really
+        // drawn, AFTER tone mapping, so its orange arrives flat instead
+        // of going through ACES. Always one sample (the LDR is not
+        // multisampled) and without writing depth, which is no longer its own.
         outlineDesc.RTVFormats[0]                       = kLdrFormat;
         outlineDesc.SampleDesc.Count                    = 1;
         outlineDesc.DepthStencilState.DepthWriteMask    = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -3032,14 +3032,14 @@ void D3D12Renderer::Impl::createMeshPipeline()
 
 void D3D12Renderer::Impl::createMeshResources()
 {
-    // Buffer de instancias con la identidad. La geometría de la escena usa el
-    // push constant para su transformación (flags.x = 0), pero el shader
-    // declara el SSBO igual y la root signature tiene que satisfacerlo.
+    // Instance buffer with the identity. The scene geometry uses the push
+    // constant for its transform (flags.x = 0), but the shader declares
+    // the SSBO anyway and the root signature has to satisfy it.
     const glm::mat4 instanceModel{1.0f};
     instanceAllocation = uploadBuffer(&instanceModel, sizeof(instanceModel),
                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-    // Heap de los tres SRV que pide el fragment shader.
+    // Heap of the three SRVs the fragment shader asks for.
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc{};
     srvHeapDesc.NumDescriptors = kSrvHeapSize;
     srvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -3048,16 +3048,16 @@ void D3D12Renderer::Impl::createMeshResources()
                   "ID3D12Device::CreateDescriptorHeap(SRV)");
     srvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    // Texturas 1x1: el cubo es procedural y no trae ninguna, pero los shaders
-    // las muestrean igual. Blanca para el color base y (0.5, 0.5, 1) para la
-    // normal, que es la normal sin perturbar.
+    // 1x1 textures: the cube is procedural and has none, but the shaders
+    // sample them anyway. White for the base color and (0.5, 0.5, 1) for the
+    // normal, which is the unperturbed normal.
     const uint8_t white[4]      = {255, 255, 255, 255};
     const uint8_t flatNormal[4] = {128, 128, 255, 255};
     baseColorAllocation = uploadTexture(white, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, 0);
-    // Y el damero. uploadTexture escribe ademas el SRV del hueco que se le
-    // pase, asi que se le da el 0 y acto seguido se restituye el blanco: ese
-    // hueco global es el neutro, y el damero solo se referencia desde el
-    // bloque del objeto cuya textura ha fallado.
+    // And the checkerboard. uploadTexture also writes the SRV of the slot it
+    // is given, so it is given 0 and immediately afterwards the white is restored: that
+    // global slot is the neutral one, and the checkerboard is only referenced from the
+    // block of the object whose texture has failed.
     {
         const std::vector<uint8_t> damero = makeMissingTextureRgba();
         missingTextureAllocation =
@@ -3067,39 +3067,39 @@ void D3D12Renderer::Impl::createMeshResources()
     }
     normalMapAllocation = uploadTexture(flatNormal, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, 1);
 
-    // Mapa de sombras: 1x1 por cascada a profundidad máxima. Con cascadeSplits
-    // a cero, selectCascade devuelve -1 y el shader ni lo muestrea; existe
-    // porque la root signature tiene que satisfacer el t3 que declara.
+    // Shadow map: 1x1 per cascade at maximum depth. With cascadeSplits
+    // at zero, selectCascade returns -1 and the shader does not even sample it; it exists
+    // because the root signature has to satisfy the t3 it declares.
     const float noShadow[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     shadowMapAllocation = uploadTexture(noShadow, 1, 1, 4, DXGI_FORMAT_R32_FLOAT, 4, kSrvShadowMap);
 
-    // t4: ORM sin textura. R = oclusión, G = rugosidad, B = metalicidad, y
-    // pbr.frag los multiplica por los factores del push: a 255 el material
-    // manda entero, que es lo que hacía el shader anterior.
+    // t4: ORM without texture. R = occlusion, G = roughness, B = metalness, and
+    // pbr.frag multiplies them by the push factors: at 255 the material
+    // rules entirely, which is what the previous shader did.
     const uint8_t neutralOrm[4] = {255, 255, 255, 255};
     metalRoughAllocation =
         uploadTexture(neutralOrm, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, kSrvMetalRough);
 
-    // t7: oclusión de pantalla a 1. Con SSAO apagado el shader multiplica por
-    // la unidad y no hace falta ninguna rama.
+    // t7: screen occlusion at 1. With SSAO off the shader multiplies by
+    // one and no branch is needed.
     const uint8_t noOcclusion[4] = {255, 255, 255, 255};
     ssaoAllocation = uploadTexture(noOcclusion, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, kSrvSsao);
 
-    // El "bloom" del camino apagado: negro de 1x1 en el mismo formato que la
-    // cadena. Ocho bytes a cero son (0,0,0,0) en R16G16B16A16_FLOAT, así que la
-    // composición suma exactamente nada — y sin depender de que la cadena de
-    // mips tenga un contenido válido, que apagado no lo tiene.
+    // The "bloom" of the off path: 1x1 black in the same format as the
+    // chain. Eight zero bytes are (0,0,0,0) in R16G16B16A16_FLOAT, so the
+    // composition adds exactly nothing, and without depending on the mip chain
+    // having valid contents, which it does not have when off.
     const uint8_t bloomBlack[8] = {};
     bloomBlackAllocation =
         uploadTexture(bloomBlack, 1, 1, 1, kHdrFormat, 8, kSrvCompositeOff + 1);
 
-    // t5 y t6: entorno neutro, los mismos valores que deja el camino de Vulkan
-    // cuando no hay cubemap. Un ambiente plano ilumina de forma aburrida, pero
-    // sin ellos pbr.frag leería de un descriptor vacío.
+    // t5 and t6: neutral environment, the same values the Vulkan path leaves
+    // when there is no cubemap. A flat ambient lights in a boring way, but
+    // without them pbr.frag would read from an empty descriptor.
     createNeutralIblCubes();
 
-    // UBO por frame en vuelo, mapeado de forma persistente: se reescribe cada
-    // frame y desmapear/remapear no aporta nada.
+    // UBO per frame in flight, persistently mapped: it is rewritten every
+    // frame and unmapping/remapping adds nothing.
     D3D12_RESOURCE_DESC uboDesc{};
     uboDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
     uboDesc.Width            = alignUp(sizeof(SceneUbo), kCbvAlignment);
@@ -3126,16 +3126,16 @@ void D3D12Renderer::Impl::createMeshResources()
 
 void D3D12Renderer::Impl::updateSceneUbo()
 {
-    // View-proj SIN jitter: es la que reproyecta el TAA y la que se compara con
-    // la del frame anterior.
+    // View-proj WITHOUT jitter: it is the one TAA reprojects and the one compared with
+    // the previous frame's.
     taaPrevViewProj = taaCurrViewProj;
     taaCurrViewProj = cameraProj() * cameraView;
     taaJitteredProj = cameraProj();
 
     if (state->aaMode() == RendererState::AaMode::Taa) {
-        // Secuencia y aplicación en TaaJitter.h, compartidas con el camino
-        // Vulkan: estaban escritas dos veces y descuadrarlas no da error, solo
-        // hace converger el TAA a una imagen distinta según el backend.
+        // Sequence and application in TaaJitter.h, shared with the Vulkan
+        // path: they were written twice and letting them drift apart raises no error, it only
+        // makes TAA converge to a different image depending on the backend.
         const glm::vec2 jitter = taaJitterPixels(taaJitterIndex, state->taaJitterScale());
         applyTaaJitter(taaJitteredProj, jitter,
                        static_cast<float>(width), static_cast<float>(height));
@@ -3144,36 +3144,36 @@ void D3D12Renderer::Impl::updateSceneUbo()
     SceneUbo ubo{};
     ubo.view = cameraView;
     ubo.proj = taaJitteredProj;
-    // Vulkan tiene el eje Y de pantalla invertido respecto a OpenGL y el motor
-    // lo compensa ahí; D3D12 usa la misma orientación que OpenGL, así que aquí
-    // NO se invierte.
+    // Vulkan has the screen Y axis inverted relative to OpenGL and the engine
+    // compensates for it there; D3D12 uses the same orientation as OpenGL, so here it is
+    // NOT inverted.
 
     ubo.cascadeSplits = cascadeSplits;
-    // Las SEIS, no cuatro: con una luz de punto las caras 4 y 5 tambien llevan
-    // matriz. Copiar solo 4 dejaria dos caras del cubemap con la identidad.
+    // All SIX, not four: with a point light faces 4 and 5 also carry a
+    // matrix. Copying only 4 would leave two cubemap faces with the identity.
     for (int i = 0; i < kShadowLayers; ++i)
         ubo.lightSpaceMatrix[i] = cascadeMatrices[i];
 
     if (!sceneLights.empty()) {
-        // Las de la escena mandan: sin esto el backend iluminaba con su
-        // direccional de relleno y una escena con focos se veía a oscuras
-        // aunque los tuviera bien puestos.
+        // The scene's lights rule: without this the backend lit with its
+        // filler directional and a scene with spots looked dark
+        // even though they were placed correctly.
         const size_t count = (std::min)(sceneLights.size(), static_cast<size_t>(MAX_LIGHTS));
         std::memcpy(ubo.lights, sceneLights.data(), count * sizeof(ShaderLight));
         ubo.numLights = static_cast<int>(count);
 
-        // DESPUES del memcpy, que si no lo pisa. position.w de la luz key:
-        // 1 = su sombra se grabo como CUBEMAP. El shader lo lee para elegir
-        // camino en vez de deducirlo del tipo, porque un foco muy abierto
-        // tambien acaba en el cubemap. Sale de lo que el pase HIZO —cuantas
-        // capas dejo validas— y no de recalcular el criterio aqui: dos copias
-        // de un criterio es lo que rompio H65. Ese hueco estaba libre, ningun
-        // shader leia position.w.
+        // AFTER the memcpy, which would otherwise overwrite it. position.w of the key light:
+        // 1 = its shadow was recorded as a CUBEMAP. The shader reads it to pick the
+        // path instead of deducing it from the type, because a very wide spot
+        // also ends up in the cubemap. It comes from what the pass DID (how many
+        // layers it left valid) and not from recomputing the criterion here: two copies
+        // of a criterion is what broke H65. That slot was free, no
+        // shader read position.w.
         ubo.lights[0].position[3] = (activeLayers == kShadowKeyLayers) ? 1.0f : 0.0f;
-        // Y las demas, su ranura + 1 (0 = no proyecta).
-        // Ranura + 1 con el SIGNO diciendo el camino: positivo una cara,
-        // negativo cubemap de seis. Mismo codigo que en Vulkan, porque lo lee
-        // el mismo shader.
+        // And the rest, their slot + 1 (0 = casts none).
+        // Slot + 1 with the SIGN telling the path: positive one face,
+        // negative six-face cubemap. Same code as in Vulkan, because the
+        // same shader reads it.
         for (int i = 1; i < ubo.numLights; i++) {
             if (shadowSlot[i] < 0) { ubo.lights[i].position[3] = 0.0f; continue; }
             const float codigo = (float)(shadowSlot[i] + 1);
@@ -3187,27 +3187,27 @@ void D3D12Renderer::Impl::updateSceneUbo()
         return;
     }
 
-    // Una direccional (tipo 2), que es lo que el shader trata sin atenuación.
-    // La dirección tiene que ser LA MISMA con la que se calcularon las
-    // cascadas, o la sombra caería en un sitio y la luz vendría de otro.
+    // A directional (type 2), which is what the shader treats without attenuation.
+    // The direction has to be THE SAME one the cascades were computed with,
+    // or the shadow would fall in one place and the light would come from another.
     ubo.numLights              = 1;
     ubo.lights[0].direction[0] = lightDirection.x;
     ubo.lights[0].direction[1] = lightDirection.y;
     ubo.lights[0].direction[2] = lightDirection.z;
     ubo.lights[0].direction[3] = 2.0f;  // directional
-    ubo.lights[0].position[3]  = 0.0f;  // direccional: cascadas, nunca cubemap
+    ubo.lights[0].position[3]  = 0.0f;  // directional: cascades, never cubemap
     ubo.lights[0].color[0]     = 1.0f;
     ubo.lights[0].color[1]     = 0.98f;
     ubo.lights[0].color[2]     = 0.94f;
-    // Intensidad por debajo de 1: con albedo blanco y la luz a 1.0 la escena
-    // entera se planta en 1.0, y entonces el umbral del bloom deja pasar hasta
-    // el suelo y lava la imagen. Con 0,7 queda rango por debajo del umbral.
+    // Intensity below 1: with white albedo and the light at 1.0 the whole scene
+    // lands at 1.0, and then the bloom threshold lets even the
+    // ground through and washes out the image. With 0.7 there is range left below the threshold.
     ubo.lights[0].color[3]     = 0.7f;
 
     ubo.viewPos          = glm::vec4(cameraPos, 1.0f);
-    // Apagado = intensidad cero, igual que en el camino de Vulkan: el shader no
-    // tiene rama para el ambiente, y sin esto el interruptor "Ambient (IBL)" del
-    // menu View no hacia nada con este backend.
+    // Off = zero intensity, just like in the Vulkan path: the shader has no
+    // branch for the ambient, and without this the "Ambient (IBL)" switch in the
+    // View menu did nothing with this backend.
     ubo.ambientIntensity = state->ambientEnabled() ? state->ambientIntensity() : 0.0f;
 
     std::memcpy(sceneUboMapped[frameIndex], &ubo, sizeof(ubo));
@@ -3239,13 +3239,13 @@ D3D12MA::Allocation* D3D12Renderer::Impl::createStorageBuffer(UINT64 size,
 
 void D3D12Renderer::Impl::createSkinningPipelines()
 {
-    // Una root signature por pase, con EXACTAMENTE los registros que declara
-    // cada shader. Todos los buffers son ByteAddressBuffer, así que van como
-    // root descriptors y no hacen falta tablas ni heaps.
+    // One root signature per pass, with EXACTLY the registers each shader
+    // declares. All buffers are ByteAddressBuffers, so they go as
+    // root descriptors and no tables or heaps are needed.
     //
-    // Ojo con los recursos que cambian de vista entre pases: localXforms es u4
-    // cuando bone_eval lo escribe y t4 cuando bone_hierarchy lo lee; finalBones
-    // es u5 al escribirse y t5 al leerse. Es el mismo buffer.
+    // Watch out for resources that change view between passes: localXforms is u4
+    // when bone_eval writes it and t4 when bone_hierarchy reads it; finalBones
+    // is u5 when written and t5 when read. It is the same buffer.
     struct Slot {
         D3D12_ROOT_PARAMETER_TYPE type;
         UINT                      shaderRegister;
@@ -3256,8 +3256,8 @@ void D3D12Renderer::Impl::createSkinningPipelines()
         std::vector<D3D12_ROOT_PARAMETER> params;
         params.reserve(slots.size() + 1);
 
-        // Los push constants van SIEMPRE en b0, que es donde DXC coloca el
-        // cbuffer del bloque push_constant al no llevar registro explícito.
+        // The push constants ALWAYS go in b0, which is where DXC places the
+        // push_constant block's cbuffer when it has no explicit register.
         D3D12_ROOT_PARAMETER pushParam{};
         pushParam.ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         pushParam.Constants.ShaderRegister = 0;
@@ -3294,33 +3294,33 @@ void D3D12Renderer::Impl::createSkinningPipelines()
     };
 
     using RT = D3D12_ROOT_PARAMETER_TYPE;
-    // bone_eval: lee claves y huesos (t0..t3), escribe transformaciones locales (u4)
+    // bone_eval: reads keys and bones (t0..t3), writes local transforms (u4)
     buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 0},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 1},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 2},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 3},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 4},
-                        // poseTrs (u8, escribible) y frozenTrs (t9, solo lectura):
-                        // spirv-cross da el registro del binding.
+                        // poseTrs (u8, writable) and frozenTrs (t9, read-only):
+                        // spirv-cross gives the binding's register.
                         {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 8},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 9},
-                        // Bloque de pose (t10), una copia por frame: el offset
-                        // de la de este frame va en las root constants.
+                        // Pose block (t10), one copy per frame: the offset
+                        // of this frame's goes in the root constants.
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 10}},
                        boneEvalRootSignature, "bone_eval");
-    // bone_hierarchy: lee huesos y locales (t3, t4), escribe matrices finales (u5)
+    // bone_hierarchy: reads bones and locals (t3, t4), writes final matrices (u5)
     buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 3},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 4},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 5}},
                        boneHierarchyRootSignature, "bone_hierarchy");
-    // bone_ik: escribe los locales (u4) y lee los mundos de la jerarquía (t5),
-    // los huesos (t3) y el bloque de IK (t11).
+    // bone_ik: writes the locals (u4) and reads the hierarchy's worlds (t5),
+    // the bones (t3) and the IK block (t11).
     buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 4},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 5},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 3},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 11}},
                        boneIkRootSignature, "bone_ik");
-    // skinning: lee matrices y vértices (t5, t6), escribe vértices deformados (u7)
+    // skinning: reads matrices and vertices (t5, t6), writes deformed vertices (u7)
     buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 5},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 6},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 7}},
@@ -3344,9 +3344,9 @@ void D3D12Renderer::Impl::createSkinningPipelines()
     buildComputePipeline("shaders/skinning.comp.dxil", skinningRootSignature.Get(),
                          skinningPipeline);
 
-    // Pipeline gráfico del personaje: MISMO triangle.vert/frag que el cubo, pero
-    // el vertex buffer es la salida del compute, que va en vec4 alineados (5 x
-    // vec4 = 80 B) en vez del Vertex empaquetado del motor.
+    // Character graphics pipeline: SAME triangle.vert/frag as the cube, but
+    // the vertex buffer is the compute output, which goes in aligned vec4 (5 x
+    // vec4 = 80 B) instead of the engine's packed Vertex.
     const std::vector<char> vertexShader = readBinaryFile("shaders/triangle.vert.dxil");
     const std::vector<char> pixelShader  = readBinaryFile("shaders/pbr.frag.dxil");
 
@@ -3399,8 +3399,8 @@ void D3D12Renderer::Impl::createSkinningPipelines()
                   "ID3D12Device::CreateGraphicsPipelineState(wireframe skinned)");
 
     {
-        // El contorno del personaje va sobre los vértices que deja el skinning,
-        // así que hereda ESTE input layout y no el de la malla del motor.
+        // The character's outline goes over the vertices left by the skinning,
+        // so it inherits THIS input layout and not the engine mesh's.
         const std::vector<char> outlineVs = readBinaryFile("shaders/outline.vert.dxil");
         const std::vector<char> outlinePs = readBinaryFile("shaders/outline.frag.dxil");
 
@@ -3408,15 +3408,15 @@ void D3D12Renderer::Impl::createSkinningPipelines()
         outlineDesc.VS = {outlineVs.data(), outlineVs.size()};
         outlineDesc.PS = {outlinePs.data(), outlinePs.size()};
         outlineDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
-        // LESS estricto y no LESS_EQUAL como la malla: el casco cae a la MISMA
-        // profundidad que la superficie en las zonas planas, y con el igual
-        // incluido pasaría el test y la taparía entera.
+        // Strict LESS and not LESS_EQUAL like the mesh: the hull falls at the SAME
+        // depth as the surface in flat areas, and with equality
+        // included it would pass the test and cover it entirely.
         outlineDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
         throwIfFailed(device->CreateGraphicsPipelineState(&outlineDesc,
                                                           IID_PPV_ARGS(&outlineSkinnedPipeline)),
                       "ID3D12Device::CreateGraphicsPipelineState(skinned outline)");
 
-        // Variante sobre el target LDR, por lo mismo que la de la malla.
+        // Variant on the LDR target, for the same reason as the mesh's.
         outlineDesc.RTVFormats[0]                    = kLdrFormat;
         outlineDesc.SampleDesc.Count                 = 1;
         outlineDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -3442,7 +3442,7 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
     object.vertexCount  = static_cast<uint32_t>(mesh.skinnedVertices.size());
     object.clipBase     = 0;
     object.animDuration = mesh.animationClips.empty() ? 0.0f : mesh.animationClips[0].duration;
-    // Mismo default que Vulkan: un FBX sin mTicksPerSecond se reproduce a 24.
+    // Same default as Vulkan: an FBX without mTicksPerSecond plays at 24.
     object.ticksPerSecond = mesh.animationClips.empty()
                                 ? 0.0f
                                 : (mesh.animationClips[0].ticksPerSecond > 0.0f
@@ -3458,8 +3458,8 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
     object.boneInfos = uploadBuffer(packed.boneInfos.data(),
                                     packed.boneInfos.size() * sizeof(GpuBoneInfo),
                                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    // Extension de la pose en reposo, para el grosor del contorno. Misma
-    // cuenta que el camino de Vulkan.
+    // Extent of the rest pose, for the outline thickness. Same
+    // computation as the Vulkan path.
     object.restMaxExtent = 0.0f;
     if (!mesh.skinnedVertices.empty()) {
         glm::vec3 bMin(mesh.skinnedVertices[0].position);
@@ -3528,8 +3528,8 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
     object.indexBufferView.Format      = DXGI_FORMAT_R32_UINT;
     object.indexCount                  = static_cast<UINT>(mesh.indices.size());
 
-    // Materiales por submalla. Sin subMeshRanges (FBX de una sola pieza) se
-    // toma el material del propio Mesh, que es lo que rellena ModelLoader.
+    // Materials per submesh. Without subMeshRanges (single-piece FBX) the
+    // Mesh's own material is taken, which is what ModelLoader fills in.
     struct RangeSrc {
         uint32_t        start;
         uint32_t        count;
@@ -3552,26 +3552,26 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
         sub.indexStart = range.start;
         sub.indexCount = range.count;
 
-        // Mismo criterio que addStaticMesh y que Vulkan (SkinnedMatGfx): con
-        // mapa ORM manda el mapa y los dos factores se fuerzan a 1.0, porque el
-        // shader los MULTIPLICA por lo que lea de la textura. Se decide aquí,
-        // con el material delante, y no en el pase de dibujo, que ya no tiene
-        // de dónde sacarlo.
+        // Same criterion as addStaticMesh and as Vulkan (SkinnedMatGfx): with an
+        // ORM map the map rules and both factors are forced to 1.0, because the
+        // shader MULTIPLIES them by what it reads from the texture. It is decided here,
+        // with the material at hand, and not in the draw pass, which no longer has
+        // anywhere to get it from.
         //
-        // Se rellena aunque la submalla se quede sin terna propia (haySlot
-        // false, pasado kMaxSkinnedSlots): entonces muestrea el ORM neutro
-        // global, así que el factor sigue siendo lo único que decide. Es lo
-        // mismo que hace addStaticMesh, que también los escribe antes de saber
-        // si habrá hueco.
+        // It is filled in even if the submesh ends up without its own triplet (haySlot
+        // false, past kMaxSkinnedSlots): then it samples the global neutral ORM,
+        // so the factor is still the only thing that decides. It is the same
+        // as what addStaticMesh does, which also writes them before knowing whether
+        // there will be a slot.
         const bool tieneMapaOrm =
             chooseTextureSource(range.material->metallicRoughnessPath,
                                 range.material->embeddedMetallicRoughness) != TextureSource::None;
         sub.metallic  = tieneMapaOrm ? 1.0f : range.material->metallic;
         sub.roughness = tieneMapaOrm ? 1.0f : range.material->roughness;
 
-        // Las ternas se reparten entre TODOS los personajes de la escena, no
-        // por personaje: pasado el tope, la submalla cae a la terna global.
-        // Primero las que haya devuelto un personaje borrado.
+        // The triplets are shared among ALL characters in the scene, not
+        // per character: past the cap, the submesh falls back to the global triplet.
+        // First those returned by a deleted character.
         UINT slot = 0;
         bool haySlot = false;
         if (!freeSkinnedSrv.empty()) {
@@ -3586,19 +3586,19 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
         if (haySlot) {
             sub.srvBase = slot;
 
-            // Compartida entre personajes del mismo FBX. En fallo de caché sube
-            // y escribe la vista (uploadMaterialTexture); en acierto solo
-            // escribe la vista de este personaje sobre la imagen ya subida, con
-            // el mismo formato. nullptr = sin textura: el llamante pone su
-            // relleno, y la caché no lo guarda.
+            // Shared among characters of the same FBX. On a cache miss it uploads
+            // and writes the view (uploadMaterialTexture); on a hit it only
+            // writes this character's view over the already uploaded image, with
+            // the same format. nullptr = no texture: the caller puts its
+            // filler, and the cache does not store it.
             auto pedirTextura = [&](const std::string& ruta, const std::vector<uint8_t>& emb,
                                     TextureKind tipo, UINT srvIndex) -> D3D12MA::Allocation* {
                 bool creada = false;
                 D3D12MA::Allocation* a = skinnedTextures.acquire(
                     makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta)),
                     [&] { return uploadMaterialTexture(ruta, emb, tipo, srvIndex); }, &creada);
-                // En acierto, el formato es el del recurso ya subido (resolveSrgb
-                // lo decidio cuando se creo), no una suposicion por el slot.
+                // On a hit, the format is that of the already uploaded resource (resolveSrgb
+                // decided it when it was created), not an assumption by slot.
                 if (a && !creada)
                     createTexture2DSrv(a->GetResource(), formatOf(a), srvIndex);
                 return a;
@@ -3631,14 +3631,14 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
         object.subMeshes.push_back(sub);
     }
 
-    // El reloj de animación arranca con el primer personaje: hasta entonces no
-    // hay nada que avanzar, y dejarlo a cero daría un salto en el primer frame.
+    // The animation clock starts with the first character: until then there is
+    // nothing to advance, and leaving it at zero would cause a jump in the first frame.
     if (skinnedObjects.empty()) {
         QueryPerformanceFrequency(&tickFrequency);
         QueryPerformanceCounter(&lastTick);
     }
 
-    // Hueco reciclado si lo hay; si no, el vector crece como siempre.
+    // Recycled slot if there is one; otherwise, the vector grows as usual.
     const int slot = skinnedSlots.acquire();
     if (slot < 0) {
         skinnedObjects.push_back(std::move(object));
@@ -3708,8 +3708,8 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
         character.textures.clear();
     }
     skinnedObjects.clear();
-    // Todos los personajes se soltaron: la caché tiene que estar vacía. Si no,
-    // alguien se saltó el release; se avisa y no se libera nada a ciegas.
+    // All characters were released: the cache has to be empty. If not,
+    // someone skipped the release; a warning is given and nothing is freed blindly.
     if (skinnedTextures.size() != 0)
         diagLog("[D3D12] " + std::to_string(skinnedTextures.size()) +
                 " character textures not released at shutdown");
@@ -3728,8 +3728,8 @@ void D3D12Renderer::Impl::recordSkinning()
     if (activos.empty())
         return;
 
-    // El bloque de pose de este frame, en su copia: la pose del Animator o,
-    // sin él, una muestra (clipBase en animTime) con el reloj del backend.
+    // This frame's pose block, in its copy: the Animator's pose or,
+    // without it, a sample (clipBase at animTime) with the backend's clock.
     for (SkinnedObject* object : activos) {
         if (!object->poseBlockMapped)
             continue;
@@ -3738,7 +3738,7 @@ void D3D12Renderer::Impl::recordSkinning()
         unica.count = 1;
         unica.samples[0] = { B > 0 ? static_cast<int>(object->clipBase / B) : 0, object->animTime, 1.0f, 0 };
         AnimationPose& pose = object->hasPose ? object->pose : unica;
-        // Las máscaras apuntan a la copia del objeto (la del Animator ya no vale).
+        // The masks point to the object's copy (the Animator's is no longer valid).
         for (int L = 0; L < kMaxLayersPose; L++)
             pose.layers[L].mask = object->poseMasks[L].empty() ? nullptr : &object->poseMasks[L];
         writePoseBlock(pose, B, static_cast<uint32_t*>(object->poseBlockMapped) +
@@ -3758,8 +3758,8 @@ void D3D12Renderer::Impl::recordSkinning()
         return push;
     };
 
-    // Congelar la pose de pantalla de cada capa con un fade interrumpido antes
-    // de evaluar: poseTrs tiene la del frame anterior. Una vez por petición.
+    // Freeze the on-screen pose of each layer with an interrupted fade before
+    // evaluating: poseTrs holds the previous frame's. Once per request.
     for (SkinnedObject* object : activos) {
         if (!object->hasPose)
             continue;
@@ -3788,13 +3788,13 @@ void D3D12Renderer::Impl::recordSkinning()
     }
     auto gpu = [](const auto& buffer) { return buffer->GetResource()->GetGPUVirtualAddress(); };
 
-    // Tres FASES para todos los personajes, no tres pases por personaje: los
-    // buffers de cada uno son suyos, así que dentro de una fase no dependen
-    // entre sí y basta UNA barrera entre fases. Antes eran dos barreras UAV
-    // por personaje, que serializaban a todos (docs/animation-audit.md, fila
-    // 9). La barrera UAV sin recurso cubre todos los accesos UAV de la lista.
-    // Barrera de UAV y no de transición: los pases no cambian de estado, solo
-    // hay que garantizar que lo escrito por una fase lo vea la siguiente.
+    // Three PHASES for all characters, not three passes per character: each one's
+    // buffers are its own, so within a phase they do not depend on
+    // each other and ONE barrier between phases is enough. Before it was two UAV barriers
+    // per character, which serialized all of them (docs/animation-audit.md, row
+    // 9). The UAV barrier with no resource covers all UAV accesses in the list.
+    // UAV barrier and not a transition: the passes do not change state, it is only
+    // necessary to guarantee that what one phase wrote is seen by the next.
     auto barreraEntreFases = [&]() {
         D3D12_RESOURCE_BARRIER barrier{};
         barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -3802,7 +3802,7 @@ void D3D12Renderer::Impl::recordSkinning()
         commandList->ResourceBarrier(1, &barrier);
     };
 
-    // 1) Claves de animación -> transformaciones locales. Un hilo por hueso.
+    // 1) Animation keys -> local transforms. One thread per bone.
     commandList->SetComputeRootSignature(boneEvalRootSignature.Get());
     commandList->SetPipelineState(boneEvalPipeline.Get());
     for (const SkinnedObject* object : activos) {
@@ -3820,9 +3820,9 @@ void D3D12Renderer::Impl::recordSkinning()
     }
     barreraEntreFases();
 
-    // 1b) Personajes con IK: la jerarquía corre una vez de más, SIN la pasada
-    // 2 (flags bit 0), para que bone_ik pueda leer los transforms de mundo y
-    // corregir los locales. Los demás no pagan nada.
+    // 1b) Characters with IK: the hierarchy runs one extra time, WITHOUT pass
+    // 2 (flags bit 0), so bone_ik can read the world transforms and
+    // correct the locals. The others pay nothing.
     std::vector<SkinnedObject*> conIk;
     for (SkinnedObject* object : activos)
         if (object->ik.count > 0) conIk.push_back(object);
@@ -3854,8 +3854,8 @@ void D3D12Renderer::Impl::recordSkinning()
         barreraEntreFases();
     }
 
-    // 2) Jerarquía: acumula padre a hijo. Un workgroup por personaje, que va
-    // por niveles de profundidad (bone_hierarchy.comp).
+    // 2) Hierarchy: accumulates parent to child. One workgroup per character, which goes
+    // through depth levels (bone_hierarchy.comp).
     commandList->SetComputeRootSignature(boneHierarchyRootSignature.Get());
     commandList->SetPipelineState(boneHierarchyPipeline.Get());
     for (const SkinnedObject* object : activos) {
@@ -3868,7 +3868,7 @@ void D3D12Renderer::Impl::recordSkinning()
     }
     barreraEntreFases();
 
-    // 3) Deformación de los vértices. Un hilo por vértice.
+    // 3) Vertex deformation. One thread per vertex.
     commandList->SetComputeRootSignature(skinningRootSignature.Get());
     commandList->SetPipelineState(skinningPipeline.Get());
     for (const SkinnedObject* object : activos) {
@@ -3880,9 +3880,9 @@ void D3D12Renderer::Impl::recordSkinning()
         commandList->Dispatch((object->vertexCount + 63) / 64, 1, 1);
     }
 
-    // De escritura por compute a entrada del ensamblador de vértices: aquí sí
-    // cambia el uso del buffer, así que hace falta transición. Todas en una
-    // misma llamada.
+    // From compute write to vertex assembler input: here the buffer's usage
+    // does change, so a transition is needed. All in a
+    // single call.
     std::vector<D3D12_RESOURCE_BARRIER> alDibujo(activos.size());
     for (size_t i = 0; i < activos.size(); i++) {
         D3D12_RESOURCE_BARRIER& b = alDibujo[i];
@@ -3907,10 +3907,10 @@ void D3D12Renderer::Impl::releaseHdrTargets()
     }
     taaHistoryAllocations  = {};
     taaHistoryValid        = false;
-    // Los recursos nuevos vuelven a salir de un heap sin poner a cero, así que
-    // el estreno hay que repetirlo. Sin esto el arranque deja de avisar pero
-    // cada resize sigue estrenando sin estrenar, que es de donde salían la
-    // mayoría de los id=1422.
+    // The new resources again come out of a heap that is not zeroed, so
+    // the first use has to be repeated. Without this startup stops warning but
+    // every resize still first-uses without first-using, which is where most of
+    // the id=1422 came from.
     taaHistoryInicializada = {};
     viewportInicializado   = false;
     ldrInicializado        = false;
@@ -3949,8 +3949,8 @@ void D3D12Renderer::Impl::createHdrTargets()
 {
     releaseHdrTargets();
 
-    // Destino del trazado de reflejos: mismo formato y tamaño que la escena,
-    // porque lo que guarda es color de la escena reproyectado.
+    // Reflection trace target: same format and size as the scene,
+    // because what it stores is reprojected scene color.
     {
         D3D12_RESOURCE_DESC ssrDesc{};
         ssrDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -3979,8 +3979,8 @@ void D3D12Renderer::Impl::createHdrTargets()
         createTexture2DSrv(ssrAllocation->GetResource(), kHdrFormat, kSrvSsr);
     }
 
-    // Destino del motion blur: la misma escena emborronada, así que mismo
-    // formato y tamaño. No lleva SRV porque de aquí solo sale una CopyResource.
+    // Motion blur target: the same blurred scene, so same
+    // format and size. It has no SRV because only a CopyResource comes out of here.
     {
         D3D12_RESOURCE_DESC blurDesc{};
         blurDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -4008,8 +4008,8 @@ void D3D12Renderer::Impl::createHdrTargets()
                                           handle);
     }
 
-    // Target de la escena, en coma flotante para que el umbral del bloom pueda
-    // distinguir lo que pasa de 1.0.
+    // Scene target, in floating point so the bloom threshold can
+    // tell apart what exceeds 1.0.
     D3D12_RESOURCE_DESC hdrDesc{};
     hdrDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     hdrDesc.Width            = width;
@@ -4018,8 +4018,8 @@ void D3D12Renderer::Impl::createHdrTargets()
     hdrDesc.MipLevels        = 1;
     hdrDesc.Format           = kHdrFormat;
     hdrDesc.SampleDesc.Count = 1;
-    // Render target para la escena y acceso desordenado para la niebla, que
-    // reescribe este mismo contenido antes de que lo lea el bloom.
+    // Render target for the scene and unordered access for the fog, which
+    // rewrites this same content before the bloom reads it.
     hdrDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
                     D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
@@ -4034,15 +4034,15 @@ void D3D12Renderer::Impl::createHdrTargets()
                                             &hdrAllocation, IID_NULL, nullptr),
                   "D3D12MA::Allocator::CreateResource(HDR)");
 
-    // El RTV del target va detrás de los de la swapchain, en el mismo heap.
+    // The target's RTV goes after those of the swapchain, in the same heap.
     D3D12_CPU_DESCRIPTOR_HANDLE hdrRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
     hdrRtv.ptr += static_cast<SIZE_T>(kRtvSceneHdr) * rtvSize;
     device->CreateRenderTargetView(hdrAllocation->GetResource(), nullptr, hdrRtv);
 
     if (sampleCount > 1) {
-        // Color y profundidad del pase de escena con MSAA. El resto de la
-        // cadena (SSR, niebla, bloom, composición) sigue leyendo los de una
-        // muestra: entre medias va un resolve.
+        // Color and depth of the scene pass with MSAA. The rest of the
+        // chain (SSR, fog, bloom, composition) keeps reading the single-sample ones:
+        // a resolve goes in between.
         D3D12_RESOURCE_DESC msDesc{};
         msDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         msDesc.Width            = width;
@@ -4088,9 +4088,9 @@ void D3D12Renderer::Impl::createHdrTargets()
     }
 
     {
-        // Imagen del viewport, del formato del backbuffer: es su sustituto. Va
-        // al tamaño de SALIDA, no al de render: con SSAA la escena se dibuja más
-        // grande y el pase de bajada la promedia hasta aquí.
+        // Viewport image, in the backbuffer's format: it is its substitute. It goes
+        // at the OUTPUT size, not the render one: with SSAA the scene is drawn larger
+        // and the downsample pass averages it down to here.
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         desc.Width            = outWidth;
@@ -4119,8 +4119,8 @@ void D3D12Renderer::Impl::createHdrTargets()
                            kSrvViewport);
     }
 
-    // Historial del TAA: dos imágenes del formato de la composición, que es lo
-    // que el pase mezcla.
+    // TAA history: two images in the composition's format, which is what
+    // the pass blends.
     for (UINT i = 0; i < 2; ++i) {
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -4160,16 +4160,16 @@ void D3D12Renderer::Impl::createHdrTargets()
     handle.ptr += static_cast<SIZE_T>(kSrvSceneHdr) * srvSize;
     device->CreateShaderResourceView(hdrAllocation->GetResource(), &hdrSrv, handle);
 
-    // La misma vista, otra vez, en el primer hueco de la pareja del bloom
-    // apagado: la tabla de la composición exige [escena, bloom] CONTIGUOS y el
-    // negro ya vive en el segundo. Duplicar un SRV del mismo recurso es legal y
-    // no cuesta memoria. Va aquí y no en createMeshResources porque hdrAllocation
-    // se rehace en cada resize y la vista tiene que seguirlo.
+    // The same view, again, in the first slot of the bloom-off pair:
+    // the composition table requires [scene, bloom] CONTIGUOUS and the
+    // black already lives in the second. Duplicating an SRV of the same resource is legal and
+    // costs no memory. It goes here and not in createMeshResources because hdrAllocation
+    // is redone on every resize and the view has to follow it.
     handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
     handle.ptr += static_cast<SIZE_T>(kSrvCompositeOff) * srvSize;
     device->CreateShaderResourceView(hdrAllocation->GetResource(), &hdrSrv, handle);
 
-    // Vista de escritura del mismo target, la que usa la niebla.
+    // Write view of the same target, the one the fog uses.
     D3D12_UNORDERED_ACCESS_VIEW_DESC hdrUav{};
     hdrUav.Format        = kHdrFormat;
     hdrUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
@@ -4177,8 +4177,8 @@ void D3D12Renderer::Impl::createHdrTargets()
     handle.ptr += static_cast<SIZE_T>(kUavSceneHdr) * srvSize;
     device->CreateUnorderedAccessView(hdrAllocation->GetResource(), nullptr, &hdrUav, handle);
 
-    // La profundidad se creó antes que el heap en el arranque, así que su vista
-    // de muestreo se registra aquí.
+    // The depth was created before the heap at startup, so its sampling
+    // view is registered here.
     D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv{};
     depthSrv.Format                  = DXGI_FORMAT_R32_FLOAT;
     depthSrv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -4188,8 +4188,8 @@ void D3D12Renderer::Impl::createHdrTargets()
     handle.ptr += static_cast<SIZE_T>(kSrvDepth) * srvSize;
     device->CreateShaderResourceView(depthAllocation->GetResource(), &depthSrv, handle);
 
-    // Target LDR: lo escribe la composición y lo lee FXAA. Sin él, FXAA tendría
-    // que leer del backbuffer mientras escribe en él.
+    // LDR target: written by the composition and read by FXAA. Without it, FXAA would have
+    // to read from the backbuffer while writing to it.
     D3D12_RESOURCE_DESC ldrDesc = hdrDesc;
     ldrDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     ldrDesc.Flags  = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
@@ -4215,18 +4215,18 @@ void D3D12Renderer::Impl::createHdrTargets()
     handle.ptr += static_cast<SIZE_T>(kSrvLdr) * srvSize;
     device->CreateShaderResourceView(ldrAllocation->GetResource(), &ldrSrv, handle);
 
-    // Niveles del bloom: texturas independientes en vez de mips de un mismo
-    // recurso. Cada una tiene un solo subrecurso, así que su estado se cambia
-    // de una pieza y no hay que llevar la cuenta por nivel.
-    // Niveles REALMENTE utiles. El camino Vulkan (BloomPass::createImages) para
-    // en cuanto un nivel bajaria de 2 px, y aqui se usaban los cinco siempre,
-    // recortando a 1x1: con el viewport pequeno D3D12 desenfocaba sobre mips
-    // degenerados —que promedian toda la pantalla— y Vulkan no. Misma regla en
-    // los dos, o el mismo panel estrecho da dos imagenes distintas.
+    // Bloom levels: independent textures instead of mips of a single
+    // resource. Each one has a single subresource, so its state is changed
+    // in one piece and there is no need to keep count per level.
+    // Levels that are REALLY useful. The Vulkan path (BloomPass::createImages) stops
+    // as soon as a level would drop below 2 px, and here all five were always used,
+    // clamping to 1x1: with a small viewport D3D12 blurred over degenerate mips
+    // (which average the whole screen) and Vulkan did not. Same rule in
+    // both, or the same narrow panel gives two different images.
     //
-    // La RESERVA se queda en kBloomMips porque el reparto de descriptores lo da
-    // por hecho (kUavBloomMip = kSrvBloomMip + kBloomMips); lo que se acota es
-    // cuantos se usan.
+    // The RESERVATION stays at kBloomMips because the descriptor layout takes it
+    // for granted (kUavBloomMip = kSrvBloomMip + kBloomMips); what is bounded is
+    // how many are used.
     bloomMipCount = 0;
     {
         UINT w = width / 2, h = height / 2;
@@ -4279,9 +4279,9 @@ void D3D12Renderer::Impl::createHdrTargets()
 
 void D3D12Renderer::Impl::createBloomPipelines()
 {
-    // Los dos compute comparten firma: constantes, una textura de origen y una
-    // imagen de destino. Texture2D y RWTexture2D no pueden ir como root
-    // descriptors —solo los buffers pueden—, así que van en tablas.
+    // The two computes share a signature: constants, a source texture and a
+    // destination image. Texture2D and RWTexture2D cannot go as root
+    // descriptors (only buffers can), so they go in tables.
     D3D12_DESCRIPTOR_RANGE srcRange{};
     srcRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     srcRange.NumDescriptors     = 1;
@@ -4305,8 +4305,8 @@ void D3D12Renderer::Impl::createBloomPipelines()
     bloomParams[2].DescriptorTable.NumDescriptorRanges = 1;
     bloomParams[2].DescriptorTable.pDescriptorRanges   = &dstRange;
 
-    // Clamp en los bordes: con wrap, el filtro de 13 taps traería color del
-    // lado opuesto de la imagen y el bloom sangraría de un borde a otro.
+    // Clamp at the edges: with wrap, the 13-tap filter would bring color from the
+    // opposite side of the image and the bloom would bleed from one edge to the other.
     D3D12_STATIC_SAMPLER_DESC bloomSampler{};
     bloomSampler.Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     bloomSampler.AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -4352,9 +4352,9 @@ void D3D12Renderer::Impl::createBloomPipelines()
     buildComputePipeline("shaders/bloom_down.comp.dxil", bloomDownPipeline);
     buildComputePipeline("shaders/bloom_up.comp.dxil", bloomUpPipeline);
 
-    // Composición: escena + bloom -> backbuffer. t0 y t1 tienen que caer en
-    // descriptores contiguos, y por eso sceneHdr y el nivel 0 del bloom están
-    // pegados en el heap.
+    // Composition: scene + bloom -> backbuffer. t0 and t1 have to land in
+    // contiguous descriptors, and that is why sceneHdr and bloom level 0 are
+    // stuck together in the heap.
     D3D12_DESCRIPTOR_RANGE compositeRange{};
     compositeRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     compositeRange.NumDescriptors     = 2;
@@ -4389,8 +4389,8 @@ void D3D12Renderer::Impl::createBloomPipelines()
     compositeDesc.pStaticSamplers   = compositeSamplers;
     serializeAndCreate(compositeDesc, compositeRootSignature, "composite");
 
-    // fullscreen.vert genera el triángulo desde el índice de vértice: sin
-    // vertex buffer y sin input layout.
+    // fullscreen.vert generates the triangle from the vertex index: no
+    // vertex buffer and no input layout.
     const std::vector<char> fullscreenVs = readBinaryFile("shaders/fullscreen.vert.dxil");
     const std::vector<char> compositePs  = readBinaryFile("shaders/bloom_composite.frag.dxil");
 
@@ -4421,8 +4421,8 @@ void D3D12Renderer::Impl::createBloomPipelines()
 
 void D3D12Renderer::Impl::createNeutralIblCubes()
 {
-    // Medio flotante, que es el formato del IBL de verdad: así el mismo hueco
-    // sirve luego para el resultado de los compute sin recrear la vista.
+    // Half float, which is the real IBL's format: this way the same slot
+    // later serves for the compute result without recreating the view.
     auto uploadNeutralCube = [&](const float rgb[3], UINT srvIndex) {
         std::array<uint16_t, 4 * 6> texels{};
         for (UINT face = 0; face < 6; ++face) {
@@ -4465,7 +4465,7 @@ void D3D12Renderer::Impl::recordIblConvolution(UINT sourceSrv, UINT irradianceUa
         float    intensity;
     };
 
-    // Irradiancia: un dispatch para las seis caras a la vez (z = cara).
+    // Irradiance: one dispatch for all six faces at once (z = face).
     {
         const IblPush push{0.0f, kIblIrradianceSize, intensity};
         commandList->SetPipelineState(iblIrradiancePipeline.Get());
@@ -4476,7 +4476,7 @@ void D3D12Renderer::Impl::recordIblConvolution(UINT sourceSrv, UINT irradianceUa
         commandList->Dispatch(groups, groups, 6);
     }
 
-    // Prefiltrado: un dispatch por mip, con su rugosidad y su tamaño.
+    // Prefilter: one dispatch per mip, with its roughness and its size.
     commandList->SetPipelineState(iblPrefilterPipeline.Get());
     for (UINT mip = 0; mip < kIblPrefilterMips; ++mip) {
         const UINT  size      = (std::max)(kIblPrefilterSize >> mip, 1u);
@@ -4492,13 +4492,13 @@ void D3D12Renderer::Impl::recordIblConvolution(UINT sourceSrv, UINT irradianceUa
 
 void D3D12Renderer::Impl::precomputeIbl()
 {
-    // Sin cielo no hay nada que convolucionar: se quedan los neutros.
+    // Without a sky there is nothing to convolve: the neutrals stay.
     if (!skyboxAllocation)
         return;
 
-    // Los dos destinos, con el mismo formato que los neutros a los que
-    // sustituyen. CUBE lo da la vista, no el recurso: para el compute es un
-    // array de seis capas y para pbr.frag un TextureCube.
+    // The two destinations, with the same format as the neutrals they
+    // replace. CUBE comes from the view, not the resource: for the compute it is an
+    // array of six layers and for pbr.frag a TextureCube.
     auto createCubeTarget = [&](UINT size, UINT mips) {
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -4533,9 +4533,9 @@ void D3D12Renderer::Impl::precomputeIbl()
     prefilterAllocation  = createCubeTarget(kIblPrefilterSize, kIblPrefilterMips);
     prefilterMips        = kIblPrefilterMips;
 
-    // Un UAV por destino: el de irradiancia cubre sus seis capas; el del
-    // prefiltrado va por mip, porque cada nivel es una rugosidad distinta y se
-    // dispara por separado.
+    // One UAV per destination: the irradiance one covers its six layers; the
+    // prefilter one goes per mip, because each level is a different roughness and is
+    // dispatched separately.
     auto createArrayUav = [&](ID3D12Resource* resource, UINT mip, UINT srvIndex) {
         D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
         uavDesc.Format                      = kHdrFormat;
@@ -4552,8 +4552,8 @@ void D3D12Renderer::Impl::precomputeIbl()
     for (UINT mip = 0; mip < kIblPrefilterMips; ++mip)
         createArrayUav(prefilterAllocation->GetResource(), mip, kUavPrefilter + mip);
 
-    // Root signature común a los dos compute: el push de tres floats, el
-    // cubemap del cielo en t0 y el destino en u1.
+    // Root signature common to both computes: the three-float push, the
+    // sky cubemap in t0 and the destination in u1.
     if (!iblRootSignature) {
         D3D12_DESCRIPTOR_RANGE envRange{};
         envRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -4621,8 +4621,8 @@ void D3D12Renderer::Impl::precomputeIbl()
         buildCompute("shaders/ibl_prefilter.comp.dxil", iblPrefilterPipeline);
     }
 
-    // Se graba y se espera aquí mismo: esto corre una vez al cargar el cielo,
-    // no por frame, y el resto del init ya bloquea igual.
+    // It is recorded and waited on right here: this runs once when the sky loads,
+    // not per frame, and the rest of init already blocks the same way.
     throwIfFailed(allocators[frameIndex]->Reset(), "ID3D12CommandAllocator::Reset(IBL)");
     throwIfFailed(commandList->Reset(allocators[frameIndex].Get(), nullptr),
                   "ID3D12GraphicsCommandList::Reset(IBL)");
@@ -4637,12 +4637,12 @@ void D3D12Renderer::Impl::precomputeIbl()
         return handle;
     };
 
-    // Los mismos dispatches que usa cada sonda: entrada, destinos e intensidad
-    // por parametro, y el resto identico.
+    // The same dispatches each probe uses: input, destinations and intensity
+    // as parameters, and everything else identical.
     recordIblConvolution(kSrvSkybox, kUavIrradiance, kUavPrefilter, 1.0f);
 
-    // De destino de escritura a textura de lectura: pbr.frag los muestrea en el
-    // pase de escena del mismo frame en adelante.
+    // From write destination to read texture: pbr.frag samples them in the
+    // scene pass from the same frame onwards.
     D3D12_RESOURCE_BARRIER toShader[2]{};
     for (int i = 0; i < 2; ++i) {
         toShader[i].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -4659,12 +4659,12 @@ void D3D12Renderer::Impl::precomputeIbl()
     queue->ExecuteCommandLists(1, lists);
     waitForGpu();
 
-    // Las vistas de lectura, ahora sobre los recursos nuevos: el bloque global
-    // y el de cada objeto ya cargado.
+    // The read views, now over the new resources: the global block
+    // and that of each already loaded object.
     createCubeSrv(irradianceAllocation->GetResource(), kHdrFormat, 1, kSrvIrradiance);
     createCubeSrv(prefilterAllocation->GetResource(), kHdrFormat, prefilterMips, kSrvPrefilter);
-    // Solo los dos huecos de entorno: rehacer el bloque entero pisaría el
-    // metallic-roughness propio de cada malla con el neutro.
+    // Only the two environment slots: redoing the whole block would overwrite each
+    // mesh's own metallic-roughness with the neutral.
     auto refreshEnv = [&](UINT blockBase) {
         createCubeSrv(irradianceAllocation->GetResource(), kHdrFormat, 1, blockBase + 4);
         createCubeSrv(prefilterAllocation->GetResource(), kHdrFormat, prefilterMips,
@@ -4682,11 +4682,11 @@ void D3D12Renderer::Impl::precomputeIbl()
 
 void D3D12Renderer::Impl::createForwardPlusBuffers()
 {
-    // Forward+ apagado: mode = 0 y una rejilla de una celda. pbr.frag lee mode
-    // antes que nada y se queda con el bucle sobre las luces del UBO, pero los
-    // cuatro buffers tienen que estar enlazados igual.
-    // Parámetros y luces van en heap de subida y mapeados: se reescriben cada
-    // frame con la cámara y las luces vivas.
+    // Forward+ off: mode = 0 and a one-cell grid. pbr.frag reads mode
+    // before anything else and sticks to the loop over the UBO lights, but the
+    // four buffers have to be bound anyway.
+    // Parameters and lights go in an upload heap and mapped: they are rewritten every
+    // frame with the camera and the live lights.
     auto createMapped = [&](UINT64 bytes, D3D12MA::Allocation** allocation, void** mapped) {
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -4712,13 +4712,13 @@ void D3D12Renderer::Impl::createForwardPlusBuffers()
     createMapped(sizeof(FpParamsGpu), &fpParamsAllocation, &fpParamsMapped);
     createMapped(sizeof(FpLightGpu) * kFpMaxLights, &fpLightsAllocation, &fpLightsMapped);
 
-    // Los ceros con los que se limpia el bloque de estadisticas antes de cada
-    // dispatch. Se escriben UNA vez: el contenido no cambia nunca.
+    // The zeros used to clear the statistics block before every
+    // dispatch. They are written ONCE: the contents never change.
     createMapped(kFpStatsWords * sizeof(uint32_t), &fpStatsZeros, &fpStatsZerosMapped);
     std::memset(fpStatsZerosMapped, 0, kFpStatsWords * sizeof(uint32_t));
 
-    // Y el destino de lectura. Que falle no es motivo para no dibujar: sin el,
-    // las estadisticas se quedan a cero y el resto del Forward+ funciona igual.
+    // And the read destination. Failing is no reason not to draw: without it,
+    // the statistics stay at zero and the rest of Forward+ works the same.
     {
         D3D12_HEAP_PROPERTIES readbackHeap{};
         readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
@@ -4744,11 +4744,11 @@ void D3D12Renderer::Impl::createForwardPlusBuffers()
         }
     }
 
-    // Con Forward+ apagado no hay rejilla, pero los cuatro buffers tienen que
-    // estar enlazados igual: pbr.frag los declara sin rama. Una celda basta.
+    // With Forward+ off there is no grid, but the four buffers have to be
+    // bound anyway: pbr.frag declares them without a branch. One cell is enough.
     ensureForwardPlusGrid(1);
 
-    // Y el bloque, escrito ya en Off: pbr.frag lee mode antes que nada.
+    // And the block, already written as Off: pbr.frag reads mode before anything else.
     FpParamsGpu off{};
     off.gridX = off.gridY = off.gridZ = 1;
     off.tileSize   = kFpTileSize;
@@ -4760,12 +4760,12 @@ void D3D12Renderer::Impl::createForwardPlusBuffers()
 
 bool D3D12Renderer::Impl::loadSkyboxCubemap()
 {
-    // Mismo orden de caras que el camino de Vulkan: +X, -X, +Y, -Y, +Z, -Z,
-    // que es el que espera un TextureCube por slice.
+    // Same face order as the Vulkan path: +X, -X, +Y, -Y, +Z, -Z,
+    // which is what a TextureCube expects per slice.
     const std::array<std::string, 6>& facePaths = skyboxFacePaths;
 
-    // Recarga: el cubemap anterior se suelta aqui. Quien llame tiene que
-    // haber parado la GPU antes.
+    // Reload: the previous cubemap is released here. The caller has to
+    // have stopped the GPU beforehand.
     if (skyboxAllocation) {
         skyboxAllocation->Release();
         skyboxAllocation = nullptr;
@@ -4785,15 +4785,15 @@ bool D3D12Renderer::Impl::loadSkyboxCubemap()
             faceWidth  = w;
             faceHeight = h;
         } else if (w != faceWidth || h != faceHeight) {
-            // Un cubemap con caras de distinto tamaño no es un cubemap: el
-            // recurso es UNO con seis slices del mismo tamaño.
+            // A cubemap with faces of different sizes is not a cubemap: the
+            // resource is ONE with six slices of the same size.
             ok = false;
             break;
         }
     }
 
     if (ok && faceWidth > 0 && faceHeight > 0) {
-        // Las seis caras seguidas, que es como uploadTexture recorre el array.
+        // The six faces in a row, which is how uploadTexture walks the array.
         const size_t         faceBytes = static_cast<size_t>(faceWidth) * faceHeight * 4;
         std::vector<uint8_t> cube(faceBytes * 6);
         for (int i = 0; i < 6; ++i)
@@ -4803,8 +4803,8 @@ bool D3D12Renderer::Impl::loadSkyboxCubemap()
                                          static_cast<UINT>(faceHeight), 6,
                                          DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, 4, kSrvSkybox);
 
-        // uploadTexture deja un SRV de array 2D; el shader declara TextureCube,
-        // y con la vista de array la dirección de muestreo no significa nada.
+        // uploadTexture leaves a 2D array SRV; the shader declares TextureCube,
+        // and with the array view the sampling direction means nothing.
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
         srvDesc.Format                  = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
         srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURECUBE;
@@ -4834,9 +4834,9 @@ void D3D12Renderer::Impl::createSkyboxPipelineOnly()
     if (!skyboxAllocation)
         return;
 
-    // Root signature: la invViewProj como root constants (b0) y el cubemap en
-    // una tabla (t0). El vertex shader no lee vértices —saca las tres esquinas
-    // del SV_VertexID—, así que no hay input layout.
+    // Root signature: the invViewProj as root constants (b0) and the cubemap in
+    // a table (t0). The vertex shader reads no vertices (it takes the three corners
+    // from SV_VertexID), so there is no input layout.
     D3D12_DESCRIPTOR_RANGE cubeRange{};
     cubeRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     cubeRange.NumDescriptors     = 1;
@@ -4894,8 +4894,8 @@ void D3D12Renderer::Impl::createSkyboxPipelineOnly()
     psoDesc.PS                    = {pixelShader.data(), pixelShader.size()};
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets      = 1;
-    // El cielo va al target HDR, con la escena: así lo tonemapea la
-    // composición como todo lo demás y puede generar bloom.
+    // The sky goes to the HDR target, with the scene: this way the composition
+    // tonemaps it like everything else and it can generate bloom.
     psoDesc.RTVFormats[0]    = kHdrFormat;
     psoDesc.DSVFormat        = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count = sampleCount;
@@ -4908,9 +4908,9 @@ void D3D12Renderer::Impl::createSkyboxPipelineOnly()
     for (auto& rt : psoDesc.BlendState.RenderTarget)
         rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-    // El triángulo sale con z = 1: se dibuja al final, solo donde no haya
-    // geometría, y NO escribe profundidad — la niebla lee ese buffer y un
-    // cielo a distancia máxima le haría teñir la pantalla entera.
+    // The triangle comes out with z = 1: it is drawn last, only where there is no
+    // geometry, and does NOT write depth: the fog reads that buffer and a
+    // sky at maximum distance would make it tint the whole screen.
     psoDesc.DepthStencilState.DepthEnable    = TRUE;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
@@ -4925,9 +4925,9 @@ UINT D3D12Renderer::Impl::desiredSampleCount() const
     if (state->aaMode() != RendererState::AaMode::Msaa)
         return 1;
 
-    // Lo que pida el usuario, recortado a lo que el device acepte para el
-    // formato de la escena: pedir 8 donde solo hay 4 no falla al crear la
-    // textura, falla al crear el pipeline, y ahí ya es tarde.
+    // What the user requests, clamped to what the device accepts for the
+    // scene's format: asking for 8 where there are only 4 does not fail when creating the
+    // texture, it fails when creating the pipeline, and by then it is too late.
     UINT wanted = static_cast<UINT>((std::max)(1, state->msaaSamples()));
     while (wanted > 1) {
         D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS levels{};
@@ -4951,9 +4951,9 @@ void D3D12Renderer::Impl::applyPendingRenderSize()
     if (wantedOut == 0 || wantedOutH == 0)
         return;
 
-    // Y el tamaño de dibujo, que con SSAA es el de salida multiplicado por el
-    // factor. El tope de una textura 2D en D3D12 son 16384 por lado: pedir más
-    // no falla al crear el recurso, falla al usarlo.
+    // And the draw size, which with SSAA is the output one multiplied by the
+    // factor. The cap of a 2D texture in D3D12 is 16384 per side: asking for more
+    // does not fail when creating the resource, it fails when using it.
     UINT wanted  = wantedOut;
     UINT wantedH = wantedOutH;
     if (state->aaMode() == RendererState::AaMode::Ssaa && state->ssaaFactor() > 1.0f) {
@@ -4967,9 +4967,9 @@ void D3D12Renderer::Impl::applyPendingRenderSize()
     if (wanted == width && wantedH == height && wantedOut == outWidth && wantedOutH == outHeight)
         return;
 
-    // Todo lo interno es del tamaño de render: profundidad, escena, bloom,
-    // oclusión, historial y el LDR. La imagen del panel es la excepción —va al
-    // de salida— y la swapchain NO se toca.
+    // Everything internal is at render size: depth, scene, bloom,
+    // occlusion, history and the LDR. The panel image is the exception (it goes at
+    // the output size) and the swapchain is NOT touched.
     waitForGpu();
     width     = wanted;
     height    = wantedH;
@@ -4994,8 +4994,8 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
         return;
     }
     if (!shadowMapArrayAllocation) {
-        // Todavia no hay pase de sombras: se cogera el tamano al crearlo. NO se
-        // limpia lo pendiente, para que se aplique en cuanto exista.
+        // There is no shadow pass yet: the size will be taken when it is created. The pending value is NOT
+        // cleared, so it gets applied as soon as it exists.
         diagLog("shadow: resize a " + std::to_string(pendingShadowMapSize) +
                 " deferred, there is no map yet.");
         return;
@@ -5005,9 +5005,9 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
             std::to_string(pendingShadowMapSize) + " (" + std::to_string(objects.size()) +
             " objects, " + std::to_string(skinnedObjects.size()) + " characters).");
 
-    // El mapa puede estar en el frame anterior. Es un ajuste de calidad que se
-    // toca de uvas a peras, asi que esperar sale mas barato que llevar borrado
-    // diferido para esto.
+    // The map may be in the previous frame. It is a quality setting that gets
+    // touched once in a blue moon, so waiting is cheaper than carrying a
+    // deferred delete for this.
     waitForGpu();
 
     shadowMapSize        = pendingShadowMapSize;
@@ -5038,8 +5038,8 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
                                             nullptr),
                   "D3D12MA::Allocator::CreateResource(shadow map, resize)");
 
-    // El heap de DSV no se rehace —sigue teniendo kShadowCascades huecos— pero
-    // las VISTAS cuelgan del recurso viejo, asi que hay que reescribirlas.
+    // The DSV heap is not redone (it still has kShadowCascades slots) but
+    // the VIEWS hang off the old resource, so they have to be rewritten.
     for (int cascade = 0; cascade < kShadowLayers; ++cascade) {
         D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
         dsvDesc.Format                         = DXGI_FORMAT_D32_FLOAT;
@@ -5052,9 +5052,9 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
         device->CreateDepthStencilView(shadowMapArrayAllocation->GetResource(), &dsvDesc, handle);
     }
 
-    // Y todos los t3, igual que hace createShadowResources al montarlo: el
-    // global y el de cada objeto y submalla ya cargados. Sin esto muestrean un
-    // recurso que acaba de morir.
+    // And all the t3, just as createShadowResources does when building it: the
+    // global one and that of each already loaded object and submesh. Without this they sample
+    // a resource that has just died.
     createShadowMapSrv(kSrvShadowMap);
     for (const StaticObject& object : objects)
         if (object.srvBase != kSrvBaseColor)
@@ -5064,8 +5064,8 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
             if (sub.srvBase != kSrvBaseColor)
                 createShadowMapSrv(sub.srvBase + 2);
 
-    // Del recurso, no de la variable: si esto no dice lo que se pidio, el que
-    // esta mal es el CreateResource de arriba y no el camino que llega hasta el.
+    // From the resource, not from the variable: if this does not say what was requested, the one
+    // that is wrong is the CreateResource above and not the path that leads to it.
     const D3D12_RESOURCE_DESC hecho = shadowMapArrayAllocation->GetResource()->GetDesc();
     diagLog("shadow: map rebuilt, " + std::to_string(hecho.Width) + "x" +
             std::to_string(hecho.Height) + ", " + std::to_string(hecho.DepthOrArraySize) +
@@ -5078,8 +5078,8 @@ void D3D12Renderer::Impl::applyPendingSampleCount()
     if (wanted == sampleCount)
         return;
 
-    // Cambia el número de muestras de los targets Y de todos los pipelines que
-    // dibujan en ellos: hay que esperar a que la GPU suelte los viejos.
+    // Changes the number of samples of the targets AND of all the pipelines that
+    // draw into them: the GPU has to be waited on to release the old ones.
     waitForGpu();
     sampleCount = wanted;
 
@@ -5088,20 +5088,20 @@ void D3D12Renderer::Impl::applyPendingSampleCount()
     createSkinningPipelines();
     createGizmoPipeline();
     createSkyboxPipelineOnly();
-    // Los canvas de MUNDO también dibujan en el target de la escena, así que sus
-    // dos PSO llevan su SampleDesc. Es la ÚNICA ruta de recreación que les
-    // afecta: un cambio de tamaño (applyPendingResize/applyPendingRenderSize)
-    // mueve los recursos pero no las muestras, y en D3D12 un PSO no está atado a
-    // ningún objeto de render pass. Olvidarla dejaría los dos compilados para
-    // otro número de muestras: device lost al usarlos, sin un solo aviso.
+    // The WORLD canvases also draw into the scene target, so their
+    // two PSOs carry their SampleDesc. It is the ONLY recreation path that
+    // affects them: a size change (applyPendingResize/applyPendingRenderSize)
+    // moves the resources but not the samples, and in D3D12 a PSO is not tied to
+    // any render pass object. Forgetting it would leave both compiled for
+    // another sample count: device lost when using them, without a single warning.
     createUiWorldPipelines();
 }
 
 void D3D12Renderer::Impl::createForwardPlusPipelines()
 {
-    // t0 parámetros, t1 luces, u2 celdas, u3 índices, t4 profundidad, u5
-    // estadísticas. Los buffers van como root SRV/UAV —son ByteAddressBuffer y
-    // no necesitan descriptor— y la profundidad, que sí es textura, en tabla.
+    // t0 parameters, t1 lights, u2 cells, u3 indices, t4 depth, u5
+    // statistics. The buffers go as root SRV/UAV (they are ByteAddressBuffers and
+    // need no descriptor) and the depth, which is a texture, in a table.
     D3D12_DESCRIPTOR_RANGE depthRange{};
     depthRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     depthRange.NumDescriptors     = 1;
@@ -5175,8 +5175,8 @@ void D3D12Renderer::Impl::ensureForwardPlusGrid(uint32_t cells)
     if (cells == 0 || cells == fpCellCount)
         return;
 
-    // Los de salida se rehacen: su tamaño depende de la rejilla, y la rejilla
-    // del tamaño de la ventana y del modo.
+    // The output ones are redone: their size depends on the grid, and the grid
+    // on the window size and the mode.
     waitForGpu();
     for (auto** allocation : {&fpCellsAllocation, &fpIndicesAllocation, &fpStatsAllocation}) {
         if (*allocation) {
@@ -5207,9 +5207,9 @@ void D3D12Renderer::Impl::updateForwardPlus()
 
     ensureForwardPlusGrid(gridX * gridY * gridZ);
 
-    // zNear y zFar salen de la propia proyección (RH_ZO): p22 = f/(n-f) y
-    // p32 = f*n/(n-f). Sacarlos de ahí es lo que mantiene la rejilla pegada a
-    // la cámara que se esté usando, sin duplicar sus planos en otro sitio.
+    // zNear and zFar come from the projection itself (RH_ZO): p22 = f/(n-f) and
+    // p32 = f*n/(n-f). Taking them from there is what keeps the grid attached to
+    // the camera being used, without duplicating its planes elsewhere.
     const glm::mat4 proj  = cameraProj();
     const float     p22   = proj[2][2];
     const float     p32   = proj[3][2];
@@ -5229,7 +5229,7 @@ void D3D12Renderer::Impl::updateForwardPlus()
     fp.numLights  = count;
     fp.zNear      = zNear;
     fp.zFar       = zFar;
-    // Inverso del reparto logarítmico del culling clustered:
+    // Inverse of the logarithmic split of clustered culling:
     // slice = log2(z) * scale + bias.
     const float logRatio = std::log2((std::max)(zFar / zNear, 1.0001f));
     fp.sliceScale        = static_cast<float>(gridZ) / logRatio;
@@ -5241,10 +5241,10 @@ void D3D12Renderer::Impl::updateForwardPlus()
         for (uint32_t i = 0; i < count; ++i) {
             const ShaderLight& light = sceneLights[i];
             const glm::vec3    world(light.position[0], light.position[1], light.position[2]);
-            // El radio no viaja en la luz del UBO. Mismo criterio que
-            // ForwardPlusPass en Vulkan: el que mande el llamante para ESTA luz,
-            // y si no lo hay, el global de RendererState —que es el que edita el
-            // slider "Light radius" del panel Forward+—.
+            // The radius does not travel in the UBO light. Same criterion as
+            // ForwardPlusPass in Vulkan: the one the caller sends for THIS light,
+            // and if there is none, the global one from RendererState (which is the one edited by the
+            // "Light radius" slider of the Forward+ panel).
             const float radius = (i < lightRadii.size()) ? lightRadii[i]
                                                          : state->forwardPlusLightRadius();
             const glm::vec3 view = glm::vec3(cameraView * glm::vec4(world, 1.0f));
@@ -5273,34 +5273,34 @@ void D3D12Renderer::Impl::recordForwardPlusCull()
     const uint32_t gridY    = (height + tileSize - 1) / tileSize;
     const uint32_t gridZ    = clustered ? kFpClusterSlices : 1u;
 
-    // El tiled reduce la profundidad del tile leyéndola; el clustered no la
-    // lee. Pero eso es lo que hace el SHADER: este código la necesita igual en
-    // los dos modos, porque la transiciona dos veces —la barrera de aquí abajo
-    // y su inversa en toScene[2]— y bindea kSrvPrepassDepth en la tabla 6 sin
-    // mirar el modo. Por eso la guarda no puede dejar pasar al clustered.
+    // Tiled reduces the tile's depth by reading it; clustered does not
+    // read it. But that is what the SHADER does: this code needs it just the same in
+    // both modes, because it transitions it twice (the barrier down here
+    // and its inverse in toScene[2]) and binds kSrvPrepassDepth in table 6 without
+    // looking at the mode. That is why the guard cannot let clustered through.
     //
-    // Hoy no se alcanza: init() llama a createSsaoTargets() sin condición y el
-    // único sitio que suelta el recurso sin recrearlo es shutdown(). Se
-    // endurece porque la guarda anterior afirmaba lo contrario de lo que el
-    // cuerpo hace, y esa contradicción es la que se cobra la pieza el día que
-    // los targets del SSAO se creen solo con el efecto encendido.
+    // Today it is not reached: init() calls createSsaoTargets() unconditionally and the
+    // only place that releases the resource without recreating it is shutdown(). It is
+    // hardened because the previous guard claimed the opposite of what the
+    // body does, and that contradiction is what bills the piece the day
+    // the SSAO targets are created only with the effect on.
     if (!prepassDepthAllocation)
         return;
 
-    // Las del ultimo frame que uso este slot, ANTES de sobrescribirlas. El
-    // slot ya paso por moveToNextFrame, que espero su fence, asi que lo que hay
-    // esta completo. Mismo criterio y mismo desfase que readTimestamps.
+    // Those of the last frame that used this slot, BEFORE overwriting them. The
+    // slot already went through moveToNextFrame, which waited on its fence, so what is there
+    // is complete. Same criterion and same lag as readTimestamps.
     //
-    // [0] luces repartidas, [1] celdas con alguna luz, [2] celdas desbordadas:
-    // el mismo layout que lee el camino de Vulkan en ForwardPlusPass.
+    // [0] lights distributed, [1] cells with any light, [2] overflowed cells:
+    // the same layout the Vulkan path reads in ForwardPlusPass.
     if (fpStatsMapped) {
         const uint32_t* s = fpStatsMapped + static_cast<size_t>(frameIndex) * kFpStatsWords;
         fpAvgPerCell      = (s[1] > 0) ? static_cast<float>(s[0]) / static_cast<float>(s[1]) : 0.0f;
         fpOverflowCells   = s[2];
     }
 
-    // A cero antes del dispatch: el shader ACUMULA con atomicAdd, asi que sin
-    // esto la cuenta seria la de toda la sesion.
+    // To zero before the dispatch: the shader ACCUMULATES with atomicAdd, so without
+    // this the count would be that of the whole session.
     if (fpStatsZeros) {
         D3D12_RESOURCE_BARRIER toCopy{};
         toCopy.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -5370,14 +5370,14 @@ void D3D12Renderer::Impl::recordForwardPlusCull()
     depthTable.ptr += static_cast<UINT64>(kSrvPrepassDepth) * srvSize;
     commandList->SetComputeRootDescriptorTable(6, depthTable);
 
-    // Un grupo por celda: el tiled tiene un hilo por píxel del tile (16x16) y el
-    // clustered reparte 4x4x4 celdas por grupo.
+    // One group per cell: tiled has one thread per pixel of the tile (16x16) and
+    // clustered distributes 4x4x4 cells per group.
     if (clustered)
         commandList->Dispatch((gridX + 3) / 4, (gridY + 3) / 4, (gridZ + 3) / 4);
     else
         commandList->Dispatch(gridX, gridY, 1);
 
-    // Y a la region de lectura de ESTE slot, para leerla cuando vuelva a tocar.
+    // And to THIS slot's read region, to read it when its turn comes around again.
     if (fpStatsReadback) {
         D3D12_RESOURCE_BARRIER toSrc{};
         toSrc.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -5396,8 +5396,8 @@ void D3D12Renderer::Impl::recordForwardPlusCull()
         commandList->ResourceBarrier(1, &toSrc);
     }
 
-    // Las listas pasan a lectura del pase de escena, y la profundidad vuelve a
-    // escritura para el frame siguiente.
+    // The lists move to read for the scene pass, and the depth goes back to
+    // write for the next frame.
     D3D12_RESOURCE_BARRIER toScene[3]{};
     toScene[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     toScene[0].Transition.pResource   = fpCellsAllocation->GetResource();
@@ -5417,8 +5417,8 @@ void D3D12Renderer::Impl::recordForwardPlusCull()
 
 void D3D12Renderer::Impl::createTaaPipeline()
 {
-    // t0 la imagen del frame, t1 el historial, t2 la profundidad. Cada una en
-    // su tabla: viven en huecos del heap que no son contiguos.
+    // t0 the frame's image, t1 the history, t2 the depth. Each in
+    // its own table: they live in heap slots that are not contiguous.
     D3D12_DESCRIPTOR_RANGE ranges[3]{};
     for (UINT i = 0; i < 3; ++i) {
         ranges[i].RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -5437,8 +5437,8 @@ void D3D12Renderer::Impl::createTaaPipeline()
         params[1 + i].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
     }
 
-    // La imagen y el historial se filtran —la reproyección cae entre píxeles—;
-    // la profundidad no.
+    // The image and the history are filtered (the reprojection lands between pixels);
+    // the depth is not.
     D3D12_STATIC_SAMPLER_DESC samplers[3]{};
     for (UINT i = 0; i < 3; ++i) {
         samplers[i].Filter = (i == 2) ? D3D12_FILTER_MIN_MAG_MIP_POINT
@@ -5477,8 +5477,8 @@ void D3D12Renderer::Impl::createTaaPipeline()
     const std::vector<char> vertexShader = readBinaryFile("shaders/fullscreen.vert.dxil");
     const std::vector<char> pixelShader  = readBinaryFile("shaders/taa.frag.dxil");
 
-    // Dos destinos: el backbuffer y el historial de este frame, que es lo que
-    // leerá el siguiente. El shader escribe los dos en la misma pasada.
+    // Two destinations: the backbuffer and this frame's history, which is what
+    // the next one will read. The shader writes both in the same pass.
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
     psoDesc.pRootSignature        = taaRootSignature.Get();
     psoDesc.VS                    = {vertexShader.data(), vertexShader.size()};
@@ -5525,7 +5525,7 @@ void D3D12Renderer::Impl::recordTaa(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv)
     transition(taaHistoryAllocations[writeIndex]->GetResource(),
                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-    // Después de la transición, que es donde DiscardResource lo quiere.
+    // After the transition, which is where DiscardResource wants it.
     estrenarRenderTarget(taaHistoryAllocations[writeIndex]->GetResource(),
                          taaHistoryInicializada[writeIndex]);
 
@@ -5538,8 +5538,8 @@ void D3D12Renderer::Impl::recordTaa(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv)
     const D3D12_CPU_DESCRIPTOR_HANDLE targets[2] = {backBufferRtv, historyRtv};
     commandList->OMSetRenderTargets(2, targets, FALSE, nullptr);
 
-    // Altura negativa por lo mismo que la composición: fullscreen.vert saca la
-    // uv del NDC dando por hecho la orientación de Vulkan.
+    // Negative height for the same reason as the composition: fullscreen.vert derives the
+    // uv from NDC assuming the Vulkan orientation.
     D3D12_VIEWPORT viewport{};
     viewport.TopLeftY = static_cast<float>(height);
     viewport.Width    = static_cast<float>(width);
@@ -5555,9 +5555,9 @@ void D3D12Renderer::Impl::recordTaa(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv)
     commandList->SetGraphicsRootSignature(taaRootSignature.Get());
 
     TaaPush push{};
-    // Del clip de ESTE frame al del anterior, las dos sin jitter: el
-    // desplazamiento de subpíxel es ruido de muestreo, no movimiento de cámara,
-    // y meterlo aquí arrastraría el historial.
+    // From THIS frame's clip to the previous one's, both without jitter: the
+    // subpixel offset is sampling noise, not camera motion,
+    // and putting it in here would drag the history along.
     push.reproject    = taaPrevViewProj * glm::inverse(taaCurrViewProj);
     push.invRes       = glm::vec2(1.0f / static_cast<float>(width),
                                   1.0f / static_cast<float>(height));
@@ -5582,7 +5582,7 @@ void D3D12Renderer::Impl::recordTaa(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv)
     transition(readableDepth(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                readableDepthState());
 
-    // El historial de este frame es el que leerá el siguiente.
+    // This frame's history is the one the next will read.
     taaHistoryIndex = readIndex;
     taaHistoryValid = true;
 }
@@ -5621,8 +5621,8 @@ void D3D12Renderer::Impl::createSsrPipelines()
     params[3].DescriptorTable.NumDescriptorRanges = 1;
     params[3].DescriptorTable.pDescriptorRanges   = &outputRange;
 
-    // s0 filtra —el rayo cae entre píxeles de la escena— y s1 no: interpolar
-    // dos profundidades de superficies distintas da un valor que no existe.
+    // s0 filters (the ray lands between scene pixels) and s1 does not: interpolating
+    // two depths from different surfaces gives a value that does not exist.
     D3D12_STATIC_SAMPLER_DESC samplers[2]{};
     samplers[0].Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     samplers[1].Filter         = D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -5698,9 +5698,9 @@ void D3D12Renderer::Impl::recordSsr()
     push.maxDistance = state->ssrMaxDistance();
     push.thickness   = state->ssrThickness();
     push.maxSteps    = state->ssrMaxSteps();
-    // El refinado no tiene ajuste propio en el estado compartido: son pasos de
-    // bisección sobre el último tramo, y con menos de cuatro el borde del
-    // reflejo se escalona.
+    // Refinement has no setting of its own in the shared state: they are bisection
+    // steps over the last segment, and with fewer than four the reflection's edge
+    // gets stair-stepped.
     push.refineSteps = 5;
     push.edgeFade    = state->ssrEdgeFade();
     push.intensity   = state->ssrIntensity();
@@ -5711,8 +5711,8 @@ void D3D12Renderer::Impl::recordSsr()
     ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
     commandList->SetDescriptorHeaps(1, heaps);
 
-    // Trazado: la escena ya dibujada como textura, la profundidad del pase de
-    // escena (la completa, no la del pre-pase) y el destino propio.
+    // Trace: the already drawn scene as a texture, the scene pass depth
+    // (the full one, not the pre-pass's) and the own destination.
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     transition(readableDepth(), readableDepthState(),
@@ -5726,8 +5726,8 @@ void D3D12Renderer::Impl::recordSsr()
     commandList->SetComputeRootDescriptorTable(3, gpuHandle(kUavSsr));
     commandList->Dispatch(groupsX, groupsY, 1);
 
-    // Resolve: el reflejo se suma sobre la escena, que vuelve a ser destino de
-    // escritura.
+    // Resolve: the reflection is added onto the scene, which becomes a write
+    // destination again.
     transition(ssrAllocation->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -5740,8 +5740,8 @@ void D3D12Renderer::Impl::recordSsr()
     commandList->SetComputeRootDescriptorTable(3, gpuHandle(kUavSceneHdr));
     commandList->Dispatch(groupsX, groupsY, 1);
 
-    // Y todo como estaba: la niebla, que va detrás, espera encontrar la escena
-    // como render target y la profundidad en escritura.
+    // And everything as it was: the fog, which comes after, expects to find the scene
+    // as a render target and the depth in write state.
     transition(ssrAllocation->GetResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -5752,16 +5752,16 @@ void D3D12Renderer::Impl::recordSsr()
 
 bool D3D12Renderer::Impl::motionBlurActive() const
 {
-    // Menos de dos taps no promedia nada: el resultado sería el píxel central y
-    // la copia de vuelta escribiría la misma imagen con el coste de un dispatch
-    // entero.
+    // Fewer than two taps average nothing: the result would be the center pixel and
+    // the copy back would write the same image at the cost of an entire
+    // dispatch.
     return state->motionBlurEnabled() && state->motionBlurSamples() >= 2;
 }
 
 void D3D12Renderer::Impl::createMotionBlurPipeline()
 {
-    // Mismo reparto que el SSR: la escena en t0, la profundidad en t1 y el
-    // destino en u2, que es como spirv-cross traduce los bindings 0, 1 y 2 del
+    // Same layout as SSR: the scene in t0, the depth in t1 and the
+    // destination in u2, which is how spirv-cross translates bindings 0, 1 and 2 of
     // set 0.
     D3D12_DESCRIPTOR_RANGE sceneRange{};
     sceneRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -5795,9 +5795,9 @@ void D3D12Renderer::Impl::createMotionBlurPipeline()
     params[3].DescriptorTable.NumDescriptorRanges = 1;
     params[3].DescriptorTable.pDescriptorRanges   = &outputRange;
 
-    // s0 filtra —los taps caen entre píxeles— y s1 no: interpolar dos
-    // profundidades de superficies distintas da un valor que no existe. CLAMP
-    // para que un tap del borde no traiga color del lado opuesto.
+    // s0 filters (the taps land between pixels) and s1 does not: interpolating two
+    // depths from different surfaces gives a value that does not exist. CLAMP
+    // so that an edge tap does not bring color from the opposite side.
     D3D12_STATIC_SAMPLER_DESC samplers[2]{};
     samplers[0].Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     samplers[1].Filter         = D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -5863,9 +5863,9 @@ void D3D12Renderer::Impl::recordMotionBlur()
     };
 
     MotionBlurPush push{};
-    // La MISMA matriz que reproyecta el TAA: clip de este frame (sin jitter) →
-    // clip del anterior. Las dos view-proj se actualizan todos los frames, esté
-    // el TAA activo o no.
+    // The SAME matrix TAA reprojects with: this frame's clip (without jitter) ->
+    // the previous frame's clip. Both view-projs are updated every frame, whether
+    // TAA is active or not.
     push.reproject = taaPrevViewProj * glm::inverse(taaCurrViewProj);
     push.invRes    = glm::vec2(1.0f / static_cast<float>(width), 1.0f / static_cast<float>(height));
     push.intensity = state->motionBlurIntensity();
@@ -5888,8 +5888,8 @@ void D3D12Renderer::Impl::recordMotionBlur()
     commandList->SetComputeRootDescriptorTable(3, gpuHandle(kUavMotionBlur));
     commandList->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
 
-    // La copia de vuelta, y no un segundo dispatch: es una copia 1:1 de la
-    // imagen entera, que es lo que mejor hace el hardware.
+    // The copy back, and not a second dispatch: it is a 1:1 copy of the
+    // whole image, which is what the hardware does best.
     transition(motionBlurAllocation->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                D3D12_RESOURCE_STATE_COPY_SOURCE);
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -5898,8 +5898,8 @@ void D3D12Renderer::Impl::recordMotionBlur()
     commandList->CopyResource(hdrAllocation->GetResource(),
                               motionBlurAllocation->GetResource());
 
-    // Y todo como estaba: el bloom espera encontrar la escena como render target
-    // y la profundidad en escritura.
+    // And everything as it was: the bloom expects to find the scene as a render target
+    // and the depth in write state.
     transition(motionBlurAllocation->GetResource(), D3D12_RESOURCE_STATE_COPY_SOURCE,
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_COPY_DEST,
@@ -5929,9 +5929,9 @@ void D3D12Renderer::Impl::createSsaoPipelines()
                       "ID3D12Device::CreateRootSignature");
     };
 
-    // ── Pre-pase de profundidad ───────────────────────────────────────────
-    // depth_prepass.vert declara el UBO recortado a view y proj —std140 los
-    // deja en los mismos offsets—, y saca el model del buffer de instancias.
+    // ── Depth pre-pass ────────────────────────────────────────────────────
+    // depth_prepass.vert declares the UBO trimmed to view and proj (std140 leaves
+    // them at the same offsets), and takes the model from the instance buffer.
     {
         D3D12_ROOT_PARAMETER params[2]{};
         params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -5952,9 +5952,9 @@ void D3D12Renderer::Impl::createSsaoPipelines()
 
     const std::vector<char> prepassVs = readBinaryFile("shaders/depth_prepass.vert.dxil");
 
-    // Solo la posición: el shader no lee nada más, y así el mismo VS sirve para
-    // los vértices del motor y para los que escribe el skinning, que difieren
-    // en el tamaño de cada vértice pero no en dónde empieza.
+    // Only the position: the shader reads nothing else, and this way the same VS serves
+    // the engine's vertices and those written by the skinning, which differ
+    // in the size of each vertex but not in where it starts.
     D3D12_INPUT_ELEMENT_DESC positionOnly[] = {
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
          0},
@@ -5983,7 +5983,7 @@ void D3D12Renderer::Impl::createSsaoPipelines()
         device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&depthPrepassSkinnedPipeline)),
         "ID3D12Device::CreateGraphicsPipelineState(skinned prepass)");
 
-    // ── Los dos compute ───────────────────────────────────────────────────
+    // ── The two computes ──────────────────────────────────────────────────
     {
         D3D12_DESCRIPTOR_RANGE inputRange{};
         inputRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -6008,8 +6008,8 @@ void D3D12Renderer::Impl::createSsaoPipelines()
         params[2].DescriptorTable.NumDescriptorRanges = 1;
         params[2].DescriptorTable.pDescriptorRanges   = &outputRange;
 
-        // La profundidad se muestrea sin filtrar: interpolar dos profundidades
-        // de superficies distintas da un valor que no está en ninguna.
+        // The depth is sampled unfiltered: interpolating two depths
+        // from different surfaces gives a value that is in neither.
         D3D12_STATIC_SAMPLER_DESC sampler{};
         sampler.Filter         = D3D12_FILTER_MIN_MAG_MIP_POINT;
         sampler.AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -6052,8 +6052,8 @@ void D3D12Renderer::Impl::createSsaoTargets()
 {
     releaseSsaoTargets();
 
-    // Profundidad propia del pre-pase. TYPELESS porque el mismo recurso se
-    // escribe como profundidad y se lee como textura.
+    // The pre-pass's own depth. TYPELESS because the same resource is
+    // written as depth and read as a texture.
     {
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -6086,8 +6086,8 @@ void D3D12Renderer::Impl::createSsaoTargets()
                            kSrvPrepassDepth);
     }
 
-    // Mapa crudo y emborronado, a resolución completa como en Vulkan: pbr.frag
-    // lo muestrea por coordenada de pantalla y da por hecho que es 1:1.
+    // Raw and blurred map, at full resolution as in Vulkan: pbr.frag
+    // samples it by screen coordinate and takes for granted that it is 1:1.
     auto createAoTarget = [&](UINT uavIndex, int srvIndex) {
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -6125,15 +6125,15 @@ void D3D12Renderer::Impl::createSsaoTargets()
     ssaoRawAllocation  = createAoTarget(kUavSsaoRaw, kSrvSsaoRaw);
     ssaoBlurAllocation = createAoTarget(kUavSsaoBlur, -1);
 
-    // Y t7 de cada bloque, por writeAoSlot y NO apuntando al mapa a pelo: con el
-    // SSAO apagado ese mapa no se escribe nunca y vale cero, que multiplicado al
-    // ambiente lo apaga entero. Esto corre al arrancar y en CADA redimensionado,
-    // así que ponerlo a mano dejaba los bloques en un estado que no se
-    // correspondía con el interruptor.
+    // And t7 of each block, through writeAoSlot and NOT pointing at the map bare: with
+    // SSAO off that map is never written and is zero, which multiplied into the
+    // ambient turns it off entirely. This runs at startup and on EVERY resize,
+    // so setting it by hand left the blocks in a state that did not
+    // match the switch.
     //
-    // El bloque GLOBAL entra aquí: es el único que no pasa por fillSharedSlots,
-    // y es el que usa el suelo del motor —el que se dibuja cuando la escena no
-    // trae mallas—. Sin esto, ese suelo salía NEGRO tapando el cielo.
+    // The GLOBAL block comes in here: it is the only one that does not go through fillSharedSlots,
+    // and it is the one used by the engine's ground (the one drawn when the scene
+    // has no meshes). Without this, that ground came out BLACK covering the sky.
     writeAoSlot(kSrvBaseColor);
     for (const StaticObject& object : objects)
         if (object.srvBase != kSrvBaseColor)
@@ -6143,27 +6143,27 @@ void D3D12Renderer::Impl::createSsaoTargets()
             if (sub.srvBase != kSrvBaseColor)
                 writeAoSlot(sub.srvBase);
 
-    // Y el estado que consulta refreshAoSlots para saber si hay algo que
-    // cambiar: sin esto se quedaría creyendo que los bloques dicen otra cosa.
+    // And the state that refreshAoSlots queries to know whether there is anything to
+    // change: without this it would keep believing the blocks say something else.
     aoSlotsUseMap = state->ssaoEnabled() && ssaoBlurAllocation != nullptr;
 }
 
 void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
 {
-    // La profundidad del pre-pase tiene cuatro clientes: la oclusión, el
-    // reparto de luces por tile, y —cuando la del pase de escena es
-    // multimuestra y no se puede muestrear— la niebla y los reflejos. Se graba
-    // si la quiere alguno; los dos dispatch de oclusión siguen atados al SSAO.
+    // The pre-pass depth has four clients: occlusion, the per-tile
+    // light split, and (when the scene pass one is
+    // multisampled and cannot be sampled) the fog and the reflections. It is recorded
+    // if any of them wants it; the two occlusion dispatches stay tied to SSAO.
     if (!prepassDepthAllocation)
         return;
 
     const bool wantsSsao = state->ssaoEnabled();
     const bool wantsCull = state->forwardPlusMode() == RendererState::FpMode::Tiled;
-    // Con MSAA, el contorno de la selección también la necesita: la del pase de
-    // escena es multimuestra y no se puede emparejar con el target LDR sobre el
-    // que se dibuja.
-    // El motion blur es el quinto cliente: reproyecta esta misma profundidad al
-    // frame anterior para sacar la velocidad de cada píxel.
+    // With MSAA, the selection outline also needs it: the scene pass one
+    // is multisampled and cannot be paired with the LDR target it
+    // is drawn onto.
+    // Motion blur is the fifth client: it reprojects this same depth to the
+    // previous frame to get each pixel's velocity.
     const bool wantsMultisampleDepth =
         sampleCount > 1 &&
         (state->fogEnabled() || state->ssrEnabled() || hasOutlineSelection() ||
@@ -6182,7 +6182,7 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
         ssaoBlurNeedsUav = false;
     }
 
-    // ── 1. Profundidad ────────────────────────────────────────────────────
+    // ── 1. Depth ──────────────────────────────────────────────────────────
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = prepassDsvHeap->GetCPUDescriptorHandleForHeapStart();
     commandList->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
     commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -6200,7 +6200,7 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
         0, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    // Mismo reparto que el de sombras: los dos quieren todo lo visible.
+    // Same split as the shadow one: both want everything visible.
     if (!shadowBatches.empty() && sceneInstanceAllocations[frameIndex]) {
         commandList->SetPipelineState(depthPrepassPipeline.Get());
         for (const Batching::InstanceBatch& batch : shadowBatches) {
@@ -6228,11 +6228,11 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
     }
 
     if (!wantsSsao) {
-        // Solo hacía falta la profundidad: los demás la leen por su cuenta.
+        // Only the depth was needed: the others read it on their own.
         return;
     }
 
-    // ── 2. Oclusión ───────────────────────────────────────────────────────
+    // ── 2. Occlusion ──────────────────────────────────────────────────────
     D3D12_RESOURCE_BARRIER depthToRead{};
     depthToRead.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     depthToRead.Transition.pResource   = prepassDepthAllocation->GetResource();
@@ -6251,16 +6251,16 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
         return handle;
     };
 
-    // Los cuatro coeficientes con los que el shader reconstruye la posición en
-    // view space, sacados de la proyección de ESTE frame.
+    // The four coefficients with which the shader reconstructs the position in
+    // view space, taken from THIS frame's projection.
     //
-    // SIN el Y-flip que sí lleva el camino de Vulkan, y da igual: este pase no
-    // sale de espacio de pantalla —reconstruye y reproyecta con el MISMO p11—,
-    // así que el signo se cancela. Verificado comparando las dos imágenes.
-    // La explicación completa está en ssao.comp.
+    // WITHOUT the Y-flip that the Vulkan path does carry, and it does not matter: this pass does not
+    // leave screen space (it reconstructs and reprojects with the SAME p11),
+    // so the sign cancels out. Verified by comparing the two images.
+    // The full explanation is in ssao.comp.
     //
-    // Ojo con generalizarlo: la niebla sí sale a mundo con la matriz completa y
-    // allí la inversión hay que meterla a mano (ver recordFog).
+    // Careful about generalizing it: the fog does go out to world with the full matrix and
+    // there the inversion has to be added by hand (see recordFog).
     const glm::mat4 proj = cameraProj();
     SsaoPush        push{};
     push.projParams = glm::vec4(proj[0][0], proj[1][1], proj[2][2], proj[3][2]);
@@ -6279,7 +6279,7 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
     commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavSsaoRaw));
     commandList->Dispatch(groupsX, groupsY, 1);
 
-    // El crudo pasa a entrada del blur.
+    // The raw one becomes the blur's input.
     D3D12_RESOURCE_BARRIER rawToRead{};
     rawToRead.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     rawToRead.Transition.pResource   = ssaoRawAllocation->GetResource();
@@ -6294,8 +6294,8 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
     commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavSsaoBlur));
     commandList->Dispatch(groupsX, groupsY, 1);
 
-    // Y a leerlo el pase de escena. Los tres vuelven a su estado de partida
-    // para que el frame siguiente encuentre lo mismo que este.
+    // And for the scene pass to read it. All three go back to their starting state
+    // so the next frame finds the same as this one.
     D3D12_RESOURCE_BARRIER toScene[3]{};
     toScene[0] = rawToRead;
     std::swap(toScene[0].Transition.StateBefore, toScene[0].Transition.StateAfter);
@@ -6310,8 +6310,8 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
     std::swap(toScene[2].Transition.StateBefore, toScene[2].Transition.StateAfter);
     commandList->ResourceBarrier(3, toScene);
 
-    // El emborronado se queda como lectura durante el pase de escena; el frame
-    // siguiente lo devuelve a escritura antes de volver a dispararlo.
+    // The blur stays as read during the scene pass; the next frame
+    // returns it to write before dispatching it again.
     ssaoBlurNeedsUav = true;
 }
 
@@ -6331,12 +6331,12 @@ void D3D12Renderer::Impl::bindForwardPlus()
 
 void D3D12Renderer::Impl::recordSkybox()
 {
-    // En alambre el cielo sobra: taparía la geometría que se quiere ver por
-    // dentro, y el camino de Vulkan también lo omite.
+    // In wireframe the sky is unnecessary: it would cover the geometry one wants to see
+    // from inside, and the Vulkan path omits it too.
     if (!skyboxPipeline || state->isWireframeMode())
         return;
 
-    // La vista SIN traslación: el cielo no se acerca al andar, solo gira.
+    // The view WITHOUT translation: the sky does not get closer when walking, it only rotates.
     const glm::mat4 rotView     = glm::mat4(glm::mat3(cameraView));
     const glm::mat4 invViewProj = glm::inverse(cameraProj() * rotView);
 
@@ -6375,11 +6375,11 @@ void D3D12Renderer::Impl::createFogAndFxaaPipelines()
                       "ID3D12Device::CreateRootSignature");
     };
 
-    // ── Niebla ──────────────────────────────────────────────────────────────
-    // u0 = escena (lectura y escritura), t1 = profundidad, t3 = sombras,
-    // b2 = el mismo UBO de escena. Su cbuffer declara hasta lights —necesita el
-    // TIPO de la luz key para saber cómo muestrear el shadow map— y para en
-    // seco, pero los offsets son los mismos, así que se enlaza el buffer entero.
+    // ── Fog ─────────────────────────────────────────────────────────────────
+    // u0 = scene (read and write), t1 = depth, t3 = shadows,
+    // b2 = the same scene UBO. Its cbuffer declares up to lights (it needs the
+    // TYPE of the key light to know how to sample the shadow map) and stops
+    // dead, but the offsets are the same, so the whole buffer is bound.
     D3D12_DESCRIPTOR_RANGE fogHdrRange{};
     fogHdrRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     fogHdrRange.NumDescriptors     = 1;
@@ -6416,7 +6416,7 @@ void D3D12Renderer::Impl::createFogAndFxaaPipelines()
     fogParams[4].DescriptorTable.pDescriptorRanges   = &fogShadowRange;
 
     D3D12_STATIC_SAMPLER_DESC fogSamplers[2]{};
-    fogSamplers[0].Filter         = D3D12_FILTER_MIN_MAG_MIP_POINT;  // profundidad: sin filtrar
+    fogSamplers[0].Filter         = D3D12_FILTER_MIN_MAG_MIP_POINT;  // depth: unfiltered
     fogSamplers[0].AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     fogSamplers[0].AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     fogSamplers[0].AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -6507,11 +6507,11 @@ void D3D12Renderer::Impl::createFogAndFxaaPipelines()
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&fxaaPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(FXAA)");
 
-    // Bajada del SSAA: misma forma que el FXAA —triángulo de pantalla completa
-    // leyendo la imagen ya compuesta— pero con otro push y otro shader. La
-    // fuente es más grande que el destino y el shader promedia la huella de
-    // cada píxel; el sampler no basta, que solo miraría los cuatro texeles del
-    // centro.
+    // SSAA downsample: same shape as FXAA (a full-screen triangle
+    // reading the already composed image) but with another push and another shader. The
+    // source is larger than the destination and the shader averages each pixel's
+    // footprint; the sampler is not enough, as it would only look at the four
+    // center texels.
     D3D12_ROOT_PARAMETER ssaaParams[2]{};
     ssaaParams[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     ssaaParams[0].Constants.ShaderRegister = 0;
@@ -6539,22 +6539,22 @@ void D3D12Renderer::Impl::createFogAndFxaaPipelines()
 
 void D3D12Renderer::Impl::createUiPipeline()
 {
-    // Root signature: la ortográfica como root constants (b0) y el atlas en una
-    // tabla (t0). Todo lo demás —modo, grosor del contorno, colores— viaja por
-    // vértice, que es lo que permite que el texto caiga en el mismo lote que el
-    // panel que tiene detrás.
+    // Root signature: the orthographic as root constants (b0) and the atlas in a
+    // table (t0). Everything else (mode, outline thickness, colors) travels per
+    // vertex, which is what lets text land in the same batch as the
+    // panel behind it.
     D3D12_DESCRIPTOR_RANGE atlasRange{};
     atlasRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     atlasRange.NumDescriptors     = 1;
     atlasRange.BaseShaderRegister = 0;  // t0
 
-    // 17 dwords y no 16, y visibilidad ALL y no VERTEX: el bloque de push
-    // constants de ui.vert/ui.frag lleva ahora, detras de la mat4, un
-    // `int linearOutput` que lee el PIXEL shader (deshace la gamma cuando el
-    // destino es HDR lineal, que es el caso de los canvas de mundo en el pase de
-    // escena). El HLSL sale de traducir ese mismo GLSL con spirv-cross, asi que
-    // el cbuffer b0 tiene 17 dwords y lo usan las dos etapas; dejarlo en
-    // 16/VERTEX romperia la creacion del PSO contra esta root signature.
+    // 17 dwords and not 16, and ALL visibility and not VERTEX: the push
+    // constants block of ui.vert/ui.frag now carries, after the mat4, an
+    // `int linearOutput` read by the PIXEL shader (it undoes the gamma when the
+    // destination is linear HDR, which is the case of world canvases in the scene
+    // pass). The HLSL comes from translating that same GLSL with spirv-cross, so
+    // the b0 cbuffer has 17 dwords and both stages use it; leaving it at
+    // 16/VERTEX would break PSO creation against this root signature.
     D3D12_ROOT_PARAMETER params[2]{};
     params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[0].Constants.ShaderRegister = 0;  // b0
@@ -6597,12 +6597,12 @@ void D3D12Renderer::Impl::createUiPipeline()
     if (vs.empty() || ps.empty())
         return;
 
-    // El mismo UiVertex que arma el canvas: posición en píxeles, uv, color y los
-    // dos vec4 que llevan el modo y el contorno.
-    // Todas las semánticas son TEXCOORDn, incluida la posición: el HLSL sale de
-    // traducir el SPIR-V y spirv-cross nombra las entradas por su location, no
-    // por lo que signifiquen. Poner POSITION aquí crea el pipeline y deja el
-    // atributo sin enlazar.
+    // The same UiVertex that the canvas builds: position in pixels, uv, color and the
+    // two vec4 that carry the mode and the outline.
+    // All semantics are TEXCOORDn, including the position: the HLSL comes from
+    // translating the SPIR-V and spirv-cross names the inputs by their location, not
+    // by what they mean. Putting POSITION here creates the pipeline and leaves the
+    // attribute unbound.
     const D3D12_INPUT_ELEMENT_DESC layout[] = {
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(UiVertex, pos),
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -6632,8 +6632,8 @@ void D3D12Renderer::Impl::createUiPipeline()
     psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
     psoDesc.RasterizerState.DepthClipEnable = TRUE;
 
-    // Alfa recto, no premultiplicado: el shader devuelve el color sin
-    // multiplicar por el alfa, igual que en Vulkan.
+    // Straight alpha, not premultiplied: the shader returns the color without
+    // multiplying by alpha, just like in Vulkan.
     D3D12_RENDER_TARGET_BLEND_DESC& blend = psoDesc.BlendState.RenderTarget[0];
     blend.BlendEnable           = TRUE;
     blend.SrcBlend              = D3D12_BLEND_SRC_ALPHA;
@@ -6650,15 +6650,15 @@ void D3D12Renderer::Impl::createUiPipeline()
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&uiPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(UI 2D)");
 
-    // Y las de mundo, que se apoyan en la root signature recién creada.
+    // And the world ones, which rely on the root signature just created.
     createUiWorldPipelines();
 }
 
 void D3D12Renderer::Impl::createUiWorldPipelines()
 {
-    // Sin root signature no hay contra qué compilar: pasa si createUiPipeline()
-    // se rindió antes (shaders que no están, serialización fallida). No es un
-    // error, es que este backend se queda sin UI.
+    // Without a root signature there is nothing to compile against: it happens if createUiPipeline()
+    // gave up earlier (missing shaders, failed serialization). It is not an
+    // error, it is that this backend is left without UI.
     if (!uiRootSignature)
         return;
 
@@ -6667,8 +6667,8 @@ void D3D12Renderer::Impl::createUiWorldPipelines()
     if (vs.empty() || ps.empty())
         return;
 
-    // El MISMO layout de la de pantalla: los quads de un canvas de mundo salen
-    // del mismo buildDrawData, solo cambia la matriz que los proyecta.
+    // The SAME layout as the screen one: the quads of a world canvas come out of
+    // the same buildDrawData, only the matrix that projects them changes.
     const D3D12_INPUT_ELEMENT_DESC layout[] = {
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(UiVertex, pos),
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -6689,18 +6689,18 @@ void D3D12Renderer::Impl::createUiWorldPipelines()
     psoDesc.InputLayout           = {layout, _countof(layout)};
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets      = 1;
-    // Aquí está la diferencia con la de pantalla: el destino es el target de la
-    // ESCENA, que es HDR lineal, tiene profundidad y puede ser multimuestra. Un
-    // PSO con formatos o muestras que no casen con el target NO falla al
-    // crearse; se cae al usarlo.
+    // Here is the difference from the screen one: the destination is the SCENE target,
+    // which is linear HDR, has depth and can be multisampled. A
+    // PSO with formats or samples that do not match the target does NOT fail when
+    // created; it crashes when used.
     psoDesc.RTVFormats[0]         = kHdrFormat;
     psoDesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count      = sampleCount;
     psoDesc.SampleMask            = UINT_MAX;
 
     psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
-    // Sin descarte de caras: un canvas de mundo se puede mirar por detrás, y con
-    // billboard apagado eso es lo normal al rodearlo.
+    // No face culling: a world canvas can be viewed from behind, and with
+    // billboard off that is normal when walking around it.
     psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
     psoDesc.RasterizerState.DepthClipEnable = TRUE;
 
@@ -6714,16 +6714,16 @@ void D3D12Renderer::Impl::createUiWorldPipelines()
     blend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
     blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-    // La ESCRITURA de profundidad va apagada en las DOS variantes, a propósito:
-    // la UI va con alpha, y escribir depth haría que los quads de un mismo
-    // canvas se recortaran entre sí según el orden en que salieran del batcher.
+    // Depth WRITE is off in BOTH variants, on purpose:
+    // the UI uses alpha, and writing depth would make the quads of the same
+    // canvas clip each other depending on the order they leave the batcher.
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     psoDesc.DepthStencilState.StencilEnable  = FALSE;
 
-    // Se sueltan las viejas ANTES de compilar: esta función es también el
-    // "recreate" del cambio de muestras, y applyPendingSampleCount() ya esperó
-    // a que la GPU soltara los command lists que las usaban.
+    // The old ones are released BEFORE compiling: this function is also the
+    // "recreate" of the sample count change, and applyPendingSampleCount() already waited
+    // for the GPU to release the command lists that used them.
     uiWorldPipelineDepth.Reset();
     uiWorldPipelineNoDepth.Reset();
 
@@ -6741,9 +6741,9 @@ bool D3D12Renderer::Impl::createProbeResources(GpuProbe& probe)
     if (probe.srvBase == 0)
         return false;
 
-    // Un cubemap: seis capas de una textura 2D. CUBE lo dice la VISTA, no el
-    // recurso —para el compute es un array y para pbr.frag un TextureCube—, y
-    // por eso la misma imagen sirve para las dos cosas.
+    // A cubemap: six layers of a 2D texture. CUBE is stated by the VIEW, not the
+    // resource (for the compute it is an array and for pbr.frag a TextureCube), and
+    // that is why the same image serves for both things.
     auto createCube = [&](UINT size, UINT mips, D3D12_RESOURCE_STATES state,
                           D3D12_RESOURCE_FLAGS flags) -> D3D12MA::Allocation* {
         D3D12_RESOURCE_DESC desc{};
@@ -6766,8 +6766,8 @@ bool D3D12Renderer::Impl::createProbeResources(GpuProbe& probe)
         return allocation;
     };
 
-    // La captura es el destino de las seis pasadas de escena, así que nace como
-    // render target; las otras dos las escriben los compute.
+    // The capture is the destination of the six scene passes, so it is born as a
+    // render target; the other two are written by the computes.
     probe.captureAllocation =
         createCube(kProbeFaceSize, 1, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                    D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
@@ -6783,8 +6783,8 @@ bool D3D12Renderer::Impl::createProbeResources(GpuProbe& probe)
         return false;
     }
 
-    // Vistas de lectura: las tres como TextureCube, que es lo que muestrean el
-    // compute de convolución (la captura) y pbr.frag (las otras dos).
+    // Read views: all three as TextureCube, which is what the convolution
+    // compute (the capture) and pbr.frag (the other two) sample.
     createCubeSrv(probe.captureAllocation->GetResource(), kHdrFormat, 1,
                   probe.srvBase + kProbeCaptureSrv);
     createCubeSrv(probe.irradianceAllocation->GetResource(), kHdrFormat, 1,
@@ -6792,8 +6792,8 @@ bool D3D12Renderer::Impl::createProbeResources(GpuProbe& probe)
     createCubeSrv(probe.prefilterAllocation->GetResource(), kHdrFormat, kIblPrefilterMips,
                   probe.srvBase + kProbePrefilterSrv);
 
-    // Y las de escritura, como array 2D: un UAV para la irradiancia y uno por
-    // mip del prefiltrado.
+    // And the write ones, as a 2D array: one UAV for the irradiance and one per
+    // prefilter mip.
     auto createArrayUav = [&](ID3D12Resource* resource, UINT mip, UINT index) {
         D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
         uavDesc.Format                   = kHdrFormat;
@@ -6818,8 +6818,8 @@ bool D3D12Renderer::Impl::createProbeResources(GpuProbe& probe)
 
 void D3D12Renderer::Impl::syncProbes()
 {
-    // Camino rápido: sin escena o sin sondas por ningún lado no se toca nada.
-    // Es el caso de todas las escenas que no las usan.
+    // Fast path: with no scene or no probes anywhere nothing is touched.
+    // It is the case of all scenes that do not use them.
     if (!scene && probes.empty())
         return;
 
@@ -6842,8 +6842,8 @@ void D3D12Renderer::Impl::syncProbes()
     if (descs.empty() && probes.empty())
         return;
 
-    // Bajas: sondas cuyo GameObject ya no está. Se sueltan sus imágenes y su
-    // hueco del heap queda libre para la siguiente.
+    // Removals: probes whose GameObject is no longer there. Their images are released and their
+    // heap slot is left free for the next one.
     for (size_t i = probes.size(); i-- > 0;) {
         const uint64_t owner = probes[i].ownerId;
         const bool     alive =
@@ -6851,12 +6851,12 @@ void D3D12Renderer::Impl::syncProbes()
         if (alive)
             continue;
 
-        // ANTES de soltar sus imágenes: devolver al entorno global TODO lo que
-        // la miraba. Si no, quedarían descriptores apuntando a memoria liberada
-        // —y un SRV colgante no da error al crearse: mata el device después, sin
-        // decir de qué—. Se reescriben todos porque al borrar del vector los
-        // índices de las demás se desplazan, así que la asignación entera deja
-        // de valer; el refresco de más abajo la recompone.
+        // BEFORE releasing their images: return to the global environment EVERYTHING that
+        // looked at it. Otherwise, descriptors would be left pointing at freed memory
+        // (and a dangling SRV raises no error when created: it kills the device later, without
+        // saying which one). All of them are rewritten because when deleting from the vector the
+        // indices of the others shift, so the whole assignment
+        // stops being valid; the refresh below rebuilds it.
         for (const StaticObject& object : objects)
             writeProbeSlots(object.srvBase, -1);
         for (const SkinnedObject& character : skinnedObjects)
@@ -6864,29 +6864,29 @@ void D3D12Renderer::Impl::syncProbes()
                 writeProbeSlots(sub.srvBase, -1);
         probeAssignStatic.assign(objects.size(), -1);
         probeAssignSkinned.assign(skinnedObjects.size(), -1);
-        // La sonda entra en la clave del grupo de dibujo, y aquí se reasigna a
-        // mano sin pasar por refreshProbeAssignment: sin esto los grupos se
-        // quedarían partidos por una sonda que ya no existe. No se ve mal
-        // —todos los bloques vuelven al IBL global, así que cada grupo sigue
-        // siendo coherente—, pero son draws de más para siempre.
+        // The probe enters the draw group key, and here it is reassigned by
+        // hand without going through refreshProbeAssignment: without this the groups would
+        // stay split by a probe that no longer exists. It does not look wrong
+        // (all blocks go back to the global IBL, so each group is still
+        // coherent), but they are extra draws forever.
         drawGroupsDirty = true;
 
         releaseProbe(probes[i]);
         probes.erase(probes.begin() + static_cast<long>(i));
     }
 
-    // Altas y actualizaciones.
+    // Additions and updates.
     for (const Desc& desc : descs) {
         auto it = std::find_if(probes.begin(), probes.end(),
                                [&desc](const GpuProbe& p) { return p.ownerId == desc.id; });
         if (it == probes.end()) {
             if (probes.size() >= kMaxProbes)
-                continue;  // pasado el tope, esos objetos se quedan con el IBL global
+                continue;  // past the cap, those objects keep the global IBL
 
-            // El primer bloque LIBRE, no el que toque por tamaño de la lista:
-            // al borrar una sonda del medio el vector se compacta pero las
-            // demás conservan su bloque, así que contar sondas daría un hueco
-            // ya ocupado y las dos escribirían sobre los mismos descriptores.
+            // The first FREE block, not the one that falls out of the list size:
+            // when deleting a probe from the middle the vector is compacted but the
+            // others keep their block, so counting probes would give a slot
+            // already taken and both would write over the same descriptors.
             UINT slot = kMaxProbes;
             for (UINT candidate = 0; candidate < kMaxProbes; ++candidate) {
                 const UINT base = kSrvProbes + candidate * kSrvPerProbe;
@@ -6914,8 +6914,8 @@ void D3D12Renderer::Impl::syncProbes()
             continue;
         }
 
-        // Mover la sonda o cambiar su radio invalida lo horneado: lo que
-        // capturó era otra vista.
+        // Moving the probe or changing its radius invalidates what was baked: what it
+        // captured was another view.
         if (it->position != desc.position || it->radius != desc.radius ||
             it->intensity != desc.intensity) {
             it->position   = desc.position;
@@ -6926,12 +6926,12 @@ void D3D12Renderer::Impl::syncProbes()
         }
     }
 
-    // Peticiones de horneado. Se atienden AQUÍ, al principio del frame y antes
-    // de grabar nada, porque hornear reescribe la cámara y el UBO y espera a la
-    // GPU: a mitad de un frame sería grabar sobre lo ya grabado.
+    // Bake requests. They are handled HERE, at the start of the frame and before
+    // recording anything, because baking rewrites the camera and the UBO and waits on the
+    // GPU: in the middle of a frame it would be recording over what is already recorded.
     //
-    // Pedirlo a mano limpia también la marca de fallo: es la forma que tiene el
-    // usuario de decir "vuelve a intentarlo".
+    // Requesting it by hand also clears the failure mark: it is the user's way
+    // of saying "try again".
     if (probeBakeAllQueued) {
         for (GpuProbe& probe : probes) {
             probe.baked      = false;
@@ -6949,9 +6949,9 @@ void D3D12Renderer::Impl::syncProbes()
     }
     probeBakeQueue.clear();
 
-    // Una por frame: seis pasadas de escena más la convolución es demasiado
-    // para hacerlo de golpe con varias sondas, y así el editor sigue
-    // respondiendo mientras se hornean.
+    // One per frame: six scene passes plus the convolution is too much
+    // to do all at once with several probes, and this way the editor keeps
+    // responding while they bake.
     for (GpuProbe& probe : probes) {
         if (probe.baked || probe.bakeFailed)
             continue;
@@ -6959,20 +6959,20 @@ void D3D12Renderer::Impl::syncProbes()
         break;
     }
 
-    // Y quién mira a quién. Detrás del horneado: una sonda recién horneada ya
-    // puede entrar, y una que se fue deja de estar en la lista.
+    // And who looks at whom. After the baking: a freshly baked probe can
+    // already come in, and one that left is no longer in the list.
     refreshProbeAssignment();
 }
 
 int D3D12Renderer::Impl::pickProbeFor(const glm::vec3& worldPos) const
 {
-    // La más cercana de las que lo alcanzan. Sin sonda que llegue, -1: ese
-    // objeto se queda con el entorno global, que es lo que hacía siempre.
+    // The nearest of those that reach it. With no probe reaching, -1: that
+    // object keeps the global environment, which is what it always did.
     int   best         = -1;
     float bestDistance = 0.0f;
     for (size_t i = 0; i < probes.size(); ++i) {
-        // Una sonda sin hornear todavía tiene sus cubemaps en blanco: usarla
-        // apagaría el reflejo del objeto hasta que termine.
+        // A probe not yet baked has its cubemaps blank: using it
+        // would turn off the object's reflection until it finishes.
         if (!probes[i].baked)
             continue;
         const float distance = glm::length(worldPos - probes[i].position);
@@ -6988,8 +6988,8 @@ int D3D12Renderer::Impl::pickProbeFor(const glm::vec3& worldPos) const
 
 void D3D12Renderer::Impl::writeProbeSlots(UINT blockBase, int probeIndex)
 {
-    // t4 = irradiancia, t5 = prefiltrado. Mismos huecos que rellena
-    // fillSharedSlots; aquí solo se cambia a qué imagen apuntan.
+    // t4 = irradiance, t5 = prefilter. Same slots that fillSharedSlots fills;
+    // here only which image they point at is changed.
     if (probeIndex >= 0 && probeIndex < static_cast<int>(probes.size())) {
         const GpuProbe& probe = probes[static_cast<size_t>(probeIndex)];
         createCubeSrv(probe.irradianceAllocation->GetResource(), kHdrFormat, 1, blockBase + 4);
@@ -7011,8 +7011,8 @@ int D3D12Renderer::Impl::refreshProbeAssignment()
 
     int changed = 0;
 
-    // Los descriptores que se van a reescribir pueden estar en uso por el frame
-    // en vuelo. Se espera UNA vez, y solo si de verdad hay algo que cambiar.
+    // The descriptors about to be rewritten may be in use by the in-flight
+    // frame. It waits ONCE, and only if there is really something to change.
     bool waited    = false;
     auto ensureIdle = [&]() {
         if (!waited) {
@@ -7022,11 +7022,11 @@ int D3D12Renderer::Impl::refreshProbeAssignment()
     };
 
     for (size_t i = 0; i < objects.size(); ++i) {
-        // El CENTRO del objeto en mundo, no su origen: una malla larga con el
-        // pivote fuera del radio se quedaría sin sonda por nada.
+        // The object's CENTER in world, not its origin: a long mesh with the
+        // pivot outside the radius would be left without a probe for nothing.
         const StaticObject& object = objects[i];
         if (object.slotFree)
-            continue;   // sin malla que asignar a ninguna sonda
+            continue;   // no mesh to assign to any probe
         const glm::vec3     center =
             object.hasBounds ? glm::vec3(object.transform *
                                      glm::vec4((object.aabbMin + object.aabbMax) * 0.5f, 1.0f))
@@ -7039,8 +7039,8 @@ int D3D12Renderer::Impl::refreshProbeAssignment()
         ensureIdle();
         probeAssignStatic[i] = wanted;
         writeProbeSlots(object.srvBase, wanted);
-        // La sonda entra en la clave del grupo de dibujo: dos objetos con la
-        // misma malla y distinta sonda ya no pueden compartir draw.
+        // The probe enters the draw group key: two objects with the
+        // same mesh and a different probe can no longer share a draw.
         drawGroupsDirty = true;
         ++changed;
     }
@@ -7053,8 +7053,8 @@ int D3D12Renderer::Impl::refreshProbeAssignment()
 
         ensureIdle();
         probeAssignSkinned[i] = wanted;
-        // Un personaje tiene un bloque por submalla y todas miran la misma
-        // sonda: el objeto es uno solo.
+        // A character has one block per submesh and all of them look at the same
+        // probe: the object is a single one.
         for (const SkinnedSubMesh& sub : character.subMeshes)
             writeProbeSlots(sub.srvBase, wanted);
         ++changed;
@@ -7093,7 +7093,7 @@ void D3D12Renderer::Impl::createProbeDepth()
     dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
 
     D3D12_CPU_DESCRIPTOR_HANDLE handle = dsvHeap->GetCPUDescriptorHandleForHeapStart();
-    handle.ptr += static_cast<SIZE_T>(2) * dsvSize;  // 0 escena, 1 multimuestra, 2 sondas
+    handle.ptr += static_cast<SIZE_T>(2) * dsvSize;  // 0 scene, 1 multisampled, 2 probes
     device->CreateDepthStencilView(probeDepthAllocation->GetResource(), &dsvDesc, handle);
 }
 
@@ -7106,16 +7106,16 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
     if (!probeDepthAllocation)
         return;
 
-    // Esto no es un pase del frame: se graba en su propia lista y se espera. La
-    // captura reescribe el UBO de escena y la cámara, que el frame en vuelo
-    // está usando.
+    // This is not a pass of the frame: it is recorded in its own list and waited on. The
+    // capture rewrites the scene UBO and the camera, which the in-flight frame
+    // is using.
     waitForGpu();
 
-    // Direcciones y "up" de las seis caras. Los up van NEGADOS respecto a la
-    // lista clásica de OpenGL y la proyección espeja X además de Y: dos espejos
-    // son una rotación, así que el sentido de las caras —y con él el descarte
-    // de caras traseras— se conserva y el cubemap sale con la orientación que
-    // espera el muestreo. Es lo mismo que hizo falta para el cielo.
+    // Directions and "up" of the six faces. The ups are NEGATED relative to the
+    // classic OpenGL list and the projection mirrors X as well as Y: two mirrors
+    // make a rotation, so the face winding (and with it the back-face
+    // culling) is preserved and the cubemap comes out with the orientation that
+    // sampling expects. It is the same thing that was needed for the sky.
     static const glm::vec3 kDirs[6] = {
         {1.0f, 0.0f, 0.0f},  {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
         {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f, 1.0f},  {0.0f, 0.0f, -1.0f},
@@ -7125,14 +7125,14 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
         {0.0f, 0.0f, -1.0f}, {0.0f, -1.0f, 0.0f}, {0.0f, -1.0f, 0.0f},
     };
 
-    // Lo que se toca y hay que devolver: la cámara del frame y el tamaño de
-    // render, que el pase de geometría usa para el viewport y el culling.
+    // What is touched and has to be given back: the frame's camera and the render
+    // size, which the geometry pass uses for the viewport and the culling.
     const glm::mat4 savedView     = cameraView;
     const glm::vec3 savedPos      = cameraPos;
     const float     savedFov      = cameraFovDeg;
     const glm::mat4 savedViewProj = viewProj;
 
-    // Un RTV por cara, en los seis huecos que el heap reserva al final.
+    // One RTV per face, in the six slots the heap reserves at the end.
     const UINT kProbeRtvBase = kRtvProbeFace;
     for (UINT face = 0; face < 6; ++face) {
         D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
@@ -7176,12 +7176,12 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
 
     const auto bakeStart = std::chrono::high_resolution_clock::now();
 
-    // Una lista POR CARA, enviada y esperada antes de grabar la siguiente. Las
-    // seis comparten el UBO de escena —una sola dirección de constant buffer— y
-    // lo que la GPU lee es lo que haya en esa memoria cuando EJECUTA, no cuando
-    // se grabó: de corrido, las seis caras salían con la cámara de la última y
-    // el cubemap era seis copias de la misma vista. Vale igual para cualquier
-    // buffer por frame que se reescriba entre caras.
+    // One list PER FACE, submitted and waited on before recording the next. All
+    // six share the scene UBO (a single constant buffer address) and
+    // what the GPU reads is whatever is in that memory when it EXECUTES, not when
+    // it was recorded: run back to back, the six faces came out with the last one's camera and
+    // the cubemap was six copies of the same view. The same applies to any
+    // per-frame buffer that gets rewritten between faces.
     bool inRenderTarget = false;
     bool facesOk        = true;
 
@@ -7196,22 +7196,22 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                        D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-        // 90° por cara y un rango generoso: la sonda ve toda la escena, no el
-        // encuadre del jugador.
+        // 90 degrees per face and a generous range: the probe sees the whole scene, not the
+        // player's framing.
         cameraView       = glm::lookAtRH(probe.position, probe.position + kDirs[face], kUps[face]);
         cameraPos        = probe.position;
         cameraFovDeg = 90.0f;
 
         glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(90.0f), 1.0f, 0.1f, 20000.0f);
-        proj[0][0] *= -1.0f;  // el espejo en X que compensa los "up" negados
+        proj[0][0] *= -1.0f;  // the X mirror that compensates for the negated "up"s
         proj[1][1] *= -1.0f;
         probeFaceProj = proj;
         viewProj      = proj * cameraView;
 
-        // El UBO con la vista de ESTA cara: es de donde pbr.frag saca la
-        // posición del ojo y la proyección. Las luces y las cascadas se dejan
-        // como están —el mapa de sombras que hay en la GPU es el de esas
-        // matrices, y recalcularlas aquí lo descuadraría.
+        // The UBO with THIS face's view: it is where pbr.frag takes the eye
+        // position and the projection from. The lights and the cascades are left
+        // as they are (the shadow map on the GPU is that of those
+        // matrices, and recomputing them here would throw it off).
         updateSceneUbo();
 
         D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -7226,16 +7226,16 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
         inRenderTarget = true;
     }
 
-    // La vuelta a lectura se graba aunque una cara haya fallado: dejar el
-    // cubemap en RENDER_TARGET descuadraría la barrera del siguiente horneado,
-    // que lo espera en PIXEL_SHADER_RESOURCE.
+    // The return to read is recorded even if a face failed: leaving the
+    // cubemap in RENDER_TARGET would throw off the next bake's barrier,
+    // which expects it in PIXEL_SHADER_RESOURCE.
     bool convolved = false;
     if (inRenderTarget && beginList()) {
         transition(probe.captureAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-        // Y la convolución: los mismos dos compute del IBL global, pero leyendo
-        // la captura de esta sonda y escribiendo en sus cubemaps.
+        // And the convolution: the same two computes of the global IBL, but reading
+        // this probe's capture and writing into its cubemaps.
         if (facesOk)
             recordIblConvolution(probe.srvBase + kProbeCaptureSrv,
                                  probe.srvBase + kProbeIrradianceUav,
@@ -7244,14 +7244,14 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
         convolved = submitAndWait() && facesOk;
     }
 
-    // Tiempo de pared, no de GPU: aquí se espera a que termine, así que la
-    // espera ES el coste, y es lo que interesa saber al que hornea.
+    // Wall-clock time, not GPU time: here it waits for it to finish, so the
+    // wait IS the cost, and that is what the person baking wants to know.
     probe.bakeMs = std::chrono::duration<float, std::milli>(
                        std::chrono::high_resolution_clock::now() - bakeStart)
                        .count();
     probeLastBakeMs = probe.bakeMs;
 
-    // Y todo como estaba: el frame siguiente dibuja desde la cámara del jugador.
+    // And everything as it was: the next frame draws from the player's camera.
     cameraView       = savedView;
     cameraPos        = savedPos;
     cameraFovDeg = savedFov;
@@ -7259,9 +7259,9 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
     probeFaceProj.reset();
     updateSceneUbo();
 
-    // Sin las seis caras y su convolución, la sonda NO queda horneada: marcarla
-    // igual la dejaría en la lista de candidatas con sus cubemaps a medias, y
-    // los objetos que le tocaran reflejarían eso.
+    // Without the six faces and their convolution, the probe is NOT left baked: marking it
+    // anyway would leave it in the candidate list with its cubemaps half done, and
+    // the objects that fell to it would reflect that.
     probe.baked      = convolved;
     probe.bakeFailed = !convolved;
 
@@ -7269,9 +7269,9 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
 
 void D3D12Renderer::Impl::releaseProbe(GpuProbe& probe)
 {
-    // Sus imágenes pueden estar en el frame en vuelo: quitar una sonda es un
-    // evento raro (borrar el GameObject), así que esperar sale más barato que
-    // llevar una lista de borrado diferido.
+    // Its images may be in the in-flight frame: removing a probe is a rare
+    // event (deleting the GameObject), so waiting is cheaper than
+    // keeping a deferred delete list.
     waitForGpu();
 
     for (D3D12MA::Allocation** allocation :
@@ -7291,9 +7291,9 @@ bool D3D12Renderer::Impl::registerUiAtlas(UiTextureAtlas& atlas)
     if (uiNextAtlasSlot >= kMaxUiAtlases)
         return false;
 
-    // El formato lo decide el CONTENIDO: un atlas de sprites es color y va en
-    // sRGB; el de una fuente son distancias y en sRGB saldría deformado sin que
-    // la validación diga una palabra.
+    // The format is decided by the CONTENT: a sprite atlas is color and goes in
+    // sRGB; a font's is distances and in sRGB it would come out distorted without
+    // validation saying a word.
     const DXGI_FORMAT format = atlas.sourceIsSrgb() ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
                                                     : DXGI_FORMAT_R8G8B8A8_UNORM;
 
@@ -7304,7 +7304,7 @@ bool D3D12Renderer::Impl::registerUiAtlas(UiTextureAtlas& atlas)
     if (!texture)
         return false;
 
-    // Nombre para que el JSON de D3D12MA (y ReportLiveObjects) lo distinga.
+    // Name so that the D3D12MA JSON (and ReportLiveObjects) can tell it apart.
     texture->SetName(L"UiAtlas");
     diagLog("registerUiAtlas: atlas " + std::to_string(atlas.width()) + "x" +
             std::to_string(atlas.height()) + " in slot " + std::to_string(slot) +
@@ -7317,11 +7317,11 @@ bool D3D12Renderer::Impl::registerUiAtlas(UiTextureAtlas& atlas)
 
 namespace
 {
-    // El RTV de ImGui en D3D12 es R8G8B8A8_UNORM (EditorUI::initUiD3D12 /
-    // uiInfo.d3dRtvFormat): sampleando un SRV sRGB hacia un RTV UNORM la imagen
-    // saldria mas oscura. El atlas es UNORM, asi que los bytes sRGB de la imagen
-    // llegan tal cual a pantalla. Si la comprobacion manual dice otra cosa, esta es
-    // la unica constante que cambiar.
+    // ImGui's RTV in D3D12 is R8G8B8A8_UNORM (EditorUI::initUiD3D12 /
+    // uiInfo.d3dRtvFormat): sampling an sRGB SRV into a UNORM RTV would make the image
+    // come out darker. The atlas is UNORM, so the image's sRGB bytes
+    // reach the screen as they are. If the manual check says otherwise, this is the
+    // only constant to change.
     constexpr DXGI_FORMAT kThumbAtlasFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 }
 
@@ -7332,7 +7332,7 @@ bool D3D12Renderer::Impl::ensureThumbAtlas()
 
     try
     {
-        // Transparente. uploadTexture la deja en PIXEL_SHADER_RESOURCE y crea su SRV.
+        // Transparent. uploadTexture leaves it in PIXEL_SHADER_RESOURCE and creates its SRV.
         const std::vector<uint8_t> blank(static_cast<size_t>(kThumbAtlasSize) * kThumbAtlasSize * 4, 0);
         thumbAtlas = uploadTexture(blank.data(), kThumbAtlasSize, kThumbAtlasSize, 1,
                                    kThumbAtlasFormat, 4, kSrvThumbAtlas);
@@ -7356,10 +7356,10 @@ bool D3D12Renderer::Impl::uploadThumbnailTiles(const ThumbnailTile* tiles, size_
 {
     if (!thumbAtlas || !tiles || count == 0) return false;
 
-    // Una casilla son 64 filas de 256 bytes: la fila ya cumple
-    // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT y la casilla entera (16 KiB) cumple
-    // D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, asi que las N casillas van
-    // contiguas en el staging sin relleno.
+    // A cell is 64 rows of 256 bytes: the row already meets
+    // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT and the whole cell (16 KiB) meets
+    // D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, so the N cells go
+    // contiguous in the staging buffer with no padding.
     constexpr UINT kRowBytes  = kThumbCell * 4;
     constexpr UINT kTileBytes = kRowBytes * kThumbCell;
     static_assert(kRowBytes % D3D12_TEXTURE_DATA_PITCH_ALIGNMENT == 0);
@@ -7401,8 +7401,8 @@ bool D3D12Renderer::Impl::uploadThumbnailTiles(const ThumbnailTile* tiles, size_
             std::memcpy(mapped + i * kTileBytes, tiles[i].rgba, kTileBytes);
         staging->GetResource()->Unmap(0, nullptr);
 
-        // Mismo camino que uploadTexture: una lista, una espera. Las N casillas
-        // comparten las dos barreras y la espera.
+        // Same path as uploadTexture: one list, one wait. The N cells
+        // share the two barriers and the wait.
         throwIfFailed(allocators[frameIndex]->Reset(), "ID3D12CommandAllocator::Reset(thumbnails)");
         throwIfFailed(commandList->Reset(allocators[frameIndex].Get(), nullptr),
                       "ID3D12GraphicsCommandList::Reset(thumbnails)");
@@ -7462,16 +7462,16 @@ void D3D12Renderer::Impl::ensureUiBuffers(UINT vertexCount, UINT indexCount)
         if (needed <= capacity && allocation)
             return;
 
-        // Duplicando: reasignar cada frame por un vértice de más sería un
-        // create/destroy por frame.
+        // Doubling: reallocating every frame for one extra vertex would be a
+        // create/destroy per frame.
         UINT next = capacity ? capacity : 256;
         while (next < needed)
             next *= 2;
 
         if (allocation) {
-            // Puede estar en uso por un frame anterior: crecer es raro (solo
-            // cuando la UI se complica), así que esperar sale más barato que
-            // llevar una lista de borrado diferido.
+            // It may be in use by a previous frame: growing is rare (only
+            // when the UI gets more complex), so waiting is cheaper than
+            // keeping a deferred delete list.
             waitForGpu();
             allocation->GetResource()->Unmap(0, nullptr);
             allocation->Release();
@@ -7497,7 +7497,7 @@ void D3D12Renderer::Impl::ensureUiBuffers(UINT vertexCount, UINT indexCount)
             return;
 
         if (FAILED(allocation->GetResource()->Map(0, nullptr, &mapped))) {
-            // Recién creado y sin usar: se puede soltar sin esperar a nadie.
+            // Freshly created and unused: it can be released without waiting for anyone.
             allocation->Release();
             allocation = nullptr;
             return;
@@ -7513,15 +7513,15 @@ void D3D12Renderer::Impl::ensureUiBuffers(UINT vertexCount, UINT indexCount)
 
 void D3D12Renderer::Impl::beginUiFrame()
 {
-    // El draw data de TODOS los canvas del frame, y el dimensionado del par de
-    // buffers, en UN solo sitio y ANTES del pase de escena. No está dentro de
-    // recordUiCanvas (que es donde vivía) porque los canvas de MUNDO se graban
-    // en el pase de ESCENA, que corre antes: si el buffer se dimensionara ahí,
-    // los de mundo llegarían con la capacidad del frame ANTERIOR (o 0) y la
-    // guarda de bindUiCanvasGeometry los descartaría EN SILENCIO. Y peor: si
-    // ensureUiBuffers tuviera que CRECER a mitad de frame, soltaría el recurso
-    // sobre el que los de mundo ya han grabado su vista y la GPU leería una
-    // dirección muerta al ejecutar.
+    // The draw data of ALL the frame's canvases, and the sizing of the buffer pair,
+    // in ONE place and BEFORE the scene pass. It is not inside
+    // recordUiCanvas (which is where it used to live) because the WORLD canvases are recorded
+    // in the SCENE pass, which runs earlier: if the buffer were sized there,
+    // the world ones would arrive with the PREVIOUS frame's capacity (or 0) and the
+    // guard in bindUiCanvasGeometry would discard them SILENTLY. And worse: if
+    // ensureUiBuffers had to GROW mid-frame, it would release the resource
+    // on which the world ones have already recorded their view and the GPU would read a dead
+    // address on execute.
     uiVertexCursor   = 0;
     uiIndexCursor    = 0;
     uiScreenVertices = 0;
@@ -7534,15 +7534,15 @@ void D3D12Renderer::Impl::beginUiFrame()
         if (!s) continue;
         if (s->mode == UiCanvasRenderMode::World)
         {
-            // La matriz de MODELO, aquí y no en syncUiCanvases: necesita la
-            // vista de la cámara para el billboard, y syncUiCanvases no la
-            // tiene. Además cae ANTES de sortWorldCanvasesBackToFront, que
-            // ordena leyendo la posición de model[3] — calcularla ya en el
-            // grabado la dejaría a cero para el orden.
+            // The MODEL matrix, here and not in syncUiCanvases: it needs the
+            // camera view for the billboard, and syncUiCanvases does not
+            // have it. It also falls BEFORE sortWorldCanvasesBackToFront, which
+            // sorts by reading the position in model[3]; computing it only at
+            // recording time would leave it at zero for the sort.
             //
-            // En modo World el canvas NO se ajusta a ninguna pantalla: su
-            // espacio es su propia referenceResolution, que es lo que fija
-            // CanvasComponent::applyTo.
+            // In World mode the canvas is NOT fitted to any screen: its
+            // space is its own referenceResolution, which is what
+            // CanvasComponent::applyTo sets.
             const glm::vec2 tam = s->canvas.referenceResolution;
             s->model = uiWorldCanvasMatrix(s->component, tam, s->worldTransform, cameraView);
             s->canvas.buildDrawData(static_cast<uint32_t>(tam.x), static_cast<uint32_t>(tam.y),
@@ -7550,14 +7550,14 @@ void D3D12Renderer::Impl::beginUiFrame()
         }
         else
         {
-            // Los de pantalla, al tamaño de SALIDA: la UI se mide en píxeles de
-            // pantalla, no en los de render, que con SSAA son otros.
+            // The screen ones, at OUTPUT size: the UI is measured in screen pixels,
+            // not render pixels, which with SSAA are different.
             s->canvas.buildDrawData(outWidth, outHeight, s->drawData);
         }
     }
 
-    // La cuenta la hace la función libre de UiWidgetSync.h, que es la que está
-    // probada sin GPU (test_ui_frame_totals_suma_mundo_y_pantalla).
+    // The count is done by the free function in UiWidgetSync.h, which is the one tested
+    // without a GPU (test_ui_frame_totals_suma_mundo_y_pantalla).
     const UiFrameTotals totales = uiFrameTotals(uiSlots);
     uiScreenVertices = totales.screenVertices;
     uiScreenIndices  = totales.screenIndices;
@@ -7572,22 +7572,22 @@ bool D3D12Renderer::Impl::bindUiCanvasGeometry(const UiDrawData& data)
     if (!uiVertexMapped[frameIndex] || !uiIndexMapped[frameIndex])
         return false;
 
-    // Sub-asignación DENTRO del mismo buffer: cada canvas escribe a partir de
-    // donde dejó el anterior (bumpUiCursor) y bindea SU propia vista, con el
-    // offset ya metido en BufferLocation. Sin esto —o con las vistas arrancando
-    // siempre en el byte 0, que es lo que hacía con un canvas único— el segundo
-    // canvas pisaría los vértices del primero, y como la GPU lee el buffer al
-    // EJECUTAR el command list (no al grabarlo), los N draws saldrían todos con
-    // la geometría del ÚLTIMO.
+    // Suballocation INSIDE the same buffer: each canvas writes starting where
+    // the previous one left off (bumpUiCursor) and binds ITS own view, with the
+    // offset already put into BufferLocation. Without this (or with views always starting
+    // at byte 0, which is what it did with a single canvas) the second
+    // canvas would overwrite the vertices of the first, and since the GPU reads the buffer at
+    // EXECUTE of the command list (not at record time), the N draws would all come out with
+    // the geometry of the LAST one.
     const UINT vertexCount = static_cast<UINT>(data.vertices.size());
     const UINT indexCount  = static_cast<UINT>(data.indices.size());
     const UINT vertexBase  = bumpUiCursor(uiVertexCursor, vertexCount);
     const UINT indexBase   = bumpUiCursor(uiIndexCursor,  indexCount);
 
-    // El cursor lo dimensiona beginUiFrame() con el total de TODOS los canvas
-    // del frame. Si ese total no cuadrase con lo que de verdad se escribe aquí,
-    // esto escribiría FUERA de la memoria mapeada sin que ninguna capa de
-    // validación lo vea. Mejor no dibujar ese canvas que corromper el buffer.
+    // The cursor is sized by beginUiFrame() with the total of ALL the frame's
+    // canvases. If that total did not match what is really written here,
+    // this would write OUTSIDE the mapped memory without any validation layer
+    // seeing it. Better not to draw that canvas than to corrupt the buffer.
     if (!uiCursorFits(vertexBase, vertexCount, uiVertexCapacity[frameIndex]) ||
         !uiCursorFits(indexBase,  indexCount,  uiIndexCapacity[frameIndex]))
         return false;
@@ -7619,9 +7619,9 @@ void D3D12Renderer::Impl::recordWorldCanvases(UINT targetWidth, UINT targetHeigh
     if (!uiWorldPipelineDepth || !uiWorldPipelineNoDepth)
         return;
 
-    // El orden lo pone la función libre de UiWidgetSync.h, que es la que está
-    // probada sin GPU (test_world_canvases_se_ordenan_de_lejos_a_cerca). El draw
-    // data y la matriz de modelo ya están hechos, en beginUiFrame().
+    // The order is set by the free function in UiWidgetSync.h, which is the one tested
+    // without a GPU (test_world_canvases_se_ordenan_de_lejos_a_cerca). The draw
+    // data and the model matrix are already done, in beginUiFrame().
     sortWorldCanvasesBackToFront(uiSlots, cameraView, uiWorldOrder);
     if (uiWorldOrder.empty())
         return;
@@ -7638,64 +7638,64 @@ void D3D12Renderer::Impl::recordWorldCanvases(UINT targetWidth, UINT targetHeigh
     commandList->SetGraphicsRootSignature(uiRootSignature.Get());
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    // El render target y el viewport ya son los del pase de escena: esta función
-    // se llama con la geometría y el cielo recién grabados y sin nada en medio
-    // que los cambie, así que la profundidad que hay escrita es la que tiene que
-    // ocluir. Lo que sí se repone es el scissor, porque el bucle de abajo NO lo
-    // toca (ver la limitación) y el pase de composición lo deja donde quiera.
+    // The render target and viewport are already those of the scene pass: this function
+    // is called with the geometry and sky just recorded and nothing in between
+    // that changes them, so the depth that is written is the one that has to
+    // occlude. What IS restored is the scissor, because the loop below does NOT
+    // touch it (see the limitation) and the composition pass leaves it wherever it likes.
     D3D12_RECT scissor{0, 0, static_cast<LONG>(targetWidth), static_cast<LONG>(targetHeight)};
     commandList->RSSetScissorRects(1, &scissor);
 
-    // LIMITACIÓN CONOCIDA, igual que en Vulkan: `clipChildren` no recorta en un
-    // canvas de mundo. El scissor del batcher está en píxeles de canvas y un
-    // D3D12_RECT solo entiende píxeles del target; en pantalla el mapeo es una
-    // escala, pero un canvas de mundo está PROYECTADO (puede salir rotado, en
-    // perspectiva o partido por el borde) y no hay rectángulo alineado a los
-    // ejes que lo represente. Recortar con el rect sin proyectar taparía trozos
-    // que sí se ven.
+    // KNOWN LIMITATION, same as in Vulkan: `clipChildren` does not clip in a
+    // world canvas. The batcher's scissor is in canvas pixels and a
+    // D3D12_RECT only understands target pixels; on screen the mapping is a
+    // scale, but a world canvas is PROJECTED (it can come out rotated, in
+    // perspective or split by the edge) and there is no axis-aligned
+    // rectangle that represents it. Clipping with the unprojected rect would cover pieces
+    // that are visible.
     for (UiCanvasSlot* s : uiWorldOrder)
     {
         const UiDrawData& data = s->drawData;
         if (data.empty() || data.vertices.empty() || data.indices.empty()) continue;
         if (!bindUiCanvasGeometry(data)) continue;
 
-        // depthTest elige pipeline: true = lo tapa una pared; false = siempre
-        // encima. La ESCRITURA de profundidad va apagada en las dos.
+        // depthTest chooses the pipeline: true = a wall hides it; false = always
+        // on top. Depth WRITE is off in both.
         commandList->SetPipelineState(s->depthTest ? uiWorldPipelineDepth.Get()
                                                    : uiWorldPipelineNoDepth.Get());
 
-        // La matriz va como ROOT CONSTANTS, no en un buffer compartido: se queda
-        // grabada en el command list, así que cada canvas conserva la SUYA
-        // aunque la GPU no ejecute hasta mucho después. Con un CBV por frame
-        // reescrito entre draws, los N canvas saldrían todos con la matriz del
-        // ÚLTIMO — que es exactamente lo que pasó con las seis caras de una
-        // sonda, y el síntoma fue geometría AUSENTE, no matrices iguales.
-        // La proyección es la JITTEREADA, la misma que updateSceneUbo le da a la
-        // geometría: con TAA, un canvas de mundo sin jitter dejaría un borde
-        // permanente contra todo lo que sí lo lleva. Fuera de TAA,
-        // taaJitteredProj es cameraProj() tal cual y esto es viewProj.
+        // The matrix goes as ROOT CONSTANTS, not in a shared buffer: it stays
+        // recorded in the command list, so each canvas keeps ITS OWN
+        // even if the GPU does not execute until much later. With one CBV per frame
+        // rewritten between draws, the N canvases would all come out with the LAST one's matrix,
+        // which is exactly what happened with the six faces of a
+        // probe, and the symptom was ABSENT geometry, not equal matrices.
+        // The projection is the JITTERED one, the same updateSceneUbo gives the
+        // geometry: with TAA, a world canvas without jitter would leave a permanent
+        // edge against everything that does carry it. Outside TAA,
+        // taaJitteredProj is cameraProj() as is and this is viewProj.
         const glm::mat4 mvp = taaJitteredProj * cameraView * s->model;
         commandList->SetGraphicsRoot32BitConstants(0, 16, &mvp[0][0], 0);
-        // El dword 16 es linearOutput, y aquí va a 1: el destino es el target de
-        // la ESCENA, que es kHdrFormat (R16G16B16A16_FLOAT), o sea HDR LINEAL, y
-        // lo que se escriba ahí pasa después por bloom_composite (ACES +
-        // pow(1/2.2)). Sin deshacer la gamma aquí, un 0.5 acabaría en ~0.80 en
-        // pantalla: el cartel sale LAVADO y ninguna capa lo dice.
+        // Dword 16 is linearOutput, and here it goes to 1: the destination is the SCENE
+        // target, which is kHdrFormat (R16G16B16A16_FLOAT), that is, LINEAR HDR, and
+        // whatever is written there later goes through bloom_composite (ACES +
+        // pow(1/2.2)). Without undoing the gamma here, a 0.5 would end up at ~0.80 on
+        // screen: the sign comes out WASHED OUT and no layer says so.
         const UINT linearOutput = 1;
         commandList->SetGraphicsRoot32BitConstants(0, 1, &linearOutput, 16);
 
         for (const UiBatch& batch : data.batches) {
-            // `scissor.empty()` TAMBIÉN descarta, igual que en Vulkan
-            // (UiSpriteBatch.cpp): un nodo con clipChildren cuyo rect de recorte
-            // se quedó a ancho o alto 0 —un ScrollView con el contenido
-            // desplazado del todo fuera— no emite NADA. Aquí no se puede aplicar
-            // el scissor por lote (el canvas está proyectado y no hay rect
-            // alineado a los ejes que lo represente, ver el comentario de
-            // arriba), pero un clip ya vacío sí se respeta: sin esta mitad, ese
-            // ScrollView se dibujaba ENTERO y sin recortar. Ojo: NO es el mismo
-            // caso que el camino de PANTALLA (recordUiCanvas), donde
-            // scissor.empty() significa "sin recorte propio" y cae al viewport
-            // entero — eso es de antes y ahí seguir.
+            // `scissor.empty()` ALSO discards, just like in Vulkan
+            // (UiSpriteBatch.cpp): a node with clipChildren whose clip rect
+            // ended up with width or height 0 (a ScrollView with the content
+            // scrolled completely out) emits NOTHING. Here the per-batch scissor cannot be applied
+            // (the canvas is projected and there is no axis-aligned rect
+            // that represents it, see the comment above),
+            // but an already empty clip is respected: without this half, that
+            // ScrollView was drawn WHOLE and unclipped. Careful: it is NOT the same
+            // case as the SCREEN path (recordUiCanvas), where
+            // scissor.empty() means "no clip of its own" and falls back to the whole
+            // viewport; that one predates this and stays as it is there.
             if (batch.indexCount == 0 || batch.scissor.empty())
                 continue;
 
@@ -7706,8 +7706,8 @@ void D3D12Renderer::Impl::recordWorldCanvases(UINT targetWidth, UINT targetHeigh
                     srv = it->second;
             }
             commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(srv));
-            // firstIndex es LOCAL a este canvas: el offset ya lo aplicó la vista
-            // de índices de bindUiCanvasGeometry.
+            // firstIndex is LOCAL to this canvas: the offset was already applied by the index
+            // view of bindUiCanvasGeometry.
             commandList->DrawIndexedInstanced(batch.indexCount, 1, batch.firstIndex, 0, 0);
         }
     }
@@ -7718,10 +7718,10 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, 
     if (!uiPipeline)
         return;
 
-    // El draw data y el dimensionado del buffer ya están hechos: los hizo
-    // beginUiFrame(), antes del pase de escena. Aquí solo se graban los canvas
-    // de PANTALLA, que son los únicos de este pase; los de MUNDO ya se grabaron
-    // dentro del de escena, y sus vértices siguen en el mismo buffer sin leer.
+    // The draw data and the buffer sizing are already done: beginUiFrame() did them,
+    // before the scene pass. Here only the SCREEN canvases are recorded,
+    // which are the only ones in this pass; the WORLD ones were already recorded
+    // inside the scene one, and their vertices are still in the same unread buffer.
     if (uiScreenVertices == 0 || uiScreenIndices == 0)
         return;
     if (!uiVertexMapped[frameIndex] || !uiIndexMapped[frameIndex])
@@ -7746,12 +7746,12 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, 
     commandList->SetPipelineState(uiPipeline.Get());
     commandList->SetGraphicsRootSignature(uiRootSignature.Get());
     commandList->SetGraphicsRoot32BitConstants(0, 16, &transform[0][0], 0);
-    // El dword 16 es linearOutput. Los canvas de PANTALLA se dibujan sobre el
-    // back buffer, que ya está tonemapeado y con la gamma aplicada por
-    // bloom_composite, así que va a 0: el número que se escribe aquí YA es el
-    // que se ve. Los de MUNDO van a 1 (ver recordWorldCanvases). Si no se
-    // empujara, el pixel shader leería un valor sin definir y el color saldría
-    // mal en cuanto no fuera 0.
+    // Dword 16 is linearOutput. SCREEN canvases are drawn onto the
+    // back buffer, which is already tonemapped and with gamma applied by
+    // bloom_composite, so it goes to 0: the number written here is ALREADY the
+    // one seen. The WORLD ones go to 1 (see recordWorldCanvases). If it were not
+    // pushed, the pixel shader would read an undefined value and the color would come out
+    // wrong as soon as it was not 0.
     const UINT linearOutput = 0;
     commandList->SetGraphicsRoot32BitConstants(0, 1, &linearOutput, 16);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -7762,17 +7762,17 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, 
         const UiDrawData& data = s->drawData;
         if (data.empty() || data.vertices.empty() || data.indices.empty()) continue;
 
-        // Los cursores son MIEMBROS y siguen donde los dejaron los canvas de
-        // mundo en el pase de escena: sus vértices están en este mismo buffer y
-        // la GPU todavía no los ha leído (lee al EJECUTAR, no al grabar).
+        // The cursors are MEMBERS and continue where the world canvases left them
+        // in the scene pass: their vertices are in this same buffer and
+        // the GPU has not read them yet (it reads at EXECUTE, not at record time).
         if (!bindUiCanvasGeometry(data)) continue;
 
         for (const UiBatch& batch : data.batches) {
             if (batch.indexCount == 0)
                 continue;
 
-            // El recorte del nodo, en píxeles de pantalla. Un lote sin scissor
-            // propio se recorta al viewport entero.
+            // The node's clip, in screen pixels. A batch without its own scissor
+            // is clipped to the whole viewport.
             D3D12_RECT scissor{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
             if (!batch.scissor.empty()) {
                 scissor.left   = batch.scissor.x;
@@ -7782,11 +7782,11 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, 
             }
             commandList->RSSetScissorRects(1, &scissor);
 
-            // Sin atlas, la 1x1 blanca: multiplicar por (1,1,1,1) deja el color del
-            // vértice tal cual, así que un panel plano no necesita ni pipeline
-            // aparte. Con atlas, el suyo; y si no llegó a subirse, otra vez la
-            // blanca —se verá el color plano en vez del sprite, pero no un
-            // descriptor de otro.
+            // Without an atlas, the white 1x1: multiplying by (1,1,1,1) leaves the vertex
+            // color as is, so a flat panel does not even need a separate
+            // pipeline. With an atlas, its own; and if it never got uploaded, the
+            // white again (the flat color will show instead of the sprite, but not
+            // another one's descriptor).
             UINT srv = kSrvBaseColor;
             if (batch.atlas) {
                 const auto it = uiAtlasSrv.find(batch.atlas);
@@ -7794,8 +7794,8 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, 
                     srv = it->second;
             }
             commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(srv));
-            // firstIndex es LOCAL a este canvas: el offset ya lo aplicó la
-            // vista de índices de arriba.
+            // firstIndex is LOCAL to this canvas: the offset was already applied by the
+            // index view above.
             commandList->DrawIndexedInstanced(batch.indexCount, 1, batch.firstIndex, 0, 0);
         }
     }
@@ -7821,14 +7821,14 @@ void D3D12Renderer::Impl::recordFog()
         commandList->ResourceBarrier(1, &barrier);
     };
 
-    // La escena pasa a escritura desordenada y la profundidad a lectura.
+    // The scene goes to unordered access and the depth to read.
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    // readableDepth() y no depthAllocation: con MSAA la profundidad legible es
-    // la del pre-pase, que es OTRO recurso, y la transicion de vuelta de mas
-    // abajo ya usaba readableDepth(). Asimetricas dejaban la del pase de escena
-    // en lectura para siempre y tocaban la del pre-pase desde un estado que no
-    // era el suyo.
+    // readableDepth() and not depthAllocation: with MSAA the readable depth is
+    // the pre-pass one, which is ANOTHER resource, and the transition back further
+    // down already used readableDepth(). Asymmetric ones left the scene pass one
+    // in read forever and touched the pre-pass one from a state that
+    // was not its own.
     transition(readableDepth(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -7837,29 +7837,29 @@ void D3D12Renderer::Impl::recordFog()
     const glm::mat4& view   = cameraView;
 
     FogPush push{};
-    // fog.comp reconstruye la posición de mundo con clip = vec4(uv*2-1, d, 1),
-    // o sea que da por hecho que la FILA DE ARRIBA (uv.y = 0) cae en ndc.y = -1.
-    // Eso es la convención de Vulkan, cuya proyección lleva la inversión de Y.
+    // fog.comp reconstructs the world position with clip = vec4(uv*2-1, d, 1),
+    // that is, it takes for granted that the TOP ROW (uv.y = 0) falls at ndc.y = -1.
+    // That is the Vulkan convention, whose projection carries the Y inversion.
     //
-    // Los pases GRÁFICOS de este backend compensan eso con el viewport de altura
-    // negativa, pero esto es un COMPUTE: no hay viewport donde meterlo, así que
-    // la inversión tiene que ir en la matriz. Sin ella la reconstrucción sale
-    // espejada en vertical y la niebla se ve del revés.
+    // The GRAPHICS passes of this backend compensate for that with the negative-height
+    // viewport, but this is a COMPUTE: there is no viewport to put it in, so
+    // the inversion has to go in the matrix. Without it the reconstruction comes out
+    // mirrored vertically and the fog looks upside down.
     //
-    // El comentario que había aquí decía justo lo contrario -"en D3D12 no hay
-    // ninguna que meter"- y es lo que tapaba el fallo.
+    // The comment that was here said exactly the opposite ("in D3D12 there is
+    // none to put in") and is what hid the bug.
     glm::mat4 projFog = proj;
     projFog[1][1]    *= -1.0f;
     push.invViewProj  = glm::inverse(projFog * view);
     push.camPosDensity    = glm::vec4(camPos, state->fogDensity());
     push.lightDirFalloff  = glm::vec4(glm::normalize(lightDirection), state->fogHeightFalloff());
-    // El scattering va YA multiplicado por el color y la intensidad de la luz.
-    // El color de la luz key se pliega aquí sobre el tinte de la niebla, igual
-    // que en el camino de Vulkan: el shader multiplica una sola vez.
+    // The scattering goes ALREADY multiplied by the light's color and intensity.
+    // The key light's color is folded in here over the fog tint, just like
+    // in the Vulkan path: the shader multiplies only once.
     //
-    // Antes esto era un tinte CÁLIDO A FUEGO (1.0, 0.98, 0.94) al 70%, que
-    // ignoraba la luz de la escena: elegir blanco puro daba gris, y subir la
-    // intensidad de la luz no aclaraba la niebla.
+    // Before, this was a HARDCODED WARM tint (1.0, 0.98, 0.94) at 70%, which
+    // ignored the scene's light: choosing pure white gave gray, and raising the
+    // light intensity did not brighten the fog.
     glm::vec3 lightColor(0.0f);
     if (!sceneLights.empty()) {
         lightColor = glm::vec3(sceneLights[0].color[0], sceneLights[0].color[1],
@@ -7883,7 +7883,7 @@ void D3D12Renderer::Impl::recordFog()
     commandList->SetComputeRootDescriptorTable(4, gpuHandle(kSrvShadowMap));
     commandList->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
 
-    // Y se devuelven a lo que espera el resto del frame.
+    // And they are returned to what the rest of the frame expects.
     transition(readableDepth(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                readableDepthState());
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -7892,8 +7892,8 @@ void D3D12Renderer::Impl::recordFog()
 
 void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv)
 {
-    // El heap lo deja puesto el pase de escena, pero este pase no puede
-    // depender de que ese se haya grabado.
+    // The heap is left set by the scene pass, but this pass cannot
+    // depend on that one having been recorded.
     ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
     commandList->SetDescriptorHeaps(1, heaps);
 
@@ -7915,27 +7915,27 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
         commandList->ResourceBarrier(1, &barrier);
     };
 
-    // La escena deja de ser destino de dibujo y pasa a leerse: primero por el
-    // compute del bloom, después por el pase de composición.
+    // The scene stops being a draw target and becomes read: first by the
+    // bloom compute, then by the composition pass.
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
 
-    // Apagado significa APAGADO: ni un dispatch y ni una barrera de la cadena,
-    // igual que en Vulkan (Renderer.cpp, `if (bloomEnabled())`). La composición
-    // de más abajo se encarga de leer negro en vez de unos mips que se quedan
-    // como estaban. Hasta ahora este flag no se consultaba en ningún sitio del
-    // backend, así que el interruptor del editor no apagaba nada.
-    // bloomMipCount == 0 es el viewport tan pequeno que no da ni para un nivel.
-    // Entra en el mismo camino que el bloom apagado: la composicion lee negro en
-    // vez de un mip que nadie ha escrito. Vulkan hace lo mismo (BloomPass
-    // devuelve con m_mipCount == 0 y su composicion lo comprueba).
+    // Off means OFF: not a dispatch and not a barrier of the chain,
+    // just like in Vulkan (Renderer.cpp, `if (bloomEnabled())`). The composition
+    // below takes care of reading black instead of mips that stay
+    // as they were. Until now this flag was not queried anywhere in the
+    // backend, so the editor's switch turned nothing off.
+    // bloomMipCount == 0 is a viewport so small it does not fit even one level.
+    // It goes down the same path as bloom off: the composition reads black instead
+    // of a mip nobody has written. Vulkan does the same (BloomPass
+    // returns with m_mipCount == 0 and its composition checks it).
     const bool bloomOn = state->bloomEnabled() && bloomMipCount > 0;
 
     if (bloomOn) {
         commandList->SetComputeRootSignature(bloomRootSignature.Get());
 
-        // Reducción. El primer nivel lee la escena y aplica el umbral; el resto
-        // solo filtra el nivel anterior.
+        // Reduction. The first level reads the scene and applies the threshold; the rest
+        // only filter the previous level.
         for (int level = 0; level < static_cast<int>(bloomMipCount); ++level) {
             const UINT srcWidth  = (level == 0) ? width : bloomMipWidth[level - 1];
             const UINT srcHeight = (level == 0) ? height : bloomMipHeight[level - 1];
@@ -7955,14 +7955,14 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
             commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavBloomMip + level));
             commandList->Dispatch((bloomMipWidth[level] + 7) / 8, (bloomMipHeight[level] + 7) / 8, 1);
 
-            // Este nivel pasa a ser origen del siguiente paso.
+            // This level becomes the source of the next step.
             transition(bloomMipAllocations[level]->GetResource(),
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
 
-        // Ampliación: cada nivel SUMA el de abajo sobre lo que ya tenía, así que el
-        // destino vuelve a acceso desordenado para poder leerse y escribirse.
+        // Upsampling: each level ADDS the one below onto what it already had, so the
+        // destination goes back to unordered access to be both read and written.
         for (int level = static_cast<int>(bloomMipCount) - 2; level >= 0; --level) {
             BloomPush push{};
             push.srcTexel[0] = 1.0f / static_cast<float>(bloomMipWidth[level + 1]);
@@ -7982,8 +7982,8 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
             commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavBloomMip + level));
             commandList->Dispatch((bloomMipWidth[level] + 7) / 8, (bloomMipHeight[level] + 7) / 8, 1);
 
-            // Y vuelve a origen para el nivel siguiente (o para la composición, si
-            // este era el último).
+            // And it goes back to source for the next level (or for the composition, if
+            // this was the last one).
             transition(bloomMipAllocations[level]->GetResource(),
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                        level == 0 ? D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
@@ -7991,14 +7991,14 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
         }
     }
 
-    // Composición al backbuffer.
+    // Composition to the backbuffer.
     //
-    // Viewport de ALTURA NEGATIVA, y no es un truco gratuito: fullscreen.vert
-    // saca la uv de las mismas coordenadas que la posición (uv = ndc*0.5+0.5)
-    // dando por hecho que el NDC y=-1 es la fila de ARRIBA, que es como funciona
-    // Vulkan. En D3D12 y=-1 es la de abajo, así que el mismo shader deja la
-    // imagen del revés. Invertir el viewport lo corrige sin tocar un shader que
-    // comparten los dos backends.
+    // NEGATIVE-HEIGHT viewport, and it is not a gratuitous trick: fullscreen.vert
+    // derives the uv from the same coordinates as the position (uv = ndc*0.5+0.5)
+    // taking for granted that NDC y=-1 is the TOP row, which is how
+    // Vulkan works. In D3D12 y=-1 is the bottom one, so the same shader leaves the
+    // image upside down. Inverting the viewport fixes it without touching a shader that
+    // both backends share.
     D3D12_VIEWPORT viewport{};
     viewport.TopLeftY = static_cast<float>(height);
     viewport.Width    = static_cast<float>(width);
@@ -8006,14 +8006,14 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     viewport.MaxDepth = 1.0f;
     const D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
 
-    // La composición NO va al backbuffer: va al target LDR, que es lo que lee
-    // FXAA después. Un pase no puede leer y escribir la misma imagen.
+    // The composition does NOT go to the backbuffer: it goes to the LDR target, which is what
+    // FXAA reads afterwards. A pass cannot read and write the same image.
     D3D12_CPU_DESCRIPTOR_HANDLE ldrRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
     ldrRtv.ptr += static_cast<SIZE_T>(kRtvLdr) * rtvSize;
 
-    // Se crea ya en RENDER_TARGET (ver createHdrTargets) y sigue en ese estado
-    // hasta el transition de después de componer, así que aquí se puede
-    // estrenar tal cual.
+    // It is created already in RENDER_TARGET (see createHdrTargets) and stays in that state
+    // until the transition after compositing, so here it can be
+    // first-used as is.
     estrenarRenderTarget(ldrAllocation->GetResource(), ldrInicializado);
 
     commandList->OMSetRenderTargets(1, &ldrRtv, FALSE, nullptr);
@@ -8023,30 +8023,30 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     commandList->SetGraphicsRootSignature(compositeRootSignature.Get());
     const float bloomIntensity = state->bloomIntensity();
     commandList->SetGraphicsRoot32BitConstants(0, 1, &bloomIntensity, 0);
-    // Con el bloom encendido, la pareja de siempre: escena y mip 0 de la
-    // cadena. Apagado, la del final del heap: la misma escena y un negro, para
-    // que el `+= bloom * intensity` del shader sume exactamente cero sin leer
-    // unos mips que este frame no ha escrito nadie.
+    // With bloom on, the usual pair: scene and mip 0 of the
+    // chain. Off, the one at the end of the heap: the same scene and a black, so
+    // that the shader's `+= bloom * intensity` adds exactly zero without reading
+    // mips that nobody has written this frame.
     commandList->SetGraphicsRootDescriptorTable(
         1, gpuHandle(bloomOn ? kSrvSceneHdr : kSrvCompositeOff));
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    // Sin vertex buffer: fullscreen.vert saca las tres posiciones del índice.
+    // No vertex buffer: fullscreen.vert derives the three positions from the index.
     commandList->DrawInstanced(3, 1, 0, 0);
 
-    // El contorno de lo seleccionado, aquí y no en el pase de escena: sobre la
-    // imagen ya tonemapeada su naranja llega plano, que es el que lo distingue
-    // del amarillo de los colliders y del cian del frustum. De paso deja de
-    // colarse en la captura de una sonda, que es geometría de la escena y no
-    // decoración del editor.
+    // The outline of the selection, here and not in the scene pass: over the
+    // already tonemapped image its orange arrives flat, which is what tells it apart
+    // from the yellow of the colliders and the cyan of the frustum. As a bonus it stops
+    // leaking into a probe's capture, which is scene geometry and not
+    // editor decoration.
     recordSelectionOutline(ldrRtv);
 
-    // FXAA sobre el resultado ya compuesto, y de ahí al backbuffer.
+    // FXAA over the already composed result, and from there to the backbuffer.
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    // El pase final escribe al destino, que puede ser MÁS PEQUEÑO que lo que se
-    // acaba de dibujar: con SSAA el viewport de salida es el del panel y el
-    // shader promedia. Sin SSAA los dos tamaños coinciden y esto es lo de antes.
+    // The final pass writes to the destination, which can be SMALLER than what was
+    // just drawn: with SSAA the output viewport is the panel's and the
+    // shader averages. Without SSAA both sizes match and this is as before.
     D3D12_VIEWPORT outViewport{};
     outViewport.TopLeftY = static_cast<float>(outHeight);
     outViewport.Width    = static_cast<float>(outWidth);
@@ -8058,9 +8058,9 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
 
     markTimestamp(TsAa);
     if (state->aaMode() == RendererState::AaMode::Ssaa && ssaaPipeline) {
-        // Bajada por promedio: una muestra por texel de origen y por eje, que es
-        // lo que define el supersampling. A factor 2 son los cuatro texeles que
-        // caen dentro del píxel de destino.
+        // Downsample by averaging: one sample per source texel and per axis, which is
+        // what defines supersampling. At factor 2 it is the four texels that
+        // fall inside the destination pixel.
         SsaaPush ssaaPush{};
         ssaaPush.invSrc[0] = 1.0f / static_cast<float>(width);
         ssaaPush.invSrc[1] = 1.0f / static_cast<float>(height);
@@ -8075,8 +8075,8 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
 
         taaHistoryValid = false;
     } else if (state->aaMode() == RendererState::AaMode::Taa) {
-        // El TAA ocupa el sitio del FXAA: mezcla esta imagen con la del frame
-        // anterior y escribe a la vez el backbuffer y el historial siguiente.
+        // TAA takes FXAA's place: it blends this image with the previous frame's
+        // and writes both the backbuffer and the next history at once.
         recordTaa(backBufferRtv);
     } else {
         FxaaPush fxaaPush{};
@@ -8093,19 +8093,19 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
         commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvLdr));
         commandList->DrawInstanced(3, 1, 0, 0);
 
-        // Sin acumulación temporal el historial deja de valer: al volver a TAA
-        // hay que empezar de cero o el primer frame mezcla una imagen vieja.
+        // Without temporal accumulation the history stops being valid: when going back to TAA
+        // one has to start from zero or the first frame blends an old image.
         taaHistoryValid = false;
     }
     markTimestamp(TsAa + 1);
 
-    // UI del juego, encima de la escena ya compuesta y por debajo de la del
-    // editor (que se graba después, sobre el backbuffer). Con el canvas vacío no
-    // graba ni un comando.
+    // Game UI, on top of the already composed scene and below the editor's
+    // (which is recorded afterwards, over the backbuffer). With an empty canvas it
+    // records not a single command.
     //
-    // Ortográfica en píxeles con el origen ARRIBA a la izquierda, que es como
-    // vienen las posiciones. Sin voltear nada más: el viewport de salida ya va
-    // con altura negativa en el resto de pases, así que aquí se pone recto.
+    // Orthographic in pixels with the origin at the TOP left, which is how
+    // positions come. Nothing else is flipped: the output viewport already has
+    // negative height in the rest of the passes, so here it is set straight.
     const glm::mat4 uiProj = glm::orthoRH_ZO(0.0f, static_cast<float>(outWidth),
                                              static_cast<float>(outHeight), 0.0f, -1.0f, 1.0f);
     recordUiCanvas(backBufferRtv, uiProj);
@@ -8113,21 +8113,21 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-    // La interfaz va encima de todo, sobre el backbuffer y sin post-procesado:
-    // suavizar los bordes del texto de la UI lo emborronaría. Con la escena en
-    // textura la dibuja quien llama, DESPUÉS de que esa textura pase a lectura:
-    // aquí todavía es el destino del pase.
+    // The interface goes on top of everything, over the backbuffer and without post-processing:
+    // smoothing the UI text edges would blur it. With the scene in a
+    // texture it is drawn by the caller, AFTER that texture goes to read:
+    // here it is still the pass's destination.
     if (uiDrawCallback && !renderToTexture) {
         commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
         uiDrawCallback();
     }
 
-    // Todo vuelve al estado con el que arranca el frame siguiente.
+    // Everything goes back to the state the next frame starts with.
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
-    // Solo si la cadena llegó a correr: con el bloom apagado los mips no se han
-    // movido de UNORDERED_ACCESS, y "devolverlos" desde un estado en el que no
-    // están es un error de barrera, no una corrección.
+    // Only if the chain actually ran: with bloom off the mips have not
+    // moved from UNORDERED_ACCESS, and "returning" them from a state they
+    // are not in is a barrier error, not a correction.
     if (bloomOn) {
         transition(bloomMipAllocations[0]->GetResource(),
                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
@@ -8142,9 +8142,9 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
 
 void D3D12Renderer::Impl::createShadowResources()
 {
-    // Suelo: la malla del propio motor, la misma que usa el editor.
-    // Un pelo por debajo de y=0, que es donde vive la rejilla: en el mismo
-    // plano se pelean por la profundidad y las líneas salen punteadas.
+    // Ground: the engine's own mesh, the same one the editor uses.
+    // A hair below y=0, which is where the grid lives: in the same
+    // plane they fight over depth and the lines come out dotted.
     const Mesh ground = Plane::create(200.0f, -0.02f, glm::vec3(0.55f, 0.55f, 0.58f), 20.0f);
 
     groundVertexAllocation = uploadBuffer(ground.vertices.data(),
@@ -8162,23 +8162,23 @@ void D3D12Renderer::Impl::createShadowResources()
     groundIndexBufferView.Format         = DXGI_FORMAT_R32_UINT;
     groundIndexCount                     = static_cast<UINT>(ground.indices.size());
 
-    // shadow.vert SIEMPRE saca el model del buffer de instancias, incluso para
-    // objetos que en el pase principal usan el push constant. Por eso cada
-    // objeto necesita el suyo, con la MISMA transformación que se usa al
-    // dibujarlo: si difieren, la sombra cae donde no está el objeto.
+    // shadow.vert ALWAYS takes the model from the instance buffer, even for
+    // objects that in the main pass use the push constant. That is why each
+    // object needs its own, with the SAME transform used when
+    // drawing it: if they differ, the shadow falls where the object is not.
     const glm::mat4 groundModel = glm::mat4(1.0f);
     groundInstanceAllocation = uploadBuffer(&groundModel, sizeof(groundModel),
                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-    // Mapa de sombras: un array de profundidad, una capa por cascada.
+    // Shadow map: a depth array, one layer per cascade.
     D3D12_RESOURCE_DESC shadowDesc{};
     shadowDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     shadowDesc.Width            = shadowMapSize;
     shadowDesc.Height           = shadowMapSize;
     shadowDesc.DepthOrArraySize = kShadowLayers;
     shadowDesc.MipLevels        = 1;
-    // TYPELESS porque el mismo recurso se ve de dos formas: como profundidad
-    // al grabarlo (D32_FLOAT) y como textura al muestrearlo (R32_FLOAT).
+    // TYPELESS because the same resource is seen in two ways: as depth
+    // when recording it (D32_FLOAT) and as a texture when sampling it (R32_FLOAT).
     shadowDesc.Format           = DXGI_FORMAT_R32_TYPELESS;
     shadowDesc.SampleDesc.Count = 1;
     shadowDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
@@ -8202,7 +8202,7 @@ void D3D12Renderer::Impl::createShadowResources()
                   "ID3D12Device::CreateDescriptorHeap(shadow DSV)");
     dsvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
 
-    // Un DSV por capa: cada cascada se graba por separado.
+    // One DSV per layer: each cascade is recorded separately.
     for (int cascade = 0; cascade < kShadowLayers; ++cascade) {
         D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
         dsvDesc.Format                         = DXGI_FORMAT_D32_FLOAT;
@@ -8215,12 +8215,12 @@ void D3D12Renderer::Impl::createShadowResources()
         device->CreateDepthStencilView(shadowMapArrayAllocation->GetResource(), &dsvDesc, handle);
     }
 
-    // El SRV va en el hueco t3, encima del array 1x1 de relleno que ocupaba ese
-    // sitio: a partir de aquí el shader muestrea sombras de verdad.
+    // The SRV goes in the t3 slot, over the 1x1 filler array that occupied that
+    // place: from here on the shader samples real shadows.
     createShadowMapSrv(kSrvShadowMap);
 
-    // Y la misma vista en la terna de cada objeto ya cargado: si esto se
-    // rehiciera con escena en pantalla, sus t3 apuntarían al recurso viejo.
+    // And the same view in the triplet of each already loaded object: if this were
+    // redone with a scene on screen, their t3 would point at the old resource.
     for (const StaticObject& object : objects)
         if (object.srvBase != kSrvBaseColor)
             createShadowMapSrv(object.srvBase + 2);
@@ -8229,9 +8229,9 @@ void D3D12Renderer::Impl::createShadowResources()
             if (sub.srvBase != kSrvBaseColor)
                 createShadowMapSrv(sub.srvBase + 2);
 
-    // Root signature del pase de sombras: el MISMO UBO en b0 (los offsets de
-    // view/proj/lightSpaceMatrix coinciden con los de triangle), el índice de
-    // cascada como root constant y el buffer de instancias.
+    // Root signature of the shadow pass: the SAME UBO in b0 (the offsets of
+    // view/proj/lightSpaceMatrix match those of triangle), the cascade
+    // index as a root constant and the instance buffer.
     D3D12_ROOT_PARAMETER params[3]{};
     params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor.ShaderRegister = 0;
@@ -8271,9 +8271,9 @@ void D3D12Renderer::Impl::createShadowResources()
 
     const std::vector<char> shadowVs = readBinaryFile("shaders/shadow.vert.dxil");
 
-    // Dos PSO porque hay dos formatos de vértice: el del motor y el que escribe
-    // el compute de skinning. shadow.vert solo lee la posición, así que basta
-    // con un elemento, pero el stride tiene que ser el que toca.
+    // Two PSOs because there are two vertex formats: the engine's and the one written by
+    // the skinning compute. shadow.vert only reads the position, so one
+    // element is enough, but the stride has to be the right one.
     auto buildShadowPipeline = [&](UINT stride, ComPtr<ID3D12PipelineState>& out) {
         const D3D12_INPUT_ELEMENT_DESC layout[] = {
             {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
@@ -8283,7 +8283,7 @@ void D3D12Renderer::Impl::createShadowResources()
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
         psoDesc.pRootSignature        = shadowRootSignature.Get();
         psoDesc.VS                    = {shadowVs.data(), shadowVs.size()};
-        // Sin pixel shader: el pase solo escribe profundidad.
+        // No pixel shader: the pass only writes depth.
         psoDesc.InputLayout           = {layout, _countof(layout)};
         psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         psoDesc.NumRenderTargets      = 0;
@@ -8292,17 +8292,17 @@ void D3D12Renderer::Impl::createShadowResources()
         psoDesc.SampleMask            = UINT_MAX;
 
         psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-        // Se graban las caras TRASERAS, no las frontales. Es lo que evita que
-        // una superficie se sombree a sí misma: la cara que se ilumina no entra
-        // en el mapa, así que su profundidad no puede quedar por delante de sí
-        // misma. Con caras frontales o sin culling, un plano grande —el suelo de
-        // un proyecto -- sale entero en sombra por mucho sesgo que se le ponga.
-        // A cambio, una malla abierta de una sola cara no proyecta sombra.
+        // BACK faces are recorded, not the front ones. It is what prevents
+        // a surface from shading itself: the face that gets lit does not enter
+        // the map, so its depth cannot end up in front of
+        // itself. With front faces or no culling, a large plane (a project's
+        // ground) comes out entirely in shadow no matter how much bias is put on it.
+        // In exchange, an open single-sided mesh casts no shadow.
         psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
         psoDesc.RasterizerState.DepthClipEnable       = TRUE;
         psoDesc.RasterizerState.FrontCounterClockwise = TRUE;
-        // Sesgo de profundidad contra el acné de sombra: sin él, la superficie
-        // se sombrea a sí misma en bandas.
+        // Depth bias against shadow acne: without it, the surface
+        // shades itself in bands.
         psoDesc.RasterizerState.DepthBias            = 2000;
         psoDesc.RasterizerState.SlopeScaledDepthBias = 2.0f;
 
@@ -8310,7 +8310,7 @@ void D3D12Renderer::Impl::createShadowResources()
         psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
         psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
 
-        (void)stride;  // el stride va en la vista del vertex buffer, no en el PSO
+        (void)stride;  // the stride goes in the vertex buffer view, not in the PSO
         throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&out)),
                       "ID3D12Device::CreateGraphicsPipelineState(shadows)");
     };
@@ -8328,9 +8328,9 @@ void D3D12Renderer::Impl::computeCascades()
     extraLayers   = 0;
     for (int& r : shadowSlot) r = -1;
 
-    // Los focos secundarios PRIMERO, porque las ramas de la luz key de mas abajo
-    // salen con return. Mismo helper que Vulkan: el reparto TIENE que ser
-    // identico o la misma escena tendria sombras en luces distintas segun el
+    // The secondary spots FIRST, because the key light branches further down
+    // exit with return. Same helper as Vulkan: the split HAS to be
+    // identical or the same scene would have shadows on different lights depending on the
     // backend.
     if (!sceneLights.empty()) {
         const int n = (std::min)(static_cast<int>(sceneLights.size()), MAX_LIGHTS);
@@ -8349,11 +8349,11 @@ void D3D12Renderer::Impl::computeCascades()
             const glm::vec4 dir(l.direction[0], l.direction[1], l.direction[2], l.direction[3]);
             const glm::vec4 par(l.params[0], l.params[1], l.params[2], l.params[3]);
 
-            // Cuantas caras le toca a esta luz lo dijo el REPARTO, que es
-            // compartido con Vulkan. Preguntarlo aqui otra vez seria una segunda
-            // copia del criterio, y contestar distinto grabaria menos caras de
-            // las reservadas.
-            // flipY = false: aqui lo absorbe el viewport de altura negativa.
+            // How many faces this light gets was said by the SPLIT, which is
+            // shared with Vulkan. Asking it again here would be a second
+            // copy of the criterion, and answering differently would record fewer faces than
+            // were reserved.
+            // flipY = false: here it is absorbed by the negative-height viewport.
             const bool ok = (shadowFaces[i] == SHADOW_KEY_MATRICES)
                 ? pointShadowMatrices(pos, par, /*flipY=*/false,
                                       &cascadeMatrices[shadowSlot[i]])
@@ -8366,11 +8366,11 @@ void D3D12Renderer::Impl::computeCascades()
         }
     }
 
-    // PUNTO: cubemap de seis caras. Tampoco usa el frustum de la camara, asi
-    // que sale por aqui igual que el foco.
-    // Un FOCO demasiado abierto entra tambien por aqui, mismo criterio que
-    // Vulkan: por encima de 90 grados de cono una sola cara reparte los texeles
-    // sobre demasiado mundo, y empeora con tan(FOV/2).
+    // POINT: six-face cubemap. It does not use the camera frustum either, so
+    // it exits through here just like the spot.
+    // A SPOT that is too wide also enters through here, same criterion as
+    // Vulkan: above a 90 degree cone a single face spreads the texels
+    // over too much world, and it gets worse with tan(FOV/2).
     const int tipoKey = sceneLights.empty()
                             ? -1
                             : static_cast<int>(sceneLights[0].direction[3] + 0.5f);
@@ -8382,8 +8382,8 @@ void D3D12Renderer::Impl::computeCascades()
     if (tipoKey == static_cast<int>(LightType::Point) ||
         (tipoKey == static_cast<int>(LightType::Spot) && spotNecesitaCubemap(paramsKey))) {
         const ShaderLight& key = sceneLights[0];
-        // flipY = false: aqui la convencion de Y la absorbe el viewport de
-        // altura negativa del pase de sombras, igual que con las cascadas.
+        // flipY = false: here the Y convention is absorbed by the shadow pass's
+        // negative-height viewport, just like with the cascades.
         if (pointShadowMatrices(
                 glm::vec4(key.position[0], key.position[1], key.position[2], key.position[3]),
                 glm::vec4(key.params[0], key.params[1], key.params[2], key.params[3]),
@@ -8393,10 +8393,10 @@ void D3D12Renderer::Impl::computeCascades()
         return;
     }
 
-    // FOCO: una sola cara en perspectiva, en la capa 0. No usa el frustum de la
-    // camara para nada —el volumen lo fija el cono de la luz—, asi que sale por
-    // aqui antes de calcularlo. Misma funcion que Vulkan: la matriz TIENE que
-    // ser identica o el bias cuadra en un backend y no en el otro.
+    // SPOT: a single perspective face, in layer 0. It does not use the camera
+    // frustum at all (the volume is set by the light's cone), so it exits through
+    // here before computing it. Same function as Vulkan: the matrix HAS to
+    // be identical or the bias works out on one backend and not on the other.
     if (!sceneLights.empty() &&
         static_cast<int>(sceneLights[0].direction[3] + 0.5f) ==
             static_cast<int>(LightType::Spot)) {
@@ -8405,30 +8405,30 @@ void D3D12Renderer::Impl::computeCascades()
                 glm::vec4(key.position[0], key.position[1], key.position[2], key.position[3]),
                 glm::vec4(key.direction[0], key.direction[1], key.direction[2], key.direction[3]),
                 glm::vec4(key.params[0], key.params[1], key.params[2], key.params[3]),
-                // flipY = false: aqui la convencion de Y la absorbe el viewport
-                // de altura negativa del pase de sombras, igual que con la
-                // ortografica de las cascadas. Invertir tambien la matriz seria
-                // aplicarla dos veces.
+                // flipY = false: here the Y convention is absorbed by the
+                // negative-height viewport of the shadow pass, just like with the
+                // cascades' orthographic. Inverting the matrix too would be
+                // applying it twice.
                 /*flipY=*/false, cascadeMatrices[0])) {
             activeLayers = 1;
         }
         return;
     }
 
-    // El reparto de cascadas vive en cascadeShadowMatrices, compartido con el
-    // camino Vulkan: eran las mismas lineas de matematica escritas dos veces, y
-    // una divergencia entre ellas no la detectaba nada (H3).
+    // The cascade split lives in cascadeShadowMatrices, shared with the
+    // Vulkan path: they were the same lines of math written twice, and
+    // a divergence between them went undetected by anything (H3).
     const glm::mat4  proj = cameraProj();
     const glm::mat4& view = cameraView;
 
-    // La direccion de la luz key: la de una luz de punto apunta al centro de la
-    // ESCENA, que cambia cuando se mueve cualquier objeto y no solo cuando se
-    // tocan las luces. Por eso se resuelve aqui y no en setLights.
+    // The key light's direction: that of a point light points at the center of the
+    // SCENE, which changes when any object moves and not only when the
+    // lights are touched. That is why it is resolved here and not in setLights.
     if (!sceneLights.empty()) {
         SceneCenter centro;
         for (const StaticObject& object : objects) {
             if (object.slotFree)
-                continue;   // un hueco libre esta en el origen y tiraria de la media
+                continue;   // a free slot is at the origin and would pull on the average
             centro.add(object.transform);
         }
         for (const SkinnedObject& character : skinnedObjects)
@@ -8448,8 +8448,8 @@ void D3D12Renderer::Impl::computeCascades()
         }
     }
 
-    // flipY = false: aqui la convencion de Y la absorbe el viewport de altura
-    // negativa del pase de sombras, no la matriz.
+    // flipY = false: here the Y convention is absorbed by the negative-height
+    // viewport of the shadow pass, not by the matrix.
     if (!cascadeShadowMatrices(view, proj, glm::normalize(lightDirection),
                                state->shadowDistance(), state->cascadeLambda(),
                                shadowMapSize, /*flipY=*/false,
@@ -8465,12 +8465,12 @@ void D3D12Renderer::Impl::ensureSceneInstanceBuffer(size_t count)
     if (count == 0 || count <= sceneInstanceCapacity[frameIndex])
         return;
 
-    // Se crece por bloques para no rehacer el buffer cada vez que entra una
-    // malla al cargar una escena.
+    // It grows in blocks so as not to redo the buffer every time a
+    // mesh comes in while loading a scene.
     const size_t newCapacity = (std::max)(count, sceneInstanceCapacity[frameIndex] * 2 + 64);
 
     if (sceneInstanceAllocations[frameIndex]) {
-        // Puede estar en uso por el frame anterior.
+        // It may be in use by the previous frame.
         waitForGpu();
         if (sceneInstanceMapped[frameIndex]) {
             sceneInstanceAllocations[frameIndex]->GetResource()->Unmap(0, nullptr);
@@ -8514,8 +8514,8 @@ D3D12_GPU_VIRTUAL_ADDRESS D3D12Renderer::Impl::instanceAddress(uint32_t index) c
 
 bool D3D12Renderer::Impl::releaseStaticObject(StaticObject& object)
 {
-    // Un duplicado lleva COPIAS de los handles del dueño: soltarlas liberaría
-    // dos veces el mismo recurso. Solo baja el recuento del dueño.
+    // A duplicate carries COPIES of the owner's handles: releasing them would free
+    // the same resource twice. It only lowers the owner's count.
     if (!object.ownsGpu) {
         if (object.sharedMesh >= 0 && object.sharedMesh < static_cast<int>(objects.size()))
             --objects[static_cast<size_t>(object.sharedMesh)].sharedRefs;
@@ -8527,8 +8527,8 @@ bool D3D12Renderer::Impl::releaseStaticObject(StaticObject& object)
         return false;
     }
 
-    // El dueño con duplicados vivos NO puede soltar: los dejaría dibujando con
-    // memoria liberada, que no lo avisa ni la capa de validación.
+    // The owner with live duplicates CANNOT release: it would leave them drawing with
+    // freed memory, which not even the validation layer warns about.
     if (--object.sharedRefs > 0)
         return false;
 
@@ -8550,20 +8550,20 @@ bool D3D12Renderer::Impl::releaseObjectSlot(size_t index)
     if (object.slotFree)
         return false;
 
-    // Hay que quedarse con esto ANTES de que releaseStaticObject lo toque: a un
-    // duplicado le anula los handles, y luego el struct entero se resetea.
+    // This has to be kept BEFORE releaseStaticObject touches it: for a
+    // duplicate it nulls the handles, and then the whole struct is reset.
     const bool duplicado = !object.ownsGpu;
     const int  duenyo    = object.sharedMesh;
 
-    // Aquí vive el criterio de quién puede soltar; esta función solo decide qué
-    // hacer con el HUECO según lo que aquella haya contestado.
+    // The criterion of who may release lives there; this function only decides what to
+    // do with the SLOT according to what that one answered.
     const bool solto = releaseStaticObject(object);
 
     if (!solto && !duplicado) {
-        // Dueño con duplicados vivos. Ceder el hueco los dejaría dibujando
-        // memoria que otro objeto habría reasignado, y eso no lo avisa ni la
-        // capa de validación: los handles siguen siendo válidos, solo que ya no
-        // son suyos. Se apaga y espera.
+        // Owner with live duplicates. Giving up the slot would leave them drawing
+        // memory that another object would have reassigned, and not even the
+        // validation layer warns about that: the handles are still valid, just no longer
+        // theirs. It is turned off and waits.
         object.meshVisible    = false;
         object.pendingRelease = true;
         drawGroupsDirty       = true;
@@ -8571,12 +8571,12 @@ bool D3D12Renderer::Impl::releaseObjectSlot(size_t index)
     }
 
     const std::string key = object.sharedKey;
-    // El bloque de descriptores se CONSERVA: pertenece al indice, no al objeto
-    // (kSrvObjects + indice * kSrvPerObject), y quien reutilice el hueco va a
-    // calcular exactamente el mismo. Devolverlo a kSrvBaseColor haria que los
-    // bucles que refrescan sondas, sombras y AO para todos los objetos —los que
-    // no filtran por srvBase— escribieran en el hueco GLOBAL: una entrada
-    // muerta pisando la textura neutra que usan los objetos sin material.
+    // The descriptor block is KEPT: it belongs to the index, not the object
+    // (kSrvObjects + index * kSrvPerObject), and whoever reuses the slot will
+    // compute exactly the same one. Returning it to kSrvBaseColor would make the
+    // loops that refresh probes, shadows and AO for all objects (the ones that
+    // do not filter by srvBase) write into the GLOBAL slot: a dead
+    // entry overwriting the neutral texture used by objects without a material.
     const UINT srvBase = object.srvBase;
     object             = StaticObject{};
     object.srvBase     = srvBase;
@@ -8590,14 +8590,14 @@ bool D3D12Renderer::Impl::releaseObjectSlot(size_t index)
     objectSlots.release(static_cast<int>(index));
     drawGroupsDirty = true;
 
-    // El duplicado que acaba de morir puede haber sido el último que mantenía
-    // en pie a un dueño ya retirado. Sin esto sus buffers se quedaban hasta el
-    // clearStaticMeshes siguiente, que es justo la fuga que cierra P11.
+    // The duplicate that just died may have been the last one keeping
+    // an already retired owner alive. Without this its buffers stayed until the next
+    // clearStaticMeshes, which is exactly the leak P11 closes.
     if (duplicado && duenyo >= 0 && static_cast<size_t>(duenyo) < objects.size()) {
         StaticObject& previo = objects[static_cast<size_t>(duenyo)];
         if (previo.pendingRelease && previo.sharedRefs <= 0) {
-            // releaseStaticObject decrementa antes de comparar, así que se le
-            // deja el recuento en 1 para que baje a 0 y suelte.
+            // releaseStaticObject decrements before comparing, so its
+            // count is left at 1 so that it drops to 0 and releases.
             previo.sharedRefs     = 1;
             previo.pendingRelease = false;
             releaseObjectSlot(static_cast<size_t>(duenyo));
@@ -8628,9 +8628,9 @@ bool D3D12Renderer::Impl::releaseSkinnedSlot(size_t index)
             skinnedTextures.release(texture, [](D3D12MA::Allocation* const& a) { a->Release(); });
     character.textures.clear();
 
-    // Las ternas vuelven al pool. Un personaje se lleva una por submalla, así
-    // que sin esto el tope de 16 se agotaba con dos o tres recargas de escena
-    // aunque no quedara ni un personaje vivo.
+    // The triplets go back to the pool. A character takes one per submesh, so
+    // without this the cap of 16 ran out after two or three scene reloads
+    // even with not a single character alive.
     for (const SkinnedSubMesh& sub : character.subMeshes)
         if (sub.srvBase >= kSrvSkinned &&
             sub.srvBase < kSrvSkinned + kMaxSkinnedSlots * kSrvPerObject)
@@ -8650,15 +8650,15 @@ void D3D12Renderer::Impl::rebuildDrawGroups()
     if (objects.empty())
         return;
 
-    // La clave NO es solo la malla. Dos objetos que la comparten se pintan del
-    // mismo draw, y un draw enlaza UN bloque de descriptores: solo pueden ir
-    // juntos si el bloque de los dos dice lo mismo. Lo que puede diferir con la
-    // misma malla es la sonda de reflexión (t4/t5) y el relleno de una textura
-    // que no se pudo leer, así que los dos entran en la clave.
+    // The key is NOT just the mesh. Two objects that share it are painted in the
+    // same draw, and a draw binds ONE descriptor block: they can only go
+    // together if both blocks say the same thing. What can differ with the
+    // same mesh is the reflection probe (t4/t5) and the filler of a texture
+    // that could not be read, so both enter the key.
     //
-    // El resto de lo por-objeto no hace falta aquí: metallic y roughness salen
-    // del material, que ya está en la clave de contenido de la malla, y la
-    // fuerza de SSR la parte el propio agrupado.
+    // The rest of the per-object data is not needed here: metallic and roughness come
+    // from the material, which is already in the mesh's content key, and the
+    // SSR strength is split by the grouping itself.
     std::unordered_map<uint64_t, int> byKey;
     byKey.reserve(objects.size());
 
@@ -8687,12 +8687,11 @@ void D3D12Renderer::Impl::buildShadowBatches()
     if (objects.empty() || !sceneInstanceMapped[frameIndex])
         return;
 
-    // Sin frustum: el pase de sombras dibuja las cuatro cascadas y el pre-pase
-    // cubre la pantalla entera, así que los dos quieren TODO lo visible. La
-    // fuerza de SSR se deja a 0 y los factores PBR en su valor por defecto
-    // porque ninguno de los dos pinta color: los tres entran en la clave del
-    // agrupado, así que con un único valor salen MENOS draws y el mapa
-    // resultante es idéntico.
+    // No frustum: the shadow pass draws all four cascades and the pre-pass
+    // covers the whole screen, so both want EVERYTHING visible. The SSR
+    // strength is left at 0 and the PBR factors at their default value
+    // because neither paints color: all three enter the grouping key, so with a single
+    // value FEWER draws come out and the resulting map is identical.
     batchCandidates.clear();
     batchCandidates.reserve(objects.size());
     for (const StaticObject& object : objects)
@@ -8717,25 +8716,25 @@ void D3D12Renderer::Impl::recordShadowPasses()
     toDepthWrite.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     commandList->ResourceBarrier(1, &toDepthWrite);
 
-    // ALTURA NEGATIVA, por lo mismo que el resto de pases de este backend: el
-    // shader que LEE el mapa da por hecha la orientación de Vulkan.
+    // NEGATIVE HEIGHT, for the same reason as the rest of this backend's passes: the
+    // shader that READS the map takes the Vulkan orientation for granted.
     //
-    // Quien decide el mapeo son la matriz y el viewport JUNTOS, y hasta ahora
-    // solo se había mirado la matriz. Con g = la Y del punto en espacio de luz
-    // (convención GL, que es la que sale de orthoRH_ZO sin invertir):
+    // What decides the mapping are the matrix and the viewport TOGETHER, and until now
+    // only the matrix had been looked at. With g = the point's Y in light space
+    // (GL convention, which is what comes out of orthoRH_ZO without inverting):
     //
-    //   Vulkan   lightProj[1][1] *= -1  ->  NDC y = -g, y su viewport manda
-    //            y=-1 ARRIBA, luego escribe en la fila (1-g)/2.
-    //            pbr.frag lee uv.v = (-g)*0.5+0.5 = (1-g)/2.  Coincide.
+    //   Vulkan   lightProj[1][1] *= -1  ->  NDC y = -g, and its viewport puts
+    //            y=-1 at the TOP, so it writes to row (1-g)/2.
+    //            pbr.frag reads uv.v = (-g)*0.5+0.5 = (1-g)/2.  They match.
     //
-    //   D3D12    sin invertir           ->  NDC y = g, y su viewport manda
-    //            y=+1 ARRIBA, luego escribía también en (1-g)/2 —por eso el
-    //            comentario de computeCascades acierta al no volver a invertir
-    //            la matriz—, PERO el shader lee uv.v = g*0.5+0.5 = (1+g)/2.
-    //            Espejado en vertical.
+    //   D3D12    without inverting      ->  NDC y = g, and its viewport puts
+    //            y=+1 at the TOP, so it also wrote to (1-g)/2 (which is why the
+    //            comment in computeCascades is right not to invert
+    //            the matrix again), BUT the shader reads uv.v = g*0.5+0.5 = (1+g)/2.
+    //            Vertically mirrored.
     //
-    // Invertir el viewport pone la escritura en (1+g)/2, que es justo donde el
-    // shader mira. La matriz se queda como está.
+    // Inverting the viewport puts the write at (1+g)/2, which is exactly where the
+    // shader looks. The matrix stays as it is.
     D3D12_VIEWPORT shadowViewport{};
     shadowViewport.TopLeftY = static_cast<float>(shadowMapSize);
     shadowViewport.Width    = static_cast<float>(shadowMapSize);
@@ -8759,22 +8758,22 @@ void D3D12Renderer::Impl::recordShadowPasses()
         commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
         commandList->SetGraphicsRoot32BitConstants(1, 1, &cascade, 0);
 
-        // Se dibuja en las capas de la luz key (desde la 0) y en las de los focos
-        // secundarios (desde kShadowKeyLayers). Las de en medio se limpian igual
-        // —el clear de arriba es lo que las deja utilizables— pero dibujar en
-        // ellas seria grabar con la matriz identidad sobre capas que nadie
-        // muestrea.
+        // It is drawn in the key light's layers (from 0) and in those of the secondary
+        // spots (from kShadowKeyLayers). The ones in between are cleared anyway
+        // (the clear above is what leaves them usable) but drawing into
+        // them would be recording with the identity matrix on layers nobody
+        // samples.
         const bool esDeLaKey   = cascade < activeLayers;
         const bool esDeUnExtra = cascade >= static_cast<UINT>(kShadowKeyLayers) &&
                                  cascade <  static_cast<UINT>(kShadowKeyLayers) + extraLayers;
         if (!esDeLaKey && !esDeUnExtra)
             continue;
 
-        // El suelo no se mete en el mapa: es el receptor, y meterlo solo
-        // añadiría su propia superficie como oclusor de sí misma.
+        // The ground is not put in the map: it is the receiver, and putting it in would only
+        // add its own surface as an occluder of itself.
         //
-        // Un draw por grupo de malla, con la vista de instancias apuntando al
-        // principio del rango del grupo: de ahí saca shadow.vert su model.
+        // One draw per mesh group, with the instance view pointing at the
+        // start of the group's range: that is where shadow.vert takes its model from.
         if (!shadowBatches.empty() && sceneInstanceAllocations[frameIndex]) {
             commandList->SetPipelineState(shadowPipeline.Get());
 
@@ -8817,15 +8816,15 @@ void D3D12Renderer::Impl::updateViewProj()
 
 void D3D12Renderer::Impl::resolveFrameCamera()
 {
-    // Por defecto manda la cámara de edición, que es la que empuja setCamera
-    // cada frame. Se limpia SIEMPRE: al parar Play la vista tiene que volver
-    // sola, sin guardar ni restaurar nada.
+    // By default the edit camera rules, which is the one setCamera pushes
+    // every frame. It is ALWAYS cleared: when Play stops the view has to go back
+    // by itself, without saving or restoring anything.
     sceneCameraProj.reset();
 
-    // headless = juego exportado, que está SIEMPRE en Play y no tiene editor
-    // que le empuje una cámara: si no se resuelve aquí, se queda con la vista
-    // por defecto del backend y no mira nunca por la cámara de la escena.
-    // Misma regla que Renderer::isPlaying() en el camino de Vulkan.
+    // headless = exported game, which is ALWAYS in Play and has no editor
+    // to push a camera to it: if it is not resolved here, it stays with the backend's
+    // default view and never looks through the scene's camera.
+    // Same rule as Renderer::isPlaying() in the Vulkan path.
     const bool playing = headless || (uiLayer && uiLayer->isPlaying());
     if (!playing || !scene)
         return;
@@ -8836,32 +8835,32 @@ void D3D12Renderer::Impl::resolveFrameCamera()
 
     const auto& component = cam->getCameraComponent();
 
-    // projectionMatrix trae el Y flip de Vulkan cocinado dentro. Aquí sobra:
-    // este backend no invierte el eje (ver updateSceneUbo). Se deshace en vez
-    // de rehacer la matriz a mano para que ortográfica, near/far y fov sigan
-    // saliendo de un único sitio.
+    // projectionMatrix carries Vulkan's Y flip baked in. Here it is unwanted:
+    // this backend does not invert the axis (see updateSceneUbo). It is undone instead
+    // of rebuilding the matrix by hand so that orthographic, near/far and fov keep
+    // coming from a single place.
     glm::mat4 proj = component->projectionMatrix(viewportAspectRatio());
     proj[1][1] *= -1.0f;
     sceneCameraProj = proj;
 
-    // La vista y el ojo también salen del componente. cameraView y cameraPos se
-    // pisan sin más: el editor los vuelve a empujar en el frame siguiente, así
-    // que no hay estado que restaurar.
+    // The view and the eye also come from the component. cameraView and cameraPos are
+    // simply overwritten: the editor pushes them again in the next frame, so
+    // there is no state to restore.
     cameraView = CameraComponent::viewFromWorld(cam->worldTransform);
     cameraPos  = glm::vec3(cam->worldTransform[3]);
 }
 
 D3D12Renderer::D3D12Renderer() : m_impl(std::make_unique<Impl>())
 {
-    // El Impl consulta el estado a través de este puntero en vez de copiarlo:
-    // así un setBloomIntensity() desde el editor se ve en el frame siguiente.
+    // The Impl queries the state through this pointer instead of copying it:
+    // this way a setBloomIntensity() from the editor shows up in the next frame.
     m_impl->state = this;
 
-    // Aquí NO se enciende ningún efecto. Los encendía —niebla y un bloom más
-    // fuerte— cuando este backend tenía su propio bucle de prueba y quería
-    // enseñarlos; detrás del editor eso pisa lo que diga el proyecto, y una
-    // escena real con la niebla puesta y una sola luz lejana se ve NEGRA. El
-    // default del motor es el de RendererState, igual que para Vulkan.
+    // NO effect is turned on here. It used to turn them on (fog and a stronger
+    // bloom) when this backend had its own test loop and wanted to
+    // show them off; behind the editor that overrides what the project says, and a real
+    // scene with fog set and a single distant light looks BLACK. The
+    // engine default is RendererState's, just like for Vulkan.
 }
 
 D3D12Renderer::~D3D12Renderer()
@@ -8887,8 +8886,8 @@ void D3D12Renderer::init(Window& window)
     glfwGetFramebufferSize(glfwWindow, &fbWidth, &fbHeight);
     d.width  = static_cast<UINT>(fbWidth > 0 ? fbWidth : 1);
     d.height = static_cast<UINT>(fbHeight > 0 ? fbHeight : 1);
-    // Al arrancar, el render es del tamaño de la ventana: no hay panel todavía,
-    // ni SSAA que multiplique nada.
+    // At startup, the render is the size of the window: there is no panel yet,
+    // nor SSAA multiplying anything.
     d.swapWidth  = d.width;
     d.swapHeight = d.height;
     d.outWidth   = d.width;
@@ -8896,9 +8895,9 @@ void D3D12Renderer::init(Window& window)
 
     UINT factoryFlags = 0;
 #ifndef NDEBUG
-    // Capa de depuración ANTES de crear el device: activarla después no afecta
-    // a un device ya creado. Si no está el "Graphics Tools" de Windows, falla y
-    // se sigue sin ella en vez de impedir el arranque.
+    // Debug layer BEFORE creating the device: enabling it afterwards does not affect
+    // an already created device. If Windows "Graphics Tools" is not present, it fails and
+    // we continue without it instead of preventing startup.
     {
         ComPtr<ID3D12Debug> debugController;
         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
@@ -8908,26 +8907,26 @@ void D3D12Renderer::init(Window& window)
     }
 #endif
 
-    // DRED (Device Removed Extended Data). Es la única forma de saber QUÉ
-    // operación colgó a la GPU cuando el device se pierde, y no depende de la
-    // capa de depuración ni de las "Graphics Tools". Como la capa, hay que
-    // pedirlo ANTES de crear el device: es un ajuste de proceso que el device
-    // lee al nacer.
+    // DRED (Device Removed Extended Data). It is the only way to know WHICH
+    // operation hung the GPU when the device is lost, and it does not depend on the
+    // debug layer or on the "Graphics Tools". Like the layer, it has to be
+    // requested BEFORE creating the device: it is a process setting that the device
+    // reads when it is born.
     //
-    // Las dos mitades NO cuestan lo mismo y por eso no llevan la misma guarda:
+    // The two halves do NOT cost the same and that is why they do not share the same guard:
     //
-    //   - Los AUTO-BREADCRUMBS graban un WriteBufferImmediate por CADA comando
-    //     que se mete en la lista. Eso es coste por frame, en todos los frames,
-    //     y Release es la configuración desde la que se exporta el juego: van
-    //     solo en Debug. Si alguien viene dentro de seis meses a "arreglar"
-    //     esta guarda quitándola, que sepa lo que está pagando — y que para
-    //     perseguir un cuelgue de GPU basta con reproducirlo en Debug, donde
-    //     las migas SÍ están.
-    //   - El FALLO DE PÁGINA no graba nada por comando: solo hace que el
-    //     runtime recuerde el nombre de las allocations para poder decir qué
-    //     había en la dirección que reventó. Se queda encendido en las dos
-    //     configuraciones, porque es justo lo que uno quiere tener cuando el
-    //     cuelgue aparece en la máquina de un jugador y no hay segunda toma.
+    //   - The AUTO-BREADCRUMBS record a WriteBufferImmediate for EVERY command
+    //     put into the list. That is a per-frame cost, in every frame,
+    //     and Release is the configuration the game is exported from: they go
+    //     only in Debug. If someone comes along in six months to "fix"
+    //     this guard by removing it, let them know what they are paying, and that to
+    //     chase a GPU hang it is enough to reproduce it in Debug, where
+    //     the breadcrumbs ARE present.
+    //   - The PAGE FAULT records nothing per command: it only makes the
+    //     runtime remember the names of the allocations so it can say what
+    //     was at the address that blew up. It stays on in both
+    //     configurations, because it is exactly what one wants to have when the
+    //     hang shows up on a player's machine and there is no second take.
     {
         ComPtr<ID3D12DeviceRemovedExtendedDataSettings> dredSettings;
         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dredSettings)))) {
@@ -8947,9 +8946,9 @@ void D3D12Renderer::init(Window& window)
     throwIfFailed(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&d.factory)),
                   "CreateDXGIFactory2");
 
-    // Adaptador: se prefiere el de más rendimiento si DXGI 1.6 está disponible;
-    // si no, el primero hardware que acepte el feature level. Mismo criterio de
-    // descarte de WARP que D3D12Support::querySupport.
+    // Adapter: the highest-performance one is preferred if DXGI 1.6 is available;
+    // otherwise, the first hardware one that accepts the feature level. Same WARP
+    // discard criterion as D3D12Support::querySupport.
     ComPtr<IDXGIAdapter1> adapter;
     {
         ComPtr<IDXGIFactory6> factory6;
@@ -8995,16 +8994,16 @@ void D3D12Renderer::init(Window& window)
     throwIfFailed(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d.device)),
                   "D3D12CreateDevice");
 
-    // La cola de mensajes de la capa de depuración, para poder drenarla a
-    // fichero: por sí sola escribe por OutputDebugString, que sin depurador no
-    // lo lee nadie. Solo existe si la capa está activa (Debug + Graphics
-    // Tools); si no, el QueryInterface falla y aquí no pasa nada.
+    // The debug layer's message queue, so it can be drained to
+    // file: by itself it writes through OutputDebugString, which without a debugger
+    // nobody reads. It only exists if the layer is active (Debug + Graphics
+    // Tools); otherwise, the QueryInterface fails and nothing happens here.
     if (SUCCEEDED(d.device->QueryInterface(IID_PPV_ARGS(&d.infoQueue))))
         diagLog("Debug layer message queue redirected to this file.");
 
-    // El gancho para throwIfFailed, que es una función libre y no tiene device.
-    // Va sobre una estática de traducción porque no hay más de un D3D12Renderer
-    // por proceso (el device cuelga de él y main crea uno).
+    // The hook for throwIfFailed, which is a free function and has no device.
+    // It goes on a translation-unit static because there is no more than one D3D12Renderer
+    // per process (the device hangs off it and main creates one).
     static D3D12Renderer::Impl* impl = nullptr;
     impl                             = &d;
     g_volcarDeviceRemoved            = [](const char* donde, HRESULT hr) {
@@ -9022,18 +9021,18 @@ void D3D12Renderer::init(Window& window)
     scDesc.BufferCount = kFrameCount;
     scDesc.Width       = d.width;
     scDesc.Height      = d.height;
-    // UNORM, no SRGB: la conversión a espacio de pantalla la hará el pass de
-    // composición cuando exista, igual que en el camino Vulkan.
+    // UNORM, not SRGB: the conversion to screen space will be done by the
+    // composition pass when it exists, just like in the Vulkan path.
     scDesc.Format      = DXGI_FORMAT_R8G8B8A8_UNORM;
     scDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     scDesc.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     scDesc.SampleDesc.Count = 1;
 
-    // Tearing: es lo que permite presentar SIN esperar al refresco, o sea el
-    // equivalente de VK_PRESENT_MODE_IMMEDIATE. Depende del adaptador y del SO,
-    // asi que se pregunta; y el flag hay que pedirlo al CREAR el swapchain,
-    // aunque el modo se elija luego en cada Present. Sin el, un Present(0,
-    // ALLOW_TEARING) falla.
+    // Tearing: it is what allows presenting WITHOUT waiting for the refresh, that is, the
+    // equivalent of VK_PRESENT_MODE_IMMEDIATE. It depends on the adapter and the OS,
+    // so it is queried; and the flag has to be requested when CREATING the swapchain,
+    // even though the mode is chosen later on each Present. Without it, a Present(0,
+    // ALLOW_TEARING) fails.
     {
         BOOL permitido = FALSE;
         ComPtr<IDXGIFactory5> factory5;
@@ -9053,19 +9052,19 @@ void D3D12Renderer::init(Window& window)
                                                     nullptr, &swapChain1),
                   "IDXGIFactory4::CreateSwapChainForHwnd");
 
-    // El fullscreen por Alt+Enter de DXGI se lleva mal con una ventana que
-    // gestiona GLFW: se desactiva y el modo de pantalla lo decide el motor.
+    // DXGI's Alt+Enter fullscreen does not get along with a window
+    // managed by GLFW: it is disabled and the display mode is decided by the engine.
     d.factory->MakeWindowAssociation(d.hwnd, DXGI_MWA_NO_ALT_ENTER);
 
     throwIfFailed(swapChain1.As(&d.swapChain), "IDXGISwapChain1::QueryInterface(IDXGISwapChain3)");
     d.frameIndex = d.swapChain->GetCurrentBackBufferIndex();
 
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
-    // Los de la swapchain, más el target HDR de la escena y el LDR intermedio
-    // que la composición deja para FXAA.
-    // Los de la swapchain, el HDR, el LDR de la composición y el color
-    // multimuestra del pase de escena cuando hay MSAA.
-    // + historias del TAA, viewport y las seis caras del horneado de sondas.
+    // Those of the swapchain, plus the scene's HDR target and the intermediate LDR
+    // that the composition leaves for FXAA.
+    // Those of the swapchain, the HDR, the composition's LDR and the
+    // multisampled color of the scene pass when there is MSAA.
+    // + TAA histories, viewport and the six faces of the probe bake.
     rtvHeapDesc.NumDescriptors = kRtvCount;
     rtvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
@@ -9085,11 +9084,11 @@ void D3D12Renderer::init(Window& window)
                                               d.allocators[d.frameIndex].Get(), nullptr,
                                               IID_PPV_ARGS(&d.commandList)),
                   "ID3D12Device::CreateCommandList");
-    // Nombres para que las migas de DRED digan de QUÉ lista y QUÉ cola habla,
-    // en vez de "(sin nombre)".
+    // Names so that the DRED breadcrumbs say WHICH list and WHICH queue they talk about,
+    // instead of "(unnamed)".
     d.commandList->SetName(L"ListaPrincipal");
     d.queue->SetName(L"ColaDirecta");
-    // Se crea en estado abierto y drawFrame espera encontrarla cerrada.
+    // It is created in the open state and drawFrame expects to find it closed.
     throwIfFailed(d.commandList->Close(), "ID3D12GraphicsCommandList::Close");
 
     throwIfFailed(d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d.fence)),
@@ -9101,8 +9100,8 @@ void D3D12Renderer::init(Window& window)
     if (d.fenceEvent == nullptr)
         throwIfFailed(HRESULT_FROM_WIN32(GetLastError()), "CreateEventW");
 
-    // Suballocador de recursos. Va DESPUÉS del fence porque la primera subida
-    // de geometría necesita esperar a la GPU para soltar su staging.
+    // Resource suballocator. It goes AFTER the fence because the first geometry
+    // upload needs to wait on the GPU to release its staging.
     d.adapter = adapter;
 
     D3D12MA::ALLOCATOR_DESC allocatorDesc{};
@@ -9112,8 +9111,8 @@ void D3D12Renderer::init(Window& window)
                   "D3D12MA::CreateAllocator");
 
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
-    // La profundidad de siempre y la multimuestra.
-    dsvHeapDesc.NumDescriptors = 3;  // escena, escena multimuestra y caras de sonda
+    // The usual depth and the multisampled one.
+    dsvHeapDesc.NumDescriptors = 3;  // scene, multisampled scene and probe faces
     dsvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     throwIfFailed(d.device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&d.dsvHeap)),
                   "ID3D12Device::CreateDescriptorHeap(DSV)");
@@ -9133,19 +9132,19 @@ void D3D12Renderer::init(Window& window)
     d.createSsaoTargets();
 
     d.createSkinningPipelines();
-    // Las sombras van al final: su SRV pisa el array de relleno que dejó
-    // createMeshResources en el hueco t3, y necesita el buffer de instancias
-    // del cubo ya creado.
+    // Shadows go last: their SRV overwrites the filler array that createMeshResources
+    // left in the t3 slot, and it needs the cube's instance buffer
+    // already created.
     d.createShadowResources();
     d.computeCascades();
-    // El target HDR y los niveles del bloom necesitan el heap de descriptores
-    // ya creado por createMeshResources.
+    // The HDR target and the bloom levels need the descriptor heap
+    // already created by createMeshResources.
     d.createHdrTargets();
     d.createBloomPipelines();
-    // El cielo despues del heap y del target HDR: usa un hueco del primero y
-    // dibuja en el segundo.
+    // The sky after the heap and the HDR target: it uses a slot of the first and
+    // draws into the second.
     d.createSkyboxResources();
-    // El IBL sale del cielo recién cargado, así que va detrás.
+    // The IBL comes from the freshly loaded sky, so it goes after.
     d.precomputeIbl();
     d.createFogAndFxaaPipelines();
     d.createSsrPipelines();
@@ -9177,10 +9176,10 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
     if (!outlineLdrPipeline || !hasOutlineSelection())
         return;
 
-    // La profundidad de la escena, en una versión que se pueda emparejar con el
-    // target LDR: los dos tienen que coincidir en número de muestras. Sin MSAA
-    // vale la del pase de escena; con MSAA esa es multimuestra y se usa la del
-    // pre-pase, que por eso se graba también cuando hay algo seleccionado.
+    // The scene's depth, in a version that can be paired with the
+    // LDR target: both have to match in sample count. Without MSAA the scene pass one
+    // works; with MSAA that one is multisampled and the pre-pass one is used,
+    // which is why it is also recorded when something is selected.
     const bool multisampled = sampleCount > 1;
     if (multisampled && !prepassDepthAllocation)
         return;
@@ -9191,9 +9190,9 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
 
     commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
 
-    // Viewport SIN altura negativa, al revés que el de la composición: aquel lo
-    // invierte porque fullscreen.vert da por hecha la orientación de Vulkan,
-    // pero esto es geometría de verdad y sale igual que en el pase de escena.
+    // Viewport WITHOUT negative height, unlike the composition's: that one
+    // inverts it because fullscreen.vert takes the Vulkan orientation for granted,
+    // but this is real geometry and comes out the same as in the scene pass.
     D3D12_VIEWPORT viewport{};
     viewport.Width    = static_cast<float>(width);
     viewport.Height   = static_cast<float>(height);
@@ -9205,9 +9204,9 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
     commandList->SetGraphicsRootSignature(meshRootSignature.Get());
     commandList->SetGraphicsRootConstantBufferView(
         0, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
-    // outline.vert/frag solo miran el UBO y el push, pero la root signature
-    // declara los otros dos rangos: se dejan apuntando a algo válido en vez de
-    // a cero.
+    // outline.vert/frag only look at the UBO and the push, but the root signature
+    // declares the other two ranges: they are left pointing at something valid instead of
+    // at zero.
     commandList->SetGraphicsRootDescriptorTable(2, srvHeap->GetGPUDescriptorHandleForHeapStart());
     commandList->SetGraphicsRootShaderResourceView(
         3, instanceAllocation->GetResource()->GetGPUVirtualAddress());
@@ -9223,11 +9222,11 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
 
         PushData push{};
         push.transform = transform;
-        // flags.y lleva el grosor de la extrusión, que es el hueco que esa vec2
-        // tenía libre. Proporcional al tamaño del objeto EN MUNDO, igual que el
-        // camino de Vulkan: un grosor plano se come los objetos pequeños y no se
-        // ve en los grandes. El mínimo de 1 unidad evita que una malla diminuta
-        // se quede sin contorno.
+        // flags.y carries the extrusion thickness, which is the slot that vec2
+        // had free. Proportional to the object's size IN WORLD, just like the
+        // Vulkan path: a flat thickness eats small objects and is not
+        // visible on large ones. The minimum of 1 unit prevents a tiny mesh
+        // from being left without an outline.
         push.flags = glm::vec2(0.0f, outlineThickness(localExtent, transform));
         commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
 
@@ -9240,8 +9239,8 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
         const StaticObject& object = objects[static_cast<size_t>(selectedObject)];
         if (object.meshVisible)
         {
-            // La caja del estatico esta en espacio LOCAL (ver StaticObject), que
-            // es justo lo que espera outlineThickness.
+            // The static's box is in LOCAL space (see StaticObject), which
+            // is exactly what outlineThickness expects.
             const glm::vec3 e = object.aabbMax - object.aabbMin;
             const float ext = object.hasBounds ? (glm::max)(e.x, (glm::max)(e.y, e.z)) : 0.0f;
             drawOutline(outlineLdrPipeline.Get(), object.transform, ext,
@@ -9251,15 +9250,15 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
     if (selectedSkinned >= 0 && selectedSkinned < static_cast<int>(skinnedObjects.size())) {
         const SkinnedObject& character = skinnedObjects[static_cast<size_t>(selectedSkinned)];
         if (character.visible && character.vertexCount > 0) {
-            // El buffer de vertices deformados ya NO esta como entrada del
-            // ensamblador: el pase de escena lo devuelve a acceso desordenado en
-            // cuanto termina, porque el compute del frame siguiente lo reescribe.
-            // Este pase va DESPUES de aquello, asi que tiene que pedirlo prestado
-            // y dejarlo como estaba.
+            // The deformed vertex buffer is NO LONGER an input of the
+            // assembler: the scene pass returns it to unordered access as
+            // soon as it finishes, because the next frame's compute rewrites it.
+            // This pass goes AFTER that, so it has to borrow it
+            // and leave it as it was.
             //
-            // Sin esto el draw es invalido -vertex buffer en UNORDERED_ACCESS- y
-            // el contorno de un personaje sencillamente no se dibujaba. El de un
-            // objeto estatico si, porque su vertex buffer no lo toca el skinning.
+            // Without this the draw is invalid (vertex buffer in UNORDERED_ACCESS) and
+            // a character's outline was simply not drawn. A static
+            // object's was, because its vertex buffer is not touched by the skinning.
             D3D12_RESOURCE_BARRIER vb{};
             vb.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             vb.Transition.pResource   = character.outputVerts->GetResource();
@@ -9282,19 +9281,19 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
                                               D3D12_CPU_DESCRIPTOR_HANDLE dsv, UINT targetWidth,
                                               UINT targetHeight)
 {
-    // TODO el pase de geometria: limpiar, mallas, personajes, contorno, cielo y
-    // las lineas del editor. Sale de drawFrame para poder repetirlo con otra
-    // camara y otro destino, que es lo que necesita el horneado de una sonda de
-    // reflexion: seis caras, la misma escena.
+    // The WHOLE geometry pass: clear, meshes, characters, outline, sky and
+    // the editor lines. It comes out of drawFrame so it can be repeated with another
+    // camera and another destination, which is what the baking of a reflection probe
+    // needs: six faces, the same scene.
     //
-    // Lo que NO entra: las marcas de tiempo (miden el pase del frame, no una
-    // cara) y el post-procesado, que va detras y sobre el target HDR.
+    // What does NOT go in: the timestamps (they measure the frame's pass, not a
+    // face) and the post-processing, which goes after and over the HDR target.
     commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
     commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
     commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-    // Viewport y scissor se ponen cada frame: tras un resize el estado del
-    // command list se reinicia y arrastrar el tamaño viejo recortaría la imagen.
+    // Viewport and scissor are set every frame: after a resize the command list's
+    // state is reset and carrying the old size would clip the image.
     D3D12_VIEWPORT viewport{};
     viewport.Width    = static_cast<float>(targetWidth);
     viewport.Height   = static_cast<float>(targetHeight);
@@ -9304,8 +9303,8 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
     D3D12_RECT scissor{0, 0, static_cast<LONG>(targetWidth), static_cast<LONG>(targetHeight)};
     commandList->RSSetScissorRects(1, &scissor);
 
-    // La malla primero: escribe profundidad y así la rejilla que va detrás
-    // queda tapada donde toca.
+    // The mesh first: it writes depth and so the grid behind it
+    // is covered where it should be.
     if (meshPipeline) {
         ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
         commandList->SetDescriptorHeaps(1, heaps);
@@ -9324,23 +9323,23 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
         bindForwardPlus();
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-        // Geometría de la escena, agrupada por malla compartida: N cubos
-        // iguales visibles salen de UN draw instanciado, y cada instancia coge
-        // su matriz del tramo del grupo (flags.x = 1). El culling sigue siendo
-        // por objeto —lo que decide es si el objeto entra o no en su grupo—.
+        // Scene geometry, grouped by shared mesh: N identical visible
+        // cubes come out of ONE instanced draw, and each instance takes
+        // its matrix from the group's range (flags.x = 1). Culling is still
+        // per object (what it decides is whether the object enters its group).
         //
-        // El reparto se rehace aquí y no una vez por frame porque esta función
-        // también graba las seis caras de una sonda, y cada una ve un conjunto
-        // distinto. Que se pueda reusar el mismo tramo es cosa de que cada cara
-        // se envía y se espera antes de grabar la siguiente.
+        // The split is redone here and not once per frame because this function
+        // also records the six faces of a probe, and each one sees a different
+        // set. That the same range can be reused is because each face
+        // is submitted and waited on before recording the next.
         const Culling::Frustum cameraFrustum = Culling::frustumFromViewProj(viewProj);
 
         batchCandidates.clear();
         batchCandidates.reserve(objects.size());
         for (const StaticObject& object : objects) {
-            // El test del frustum es conservador —puede dejar pasar algo que no
-            // se ve, nunca quitar algo que sí—, y una malla sin caja se dibuja
-            // siempre.
+            // The frustum test is conservative (it may let something through that
+            // is not seen, never remove something that is) and a mesh without a box is drawn
+            // always.
             const bool dibujable = object.meshVisible && object.indexCount > 0;
             const bool visible =
                 dibujable && (!object.hasBounds ||
@@ -9349,9 +9348,9 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
             if (dibujable && !visible)
                 if (perfCapture) ++statCulledCount;
 
-            // Los factores entran en la clave del agrupado: desde que salieron
-            // de makeSharedMeshKey, dos objetos del mismo drawGroup pueden tener
-            // acabados distintos y no pueden compartir push constant.
+            // The factors enter the grouping key: since they left
+            // makeSharedMeshKey, two objects of the same drawGroup can have
+            // different finishes and cannot share a push constant.
             batchCandidates.push_back({object.drawGroup, visible, &object.transform,
                                        state->ssrEnabled() ? object.ssrStrength : 0.0f,
                                        object.metallic, object.roughness});
@@ -9372,8 +9371,8 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
             const StaticObject& rep = objects[static_cast<size_t>(
                 drawGroupRep[static_cast<size_t>(batch.sharedIndex)])];
 
-            // La terna del representante vale para todo el grupo: comparten
-            // malla, material y sonda, que es justo lo que decide el grupo.
+            // The representative's triplet is valid for the whole group: they share
+            // mesh, material and probe, which is exactly what decides the group.
             D3D12_GPU_DESCRIPTOR_HANDLE table = srvHeap->GetGPUDescriptorHandleForHeapStart();
             table.ptr += static_cast<UINT64>(rep.srvBase) * srvSize;
             commandList->SetGraphicsRootDescriptorTable(2, table);
@@ -9381,13 +9380,13 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
                                                            instanceAddress(batch.firstInstance));
 
             PushData push{};
-            // flags.x = 1: el model sale del buffer de instancias, uno por
-            // instancia. El transform del push constant no se mira.
-            // Del GRUPO y no del representante: rep es el primer objeto del
-            // drawGroup, y desde que los factores salieron de la clave de dedup
-            // sus valores no tienen por que ser los de este batch. El agrupado
-            // ya ha partido por factores, asi que el del batch vale para todas
-            // sus instancias; el de rep se dibujaria en objetos que no son el.
+            // flags.x = 1: the model comes from the instance buffer, one per
+            // instance. The push constant's transform is not looked at.
+            // From the GROUP and not the representative: rep is the first object of the
+            // drawGroup, and since the factors left the dedup key
+            // their values need not be those of this batch. The grouping
+            // has already split by factors, so the batch's applies to all
+            // its instances; rep's would be drawn on objects that are not it.
             push.metallic  = batch.metallic;
             push.roughness = batch.roughness;
             push.flags     = glm::vec2(1.0f, batch.ssrStrength);
@@ -9400,10 +9399,10 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
             if (perfCapture) statInstanced += static_cast<int>(batch.instanceCount);
         }
 
-        // Suelo: receptor de sombras y referencia visual, NO parte de la
-        // escena. Solo se dibuja cuando no hay geometría cargada: un proyecto
-        // suele traer su propio plano, y superponerle otro deja los dos
-        // peleándose por la profundidad y proyectándose sombra el uno al otro.
+        // Ground: shadow receiver and visual reference, NOT part of the
+        // scene. It is only drawn when there is no geometry loaded: a project
+        // usually brings its own plane, and overlaying another leaves the two
+        // fighting over depth and casting shadow on each other.
         if (groundIndexCount > 0 && objects.empty()) {
             PushData groundPush{};
             groundPush.transform = glm::mat4(1.0f);
@@ -9419,8 +9418,8 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
         }
     }
 
-    // Personajes: mismos shaders y misma root signature que el cubo, pero el
-    // vertex buffer es lo que acaba de escribir el compute.
+    // Characters: same shaders and same root signature as the cube, but the
+    // vertex buffer is what the compute just wrote.
     if (!skinnedObjects.empty() && skinnedMeshPipeline) {
         commandList->SetPipelineState(state->isWireframeMode()
                                             ? skinnedMeshWirePipeline.Get()
@@ -9438,20 +9437,20 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
                 continue;
 
             PushData push{};
-            // flags.x = 0: el model sale de aquí, no del buffer de instancias,
-            // que es la ruta que usa el motor para skinne
+            // flags.x = 0: the model comes from here, not from the instance buffer,
+            // which is the route the engine uses for skinne
             push.transform = character.transform;
             push.flags = glm::vec2(0.0f, state->ssrEnabled() ? character.ssrStrength : 0.0f);
 
             commandList->IASetVertexBuffers(0, 1, &character.vertexBufferView);
             commandList->IASetIndexBuffer(&character.indexBufferView);
 
-            // Un draw por submalla, cada una con la terna de su material Y con
-            // sus factores. El push se escribe DENTRO del bucle por eso: antes
-            // se escribía una vez por personaje con dos constantes, así que las
-            // submallas de un mismo personaje no podían tener acabados
-            // distintos ni responder a los sliders. Es lo que ya hacía Vulkan
-            // (un push por submalla, leyendo de matGfx[sm.materialIndex]).
+            // One draw per submesh, each with its material's triplet AND with
+            // its factors. The push is written INSIDE the loop for that reason: before,
+            // it was written once per character with two constants, so the
+            // submeshes of the same character could not have different
+            // finishes or respond to the sliders. It is what Vulkan already did
+            // (one push per submesh, reading from matGfx[sm.materialIndex]).
             for (const SkinnedSubMesh& sub : character.subMeshes) {
                 if (sub.indexCount == 0)
                     continue;
@@ -9468,27 +9467,27 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
         }
     }
 
-    // El cielo al final de la geometria: se apoya en la profundidad ya escrita
-    // para salir solo donde no hay nada, y asi no paga sombreado por pixeles
-    // que va a tapar la escena.
+    // The sky at the end of the geometry: it relies on the depth already written
+    // to come out only where there is nothing, and so does not pay shading for pixels
+    // that the scene will cover.
     recordSkybox();
 
-    // La rejilla y las líneas de depuración son cosa del EDITOR: en un juego
-    // exportado no pintan nada, y salían igual porque este backend no miraba el
-    // modo headless.
-    // La rejilla y las líneas de depuración comparten pipeline y formato de
-    // vértice, pero NO condición: antes las líneas colgaban del `if` de la
-    // rejilla, así que una escena sin rejilla se llevaba por delante también los
-    // gizmos del editor. Cada una con la suya.
+    // The grid and the debug lines are an EDITOR matter: in an exported
+    // game they paint nothing, and they came out anyway because this backend did not look at
+    // headless mode.
+    // The grid and the debug lines share pipeline and vertex
+    // format, but NOT condition: before, the lines hung off the grid's `if`,
+    // so a scene without a grid also took the editor's
+    // gizmos down with it. Each with its own.
     const bool dibujaRejilla = gridVertexCount > 0;
     const bool dibujaLineas  = debugLineVertices > 0 && debugLinesAllocation;
 
     if (gizmoPipeline && !headless && (dibujaRejilla || dibujaLineas)) {
         commandList->SetPipelineState(gizmoPipeline.Get());
         commandList->SetGraphicsRootSignature(rootSignature.Get());
-        // glm guarda la matriz en columnas y el HLSL traducido la declara
-        // row_major: los 16 floats crudos se interpretan igual que en Vulkan,
-        // sin transponer.
+        // glm stores the matrix in columns and the translated HLSL declares it
+        // row_major: the 16 raw floats are interpreted the same as in Vulkan,
+        // without transposing.
         commandList->SetGraphicsRoot32BitConstants(0, 16, &viewProj[0][0], 0);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
 
@@ -9497,9 +9496,9 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
             commandList->DrawInstanced(gridVertexCount, 1, 0, 0);
         }
 
-        // Las que haya mandado este frame quien dibuja (en el editor,
-        // ViewportPanel a través de submitDebugLines): colliders, luces,
-        // frustum de la cámara y ejes de la selección.
+        // Whatever the drawer sent this frame (in the editor,
+        // ViewportPanel through submitDebugLines): colliders, lights,
+        // camera frustum and selection axes.
         if (dibujaLineas) {
             commandList->IASetVertexBuffers(0, 1, &debugLinesView);
             commandList->DrawInstanced(debugLineVertices, 1, 0, 0);
@@ -9514,51 +9513,51 @@ void D3D12Renderer::drawFrame()
     if (!d.initialized)
         return;
 
-    // El device se perdió en algún punto que no podía lanzar (el destructor
-    // pasa por waitForGpu). Aquí sí se puede, y es el mismo desenlace que ya
-    // tiene el Present de más abajo: seguir dibujando sobre un fence roto solo
-    // entierra el error de verdad, que ya está en d3d12_diag.log.
+    // The device was lost at some point that could not throw (the destructor
+    // goes through waitForGpu). Here it can, and it is the same outcome the Present
+    // below already has: continuing to draw over a broken fence only buries the real
+    // error, which is already in d3d12_diag.log.
     if (d.deviceLost) {
         throw std::runtime_error(std::string("D3D12: device lost at ") +
                                  (d.deviceLostDonde ? d.deviceLostDonde : "?") + " (HRESULT " +
                                  hresultToString(d.deviceLostHr) + ")");
     }
 
-    // Lo primero del frame: el tamaño que anotó el callback de la ventana. Aquí
-    // ya estamos en el bucle principal, fuera del WindowProc, así que se puede
-    // tocar DXGI y una excepción tiene por dónde salir.
+    // First thing in the frame: the size recorded by the window callback. Here
+    // we are already in the main loop, outside the WindowProc, so DXGI can be
+    // touched and an exception has somewhere to go.
     d.applyPendingResize();
 
-    // Y un cambio de tamaño del panel, que mueve todo lo interno sin tocar la
+    // And a panel size change, which moves everything internal without touching the
     // swapchain.
     d.applyPendingRenderSize();
 
-    // Y un cambio de anti-aliasing, que mueve targets y pipelines: aquí, entre
-    // frames, no en mitad de uno.
+    // And an anti-aliasing change, which moves targets and pipelines: here, between
+    // frames, not in the middle of one.
     d.applyPendingSampleCount();
 
-    // Y el lado del shadow map, por el mismo motivo: entre frames, no en
-    // mitad de uno.
+    // And the shadow map side, for the same reason: between frames, not in
+    // the middle of one.
     d.applyPendingShadowSize();
 
-    // Los tiempos que dejó la última vez que se usó este slot: moveToNextFrame
-    // ya esperó su fence, así que están completos. Se leen ANTES de grabar
-    // nada, porque el frame que empieza los va a sobrescribir.
+    // The times left by the last time this slot was used: moveToNextFrame
+    // already waited on its fence, so they are complete. They are read BEFORE recording
+    // anything, because the frame that starts is going to overwrite them.
     d.readTimestamps();
 
-    // Qué cámara manda este frame: la de edición o la de la escena si corre
-    // Play. Va antes que todo lo que dibuja o mide —las sondas hornean con el
-    // UBO, las cascadas se reparten sobre el frustum— porque cambia la
-    // proyección y con ella el culling y el rango de sombras.
+    // Which camera rules this frame: the edit one or the scene's if Play runs.
+    // It goes before everything that draws or measures (probes bake with the
+    // UBO, cascades are split over the frustum) because it changes the
+    // projection and with it the culling and the shadow range.
     d.resolveFrameCamera();
     d.updateViewProj();
     d.computeCascades();
 
-    // Los grupos de dibujo y el buffer de instancias, ANTES que las sondas: el
-    // horneado graba el pase de geometría seis veces, y ese pase agrupa y
-    // escribe en este buffer. Sin esto, el primer horneado tras cargar una
-    // escena capturaba el cielo y nada más, porque los objetos aún no tenían
-    // grupo asignado.
+    // The draw groups and the instance buffer, BEFORE the probes: the
+    // bake records the geometry pass six times, and that pass groups and
+    // writes into this buffer. Without this, the first bake after loading a
+    // scene captured the sky and nothing else, because the objects did not yet have a
+    // group assigned.
     if (!d.objects.empty()) {
         if (d.drawGroupsDirty)
             d.rebuildDrawGroups();
@@ -9566,18 +9565,18 @@ void D3D12Renderer::drawFrame()
         d.ensureSceneInstanceBuffer(d.instanceRegionStride * 2);
     }
 
-    // Sondas: altas, bajas y horneado. ANTES de abrir el frame, porque hornear
-    // graba en esta misma lista de comandos y espera a la GPU — con el frame a
-    // medias, el Reset del allocator falla y no se hornea nada, en silencio.
+    // Probes: additions, removals and baking. BEFORE opening the frame, because baking
+    // records into this same command list and waits on the GPU: with the frame
+    // half done, the allocator's Reset fails and nothing gets baked, silently.
     d.syncProbes();
 
-    // Y el hueco de oclusion, que depende del interruptor del SSAO.
+    // And the occlusion slot, which depends on the SSAO switch.
     d.refreshAoSlots();
 
-    // Un Reset que falla deja el frame sin grabar. No se ha enviado nada, así
-    // que la GPU no queda a medias, pero syncProbes() de más arriba SÍ ha
-    // corrido ya: descartarlo en silencio es como se pierde un horneado sin
-    // que nadie se entere.
+    // A Reset that fails leaves the frame unrecorded. Nothing has been submitted, so
+    // the GPU is not left half done, but syncProbes() above HAS
+    // already run: discarding it silently is how a bake gets lost without
+    // anyone noticing.
     ID3D12CommandAllocator* allocator = d.allocators[d.frameIndex].Get();
     if (const HRESULT hr = allocator->Reset(); FAILED(hr)) {
         d.notarFrameDescartado("ID3D12CommandAllocator::Reset (drawFrame)", hr);
@@ -9588,22 +9587,22 @@ void D3D12Renderer::drawFrame()
         return;
     }
 
-    // TODAS las marcas al arranque del frame, y luego cada pase sobrescribe las
-    // suyas. El resolve copia el rango entero, así que una query que este frame
-    // no se escriba conservaría el tick de hace tres frames y daría una resta
-    // absurda —se vio un Forward+ de 735 ms con el modo apagado—. Escribiéndolas
-    // todas, un pase que no corre mide cero, que es la verdad.
+    // ALL the marks at frame start, and then each pass overwrites its
+    // own. The resolve copies the whole range, so a query that is not written this frame
+    // would keep the tick from three frames ago and give an absurd subtraction
+    // (a 735 ms Forward+ was seen with the mode off). By writing
+    // all of them, a pass that does not run measures zero, which is the truth.
     for (UINT slot = 0; slot < Impl::TsCount; ++slot)
         d.markTimestamp(slot);
 
-    // Las cuentas del frame anterior ya las ha leído el panel (la interfaz se
-    // construye antes de grabar), así que aquí se pueden reiniciar.
+    // The previous frame's counts have already been read by the panel (the interface is
+    // built before recording), so here they can be reset.
     d.statDraws       = 0;
     d.statInstanced   = 0;
     d.statCulledCount = 0;
 
-    // Los tres compute van ANTES de abrir el render target: escriben el vertex
-    // buffer que el pase gráfico va a leer este mismo frame.
+    // The three computes go BEFORE opening the render target: they write the vertex
+    // buffer that the graphics pass will read this same frame.
     if (!d.skinnedObjects.empty()) {
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
@@ -9613,12 +9612,12 @@ void D3D12Renderer::drawFrame()
                                    : 0.0;
         d.lastTick = now;
 
-        // Cada personaje avanza en su propio ciclo: los clips no duran lo
-        // mismo, y un tiempo compartido haría saltar a los cortos.
+        // Each character advances in its own cycle: clips do not last the
+        // same, and a shared time would make the short ones jump.
         for (Impl::SkinnedObject& character : d.skinnedObjects) {
-            // Salvo los que lleva alguien de fuera: el editor avanza el reloj
-            // por frame desde el Animator del GameObject, y sumar aquí también
-            // los pondría al doble de velocidad.
+            // Except those driven from outside: the editor advances the clock
+            // per frame from the GameObject's Animator, and adding here too would
+            // put them at double speed.
             if (character.externalClock)
                 continue;
             character.animTime = advanceMeshClock(character.animTime, static_cast<float>(elapsed),
@@ -9629,14 +9628,14 @@ void D3D12Renderer::drawFrame()
         d.recordSkinning();
     }
 
-    // El UBO se escribe una vez por frame y lo leen los dos pases: el de
-    // sombras necesita lightSpaceMatrix, el principal todo lo demás.
+    // The UBO is written once per frame and read by both passes: the shadow
+    // one needs lightSpaceMatrix, the main one everything else.
     d.updateSceneUbo();
 
-    // Y el reparto del tramo de sombras/pre-pase. Se reescribe entero: mover un
-    // objeto no tiene por qué avisar al renderer. Va aquí, con el frame ya
-    // abierto, porque el horneado de una sonda pudo cambiar la asignación de
-    // sondas y con ella los grupos.
+    // And the split of the shadow/pre-pass range. It is rewritten entirely: moving an
+    // object need not notify the renderer. It goes here, with the frame already
+    // open, because a probe's bake may have changed the probe
+    // assignment and with it the groups.
     if (!d.objects.empty()) {
         if (d.drawGroupsDirty)
             d.rebuildDrawGroups();
@@ -9646,8 +9645,8 @@ void D3D12Renderer::drawFrame()
         d.instanceRegionStride = 0;
     }
 
-    // Lo mismo para los personajes: el pase de sombras los dibuja con
-    // StartInstanceLocation, y shadow.vert saca su model de este buffer.
+    // The same for the characters: the shadow pass draws them with
+    // StartInstanceLocation, and shadow.vert takes its model from this buffer.
     if (!d.skinnedObjects.empty()) {
         d.ensureSkinnedInstanceBuffer(d.skinnedObjects.size());
         if (d.skinnedInstanceMapped[d.frameIndex]) {
@@ -9657,22 +9656,22 @@ void D3D12Renderer::drawFrame()
         }
     }
 
-    // Sombras antes del pase principal: pbr.frag muestrea el mapa que se graba
-    // aquí.
+    // Shadows before the main pass: pbr.frag samples the map that is recorded
+    // here.
     if (d.shadowPipeline) {
         d.markTimestamp(Impl::TsShadow);
         d.recordShadowPasses();
         d.markTimestamp(Impl::TsShadow + 1);
     }
 
-    // Y la oclusión, que necesita su propia profundidad y la produce con dos
-    // compute: pbr.frag la multiplica al ambiente en el pase siguiente.
+    // And the occlusion, which needs its own depth and produces it with two
+    // computes: pbr.frag multiplies it into the ambient in the next pass.
     d.markTimestamp(Impl::TsSsao);
     d.recordDepthPrepassAndSsao();
     d.markTimestamp(Impl::TsSsao + 1);
 
-    // Reparto de luces por celda. Va detrás del pre-pase porque el modo tiled
-    // reduce la profundidad de cada tile a partir de él.
+    // Per-cell light split. It goes after the pre-pass because tiled mode
+    // reduces each tile's depth from it.
     d.updateForwardPlus();
     d.markTimestamp(Impl::TsForwardPlus);
     d.recordForwardPlusCull();
@@ -9689,8 +9688,8 @@ void D3D12Renderer::drawFrame()
     D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
     backBufferRtv.ptr += static_cast<SIZE_T>(d.frameIndex) * d.rtvSize;
 
-    // Con la escena en textura, el pase final escribe ahí y el backbuffer se
-    // queda para la interfaz, que es quien la dibujará dentro de su panel.
+    // With the scene in a texture, the final pass writes there and the backbuffer is
+    // left for the interface, which will draw it inside its panel.
     D3D12_CPU_DESCRIPTOR_HANDLE sceneRtv = backBufferRtv;
     const bool toTexture = d.renderToTexture && d.viewportAllocation;
     if (toTexture) {
@@ -9705,16 +9704,16 @@ void D3D12Renderer::drawFrame()
         toTarget.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         d.commandList->ResourceBarrier(1, &toTarget);
 
-        // Ya en RENDER_TARGET: el pase final de AA lo escribe entero más
-        // abajo, pero el primero de todos necesita el estreno.
+        // Already in RENDER_TARGET: the final AA pass writes it entirely further
+        // down, but the very first one needs the first use.
         d.estrenarRenderTarget(d.viewportAllocation->GetResource(), d.viewportInicializado);
     }
 
-    // La escena NO se dibuja en el backbuffer: va al target HDR, que es el
-    // único sitio donde el umbral del bloom puede distinguir lo que pasa de
-    // 1.0. El backbuffer lo escribe después el pase de composición.
-    // Con MSAA la escena se dibuja en el par multimuestra y se resuelve al
-    // cerrar el pase; sin él, directo al HDR de siempre.
+    // The scene is NOT drawn into the backbuffer: it goes to the HDR target, which is the
+    // only place where the bloom threshold can tell apart what exceeds
+    // 1.0. The backbuffer is written afterwards by the composition pass.
+    // With MSAA the scene is drawn into the multisampled pair and resolved on
+    // closing the pass; without it, straight into the usual HDR.
     const bool multisampled = d.sampleCount > 1 && d.hdrMsAllocation && d.depthMsAllocation;
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -9722,27 +9721,27 @@ void D3D12Renderer::drawFrame()
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = d.dsvHeap->GetCPUDescriptorHandleForHeapStart();
     if (multisampled)
         dsv.ptr += d.dsvSize;
-    // El frame de UI, ANTES del pase de escena: es ahí donde se graban los
-    // canvas de MUNDO, y esta llamada es la que construye su draw data, calcula
-    // su matriz de modelo y dimensiona el buffer que comparten con los de
-    // pantalla. Una sola vez por frame — ver el comentario de uiVertexCursor.
-    // Va DETRÁS de resolveFrameCamera/updateViewProj porque la matriz de modelo
-    // necesita la vista del frame para el billboard, y DETRÁS del horneado de
-    // sondas para que ese no se lleve por delante el dimensionado.
+    // The UI frame, BEFORE the scene pass: that is where WORLD canvases are
+    // recorded, and this call is the one that builds their draw data, computes
+    // their model matrix and sizes the buffer they share with the screen
+    // ones. Only once per frame (see the comment on uiVertexCursor).
+    // It goes AFTER resolveFrameCamera/updateViewProj because the model matrix
+    // needs the frame's view for the billboard, and AFTER the probe bake
+    // so that one does not take the sizing down with it.
     d.beginUiFrame();
 
     d.markTimestamp(Impl::TsScene);
     d.recordSceneGeometry(rtv, dsv, d.width, d.height);
-    // Los canvas de mundo, al final del pase de escena: la geometría y el cielo
-    // ya han escrito profundidad, así que una pared delante los tapa. Aquí y no
-    // dentro de recordSceneGeometry a propósito: esa función la reusa el
-    // horneado de sondas, y una sonda no tiene que capturar la interfaz.
+    // The world canvases, at the end of the scene pass: the geometry and the sky
+    // have already written depth, so a wall in front hides them. Here and not
+    // inside recordSceneGeometry on purpose: that function is reused by the
+    // probe bake, and a probe must not capture the interface.
     d.recordWorldCanvases(d.width, d.height);
     d.markTimestamp(Impl::TsScene + 1);
 
-    // El buffer de vértices deformados vuelve a acceso desordenado: el frame
-    // siguiente lo reescribe el compute, y tiene que encontrarlo como lo dejó
-    // el anterior o la transición de ida partiría de un estado que no es.
+    // The deformed vertex buffer goes back to unordered access: the next
+    // frame rewrites it with the compute, and it has to find it as the
+    // previous one left it or the transition there would start from a state that it is not in.
     for (const Impl::SkinnedObject& character : d.skinnedObjects) {
         if (character.vertexCount == 0)
             continue;
@@ -9756,8 +9755,8 @@ void D3D12Renderer::drawFrame()
     }
 
     if (multisampled) {
-        // Multimuestra a una muestra: de aquí en adelante todo el post lee el
-        // HDR de siempre, que es el único que tiene UAV y vistas de lectura.
+        // Multisample to single sample: from here on all the post reads the
+        // usual HDR, which is the only one with UAV and read views.
         D3D12_RESOURCE_BARRIER toResolve[2]{};
         toResolve[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         toResolve[0].Transition.pResource   = d.hdrMsAllocation->GetResource();
@@ -9778,35 +9777,35 @@ void D3D12Renderer::drawFrame()
         d.commandList->ResourceBarrier(2, toResolve);
     }
 
-    // Reflejos antes de la niebla: leen la escena tal cual salió del pase y le
-    // suman lo reflejado; la niebla va después porque tiñe TODO lo que hay.
+    // Reflections before the fog: they read the scene as it came out of the pass and
+    // add the reflected part to it; the fog goes after because it tints EVERYTHING that is there.
     if (d.state->ssrEnabled()) {
         d.markTimestamp(Impl::TsSsr);
         d.recordSsr();
         d.markTimestamp(Impl::TsSsr + 1);
     }
 
-    // Niebla ANTES del bloom: reescribe la escena, y lo que el bloom filtre
-    // tiene que ser ya lo que se va a ver.
-    // Ahora que el interruptor vive en el estado compartido, se respeta: es el
-    // mismo que apaga la niebla en el menú View del editor.
+    // Fog BEFORE the bloom: it rewrites the scene, and what the bloom filters
+    // has to be already what will be seen.
+    // Now that the switch lives in the shared state, it is respected: it is the
+    // same one that turns off the fog in the editor's View menu.
     if (d.fogPipeline && d.state->fogEnabled()) {
         d.markTimestamp(Impl::TsFog);
         d.recordFog();
         d.markTimestamp(Impl::TsFog + 1);
     }
 
-    // Motion blur detrás de la niebla y antes del bloom: emborrona la imagen tal
-    // y como se va a ver, y la estela arrastra los highlights para que florezcan
-    // con ellos. Apagado no graba ni un comando.
+    // Motion blur after the fog and before the bloom: it blurs the image just
+    // as it will be seen, and the trail drags the highlights so they bloom
+    // with them. Off, it records not a single command.
     if (d.motionBlurActive()) {
         d.markTimestamp(Impl::TsMotionBlur);
         d.recordMotionBlur();
         d.markTimestamp(Impl::TsMotionBlur + 1);
     }
 
-    // Bloom, composición con tone mapping y FXAA hasta el backbuffer. El
-    // anti-aliasing se cronometra dentro: TAA y FXAA van cosidos a este pase.
+    // Bloom, composition with tone mapping and FXAA down to the backbuffer. The
+    // anti-aliasing is timed inside: TAA and FXAA are sewn to this pass.
     if (d.compositePipeline) {
         d.markTimestamp(Impl::TsBloom);
         d.recordBloomAndComposite(sceneRtv);
@@ -9814,7 +9813,7 @@ void D3D12Renderer::drawFrame()
     }
 
     if (toTexture) {
-        // Y a lectura, que es como la quiere la interfaz.
+        // And to read, which is how the interface wants it.
         D3D12_RESOURCE_BARRIER toRead{};
         toRead.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         toRead.Transition.pResource   = d.viewportAllocation->GetResource();
@@ -9823,8 +9822,8 @@ void D3D12Renderer::drawFrame()
         toRead.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         d.commandList->ResourceBarrier(1, &toRead);
 
-        // El backbuffer no lo ha tocado nadie: se limpia para que la interfaz
-        // no dibuje sobre lo del frame anterior.
+        // Nobody has touched the backbuffer: it is cleared so the interface
+        // does not draw over the previous frame's contents.
         const float uiClear[4] = {0.05f, 0.05f, 0.06f, 1.0f};
         d.commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
         d.commandList->ClearRenderTargetView(backBufferRtv, uiClear, 0, nullptr);
@@ -9841,13 +9840,13 @@ void D3D12Renderer::drawFrame()
     toPresent.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
     d.commandList->ResourceBarrier(1, &toPresent);
 
-    // La última marca y el volcado, ya con todo grabado.
+    // The last mark and the dump, now with everything recorded.
     d.markTimestamp(Impl::TsFrame + 1);
     d.resolveTimestamps();
 
-    // Igual que los Reset: sin Close no hay nada que ejecutar y el frame se
-    // cae entero. Aquí duele más, porque todo el trabajo del frame ya está
-    // grabado y los timestamps se quedan sin resolver.
+    // Same as the Resets: without Close there is nothing to execute and the frame
+    // falls entirely. Here it hurts more, because all the frame's work is already
+    // recorded and the timestamps are left unresolved.
     if (const HRESULT hr = d.commandList->Close(); FAILED(hr)) {
         d.notarFrameDescartado("ID3D12GraphicsCommandList::Close (drawFrame)", hr);
         return;
@@ -9856,12 +9855,12 @@ void D3D12Renderer::drawFrame()
     ID3D12CommandList* lists[] = {d.commandList.Get()};
     d.queue->ExecuteCommandLists(1, lists);
 
-    // Aqui es donde D3D12 elige modo de presentacion, y no al crear el
-    // swapchain como Vulkan: SyncInterval 1 espera al refresco y 0 no.
+    // This is where D3D12 chooses the presentation mode, and not when creating the
+    // swapchain like Vulkan: SyncInterval 1 waits for the refresh and 0 does not.
     //
-    // Mailbox no tiene equivalente en DXGI, asi que cae a Vsync — la UI ya lo
-    // deshabilita con su motivo. Immediate necesita ademas el flag de tearing,
-    // que solo vale si el swapchain se creo con el suyo.
+    // Mailbox has no equivalent in DXGI, so it falls back to Vsync (the UI already
+    // disables it with its reason). Immediate also needs the tearing flag,
+    // which is only valid if the swapchain was created with its own.
     UINT sync  = 1;
     UINT flags = 0;
     if (d.state->presentMode() == PresentMode::Immediate && d.tearingDisponible) {
@@ -9870,20 +9869,20 @@ void D3D12Renderer::drawFrame()
     }
     const HRESULT presentHr = d.swapChain->Present(sync, flags);
     if (presentHr == DXGI_ERROR_DEVICE_REMOVED || presentHr == DXGI_ERROR_DEVICE_RESET) {
-        // El volcado ANTES de lanzar: la excepción se lleva el proceso por
-        // delante y con él el device, que es a quien hay que preguntarle.
+        // The dump BEFORE throwing: the exception takes the process down
+        // and with it the device, which is the one that has to be asked.
         d.dumpDeviceRemoved("IDXGISwapChain3::Present", presentHr);
         throw std::runtime_error("D3D12: device lost during Present (HRESULT " +
                                  hresultToString(presentHr) + ")");
     }
 
-    // Frame entero grabado, enviado y presentado: la racha de descartes se
-    // rompe aquí. Sin esto, tres frames malos sueltos a lo largo de una sesión
-    // se sumarían y acabarían dando el device por perdido sin motivo.
+    // Whole frame recorded, submitted and presented: the discard streak
+    // is broken here. Without this, three isolated bad frames over a session
+    // would add up and end up declaring the device lost for no reason.
     d.framesDescartadosSeguidos = 0;
 
-    // Lo que la capa de depuración haya dicho en este frame, al fichero. Es una
-    // cola: si no se drena, se llena y empieza a descartar.
+    // What the debug layer said during this frame, to the file. It is a
+    // queue: if it is not drained, it fills up and starts discarding.
     d.drainInfoQueue();
 
     d.moveToNextFrame();
@@ -10106,7 +10105,7 @@ void D3D12Renderer::resize(uint32_t width, uint32_t height)
     Impl& d = *m_impl;
     if (!d.initialized)
         return;
-    // Ventana minimizada: DXGI rechaza 0x0 y no hay nada que presentar.
+    // Minimized window: DXGI rejects 0x0 and there is nothing to present.
     if (width == 0 || height == 0)
         return;
 
@@ -10124,19 +10123,19 @@ void D3D12Renderer::Impl::applyPendingResize()
     if (pendingWidth == width && pendingHeight == height)
         return;
 
-    // La GPU no puede estar usando los buffers viejos.
+    // The GPU cannot be using the old buffers.
     waitForGpu();
 
-    // El valor con el que arrancará el frame siguiente. Se captura AQUÍ, con
-    // frameIndex todavía apuntando al slot que acaba de esperar: waitForGpu lo
-    // dejó en "completado + 1", que es el único valor que se sabe alcanzable.
+    // The value the next frame will start with. It is captured HERE, with
+    // frameIndex still pointing at the slot that was just waited on: waitForGpu
+    // left it at "completed + 1", which is the only value known to be reachable.
     const UINT64 nextFenceValue = fenceValues[frameIndex];
 
-    // Y no puede quedar NINGUNA referencia viva a ellos, o ResizeBuffers falla
-    // con E_INVALIDARG. Soltar renderTargets no basta: un command list cerrado
-    // retiene los recursos que grabó, y el último frame grabó justamente las
-    // barreras del back buffer. Resetearlo suelta esa retención; se vuelve a
-    // cerrar porque drawFrame espera encontrarlo cerrado.
+    // And NO live reference to them can remain, or ResizeBuffers fails
+    // with E_INVALIDARG. Releasing renderTargets is not enough: a closed command list
+    // retains the resources it recorded, and the last frame recorded precisely the
+    // back buffer barriers. Resetting it releases that retention; it is closed
+    // again because drawFrame expects to find it closed.
     for (auto& allocator : allocators) {
         if (allocator)
             allocator->Reset();
@@ -10147,9 +10146,9 @@ void D3D12Renderer::Impl::applyPendingResize()
     }
     releaseRenderTargets();
 
-    // El flag de tearing hay que REPETIRLO aqui: ResizeBuffers recrea los
-    // buffers con los flags que se le pasen, no con los que tenia. Perderlo
-    // dejaria el Present(0, ALLOW_TEARING) fallando a partir del primer resize.
+    // The tearing flag has to be REPEATED here: ResizeBuffers recreates the
+    // buffers with the flags passed to it, not with the ones it had. Losing it
+    // would leave Present(0, ALLOW_TEARING) failing from the first resize on.
     throwIfFailed(swapChain->ResizeBuffers(kFrameCount, pendingWidth, pendingHeight,
                                            DXGI_FORMAT_R8G8B8A8_UNORM,
                                            tearingDisponible
@@ -10159,11 +10158,11 @@ void D3D12Renderer::Impl::applyPendingResize()
 
     swapWidth  = pendingWidth;
     swapHeight = pendingHeight;
-    // Sin panel, el render es del tamaño de la ventana. Con panel manda el
-    // panel, y redimensionar la ventana no tiene por qué moverlo. El de render
-    // sale del de salida, que con SSAA no son el mismo: lo recalcula
-    // applyPendingRenderSize en el frame siguiente, aquí basta con dejar el de
-    // salida al día.
+    // Without a panel, the render is the window's size. With a panel the panel rules,
+    // and resizing the window need not move it. The render one
+    // comes from the output one, which with SSAA are not the same: it is recomputed by
+    // applyPendingRenderSize in the next frame, here it is enough to leave the
+    // output one up to date.
     if (!renderToTexture || pendingRenderWidth == 0) {
         outWidth  = pendingWidth;
         outHeight = pendingHeight;
@@ -10172,38 +10171,38 @@ void D3D12Renderer::Impl::applyPendingResize()
     }
     frameIndex = swapChain->GetCurrentBackBufferIndex();
 
-    // ResizeBuffers puede devolver el índice a CUALQUIER slot, no al siguiente.
-    // Los fenceValues por slot dejan entonces de corresponderse con lo que se
-    // ha señalado de verdad: un slot puede quedarse guardando un valor que la
-    // GPU ya no va a alcanzar nunca, y la espera de moveToNextFrame es
-    // INFINITE — el proceso se cuelga mudo, sin error de la API ni de la capa
-    // de validación. Igualarlos al valor vivo es lo que rompe esa trampa.
+    // ResizeBuffers may return the index to ANY slot, not to the next one.
+    // The per-slot fenceValues then no longer correspond to what has
+    // really been signaled: a slot can end up holding a value that the
+    // GPU will never reach, and moveToNextFrame's wait is
+    // INFINITE: the process hangs silently, with no API or validation layer
+    // error. Setting them all to the live value is what breaks that trap.
     fenceValues.fill(nextFenceValue);
 
     createRenderTargetViews();
 
-    // El buffer de profundidad tiene el tamaño de la ventana: si no se recrea,
-    // el test se hace contra una superficie de otro tamaño.
+    // The depth buffer has the window's size: if it is not recreated,
+    // the test is done against a surface of another size.
     createDepthBuffer();
 
-    // Y el target HDR con los niveles del bloom, por lo mismo. Solo si ya
-    // existían: en el primer arranque los crea init() después del resize.
+    // And the HDR target with the bloom levels, for the same reason. Only if they
+    // already existed: on first startup init() creates them after the resize.
     if (hdrAllocation)
         createHdrTargets();
 
-    // Y los del SSAO, que también son del tamaño de la ventana.
+    // And the SSAO ones, which are also the window's size.
     if (ssaoRawAllocation) {
         createSsaoTargets();
-        ssaoBlurNeedsUav = false;  // recién creado: ya está en escritura
+        ssaoBlurNeedsUav = false;  // freshly created: it is already in write state
     }
 
-    // El aspecto de la proyección depende del tamaño: sin esto la rejilla se
-    // deforma al estirar la ventana.
+    // The projection's aspect depends on the size: without this the grid
+    // gets distorted when stretching the window.
     updateViewProj();
 
-    // Y las cascadas se reparten sobre el frustum de la cámara, que acaba de
-    // cambiar de forma: sin recalcularlas, los volúmenes de sombra siguen
-    // ajustados al aspecto anterior.
+    // And the cascades are split over the camera frustum, which has just
+    // changed shape: without recomputing them, the shadow volumes stay
+    // fitted to the previous aspect.
     computeCascades();
 }
 
@@ -10217,9 +10216,9 @@ void D3D12Renderer::setCamera(const glm::mat4& view, const glm::vec3& position, 
 
     d.updateViewProj();
 
-    // Las cascadas se reparten sobre el frustum de la cámara: sin recalcularlas
-    // aquí seguirían cubriendo el volumen del encuadre anterior, y la sombra se
-    // quedaría atrás al mover la vista.
+    // The cascades are split over the camera frustum: without recomputing them
+    // here they would keep covering the volume of the previous framing, and the shadow would
+    // lag behind when moving the view.
     d.computeCascades();
 }
 
@@ -10234,10 +10233,10 @@ void D3D12Renderer::setLights(const Light* lights, size_t count)
     d.sceneLights.resize(count);
     std::memcpy(d.sceneLights.data(), lights, count * sizeof(ShaderLight));
 
-    // SOLO la luz 0 proyecta sombra, y de dónde sale su dirección lo decide
-    // computeCascades: la de una luz de punto apunta al centro del volumen
-    // sombreado, que depende de la cámara. Derivarla aquí la dejaría congelada
-    // en la cámara que hubiera cuando cambiaron las luces.
+    // ONLY light 0 casts shadow, and where its direction comes from is decided by
+    // computeCascades: that of a point light points at the center of the shaded
+    // volume, which depends on the camera. Deriving it here would leave it frozen
+    // at whatever camera there was when the lights changed.
     d.computeCascades();
 }
 
@@ -10262,16 +10261,16 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
 
     Impl::StaticObject object;
 
-    // El índice se decide AQUÍ y no al insertar, porque de él salen tres cosas
-    // que se escriben más abajo: el bloque de descriptores, el `sharedMesh` de
-    // quien sube la malla y la entrada de `sharedMeshOwner`. Con huecos
-    // reciclados, `objects.size()` ya no es el índice de este objeto.
+    // The index is decided HERE and not on insert, because three things that
+    // are written further down come from it: the descriptor block, the `sharedMesh` of
+    // whoever uploads the mesh and the `sharedMeshOwner` entry. With recycled
+    // slots, `objects.size()` is no longer this object's index.
     const int  reciclado = d.objectSlots.acquire();
     const size_t indice  = reciclado >= 0 ? static_cast<size_t>(reciclado) : d.objects.size();
 
-    // ¿Ya está esta misma malla con este mismo material en VRAM? La clave es de
-    // CONTENIDO, así que dos cubos creados por separado la comparten. El
-    // duplicado se queda con los handles del dueño y no sube ni un byte.
+    // Is this same mesh with this same material already in VRAM? The key is by
+    // CONTENT, so two cubes created separately share it. The
+    // duplicate keeps the owner's handles and uploads not a single byte.
     const std::string key   = makeSharedMeshKey(mesh);
     auto              found = d.sharedMeshOwner.find(key);
     const bool        reusa = found != d.sharedMeshOwner.end() &&
@@ -10313,10 +10312,10 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
         object.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
         object.indexCount             = static_cast<UINT>(mesh.indices.size());
 
-        // Caja envolvente local, de una vez y para siempre: no depende del
-        // transform, así que moverlo o rotarlo no obliga a recalcularla.
-        // Paréntesis alrededor del nombre: windows.h define max como macro y
-        // sin ellos no compila.
+        // Local bounding box, once and for all: it does not depend on the
+        // transform, so moving or rotating it does not force recomputing it.
+        // Parentheses around the name: windows.h defines max as a macro and
+        // without them it does not compile.
         glm::vec3 lo((std::numeric_limits<float>::max)());
         glm::vec3 hi(std::numeric_limits<float>::lowest());
         for (const Vertex& v : mesh.vertices) {
@@ -10329,16 +10328,16 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
 
         object.sharedMesh = static_cast<int>(indice);
         object.ownsGpu    = true;
-        object.sharedRefs = 1;  // él mismo
+        object.sharedRefs = 1;  // itself
     }
 
-    // Con mapa ORM, el mapa manda: se fuerzan los dos a 1.0 para que
-    // clamp(orm.g/b * push.factor, ...) del shader deje pasar el texel tal
-    // cual, sin que el factor del material lo escale. Mismo criterio que
-    // Renderer::createSharedGpuMesh (Vulkan) en el mismo punto — antes de este
-    // fix, D3D12 copiaba mesh.material.metallic/roughness sin mirar si había
-    // ORM, y un material con mapa pero metallic=0.0 (el default) salía con
-    // metalicidad muerta solo en este backend.
+    // With an ORM map, the map rules: both are forced to 1.0 so that the shader's
+    // clamp(orm.g/b * push.factor, ...) lets the texel through as
+    // is, without the material's factor scaling it. Same criterion as
+    // Renderer::createSharedGpuMesh (Vulkan) at the same point. Before this
+    // fix, D3D12 copied mesh.material.metallic/roughness without checking whether there was
+    // an ORM, and a material with a map but metallic=0.0 (the default) came out with
+    // dead metalness only in this backend.
     const bool tieneMapaOrm = chooseTextureSource(mesh.material.metallicRoughnessPath,
                                                    mesh.material.embeddedMetallicRoughness) !=
                               TextureSource::None;
@@ -10346,21 +10345,21 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
     object.roughness = tieneMapaOrm ? 1.0f : mesh.material.roughness;
     object.hasOrmMap = tieneMapaOrm;
 
-    // Terna propia en el heap mientras queden huecos. Pasado el tope se queda
-    // con la global: peor aspecto, pero nunca escribe fuera del heap.
+    // Own triplet in the heap while slots remain. Past the cap it keeps
+    // the global one: worse look, but it never writes outside the heap.
     //
-    // El bloque de descriptores NO se comparte aunque la malla sí: t4 y t5
-    // llevan la sonda de reflexión que le toca a ESTE objeto, y dos cubos
-    // iguales en dos habitaciones distintas reflejan cosas distintas. Lo que se
-    // comparte son los recursos a los que apuntan, que es donde está la memoria.
+    // The descriptor block is NOT shared even though the mesh is: t4 and t5
+    // carry the reflection probe that applies to THIS object, and two identical cubes
+    // in two different rooms reflect different things. What is
+    // shared are the resources they point to, which is where the memory is.
     if (indice < kMaxObjectSlots) {
         const UINT slot = kSrvObjects + static_cast<UINT>(indice) * kSrvPerObject;
         object.srvBase  = slot;
 
         if (reusa) {
-            // Mismos recursos, vistas nuevas. Los formatos son los que eligió
-            // uploadMaterialTexture (resolveSrgb: slot + sidecar): se leen del
-            // propio recurso.
+            // Same resources, new views. The formats are those chosen by
+            // uploadMaterialTexture (resolveSrgb: slot + sidecar): they are read from the
+            // resource itself.
             if (object.baseColorAllocation)
                 d.createTexture2DSrv(object.baseColorAllocation->GetResource(),
                                      formatOf(object.baseColorAllocation), slot + 0);
@@ -10385,9 +10384,9 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
                 mesh.material.texturePath, mesh.material.embeddedTexture, TextureKind::BaseColor,
                 slot + 0);
             if (!object.baseColorAllocation) {
-                // Sin material que pida textura, blanco; si la pedia y no se
-                // pudo leer, damero. Antes las dos caian en blanco y un fichero
-                // que faltaba no se notaba.
+                // With no material asking for a texture, white; if it asked and it could not
+                // be read, checkerboard. Before, both fell to white and a missing
+                // file went unnoticed.
                 const bool sePidio = !mesh.material.texturePath.empty() ||
                                      !mesh.material.embeddedTexture.empty();
                 ID3D12Resource* relleno =
@@ -10404,11 +10403,11 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
                 d.createTexture2DSrv(d.normalMapAllocation->GetResource(),
                                      DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
 
-            // t3..t7: sombras, entorno y oclusión, que son de todos.
+            // t3..t7: shadows, environment and occlusion, which belong to everyone.
             d.fillSharedSlots(slot);
 
-            // Y encima, el ORM propio si el material lo trae: pisa el neutro que
-            // acaba de dejar fillSharedSlots.
+            // And on top, the own ORM if the material has one: it overwrites the neutral that
+            // fillSharedSlots just left.
             object.metalRoughAllocation =
                 d.uploadMaterialTexture(mesh.material.metallicRoughnessPath,
                                         mesh.material.embeddedMetallicRoughness, TextureKind::Orm,
@@ -10417,8 +10416,8 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
     }
 
     if (!reusa) {
-        // La clave se guarda EN el objeto: al liberarlo hay que sacar su
-        // entrada del mapa, y buscarla por valor seria recorrerlo entero.
+        // The key is stored IN the object: when releasing it its entry has to be removed
+        // from the map, and searching for it by value would be walking the whole thing.
         object.sharedKey = key;
         d.sharedMeshOwner[key] = static_cast<int>(indice);
     }
@@ -10442,17 +10441,17 @@ void D3D12Renderer::setObjectSsr(size_t objectIndex, float strength)
         m_impl->objects[objectIndex].ssrStrength = strength;
 }
 
-// Ver EditorRenderer::setObjectMaterialFactors. Aqui los factores YA vivian por
-// objeto (StaticObject), asi que esto es escribir dos floats: ni waitForGpu, ni
-// resubida, ni tocar el heap de descriptores. Lo unico que hay que respetar es
-// la regla del mapa ORM, que en este backend se decide al registrar
-// (addStaticMesh / rebuildStaticMesh) y se recuerda en hasOrmMap.
+// See EditorRenderer::setObjectMaterialFactors. Here the factors ALREADY lived per
+// object (StaticObject), so this is writing two floats: no waitForGpu, no
+// re-upload, no touching the descriptor heap. The only thing to respect is
+// the ORM map rule, which in this backend is decided on register
+// (addStaticMesh / rebuildStaticMesh) and remembered in hasOrmMap.
 //
-// drawGroupsDirty NO se levanta a proposito: los factores dejaron de estar en la
-// clave del grupo de dibujo -salieron de makeSharedMeshKey- y quien los separa
-// ahora es la clave del AGRUPADO DE INSTANCIAS, que se rehace cada frame en
-// recordSceneGeometry. Levantarlo aqui reharia los grupos por cada frame de un
-// arrastre sin que ninguno cambiara.
+// drawGroupsDirty is NOT raised on purpose: the factors stopped being in the
+// draw group key (they left makeSharedMeshKey) and what separates them
+// now is the INSTANCE GROUPING key, which is redone every frame in
+// recordSceneGeometry. Raising it here would redo the groups on every frame of
+// a drag without any of them having changed.
 void D3D12Renderer::setObjectMaterialFactors(size_t objectIndex, float metallic, float roughness)
 {
     if (objectIndex >= m_impl->objects.size())
@@ -10490,10 +10489,10 @@ void D3D12Renderer::setLights(const std::vector<Light>& lights)
 
 void D3D12Renderer::setLightRadii(const std::vector<float>& radii)
 {
-    // Se guarda y se usa. Antes se descartaba con un (void), y con ella se
-    // descartaba también el radio global: el reparto por celdas tiraba siempre
-    // de params.x, así que el slider "Light radius" del panel Forward+ no hacía
-    // nada bajo DirectX 12 mientras que en Vulkan sí.
+    // It is stored and used. Before it was discarded with a (void), and with it the
+    // global radius was discarded too: the per-cell split always took
+    // params.x, so the "Light radius" slider of the Forward+ panel did
+    // nothing under DirectX 12 while in Vulkan it did.
     m_impl->lightRadii = radii;
 }
 
@@ -10501,10 +10500,10 @@ D3D12Renderer::SlotUsage D3D12Renderer::slotUsage() const
 {
     const Impl& d = *m_impl;
     SlotUsage u;
-    // Vivos = entradas del vector menos las que estan en el pool. El tope es el
-    // reparto del heap de descriptores (kSrvObjects + i * kSrvPerObject), no
-    // una decision del vector: pasado ese numero un objeto se dibuja con el
-    // bloque global y sale plano.
+    // Live = entries of the vector minus those in the pool. The cap is the
+    // descriptor heap layout (kSrvObjects + i * kSrvPerObject), not
+    // a decision of the vector: past that number an object is drawn with the
+    // global block and comes out flat.
     u.objects         = d.objects.size() - d.objectSlots.freeCount();
     u.objectCapacity  = kMaxObjectSlots;
     u.skinned         = d.skinnedObjects.size() - d.skinnedSlots.freeCount();
@@ -10514,8 +10513,8 @@ D3D12Renderer::SlotUsage D3D12Renderer::slotUsage() const
 
 void D3D12Renderer::tickDeferredDeletes()
 {
-    // Nada pendiente: en este backend las liberaciones esperan a la GPU en el
-    // momento en que se piden.
+    // Nothing pending: in this backend releases wait on the GPU at the
+    // moment they are requested.
 }
 
 void D3D12Renderer::updateAnimation(int index, float deltaTime)
@@ -10524,14 +10523,14 @@ void D3D12Renderer::updateAnimation(int index, float deltaTime)
     if (index < 0 || static_cast<size_t>(index) >= d.skinnedObjects.size())
         return;
 
-    // Avanza el reloj de ESE personaje y lo mantiene dentro del clip. El reloj
-    // interno del backend sigue existiendo para quien no llame aquí, pero para
-    // este personaje se apaga: mandan desde fuera.
+    // Advances THAT character's clock and keeps it inside the clip. The backend's
+    // internal clock still exists for whoever does not call here, but for
+    // this character it is turned off: they rule from outside.
     Impl::SkinnedObject& character = d.skinnedObjects[index];
     character.externalClock        = true;
-    // La regla entera (ritmo, wrap y congelar el oculto) vive en
-    // advanceMeshClock, compartida con Vulkan: escrita dos veces, las dos
-    // copias divergieron (A13).
+    // The whole rule (pace, wrap and freezing the hidden one) lives in
+    // advanceMeshClock, shared with Vulkan: written twice, the two
+    // copies diverged (A13).
     character.animTime = advanceMeshClock(character.animTime, deltaTime, character.ticksPerSecond,
                                           character.animDuration, character.visible);
 }
@@ -10553,20 +10552,20 @@ void D3D12Renderer::clearStaticMeshes()
     if (d.objects.empty())
         return;
 
-    // Los buffers pueden estar en uso por el último frame presentado: soltarlos
-    // con trabajo en vuelo es una corrupción silenciosa, no un error de la API.
+    // The buffers may be in use by the last presented frame: releasing them
+    // with work in flight is silent corruption, not an API error.
     d.waitForGpu();
 
-    // Se sueltan TODOS a la vez, así que primero se anula el recuento: la
-    // guarda de releaseStaticObject protege el borrado de UNO suelto, y aquí no
-    // queda nadie vivo que pueda seguir apuntando a estos buffers.
+    // ALL are released at once, so the count is zeroed first: the
+    // guard in releaseStaticObject protects the deletion of a SINGLE object, and here there
+    // is nobody alive left that could still point at these buffers.
     for (Impl::StaticObject& object : d.objects)
         object.sharedRefs = object.ownsGpu ? 1 : 0;
     for (Impl::StaticObject& object : d.objects)
         d.releaseStaticObject(object);
 
     d.objects.clear();
-    d.objectSlots.clear();   // los huecos ya no existen: el vector esta vacio
+    d.objectSlots.clear();   // the slots no longer exist: the vector is empty
     d.sharedMeshOwner.clear();
     d.drawGroupRep.clear();
     d.drawGroupsDirty = true;
@@ -10598,14 +10597,14 @@ void D3D12Renderer::setAnimationState(int index, uint32_t clipIndex, float animT
     if (index < 0 || static_cast<size_t>(index) >= d.skinnedObjects.size())
         return;
     Impl::SkinnedObject& character = d.skinnedObjects[index];
-    // Acotado como en Vulkan: fuera de rango, clip 0 (ver clampClipIndex).
+    // Bounded as in Vulkan: out of range, clip 0 (see clampClipIndex).
     character.clipBase             = clampClipIndex(clipIndex, character.clipCount) * character.boneCount;
     character.animTime             = animTime;
-    // Una sola muestra a partir de aquí: la pose de un Animator la vuelve a
-    // mandar setAnimationPose cada frame si hace falta.
+    // A single sample from here on: an Animator's pose is sent again by
+    // setAnimationPose every frame if needed.
     character.hasPose              = false;
-    // El Animator del GameObject es el dueño del reloj: el backend no vuelve a
-    // sumarle tiempo por su cuenta.
+    // The GameObject's Animator owns the clock: the backend does not add
+    // time to it again on its own.
     character.externalClock = true;
 }
 
@@ -10616,8 +10615,8 @@ void D3D12Renderer::setAnimationIk(int index, const AnimationIk& ik)
         return;
     Impl::SkinnedObject& character = d.skinnedObjects[index];
     character.ik = ik;
-    // Los índices vienen del Animator, resueltos contra el MISMO esqueleto:
-    // solo se filtra lo que no cabe en el SSBO.
+    // The indices come from the Animator, resolved against the SAME skeleton:
+    // only what does not fit in the SSBO is filtered.
     for (int k = 0; k < character.ik.count; k++)
         if (character.ik.solves[k].bone >= static_cast<int>(character.boneCount))
             character.ik.solves[k].bone = -1;
@@ -10631,16 +10630,16 @@ void D3D12Renderer::setAnimationPose(int index, const AnimationPose& pose)
     Impl::SkinnedObject& character = d.skinnedObjects[index];
     character.pose    = pose;
     character.hasPose = true;
-    // La máscara de cada capa se copia: la del Animator solo vale durante esta
-    // llamada. recordSkinning reapunta la pose a estas copias.
+    // Each layer's mask is copied: the Animator's is only valid during this
+    // call. recordSkinning re-points the pose at these copies.
     for (int L = 0; L < kMaxLayersPose; L++) {
         const std::vector<uint8_t>* m = (L < pose.layerCount) ? pose.layers[L].mask : nullptr;
         if (m) character.poseMasks[L] = *m; else character.poseMasks[L].clear();
         character.pose.layers[L].mask = nullptr;
     }
-    // El Animator es el dueño del reloj: el backend no suma tiempo por su cuenta.
+    // The Animator owns the clock: the backend does not add time on its own.
     character.externalClock = true;
-    // Acotado como en Vulkan: un clip fuera de rango leería otro bloque.
+    // Bounded as in Vulkan: an out-of-range clip would read another block.
     int masPesada = -1;
     for (int k = 0; k < character.pose.count; k++) {
         character.pose.samples[k].clip = static_cast<int>(
@@ -10648,7 +10647,7 @@ void D3D12Renderer::setAnimationPose(int index, const AnimationPose& pose)
         if (masPesada < 0 || character.pose.samples[k].weight > character.pose.samples[masPesada].weight)
             masPesada = k;
     }
-    // Lo demás del backend sigue mirando un solo clip: el que más pesa.
+    // The rest of the backend still looks at a single clip: the one with the most weight.
     if (masPesada >= 0) {
         character.clipBase = static_cast<uint32_t>(character.pose.samples[masPesada].clip) * character.boneCount;
         character.animTime = character.pose.samples[masPesada].time;
@@ -10666,8 +10665,8 @@ void D3D12Renderer::clearSkinnedMeshes()
     if (d.skinnedObjects.empty())
         return;
 
-    // Sus buffers pueden estar en uso por el último frame presentado, y el de
-    // vértices deformados lo escribe el compute de ese mismo frame.
+    // Its buffers may be in use by the last presented frame, and the deformed
+    // vertex one is written by that same frame's compute.
     d.waitForGpu();
     d.releaseSkinnedObjects();
 }
@@ -10695,8 +10694,8 @@ void D3D12Renderer::submitDebugLines(const float* vertices, size_t vertexCount)
 
 glm::mat4 D3D12Renderer::viewProjMatrix() const
 {
-    // La del frame, sin el desplazamiento del TAA: quien desproyecta un clic
-    // quiere la cámara, no el ruido de muestreo.
+    // The frame's one, without the TAA offset: whoever unprojects a click
+    // wants the camera, not the sampling noise.
     return m_impl->cameraProj() * m_impl->cameraView;
 }
 
@@ -10706,9 +10705,9 @@ void D3D12Renderer::rebuildSkinnedMesh(int index, const SkinnedMesh& mesh)
     if (index < 0 || index >= static_cast<int>(d.skinnedObjects.size()))
         return;
 
-    // Se conservan sitio, transformación y estado de animación: el índice de
-    // render del GameObject no puede moverse, y quien lo reconstruye —añadir o
-    // quitar clips— no espera que el personaje salte a la pose inicial.
+    // Slot, transform and animation state are kept: the GameObject's render
+    // index cannot move, and whoever rebuilds it (adding or
+    // removing clips) does not expect the character to jump to the initial pose.
     const Impl::SkinnedObject previous = d.skinnedObjects[index];
 
     const int created = d.createSkinnedObject(mesh);
@@ -10724,7 +10723,7 @@ void D3D12Renderer::rebuildSkinnedMesh(int index, const SkinnedMesh& mesh)
     rebuilt.animTime    = previous.animTime;
     rebuilt.clipBase    = previous.clipBase;
 
-    // Los recursos viejos pueden estar en uso por el último frame presentado.
+    // The old resources may be in use by the last presented frame.
     d.waitForGpu();
     Impl::SkinnedObject& slot = d.skinnedObjects[index];
     for (D3D12MA::Allocation** allocation :
@@ -10782,16 +10781,16 @@ void D3D12Renderer::removeGameObject(GameObject* node)
     if (!node)
         return;
 
-    // Los huecos NO se compactan: los índices de render de los demás objetos
-    // están anotados en sus GameObject, y moverlos dejaría a todos apuntando a
-    // otra malla. Lo que sí se hace es SOLTAR sus recursos y devolver el hueco
-    // al pool para que lo estrene el siguiente alta (H32, H43). Antes esto solo
-    // ponía meshVisible a false y la VRAM se quedaba hasta cerrar la escena.
+    // The slots are NOT compacted: the render indices of the other objects
+    // are recorded in their GameObjects, and moving them would leave all of them pointing at
+    // another mesh. What IS done is RELEASING their resources and returning the slot
+    // to the pool so the next addition can reuse it (H32, H43). Before, this only
+    // set meshVisible to false and the VRAM stayed until the scene was closed.
     //
-    // Una espera para todo el subárbol, no una por hijo: soltar recursos con
-    // trabajo en vuelo es corrupción silenciosa, no un error que avise la API.
-    // Y borrar es una acción de editor, no algo por frame, así que el parón no
-    // se nota. Mismo criterio que clearStaticMeshes.
+    // One wait for the whole subtree, not one per child: releasing resources with
+    // work in flight is silent corruption, not an error the API reports.
+    // And deleting is an editor action, not something per frame, so the stall is
+    // not noticeable. Same criterion as clearStaticMeshes.
     m_impl->waitForGpu();
     node->traverse([this](GameObject* child) {
         if (!child)
@@ -10809,15 +10808,15 @@ void D3D12Renderer::removeGameObject(GameObject* node)
 
 void D3D12Renderer::removeMeshComponent(GameObject* node)
 {
-    // Misma guarda que Renderer::removeMeshComponent (Vulkan): la señal es
-    // hasMesh(), no los huecos de GPU. Un objeto con malla y sin hueco -- la
-    // carga asincrona todavia en vuelo, o pasado kMaxObjectSlots -- tambien
-    // tiene que perder el componente; antes salia por el return de abajo con
-    // hasMesh() intacto.
+    // Same guard as Renderer::removeMeshComponent (Vulkan): the signal is
+    // hasMesh(), not the GPU slots. An object with a mesh and no slot (the
+    // async load still in flight, or past kMaxObjectSlots) also
+    // has to lose the component; before, it left through the return below with
+    // hasMesh() intact.
     if (!node || !node->hasMesh())
         return;
-    // El waitForGpu solo si de verdad hay un hueco que soltar: parar la GPU
-    // para no soltar nada no lo justifica.
+    // The waitForGpu only if there really is a slot to release: stopping the GPU
+    // in order to release nothing is not justified.
     if (node->staticRenderIndex >= 0 || node->skinnedRenderIndex >= 0) {
         m_impl->waitForGpu();
         if (node->staticRenderIndex >= 0) {
@@ -10829,12 +10828,12 @@ void D3D12Renderer::removeMeshComponent(GameObject* node)
             node->skinnedRenderIndex = -1;
         }
     }
-    // Paridad con Vulkan, y lo unico que hace que quitar el componente signifique
-    // algo fuera de la GPU: sin esto hasMesh() seguia true, la seccion Mesh se
-    // seguia dibujando con su nombre y sus texturas, loadMeshForSelected se negaba
-    // a cargar un reemplazo y el Log decia "Componente Mesh quitado" igualmente.
-    // El otro llamante (ContentBrowserPanel, al borrar el asset en uso) se quedaba
-    // con la malla de un fichero que ya no existe en disco.
+    // Parity with Vulkan, and the only thing that makes removing the component mean
+    // something outside the GPU: without this hasMesh() stayed true, the Mesh section
+    // kept being drawn with its name and textures, loadMeshForSelected refused
+    // to load a replacement and the Log said "Mesh component removed" anyway.
+    // The other caller (ContentBrowserPanel, when deleting the asset in use) was left
+    // with the mesh of a file that no longer exists on disk.
     node->setMesh(nullptr);
 }
 
@@ -10846,20 +10845,20 @@ void D3D12Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot
 
     Impl::StaticObject& object = d.objects[renderIndex];
     if (object.srvBase == kSrvBaseColor)
-        return;  // sin bloque propio: dibuja con los neutros globales
+        return;  // no block of its own: it draws with the global neutrals
 
-    // Su bloque deja de decir lo mismo que el de los que comparten esta malla,
-    // así que deja de poder compartir draw con ellos.
+    // Its block stops saying the same as those sharing this mesh,
+    // so it can no longer share a draw with them.
     ++object.materialVariant;
     d.drawGroupsDirty = true;
 
-    // El neutro que ya existe para cada hueco. No es el damero magenta del
-    // camino de Vulkan, pero deja el objeto visible en vez de con basura, que
-    // es lo que importa cuando una textura no se ha podido leer.
+    // The neutral that already exists for each slot. It is not the magenta checkerboard of the
+    // Vulkan path, but it leaves the object visible instead of with garbage, which
+    // is what matters when a texture could not be read.
     switch (slot) {
         case TextureSlot::Diffuse:
-            // Aqui SIEMPRE es un fallo -para eso se llama a esta funcion-, asi
-            // que va el damero y no el neutro blanco.
+            // Here it is ALWAYS a failure (that is why this function is called), so
+            // the checkerboard goes and not the white neutral.
             d.createTexture2DSrv(d.missingTextureAllocation
                                      ? d.missingTextureAllocation->GetResource()
                                      : d.baseColorAllocation->GetResource(),
@@ -10883,13 +10882,13 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         return;
 
     Impl::StaticObject& object = d.objects[static_cast<size_t>(index)];
-    // Hueco reciclado, o dueño ya retirado que solo espera a que muera el
-    // último duplicado: en los dos casos el GameObject que podría haber pedido
-    // esto ya no existe, y sus recursos los siguen dibujando otros.
+    // Recycled slot, or an already retired owner that only waits for the last
+    // duplicate to die: in both cases the GameObject that could have asked for
+    // this no longer exists, and its resources are still being drawn by others.
     //
-    // Las dos salidas de aquí llevan diagLog por lo mismo que las otras dos de
-    // esta función: son no-ops, el usuario ha pedido un cambio de material y no
-    // va a ver ninguno, y sin una línea no queda ni rastro de por qué.
+    // The two exits here carry diagLog for the same reason as the other two of
+    // this function: they are no-ops, the user asked for a material change and
+    // will not see any, and without a line not even a trace remains of why.
     if (object.slotFree || object.pendingRelease) {
         diagLog("rebuildStaticMesh: slot " + std::to_string(index) +
                 (object.slotFree ? " is free" : " belongs to an owner already retired") +
@@ -10897,10 +10896,10 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         return;
     }
     if (object.srvBase == kSrvBaseColor) {
-        // Alcanzable de verdad: pasado kMaxObjectSlots un objeto se dibuja con
-        // los neutros globales y no tiene bloque de descriptores propio que
-        // escribir. En Vulkan el mismo cambio SÍ se ve, así que sin esta línea
-        // la diferencia entre backends no tiene explicación por ningún lado.
+        // Really reachable: past kMaxObjectSlots an object is drawn with
+        // the global neutrals and has no descriptor block of its own to
+        // write. In Vulkan the same change IS visible, so without this line
+        // the difference between backends has no explanation anywhere.
         diagLog("rebuildStaticMesh: object " + std::to_string(index) +
                 " has no descriptor block of its own (past the limit of " +
                 std::to_string(kMaxObjectSlots) +
@@ -10909,37 +10908,37 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         return;
     }
 
-    // `ownsGpu` es la ÚNICA marca de propiedad que hay, y vale para las cinco
-    // allocations a la vez: la rama `reusa` de addStaticMesh copia también las
-    // TRES de textura del dueño, y releaseStaticObject las suelta en el mismo
-    // bucle que los buffers. No existe un campo que diga "la geometría es
-    // prestada pero estas texturas son mías".
+    // `ownsGpu` is the ONLY ownership flag there is, and it applies to all five
+    // allocations at once: the `reusa` branch of addStaticMesh also copies the
+    // THREE texture ones of the owner, and releaseStaticObject releases them in the same
+    // loop as the buffers. There is no field saying "the geometry is
+    // borrowed but these textures are mine".
     //
-    // De ahí sale todo lo de abajo: para que las texturas nuevas tengan quien
-    // las suelte, un objeto que comparta malla tiene que separarse del grupo
-    // con copia propia de TODO, que es lo que hace el camino general de Vulkan.
-    // Y separarse exige volver a subir la geometría, así que sin ella no se
-    // toca nada: mejor no hacer nada que dejar el objeto a medias.
+    // Everything below follows from that: for the new textures to have someone who
+    // releases them, an object that shares a mesh has to split off from the group
+    // with its own copy of EVERYTHING, which is what Vulkan's general path does.
+    // And splitting off requires uploading the geometry again, so without it nothing is
+    // touched: better to do nothing than to leave the object half done.
     const bool comparte = !object.ownsGpu || object.sharedRefs > 1;
     if (comparte && (mesh.vertices.empty() || mesh.indices.empty())) {
-        // Sin una línea aquí, el usuario cambia la textura y no pasa nada.
+        // Without a line here, the user changes the texture and nothing happens.
         diagLog("rebuildStaticMesh: object " + std::to_string(index) +
                 " shares a mesh and the mesh arrives without geometry, so it cannot be split "
                 "from the group; it stays as it was.");
         return;
     }
 
-    // Cede la propiedad de la malla compartida al primer duplicado y redirige
-    // hacia él a los demás. -1 si el recuento dice que hay duplicados pero no
-    // aparece ninguno: entonces no se toca nada, porque repartir a ciegas la
-    // propiedad de un recurso nativo es justo lo que acaba en doble free.
+    // Hands ownership of the shared mesh to the first duplicate and redirects
+    // the others to it. -1 if the count says there are duplicates but none
+    // shows up: then nothing is touched, because handing out ownership of a native resource
+    // blindly is exactly what ends in a double free.
     auto cederPropiedad = [&](int duenyo) -> int {
         Impl::StaticObject& viejo = d.objects[static_cast<size_t>(duenyo)];
 
-        // La clave se copia a un local ANTES de tocar nada: asignar un
-        // std::string reserva memoria y puede lanzar, y hacerlo con la
-        // propiedad ya movida dejaría a los dos objetos marcados dueños de las
-        // MISMAS cinco allocations, que es un doble free en el teardown.
+        // The key is copied to a local BEFORE touching anything: assigning a
+        // std::string allocates memory and may throw, and doing it with the
+        // ownership already moved would leave both objects marked as owners of the
+        // SAME five allocations, which is a double free at teardown.
         const std::string claveDelDuenyo = viejo.sharedKey;
 
         int elegido = -1;
@@ -10949,13 +10948,13 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
                 otro.sharedMesh != duenyo)
                 continue;
             if (elegido < 0) {
-                otro.sharedKey  = claveDelDuenyo;  // lo único de aquí que puede lanzar
+                otro.sharedKey  = claveDelDuenyo;  // the only thing here that can throw
                 elegido         = static_cast<int>(i);
                 otro.sharedMesh = elegido;
-                // El recuento NO cambia al ceder: siguen siendo los mismos
-                // objetos apuntando a la misma malla —el que se va incluido,
-                // que hasta que no se separe la sigue dibujando—, lo único que
-                // se mueve es quién la suelta.
+                // The count does NOT change when handing over: it is still the same
+                // objects pointing at the same mesh (the one leaving included,
+                // which keeps drawing it until it splits off), the only thing that
+                // moves is who releases it.
                 otro.sharedRefs = viejo.sharedRefs;
             } else {
                 otro.sharedMesh = elegido;
@@ -10963,9 +10962,9 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         }
         if (elegido < 0)
             return -1;
-        // El mapa tiene que apuntar al nuevo dueño: si siguiera apuntando aquí,
-        // el siguiente objeto con esta clave copiaría los punteros de quien ya
-        // no posee nada y que encima está a punto de cambiarlos.
+        // The map has to point at the new owner: if it kept pointing here,
+        // the next object with this key would copy the pointers of one that no longer
+        // owns anything and which is about to change them on top of that.
         if (!claveDelDuenyo.empty()) {
             auto it = d.sharedMeshOwner.find(claveDelDuenyo);
             if (it != d.sharedMeshOwner.end() && it->second == duenyo)
@@ -10975,24 +10974,24 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         viejo.sharedRefs = 0;
         viejo.sharedMesh = elegido;
 
-        // El traspaso de propiedad, en dos líneas seguidas y las ÚLTIMAS del
-        // bloque: entre ellas no queda nada que pueda fallar, así que no existe
-        // ni un instante con dos objetos marcados dueños de lo mismo.
+        // The ownership transfer, in two consecutive lines and the LAST ones of the
+        // block: nothing that can fail remains between them, so there is not
+        // even an instant with two objects marked as owners of the same thing.
         d.objects[static_cast<size_t>(elegido)].ownsGpu = true;
         viejo.ownsGpu                                   = false;
         return elegido;
     };
 
     if (object.ownsGpu && object.sharedRefs > 1) {
-        // Los duplicados dibujan ESTOS recursos y sus SRV apuntan a ellos:
-        // soltarlos aquí no lo avisa ninguna validación, se paga con el device
-        // perdido más tarde. Se les cede la malla entera y este objeto pasa a
-        // ser uno más de los que la tienen prestada.
+        // The duplicates draw THESE resources and their SRVs point to them:
+        // releasing them here is not flagged by any validation, it is paid for with the lost
+        // device later. The whole mesh is handed over to them and this object becomes
+        // one more of those that have it borrowed.
         if (cederPropiedad(index) < 0) {
-            // El recuento dice que hay duplicados y no aparece ninguno: la
-            // contabilidad está rota. Se sale sin tocar NADA —ni la variante de
-            // material ni la GPU—, pero queda escrito, que es justo lo que uno
-            // querría ver el día que pase.
+            // The count says there are duplicates and none shows up: the
+            // bookkeeping is broken. It exits touching NOTHING (neither the material
+            // variant nor the GPU), but it is logged, which is exactly what one
+            // would want to see the day it happens.
             diagLog("rebuildStaticMesh: object " + std::to_string(index) + " claims to have " +
                     std::to_string(object.sharedRefs) +
                     " references to its mesh but no duplicate shows up; nothing is touched.");
@@ -11000,33 +10999,33 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         }
     }
 
-    // Su bloque deja de decir lo mismo que el de los que comparten esta malla,
-    // así que deja de poder compartir draw con ellos.
+    // Its block stops saying the same as those sharing this mesh,
+    // so it can no longer share a draw with them.
     ++object.materialVariant;
     d.drawGroupsDirty = true;
 
-    // Los recursos viejos pueden estar en uso por el último frame presentado, y
-    // además las subidas de aquí abajo resetean el command allocator de este
-    // frame. Una sola espera cubre las dos cosas: lo que se suba después vuelve
-    // a esperar por dentro, así que al soltar la GPU sigue parada.
+    // The old resources may be in use by the last presented frame, and
+    // in addition the uploads below reset this frame's command allocator. A single wait covers
+    // both things: what is uploaded afterwards waits again internally, so when releasing
+    // the GPU is still stopped.
     d.waitForGpu();
 
-    // ── Primero TODO lo que puede lanzar ─────────────────────────────────
-    // uploadBuffer y uploadTexture van llenas de throwIfFailed (OOM, device
-    // perdido). Hasta que no han salido bien no se toca un solo campo del
-    // objeto ni se suelta nada. Hacerlo sobre la marcha —desenganchar del dueño
-    // y luego subir— deja, si la subida lanza, un objeto VISIBLE con los
-    // buffers apuntando a una allocation recién soltada y con sharedMesh a un
-    // hueco ya reciclado: eso no es una fuga, es memoria liberada en el pase de
-    // dibujo. Es la misma cautela que addStaticMesh, que arma un StaticObject
-    // local y solo lo inserta cuando ya está entero.
+    // ── First EVERYTHING that can throw ───────────────────────────────────
+    // uploadBuffer and uploadTexture are full of throwIfFailed (OOM, device
+    // lost). Until they have succeeded not a single field of the
+    // object is touched nor anything released. Doing it on the fly (detaching from the owner
+    // and then uploading) leaves, if the upload throws, a VISIBLE object with
+    // buffers pointing at a just-released allocation and with sharedMesh at a
+    // slot already recycled: that is not a leak, it is freed memory in the
+    // draw pass. It is the same caution as addStaticMesh, which builds a local
+    // StaticObject and only inserts it when it is already complete.
     //
-    // Matiz que el comentario de antes se callaba: "no se toca nada" vale para
-    // los CAMPOS del objeto y para soltar recursos, no para todo — cederPropiedad,
-    // ++materialVariant y las vistas que escriben las subidas ya han corrido a
-    // estas alturas. Lo primero es reversible sin recursos de por medio (deja al
-    // objeto dibujando lo prestado, que sigue vivo); lo de las vistas lo repara
-    // el catch de abajo.
+    // A nuance the previous comment kept quiet about: "nothing is touched" holds for
+    // the object's FIELDS and for releasing resources, not for everything (cederPropiedad,
+    // ++materialVariant and the views written by the uploads have already run by
+    // this point). The first is reversible without resources in between (it leaves the
+    // object drawing the borrowed one, which is still alive); the views are repaired
+    // by the catch below.
     const bool seSepara = !object.ownsGpu;
     const UINT slot     = object.srvBase;
 
@@ -11038,14 +11037,14 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
     std::string          nuevaClave;
     bool                 claveHonesta = false;
 
-    // Las cinco allocations son locales hasta el bloque de commit, así que si
-    // una subida lanza a mitad NADIE las suelta: el objeto se queda con las
-    // suyas de antes y estas se pierden hasta cerrar el proceso. Con el catch
-    // se sueltan aquí mismo. Ojo al orden dentro del catch: uploadTexture ya ha
-    // escrito la vista de lo que se acaba de soltar, así que hay que devolver
-    // los tres huecos a los neutros globales ANTES de salir — si no, la fuga se
-    // convierte en algo peor, un descriptor apuntando a memoria liberada que el
-    // pase de dibujo lee al frame siguiente.
+    // The five allocations are local until the commit block, so if
+    // an upload throws midway NOBODY releases them: the object keeps its
+    // previous ones and these are lost until the process closes. With the catch
+    // they are released right here. Mind the order inside the catch: uploadTexture has already
+    // written the view of what has just been released, so the three slots have to be returned
+    // to the global neutrals BEFORE leaving, otherwise the leak
+    // turns into something worse, a descriptor pointing at freed memory that the
+    // draw pass reads in the next frame.
     try {
         if (seSepara) {
             nuevosVertices =
@@ -11056,16 +11055,16 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
                                D3D12_RESOURCE_STATE_INDEX_BUFFER);
         }
 
-        // Las nuevas ANTES de soltar las viejas: así ninguna vista del bloque
-        // apunta jamás a un recurso ya liberado, ni siquiera si una subida lanza.
-        // Y de paso, al salir de aquí los tres huecos apuntan a recursos nuevos o a
-        // los neutros globales, nunca a las texturas PRESTADAS del dueño del que
-        // este objeto está a punto de desengancharse.
+        // The new ones BEFORE releasing the old ones: this way no view in the block
+        // ever points at an already released resource, not even if an upload throws.
+        // And as a bonus, on leaving here the three slots point at new resources or at
+        // the global neutrals, never at the BORROWED textures of the owner this
+        // object is about to detach from.
         nuevoColor = d.uploadMaterialTexture(mesh.material.texturePath,
                                              mesh.material.embeddedTexture, TextureKind::BaseColor,
                                              slot + 0);
         if (!nuevoColor) {
-            // La pidió y no se pudo leer: damero, que se note. No la pidió: blanco.
+            // It asked for it and it could not be read: checkerboard, so it shows. It did not ask: white.
             const bool sePidio =
                 chooseTextureSource(mesh.material.texturePath, mesh.material.embeddedTexture) !=
                 TextureSource::None;
@@ -11082,11 +11081,11 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
             d.createTexture2DSrv(d.normalMapAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
                                  slot + 1);
 
-        // El ORM propio va en +3, pisando el neutro que dejó fillSharedSlots; sin
-        // él, se vuelve a poner ese neutro. Los demás huecos compartidos (+2 y
-        // +4..+6, que el bloque es de kSrvPerObject = 7 huecos) NO se tocan: la
-        // sonda de reflexión que lleva este objeto es suya y rellenarlos otra vez
-        // la cambiaría por la global.
+        // The own ORM goes in +3, overwriting the neutral that fillSharedSlots left; without
+        // it, that neutral is put back. The other shared slots (+2 and
+        // +4..+6, since the block is kSrvPerObject = 7 slots) are NOT touched: the
+        // reflection probe carried by this object is its own and filling them in again
+        // would swap it for the global one.
         nuevoOrm = d.uploadMaterialTexture(mesh.material.metallicRoughnessPath,
                                            mesh.material.embeddedMetallicRoughness,
                                            TextureKind::Orm, slot + 3);
@@ -11094,33 +11093,33 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
             d.createTexture2DSrv(d.metalRoughAllocation->GetResource(),
                                  DXGI_FORMAT_R8G8B8A8_UNORM, slot + 3);
 
-        // La clave nueva y la comparación de prefijos, también aquí arriba: las dos
-        // construyen std::string (`makeSharedMeshKey` uno entero, `prefijoGeometria`
-        // un substr), y un bad_alloc ahí abajo ocurriría DESPUÉS de que el objeto
-        // tenga ya el material nuevo pero ANTES de sacar del mapa la entrada vieja
-        // —que se quedaría diciendo que esta clave describe a este objeto, que es
-        // justo la mentira que el re-clavado existe para borrar—.
+        // The new key and the prefix comparison, also up here: both
+        // build std::string (`makeSharedMeshKey` a whole one, `prefijoGeometria`
+        // a substr), and a bad_alloc down there would happen AFTER the object
+        // already has the new material but BEFORE removing the old entry from the map
+        // (which would stay saying that this key describes this object, which is
+        // exactly the lie the re-keying exists to erase).
         //
-        // Los dos primeros campos de la clave son, en claro y separados por '|', el
-        // número de vértices y el de índices: makeSharedMeshKey los pone delante
-        // por ser discriminantes exactos, así que comparar ese prefijo dice si una
-        // clave describe la geometría que hay REALMENTE en VRAM sin rehashear la
-        // malla. El helper es el mismo que usa Renderer::rebuildStaticMesh.
+        // The first two fields of the key are, in plain text and separated by '|', the
+        // vertex count and the index count: makeSharedMeshKey puts them first
+        // as exact discriminators, so comparing that prefix says whether a
+        // key describes the geometry that is REALLY in VRAM without rehashing the
+        // mesh. The helper is the same one used by Renderer::rebuildStaticMesh.
         auto prefijoGeometria = [](const std::string& clave) {
             const size_t primera = clave.find('|');
             if (primera == std::string::npos)
                 return clave;
-            // npos = no hay segundo '|' (clave que no salió de makeSharedMeshKey):
-            // se compara la cadena entera, que es el lado conservador.
+            // npos = no second '|' (a key that did not come from makeSharedMeshKey):
+            // the whole string is compared, which is the conservative side.
             return clave.substr(0, clave.find('|', primera + 1));
         };
 
         nuevaClave = makeSharedMeshKey(mesh);
 
-        // Si se separó, la geometría se acaba de subir DESDE `mesh` y la clave
-        // nueva la describe por construcción. Si el cambio fue in situ hay que
-        // preguntárselo a la vieja: ese camino NO resube geometría, y el contrato
-        // dice que cambiarla por aquí no está soportado pero nada lo impide.
+        // If it split off, the geometry was just uploaded FROM `mesh` and the new
+        // key describes it by construction. If the change was in place the old one has to
+        // be asked: that path does NOT re-upload geometry, and the contract
+        // says that changing it through here is not supported but nothing prevents it.
         claveHonesta = seSepara || (!object.sharedKey.empty() &&
                                     prefijoGeometria(object.sharedKey) ==
                                         prefijoGeometria(nuevaClave));
@@ -11135,15 +11134,15 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
             if (nueva)
                 nueva->Release();
 
-        // Los tres huecos vuelven a los neutros GLOBALES y no a las texturas de
-        // antes: object.*Allocation sigue vivo, pero una de esas se creó con
-        // formato _SRGB y una vista UNORM sobre un recurso tipado en sRGB no es
-        // válida en D3D12 (haría falta que el recurso fuese typeless), así que
-        // reconstruir la vista anterior desde aquí no se puede hacer sin
-        // arrastrar también con qué formato se creó cada una. Los neutros son
-        // UNORM y siempre válidos: el objeto se queda sin sus texturas hasta el
-        // siguiente rebuild, que es un desenlace pobre pero seguro para algo
-        // que solo pasa con OOM o device perdido.
+        // The three slots go back to the GLOBAL neutrals and not to the textures from
+        // before: object.*Allocation is still alive, but one of those was created with
+        // an _SRGB format and a UNORM view over a resource typed as sRGB is not
+        // valid in D3D12 (the resource would have to be typeless), so
+        // rebuilding the previous view from here cannot be done without
+        // also carrying the format each one was created with. The neutrals are
+        // UNORM and always valid: the object is left without its textures until the
+        // next rebuild, which is a poor but safe outcome for something
+        // that only happens with OOM or a lost device.
         d.createTexture2DSrv(d.baseColorAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
                              slot + 0);
         d.createTexture2DSrv(d.normalMapAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -11156,12 +11155,12 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         throw;
     }
 
-    // ── Y ya sin nada que pueda lanzar, el cambio de estado ──────────────
+    // ── And now with nothing that can throw, the state change ─────────────
     if (seSepara) {
-        // Se queda con la copia propia de la geometría y con su caja, y solo
-        // ENTONCES se desengancha del dueño: hasta esta línea el objeto seguía
-        // dibujando lo prestado, que es lo único que se puede dibujar sin
-        // riesgo mientras las subidas puedan fallar.
+        // It keeps the own copy of the geometry and its box, and only
+        // THEN detaches from the owner: until this line the object was still
+        // drawing the borrowed one, which is the only thing that can be drawn without
+        // risk while the uploads may fail.
         const int duenyo = object.sharedMesh;
 
         object.vertexAllocation = nuevosVertices;
@@ -11178,12 +11177,12 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         object.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
         object.indexCount             = static_cast<UINT>(mesh.indices.size());
 
-        // La caja se recalcula DESDE `mesh`, que es de donde acaban de salir
-        // los vértices: la regla es que quien sube la geometría calcula su
-        // caja, igual que en addStaticMesh. Heredar la del dueño valdría
-        // mientras la geometría fuese la misma —el contrato dice que por aquí
-        // no cambia—, pero nada lo impide y entonces el culling mentiría.
-        // Paréntesis alrededor del nombre: windows.h define max como macro.
+        // The box is recomputed FROM `mesh`, which is where the vertices
+        // have just come from: the rule is that whoever uploads the geometry computes its
+        // box, just like in addStaticMesh. Inheriting the owner's would work
+        // while the geometry was the same (the contract says it does not change
+        // through here) but nothing prevents it and then the culling would lie.
+        // Parentheses around the name: windows.h defines max as a macro.
         glm::vec3 lo((std::numeric_limits<float>::max)());
         glm::vec3 hi(std::numeric_limits<float>::lowest());
         for (const Vertex& v : mesh.vertices) {
@@ -11196,22 +11195,22 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
 
         object.sharedMesh = index;
         object.ownsGpu    = true;
-        object.sharedRefs = 1;  // él mismo
+        object.sharedRefs = 1;  // itself
 
-        // Las tres de textura eran copias de las del dueño: se olvidan SIN
-        // soltarlas, y así el bucle de abajo no las ve.
+        // The three texture ones were copies of the owner's: they are forgotten WITHOUT
+        // releasing them, so the loop below does not see them.
         object.baseColorAllocation  = nullptr;
         object.normalMapAllocation  = nullptr;
         object.metalRoughAllocation = nullptr;
 
-        // Ahora sí: una referencia menos al dueño, y remate si este era el
-        // último que lo mantenía en pie, igual que hace releaseObjectSlot.
+        // Now yes: one reference less to the owner, and finish it off if this was the
+        // last one keeping it alive, just like releaseObjectSlot does.
         if (duenyo >= 0 && duenyo < static_cast<int>(d.objects.size())) {
             Impl::StaticObject& previo = d.objects[static_cast<size_t>(duenyo)];
             --previo.sharedRefs;
             if (previo.pendingRelease && previo.sharedRefs <= 0) {
-                // releaseObjectSlot decrementa antes de comparar, así que se le
-                // deja el recuento en 1 para que baje a 0 y suelte.
+                // releaseObjectSlot decrements before comparing, so its
+                // count is left at 1 so that it drops to 0 and releases.
                 previo.sharedRefs     = 1;
                 previo.pendingRelease = false;
                 d.releaseObjectSlot(static_cast<size_t>(duenyo));
@@ -11219,9 +11218,9 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         }
     }
 
-    // Lo que quede en los tres punteros es de este objeto y no lo mira nadie
-    // más: o era dueño único desde el principio, o acaba de anularlos porque
-    // eran prestados.
+    // Whatever remains in the three pointers belongs to this object and nobody else
+    // looks at it: either it was the sole owner from the start, or it just nulled them because
+    // they were borrowed.
     for (D3D12MA::Allocation** vieja : {&object.baseColorAllocation, &object.normalMapAllocation,
                                         &object.metalRoughAllocation}) {
         if (*vieja)
@@ -11232,8 +11231,8 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
     object.baseColorAllocation  = nuevoColor;
     object.normalMapAllocation  = nuevaNormal;
     object.metalRoughAllocation = nuevoOrm;
-    // Mismo criterio que addStaticMesh (y que Vulkan): con mapa ORM, el mapa
-    // manda y los dos factores se fuerzan a 1.0.
+    // Same criterion as addStaticMesh (and as Vulkan): with an ORM map, the map
+    // rules and both factors are forced to 1.0.
     const bool tieneMapaOrm = chooseTextureSource(mesh.material.metallicRoughnessPath,
                                                    mesh.material.embeddedMetallicRoughness) !=
                               TextureSource::None;
@@ -11241,62 +11240,61 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
     object.roughness = tieneMapaOrm ? 1.0f : mesh.material.roughness;
     object.hasOrmMap = tieneMapaOrm;
 
-    // La entrada vieja sale SIEMPRE, honesta o no: el mapa está clavado por
-    // contenido Y material —makeSharedMeshKey mete los paths de textura y los
-    // factores PBR—, así que describe un material que este objeto ya no tiene.
-    // Dejarla haría que el siguiente objeto con el material VIEJO copiara estos
-    // punteros y saliera con el material nuevo sin haberlo pedido.
+    // The old entry ALWAYS goes, honest or not: the map is keyed by
+    // content AND material (makeSharedMeshKey puts in the texture paths and the
+    // PBR factors), so it describes a material this object no longer has.
+    // Leaving it would make the next object with the OLD material copy these
+    // pointers and come out with the new material without having asked for it.
     if (!object.sharedKey.empty()) {
         auto it = d.sharedMeshOwner.find(object.sharedKey);
         if (it != d.sharedMeshOwner.end() && it->second == index)
             d.sharedMeshOwner.erase(it);
         object.sharedKey.clear();
     }
-    // Y se apunta con la nueva si describe lo que hay en VRAM y no hay ya dueño
-    // para ella: el mapa solo admite uno por clave y el que llegó antes se
-    // queda. Este `emplace` es lo único que queda aquí abajo que pueda lanzar, y
-    // se deja a propósito para el final: como el `erase` ya ha corrido, que
-    // falle solo pierde dedup —el objeto se queda con copia privada— y nunca
-    // deja una clave mintiendo, que es el único desenlace inaceptable.
+    // And it is entered with the new one if it describes what is in VRAM and there is no owner yet
+    // for it: the map only admits one per key and whoever arrived first
+    // stays. This `emplace` is the only thing left down here that can throw, and
+    // it is left on purpose for the end: since the `erase` has already run, if it
+    // fails it only loses dedup (the object keeps a private copy) and it never
+    // leaves a key lying, which is the only unacceptable outcome.
     if (claveHonesta && d.sharedMeshOwner.emplace(nuevaClave, index).second)
         object.sharedKey = nuevaClave;
 
-    // Ojo al comparar este fichero con su hermano de Vulkan: ante el MISMO
-    // input —dueño único al que le llega un mesh con otra geometría— los dos
-    // backends son seguros pero NO hacen lo mismo, y ninguno de los dos tiene
-    // un bug ahí.
+    // Careful when comparing this file with its Vulkan sibling: given the SAME
+    // input (a sole owner receiving a mesh with other geometry) the two
+    // backends are safe but do NOT do the same, and neither of the two has
+    // a bug there.
     //
-    //  - Vulkan manda ese caso al camino general (`separarAEntradaPropia`), que
-    //    vuelve a crear la entrada entera: acaba dibujando la geometría nueva y
-    //    conservando el dedup.
-    //  - Aquí el desajuste de prefijo solo suprime el re-clavado: el objeto
-    //    sigue dibujando la geometría que ya tenía en VRAM y se queda fuera del
-    //    mapa. Lo hace explícito el diagLog de arriba.
+    //  - Vulkan sends that case to the general path (`separarAEntradaPropia`), which
+    //    recreates the whole entry: it ends up drawing the new geometry and
+    //    keeping dedup.
+    //  - Here the prefix mismatch only suppresses the re-keying: the object
+    //    keeps drawing the geometry it already had in VRAM and stays outside the
+    //    map. The diagLog above makes it explicit.
     //
-    // La divergencia se puede vivir porque el contrato de
-    // EditorRenderer::rebuildStaticMesh declara ese input NO soportado —para
-    // cambiar vértices hay que volver a registrar el objeto—, y lo que sí
-    // comparten los dos backends es lo que importa: ninguno deja el mapa de
-    // dedup diciendo que una clave describe una geometría que la entrada no
-    // tiene, que es la corrupción silenciosa y COMPARTIDA que este bloque
-    // existe para cerrar.
+    // The divergence can be lived with because the contract of
+    // EditorRenderer::rebuildStaticMesh declares that input NOT supported (to
+    // change vertices the object has to be registered again), and what both backends
+    // do share is what matters: neither leaves the dedup map saying that a key describes
+    // a geometry that the entry does not have, which is the silent and SHARED corruption that
+    // this block exists to close.
 }
 
 void D3D12Renderer::initSkybox(const std::array<std::string, 6>& facePaths)
 {
     Impl& d = *m_impl;
     if (d.skyboxFacePaths == facePaths)
-        return;  // ya es el que hay montado
+        return;  // it is already the one that is set up
 
     d.skyboxFacePaths = facePaths;
 
-    // Antes de init() basta con anotarlas: createSkyboxResources las coge.
+    // Before init() it is enough to record them: createSkyboxResources picks them up.
     if (!d.initialized)
         return;
 
-    // Y si ya hay cielo montado, se cambia en caliente. El cubemap puede
-    // estar en el frame en vuelo, y ademas es la fuente del IBL global, que
-    // hay que reconvolucionar detras.
+    // And if a sky is already set up, it is swapped live. The cubemap may
+    // be in the in-flight frame, and it is also the source of the global IBL, which
+    // has to be re-convolved afterwards.
     d.waitForGpu();
     if (d.loadSkyboxCubemap()) {
         if (!d.skyboxPipeline)
@@ -11309,16 +11307,16 @@ void D3D12Renderer::setShadowResolution(int v)
 {
     if (v <= 0 || v == shadowResolution()) return;
     setShadowResolutionFlag(v);
-    // Se anota y lo aplica drawFrame entre frames (applyPendingShadowSize).
+    // It is recorded and drawFrame applies it between frames (applyPendingShadowSize).
     m_impl->pendingShadowMapSize = static_cast<UINT>(v);
 }
 
 void D3D12Renderer::setPresentMode(PresentMode v)
 {
-    // Aquí no hay nada que recrear, al revés que en Vulkan: DXGI elige el modo
-    // en cada Present, así que basta con guardar el valor y el frame siguiente
-    // ya sale con él. El flag de tearing sí va en el swapchain, pero se pide
-    // SIEMPRE que el adaptador lo permita, no solo cuando el modo está activo.
+    // There is nothing to recreate here, unlike in Vulkan: DXGI chooses the mode
+    // on every Present, so it is enough to store the value and the next frame
+    // already comes out with it. The tearing flag does go in the swapchain, but it is requested
+    // ALWAYS when the adapter allows it, not only when the mode is active.
     setPresentModeFlag(v);
 }
 
@@ -11326,9 +11324,9 @@ bool D3D12Renderer::presentModeSupported(PresentMode v) const
 {
     switch (v) {
         case PresentMode::Vsync:     return true;
-        // DXGI no tiene equivalente de mailbox: el flip model descarta o encola,
-        // pero no hay un modo que ni espere ni rompa la imagen. Se dice que no
-        // en vez de fingir que sí y caer a vsync en silencio.
+        // DXGI has no mailbox equivalent: the flip model drops or queues,
+        // but there is no mode that neither waits nor tears the image. It says no
+        // instead of pretending yes and silently falling back to vsync.
         case PresentMode::Mailbox:   return false;
         case PresentMode::Immediate: return m_impl->tearingDisponible;
     }
@@ -11342,7 +11340,7 @@ void D3D12Renderer::setBloomEnabled(bool v)
 
 void D3D12Renderer::flushPendingUploads()
 {
-    // Nada pendiente: cada subida se envía y se espera en el momento.
+    // Nothing pending: each upload is submitted and waited on at once.
 }
 
 void D3D12Renderer::flushUploadsAndWait()
@@ -11354,13 +11352,13 @@ void D3D12Renderer::refitCameraRange()
 {
     Impl& d = *m_impl;
 
-    // Suelo del rango: una escena diminuta (o con todo en el mismo punto) daría
-    // far ~0 y no se vería ni el cielo. 200 deja far=600 y near=0.2, que cubre
-    // la cámara con la que abre el editor sin recortar props pequeños. Mismo
-    // valor que el camino de Vulkan, para que las dos den el mismo encuadre.
+    // Floor of the range: a tiny scene (or with everything at the same point) would give
+    // far ~0 and not even the sky would be seen. 200 leaves far=600 and near=0.2, which covers
+    // the camera the editor opens with without clipping small props. Same
+    // value as the Vulkan path, so both give the same framing.
     constexpr float kMinCameraDistance = 200.0f;
 
-    // Paréntesis alrededor de min/max: windows.h los define como macro.
+    // Parentheses around min/max: windows.h defines them as macros.
     glm::vec3 lo((std::numeric_limits<float>::max)());
     glm::vec3 hi(std::numeric_limits<float>::lowest());
     bool      any = false;
@@ -11369,8 +11367,8 @@ void D3D12Renderer::refitCameraRange()
         if (!object.hasBounds)
             continue;
 
-        // Las 8 esquinas de la AABB local llevadas a mundo: con el objeto
-        // rotado o escalado, la caja alineada a ejes de la malla ya no acota.
+        // The 8 corners of the local AABB taken to world: with the object
+        // rotated or scaled, the mesh's axis-aligned box no longer bounds it.
         for (int c = 0; c < 8; ++c) {
             const glm::vec3 corner((c & 1) ? object.aabbMax.x : object.aabbMin.x,
                                    (c & 2) ? object.aabbMax.y : object.aabbMin.y,
@@ -11382,9 +11380,9 @@ void D3D12Renderer::refitCameraRange()
         any = true;
     }
 
-    // De los personajes solo entra su origen: aquí no se guarda una cota de la
-    // pose como en Vulkan, y esto solo fija near/far — no culea nada. Sirve
-    // para que una escena que sea solo personajes no se quede sin rango.
+    // Of the characters only their origin goes in: a bound of the pose is not stored
+    // here as in Vulkan, and this only sets near/far, it culls nothing. It serves
+    // so that a scene made only of characters does not end up without range.
     for (const Impl::SkinnedObject& character : d.skinnedObjects) {
         const glm::vec3 origin(character.transform[3]);
         lo  = (glm::min)(lo, origin);
@@ -11392,17 +11390,17 @@ void D3D12Renderer::refitCameraRange()
         any = true;
     }
 
-    // Nada acotable: conserva el rango vigente en vez de dejarlo en infinitos.
-    // Es lo que pasa con la escena vacía de un proyecto recién creado.
+    // Nothing boundable: it keeps the current range instead of leaving it at infinities.
+    // It is what happens with the empty scene of a newly created project.
     if (!any)
         return;
 
     const float maxDim = (glm::max)(hi.x - lo.x, (glm::max)(hi.y - lo.y, hi.z - lo.z));
     d.cameraDistance   = (glm::max)(maxDim * 1.2f, kMinCameraDistance);
 
-    // El rango acaba de cambiar de forma: sin esto, las cascadas seguirían
-    // repartidas sobre el frustum anterior hasta el siguiente movimiento de
-    // cámara.
+    // The range has just changed shape: without this, the cascades would stay
+    // split over the previous frustum until the next camera
+    // movement.
     d.updateViewProj();
     d.computeCascades();
 }
@@ -11422,9 +11420,9 @@ uint32_t D3D12Renderer::renderHeight() const
     return m_impl->height;
 }
 
-// El tamaño de SALIDA, que es con el que recordUiCanvas construye el canvas.
-// Con SSAA `width`/`height` son mayores: usar aquéllos dejaría la UI y el ratón
-// en dos espacios distintos.
+// The OUTPUT size, which is what recordUiCanvas builds the canvas with.
+// With SSAA `width`/`height` are larger: using those would leave the UI and the mouse
+// in two different spaces.
 uint32_t D3D12Renderer::uiWidth() const
 {
     return m_impl->outWidth;
@@ -11446,8 +11444,8 @@ void D3D12Renderer::setUiLayer(UiLayer* ui)
     Impl& d  = *m_impl;
     d.uiLayer = ui;
 
-    // La capa de interfaz se graba por el mismo hueco que ya existía para
-    // ImGui: quien la pone deja de tener que registrar el callback a mano.
+    // The interface layer is recorded through the same slot that already existed for
+    // ImGui: whoever sets it no longer has to register the callback by hand.
     if (!ui) {
         setUiDrawCallback(nullptr);
         return;
@@ -11460,9 +11458,9 @@ void D3D12Renderer::setUiLayer(UiLayer* ui)
 
 UiCanvas& D3D12Renderer::uiCanvas()
 {
-    // El PRIMER canvas de pantalla, en el orden de la escena: mismo criterio
-    // que el Renderer de Vulkan, y el mismo que usaba el shim temporal (Task
-    // 4) cuando solo había un canvas.
+    // The FIRST screen canvas, in scene order: same criterion
+    // as the Vulkan Renderer, and the same one used by the temporary shim (Task
+    // 4) when there was only one canvas.
     for (auto& s : m_impl->uiSlots)
         if (s && s->mode == UiCanvasRenderMode::ScreenSpace) return s->canvas;
     return m_impl->uiCanvasFallback;
@@ -11470,14 +11468,14 @@ UiCanvas& D3D12Renderer::uiCanvas()
 
 void D3D12Renderer::screenUiCanvases(std::vector<UiCanvas*>& out)
 {
-    // Misma función libre que Vulkan: el orden del pase de UI (que recorre
-    // uiSlots en orden) al revés, o sea el de más arriba primero.
+    // Same free function as Vulkan: the order of the UI pass (which walks
+    // uiSlots in order) reversed, that is, the topmost first.
     screenCanvasesTopFirst(m_impl->uiSlots, out);
 }
 
 const UiCanvas* D3D12Renderer::uiCanvasOf(uint64_t ownerId) const
 {
-    // Misma funcion libre que Vulkan.
+    // Same free function as Vulkan.
     return findCanvasByOwner(m_impl->uiSlots, ownerId);
 }
 
@@ -11485,9 +11483,9 @@ void D3D12Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
 {
     Impl& d = *m_impl;
 
-    // Empareja por ownerId: los slots que sobreviven conservan su árbol y su
-    // caché, así que reordenar los canvas en la jerarquía no reconstruye lo
-    // que no ha cambiado.
+    // Matches by ownerId: surviving slots keep their tree and their
+    // cache, so reordering canvases in the hierarchy does not rebuild what
+    // has not changed.
     matchUiCanvasSlots(bindings, d.uiSlots);
 
     for (size_t i = 0; i < bindings.size(); i++)
@@ -11497,17 +11495,17 @@ void D3D12Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
         if (b.canvas) b.canvas->applyTo(s.canvas);
         const UiCanvasRenderMode modo =
             b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
-        // Mismo motivo que en el camino de Vulkan: cambiar de modo saca el canvas
-        // del reparto de input, y si se va a media pulsación se queda con una
-        // captura huérfana que al volver le roba el puntero al de encima.
+        // Same reason as in the Vulkan path: changing mode takes the canvas out
+        // of the input split, and if it leaves mid-press it is left with an
+        // orphaned capture that, when it comes back, steals the pointer from the one on top.
         if (modo != s.mode) s.canvas.releaseInput();
         s.mode      = modo;
         s.depthTest = b.canvas ? b.canvas->depthTest  : true;
-        // Copia por valor de los ajustes de mundo y del transform del
-        // GameObject: la matriz de modelo se calcula al GRABAR (necesita la
-        // vista de la cámara para el billboard) y para entonces el binding ya no
-        // existe. Sin canvas se queda el componente por defecto, que no se llega
-        // a leer porque el modo será ScreenSpace.
+        // Copy by value of the world settings and of the GameObject's
+        // transform: the model matrix is computed when RECORDING (it needs the
+        // camera view for the billboard) and by then the binding no longer
+        // exists. Without a canvas the default component stays, which is never
+        // read because the mode will be ScreenSpace.
         if (b.canvas) s.component = *b.canvas;
         s.worldTransform = b.worldTransform;
         syncUiWidgets(b.widgets, s.canvas, s.cache, *this);
@@ -11516,7 +11514,7 @@ void D3D12Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
 
 const UiElement* D3D12Renderer::findUiNode(const std::string& name) const
 {
-    // TODOS los canvas, no solo el de pantalla.
+    // ALL canvases, not only the screen one.
     for (const auto& s : m_impl->uiSlots)
     {
         if (!s) continue;
@@ -11527,9 +11525,9 @@ const UiElement* D3D12Renderer::findUiNode(const std::string& name) const
 
 void D3D12Renderer::initSceneResources(const std::vector<Mesh>& meshes)
 {
-    // La fase 2 del arranque para este backend: subir lo que ya hay. El auto-fit
-    // de la cámara y los recursos que dependen del tamaño de la escena los
-    // resuelve init(), que aquí ya corrió.
+    // Phase 2 of startup for this backend: upload what is already there. The camera's
+    // auto-fit and the resources that depend on the scene size are
+    // resolved by init(), which has already run here.
     for (const Mesh& mesh : meshes)
         addStaticMesh(mesh);
     refitCameraRange();
@@ -11537,7 +11535,7 @@ void D3D12Renderer::initSceneResources(const std::vector<Mesh>& meshes)
 
 void D3D12Renderer::drawFrame(Window& window)
 {
-    // La ventana no hace falta: el tamaño llega por resize() desde su callback.
+    // The window is not needed: the size arrives through resize() from its callback.
     (void)window;
     drawFrame();
 }
@@ -11549,9 +11547,9 @@ void D3D12Renderer::setHeadless(bool headless)
 
 void D3D12Renderer::notifyResize()
 {
-    // Vulkan solo marca un flag porque su swapchain se recrea sola al fallar el
-    // present. Aquí el tamaño lo trae el callback de la ventana, que ya llama a
-    // resize(): no queda nada por hacer.
+    // Vulkan only sets a flag because its swapchain recreates itself when the
+    // present fails. Here the size comes from the window callback, which already calls
+    // resize(): there is nothing left to do.
 }
 
 UiTextureAtlas* D3D12Renderer::loadUiAtlas(const std::string& path)
@@ -11566,7 +11564,7 @@ UiTextureAtlas* D3D12Renderer::loadUiAtlas(const std::string& path)
     auto atlas = std::make_unique<UiTextureAtlas>();
     if (!atlas->loadPixelsFromFile(path))
         return nullptr;
-    // Sub-rects, si los hay: mismo sidecar y mismas reglas que en Vulkan.
+    // Sub-rects, if there are any: same sidecar and same rules as in Vulkan.
     atlas->loadSprites(UiTextureAtlas::spriteSheetPathFor(path));
     if (!d.registerUiAtlas(*atlas))
         return nullptr;
@@ -11582,9 +11580,9 @@ uint64_t D3D12Renderer::uiAtlasTextureId(const UiTextureAtlas* atlas)
     if (!atlas || !d.srvHeap)
         return 0;
 
-    // El SRV ya existe: lo creó registerUiAtlas en el heap que la interfaz
-    // comparte con el backend, y su handle de GPU ES lo que ImGui entiende por
-    // textura (mismo criterio que EditorUI::registerUiTexture en D3D12).
+    // The SRV already exists: registerUiAtlas created it in the heap that the interface
+    // shares with the backend, and its GPU handle IS what ImGui understands as a
+    // texture (same criterion as EditorUI::registerUiTexture in D3D12).
     const auto it = d.uiAtlasSrv.find(atlas);
     if (it == d.uiAtlasSrv.end())
         return 0;
@@ -11600,8 +11598,8 @@ uint64_t D3D12Renderer::uiThumbnailAtlasId()
     if (!d.ensureThumbAtlas())
         return 0;
 
-    // Mismo criterio que uiAtlasTextureId: el handle de GPU del SRV ES lo que
-    // ImGui entiende por textura.
+    // Same criterion as uiAtlasTextureId: the SRV's GPU handle IS what
+    // ImGui understands as a texture.
     D3D12_GPU_DESCRIPTOR_HANDLE handle = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
     handle.ptr += static_cast<UINT64>(kSrvThumbAtlas) * d.srvSize;
     return handle.ptr;
@@ -11619,8 +11617,8 @@ UiFont* D3D12Renderer::loadUiFont(const std::string& path, float bakePx)
         return nullptr;
 
     auto font = std::make_unique<UiFont>();
-    // El horneado es CPU: FreeType y MSDF no saben de backends. Lo único propio
-    // es subir el atlas que sale de ahí.
+    // The baking is CPU: FreeType and MSDF know nothing of backends. The only thing specific
+    // is uploading the atlas that comes out of there.
     if (!font->bakeFromFileCached(path, bakePx))
         return nullptr;
     if (!d.registerUiAtlas(font->atlas()))
@@ -11632,8 +11630,8 @@ UiFont* D3D12Renderer::loadUiFont(const std::string& path, float bakePx)
 
 void D3D12Renderer::setAaMode(AaMode mode)
 {
-    // Solo se anota: los targets y los pipelines los rehace el frame siguiente,
-    // con la GPU en reposo.
+    // It is only recorded: the targets and pipelines are redone by the next frame,
+    // with the GPU idle.
     setAaModeFlag(mode);
 }
 
@@ -11668,21 +11666,21 @@ void D3D12Renderer::setSsaoEnabled(bool v)
 
 void D3D12Renderer::setSsaaFactor(float v)
 {
-    // SSAA SÍ está implementado en este backend (applyPendingRenderSize escala
-    // el tamaño de dibujo y el pase de resolve promedia): el comentario que
-    // había aquí decía lo contrario y llevaba tiempo obsoleto.
+    // SSAA IS implemented in this backend (applyPendingRenderSize scales
+    // the draw size and the resolve pass averages): the comment that
+    // was here said the opposite and had been obsolete for a while.
     //
-    // No hace falta marcar nada: applyPendingRenderSize recalcula el tamaño
-    // pedido en cada frame y sale por su early-out cuando no ha cambiado, así
-    // que tocar el factor ya provoca la recreación en el frame siguiente.
+    // There is no need to mark anything: applyPendingRenderSize recomputes the requested
+    // size every frame and exits through its early-out when it has not changed, so
+    // touching the factor already causes the recreation in the next frame.
     setSsaaFactorFlag(v);
 }
 
 void D3D12Renderer::requestProbeBake(uint64_t ownerId)
 {
-    // Solo se apunta: hornear reescribe la camara y espera a la GPU, asi que se
-    // hace al principio del frame siguiente y no en mitad de lo que sea que
-    // este haciendo quien llama.
+    // It is only noted: baking rewrites the camera and waits on the GPU, so it is
+    // done at the start of the next frame and not in the middle of whatever
+    // the caller is doing.
     m_impl->probeBakeQueue.push_back(ownerId);
 }
 
@@ -11692,11 +11690,11 @@ float D3D12Renderer::lastProbeBakeMs() const { return m_impl->probeLastBakeMs; }
 
 uint64_t D3D12Renderer::probeMemoryBytes() const
 {
-    // rgba16f = 8 bytes por texel, 6 caras. Tres recursos por sonda, y ahí está
-    // la diferencia con Vulkan: allí el cubemap de CAPTURA es uno solo para
-    // todas las sondas, aquí lo tiene cada una (ver createProbeResources), así
-    // que la cifra de este backend es mayor. Enseñar la de Vulkan bajo DX12 no
-    // era solo mezclar backends: subestimaba (H51).
+    // rgba16f = 8 bytes per texel, 6 faces. Three resources per probe, and that is the
+    // difference with Vulkan: there the CAPTURE cubemap is a single one for
+    // all probes, here each one has its own (see createProbeResources), so
+    // this backend's figure is larger. Showing Vulkan's under DX12 was
+    // not just mixing backends: it underestimated (H51).
     constexpr uint64_t kBytesPorTexel = 8;
     constexpr uint64_t kCaras         = 6;
 
@@ -11721,9 +11719,9 @@ float D3D12Renderer::probeBakeMs(uint64_t ownerId) const
 }
 
 void D3D12Renderer::setPerfCaptureEnabled(bool on) { m_impl->perfCapture = on; }
-// Tiempos de GPU: los mide el par de marcas de cada pase, leídos con dos frames
-// de retraso —que es cuando la GPU ya ha terminado el que los escribió— igual
-// que en el camino de Vulkan.
+// GPU times: measured by each pass's pair of marks, read two frames
+// late (which is when the GPU has already finished the one that wrote them), just
+// like in the Vulkan path.
 float D3D12Renderer::renderGpuMs() const { return m_impl->gpuMs[Impl::TsFrame / 2]; }
 float D3D12Renderer::ssaoGpuMs() const { return m_impl->gpuMs[Impl::TsSsao / 2]; }
 float D3D12Renderer::ssrGpuMs() const { return m_impl->gpuMs[Impl::TsSsr / 2]; }
@@ -11736,13 +11734,13 @@ float D3D12Renderer::shadowGpuMs() const { return m_impl->gpuMs[Impl::TsShadow /
 float D3D12Renderer::forwardPlusGpuMs() const { return m_impl->gpuMs[Impl::TsForwardPlus / 2]; }
 int   D3D12Renderer::statDrawCalls() const { return m_impl->statDraws; }
 int   D3D12Renderer::statInstances() const { return m_impl->statInstanced; }
-// Objetos que el frustum dejó fuera este frame. Solo estáticos: los personajes
-// se dibujan siempre (ver el pase principal).
+// Objects the frustum left out this frame. Statics only: characters
+// are always drawn (see the main pass).
 int   D3D12Renderer::statCulled() const { return m_impl->statCulledCount; }
-// Medidas de verdad: el compute ya las escribia, lo que faltaba era traerlas de
-// vuelta (ver recordForwardPlusCull). Antes iban cableadas a 0/0, asi que el
-// panel decia "0 luces por celda" y su aviso de celdas desbordadas no saltaba
-// jamas bajo DirectX 12: un diagnostico falso, que es peor que no tenerlo.
+// Real measurements: the compute already wrote them, what was missing was bringing them
+// back (see recordForwardPlusCull). Before they were wired to 0/0, so the
+// panel said "0 lights per cell" and its overflowed-cells warning never
+// fired under DirectX 12: a false diagnostic, which is worse than having none.
 float    D3D12Renderer::forwardPlusAvgPerCell() const { return m_impl->fpAvgPerCell; }
 uint32_t D3D12Renderer::forwardPlusOverflowCells() const { return m_impl->fpOverflowCells; }
 
@@ -11764,9 +11762,9 @@ void D3D12Renderer::setRenderToTexture(bool enabled)
 
 void D3D12Renderer::setViewportSize(uint32_t width, uint32_t height)
 {
-    // Solo se anota: recrear targets exige la GPU en reposo, y eso lo hace
-    // drawFrame al empezar el siguiente. Un panel plegado da cero y se ignora,
-    // como el minimizado de la ventana.
+    // It is only recorded: recreating targets requires the GPU idle, and drawFrame does that
+    // when starting the next one. A collapsed panel gives zero and is ignored,
+    // like the window being minimized.
     if (width == 0 || height == 0)
         return;
     m_impl->pendingRenderWidth  = width;
@@ -11848,17 +11846,17 @@ void D3D12Renderer::shutdown()
         return;
 
     diagLog("shutdown(): starting.");
-    // El estado del device ANTES de esperar a nadie: si ya está perdido, la
-    // espera de abajo no va a terminar nunca y el motivo hay que preguntarlo
-    // ahora, no después.
+    // The device state BEFORE waiting on anyone: if it is already lost, the
+    // wait below will never finish and the reason has to be asked
+    // now, not later.
     if (d.device) {
         const HRESULT motivo = d.device->GetDeviceRemovedReason();
         if (motivo != S_OK)
             d.dumpDeviceRemoved("shutdown (device already lost on entry)", motivo);
     }
 
-    // Nada se libera con trabajo en vuelo: soltar un render target que la GPU
-    // todavía lee es una corrupción silenciosa, no un error de la API.
+    // Nothing is released with work in flight: releasing a render target that the GPU
+    // is still reading is silent corruption, not an API error.
     d.waitForGpu();
 
     if (d.fenceEvent != nullptr) {
@@ -11868,9 +11866,9 @@ void D3D12Renderer::shutdown()
 
     d.releaseRenderTargets();
 
-    // Los recursos suballocados van ANTES que el allocator: liberar el
-    // allocator con allocations vivas es una fuga que solo aparece en el
-    // ReportLiveObjects de abajo.
+    // The suballocated resources go BEFORE the allocator: releasing the
+    // allocator with live allocations is a leak that only shows up in the
+    // ReportLiveObjects below.
     if (d.gridAllocation) {
         d.gridAllocation->Release();
         d.gridAllocation = nullptr;
@@ -11878,8 +11876,8 @@ void D3D12Renderer::shutdown()
     d.gridVertexBufferView = {};
     d.gridVertexCount      = 0;
 
-    // Los UBO están mapeados de forma persistente: se desmapean antes de
-    // soltar su allocation.
+    // The UBOs are persistently mapped: they are unmapped before
+    // releasing their allocation.
     for (UINT i = 0; i < kFrameCount; ++i) {
         if (d.sceneUboAllocations[i]) {
             if (d.sceneUboMapped[i]) {
@@ -11891,10 +11889,10 @@ void D3D12Renderer::shutdown()
         }
     }
 
-    // Geometría de la escena, antes que el allocator. Por la misma función que
-    // clearStaticMeshes, para que el criterio de quién suelta viva en un solo
-    // sitio; aquí se cierra todo, así que el recuento se anula antes. Este
-    // camino ADEMÁS soltaba el ORM, que clearStaticMeshes se dejaba.
+    // Scene geometry, before the allocator. Through the same function as
+    // clearStaticMeshes, so the criterion of who releases lives in a single
+    // place; here everything is closed, so the count is zeroed first. This
+    // path ALSO released the ORM, which clearStaticMeshes left behind.
     for (Impl::StaticObject& object : d.objects)
         object.sharedRefs = object.ownsGpu ? 1 : 0;
     for (Impl::StaticObject& object : d.objects)
@@ -11973,9 +11971,9 @@ void D3D12Renderer::shutdown()
         d.fpStatsAllocation->Release();
         d.fpStatsAllocation = nullptr;
     }
-    // Los dos del readback de estadisticas: el de subida va mapeado, asi que
-    // primero Unmap, y el de lectura es un ComPtr que se suelta solo. Los dos
-    // ANTES de allocator->Release(), como el resto de lo suballocado.
+    // The two of the statistics readback: the upload one is mapped, so
+    // Unmap first, and the read one is a ComPtr that releases itself. Both
+    // BEFORE allocator->Release(), like the rest of the suballocated.
     if (d.fpStatsZeros) {
         d.fpStatsZeros->GetResource()->Unmap(0, nullptr);
         d.fpStatsZeros->Release();
@@ -12011,23 +12009,23 @@ void D3D12Renderer::shutdown()
         d.releaseProbe(probe);
     d.probes.clear();
 
-    // La profundidad de las capturas NO va en releaseProbe: es UNA sola,
-    // compartida por las seis caras de todas las sondas (createProbeDepth sale
-    // por la puerta si ya existe), así que soltarla ahí la mataría en cuanto se
-    // borrase la primera sonda mientras las demás siguen horneando. Su sitio es
-    // aquí, y no lo tenía: quedaba viva cuando allocator->Release() cierra el
-    // allocator, y D3D12MA hace assert() al destruirse con un bloque no vacío
-    // —en Debug, abort() con exit 3 y ventana de Windows, sin volcado—. Mismo
-    // fallo y mismo desenlace que el de los atlas de UI de más abajo.
+    // The capture depth does NOT go in releaseProbe: it is a SINGLE one,
+    // shared by the six faces of all probes (createProbeDepth exits
+    // through the door if it already exists), so releasing it there would kill it as soon as
+    // the first probe was deleted while the others are still baking. Its place is
+    // here, and it did not have one: it stayed alive when allocator->Release() closes the
+    // allocator, and D3D12MA does assert() when destroyed with a non-empty block
+    // (in Debug, abort() with exit 3 and a Windows window, without a dump). Same
+    // failure and same outcome as that of the UI atlases further down.
     //
-    // Solo salta si la sesión llegó a hornear una sonda: es bakeProbe quien
-    // llama a createProbeDepth. Un cierre limpio sin sondas no prueba nada.
+    // It only fires if the session got to bake a probe: it is bakeProbe that
+    // calls createProbeDepth. A clean shutdown without probes proves nothing.
     if (d.probeDepthAllocation) {
         d.probeDepthAllocation->Release();
         d.probeDepthAllocation = nullptr;
     }
 
-    // Buffers de la UI 2D: van mapeados, así que primero Unmap.
+    // 2D UI buffers: they are mapped, so Unmap first.
     for (UINT i = 0; i < kFrameCount; ++i) {
         if (d.uiVertexAllocations[i]) {
             d.uiVertexAllocations[i]->GetResource()->Unmap(0, nullptr);
@@ -12044,45 +12042,45 @@ void D3D12Renderer::shutdown()
             d.uiIndexCapacity[i]    = 0;
         }
     }
-    // Los atlas de UI —sprites y fuentes MSDF, que pasan por el mismo
-    // registerUiAtlas— van AQUÍ, con el resto de recursos suballocados y no al
-    // final: su D3D12MA::Allocation tenía que estar suelta antes de que
-    // allocator->Release() cerrase el allocator. No lo estaba, y D3D12MA hace
-    // assert() al destruirse con un bloque no vacío: en Debug eso es abort(),
-    // o sea el editor muriendo al CERRAR con un exit code 3 y una ventana de
-    // Windows, sin volcado y sin nada en el visor de eventos. Fallo
-    // PREEXISTENTE, de 545b9b8; el backend de Vulkan ya lo hacía bien
+    // The UI atlases (sprites and MSDF fonts, which go through the same
+    // registerUiAtlas) go HERE, with the rest of the suballocated resources and not at the
+    // end: their D3D12MA::Allocation had to be released before
+    // allocator->Release() closed the allocator. It was not, and D3D12MA does
+    // assert() when destroyed with a non-empty block: in Debug that is abort(),
+    // that is, the editor dying on CLOSE with an exit code 3 and a
+    // Windows window, without a dump and with nothing in the event viewer. A
+    // PREEXISTING failure, from 545b9b8; the Vulkan backend already did it right
     // (Renderer.cpp, m_uiAtlases -> destroy).
     //
-    // Y ANTES de srvHeap.Reset(), por el mismo criterio con el que Vulkan
-    // suelta los atlas antes que su descriptor pool. Con una diferencia que
-    // conviene no confundir: en D3D12 un descriptor NO se destruye —no existe
-    // ninguna DestroyShaderResourceView, ni cuenta referencias sobre el
-    // recurso—, es memoria dentro del heap y muere con él. Así que aquí no
-    // hay hueco que devolver: lo único que hace falta es que la GPU esté
-    // parada, y de eso ya se encarga el waitForGpu() del principio.
+    // And BEFORE srvHeap.Reset(), by the same criterion with which Vulkan
+    // releases the atlases before its descriptor pool. With a difference that
+    // should not be confused: in D3D12 a descriptor is NOT destroyed (there is
+    // no DestroyShaderResourceView, nor does it count references on the
+    // resource), it is memory inside the heap and dies with it. So here there is
+    // no slot to return: the only thing needed is for the GPU to be
+    // stopped, and the waitForGpu() at the start already takes care of that.
     for (D3D12MA::Allocation* atlas : d.uiAtlasTextures) {
         if (atlas)
             atlas->Release();
     }
     d.uiAtlasTextures.clear();
-    // El atlas de miniaturas, con los demas atlas de UI y por la misma razon: su
-    // allocation tiene que estar suelta antes de allocator->Release() o D3D12MA
-    // hace assert al destruirse (abort en Debug, exit code 3, sin dump).
+    // The thumbnail atlas, with the other UI atlases and for the same reason: its
+    // allocation has to be released before allocator->Release() or D3D12MA
+    // asserts when destroyed (abort in Debug, exit code 3, no dump).
     if (d.thumbAtlas) {
         d.thumbAtlas->Release();
         d.thumbAtlas = nullptr;
     }
     d.thumbAtlasFailed = false;
-    // Punteros y índices a lo que se acaba de soltar: fuera antes de que nadie
-    // los pueda volver a pedir. uiAtlasSrv es el equivalente exacto del
-    // m_uiAtlasImGuiId de Vulkan (es lo que lee uiAtlasTextureId), y
-    // uiNextAtlasSlot vuelve a cero para no repartir slots de un heap muerto.
+    // Pointers and indices to what was just released: out before anyone
+    // can request them again. uiAtlasSrv is the exact equivalent of Vulkan's
+    // m_uiAtlasImGuiId (it is what uiAtlasTextureId reads), and
+    // uiNextAtlasSlot goes back to zero so as not to hand out slots of a dead heap.
     d.uiAtlasSrv.clear();
     d.uiAtlasByPath.clear();
-    // Los contenedores de CPU al final: en D3D12 ni UiTextureAtlas ni UiFont
-    // guardan nada de GPU (su destroy(GpuDevice&) es del camino de Vulkan),
-    // así que lo único que tenían de la GPU es la allocation recién soltada.
+    // The CPU containers at the end: in D3D12 neither UiTextureAtlas nor UiFont
+    // keep anything of the GPU (their destroy(GpuDevice&) belongs to the Vulkan path),
+    // so the only thing they had of the GPU is the allocation just released.
     d.uiAtlases.clear();
     d.uiFonts.clear();
     d.uiNextAtlasSlot = 0;
@@ -12094,15 +12092,15 @@ void D3D12Renderer::shutdown()
 
     d.fxaaPipeline.Reset();
     d.fxaaRootSignature.Reset();
-    // El SSAA se habia quedado fuera de esta lista, y era la fuga entera de
-    // H78: de los 20 root signatures y 36 PSO del backend, estos dos eran los
-    // UNICOS sin Reset en todo el fichero. Salian como
-    // `Live ID3D12RootSignature: 1` + `ID3D12PipelineState: 1`, y sus dos
-    // referencias eran las que dejaban el device en Refcount 2.
+    // SSAA had been left out of this list, and that was the whole leak of
+    // H78: of the backend's 20 root signatures and 36 PSOs, these two were the
+    // ONLY ones without a Reset in the whole file. They came out as
+    // `Live ID3D12RootSignature: 1` + `ID3D12PipelineState: 1`, and their two
+    // references were what left the device at Refcount 2.
     //
-    // La lista se escribe a mano y tiene 56 entradas: olvidar una no da error
-    // ni sintoma visible, solo ensucia el informe de fugas. Por eso importa que
-    // ese informe salga LIMPIO — en cuanto tolera ruido, deja de avisar.
+    // The list is written by hand and has 56 entries: forgetting one raises no error
+    // or visible symptom, it only dirties the leak report. That is why it matters that
+    // this report comes out CLEAN: as soon as it tolerates noise, it stops warning.
     d.ssaaPipeline.Reset();
     d.ssaaRootSignature.Reset();
     d.splashPipeline.Reset();
@@ -12140,10 +12138,10 @@ void D3D12Renderer::shutdown()
     d.rootSignature.Reset();
 
     if (d.allocator) {
-        // Lo que quede vivo en el allocator JUSTO ANTES de soltarlo. D3D12MA
-        // hace assert() si algo sigue asignado, y un assert en Debug se lleva
-        // el proceso por delante con un simple "exit code 3": el JSON de aquí
-        // es lo único que dice QUÉ se quedó sin liberar.
+        // What remains alive in the allocator RIGHT BEFORE releasing it. D3D12MA
+        // does assert() if anything is still allocated, and an assert in Debug takes
+        // the process down with a plain "exit code 3": the JSON here
+        // is the only thing that says WHAT was left unreleased.
         WCHAR* stats = nullptr;
         d.allocator->BuildStatsString(&stats, TRUE);
         if (stats) {
@@ -12156,18 +12154,18 @@ void D3D12Renderer::shutdown()
         d.allocator = nullptr;
     }
 
-    // Lo último que dijera la capa, antes de soltar la cola con el device.
+    // The last thing the layer said, before releasing the queue with the device.
     d.drainInfoQueue();
     d.infoQueue.Reset();
-    // El gancho apunta a este Impl: dejarlo puesto tras soltar el device sería
-    // preguntarle a un objeto medio muerto.
+    // The hook points at this Impl: leaving it set after releasing the device would be
+    // asking a half-dead object.
     g_volcarDeviceRemoved = nullptr;
 
-    // Medicion de tiempos de GPU. No se soltaba, asi que el ReportLiveObjects de
-    // mas abajo salia sucio SIEMPRE y dejaba de servir para lo unico que sirve:
-    // detectar la fuga del dia (H46). El readback ademas se queda mapeado desde
-    // que se crea —a proposito, se lee cada frame—, y hay que desmapearlo antes
-    // de soltarlo.
+    // GPU time measurement. It was not released, so the ReportLiveObjects
+    // below came out dirty ALWAYS and stopped serving the only thing it is for:
+    // detecting the leak of the day (H46). The readback also stays mapped from
+    // when it is created (on purpose, it is read every frame), and it has to be unmapped before
+    // releasing it.
     if (d.timestampReadback) {
         d.timestampReadback->Unmap(0, nullptr);
         d.timestampMapped = nullptr;
@@ -12189,9 +12187,9 @@ void D3D12Renderer::shutdown()
     diagLog("shutdown(): finished without incidents.");
 
 #ifndef NDEBUG
-    // Con el device ya soltado, lo que siga vivo es una fuga nuestra. Sale por
-    // la ventana de depuración (DebugView / el output del depurador), que es
-    // donde escribe también la capa de validación.
+    // With the device already released, whatever is still alive is a leak of ours. It comes out through
+    // the debug window (DebugView / the debugger's output), which is
+    // where the validation layer also writes.
     {
         ComPtr<IDXGIDebug1> dxgiDebug;
         if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDebug)))) {

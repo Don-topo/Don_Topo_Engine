@@ -1,10 +1,10 @@
 # cmake/PhysX.cmake
-# Descarga y compila PhysX 5.x (NVIDIA-Omniverse/PhysX) desde fuente vía FetchContent.
-# Solo soportado en Windows/Linux (PhysX de NVIDIA no soporta macOS oficialmente).
+# Downloads and builds PhysX 5.x (NVIDIA-Omniverse/PhysX) from source via FetchContent.
+# Only supported on Windows/Linux (NVIDIA's PhysX does not officially support macOS).
 #
-# Define:
-#   PHYSX_FOUND    - TRUE si PhysX se descargó y configuró correctamente
-#   PhysX::SDK     - target INTERFACE con las libs necesarias (solo si PHYSX_FOUND)
+# Defines:
+#   PHYSX_FOUND    - TRUE if PhysX was downloaded and configured correctly
+#   PhysX::SDK     - INTERFACE target with the needed libs (only if PHYSX_FOUND)
 
 set(PHYSX_FOUND FALSE)
 

@@ -6,20 +6,20 @@ namespace DonTopo
     struct SkinnedMesh;
     class AnimatorComponent;
 
-    // Root motion en CPU, sin GPU: posición y desplazamiento de la raíz de un
-    // clip a partir de sus keyframes. La raíz es el primer hueso sin padre con
-    // claves de posición en ese clip; sus claves están en espacio de modelo (la
-    // jerarquía de la GPU no aplica los nodos que hay por encima de la raíz).
+    // CPU root motion, no GPU: position and displacement of a clip's root from
+    // its keyframes. The root is the first parentless bone with position keys
+    // in that clip; its keys are in model space (the GPU hierarchy does not
+    // apply the nodes above the root).
 
-    // Posición de la raíz en t ticks, interpolada linealmente como bone_eval y
-    // acotada a la primera y la última clave. Sin raíz con claves: (0,0,0).
+    // Root position at t ticks, linearly interpolated like bone_eval and
+    // clamped to the first and last key. With no root with keys: (0,0,0).
     glm::vec3 sampleRootPosition(const SkinnedMesh& mesh, int clipIndex, double t);
 
-    // Desplazamiento desde 0 hasta T ticks acumulados de un reloj de duración
-    // `duration`. En loop suma un P(duration) − P(0) por cada ciclo completo.
+    // Displacement from 0 to T accumulated ticks of a clock of duration
+    // `duration`. When looping, it adds one P(duration) - P(0) per full cycle.
     glm::vec3 rootDisplacement(const SkinnedMesh& mesh, int clipIndex, double T, double duration, bool loop);
 
-    // Delta horizontal (y = 0) del último update del Animator, en espacio de
-    // modelo, ponderando sus rootMotionSamples.
+    // Horizontal delta (y = 0) of the Animator's last update, in model
+    // space, weighting its rootMotionSamples.
     glm::vec3 rootMotionDelta(const SkinnedMesh& mesh, const AnimatorComponent& anim);
 }

@@ -1,21 +1,21 @@
-// Cuantas luces declara el bloque UBO, en UN solo sitio del lado GLSL.
+// How many lights the UBO block declares, in a SINGLE place on the GLSL side.
 //
-// Estaba escrito a mano en los TRES shaders que declaran el array (pbr.frag,
-// triangle.frag y fog.comp). Fallar en uno no da ningun error: std140 desplaza
-// en silencio todo lo que va detras del array —viewPos, numLights,
-// ambientIntensity— y ese shader lee el UBO corrido. Mismo patron y mismo
-// arreglo que shadow_config.glsl, que hace esto con los tamanos del bloque de
-// sombras; va en un fichero aparte porque MAX_LIGHTS no es una constante de
-// sombras y meterla alli dejaria el nombre mintiendo.
+// It was written by hand in the THREE shaders that declare the array (pbr.frag,
+// triangle.frag and fog.comp). Getting one wrong gives no error: std140 silently
+// shifts everything behind the array (viewPos, numLights,
+// ambientIntensity) and that shader reads the shifted UBO. Same pattern and same
+// fix as shadow_config.glsl, which does this with the sizes of the shadow block;
+// it goes in a separate file because MAX_LIGHTS is not a shadow constant and
+// putting it there would leave the name lying.
 //
-// La otra copia es inevitable: la de C++ (UniformBufferObject.h), porque un
-// shader no puede incluir un header de C++. Dos sitios, no cuatro, y los dos
-// documentados el uno en el otro.
+// The other copy is unavoidable: the C++ one (UniformBufferObject.h), because a
+// shader cannot include a C++ header. Two places, not four, and the two
+// documented in each other.
 #ifndef DT_LIGHTS_CONFIG_GLSL
 #define DT_LIGHTS_CONFIG_GLSL
 
-// Tiene que valer lo mismo que MAX_LIGHTS en UniformBufferObject.h. Ver alli
-// por que son 64 y que hay que tocar al cambiarlo.
+// It has to have the same value as MAX_LIGHTS in UniformBufferObject.h. See there
+// why it is 64 and what has to be touched when changing it.
 #define MAX_LIGHTS 64
 
 #endif

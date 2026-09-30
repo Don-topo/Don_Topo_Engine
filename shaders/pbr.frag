@@ -11,25 +11,25 @@ layout(location = 0) out vec4 outColor;
 
 #include "lights_config.glsl"
 #include "shadow_config.glsl"
-// Huecos de matriz de sombra. Los 6 primeros son de la luz KEY (4 cascadas,
-// o 6 caras de cubemap, o 1 cara de foco); los 4 de detras son un foco
-// secundario cada uno. Mismo valor que SHADOW_MATRICES en
+// Shadow matrix slots. The first 6 belong to the KEY light (4 cascades,
+// or 6 cubemap faces, or 1 spot face); the 4 after them are one secondary
+// spot each. Same value as SHADOW_MATRICES in
 // UniformBufferObject.h.
-// Mismo layout que DonTopo::Light. direction.w = tipo (0 point, 1 spot,
-// 2 directional, 3 area); params = (range, cos interior, cos exterior, ancho).
+// Same layout as DonTopo::Light. direction.w = type (0 point, 1 spot,
+// 2 directional, 3 area); params = (range, inner cos, outer cos, width).
 struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };
 
 layout(set = 0, binding = 0) uniform UBO {
     mat4  view;
     mat4  proj;
     mat4  lightSpaceMatrix[SHADOW_MATRICES];
-    vec4  cascadeSplits;    // distancia (view space, positiva) hasta la que llega cada cascada
+    vec4  cascadeSplits;    // distance (view space, positive) that each cascade reaches
     Light lights[MAX_LIGHTS];
     vec4  viewPos;
     int   numLights;
-    // Va en el hueco de padding que ya habia detras de numLights, asi que
-    // ningun offset anterior se mueve y los otros 4 shaders que declaran este
-    // bloque no necesitan cambiar.
+    // It goes in the padding gap that was already behind numLights, so
+    // no previous offset moves and the other 4 shaders that declare this
+    // block do not need to change.
     float ambientIntensity;
 } ubo;
 
@@ -37,28 +37,28 @@ layout(set = 0, binding = 1) uniform sampler2D texSampler;
 layout(set = 0, binding = 2) uniform sampler2D normalMap;
 layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 4) uniform sampler2D metallicRoughnessTex;
-// IBL. Los dos cubemaps existen SIEMPRE: sin skybox cargado llevan un ambiente
-// neutro constante, asi que aqui no hace falta ninguna rama.
+// IBL. The two cubemaps ALWAYS exist: without a loaded skybox they carry a constant
+// neutral ambient, so no branch is needed here.
 layout(set = 0, binding = 5) uniform samplerCube irradianceMap;
 layout(set = 0, binding = 6) uniform samplerCube prefilterMap;
-// SSAO del frame, a resolucion completa y ya emborronado. Existe SIEMPRE: con
-// el efecto apagado la imagen esta puesta a 1.0 y este shader multiplica por la
-// unidad, asi que no hace falta ninguna rama ni un miembro nuevo en el UBO.
+// The frame's SSAO, at full resolution and already blurred. It ALWAYS exists: with
+// the effect off the image is set to 1.0 and this shader multiplies by
+// one, so no branch or new UBO member is needed.
 layout(set = 0, binding = 7) uniform sampler2D ssaoMap;
 
 // ── Forward+ ────────────────────────────────────────────────────────────────
-// Set 2 propio y no bindings nuevos del set 0: el 0 solo tenia libre el 8 y
-// ampliarlo obligaria a reescribir el descriptor set de CADA objeto. Este set
-// es uno por frame y se bindea una vez por pass. Los buffers EXISTEN siempre,
-// tambien con Forward+ apagado: entonces fp.mode vale 0 y el bucle de abajo es
-// el de siempre sobre el UBO, sin leer ni una luz de aqui.
+// Its own set 2 and not new bindings in set 0: set 0 only had 8 free and
+// extending it would force rewriting the descriptor set of EVERY object. This set
+// is one per frame and is bound once per pass. The buffers ALWAYS EXIST,
+// also with Forward+ off: then fp.mode is 0 and the loop below is
+// the usual one over the UBO, without reading a single light from here.
 struct FpLight
 {
-    vec4 posRadius;     // xyz mundo, w radio
-    vec4 color;         // rgb color, a intensidad
+    vec4 posRadius;     // xyz world, w radius
+    vec4 color;         // rgb color, a intensity
     vec4 viewPosR;      // xyz view space, w radio (solo lo usa el culling)
-    vec4 direction;     // xyz dir, w tipo (0 point, 1 spot, 2 directional, 3 area)
-    vec4 params;        // range, cos interior, cos exterior, ancho
+    vec4 direction;     // xyz dir, w type (0 point, 1 spot, 2 directional, 3 area)
+    vec4 params;        // range, inner cos, outer cos, width
 };
 
 layout(std430, set = 2, binding = 0) readonly buffer FpParamsBuf {
@@ -80,32 +80,32 @@ layout(std430, set = 2, binding = 1) readonly buffer FpLightBuf { FpLight fpLigh
 layout(std430, set = 2, binding = 2) readonly buffer FpGridBuf  { uvec2   fpCells[];   };
 layout(std430, set = 2, binding = 3) readonly buffer FpIndexBuf { uint    fpIndices[]; };
 
-// Debe coincidir con Renderer::IBL_PREFILTER_MIPS. Va como #define y no en el
-// UBO a proposito: el bloque UBO esta declarado en 5 shaders y anadirle un
-// miembro desplazaria en silencio todo lo que va detras por std140.
+// Must match Renderer::IBL_PREFILTER_MIPS. It is a #define and not in the
+// UBO on purpose: the UBO block is declared in 5 shaders and adding a
+// member would silently shift everything behind it under std140.
 #define IBL_PREFILTER_MIPS 5
 
 layout(push_constant) uniform PushData {
     mat4  transform;
     float metallic;
     float roughness;
-    // flags.x: ruta de instancing, la lee el vertex shader.
-    // flags.y: fuerza de SSR del objeto, que este shader vuelca al alfa del
-    // attachment HDR. Es el canal por el que la mascara por objeto llega al
-    // post-pass de reflejos sin un attachment nuevo ni un miembro en el UBO.
+    // flags.x: instancing path, read by the vertex shader.
+    // flags.y: the object's SSR strength, which this shader writes to the alpha of the
+    // HDR attachment. It is the channel through which the per-object mask reaches the
+    // reflection post-pass without a new attachment or a UBO member.
     vec2  flags;
 } push;
 
 const float PI = 3.14159265359;
 
-// Direccion hacia la luz y atenuacion segun su tipo. La copia identica de esta
-// funcion vive en triangle.frag: si las dos dejan de coincidir, el mismo objeto
-// se ve distinto segun tenga o no material PBR.
+// Direction towards the light and attenuation according to its type. The identical copy of this
+// function lives in triangle.frag: if the two stop matching, the same object
+// looks different depending on whether it has a PBR material or not.
 float lightSample(int i, vec3 worldPos, out vec3 L)
 {
     int type = int(ubo.lights[i].direction.w + 0.5);
 
-    // Directional: sin posicion ni atenuacion, solo direccion.
+    // Directional: no position or attenuation, only direction.
     if (type == 2)
     {
         L = normalize(-ubo.lights[i].direction.xyz);
@@ -116,15 +116,15 @@ float lightSample(int i, vec3 worldPos, out vec3 L)
     float dist = length(toL);
     L = toL / max(dist, 1e-4);
 
-    // El area se aproxima como un point de radio = ancho/2.
+    // The area light is approximated as a point of radius = width/2.
     float range = (type == 3) ? max(ubo.lights[i].params.w * 0.5, 1e-4)
                               : max(ubo.lights[i].params.x, 1e-4);
-    // Misma ventana por radio que la rama Forward+ de abajo: fuera del rango da
-    // EXACTAMENTE 0, asi que descartar la luz no cambia el resultado.
+    // Same radius window as the Forward+ branch below: outside the range it gives
+    // EXACTLY 0, so discarding the light does not change the result.
     float w   = clamp(1.0 - (dist * dist) / (range * range), 0.0, 1.0);
     float att = w * w;
 
-    // Spot: cono suave entre el coseno interior y el exterior.
+    // Spot: soft cone between the inner and the outer cosine.
     if (type == 1)
     {
         float cosA = dot(normalize(ubo.lights[i].direction.xyz), -L);
@@ -133,38 +133,38 @@ float lightSample(int i, vec3 worldPos, out vec3 L)
     return att;
 }
 
-// La eleccion de capa y la reproyeccion las comparte con fog.comp, que muestrea
-// el MISMO mapa; aqui solo queda el filtrado, que si es distinto a proposito.
+// The layer choice and the reprojection are shared with fog.comp, which samples
+// the SAME map; only the filtering remains here, which is different on purpose.
 #include "shadow_lookup.glsl"
 
-// normalGeo = la normal INTERPOLADA del vertice, no la del normal map: el bias
-// solo tiene que separar la superficie de su propia sombra, y hacerlo seguir los
-// bultos de una textura mete ondulaciones en el borde de la sombra.
-// PCF 3x3 sobre una coordenada ya resuelta. Lo comparten la luz key y los focos
-// secundarios: el filtrado tiene que ser el mismo o la misma geometria daria
-// bordes distintos segun que luz la sombree.
+// normalGeo = the vertex's INTERPOLATED normal, not the normal map's: the bias
+// only has to separate the surface from its own shadow, and making it follow the
+// bumps of a texture puts ripples on the shadow's edge.
+// 3x3 PCF over an already resolved coordinate. The key light and the secondary spots
+// share it: the filtering has to be the same or the same geometry would give
+// different edges depending on which light shades it.
 float dtPcf(vec3 proj, float layer)
 {
-    // Del tamano REAL del mapa, no de un 2048 a fuego. Con el valor fijo, subir
-    // la resolucion no ensanchaba ni estrechaba el filtro: a 4096 los nueve taps
-    // se separaban dos texeles reales -mismo desenfoque, solo menos aliasing- y
-    // a 1024 caian dentro de medio texel y el PCF desaparecia.
+    // From the map's REAL size, not a hardcoded 2048. With the fixed value, raising
+    // the resolution neither widened nor narrowed the filter: at 4096 the nine taps
+    // were two real texels apart (same blur, just less aliasing) and
+    // at 1024 they fell within half a texel and the PCF disappeared.
     vec2  texelSize = 1.0 / vec2(textureSize(shadowMap, 0).xy);
     float shadow    = 0.0;
-    // Se probo 5x5 para el borde de una sombra en perspectiva y se ve PEOR: con
-    // un cubemap los taps de mas se recortan contra el borde de la cara y
-    // ensanchan esa banda dura. Al indexar por capa y no por region de un atlas,
-    // los taps del borde no pueden caer en la capa vecina: el sampler los
-    // recorta contra el borde de SU capa.
+    // 5x5 was tried for the edge of a perspective shadow and it looks WORSE: with
+    // a cubemap the extra taps are clamped against the face's edge and
+    // widen that hard band. Since it is indexed by layer and not by region of an atlas,
+    // the edge taps cannot fall in the neighboring layer: the sampler
+    // clamps them against the edge of THEIR layer.
     for (int x = -1; x <= 1; x++)
         for (int y = -1; y <= 1; y++)
             shadow += texture(shadowMap, vec4(proj.xy + vec2(x, y) * texelSize, layer, proj.z));
     return shadow / 9.0;
 }
 
-// Sombra de una luz que no es la key. 1.0 = iluminado, que es lo que devuelve
-// tambien cuando esa luz no proyecta sombra: la inmensa mayoria de las luces de
-// una escena no tienen ranura, y para ellas esto es una comparacion y salir.
+// Shadow of a light that is not the key. 1.0 = lit, which is what it returns
+// also when that light casts no shadow: the vast majority of the lights in
+// a scene have no slot, and for them this is a comparison and an exit.
 float shadowDeLuz(int luz, vec3 worldPos, vec3 normalGeo)
 {
     vec3  proj;
@@ -175,8 +175,8 @@ float shadowDeLuz(int luz, vec3 worldPos, vec3 normalGeo)
 
 float computeShadow(vec3 worldPos, vec3 normalGeo)
 {
-    // Se reproyecta aqui en vez de traer N varyings del vertex shader: la
-    // cascada no se sabe hasta tener la profundidad del fragmento.
+    // It is reprojected here instead of bringing N varyings from the vertex shader: the
+    // cascade is not known until the fragment's depth is available.
     vec3  proj;
     float layer;
     if (!dtShadowCoord(worldPos, normalGeo, proj, layer)) return 1.0;
@@ -184,16 +184,16 @@ float computeShadow(vec3 worldPos, vec3 normalGeo)
     return dtPcf(proj, layer);
 }
 
-// Fresnel de Schlick con el termino de rugosidad de Lazarov: sin el, una
-// superficie rugosa vista de canto devolveria kS = 1 y se quedaria sin difuso.
+// Schlick's Fresnel with Lazarov's roughness term: without it, a
+// rough surface seen edge-on would return kS = 1 and be left without diffuse.
 vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float rough)
 {
     return F0 + (max(vec3(1.0 - rough), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// Segunda mitad del split-sum (la integral del BRDF), en su forma analitica de
-// Karis. Sustituye a la LUT 2D de 512x512 con un error del orden del 1%, y
-// ahorra una imagen, un binding y un pass de precomputacion.
+// Second half of the split-sum (the BRDF integral), in Karis's analytic form.
+// It replaces the 512x512 2D LUT with an error of the order of 1%, and
+// saves an image, a binding and a precomputation pass.
 vec3 envBRDFApprox(vec3 F0, float rough, float NdotV)
 {
     const vec4 c0 = vec4(-1.0, -0.0275, -0.572,  0.022);
@@ -211,7 +211,7 @@ void main()
     vec3 N   = normalize(TBN * (texture(normalMap, fragUV).rgb * 2.0 - 1.0));
     vec3 V   = normalize(ubo.viewPos.xyz - fragWorldPos);
 
-    // Albedo — VK_FORMAT_R8G8B8A8_SRGB ya lineariza en hardware, no aplicar pow de nuevo
+    // Albedo — VK_FORMAT_R8G8B8A8_SRGB already linearizes in hardware, do not apply pow again
     vec4 albedoSample = texture(texSampler, fragUV);
     if (albedoSample.a < 0.5) discard;
     vec3 albedo = albedoSample.rgb;
@@ -224,17 +224,17 @@ void main()
 
     vec3 F0 = mix(vec3(0.04), albedo, metal);
 
-    // Profundidad en view space. Ya no la usa la sombra —la eleccion de capa
-    // vive en shadow_lookup.glsl y la recalcula ahi— pero si el reparto en
-    // slices de Forward+ clustered.
+    // Depth in view space. The shadow no longer uses it (the layer choice
+    // lives in shadow_lookup.glsl and recomputes it there) but the split into
+    // slices of clustered Forward+ does.
     float viewDepth = -(ubo.view * vec4(fragWorldPos, 1.0)).z;
     float shadow    = computeShadow(fragWorldPos, normalize(fragNormal));
     vec3  Lo        = vec3(0.0);
 
-    // Forward+ apagado: el bucle de siempre sobre las MAX_LIGHTS del UBO, sin
-    // tocar un solo buffer del set 2. Va copiado y no factorizado con el de
-    // abajo a proposito: son las mismas operaciones en el mismo orden, y la
-    // unica diferencia es de donde sale cada luz.
+    // Forward+ off: the usual loop over the UBO's MAX_LIGHTS, without
+    // touching a single buffer of set 2. It is copied and not factored with the one
+    // below on purpose: they are the same operations in the same order, and the
+    // only difference is where each light comes from.
     if (fp.mode == 0u)
     {
     for (int i = 0; i < ubo.numLights; i++)
@@ -267,8 +267,8 @@ void main()
 
         vec3 kD = (1.0 - F) * (1.0 - metal);
 
-        // La luz key usa la sombra ya calculada arriba; las demas, la suya si
-        // consiguieron ranura. Una luz sin ranura devuelve 1.0 sin muestrear.
+        // The key light uses the shadow already computed above; the others, their own if they
+        // got a slot. A light without a slot returns 1.0 without sampling.
         float s = (i == 0) ? shadow : shadowDeLuz(i, fragWorldPos, normalize(fragNormal));
 
         Lo += att * s * (kD * albedo / PI + D * G * F / (4.0 * NdotV * NdotL + 0.0001))
@@ -277,8 +277,8 @@ void main()
     }
     else
     {
-        // Celda de este fragmento. gl_FragCoord va en pixeles del target, que es
-        // la resolucion INTERNA — la misma con la que se dimensiono la rejilla.
+        // Cell of this fragment. gl_FragCoord is in target pixels, which is
+        // the INTERNAL resolution — the same one the grid was sized with.
         uvec2 tile = uvec2(gl_FragCoord.xy) / fp.tileSize;
         tile = min(tile, uvec2(fp.gridX - 1u, fp.gridY - 1u));
 
@@ -289,7 +289,7 @@ void main()
         }
         else
         {
-            // Inverso exacto del reparto logaritmico de light_cull_clustered.comp.
+            // Exact inverse of the logarithmic split of light_cull_clustered.comp.
             float sl = log2(max(viewDepth, fp.zNear)) * fp.sliceScale + fp.sliceBias;
             uint slice = uint(clamp(sl, 0.0, float(fp.gridZ - 1u)));
             cell = (slice * fp.gridY + tile.y) * fp.gridX + tile.x;
@@ -305,17 +305,17 @@ void main()
 
             vec3  toL  = lp - fragWorldPos;
             float dist = length(toL);
-            // Ventana por radio: fuera del radio da EXACTAMENTE 0, que es lo que
-            // hace que meter luces de mas en una celda no cambie el resultado —
-            // y por tanto que tiled y clustered, que culean con volumenes
-            // distintos, den la misma imagen.
+            // Radius window: outside the radius it gives EXACTLY 0, which is what
+            // makes putting extra lights in a cell not change the result,
+            // and therefore makes tiled and clustered, which cull with different
+            // volumes, give the same image.
             float w   = clamp(1.0 - (dist * dist) / (lr * lr), 0.0, 1.0);
             float att = w * w;
 
             vec3  L = toL / max(dist, 1e-4);
 
-            // Directional: sin posicion ni atenuacion. Va aparte del radio de
-            // arriba porque el binning la mete en TODAS las celdas.
+            // Directional: no position or attenuation. It goes apart from the radius one
+            // above because the binning puts it in ALL the cells.
             if (lt == 2)
             {
                 L   = normalize(-fpLights[li].direction.xyz);
@@ -323,7 +323,7 @@ void main()
             }
             else if (lt == 1)
             {
-                // Spot: mismo cono suave que lightSample().
+                // Spot: same soft cone as lightSample().
                 float cosA = dot(normalize(fpLights[li].direction.xyz), -L);
                 att *= smoothstep(fpLights[li].params.z, fpLights[li].params.y, cosA);
             }
@@ -350,8 +350,8 @@ void main()
 
             vec3 kD = (1.0 - F) * (1.0 - metal);
 
-            // El indice que se compara es el GLOBAL, no el de la celda: la
-            // ranura de sombra se reparte sobre el array de luces del UBO.
+            // The index being compared is the GLOBAL one, not the cell's: the
+            // shadow slot is allocated over the UBO's light array.
             float s = (li == 0u) ? shadow
                                  : shadowDeLuz(int(li), fragWorldPos, normalize(fragNormal));
 
@@ -360,39 +360,39 @@ void main()
         }
     }
 
-    // ── Ambiente: IBL ───────────────────────────────────────────────────────
+    // ── Ambient: IBL ───────────────────────────────────────────────────────
     float NdotVamb = max(dot(N, V), 0.0);
     vec3  Famb     = fresnelSchlickRoughness(NdotVamb, F0, rough);
-    // Un metal no tiene difuso, y lo que refleja de especular no lo transmite.
+    // A metal has no diffuse, and the specular it reflects it does not transmit.
     vec3  kDamb    = (1.0 - Famb) * (1.0 - metal);
 
-    // El cubemap guarda ya E/PI, asi que el 1/PI del BRDF lambertiano no se
-    // vuelve a aplicar aqui.
+    // The cubemap already stores E/PI, so the 1/PI of the Lambertian BRDF is not
+    // applied again here.
     vec3 diffuseIBL = texture(irradianceMap, N).rgb * albedo;
 
-    // La rugosidad elige el mip: el ultimo es el lobulo mas ancho.
+    // Roughness picks the mip: the last one is the widest lobe.
     vec3 R           = reflect(-V, N);
     vec3 prefiltered = textureLod(prefilterMap, R, rough * float(IBL_PREFILTER_MIPS - 1)).rgb;
     vec3 specularIBL = prefiltered * envBRDFApprox(F0, rough, NdotVamb);
 
-    // El multiplicador escala difuso y especular por igual: sube o baja el peso
-    // del entorno sin cambiar su color ni el balance entre los dos terminos.
-    // El SSAO entra AQUI y no sobre el color final: es oclusion del entorno, y
-    // aplicarselo tambien a la luz directa apagaria sombras que ya calcula el
-    // shadow map. Se muestrea por coordenada de pantalla; el mapa es del tamano
-    // exacto del framebuffer, asi que la division es 1:1 y no hace falta llevar
-    // la resolucion en ningun sitio.
+    // The multiplier scales diffuse and specular equally: it raises or lowers the weight
+    // of the environment without changing its color or the balance between the two terms.
+    // SSAO goes in HERE and not on the final color: it is environment occlusion, and
+    // applying it to the direct light too would turn off shadows that the
+    // shadow map already computes. It is sampled by screen coordinate; the map is the exact
+    // size of the framebuffer, so the division is 1:1 and there is no need to carry
+    // the resolution anywhere.
     float ssao   = texture(ssaoMap, gl_FragCoord.xy / vec2(textureSize(ssaoMap, 0))).r;
     vec3 ambient = (kDamb * diffuseIBL + specularIBL) * ao * ssao * ubo.ambientIntensity;
     vec3 color   = ambient + Lo;
 
-    // Sin tonemapear: el attachment de este pass es R16G16B16A16_SFLOAT y lo
-    // consume la cadena de bloom, que necesita el rango alto intacto. El ACES +
-    // gamma que habia aqui vive ahora en shaders/bloom_composite.frag, que es el
-    // unico sitio del motor donde HDR pasa a LDR.
-    // El alfa lleva la fuerza de SSR del objeto, no opacidad: ssr.comp lo lee
-    // como mascara por pixel. Antes de esta feature valia 1.0 y no lo leia nadie
-    // (bloom_composite.frag y bloom_down.comp solo usan .rgb), asi que con el SSR
-    // desactivado la imagen sale exactamente igual.
+    // Not tonemapped: this pass's attachment is R16G16B16A16_SFLOAT and it is
+    // consumed by the bloom chain, which needs the high range intact. The ACES +
+    // gamma that was here now lives in shaders/bloom_composite.frag, which is the
+    // only place in the engine where HDR becomes LDR.
+    // The alpha carries the object's SSR strength, not opacity: ssr.comp reads it
+    // as a per-pixel mask. Before this feature it was 1.0 and nobody read it
+    // (bloom_composite.frag and bloom_down.comp only use .rgb), so with SSR
+    // disabled the image comes out exactly the same.
     outColor = vec4(color, push.flags.y);
 }

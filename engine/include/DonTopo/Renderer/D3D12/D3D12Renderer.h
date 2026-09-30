@@ -23,26 +23,26 @@ class UiFont;
 
 namespace D3D12 {
 
-// Backend de presentación DirectX 12.
+// DirectX 12 presentation backend.
 //
-// ALCANCE DE HOY: paridad con el camino de Vulkan. Mallas estáticas y
-// animadas por compute, materiales PBR, IBL, sombras en cascada y de cubemap,
-// SSAO, SSR, niebla volumétrica, bloom, motion blur, anti-aliasing (FXAA,
-// SSAA, MSAA y TAA), Forward+, sondas de reflexión, contorno de selección y
-// UI. Lo que NO tiene está en la tabla de paridad de docs/renderer-audit.md.
+// SCOPE TODAY: parity with the Vulkan path. Static meshes and meshes
+// animated by compute, PBR materials, IBL, cascaded and cubemap shadows,
+// SSAO, SSR, volumetric fog, bloom, motion blur, anti-aliasing (FXAA,
+// SSAA, MSAA and TAA), Forward+, reflection probes, selection outline and
+// UI. What it does NOT have is in the parity table in docs/renderer-audit.md.
 //
-// (Este bloque decía «presenta un color de fondo y nada más» mucho después de
-// que dejara de ser cierto: H47. El header es lo primero que se lee para
-// decidir si un efecto existe, así que mentir aquí sale más caro que en el
+// (This block used to say "presents a background color and nothing else" long after
+// that stopped being true: H47. The header is the first thing read to
+// decide whether an effect exists, so lying here costs more than in the
 // .cpp.)
 //
-// El estado de DX12 vive en un Impl oculto para que este header no arrastre
-// d3d12.h a todo el que incluya el motor; por eso las libs van PRIVATE en el
-// CMakeLists de DonTopoCore.
-// Hereda de RendererState igual que el Renderer de Vulkan: los parámetros de
-// bloom, niebla, SSAO, SSR y anti-aliasing son los mismos valores en los dos
-// backends, y tenerlos una sola vez es lo que permite que el mismo panel de
-// opciones sirva para ambos.
+// The DX12 state lives in a hidden Impl so this header does not drag
+// d3d12.h into everyone that includes the engine; that is why the libs are PRIVATE in the
+// CMakeLists of DonTopoCore.
+// It inherits from RendererState just like the Vulkan Renderer: the bloom,
+// fog, SSAO, SSR and anti-aliasing parameters are the same values in both
+// backends, and having them only once is what lets the same options panel
+// serve both.
 class D3D12Renderer : public EditorRenderer {
 public:
     D3D12Renderer();
@@ -51,33 +51,33 @@ public:
     D3D12Renderer(const D3D12Renderer&)            = delete;
     D3D12Renderer& operator=(const D3D12Renderer&) = delete;
 
-    // Crea device, cola y swapchain sobre la ventana ya existente. Lanza
-    // std::runtime_error con el HRESULT y el paso que falló: quien llama decide
-    // si aborta o cae a otro backend, pero nunca se queda a medio construir.
+    // Creates the device, queue and swapchain on the already existing window. Throws
+    // std::runtime_error with the HRESULT and the step that failed: the caller decides
+    // whether to abort or fall back to another backend, but it is never left half-built.
     void init(Window& window);
 
-    // Espera a que la GPU termine y libera todo. Idempotente: el destructor la
-    // llama, así que llamarla a mano antes no hace daño.
+    // Waits for the GPU to finish and releases everything. Idempotent: the destructor
+    // calls it, so calling it by hand beforehand does no harm.
     void shutdown() override;
 
-    // ── Ciclo de vida por la interfaz ────────────────────────────────────────
-    // Lo que el runtime llama sin saber qué backend hay. Este monta todo en
-    // init(), así que la fase 1 es esa misma llamada y la 2 se queda en subir
-    // las mallas; el cielo ya lo carga init por su cuenta.
+    // ── Lifecycle through the interface ──────────────────────────────────────
+    // What the runtime calls without knowing which backend is in use. This one sets up everything in
+    // init(), so phase 1 is that same call and phase 2 is limited to uploading
+    // the meshes; the sky is already loaded by init on its own.
     void initPresentation(Window& window) override { init(window); }
     void initSceneResources(const std::vector<Mesh>& meshes) override;
     void drawFrame(Window& window) override;
     void notifyResize() override;
     void setHeadless(bool headless) override;
 
-    // Bloquea hasta que la GPU vacía todo lo enviado. Hace falta antes de
-    // liberar recursos que no son de este backend —los de ImGui, por ejemplo—:
-    // el último frame presentado sigue en vuelo, y soltar debajo sus buffers de
-    // vértices o su textura corrompe el trabajo en curso.
+    // Blocks until the GPU drains everything submitted. Needed before
+    // releasing resources that do not belong to this backend (ImGui's, for example):
+    // the last presented frame is still in flight, and releasing its vertex buffers
+    // or its texture from under it corrupts the work in progress.
     void waitIdle();
 
-    // Un frame completo: espera el fence de este slot, graba el clear, ejecuta
-    // y presenta.
+    // One full frame: waits on this slot's fence, records the clear, executes
+    // and presents.
     void drawFrame();
 
     // Startup splash, same visible result as the Vulkan path (SplashScreen):
@@ -86,92 +86,92 @@ public:
     bool beginSplash(const std::string& logoPath) override;
     void drawSplashFrame(float alpha) override;
 
-    // ANOTA el nuevo tamaño; no toca la swapchain. El trabajo real lo hace
-    // drawFrame() al empezar el frame siguiente.
+    // RECORDS the new size; it does not touch the swapchain. The real work is done by
+    // drawFrame() at the start of the next frame.
     //
-    // Esta separación NO es un capricho: quien llama a esto es el callback de
-    // GLFW, que Windows despacha desde dentro del WindowProc. Tocar DXGI ahí
-    // ya sería arriesgado, pero lo que lo hace inaceptable es que cualquier
-    // excepción tendría que desenrollar a través del despachador de callbacks
-    // del kernel (KiUserCallbackDispatcher), cosa que en x64 no se puede: el
-    // proceso se cuelga sin dejar ni un mensaje de error.
+    // This separation is NOT a whim: the caller here is the GLFW
+    // callback, which Windows dispatches from inside the WindowProc. Touching DXGI there
+    // would already be risky, but what makes it unacceptable is that any
+    // exception would have to unwind through the kernel callback dispatcher
+    // (KiUserCallbackDispatcher), which is not possible on x64: the
+    // process hangs without leaving even an error message.
     //
-    // width/height a 0 (ventana minimizada) se ignoran: DXGI rechaza un tamaño
-    // nulo y no hay nada que presentar.
+    // width/height of 0 (minimized window) are ignored: DXGI rejects a zero
+    // size and there is nothing to present.
     void resize(uint32_t width, uint32_t height);
 
     void setClearColor(float r, float g, float b, float a);
 
-    // La escena y su raíz. Este backend no las recorre por su cuenta —la
-    // geometría entra por registerGameObject—, pero las guarda para que quien
-    // se las dio pueda preguntárselas.
+    // The scene and its root. This backend does not walk them on its own (the
+    // geometry comes in through registerGameObject), but it stores them so that whoever
+    // gave them can ask for them back.
     void setScene(Scene* scene) override;
     void setSceneRoot(GameObject* root) override;
 
-    // Cámara del frame a partir de la del motor: view, posición y campo de
-    // visión salen de ella.
+    // Frame camera taken from the engine's: view, position and field of
+    // view come from it.
     void setCamera(const Camera& camera) override;
 
     void setLights(const std::vector<Light>& lights) override;
     void setLightRadii(const std::vector<float>& radii) override;
 
-    // Aquí no hay borrados diferidos: las liberaciones esperan a la GPU en el
-    // momento. Se implementa para cumplir la interfaz.
+    // There are no deferred deletions here: releases wait for the GPU on the
+    // spot. Implemented to fulfill the interface.
     void tickDeferredDeletes() override;
 
-    // Luces de la escena, en el mismo formato que el UBO de los shaders (hasta
-    // 16; el resto se descarta). Sin llamar a esto —o con count 0— el backend
-    // ilumina con una direccional propia, que es lo que da luz a la escena de
-    // arranque cuando no hay proyecto.
+    // Scene lights, in the same format as the shaders' UBO (up to
+    // 16; the rest are discarded). Without calling this (or with count 0) the backend
+    // lights with a directional of its own, which is what lights the startup
+    // scene when there is no project.
     //
-    // La POSICIÓN de la primera manda además en el reparto de las cascadas de
-    // sombra, igual que en el Renderer de Vulkan: la sombra la proyecta siempre
-    // la luz 0, sea del tipo que sea.
+    // The POSITION of the first one also drives the split of the shadow cascades,
+    // just like in the Vulkan Renderer: the shadow is always cast
+    // by light 0, whatever its type.
     void setLights(const Light* lights, size_t count);
 
-    // Encuadre con el que se dibuja todo: escena, rejilla, niebla y el reparto
-    // de las cascadas de sombra. `view` y `position` tienen que ser de la misma
-    // cámara — la niebla desproyecta con una y sitúa el ojo con la otra.
-    // fovDegrees <= 0 conserva el que hubiera.
+    // Framing used to draw everything: scene, grid, fog and the split
+    // of the shadow cascades. `view` and `position` must come from the same
+    // camera, since the fog unprojects with one and places the eye with the other.
+    // fovDegrees <= 0 keeps whatever there was.
     //
-    // Recalcula las cascadas, así que se llama cuando la cámara se mueve, no
-    // por frame incondicionalmente.
+    // Recomputes the cascades, so it is called when the camera moves, not
+    // unconditionally every frame.
     void setCamera(const glm::mat4& view, const glm::vec3& position, float fovDegrees = 0.0f);
 
-    // --- Escena ----------------------------------------------------------
+    // --- Scene ----------------------------------------------------------
     //
-    // Mismos nombres y misma semántica que el Renderer de Vulkan, para que
-    // quien construye la escena no tenga que saber con qué backend corre.
+    // Same names and same semantics as the Vulkan Renderer, so that
+    // whoever builds the scene does not have to know which backend it runs on.
 
-    // Sube la malla a VRAM y devuelve su índice, que es el que hay que usar
-    // luego en setTransform/setObjectMeshVisible. -1 si la malla está vacía.
+    // Uploads the mesh to VRAM and returns its index, which is the one to use
+    // later in setTransform/setObjectMeshVisible. -1 if the mesh is empty.
     //
-    // decoded se ignora: aquí las subidas son síncronas y la descompresión ya
-    // viene hecha dentro del propio Mesh.
+    // decoded is ignored: uploads here are synchronous and the decompression
+    // is already done inside the Mesh itself.
     int addStaticMesh(const Mesh& mesh,
                       const std::vector<DecodedImage>* decoded = nullptr) override;
 
     void setTransform(size_t objectIndex, const glm::mat4& transform) override;
     void setObjectMeshVisible(size_t objectIndex, bool visible) override;
 
-    // Cuánto refleja este objeto. Sale al alfa de la escena, que es de donde lo
-    // lee el trazado de reflejos; a cero, ese objeto no refleja nada.
+    // How reflective this object is. It goes into the scene's alpha, which is where the
+    // reflection trace reads it; at zero, that object reflects nothing.
     void setObjectSsr(size_t objectIndex, float strength) override;
     void setObjectMaterialFactors(size_t objectIndex, float metallic, float roughness) override;
     void setSkinnedSsr(int index, float strength) override;
     size_t objectCount() const;
 
-    // Suelta toda la geometría estática. Espera a la GPU antes de liberar:
-    // los buffers pueden estar en uso por el último frame presentado.
+    // Releases all static geometry. Waits for the GPU before releasing:
+    // the buffers may be in use by the last presented frame.
     void clearStaticMeshes();
 
-    // Sube un personaje animado: claves, esqueleto, vértices sin deformar y el
-    // buffer donde el compute escribe los ya deformados. -1 si la malla no
-    // trae esqueleto, vértices o clips.
+    // Uploads an animated character: keys, skeleton, undeformed vertices and the
+    // buffer where the compute writes the deformed ones. -1 if the mesh has
+    // no skeleton, vertices or clips.
     //
-    // La animación avanza sola con el reloj del backend, reproduciendo en
-    // bucle el clip activo (el 0 al cargar). Quien tenga un Animator que la
-    // calcule en CPU usa setAnimationState y no depende de ese reloj.
+    // The animation advances on its own with the backend's clock, looping the
+    // active clip (0 on load). Whoever has an Animator that computes it
+    // on the CPU uses setAnimationState and does not depend on that clock.
     int addSkinnedMesh(const SkinnedMesh& mesh,
                        const std::vector<DecodedImage>* decoded = nullptr) override;
     void rebuildSkinnedMesh(int index, const SkinnedMesh& mesh) override;
@@ -179,59 +179,59 @@ public:
     void setSkinnedTransform(int index, const glm::mat4& transform) override;
     void setSkinnedMeshVisible(int index, bool visible) override;
 
-    // Fija clip y tiempo ya calculados fuera. Mismo contrato que en el
-    // Renderer de Vulkan: es un sink, no avanza el tiempo.
+    // Sets a clip and time already computed elsewhere. Same contract as in the
+    // Vulkan Renderer: it is a sink, it does not advance time.
     void setAnimationState(int index, uint32_t clipIndex, float animTime) override;
     void setAnimationPose(int index, const AnimationPose& pose) override;
     void setAnimationIk(int index, const AnimationIk& ik) override;
     void updateAnimation(int index, float deltaTime) override;
 
-    // Proyección por vista del frame, la misma con la que se dibuja: es lo que
-    // necesita quien desproyecte un clic del viewport para saber a qué apunta.
+    // Per-view projection of the frame, the same one used to draw: it is what
+    // is needed by whoever unprojects a viewport click to know what it points at.
     glm::mat4 viewProjMatrix() const;
 
-    // Líneas de depuración de ESTE frame: colliders, ejes, rayos. El formato es
-    // el de DonTopo::GizmoVertex —posición y color, tres float cada uno, sin
-    // hueco entre ellos—, y se pasa como float suelto para no arrastrar aquí
-    // Gizmos.h, que incluye vulkan.h.
+    // Debug lines for THIS frame: colliders, axes, rays. The format is
+    // that of DonTopo::GizmoVertex (position and color, three floats each, with no
+    // gap between them), and it is passed as a plain float so as not to drag Gizmos.h
+    // in here, which includes vulkan.h.
     //
-    // Cada llamada REEMPLAZA lo enviado antes, y lo enviado no persiste al
-    // frame siguiente: quien las dibuja las vuelve a mandar cada vez, igual que
-    // con el Gizmos del camino de Vulkan.
+    // Each call REPLACES what was sent before, and what was sent does not persist to the
+    // next frame: whoever draws them sends them again every time, just like
+    // with the Gizmos of the Vulkan path.
     void submitDebugLines(const float* vertices, size_t vertexCount);
 
-    // Qué se dibuja con contorno de selección: índices de addStaticMesh y de
-    // addSkinnedMesh, o -1 para ninguno. Se puede tener uno de cada.
+    // What is drawn with a selection outline: indices from addStaticMesh and from
+    // addSkinnedMesh, or -1 for none. One of each can be set.
     void setSelection(int staticIndex, int skinnedIndex);
-    // Grosor de la extrusión del casco, en unidades de mundo.
+    // Thickness of the hull extrusion, in world units.
     void setOutlineWidth(float width);
 
     size_t skinnedCount() const;
     void   clearSkinnedMeshes();
 
-    // --- Lo que pide el editor ------------------------------------------
+    // --- What the editor asks for ---------------------------------------
     //
-    // Sube o suelta la geometría de un nodo y de sus hijos. Es la misma
-    // operación que hace el camino del sandbox a mano, con los índices de
-    // render anotados en el propio GameObject.
+    // Uploads or releases the geometry of a node and its children. It is the same
+    // operation the sandbox path does by hand, with the render indices
+    // recorded in the GameObject itself.
     void registerGameObject(GameObject* node) override;
     void removeGameObject(GameObject* node) override;
     void removeMeshComponent(GameObject* node) override;
 
     void replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot) override;
 
-    // Contrato en EditorRenderer::rebuildStaticMesh. Aquí el objeto que cambia
-    // de material se separa del grupo de la malla compartida: la propiedad de
-    // los recursos es una sola marca para los cinco (`ownsGpu`), así que darle
-    // texturas propias exige darle también copia propia de la geometría.
+    // Contract in EditorRenderer::rebuildStaticMesh. Here the object that changes
+    // material is split off from the shared mesh group: resource ownership is
+    // a single flag for all five (`ownsGpu`), so giving it its own textures
+    // also requires giving it its own copy of the geometry.
     void rebuildStaticMesh(int index, const Mesh& mesh) override;
 
-    // Las subidas de este backend son síncronas: basta con esperar a la GPU.
+    // Uploads in this backend are synchronous: waiting for the GPU is enough.
     void flushUploadsAndWait() override;
 
-    // Recalcula near/far desde la caja de la escena, igual que el camino de
-    // Vulkan y con el mismo suelo de 200 unidades, para que los dos backends
-    // den el mismo encuadre. (Antes sí era fijo, y el comentario se quedó.)
+    // Recomputes near/far from the scene box, like the Vulkan path and
+    // with the same floor of 200 units, so both backends
+    // give the same framing. (It used to be fixed, and the comment stayed behind.)
     void refitCameraRange() override;
 
     void setOutlineTarget(int staticIndex, int skinnedIndex) override;
@@ -248,53 +248,53 @@ public:
     void      setUiLayer(UiLayer* ui) override;
     UiCanvas& uiCanvas() override;
 
-    // TODOS los de pantalla, en orden de prioridad de input (el de más arriba
-    // primero). Mismo criterio y misma función libre que en Vulkan.
+    // ALL the screen ones, in input priority order (the topmost
+    // first). Same criterion and same free function as in Vulkan.
     void screenUiCanvases(std::vector<UiCanvas*>& out) override;
 
-    // El canvas de un GameObject por su id (nullptr si no tiene). Misma
-    // funcion libre que en Vulkan.
+    // The canvas of a GameObject by its id (nullptr if it has none). Same
+    // free function as in Vulkan.
     const UiCanvas* uiCanvasOf(uint64_t ownerId) const override;
 
-    // Monta el árbol vivo de CADA canvas de la escena. Mismo contrato que en
-    // el Renderer de Vulkan: uiCanvas() sigue devolviendo solo el de pantalla.
+    // Builds the live tree of EACH canvas in the scene. Same contract as in
+    // the Vulkan Renderer: uiCanvas() still returns only the screen one.
     void syncUiCanvases(const std::vector<UiCanvasBinding>& bindings) override;
-    // Busca un nodo por nombre en TODOS los canvas, no solo en el de pantalla.
+    // Looks up a node by name in ALL canvases, not only the screen one.
     const UiElement* findUiNode(const std::string& name) const override;
 
-    // Atlas y fuentes de la UI 2D. Mismas firmas que en el camino de Vulkan: el
-    // sync de widgets las llama por plantilla, sin saber qué backend hay debajo.
-    // El dueño es el backend; quien las pide se queda solo con el puntero.
+    // Atlases and fonts of the 2D UI. Same signatures as in the Vulkan path: the
+    // widget sync calls them through a template, without knowing which backend is underneath.
+    // The owner is the backend; whoever asks for them keeps only the pointer.
     UiTextureAtlas* loadUiAtlas(const std::string& path) override;
     UiFont*         loadUiFont(const std::string& path, float bakePx = 48.0f) override;
 
-    // Cambiar de modo o de muestras mueve targets y pipelines, y eso lo aplica
-    // el frame siguiente con la GPU en reposo.
+    // Changing mode or sample count moves targets and pipelines, and that is applied
+    // on the next frame with the GPU idle.
     void  setAaMode(AaMode mode) override;
     void  setMsaaSamples(int v) override;
     int   maxMsaaSamples() const override;
     void  setSsaoEnabled(bool v) override;
 
-    // El bloom aquí no suelta nada al apagarse: la cadena de imágenes vive con
-    // los demás targets. El interruptor es el del estado compartido.
+    // Here bloom releases nothing when turned off: the image chain lives with
+    // the other targets. The switch is the one in the shared state.
     void  setBloomEnabled(bool v) override;
-    // El cielo del proyecto. Antes NO se sobrescribia y este backend usaba
-    // seis rutas a fuego, con lo que ignoraba el skybox de la escena y con el
-    // el IBL global que sale de convolucionarlo.
+    // The project's sky. It used NOT to be overwritten and this backend used
+    // six hardcoded paths, so it ignored the scene's skybox and the
+    // global IBL that comes from convolving it.
     void  initSkybox(const std::array<std::string, 6>& facePaths) override;
     void  setShadowResolution(int v) override;
     void  setPresentMode(PresentMode v) override;
     bool  presentModeSupported(PresentMode v) const override;
 
-    // Sin lote de subidas: aquí cada una se envía y se espera al hacerla.
+    // No upload batch: here each one is submitted and waited on when made.
     void  flushPendingUploads() override;
 
-    // SSAA sí escala aquí la resolución de dibujo: applyPendingRenderSize la
-    // recalcula en el frame siguiente y el resolve promedia.
+    // SSAA does scale the draw resolution here: applyPendingRenderSize
+    // recomputes it on the next frame and the resolve averages.
     void  setSsaaFactor(float v) override;
 
-    // Sondas de reflexión, con horneado real: seis caras por sonda, su coste
-    // de GPU medido y el reparto por objeto que hace el pase de escena.
+    // Reflection probes, with real baking: six faces per probe, their measured
+    // GPU cost and the per-object assignment done by the scene pass.
     void  requestProbeBake(uint64_t ownerId) override;
     void  requestProbeBakeAll() override;
     int   probeCount() const override;
@@ -302,7 +302,7 @@ public:
     uint64_t probeMemoryBytes() const override;
     float probeBakeMs(uint64_t ownerId) const override;
 
-    // Métricas por pase: sin consultas de tiempo en este backend todavía.
+    // Per-pass metrics: no timing queries in this backend yet.
     void     setPerfCaptureEnabled(bool on) override;
     SlotUsage slotUsage() const override;
     float    renderGpuMs() const override;
@@ -316,51 +316,51 @@ public:
     float    shadowGpuMs() const override;
     float    forwardPlusGpuMs() const override;
 
-    // Cuentas del frame: este backend todavía no las lleva.
+    // Frame counters: this backend does not keep them yet.
     int      statDrawCalls() const override;
     int      statInstances() const override;
     int      statCulled() const override;
     float    forwardPlusAvgPerCell() const override;
     uint32_t forwardPlusOverflowCells() const override;
 
-    // Descripción del adaptador con el que se creó el device. Vacía antes de
-    // init(). Se usa para dejarlo en el Log.
+    // Description of the adapter the device was created with. Empty before
+    // init(). Used to write it to the Log.
     const std::string& adapterName() const;
 
-    // --- Enganche de interfaz de usuario --------------------------------
+    // --- User interface hook --------------------------------------------
     //
-    // DonTopoCore no puede depender de ImGui (el runtime exportado lo enlaza y
-    // ahí no existe), así que el backend no dibuja la UI: expone lo justo para
-    // que quien sí conoce ImGui lo haga desde fuera. Los punteros se devuelven
-    // como void* a propósito, para no arrastrar d3d12.h a este header.
+    // DonTopoCore cannot depend on ImGui (the exported runtime links it and
+    // it does not exist there), so the backend does not draw the UI: it exposes just enough for
+    // whoever does know ImGui to do it from outside. The pointers are returned
+    // as void* on purpose, so as not to drag d3d12.h into this header.
 
-    // Se invoca dentro del frame, con la lista de comandos abierta y el
-    // backbuffer ya como destino, justo después del último post-efecto.
+    // Invoked inside the frame, with the command list open and the
+    // backbuffer already as the target, right after the last post-effect.
     void setUiDrawCallback(std::function<void()> callback);
 
-    // Manda la escena ya compuesta a una textura en vez de al backbuffer, que
-    // pasa a llevar SOLO la interfaz. Es lo que necesita un viewport dentro de
-    // un panel: quien dibuja la UI recibe la escena como imagen.
+    // Sends the composed scene to a texture instead of the backbuffer, which
+    // then carries ONLY the interface. It is what a viewport inside a
+    // panel needs: whoever draws the UI receives the scene as an image.
     void setRenderToTexture(bool enabled);
 
-    // Tamaño al que se dibuja la escena cuando va a textura: el del panel que
-    // la muestra, para que salga 1:1 y no reescalada. Se anota y se aplica
-    // entre frames, como el resize de la ventana; 0 se ignora.
+    // Size at which the scene is drawn when it goes to a texture: that of the panel that
+    // shows it, so it comes out 1:1 and not rescaled. It is recorded and applied
+    // between frames, like the window resize; 0 is ignored.
     void setViewportSize(uint32_t width, uint32_t height) override;
 
-    // Descriptor GPU de esa textura, listo para usarse como ImTextureID. 0 si
-    // todavía no hay imagen (antes de init). El heap es el mismo que se expone
-    // en uiDescriptorHeap(), así que el backend de ImGui ya lo tiene enlazado.
+    // GPU descriptor of that texture, ready to use as an ImTextureID. 0 if
+    // there is no image yet (before init). The heap is the same one exposed
+    // in uiDescriptorHeap(), so the ImGui backend already has it bound.
     uint64_t viewportTexture() const;
 
     void* nativeDevice() const;       // ID3D12Device*
-    void* nativeCommandList() const;  // ID3D12GraphicsCommandList*, solo válido dentro del callback
+    void* nativeCommandList() const;  // ID3D12GraphicsCommandList*, only valid inside the callback
     void* nativeQueue() const;        // ID3D12CommandQueue*
-    void* uiDescriptorHeap() const;   // ID3D12DescriptorHeap* con el rango reservado a la UI
+    void* uiDescriptorHeap() const;   // ID3D12DescriptorHeap* with the range reserved for the UI
 
-    // Primer descriptor del rango reservado, y cuántos hay. El backend de ImGui
-    // reserva por su cuenta según le hagan falta, así que necesita el rango
-    // entero y no solo el hueco de la fuente.
+    // First descriptor of the reserved range, and how many there are. The ImGui backend
+    // reserves on its own as it needs them, so it needs the whole
+    // range and not just the font's slot.
     uint64_t uiHeapStartCpu() const;
     uint64_t uiHeapStartGpu() const;
     unsigned uiDescriptorCount() const;

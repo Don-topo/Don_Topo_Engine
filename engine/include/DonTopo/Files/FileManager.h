@@ -5,26 +5,26 @@
 
 namespace DonTopo
 {
-    // Wrapper de I/O de ficheros JSON, sin estado y sin conocer Scene/GameObject
-    // — reutilizable para otros ficheros del motor (config, presets) además
-    // de la serialización de escena.
+    // JSON file I/O wrapper, stateless and unaware of Scene/GameObject
+    // — reusable for other engine files (config, presets) besides
+    // scene serialization.
     class FileManager
     {
         public:
-            // Escribe j formateado (pretty-print, indent 2) en path. false si
-            // el fichero no se pudo abrir/escribir.
+            // Writes j formatted (pretty-print, indent 2) to path. false if
+            // the file could not be opened/written.
             static bool writeJson(const std::string& path, const nlohmann::json& j);
 
-            // Lee y parsea path. std::nullopt si el fichero no existe o el
-            // JSON es inválido (nunca lanza excepción hacia el caller).
+            // Reads and parses path. std::nullopt if the file does not exist or the
+            // JSON is invalid (never throws an exception to the caller).
             static std::optional<nlohmann::json> readJson(const std::string& path);
 
-            // Lee el contenido completo de path como texto plano. std::nullopt
-            // si el fichero no existe o no se pudo abrir.
+            // Reads the full contents of path as plain text. std::nullopt
+            // if the file does not exist or could not be opened.
             static std::optional<std::string> readText(const std::string& path);
 
-            // Escribe content en path, reemplazando cualquier contenido previo.
-            // false si el fichero no se pudo abrir/escribir.
+            // Writes content to path, replacing any previous contents.
+            // false if the file could not be opened/written.
             static bool writeText(const std::string& path, const std::string& content);
     };
 }

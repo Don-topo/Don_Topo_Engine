@@ -4,27 +4,27 @@
 
 namespace DonTopo
 {
-    // El reloj del camino SIN Animator: el personaje que no tiene componente
-    // reproduce su clip 0 en bucle y es el backend quien lleva el tiempo.
+    // The clock of the path WITHOUT an Animator: a character with no component
+    // plays its clip 0 in a loop and the backend is the one that keeps the time.
     //
-    // Vive aquí, y no en cada backend, porque estaba escrito dos veces y las dos
-    // copias habían divergido (fila A13 del audit de animación): Vulkan
-    // multiplicaba por ticksPerSecond y congelaba el reloj de un mesh oculto;
-    // D3D12 ni guardaba ticksPerSecond —sumaba los segundos del frame a un
-    // reloj que el compute lee en TICKS, así que iba entre 24 y 30 veces más
-    // lento— ni miraba la visibilidad. Con Animator no se notaba nada, porque
-    // ahí el tiempo lo calcula el AnimatorComponent y llega ya en ticks.
+    // It lives here, and not in each backend, because it was written twice and the two
+    // copies had diverged (row A13 of the animation audit): Vulkan
+    // multiplied by ticksPerSecond and froze the clock of a hidden mesh;
+    // D3D12 did not even store ticksPerSecond (it added the frame's seconds to a
+    // clock that the compute reads in TICKS, so it ran between 24 and 30 times
+    // slower) and did not look at visibility either. With an Animator nothing showed,
+    // because there the time is computed by the AnimatorComponent and arrives already in ticks.
     //
-    // animTime y durationTicks van en TICKS de Assimp (`aiAnimation::mDuration`,
-    // lo que guarda AnimationClip::duration); dt, en segundos.
+    // animTime and durationTicks are in Assimp TICKS (`aiAnimation::mDuration`,
+    // what AnimationClip::duration stores); dt is in seconds.
     inline float advanceMeshClock(float animTime, float dt, float ticksPerSecond,
                                   float durationTicks, bool visible)
     {
-        // Sin ritmo o sin duración no hay clip que muestrear: mover el reloj
-        // solo serviría para que el wrap no pudiera acotarlo nunca.
+        // Without a rate or without a duration there is no clip to sample: moving the clock
+        // would only make it so the wrap could never bound it.
         if (ticksPerSecond <= 0.0f || durationTicks <= 0.0f) return animTime;
-        // Oculto: no se ve, así que su reloj tampoco corre. Al volver a marcarlo
-        // visible reanuda donde se quedó en vez de saltar hacia delante.
+        // Hidden: it is not seen, so its clock does not run either. When it is marked
+        // visible again it resumes where it left off instead of jumping forward.
         if (!visible) return animTime;
         float t = animTime + dt * ticksPerSecond;
         if (t > durationTicks) t = std::fmod(t, durationTicks);

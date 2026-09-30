@@ -4,16 +4,16 @@
 
 namespace DonTopo {
 
-// Componente único de física de tipo caja. Respaldado por un physx::PxRigidStatic
-// (sin Rigidbody) o un physx::PxRigidDynamic (con Rigidbody). El collider POSEE
-// su actor (lo libera en el dtor); PhysicsManager reconstruye el actor al
-// pasar de static a dynamic o viceversa (attach/detachRigidbody). La política
-// de gravedad/kinematic ya NO vive aquí: vive en el Rigidbody.
+// Unique physics component of box type. Backed by a physx::PxRigidStatic
+// (without Rigidbody) or a physx::PxRigidDynamic (with Rigidbody). The collider OWNS
+// its actor (it releases it in the dtor); PhysicsManager rebuilds the actor when
+// going from static to dynamic or vice versa (attach/detachRigidbody). The
+// gravity/kinematic policy NO LONGER lives here: it lives in the Rigidbody.
 class BoxCollider : public Collider {
 public:
-    // actor: physx::PxRigidStatic* o PxRigidDynamic* ya creado y añadido a la
-    // escena por PhysicsManager. shape: physx::PxShape* de geometría caja
-    // adjunta a ese actor, con localPose ya puesto a partir de center.
+    // actor: physx::PxRigidStatic* or PxRigidDynamic* already created and added to the
+    // scene by PhysicsManager. shape: physx::PxShape* of box geometry
+    // attached to that actor, with localPose already set from center.
     BoxCollider(void* actor, void* shape, const glm::vec3& halfExtents,
                 const glm::vec3& center);
     ~BoxCollider();
@@ -21,14 +21,14 @@ public:
     BoxCollider(const BoxCollider&)            = delete;
     BoxCollider& operator=(const BoxCollider&) = delete;
 
-    // Offset local de la shape dentro del actor (PxShape::setLocalPose).
+    // Local offset of the shape inside the actor (PxShape::setLocalPose).
     void setCenter(const glm::vec3& center);
-    // Medio-tamaño de la caja (PxShape::setGeometry con nueva PxBoxGeometry).
+    // Half-size of the box (PxShape::setGeometry with a new PxBoxGeometry).
     void setHalfExtents(const glm::vec3& halfExtents);
-    // Escala del Transform del GameObject. PxTransform no admite escala, así
-    // que se hornea en la geometría (halfExtents * abs(scale), componente a
-    // componente). m_halfExtents —lo que ve el inspector y lo que se
-    // serializa— no cambia. Idempotente: con la misma escala no toca nada.
+    // Scale of the GameObject's Transform. PxTransform does not support scale, so
+    // it is baked into the geometry (halfExtents * abs(scale), component by
+    // component). m_halfExtents —what the inspector sees and what is
+    // serialized— does not change. Idempotent: with the same scale it touches nothing.
     void setWorldScale(const glm::vec3& scale);
 
     glm::vec3 getCenter() const       { return m_center; }
@@ -37,19 +37,19 @@ public:
     void* actorHandle() const override;
     void  setActorHandle(void* actor) override;
 
-    // Lee la pose global del actor (traslación + rotación, sin escala). El
-    // motor la lee hacia el GameObject cuando hay un Rigidbody simulado.
+    // Reads the global pose of the actor (translation + rotation, no scale). The
+    // engine reads it back into the GameObject when there is a simulated Rigidbody.
     glm::mat4 getWorldTransform() const override;
 
-    // Empuja worldTransform hacia PhysX. Si el actor es dynamic-kinematic usa
-    // setKinematicTarget; en cualquier otro caso cae a setGlobalPose.
+    // Pushes worldTransform to PhysX. If the actor is dynamic-kinematic it uses
+    // setKinematicTarget; in any other case it falls back to setGlobalPose.
     void syncTransform(const glm::mat4& worldTransform) override;
 
-    // Teletransporta el actor (setGlobalPose, no setKinematicTarget) sea
-    // cual sea el modo, y resetea su velocidad a cero. Válido en ambos
-    // modos (dinámico o kinematic) — pensado para ediciones puntuales desde
-    // el Transform panel del editor, no para el empuje continuo por frame
-    // (eso es syncTransform).
+    // Teleports the actor (setGlobalPose, not setKinematicTarget) whatever
+    // the mode, and resets its velocity to zero. Valid in both
+    // modes (dynamic or kinematic) — meant for one-off edits from
+    // the editor Transform panel, not for the continuous per-frame push
+    // (that is syncTransform).
     void teleport(const glm::mat4& worldTransform) override;
 
 protected:
@@ -57,7 +57,7 @@ protected:
 
 private:
 #ifdef DT_PHYSX_ENABLED
-    // Sube a PhysX m_halfExtents con m_worldScale ya aplicada. Requiere m_shape.
+    // Pushes m_halfExtents to PhysX with m_worldScale already applied. Requires m_shape.
     void applyScaledGeometry();
 
     void* m_actor = nullptr; // physx::PxRigidActor* (static o dynamic)
@@ -65,8 +65,8 @@ private:
 #endif
     glm::vec3 m_halfExtents;
     glm::vec3 m_center;
-    // m_worldScale (la escala ya horneada) vive en la base Collider: Scene la
-    // consulta por el puntero base para saber si hay que re-aplicarla.
+    // m_worldScale (the already baked scale) lives in the Collider base: Scene
+    // queries it through the base pointer to know whether it must be reapplied.
 };
 
 } // namespace DonTopo

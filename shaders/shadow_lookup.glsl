@@ -1,32 +1,32 @@
-// Coordenada de muestreo del shadow map de la luz key.
+// Sampling coordinate of the key light's shadow map.
 //
-// Lo incluyen pbr.frag y fog.comp, que muestrean EL MISMO mapa. Antes cada uno
-// tenia su copia de la seleccion de cascada y de la reproyeccion; cambiar una y
-// no la otra dejo el in-scattering de la niebla apuntando a un lado y el shadow
-// map construido hacia otro (H65), y ese fallo no lo delata ninguna capa de
-// validacion. Por eso lo que tiene que ser identico vive aqui.
+// It is included by pbr.frag and fog.comp, which sample THE SAME map. Before, each had
+// its own copy of the cascade selection and of the reprojection; changing one and
+// not the other left the fog's in-scattering pointing to one side and the shadow
+// map built towards another (H65), and no validation layer reports that failure.
+// That is why what has to be identical lives here.
 //
-// Lo que NO vive aqui es el filtrado: la escena hace PCF 3x3 y la niebla un solo
-// tap, porque la niebla ya promedia a lo largo de la marcha y multiplicar por
-// nueve sus taps se paga en cada paso de cada rayo. Esa diferencia es
-// deliberada; la eleccion de capa y la reproyeccion, no.
+// What does NOT live here is the filtering: the scene does 3x3 PCF and the fog a single
+// tap, because the fog already averages along the march and multiplying its taps by
+// nine is paid at every step of every ray. That difference is
+// deliberate; the layer choice and the reprojection are not.
 //
-// INCLUSION TEXTUAL: va DESPUES de declarar `ubo` (con view, lightSpaceMatrix[]
-// y cascadeSplits) y el sampler `shadowMap`, porque estas funciones los usan por
-// nombre. Y despues de #define SHADOW_CASCADES.
+// TEXTUAL INCLUSION: it goes AFTER declaring `ubo` (with view, lightSpaceMatrix[]
+// and cascadeSplits) and the `shadowMap` sampler, because these functions use them by
+// name. And after #define SHADOW_CASCADES.
 
-// Tipo de la luz key, con la misma convencion que el resto del motor:
-// direction.w lleva el tipo y se lee con int(w + 0.5). SOLO la luz 0 proyecta
-// sombra.
+// Type of the key light, with the same convention as the rest of the engine:
+// direction.w carries the type and is read with int(w + 0.5). ONLY light 0 casts
+// shadow.
 //   0 point, 1 spot, 2 directional, 3 area.
 int dtKeyLightType()
 {
     return int(ubo.lights[0].direction.w + 0.5);
 }
 
-// Cascada que le toca a un fragmento por su profundidad en view space. Los
-// cortes vienen ya ordenados; el ultimo es el alcance total de las sombras.
-// -1 = mas alla de ese alcance, no hay mapa que muestrear.
+// Cascade that a fragment falls into by its view space depth. The
+// cuts already come sorted; the last one is the total reach of the shadows.
+// -1 = beyond that reach, there is no map to sample.
 int dtSelectCascade(float viewDepth)
 {
     for (int i = 0; i < SHADOW_CASCADES; i++)
@@ -34,53 +34,53 @@ int dtSelectCascade(float viewDepth)
     return -1;
 }
 
-// Donde muestrear el shadow map para un punto del mundo.
+// Where to sample the shadow map for a world point.
 //
-//   uvz   = (u, v, profundidad de referencia) ya en [0,1]
-//   layer = capa del array
+//   uvz   = (u, v, reference depth) already in [0,1]
+//   layer = array layer
 //
-// false = este punto no lo cubre el mapa y el llamante debe tratarlo como
-// ILUMINADO (1.0). Pasa mas alla del alcance de las cascadas, y fuera del cono
-// de un foco.
+// false = this point is not covered by the map and the caller must treat it as
+// LIT (1.0). It happens beyond the reach of the cascades, and outside the cone
+// of a spot light.
 //
-// Dos caminos, segun el tipo de la luz key:
+// Two paths, depending on the key light's type:
 //
-//  - Direccional: sombras en CASCADA. Proyeccion ortografica, o sea sombra
-//    paralela, que es lo correcto para una luz que esta en el infinito. La
-//    cascada se elige por profundidad de camara.
+//  - Directional: CASCADED shadows. Orthographic projection, that is, parallel
+//    shadow, which is right for a light that is at infinity. The
+//    cascade is chosen by camera depth.
 //
-//  - Foco: UNA cara en PERSPECTIVA desde la posicion de la luz, en la capa 0.
-//    Su matriz va en lightSpaceMatrix[0] —las cascadas y esto no coexisten
-//    nunca, porque solo hay una luz key y solo tiene un tipo—, y la perspectiva
-//    es lo que hace que su sombra DIVERJA: crece al alejarse de la luz, en vez
-//    de mantener el tamano como hacia la aproximacion en cascada.
+//  - Spot: ONE face in PERSPECTIVE from the light's position, in layer 0.
+//    Its matrix goes in lightSpaceMatrix[0] (the cascades and this never
+//    coexist, because there is only one key light and it has only one type), and the
+//    perspective is what makes its shadow DIVERGE: it grows as it moves away from the light, instead
+//    of keeping its size as the cascade approximation did.
 //
-//  - Punto, y foco de mas de 90 grados: CUBEMAP de seis caras, una por semieje,
-//    en las capas 0..5. Cada una es una perspectiva de 90 grados desde la luz,
-//    asi que la sombra diverge en todas las direcciones y ninguna cara reparte
-//    sus texeles sobre mas de un octante. Es el unico camino que usa mas de
-//    cuatro huecos de lightSpaceMatrix, y por eso ese array tiene
+//  - Point, and spot wider than 90 degrees: six-face CUBEMAP, one per half-axis,
+//    in layers 0..5. Each one is a 90 degree perspective from the light,
+//    so the shadow diverges in all directions and no face spreads
+//    its texels over more than one octant. It is the only path that uses more than
+//    four lightSpaceMatrix slots, and that is why that array has
 //    SHADOW_MATRICES = 6.
 
-// Bias en ESPACIO DE MUNDO para los dos caminos en PERSPECTIVA (foco y punto).
-// El del rasterizador esta afinado para la ortografica de las cascadas, donde la
-// profundidad NDC es lineal en la distancia real; en perspectiva no lo es, y
-// corregirlo por ahi obligaria a un par de PSO extra en CADA backend porque el
-// bias es estado de pipeline en los dos.
+// WORLD-SPACE bias for the two PERSPECTIVE paths (spot and point).
+// The rasterizer's one is tuned for the cascades' orthographic projection, where the
+// NDC depth is linear in the real distance; in perspective it is not, and
+// correcting it there would force a couple of extra PSOs in EACH backend because the
+// bias is pipeline state in both.
 //
-// Dos terminos, que atacan cosas distintas:
+// Two terms, which attack different things:
 //
-//  - NORMAL-OFFSET proporcional a la distancia a la luz. En perspectiva la
-//    huella de un texel CRECE con esa distancia, y el error de cuantizacion con
-//    ella; un offset fijo que vale cerca de la bombilla se queda corto lejos.
-//    Separarse por la normal es lo que saca a la superficie de su propia sombra,
-//    porque el error esta en el plano de la superficie.
+//  - NORMAL-OFFSET proportional to the distance to the light. In perspective the
+//    footprint of a texel GROWS with that distance, and so does the quantization error;
+//    a fixed offset that works near the bulb falls short far away.
+//    Moving away along the normal is what takes the surface out of its own shadow,
+//    because the error is in the surface's plane.
 //
-//  - Empuje HACIA LA LUZ, pequeno y constante, para la superficie vista casi de
-//    canto desde la luz, donde la normal apenas separa en profundidad.
+//  - Push TOWARDS THE LIGHT, small and constant, for the surface seen almost edge-on
+//    from the light, where the normal barely separates in depth.
 //
-// normalMundo == vec3(0) -> punto en el AIRE (la marcha de la niebla): no puede
-// auto-sombrearse, asi que solo se aplica el empuje.
+// worldNormal == vec3(0) -> point in the AIR (the fog march): it cannot
+// self-shadow, so only the push is applied.
 vec3 dtBiasHaciaLaLuz(int luz, vec3 worldPos, vec3 normalMundo)
 {
     vec3  aLaLuz  = ubo.lights[luz].position.xyz - worldPos;
@@ -89,29 +89,29 @@ vec3 dtBiasHaciaLaLuz(int luz, vec3 worldPos, vec3 normalMundo)
     return worldPos + (aLaLuz / distLuz) * 0.02 + normalMundo * (distLuz * 0.004);
 }
 
-// normalMundo = normal GEOMETRICA de la superficie, para el bias de los caminos
-// en perspectiva. Un punto que no esta sobre ninguna superficie —la marcha de la
-// niebla— pasa vec3(0.0).
-// Una sola cara en perspectiva, en la ranura dada. La usan el foco key (ranura
-// 0) y cada foco secundario (ranuras SHADOW_KEY_MATRICES en adelante), asi que
-// el recorte del cono y el bias viven en un solo sitio.
+// worldNormal = GEOMETRIC normal of the surface, for the bias of the
+// perspective paths. A point that is not on any surface (the fog
+// march) passes vec3(0.0).
+// A single perspective face, in the given slot. It is used by the key spot (slot
+// 0) and by each secondary spot (slots SHADOW_KEY_MATRICES onwards), so that
+// the cone clipping and the bias live in a single place.
 bool dtCaraPerspectiva(int luz, int ranura, vec3 worldPos, vec3 normalMundo,
                        out vec3 uvz, out float layer)
 {
     worldPos = dtBiasHaciaLaLuz(luz, worldPos, normalMundo);
 
     vec4 ls = ubo.lightSpaceMatrix[ranura] * vec4(worldPos, 1.0);
-    // Detras de la luz: w <= 0 hace que la division devuelva el punto reflejado,
-    // que caeria dentro del mapa y pintaria una sombra fantasma al otro lado.
+    // Behind the light: w <= 0 makes the division return the mirrored point,
+    // which would fall inside the map and paint a ghost shadow on the other side.
     if (ls.w <= 0.0) return false;
 
     vec3 p = ls.xyz / ls.w;
     p.xy   = p.xy * 0.5 + 0.5;
-    // Fuera del frustum del foco no hay nada grabado. El recorte en xy es
-    // obligatorio aqui y no en las cascadas: el volumen de una cascada se ajusta
-    // a lo que se ve, mientras que el cono de un foco deja fuera casi toda la
-    // escena, y sin esto el sampler estira el borde del mapa por todo el resto
-    // del mundo.
+    // Outside the spot's frustum nothing is recorded. The clipping in xy is
+    // mandatory here and not in the cascades: a cascade's volume is fitted
+    // to what is seen, while a spot's cone leaves out almost the whole
+    // scene, and without this the sampler stretches the map's edge over the rest
+    // of the world.
     if (p.z < 0.0 || p.z > 1.0) return false;
     if (any(lessThan(p.xy, vec2(0.0))) || any(greaterThan(p.xy, vec2(1.0)))) return false;
 
@@ -120,12 +120,12 @@ bool dtCaraPerspectiva(int luz, int ranura, vec3 worldPos, vec3 normalMundo,
     return true;
 }
 
-// Elige cara de un cubemap por el eje MAYOR de (fragmento - luz): es la que
-// mira ese semiespacio, y su frustum de 90 grados contiene el punto.
+// Picks a cubemap face by the MAJOR axis of (fragment - light): it is the one that
+// looks at that half-space, and its 90 degree frustum contains the point.
 //
-// Solo elige CUAL. La UV y la profundidad salen despues de la matriz de esa
-// cara, la misma con la que se grabo — derivarlas a mano obligaria a que dos
-// convenciones de cubemap coincidieran, y aqui eso ya salio mal una vez.
+// It only picks WHICH one. The UV and the depth come out afterwards from that face's
+// matrix, the same one it was recorded with. Deriving them by hand would require two
+// cubemap conventions to match, and that already went wrong here once.
 int dtCaraDelCubemap(vec3 worldPos, vec3 posLuz)
 {
     vec3 L = worldPos - posLuz;
@@ -135,9 +135,9 @@ int dtCaraDelCubemap(vec3 worldPos, vec3 posLuz)
     return L.z > 0.0 ? 4 : 5;
 }
 
-// Muestreo en perspectiva desde una ranura ya elegida, sin recortar en xy: lo
-// usan las caras de un cubemap, donde salirse por un lado es normal —el punto
-// pertenece a la cara vecina— y recortarlo dejaria un corte duro en la diagonal.
+// Perspective sampling from an already chosen slot, without clipping in xy: it is
+// used by the faces of a cubemap, where going out through one side is normal (the point
+// belongs to the neighboring face) and clipping it would leave a hard cut on the diagonal.
 bool dtCaraDeCubemap(int luz, int ranura, vec3 worldPos, vec3 normalMundo,
                      out vec3 uvz, out float layer)
 {
@@ -148,8 +148,8 @@ bool dtCaraDeCubemap(int luz, int ranura, vec3 worldPos, vec3 normalMundo,
 
     vec3 p = ls.xyz / ls.w;
     p.xy   = p.xy * 0.5 + 0.5;
-    // Fuera del alcance de la luz no hay nada grabado, y mas alla del far
-    // tampoco ilumina: "sin sombra" es la respuesta correcta.
+    // Outside the light's reach nothing is recorded, and beyond the far plane
+    // it does not light either: "no shadow" is the right answer.
     if (p.z < 0.0 || p.z > 1.0) return false;
 
     uvz   = p;
@@ -157,16 +157,16 @@ bool dtCaraDeCubemap(int luz, int ranura, vec3 worldPos, vec3 normalMundo,
     return true;
 }
 
-// Sombra de una luz que NO es la key, en la ranura que le dio el reparto.
+// Shadow of a light that is NOT the key, in the slot the allocation gave it.
 //
-// position.w codifica las dos cosas en un solo campo, porque en el bloque no
-// queda otro libre: |w| - 1 es la ranura, y el SIGNO dice por que camino se
-// grabo — positivo una sola cara (foco estrecho), negativo las seis de un
-// cubemap (luz de punto, o foco tan abierto que una cara le queda mal). Lo pone
-// el renderer a partir de lo que el pase HIZO; el shader no deduce el camino
-// del tipo de luz, que seria una segunda copia del criterio.
+// position.w encodes both things in a single field, because there is no other free
+// one in the block: |w| - 1 is the slot, and the SIGN says which path it was
+// recorded through: positive a single face (narrow spot), negative the six of a
+// cubemap (point light, or a spot so wide that a single face fits it badly). The
+// renderer sets it from what the pass DID; the shader does not deduce the path
+// from the light type, which would be a second copy of the criterion.
 //
-// false = esta luz no tiene sombra aqui y el llamante la trata como ILUMINADA.
+// false = this light has no shadow here and the caller treats it as LIT.
 bool dtShadowCoordExtra(int luz, vec3 worldPos, vec3 normalMundo,
                         out vec3 uvz, out float layer)
 {
@@ -174,7 +174,7 @@ bool dtShadowCoordExtra(int luz, vec3 worldPos, vec3 normalMundo,
     layer = 0.0;
 
     float codigo = ubo.lights[luz].position.w;
-    if (abs(codigo) < 0.5) return false;          // no proyecta
+    if (abs(codigo) < 0.5) return false;          // does not cast
 
     int  ranura  = int(abs(codigo) + 0.5) - 1;
     bool cubemap = codigo < 0.0;
@@ -183,8 +183,8 @@ bool dtShadowCoordExtra(int luz, vec3 worldPos, vec3 normalMundo,
     if (!cubemap)
         return dtCaraPerspectiva(luz, ranura, worldPos, normalMundo, uvz, layer);
 
-    // Las seis caras estan en ranuras CONSECUTIVAS desde la que dio el reparto,
-    // en el mismo orden que las grabo pointShadowMatrices.
+    // The six faces are in CONSECUTIVE slots starting from the one the allocation gave,
+    // in the same order pointShadowMatrices recorded them.
     int cara = dtCaraDelCubemap(dtBiasHaciaLaLuz(luz, worldPos, normalMundo),
                                 ubo.lights[luz].position.xyz);
     if (ranura + cara >= SHADOW_MATRICES) return false;
@@ -198,22 +198,22 @@ bool dtShadowCoord(vec3 worldPos, vec3 normalMundo, out vec3 uvz, out float laye
 
     int tipo = dtKeyLightType();
 
-    // position.w de la luz key = 1 cuando su sombra se grabo como CUBEMAP. Lo
-    // pone el renderer a partir de cuantas capas dejo validas el pase, y NO se
-    // deduce aqui del tipo: una luz de punto siempre va por cubemap, pero un
-    // FOCO muy abierto tambien —por encima de 90 grados de cono una sola cara
-    // reparte los texeles sobre tanto mundo que el borde sale escalonado, y
-    // empeora con tan(FOV/2)—. Recalcular ese umbral aqui seria una segunda
-    // copia del criterio, que es justo lo que rompio H65.
-    if (ubo.lights[0].position.w > 0.5)   // cubemap de seis caras
+    // position.w of the key light = 1 when its shadow was recorded as a CUBEMAP. The
+    // renderer sets it from how many layers the pass left valid, and it is NOT
+    // deduced here from the type: a point light always goes through a cubemap, but a very wide
+    // SPOT does too (above a 90 degree cone a single face
+    // spreads the texels over so much world that the edge comes out stepped, and it
+    // gets worse with tan(FOV/2)). Recomputing that threshold here would be a second
+    // copy of the criterion, which is exactly what broke H65.
+    if (ubo.lights[0].position.w > 0.5)   // six-face cubemap
     {
         worldPos = dtBiasHaciaLaLuz(0, worldPos, normalMundo);
 
-        // La cara la decide el eje MAYOR de (fragmento - luz): es la que mira
-        // ese semiespacio, y su frustum de 90 grados contiene el punto. Solo se
-        // elige CUAL; la UV y la profundidad salen de la matriz de esa cara, la
-        // misma con la que se grabo. Derivarlas a mano obligaria a que dos
-        // convenciones de cubemap coincidieran, y aqui eso ya salio mal.
+        // The face is decided by the MAJOR axis of (fragment - light): it is the one that looks at
+        // that half-space, and its 90 degree frustum contains the point. Only WHICH one is
+        // picked; the UV and the depth come from that face's matrix, the
+        // same one it was recorded with. Deriving them by hand would require two cubemap
+        // conventions to match, and that already went wrong here.
         vec3  L = worldPos - ubo.lights[0].position.xyz;
         vec3  a = abs(L);
         int   cara;
@@ -226,8 +226,8 @@ bool dtShadowCoord(vec3 worldPos, vec3 normalMundo, out vec3 uvz, out float laye
 
         vec3 p = ls.xyz / ls.w;
         p.xy   = p.xy * 0.5 + 0.5;
-        // Fuera del alcance de la luz no hay nada grabado: mas alla del far de
-        // la proyeccion tampoco ilumina, asi que "sin sombra" es correcto.
+        // Outside the light's reach nothing is recorded: beyond the far plane of
+        // the projection it does not light either, so "no shadow" is correct.
         if (p.z < 0.0 || p.z > 1.0) return false;
 
         uvz   = p;
@@ -235,16 +235,16 @@ bool dtShadowCoord(vec3 worldPos, vec3 normalMundo, out vec3 uvz, out float laye
         return true;
     }
 
-    if (tipo == 1)   // foco key: una cara, en la ranura 0
+    if (tipo == 1)   // key spot: a single face, in slot 0
     {
-        // Se nota al MOVERSE mas que quieto porque el TAA acumula historia
-        // mientras la camara esta parada y la rechaza en cuanto se mueve: sin
-        // bias suficiente, el patron de acne cambia con el jitter subpixel y
-        // el TAA ya no lo puede promediar.
+        // It shows more when MOVING than when still because TAA accumulates history
+        // while the camera is stopped and rejects it as soon as it moves: without
+        // enough bias, the acne pattern changes with the subpixel jitter and
+        // TAA can no longer average it out.
         return dtCaraPerspectiva(0, 0, worldPos, normalMundo, uvz, layer);
     }
 
-    // Direccional y punto: cascadas.
+    // Directional and point: cascades.
     float viewDepth = -(ubo.view * vec4(worldPos, 1.0)).z;
     int   cascade   = dtSelectCascade(viewDepth);
     if (cascade < 0) return false;

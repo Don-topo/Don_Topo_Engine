@@ -12,13 +12,12 @@ namespace DonTopo
         std::vector<Vertex>     vertices;
         std::vector<uint32_t>   indices;
         Material                material;
-        // Path del .fbx de origen (vacío para meshes procedurales: Cube/Sphere/
-        // Plane/Capsule creados desde "Basic Shapes"). Content Browser lo usa
-        // para localizar qué GameObjects referencian un fichero al hacer
-        // rename/delete.
+        // Path of the source .fbx (empty for procedural meshes: Cube/Sphere/
+        // Plane/Capsule created from "Basic Shapes"). The Content Browser uses it
+        // to find which GameObjects reference a file when renaming/deleting.
         std::string             sourcePath;
-        // Indice de la malla dentro del fichero (scene->mMeshes[piece]). 0 = la
-        // primera, que es lo unico que se cargaba antes de las piezas.
+        // Index of the mesh inside the file (scene->mMeshes[piece]). 0 = the
+        // first one, which is the only one that was loaded before pieces existed.
         int                     piece = 0;
 
         virtual ~Mesh() = default;

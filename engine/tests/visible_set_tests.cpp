@@ -1,13 +1,13 @@
-// Test headless de las guardas de visibilidad (sin GUI, sin device Vulkan).
-// Visibility::objectVisible y gatherCandidates no llaman a Vulkan: la caché de
-// mallas reparte handles por callback, así que la decisión completa —checkbox,
-// entrada borrada, upload en vuelo y frustum— se puede ejercitar aquí. Plain
-// main + asserts, sin framework, coherente con frustum_tests.cpp.
+// Headless test of the visibility guards (no GUI, no Vulkan device).
+// Visibility::objectVisible and gatherCandidates do not call Vulkan: the mesh
+// cache hands out handles by callback, so the full decision (checkbox,
+// deleted entry, in-flight upload and frustum) can be exercised here. Plain
+// main + asserts, no framework, consistent with frustum_tests.cpp.
 //
-// Lo que se prueba no es "¿culea?" —eso ya lo cubre frustum_tests— sino las
-// cuatro guardas que estaban COPIADAS en los cuatro pases del backend. Cada
-// caso monta el estado que hace fallar a una sola de ellas: si alguna
-// desaparece del helper, exactamente un caso se pone rojo y dice cuál.
+// What is tested is not "does it cull?" (frustum_tests already covers that) but the
+// four guards that were COPIED in the four passes of the backend. Each
+// case sets up the state that makes just one of them fail: if any one
+// disappears from the helper, exactly one case turns red and says which.
 #include "DonTopo/Renderer/VisibleSet.h"
 
 #include <glm/glm.hpp>
@@ -20,7 +20,7 @@ using namespace DonTopo;
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
-// Cámara en el origen mirando hacia -Z, mismo convenio que el motor.
+// Camera at the origin looking toward -Z, same convention as the engine.
 static Culling::Frustum camaraEnOrigen()
 {
     const glm::mat4 view = glm::lookAt(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f),
@@ -35,10 +35,10 @@ static glm::mat4 en(float x, float y, float z)
     return glm::translate(glm::mat4(1.0f), glm::vec3(x, y, z));
 }
 
-// Escena de mentira: N objetos, cada uno con su entrada en la caché. Las mallas
-// y los objetos se crean TODOS de golpe y solo después se piden punteros: los
-// dos contenedores son vectores, así que una creación tardía reubicaría la
-// memoria y dejaría colgado cualquier puntero pedido antes.
+// Fake scene: N objects, each with its entry in the cache. The meshes
+// and the objects are ALL created at once and only afterwards are pointers requested: the
+// two containers are vectors, so a late creation would relocate the
+// memory and leave dangling any pointer requested before.
 struct Escena
 {
     SharedGpuMeshCache        meshes;
@@ -47,8 +47,8 @@ struct Escena
     void anade(const char* key, const glm::mat4& xform)
     {
         RenderObject obj;
-        // Caja acotada de semilado 1, como cualquier malla real: el AABB va en
-        // local y lo coloca el transform, igual que en el Renderer.
+        // Bounded box with half-side 1, like any real mesh: the AABB is in
+        // local space and the transform places it, same as in the Renderer.
         obj.sharedIndex = meshes.acquire(key, [](SharedGpuMesh& g) {
             g.aabbMin   = glm::vec3(-1.0f);
             g.aabbMax   = glm::vec3( 1.0f);
@@ -70,55 +70,55 @@ static void test_guardas_una_a_una()
     RenderObject& obj  = e.objects[0];
     SharedGpuMesh* gpu = e.meshes.get(obj.sharedIndex);
 
-    // Caso base: delante de la cámara, subido y con el checkbox puesto.
+    // Base case: in front of the camera, uploaded and with the checkbox on.
     CHECK(Visibility::objectVisible(obj, gpu, 0, cam));
 
-    // 1. Checkbox "Visible" del componente Mesh.
+    // 1. "Visible" checkbox of the Mesh component.
     obj.meshVisible = false;
     CHECK(!Visibility::objectVisible(obj, gpu, 0, cam));
     obj.meshVisible = true;
 
-    // 2. Upload en vuelo: el ticket del objeto va por delante del último
-    //    completado. Sus texturas siguen en TRANSFER_DST_OPTIMAL y samplearlas
-    //    sería leer basura.
+    // 2. In-flight upload: the object's ticket is ahead of the last
+    //    completed one. Its textures are still in TRANSFER_DST_OPTIMAL and sampling
+    //    them would read garbage.
     gpu->uploadTicket = 7;
     CHECK(!Visibility::objectVisible(obj, gpu, 6, cam));
-    // Frontera: el ticket IGUAL al último completado ya está subido. Un `<` en
-    // vez de `<=` haría parpadear un frame a cada malla que se importa.
+    // Boundary: a ticket EQUAL to the last completed one is already uploaded. A `<` instead
+    // of `<=` would make every imported mesh flicker for one frame.
     CHECK(Visibility::objectVisible(obj, gpu, 7, cam));
     CHECK(Visibility::objectVisible(obj, gpu, 8, cam));
     gpu->uploadTicket = 0;
 
-    // 3. Frustum: bien detrás de la cámara, lo bastante lejos como para que
-    //    ninguna holgura conservadora lo salve.
+    // 3. Frustum: well behind the camera, far enough that no
+    //    conservative slack saves it.
     obj.transform = en(0.0f, 0.0f, 400.0f);
     CHECK(!Visibility::objectVisible(obj, gpu, 0, cam));
 
-    // 4. Sin AABB (mesh vacío) no se puede acotar: pasa aunque esté detrás.
-    //    Descartarlo sería culear de MÁS, que es el fallo que se ve en pantalla.
+    // 4. Without an AABB (empty mesh) it cannot be bounded: it passes even if it is behind.
+    //    Discarding it would be culling TOO MUCH, which is the failure seen on screen.
     gpu->hasBounds = false;
     CHECK(Visibility::objectVisible(obj, gpu, 0, cam));
 
-    // 5. Entrada borrada desde el editor: el índice deja de estar vivo y la
-    //    caché devuelve nullptr. Se comprueba con la caché de verdad y no
-    //    pasando nullptr a mano, que es lo que hace el Renderer. Va la última
-    //    porque libera un slot que la siguiente creación reutilizaría.
+    // 5. Entry deleted from the editor: the index is no longer alive and the
+    //    cache returns nullptr. It is checked with the real cache and not by
+    //    passing nullptr by hand, which is what the Renderer does. It goes last
+    //    because it frees a slot that the next creation would reuse.
     RenderObject& segundo = e.objects[1];
     e.meshes.release(segundo.sharedIndex, [](const SharedGpuMesh&) {});
     CHECK(e.meshes.get(segundo.sharedIndex) == nullptr);
     CHECK(!Visibility::objectVisible(segundo, e.meshes.get(segundo.sharedIndex), 0, cam));
 }
 
-// El frustum es parámetro y no un miembro precisamente por esto: el pase de
-// sombras evalúa el MISMO objeto con el de su cascada. Un objeto que la cámara
-// no ve puede seguir proyectando sombra sobre lo que sí se ve, así que las dos
-// respuestas tienen que poder diferir.
+// The frustum is a parameter and not a member precisely for this: the shadow
+// pass evaluates the SAME object with the one of its cascade. An object that the camera
+// does not see can still cast a shadow onto what is seen, so the two
+// answers have to be able to differ.
 static void test_dos_frustums_mismo_objeto()
 {
     const Culling::Frustum cam = camaraEnOrigen();
 
-    // Volumen de una luz que mira hacia -X desde la derecha: cubre lo que hay
-    // al lado de la cámara, donde el frustum de la cámara no llega.
+    // Volume of a light that looks toward -X from the right: it covers what is
+    // next to the camera, where the camera frustum does not reach.
     const glm::mat4 luzView = glm::lookAt(glm::vec3(200.0f, 0.0f, 0.0f), glm::vec3(0.0f),
                                           glm::vec3(0.0f, 1.0f, 0.0f));
     const glm::mat4 luzProj = glm::orthoRH_ZO(-100.0f, 100.0f, -100.0f, 100.0f, 1.0f, 400.0f);
@@ -139,53 +139,53 @@ static void test_gather()
     const Culling::Frustum cam = camaraEnOrigen();
 
     Escena e;
-    e.anade("a", en(0.0f, 0.0f, -50.0f));  // dentro
-    e.anade("b", en(0.0f, 0.0f, 400.0f));  // detrás de la cámara
+    e.anade("a", en(0.0f, 0.0f, -50.0f));  // inside
+    e.anade("b", en(0.0f, 0.0f, 400.0f));  // behind the camera
     e.objects[0].ssrStrength = 0.75f;
     e.objects[1].ssrStrength = 0.5f;
 
     std::vector<Batching::BatchCandidate> out;
 
-    // Con basura previa: gatherCandidates limpia. Si no lo hiciera, el pase
-    // dibujaría también los candidatos del pase anterior.
+    // With prior garbage: gatherCandidates clears. If it did not, the pass
+    // would also draw the candidates of the previous pass.
     out.push_back({ 99, true, nullptr, 0.0f });
 
     Visibility::gatherCandidates(e.objects, e.meshes, 0, cam, /*ssrEnabled*/ true,
                                  /*colorPass*/ true, out);
 
-    // Los invisibles TAMBIÉN entran, con visible = false: el agrupado los
-    // salta, pero el panel Performance los cuenta como culleados. Devolver solo
-    // los visibles dejaría ese contador a cero.
+    // The invisible ones ALSO get in, with visible = false: the grouping skips
+    // them, but the Performance panel counts them as culled. Returning only the
+    // visible ones would leave that counter at zero.
     CHECK(out.size() == 2);
     CHECK(out[0].visible);
     CHECK(!out[1].visible);
-    // Orden estable y de los objetos, no del agrupado.
+    // Stable order, and that of the objects, not of the grouping.
     CHECK(out[0].sharedIndex == e.objects[0].sharedIndex);
     CHECK(out[1].sharedIndex == e.objects[1].sharedIndex);
-    // El transform va por PUNTERO al objeto: buildInstanceBatches lo copia al
-    // buffer más tarde, así que apuntar a un temporal escribiría basura.
+    // The transform goes by POINTER to the object: buildInstanceBatches copies it into the
+    // buffer later, so pointing to a temporary would write garbage.
     CHECK(out[0].transform == &e.objects[0].transform);
     CHECK(out[1].transform == &e.objects[1].transform);
     CHECK(out[0].ssr == 0.75f);
     CHECK(out[1].ssr == 0.5f);
 
-    // Los pases que no pintan color lo dejan a 0 aunque el objeto tenga fuerza:
-    // el SSR entra en la clave del agrupado, y con un único valor salen menos
-    // draws y el mapa resultante es idéntico.
+    // Passes that do not draw color leave it at 0 even if the object has strength:
+    // the SSR enters the grouping key, and with a single value fewer draws come out
+    // and the resulting map is identical.
     Visibility::gatherCandidates(e.objects, e.meshes, 0, cam, /*ssrEnabled*/ false,
                                  /*colorPass*/ true, out);
     CHECK(out.size() == 2);
     CHECK(out[0].ssr == 0.0f);
     CHECK(out[1].ssr == 0.0f);
-    // Y la visibilidad no depende del SSR.
+    // And visibility does not depend on the SSR.
     CHECK(out[0].visible);
     CHECK(!out[1].visible);
 }
 
-// Los factores PBR viajan por candidato desde que salieron de la entrada
-// compartida, y los gobierna colorPass, NO ssrEnabled. Son dos flags separados
-// a proposito: fundirlos dejaria la escena entera mate -todos los objetos con
-// los factores por defecto- por apagar el SSR, que no tiene nada que ver.
+// The PBR factors travel per candidate since they came out of the shared
+// entry, and they are governed by colorPass, NOT ssrEnabled. They are two separate flags
+// on purpose: merging them would leave the whole scene matte (all objects with
+// the default factors) just by turning the SSR off, which has nothing to do with it.
 static void test_gather_factores()
 {
     const Culling::Frustum cam = camaraEnOrigen();
@@ -200,8 +200,8 @@ static void test_gather_factores()
 
     std::vector<Batching::BatchCandidate> out;
 
-    // Pase de color con el SSR APAGADO: los factores tienen que llegar igual.
-    // Es el caso que se rompe si alguien reusa ssrEnabled para gatearlos.
+    // Color pass with the SSR OFF: the factors have to arrive all the same.
+    // It is the case that breaks if someone reuses ssrEnabled to gate them.
     Visibility::gatherCandidates(e.objects, e.meshes, 0, cam, /*ssrEnabled*/ false,
                                  /*colorPass*/ true, out);
     CHECK(out.size() == 2);
@@ -210,14 +210,14 @@ static void test_gather_factores()
     CHECK(out[1].metallic  == 0.25f);
     CHECK(out[1].roughness == 0.8f);
 
-    // Sombras y profundidad: mismo valor para todos, que es lo que colapsa los
-    // grupos. Iguales ENTRE SI es lo que importa aqui, no el numero concreto.
+    // Shadows and depth: same value for all, which is what collapses the
+    // groups. Being equal AMONG THEMSELVES is what matters here, not the specific number.
     Visibility::gatherCandidates(e.objects, e.meshes, 0, cam, /*ssrEnabled*/ true,
                                  /*colorPass*/ false, out);
     CHECK(out.size() == 2);
     CHECK(out[0].metallic  == out[1].metallic);
     CHECK(out[0].roughness == out[1].roughness);
-    // Y no es que se hayan quedado con los del objeto por casualidad.
+    // And it is not that they kept the object's own by chance.
     CHECK(out[0].metallic != e.objects[0].metallic);
 }
 

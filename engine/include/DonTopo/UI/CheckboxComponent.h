@@ -12,25 +12,25 @@ namespace DonTopo
 {
     class CheckboxComponent;
 
-    // Lo que una casilla tiene EN VIVO y no se serializa. Mismo papel y mismos
-    // motivos que UiButtonRuntime (ButtonComponent.h) y que UiSliderRuntime: el
-    // nodo del canvas lo destruye clearChildren() en cada reconstrucción, así
-    // que el dueño del callback es el COMPONENTE y el nodo solo guarda un
-    // weak_ptr a esto.
+    // What a checkbox has LIVE and is not serialized. Same role and same
+    // reasons as UiButtonRuntime (ButtonComponent.h) and UiSliderRuntime: the
+    // canvas node is destroyed by clearChildren() on every rebuild,
+    // so the owner of the callback is the COMPONENT and the node only keeps a
+    // weak_ptr to this.
     //
-    // `owner` es por donde el click escribe `isOn` EN EL COMPONENTE, que es lo
-    // que se serializa y lo que lee el editor. Lo pone el sync en cada volcado;
-    // si el componente muere, muere el runtime con él y el weak_ptr del nodo ya
-    // no resuelve, así que el puntero nunca se queda colgando.
+    // `owner` is where the click writes `isOn` IN THE COMPONENT, which is what
+    // gets serialized and what the editor reads. The sync sets it on every dump;
+    // if the component dies, the runtime dies with it and the node's weak_ptr no
+    // longer resolves, so the pointer never dangles.
     struct UiCheckboxRuntime
     {
         std::function<void(bool)> onValueChanged;
         CheckboxComponent*        owner = nullptr;
     };
 
-    // El hueco del runtime dentro del componente, con las MISMAS dos reglas que
-    // UiCallbackSlot del Button: copiar un componente estrena callbacks y
-    // compararlos ignora este campo.
+    // The runtime slot inside the component, with the SAME two rules as the
+    // Button's UiCallbackSlot: copying a component gets fresh callbacks and
+    // comparing them ignores this field.
     struct UiCheckboxCallbackSlot
     {
         std::shared_ptr<UiCheckboxRuntime> ptr = std::make_shared<UiCheckboxRuntime>();
@@ -44,17 +44,17 @@ namespace DonTopo
         bool operator==(const UiCheckboxCallbackSlot&) const { return true; }
     };
 
-    // Una casilla de verificación de la UI 2D como componente de GameObject, con
-    // el MISMO contrato que el resto: SOLO DATOS.
+    // A 2D UI checkbox as a GameObject component, with
+    // the SAME contract as the rest: DATA ONLY.
     //
-    // El Checkbox del núcleo (UiWidgets.h) es un stub SIN campos, así que el
-    // widget se monta por COMPOSICIÓN: la caja es el nodo raíz (de tipo
-    // Checkbox) y la marca cuelga de ella. Aquí no se toca ni una línea del core
-    // de UI.
+    // The core Checkbox (UiWidgets.h) is a stub with NO fields, so the
+    // widget is assembled by COMPOSITION: the box is the root node (of type
+    // Checkbox) and the mark hangs from it. Not a single line of the UI core is
+    // touched here.
     //
-    // No lleva etiqueta de texto a propósito: el Text es su propio componente y
-    // cabe en el mismo GameObject (son nodos hermanos con prefijos distintos),
-    // así que meter aquí una copia de los campos del texto sería mantener dos.
+    // It carries no text label on purpose: Text is its own component and
+    // fits in the same GameObject (they are sibling nodes with different prefixes),
+    // so putting a copy of the text fields here would mean maintaining two.
     class CheckboxComponent
     {
         public:
@@ -62,36 +62,36 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};    // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};    // px, relative to the anchor
             glm::vec2 size{24.0f, 24.0f};      // px
-            glm::vec4 color{0.2f, 0.2f, 0.2f, 1.0f};   // color de la CAJA
+            glm::vec4 color{0.2f, 0.2f, 0.2f, 1.0f};   // color of the BOX
             bool      visible = true;
 
-            // A false se dibuja igual pero el click no la mueve.
+            // When false it is drawn the same but the click does not toggle it.
             bool interactable = true;
 
-            // --- Valor ---------------------------------------------------------
+            // --- Value ---------------------------------------------------------
             bool isOn = false;
 
-            // --- Marca ----------------------------------------------------------
+            // --- Mark -----------------------------------------------------------
             glm::vec4 checkColor{1.0f, 1.0f, 1.0f, 1.0f};
 
-            // Píxeles que la marca se mete hacia DENTRO de la caja por los cuatro
-            // lados. Un padding que no cabe deja la marca a cero, que es lo peor
-            // que puede pasar; nunca un rect del revés.
+            // Pixels the mark is inset INTO the box on all four
+            // sides. A padding that does not fit leaves the mark at zero, which is the worst
+            // that can happen; never an inverted rect.
             float checkPadding = 4.0f;
 
             // --- Sprites --------------------------------------------------------
-            // UN atlas y dos NOMBRES de sub-rect dentro de él (los registra el
-            // sidecar <atlas>.sprites.json). Vacíos = quads de color plano.
+            // ONE atlas and two sub-rect NAMES inside it (registered by the
+            // sidecar <atlas>.sprites.json). Empty = flat-color quads.
             std::string atlasPath;
             std::string backgroundSprite;
             std::string checkmarkSprite;
 
-            // --- Runtime (no se serializa) --------------------------------------
+            // --- Runtime (not serialized) ---------------------------------------
             UiCheckboxCallbackSlot callbacks;
 
-            // Rect de la MARCA en coordenadas de la caja.
+            // Rect of the MARK in box coordinates.
             void checkRect(glm::vec2& outPos, glm::vec2& outSize) const
             {
                 const float p = std::max(checkPadding, 0.0f);
@@ -100,8 +100,8 @@ namespace DonTopo
                                     std::max(size.y - 2.0f * p, 0.0f));
             }
 
-            // Vuelca el rect y la caja en el nodo vivo. NO toca `atlas` (es un
-            // puntero a GPU: lo resuelve el sync).
+            // Dumps the rect and the box into the live node. Does NOT touch `atlas` (it is a
+            // GPU pointer: the sync resolves it).
             void applyTo(Checkbox& c) const
             {
                 c.anchorMin = anchorMin;
@@ -112,9 +112,9 @@ namespace DonTopo
                 c.color     = color;
                 c.visible   = visible;
                 c.sprite    = backgroundSprite;
-                // La caja recibe el ratón SIEMPRE, interactable o no: el gate
-                // está en el handler, y quitarle el raycast aquí haría que el
-                // click se lo comiera lo que hubiera detrás.
+                // The box ALWAYS receives the mouse, interactable or not: the gate
+                // is in the handler, and removing its raycast here would make whatever was
+                // behind it swallow the click.
                 c.raycastTarget = true;
             }
 
@@ -131,18 +131,18 @@ namespace DonTopo
                 m.color     = checkColor;
                 m.sprite    = checkmarkSprite;
                 m.visible   = true;
-                // Apagada, el nodo SIGUE EXISTIENDO pero no pinta: si apareciera
-                // y desapareciera cambiaría la forma del subárbol y habría que
-                // reconstruir la raíz del canvas en cada click.
+                // When off, the node KEEPS EXISTING but does not paint: if it appeared
+                // and disappeared it would change the shape of the subtree and the canvas root
+                // would have to be rebuilt on every click.
                 m.drawable  = isOn && sz.x > 0.0f && sz.y > 0.0f;
-                // Y no recibe el ratón: el hit test devuelve el nodo MÁS
-                // PROFUNDO, así que la marca se comería el click de la caja.
+                // And it does not receive the mouse: the hit test returns the DEEPEST
+                // node, so the mark would swallow the box's click.
                 m.raycastTarget = false;
             }
 
-            // El sync lo usa para saber si hay algo que volcar: sin esto habría
-            // que ensuciar el nodo TODOS los frames, que es justo lo que la
-            // caché de vértices del canvas existe para evitar.
+            // The sync uses it to know whether there is anything to dump: without this the
+            // node would have to be dirtied EVERY frame, which is exactly what the
+            // canvas's vertex cache exists to avoid.
             bool operator==(const CheckboxComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -156,18 +156,18 @@ namespace DonTopo
             bool operator!=(const CheckboxComponent& o) const { return !(*this == o); }
     };
 
-    // Nombre del nodo vivo de un Checkbox dentro del canvas. Prefijo DISTINTO al
-    // de los demás por lo mismo que aquellos entre sí: un GameObject puede
-    // llevar varios componentes de UI a la vez, y dos nodos hermanos con el
-    // mismo nombre harían que el gizmo y el picking cogieran el que no toca.
+    // Name of a Checkbox's live node inside the canvas. DIFFERENT prefix from
+    // the others for the same reason those differ among themselves: a GameObject can
+    // carry several UI components at once, and two sibling nodes with the
+    // same name would make the gizmo and picking grab the wrong one.
     inline std::string uiCheckboxNodeName(uint64_t ownerId)
     {
         return "chk:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiCheckboxNodeName. Devuelve 0 si el nombre no es de una
-    // casilla: 0 no es un id válido de GameObject. El corte por '/' hace que el
-    // nodo de la marca devuelva también a su dueño.
+    // Inverse of uiCheckboxNodeName. Returns 0 if the name is not a
+    // checkbox's: 0 is not a valid GameObject id. Cutting at '/' makes the
+    // mark node also return its owner.
     inline uint64_t uiCheckboxOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("chk:", 0) != 0) return 0;

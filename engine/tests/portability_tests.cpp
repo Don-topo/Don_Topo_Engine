@@ -1,6 +1,6 @@
-// Guarda de portabilidad: lee el codigo en disco y falla si aparece algo que
-// solo compila en Windows fuera de su sitio. Corre en Windows a proposito: el
-// error cae al escribirlo, no semanas despues en Linux.
+// Portability guard: reads the code on disk and fails if anything that only
+// compiles on Windows shows up out of place. It runs on Windows on purpose: the
+// error shows up when it is written, not weeks later on Linux.
 #include "DonTopo/Core/CopyToBuffer.h"
 #include "DonTopo/Core/Platform.h"
 
@@ -27,25 +27,25 @@ static bool esFuente(const fs::path& p)
     return e == ".cpp" || e == ".h" || e == ".hpp" || e == ".inl";
 }
 
-// Donde SI puede haber codigo de Windows.
+// Where Windows code CAN be.
 static bool permitidoWin32(const std::string& g)
 {
     return g == "engine/src/Core/Platform_win.cpp" ||
            g.rfind("engine/src/Renderer/D3D12/", 0) == 0 ||
            g.rfind("engine/include/DonTopo/Renderer/D3D12/", 0) == 0 ||
-           g == "engine/tests/portability_tests.cpp";   // nombra los patrones
+           g == "engine/tests/portability_tests.cpp";   // names the patterns
 }
 
-// Quita el comentario de linea: los comentarios de este repo nombran estas APIs
-// a menudo, y un falso positivo por comentario es ruido.
+// Strips the line comment: the comments in this repo often name these APIs, and a
+// false positive from a comment is noise.
 static std::string sinComentario(const std::string& l)
 {
     const size_t c = l.find("//");
     return c == std::string::npos ? l : l.substr(0, c);
 }
 
-// 1 si `rel` existe bajo `base` con EXACTAMENTE esas mayusculas, 0 si solo
-// existe ignorando mayusculas, -1 si no existe (cabecera de terceros).
+// 1 if `rel` exists under `base` with EXACTLY that capitalization, 0 if it only
+// exists ignoring case, -1 if it does not exist (third-party header).
 static int existeExacto(const fs::path& base, const fs::path& rel)
 {
     fs::path cur = base;
@@ -66,7 +66,7 @@ static int existeExacto(const fs::path& base, const fs::path& rel)
             std::transform(b.begin(), b.end(), b.begin(), ::tolower);
             if (a == b) hitCase = true;
         }
-        if (!hit && !hitCase) return -1;   // no existe
+        if (!hit && !hitCase) return -1;   // does not exist
         if (!hit) exacto = false;
         cur /= part;
     }
@@ -84,7 +84,7 @@ static void test_no_windows_only_code_outside_its_place()
     int ficheros = 0, fallos = 0;
     for (const char* raiz : kRaices)
     {
-        CHECK(fs::is_directory(raiz));   // otro cwd: FALLA, no aprueba
+        CHECK(fs::is_directory(raiz));   // other cwd: FAILS, does not pass
         if (!fs::is_directory(raiz)) continue;
         for (const auto& e : fs::recursive_directory_iterator(raiz))
         {
@@ -108,7 +108,7 @@ static void test_no_windows_only_code_outside_its_place()
                     if (std::regex_search(c, winInc))   falla("cabecera de Windows fuera de Platform_win.cpp");
                     if (std::regex_search(c, win32Api)) falla("API de Win32 fuera de Platform_win.cpp");
                 }
-                // Mismas excepciones que Win32: D3D12 solo se compila en Windows.
+                // Same exceptions as Win32: D3D12 only compiles on Windows.
                 if (!permitidoWin32(g) && std::regex_search(c, msvcSafe))
                     falla("funcion *_s de MSVC");
 
@@ -127,11 +127,11 @@ static void test_no_windows_only_code_outside_its_place()
             }
         }
     }
-    CHECK(ficheros > 200);   // de verdad recorrio el arbol
+    CHECK(ficheros > 200);   // it really walked the tree
     CHECK(fallos == 0);
 }
 
-// La capa de plataforma responde lo mismo que el sistema por otras vias.
+// The platform layer answers the same as the system through other routes.
 static void test_platform_basics(const char* argv0)
 {
     const fs::path yo = fs::weakly_canonical(fs::absolute(argv0)).parent_path();
@@ -155,7 +155,7 @@ static void test_copy_to_buffer()
     char b[4];
     std::memset(b, 'x', sizeof(b));
     DonTopo::copyToBuffer(b, "abcdef");
-    CHECK(std::strcmp(b, "abc") == 0);   // trunca y termina en '\0'
+    CHECK(std::strcmp(b, "abc") == 0);   // truncates and ends in '\0'
     DonTopo::copyToBuffer(b, "");
     CHECK(b[0] == '\0');
 }

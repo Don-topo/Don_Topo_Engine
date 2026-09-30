@@ -1,10 +1,10 @@
-// Decodificacion de las texturas del preview de un modelo (miniaturas del
-// Content Browser). Vive aparte de ModelLoader.cpp a proposito: el test
-// test_no_uploader_decodes_embedded_on_its_own vigila que ningun uploader de
-// material llame a stbi_load_from_memory por su cuenta, y este fichero es su
-// unica excepcion en Renderer. Aqui no hay ruta y embebida que elegir (el
-// loader rellena una u otra), se mira la cabecera antes de decodificar y no se
-// generan mips: decodeMaterialTexture no hace ninguna de las dos cosas.
+// Decoding of a model's preview textures (Content Browser thumbnails).
+// It lives apart from ModelLoader.cpp on purpose: the test
+// test_no_uploader_decodes_embedded_on_its_own checks that no material
+// uploader calls stbi_load_from_memory on its own, and this file is its
+// only exception in Renderer. Here there is no path-or-embedded choice to make (the
+// loader fills in one or the other), the header is inspected before decoding and no
+// mips are generated: decodeMaterialTexture does neither of those.
 #include "DonTopo/Renderer/ModelLoader.h"
 
 #include <stb_image.h>
@@ -71,8 +71,8 @@ namespace DonTopo
     {
         try
         {
-            // ifstream y no stbi_load: stbi_load recibe un char* en la codepage
-            // local y falla con rutas Unicode.
+            // ifstream and not stbi_load: stbi_load takes a char* in the local
+            // codepage and fails with Unicode paths.
             std::ifstream in(path, std::ios::binary);
             if (!in) return {};
             const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());

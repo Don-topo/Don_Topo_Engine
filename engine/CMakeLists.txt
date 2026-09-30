@@ -1,11 +1,11 @@
-﻿# El motor, sin nada del editor. Es lo unico que enlaza el runtime: por eso
-# aqui no puede aparecer ninguna de las libs de ImGui ni ningun fuente de
-# src/Editor/.
+﻿# The engine, with nothing from the editor. It is the only thing the runtime links: that
+# is why none of the ImGui libs and none of the sources in src/Editor/ may
+# appear here.
 add_library(DonTopoCore STATIC
     src/Core/Window.cpp
     src/Renderer/RenderBackend.cpp
     src/Renderer/Renderer.cpp
-    # Pases del Renderer de Vulkan sacados a su propia clase.
+    # Vulkan Renderer passes pulled out into their own class.
     src/Renderer/Passes/AaPass.cpp
     src/Renderer/Passes/BloomPass.cpp
     src/Renderer/Passes/DepthPrepassPass.cpp
@@ -68,12 +68,12 @@ add_library(DonTopoCore STATIC
     src/Renderer/DeferredDelete.cpp
     src/Renderer/TransferBatch.cpp
     src/Renderer/AsyncAssetLoader.cpp
-    # Gizmos vive en Core aunque solo lo pinte el editor: no depende de ImGui y
-    # lo graba el pass principal del Renderer, asi que dejarlo en Editor haria
-    # que Core dependiera del editor.
+    # Gizmos lives in Core even though only the editor draws it: it does not depend on ImGui
+    # and the Renderer's main pass records it, so leaving it in Editor would make
+    # Core depend on the editor.
     src/Renderer/Gizmos.cpp
-    # UI de juego (canvas 2D). Vive en Core, no en el editor: el runtime
-    # exportado dibuja el mismo canvas.
+    # Game UI (2D canvas). It lives in Core, not in the editor: the exported
+    # runtime draws the same canvas.
     src/UI/UiCanvas.cpp
     src/UI/UiInputBridge.cpp
     src/UI/UiSpriteBatch.cpp
@@ -97,8 +97,8 @@ target_link_libraries(DonTopoCore
         assimp
         nlohmann_json::nlohmann_json
         sol2_lib
-    # Solo UiFont.cpp los ve: UiFont.h no expone ni un tipo de FreeType ni de
-    # msdfgen, así que nadie que use DonTopoCore hereda sus includes.
+    # Only UiFont.cpp sees them: UiFont.h exposes no FreeType or msdfgen type,
+    # so nobody using DonTopoCore inherits their includes.
     PRIVATE
         freetype
         msdfgen::msdfgen-core
@@ -114,9 +114,9 @@ if(PHYSX_FOUND)
     target_compile_definitions(DonTopoCore PUBLIC DT_PHYSX_ENABLED)
 endif()
 
-# Backend DirectX 12. Las libs van PRIVATE porque ningún header público de
-# DonTopoCore incluye d3d12.h — mismo criterio que freetype/msdfgen. El define
-# sí es PUBLIC: el editor lo necesita para saber si puede ofrecer el backend.
+# DirectX 12 backend. The libs are PRIVATE because no public DonTopoCore header
+# includes d3d12.h (same criterion as freetype/msdfgen). The define
+# is PUBLIC: the editor needs it to know whether it can offer the backend.
 if(DTE_ENABLE_D3D12)
     target_sources(DonTopoCore PRIVATE
         src/Renderer/D3D12/D3D12Support.cpp
@@ -128,7 +128,7 @@ endif()
 
 target_compile_features(DonTopoCore PUBLIC cxx_std_20)
 
-# Una implementacion de DonTopo::platform por sistema (ver Platform.h).
+# One implementation of DonTopo::platform per system (see Platform.h).
 if(WIN32)
     target_sources(DonTopoCore PRIVATE src/Core/Platform_win.cpp)
     target_link_libraries(DonTopoCore PRIVATE psapi dxgi)
@@ -136,15 +136,15 @@ else()
     target_sources(DonTopoCore PRIVATE src/Core/Platform_posix.cpp)
 endif()
 
-# ScriptBindings.cpp registra muchos usertypes de sol2 en una sola TU: el
-# volumen de plantillas generadas supera el límite de secciones de MSVC
-# (C1128) sin /bigobj.
+# ScriptBindings.cpp registers many sol2 usertypes in a single TU: the
+# volume of generated templates exceeds MSVC's section limit
+# (C1128) without /bigobj.
 if(MSVC)
     set_source_files_properties(src/Scripting/ScriptBindings.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
 
-# El editor: paneles, undo, exportador y el backend de ImGui. Depende de Core,
-# nunca al reves — el Renderer solo lo ve por la interfaz UiLayer.
+# The editor: panels, undo, exporter and the ImGui backend. It depends on Core,
+# never the other way around: the Renderer only sees it through the UiLayer interface.
 add_library(DonTopoEditor STATIC
     src/Editor/EditorUI.cpp
     src/Editor/ProjectContext.cpp
@@ -173,7 +173,7 @@ add_library(DonTopoEditor STATIC
     src/Editor/GameExporter.cpp
 )
 
-# El exportador busca el runtime por este nombre (lo fija el CMakeLists raiz).
+# The exporter looks for the runtime by this name (set by the root CMakeLists).
 target_compile_definitions(DonTopoEditor PRIVATE DT_RUNTIME_FILE_NAME="${DT_RUNTIME_FILE_NAME}")
 
 target_link_libraries(DonTopoEditor

@@ -1,13 +1,13 @@
 #version 450
 
-// Triangulo que cubre la pantalla sin vertex buffer: tres vertices generados a
-// partir de gl_VertexIndex (0,1,2). Un triangulo y no un quad porque asi no hay
-// diagonal interior donde se dupliquen los quads de rasterizacion.
+// Triangle that covers the screen without a vertex buffer: three vertices generated from
+// gl_VertexIndex (0,1,2). A triangle and not a quad because that way there is no
+// interior diagonal where the rasterization quads get duplicated.
 //
-// uv sale de las MISMAS coordenadas que gl_Position (uv = ndc*0.5+0.5), asi que
-// el texel (0,0) de la textura cae en el fragmento de NDC y=-1: la fila de
-// arriba del framebuffer. Es un mapeo 1:1 con la imagen offscreen, sin voltear
-// nada — la Y ya viene invertida en la proyeccion de la escena.
+// uv comes from the SAME coordinates as gl_Position (uv = ndc*0.5+0.5), so
+// the texture's texel (0,0) falls on the fragment at NDC y=-1: the top row
+// of the framebuffer. It is a 1:1 mapping with the offscreen image, without flipping
+// anything — the Y already comes inverted in the scene's projection.
 layout(location = 0) out vec2 outUv;
 
 void main()

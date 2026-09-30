@@ -1,26 +1,26 @@
-# Parchea imgui_extra_math.inl dentro de las fuentes ya populadas de
-# imgui-node-editor.
+# Patches imgui_extra_math.inl inside imgui-node-editor's already-populated
+# sources.
 #
-# El problema: imgui_extra_math.h define IMGUI_DEFINE_MATH_OPERATORS antes de
-# incluir <imgui.h>. Con esa macro activa, nuestro imgui.h (1.92.9 WIP) ya
-# implementa "inline ImVec2 operator*(const float lhs, const ImVec2& rhs)".
-# Los operadores vecinos en imgui_extra_math.inl están guardados con
-# "#if IMGUI_VERSION_NUM < XXXXX" para no redefinirse si ImGui ya los trae,
-# pero a este operator* en concreto le falta ese guard (visto tanto en
-# master como en el tag v0.9.3 de imgui-node-editor: no hay versión mejor a
-# la que fijarse). Resultado: doble definición, imgui_node_editor.lib no
-# compila.
+# The problem: imgui_extra_math.h defines IMGUI_DEFINE_MATH_OPERATORS before
+# including <imgui.h>. With that macro on, our imgui.h (1.92.9 WIP) already
+# implements "inline ImVec2 operator*(const float lhs, const ImVec2& rhs)".
+# The neighboring operators in imgui_extra_math.inl are guarded with
+# "#if IMGUI_VERSION_NUM < XXXXX" so they are not redefined if ImGui already has them,
+# but this particular operator* is missing that guard (seen both in
+# master and in imgui-node-editor's v0.9.3 tag: there is no better version
+# to pin to). Result: double definition, imgui_node_editor.lib does not
+# compile.
 #
-# La solución usa el propio centinela que imgui.h define junto al operador
-# real (IMGUI_DEFINE_MATH_OPERATORS_IMPLEMENTED, ver imgui.h línea ~3071):
-# si está definido es porque ImGui ya implementó estos operadores, sin
-# necesidad de comparar números de versión y autocorrectivo si ImGui cambia.
+# The fix uses the sentinel imgui.h itself defines next to the real operator
+# (IMGUI_DEFINE_MATH_OPERATORS_IMPLEMENTED, see imgui.h line ~3071):
+# if it is defined, ImGui already implemented these operators, with no
+# need to compare version numbers, and it corrects itself if ImGui changes.
 #
-# No usamos FetchContent PATCH_COMMAND porque las fuentes ya están populadas
-# desde un intento anterior y PATCH_COMMAND no se re-ejecuta sobre una
-# población existente. Este script se invoca a mano tras
-# FetchContent_Populate y es idempotente: se puede llamar tantas veces como
-# se quiera (cada re-configure) sin duplicar el guard.
+# We do not use FetchContent PATCH_COMMAND because the sources are already populated
+# from a previous attempt and PATCH_COMMAND is not re-run on an
+# existing population. This script is invoked by hand after
+# FetchContent_Populate and is idempotent: it can be called as many times as
+# wanted (every re-configure) without duplicating the guard.
 
 set(_dtNodeEditorMathInl "${imguinodeeditor_SOURCE_DIR}/imgui_extra_math.inl")
 
@@ -40,21 +40,21 @@ set(_dtGuardedOperator "# ifndef IMGUI_DEFINE_MATH_OPERATORS_IMPLEMENTED\ninline
 string(FIND "${_dtNodeEditorMathInlContents}" "${_dtGuardMarker}" _dtGuardAlreadyPresent)
 
 if(_dtGuardAlreadyPresent GREATER -1)
-    # Ya parcheado en una configuración anterior: no-op.
+    # Already patched by a previous configure: no-op.
     return()
 endif()
 
 string(FIND "${_dtNodeEditorMathInlContents}" "${_dtUnguardedOperator}" _dtUnguardedOperatorPos)
 
 if(_dtUnguardedOperatorPos EQUAL -1)
-    # No encontramos el texto exacto que esperábamos parchear. Puede que
-    # upstream haya corregido el bug (ya no habría nada que parchear: no es
-    # motivo para romper el build) o que haya reescrito el archivo de forma
-    # incompatible con nuestro parche (sí sería motivo de alarma). No
-    # podemos distinguir ambos casos automáticamente, así que avisamos sin
-    # abortar la configuración: si el segundo caso es el real, la compilación
-    # de imgui_node_editor fallará a continuación con un error claro de
-    # símbolo duplicado, y ese error señalará directamente aquí.
+    # We did not find the exact text we expected to patch. Upstream may
+    # have fixed the bug (there would be nothing left to patch: no
+    # reason to break the build) or rewritten the file in a way
+    # incompatible with our patch (that would be cause for alarm). We
+    # cannot tell the two cases apart automatically, so we warn without
+    # aborting the configure: if the second case is the real one, building
+    # imgui_node_editor will fail right after with a clear duplicate-symbol
+    # error, and that error will point straight here.
     message(WARNING
         "PatchImGuiNodeEditor: the unguarded operator* was not found in "
         "${_dtNodeEditorMathInl}. Upstream may have fixed it already "

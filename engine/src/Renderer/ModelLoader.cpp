@@ -34,9 +34,9 @@ namespace DonTopo
         );
     }
 
-    // Ajustes de importacion del fichero (<fbx>.import.json). Nunca lanza: un
-    // sidecar roto da el defecto y un aviso por stderr (el Log Console no llega a
-    // este nivel; mismo canal que [AudioImport]).
+    // Import settings of the file (<fbx>.import.json). Never throws: a broken
+    // sidecar gives the default and a warning on stderr (the Log Console does not reach
+    // this level; same channel as [AudioImport]).
     static ModelImportSettings readModelSettings(const std::string& path)
     {
         std::string warning;
@@ -47,8 +47,8 @@ namespace DonTopo
         return s;
     }
 
-    // Sin sidecar: exactamente Triangulate | FlipUVs | GenNormals | CalcTangentSpace,
-    // que era lo fijo antes de que existieran los ajustes.
+    // Without a sidecar: exactly Triangulate | FlipUVs | GenNormals | CalcTangentSpace,
+    // which was the fixed set before the settings existed.
     static unsigned int assimpFlags(const ModelImportSettings& s)
     {
         unsigned int f = aiProcess_Triangulate;
@@ -56,27 +56,27 @@ namespace DonTopo
         if (s.calcTangents) f |= aiProcess_CalcTangentSpace;
         switch (s.normals)
         {
-            case NormalsMode::File:   f |= aiProcess_GenNormals; break;          // solo si faltan
+            case NormalsMode::File:   f |= aiProcess_GenNormals; break;          // only if missing
             case NormalsMode::Smooth: f |= aiProcess_RemoveComponent | aiProcess_GenSmoothNormals; break;
             case NormalsMode::Flat:   f |= aiProcess_RemoveComponent | aiProcess_GenNormals; break;
         }
-        // La escala NO va por aiProcess_GlobalScale: el importador FBX suma su
-        // propio factor de unidades (UnitScaleFactor * 0.01, cm -> m) y "escala 2"
-        // daba x0.02 en un FBX. Se aplica a mano tras la carga, en las unidades
-        // del propio fichero (ver scaleClipTranslations y los tres sitios de abajo).
+        // The scale does NOT go through aiProcess_GlobalScale: the FBX importer adds its
+        // own unit factor (UnitScaleFactor * 0.01, cm -> m) and "scale 2"
+        // gave x0.02 on an FBX. It is applied by hand after loading, in the units
+        // of the file itself (see scaleClipTranslations and the three places below).
         return f;
     }
 
     static void configureImporter(Assimp::Importer& importer, const ModelImportSettings& s)
     {
-        // Smooth y Flat descartan las normales del fichero ANTES de generarlas.
+        // Smooth and Flat discard the file's normals BEFORE generating them.
         if (s.normals != NormalsMode::File)
             importer.SetPropertyInteger(AI_CONFIG_PP_RVC_FLAGS, aiComponent_NORMALS);
     }
 
-    // Claves de traslacion de un clip x scale. Solo las de posicion: rotaciones y
-    // escalas de hueso no dependen de las unidades. x1.0f es exacto, asi que sin
-    // ajuste el clip queda bit a bit igual.
+    // Translation keys of a clip x scale. Only the position ones: bone rotations and
+    // scales do not depend on the units. x1.0f is exact, so without an
+    // adjustment the clip stays bit for bit identical.
     static void scaleClipTranslations(AnimationClip& clip, float scale)
     {
         if (scale == 1.0f) return;
@@ -85,12 +85,12 @@ namespace DonTopo
                 k.value *= scale;
     }
 
-    // Convierte una aiAnimation a AnimationClip resolviendo cada canal contra
-    // skel POR NOMBRE. Compartido por loadSkinned y loadAnimationClips: son el
-    // mismo trabajo, y duplicarlo garantizaba que las dos rutas divergieran.
+    // Converts an aiAnimation to an AnimationClip, resolving each channel against
+    // skel BY NAME. Shared by loadSkinned and loadAnimationClips: it is the
+    // same work, and duplicating it guaranteed that the two paths would diverge.
     //
-    // clip.name queda con el nombre CRUDO del FBX: la unicidad la aplica quien
-    // llama, que es quien sabe qué clips hay ya en el mesh destino.
+    // clip.name is left with the RAW name from the FBX: uniqueness is applied by the
+    // caller, who is the one who knows which clips the target mesh already has.
     static AnimationClip clipFromAssimp(const aiAnimation* anim, const Skeleton& skel,
                                         int& mappedChannels, int& totalChannels,
                                         std::vector<std::string>* unknownBones)
@@ -141,8 +141,8 @@ namespace DonTopo
         return clip;
     }
 
-    // Una aiMesh a Mesh con su material. Es el cuerpo que tenia load(path),
-    // movido tal cual; `ai` sustituye a scene->mMeshes[0].
+    // An aiMesh to a Mesh with its material. It is the body that load(path) had,
+    // moved as is; `ai` replaces scene->mMeshes[0].
     static Mesh meshFromAssimp(const aiScene* scene, const aiMesh* ai,
                                const ModelImportSettings& settings, const std::string& path)
     {
@@ -217,7 +217,7 @@ namespace DonTopo
 
             loadTex(aiTextureType_DIFFUSE, mesh.material.embeddedTexture, mesh.material.texturePath);
             loadTex(aiTextureType_NORMALS, mesh.material.embeddedNormalMap, mesh.material.normalMapPath);
-            // Assimp suele guardar el normal map como HEIGHT en FBX
+            // Assimp usually stores the normal map as HEIGHT in FBX
             if(mesh.material.embeddedNormalMap.empty() && mesh.material.normalMapPath.empty())
                 loadTex(aiTextureType_HEIGHT, mesh.material.embeddedNormalMap, mesh.material.normalMapPath);
             // ORM (glTF metallic-roughness packed: R=AO, G=roughness, B=metallic)
@@ -234,7 +234,7 @@ namespace DonTopo
         return false;
     }
 
-    // glTF/GLB por extension (sin distinguir mayusculas).
+    // glTF/GLB by extension (case-insensitive).
     static bool isGltfPath(const std::string& path)
     {
         std::string ext = std::filesystem::path(path).extension().string();
@@ -243,12 +243,12 @@ namespace DonTopo
         return ext == ".gltf" || ext == ".glb";
     }
 
-    // Apariciones de cada malla en los nodos, en profundidad. La raiz aporta su
-    // transformacion SOLO en glTF/GLB (`applyRoot`): con un unico nodo de primer
-    // nivel Assimp no crea raiz sintetica y ese nodo ES mRootNode, con la
-    // correccion de ejes/unidades del autor; con varios, la raiz es sintetica e
-    // identidad. En FBX se descarta (lleva la conversion de unidades del
-    // importador) y sus mallas, si tiene, van con identidad. En OBJ es identidad.
+    // Occurrences of each mesh in the nodes, depth-first. The root contributes its
+    // transform ONLY in glTF/GLB (`applyRoot`): with a single first-level node
+    // Assimp does not create a synthetic root and that node IS mRootNode, with the
+    // author's axis/unit correction; with several, the root is synthetic and
+    // identity. In FBX it is discarded (it carries the importer's unit conversion)
+    // and its meshes, if it has any, go with identity. In OBJ it is identity.
     static std::vector<ModelPiece> collectPieces(const aiScene* scene, float scale, bool applyRoot)
     {
         std::vector<ModelPiece> out;
@@ -271,7 +271,7 @@ namespace DonTopo
                 walk(node->mChildren[c], m * aiToGlm(node->mChildren[c]->mTransformation));
         };
         if (!scene->mRootNode) return out;
-        // Cada hijo entra con SU transformacion; la raiz, solo si applyRoot.
+        // Each child comes in with ITS transform; the root only if applyRoot.
         walk(scene->mRootNode, applyRoot ? aiToGlm(scene->mRootNode->mTransformation) : glm::mat4(1.0f));
         return out;
     }
@@ -325,20 +325,20 @@ namespace DonTopo
 
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
         {
-            // Aquí había un printf de depuración que leía scene->mNumMeshes —
-            // dentro del if cuya PRIMERA condición es !scene—. Un fichero que no
-            // existe mataba el proceso con un segfault mudo en vez de lanzar, y
-            // eso convertía en mentira el catch de nodeFromJson
-            // (Scene.cpp:1683), que promete que un asset movido o borrado deja
-            // el nodo sin mesh y el resto de la escena carga igual: el editor se
-            // caía antes de llegar al catch. La ruta lleva ya al mensaje —
-            // GetErrorString no la incluye— porque el Log Console lo enseña sin
-            // más contexto que este.
+            // There used to be a debug printf here that read scene->mNumMeshes,
+            // inside the if whose FIRST condition is !scene. A file that does not
+            // exist killed the process with a silent segfault instead of throwing, and
+            // that made the catch in nodeFromJson a lie
+            // (Scene.cpp:1683), which promises that a moved or deleted asset leaves
+            // the node without a mesh and the rest of the scene loads all the same: the editor
+            // crashed before reaching the catch. The path now goes into the message
+            // (GetErrorString does not include it) because the Log Console shows it with no
+            // more context than this one.
             throw std::runtime_error("Assimp loadSkinned '" + path + "': " +
                                      std::string(importer.GetErrorString()));
         }
         
-        // --- Registro de huesos desde TODOS los meshes ---
+        // --- Bone registry from ALL the meshes ---
         std::unordered_map<std::string, int> boneMapOld;
         std::vector<std::string>             boneNamesOld;
         std::vector<glm::mat4>               invBindOld;
@@ -359,7 +359,7 @@ namespace DonTopo
         }
         int numBones = (int)boneNamesOld.size();
 
-        // --- Vértices e índices de TODOS los meshes ---
+        // --- Vertices and indices of ALL the meshes ---
         SkinnedMesh smesh;
         uint32_t vertexOffset = 0;
 
@@ -402,10 +402,10 @@ namespace DonTopo
 
                 float crudos[4], normalizados[4];
                 for (int s = 0; s < 4; s++) crudos[s] = tempW[i][s].second;
-                // Sin pesos el vértice no lo mueve ningún hueso. Se cuentan para
-                // poder decirlo: el shader lo resuelve con identidad (se queda en
-                // su sitio en espacio de modelo), pero verlo quieto mientras el
-                // resto anima parece un fallo del motor y es del FBX.
+                // Without weights no bone moves the vertex. They are counted so that
+                // it can be reported: the shader resolves it with identity (it stays in
+                // place in model space), but seeing it stand still while the
+                // rest animates looks like an engine bug and it is the FBX's.
                 if (!normalizeBoneWeights(crudos, normalizados)) smesh.verticesWithoutWeights++;
                 for (int s = 0; s < 4; s++)
                 {
@@ -428,7 +428,7 @@ namespace DonTopo
             vertexOffset += numVerts;
         }
 
-        // --- Topological sort: DFS sobre aiNode, solo huesos conocidos ---
+        // --- Topological sort: DFS over aiNode, only known bones ---
         std::vector<int> topoOrder;
         topoOrder.reserve(numBones);
 
@@ -442,7 +442,7 @@ namespace DonTopo
         };
         collectOrder(scene->mRootNode);
 
-        // --- Parent map: para cada hueso, el ancestro más cercano que también es hueso ---
+        // --- Parent map: for each bone, the nearest ancestor that is also a bone ---
         std::unordered_map<std::string,std::string> boneParentName;
 
         std::function<void(aiNode*, const std::string&)> buildParent =
@@ -462,7 +462,7 @@ namespace DonTopo
         for (int newIdx = 0; newIdx < (int)topoOrder.size(); newIdx++)
             remap[topoOrder[newIdx]] = newIdx;
 
-        // --- Construir Skeleton en nuevo orden ---
+        // --- Build Skeleton in the new order ---
         Skeleton& skel = smesh.skeleton;
         skel.names.resize(numBones);
         skel.parentIndex.resize(numBones);
@@ -474,8 +474,8 @@ namespace DonTopo
             const std::string& name = boneNamesOld[oldIdx];
             skel.names[newIdx]          = name;
             skel.inverseBindPose[newIdx] = invBindOld[oldIdx];
-            // Escalar el modelo x s escala la TRASLACION del offset del hueso x s
-            // (la rotacion no cambia); el bindLocal de GPU se deriva de esto.
+            // Scaling the model x s scales the TRANSLATION of the bone offset x s
+            // (the rotation does not change); the GPU bindLocal is derived from this.
             skel.inverseBindPose[newIdx][3].x *= settings.scale;
             skel.inverseBindPose[newIdx][3].y *= settings.scale;
             skel.inverseBindPose[newIdx][3].z *= settings.scale;
@@ -486,35 +486,35 @@ namespace DonTopo
                 ? -1 : remap[boneMapOld[pName]];
         }
 
-        // --- Remap de bone indices en vértices ---
+        // --- Remap of bone indices in vertices ---
         for (auto& v : smesh.skinnedVertices)
             for (int s = 0; s < 4; s++)
                 if (v.boneWeights[s] > 0.0f)
                     v.boneIndices[s] = remap[v.boneIndices[s]];
 
-        // --- Animaciones: todas las del fichero ---
-        // importAnimations = false: sin clips, pero la fuente builtin de abajo se
-        // registra igual (la UI necesita una fila que represente al modelo).
+        // --- Animations: all of the file's ---
+        // importAnimations = false: no clips, but the builtin source below is
+        // registered all the same (the UI needs a row that represents the model).
         for (uint32_t a = 0; settings.importAnimations && a < scene->mNumAnimations; a++)
         {
             int mapped = 0, total = 0;
             AnimationClip clip = clipFromAssimp(scene->mAnimations[a], skel, mapped, total, nullptr);
-            // Take estático: no anima nada y se llevaría el clip 0, que es
-            // donde caen todos los caminos degradados del motor. Ver
-            // clipHasMotion. El mesh se queda sin clips y eso ya está
-            // soportado: la fuente builtin de abajo se registra igual.
+            // Static take: it animates nothing and would take clip 0, which is
+            // where all the engine's degraded paths land. See
+            // clipHasMotion. The mesh is left without clips and that is already
+            // supported: the builtin source below is registered all the same.
             if (!clipHasMotion(clip)) continue;
-            // Nombres únicos y no vacíos: Mixamo exporta cada take como
-            // "mixamo.com", y los FBX de Blender a veces sin nombre. El
-            // Animator resuelve los clips por nombre, así que dos clips
-            // homónimos harían que el segundo fuera inalcanzable.
+            // Unique, non-empty names: Mixamo exports every take as
+            // "mixamo.com", and Blender FBXs sometimes have no name. The
+            // Animator resolves clips by name, so two clips with the same
+            // name would make the second one unreachable.
             clip.name = uniqueClipName(smesh.animationClips, clip.name);
             scaleClipTranslations(clip, settings.scale);
             smesh.animationClips.push_back(std::move(clip));
         }
 
-        // Fuente builtin: el propio FBX. Se registra siempre, incluso sin
-        // animaciones — la UI necesita una fila que represente al modelo.
+        // Builtin source: the FBX itself. It is always registered, even with no
+        // animations; the UI needs a row that represents the model.
         {
             AnimationSource builtin;
             builtin.path    = path;
@@ -524,7 +524,7 @@ namespace DonTopo
             smesh.animationSources.push_back(std::move(builtin));
         }
 
-        // --- Materiales: uno por cada materialIndex único entre los submeshes ---
+        // --- Materials: one per unique materialIndex among the submeshes ---
         {
             namespace fs = std::filesystem;
             fs::path modelDir = fs::path(path).parent_path();
@@ -592,14 +592,14 @@ namespace DonTopo
     {
         LoadedClips out;
 
-        // Cada FBX usa SU sidecar: las claves de traslacion de este fichero tienen
-        // que estar en las unidades del esqueleto al que se mapean, asi que la
-        // escala se aplica aqui tambien. El resto de ajustes no le afectan.
+        // Each FBX uses ITS sidecar: the translation keys of this file have
+        // to be in the units of the skeleton they are mapped to, so the
+        // scale is applied here too. The other settings do not affect it.
         const ModelImportSettings settings = readModelSettings(path);
         Assimp::Importer importer;
-        // Flags mínimos: aquí no se construye geometría, así que triangulate,
-        // normales y tangentes serían trabajo tirado. Assimp lee las
-        // animaciones igual.
+        // Minimal flags: no geometry is built here, so triangulate,
+        // normals and tangents would be wasted work. Assimp reads the
+        // animations all the same.
         const aiScene* scene = importer.ReadFile(path, 0);
 
         const std::string file = std::filesystem::path(path).filename().string();
@@ -621,19 +621,19 @@ namespace DonTopo
             AnimationClip clip = clipFromAssimp(scene->mAnimations[a], skel,
                                                 out.mappedChannels, out.totalChannels,
                                                 &unknownBones);
-            // Un clip sin un solo canal válido no aporta nada: se descarta
-            // individualmente en vez de tumbar el fichero entero.
+            // A clip without a single valid channel contributes nothing: it is discarded
+            // individually instead of bringing down the whole file.
             if (clip.channels.empty()) continue;
-            // Ídem un take estático (ver clipHasMotion). Aquí sí se avisa: el
-            // usuario ha elegido este fichero a mano esperando animación, y sin
-            // el warning vería una fuente que no aporta clips y ninguna razón.
+            // Same for a static take (see clipHasMotion). Here a warning is given: the
+            // user picked this file by hand expecting animation, and without
+            // the warning they would see a source that contributes no clips and no reason.
             if (!clipHasMotion(clip))
             {
                 out.warnings.push_back(file + ": el clip '" + clip.name +
                                        "' animates nothing (a single key per channel), discarded");
                 continue;
             }
-            // Despues de decidir si anima: esa decision no depende de la escala.
+            // After deciding whether it animates: that decision does not depend on the scale.
             scaleClipTranslations(clip, settings.scale);
             out.clips.push_back(std::move(clip));
         }
@@ -651,8 +651,8 @@ namespace DonTopo
             std::string msg = file + ": " + std::to_string(out.mappedChannels) + "/"
                             + std::to_string(out.totalChannels) + " channels mapped, "
                             + std::to_string(unknownBones.size()) + " unknown bones ignored (";
-            // Solo los 5 primeros: la lista completa de un rig ajeno llenaría
-            // el Log Console sin decir nada más de lo que dicen 5 ejemplos.
+            // Only the first 5: the full list of a foreign rig would fill
+            // the Log Console without saying anything more than 5 examples say.
             const size_t shown = unknownBones.size() < 5 ? unknownBones.size() : 5;
             for (size_t i = 0; i < shown; i++)
                 msg += (i ? ", " : "") + unknownBones[i];
@@ -667,9 +667,9 @@ namespace DonTopo
     bool ModelLoader::hasBones(const std::string& path)
     {
         Assimp::Importer importer;
-        // Flags a cero, igual que loadAnimationClips: aquí no se construye
-        // geometría, así que triangulate, normales y tangentes serían trabajo
-        // tirado. mNumBones se lee igual.
+        // Flags at zero, same as loadAnimationClips: no geometry is built here,
+        // so triangulate, normals and tangents would be wasted work.
+        // mNumBones is read all the same.
         const aiScene* scene = importer.ReadFile(path, 0);
         if (!scene || !scene->mRootNode) return false;
 
@@ -682,7 +682,7 @@ namespace DonTopo
     std::shared_ptr<Mesh> ModelLoader::loadAuto(const std::string& path)
     {
         if (hasBones(path))
-            return std::make_shared<SkinnedMesh>(loadSkinned(path));  // convierte solo a shared_ptr<Mesh>
+            return std::make_shared<SkinnedMesh>(loadSkinned(path));  // converts only to shared_ptr<Mesh>
         return std::make_shared<Mesh>(load(path));
     }
 
@@ -695,7 +695,7 @@ namespace DonTopo
             return e;
         }
 
-        // Relativa, sin raiz y sin componentes "..": se queda dentro de la carpeta.
+        // Relative, with no root and no ".." components: it stays inside the folder.
         bool staysInside(const std::filesystem::path& rel)
         {
             if (rel.empty() || rel.has_root_path()) return false;
@@ -724,8 +724,8 @@ namespace DonTopo
         void addCompanion(std::vector<std::string>& out, const std::string& raw)
         {
             if (raw.empty() || raw.rfind("data:", 0) == 0) return;
-            // "C:/x" no tiene raiz en Linux ni "/x" nombre de unidad en Windows:
-            // se rechazan las dos formas en cualquier plataforma.
+            // "C:/x" has no root on Linux and "/x" has no drive name on Windows:
+            // both forms are rejected on every platform.
             if (raw.size() > 1 && raw[1] == ':') return;
             const std::filesystem::path rel = std::filesystem::path(raw).lexically_normal();
             if (!staysInside(rel)) return;
@@ -751,8 +751,8 @@ namespace DonTopo
     {
         namespace fs = std::filesystem;
         auto exists = [](const fs::path& p) { std::error_code ec; return fs::exists(p, ec) && !ec; };
-        // Assimp pasa la URI de una imagen glTF tal cual, con %20 y compania: se
-        // prueba tambien decodificada.
+        // Assimp passes a glTF image's URI as is, with %20 and the like: it is
+        // also tried decoded.
         const std::string decoded = percentDecode(raw);
         for (const std::string& r : { raw, decoded })
         {
@@ -788,9 +788,9 @@ namespace DonTopo
                     while (e > b && std::isspace(static_cast<unsigned char>(line[e - 1]))) --e;
                     addCompanion(out, line.substr(b, e - b));
                 }
-                // Las texturas que nombra cada .mtl, con su ruta TAL CUAL: el loader
-                // las resuelve respecto a la carpeta del modelo. Las opciones
-                // (-o, -s, -bm...) van delante, el nombre es el ultimo token.
+                // The textures named by each .mtl, with their path AS IS: the loader
+                // resolves them relative to the model's folder. The options
+                // (-o, -s, -bm...) go first, the name is the last token.
                 const std::vector<std::string> libraries = out;
                 for (const std::string& lib : libraries)
                 {
@@ -834,24 +834,24 @@ namespace DonTopo
         ModelPreview out;
         try
         {
-            // El sidecar es dependencia exista o no: crearlo tambien cambia el
-            // aspecto. Todo se sella ANTES de leerlo (ver FileStamp).
+            // The sidecar is a dependency whether it exists or not: creating it also changes the
+            // look. Everything is stamped BEFORE reading it (see FileStamp).
             out.dependencies.push_back(stampFile(importSidecarPath(path)));
-            // Lo que el modelo lee ademas de si mismo (.mtl, .bin, texturas de un
-            // .gltf), sellado ANTES de que Assimp lo lea.
+            // What the model reads besides itself (.mtl, .bin, textures of a
+            // .gltf), stamped BEFORE Assimp reads it.
             for (const std::string& rel : modelCompanionFiles(path))
                 out.dependencies.push_back(stampFile(fs::path(path).parent_path() / fs::path(rel)));
 
             const ModelImportSettings settings = readModelSettings(path);
             Assimp::Importer importer;
             configureImporter(importer, settings);
-            // Sin tangentes: la miniatura no usa normal map.
+            // No tangents: the thumbnail does not use a normal map.
             const aiScene* scene = importer.ReadFile(path, assimpFlags(settings) & ~aiProcess_CalcTangentSpace);
             if (!scene || !scene->mRootNode) return out;
             if (scene->mNumMeshes == 0)
             {
-                // Assimp marca INCOMPLETE un fichero sin mallas: con clips es un
-                // FBX de solo animacion, no uno roto.
+                // Assimp flags a file without meshes as INCOMPLETE: with clips it is an
+                // animation-only FBX, not a broken one.
                 if (scene->mNumAnimations > 0) out.status = PreviewStatus::AnimationOnly;
                 return out;
             }
@@ -861,13 +861,13 @@ namespace DonTopo
             for (uint32_t m = 0; m < scene->mNumMeshes; ++m)
                 skinned = skinned || scene->mMeshes[m]->mNumBones > 0;
 
-            // Con huesos, todas las submallas en bind pose (como loadSkinned). Sin
-            // huesos y con MAS de una aparicion en los nodos, una parte POR
-            // aparicion con su transform (igual que StaticModel::pieces via
-            // collectPieces): la miniatura deja de fingir que el modelo es una
-            // unica malla cuando no lo es. Con una aparicion o ninguna, lo de
-            // siempre -- malla 0 sin transformar -- que es lo que de verdad pinta
-            // un objeto sin repartir en hijos (loadAuto).
+            // With bones, all the submeshes in bind pose (like loadSkinned). Without
+            // bones and with MORE than one occurrence in the nodes, one part PER
+            // occurrence with its transform (same as StaticModel::pieces via
+            // collectPieces): the thumbnail stops pretending that the model is a
+            // single mesh when it is not. With one occurrence or none, the usual
+            // behavior (mesh 0 untransformed), which is what an object not split
+            // into children really draws (loadAuto).
             struct Appearance { uint32_t meshIndex; glm::mat4 transform; };
             std::vector<Appearance> appearances;
             if (skinned)
@@ -922,9 +922,9 @@ namespace DonTopo
                     }
                     else
                     {
-                        // Misma resolucion que load/loadSkinned: el nombre, junto al modelo.
+                        // Same resolution as load/loadSkinned: the name, next to the model.
                         const fs::path ext = resolveModelTexture(modelDir, texPath.C_Str());
-                        out.dependencies.push_back(stampFile(ext));    // antes de leerla
+                        out.dependencies.push_back(stampFile(ext));    // before reading it
                         img = loadPreviewImage(ext);
                     }
                 }
@@ -934,8 +934,8 @@ namespace DonTopo
             for (const Appearance& app : appearances)
             {
                 const aiMesh* ai = scene->mMeshes[app.meshIndex];
-                // Identidad para el caso de siempre: mat3(1) invertida y traspuesta
-                // sigue siendo la identidad, así que la normal no cambia.
+                // Identity for the usual case: an inverted and transposed mat3(1)
+                // is still the identity, so the normal does not change.
                 const glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(app.transform)));
                 PreviewPart part;
                 part.positions.reserve(ai->mNumVertices);
@@ -950,10 +950,10 @@ namespace DonTopo
                         : glm::vec3(0.0f, 1.0f, 0.0f);
                     const glm::vec3 tn = normalMat * n;
                     const float len = glm::length(tn);
-                    // Un eje (casi) aplastado da inf en la matriz normal, o una
-                    // longitud que desborda a inf con componentes finitas:
-                    // `len > 1e-8f` deja pasar el inf y tn / inf es NaN o el
-                    // vector cero. Entonces, la normal del fichero sin tocar.
+                    // An (almost) flattened axis gives inf in the normal matrix, or a
+                    // length that overflows to inf with finite components:
+                    // `len > 1e-8f` lets the inf through and tn / inf is NaN or the
+                    // zero vector. In that case, the file's normal untouched.
                     part.normals.push_back(std::isfinite(len) && len > 1e-8f ? tn / len : n);
                     part.uvs.push_back(ai->mTextureCoords[0]
                         ? glm::vec2(ai->mTextureCoords[0][i].x, ai->mTextureCoords[0][i].y)

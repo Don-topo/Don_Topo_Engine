@@ -9,20 +9,20 @@ namespace DonTopo
     {
         public:
             Camera(glm::vec3 position = {0,0,3}, float yaw = -90.0f, float pitch = 0.0f);
-            // keyboardEnabled=false deja el TECLADO fuera (W/A/S/D/Q/E) pero no
-            // el mando: el editor libera esas letras para los atajos del gizmo
-            // mientras no se mantenga el botón derecho, y el mando no compite
-            // con ningún atajo, así que sigue moviendo la cámara siempre.
-            // Default true: el runtime y los tests no cambian.
+            // keyboardEnabled=false leaves the KEYBOARD out (W/A/S/D/Q/E) but not
+            // the gamepad: the editor frees those letters for the gizmo shortcuts
+            // while the right button is not held, and the gamepad does not compete
+            // with any shortcut, so it keeps moving the camera always.
+            // Default true: the runtime and the tests do not change.
             void update(GLFWwindow* window, float deltaTime, bool keyboardEnabled = true);
             void processMouse(float xOffset, float yOffset);
-            // Reorienta la cámara pa mirar hacia el eje dado (usado por el
-            // axis gizmo del viewport); solo rota, no cambia posición.
+            // Reorients the camera to look along the given axis (used by the
+            // viewport axis gizmo); it only rotates, it does not change position.
             void lookAlongAxis(const glm::vec3& axis);
-            // Reposiciona la cámara pa encuadrar un objeto: retrocede a lo largo
-            // del vector cámara→center actual una distancia proporcional a
-            // boundingRadius, y queda mirando directo a center (usado por "F"
-            // pa centrar en el GameObject seleccionado).
+            // Repositions the camera to frame an object: it backs off along
+            // the current camera->center vector a distance proportional to
+            // boundingRadius, and ends up looking straight at center (used by "F"
+            // to center on the selected GameObject).
             void focusOn(const glm::vec3& center, float boundingRadius);
             glm::mat4 getViewMatrix() const;
             float getFov() const { return m_fov; }

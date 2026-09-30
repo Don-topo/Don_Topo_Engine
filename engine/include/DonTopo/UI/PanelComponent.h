@@ -7,21 +7,21 @@
 
 namespace DonTopo
 {
-    // Un Panel de la UI 2D como componente de GameObject, con el MISMO contrato
-    // que CanvasComponent, ButtonComponent, TextComponent, ProgressBarComponent
-    // y LayoutComponent: SOLO DATOS. El árbol vivo lo tiene el Renderer
-    // (Renderer::uiCanvas()) y lo monta/actualiza syncUiWidgets() cada frame.
+    // A 2D UI Panel as a GameObject component, with the SAME contract
+    // as CanvasComponent, ButtonComponent, TextComponent, ProgressBarComponent
+    // and LayoutComponent: DATA ONLY. The live tree is held by the Renderer
+    // (Renderer::uiCanvas()) and syncUiWidgets() builds/updates it every frame.
     //
-    // El Panel del núcleo (UiWidgets.h) no tiene NI UN campo propio: es un
-    // UiElement con otro typeName(), o sea el rectángulo de fondo con el que se
-    // montan marcos, grupos y ventanas. Así que aquí no hay más que el bloque de
-    // rect que ya comparten los demás, el par atlas/sprite y raycastTarget.
+    // The core Panel (UiWidgets.h) has NOT A SINGLE field of its own: it is a
+    // UiElement with another typeName(), that is the background rectangle that
+    // frames, groups and windows are built from. So there is nothing here beyond the
+    // rect block the others already share, the atlas/sprite pair and raycastTarget.
     //
-    // raycastTarget sí está y en los otros no porque en un panel es EL campo que
-    // decide el comportamiento: un fondo a pantalla completa con raycastTarget a
-    // true se come los clics de todo lo que tenga detrás, y como no hay nada que
-    // lo delate visualmente, sin este campo el editor estaría escondiendo algo
-    // que el núcleo sí soporta.
+    // raycastTarget is here and not in the others because in a panel it is THE field that
+    // decides the behavior: a full-screen background with raycastTarget set to
+    // true swallows the clicks of everything behind it, and since nothing
+    // betrays it visually, without this field the editor would be hiding something
+    // the core does support.
     class PanelComponent
     {
         public:
@@ -29,24 +29,24 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};      // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};      // px, relative to the anchor
             glm::vec2 size{200.0f, 120.0f};      // px
             glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
             bool      visible = true;
 
-            // A false el panel se sigue dibujando pero deja pasar el ratón: es
-            // lo que quiere un fondo decorativo detrás de widgets vivos.
+            // When false the panel is still drawn but lets the mouse through: this is
+            // what a decorative background behind live widgets wants.
             bool raycastTarget = true;
 
             // --- Sprite --------------------------------------------------------
-            // Vacías = quad de color plano, que es lo que dibuja UiElement sin
-            // atlas. `sprite` es un NOMBRE dentro del atlas (los registra el
-            // sidecar <atlas>.sprites.json); vacío = la imagen entera.
+            // Empty = flat-color quad, which is what UiElement draws without an
+            // atlas. `sprite` is a NAME inside the atlas (registered by the
+            // sidecar <atlas>.sprites.json); empty = the whole image.
             std::string atlasPath;
             std::string sprite;
 
-            // Vuelca el rect y el sprite en el nodo vivo. NO toca `atlas` (es un
-            // puntero a GPU: lo resuelve el sync).
+            // Dumps the rect and the sprite into the live node. Does NOT touch `atlas` (it is a
+            // GPU pointer: the sync resolves it).
             void applyTo(Panel& p) const
             {
                 p.anchorMin     = anchorMin;
@@ -60,9 +60,9 @@ namespace DonTopo
                 p.sprite        = sprite;
             }
 
-            // El sync lo usa para saber si hay algo que volcar: sin esto habría
-            // que ensuciar el nodo TODOS los frames, que es justo lo que la
-            // caché de vértices del canvas existe para evitar.
+            // The sync uses it to know whether there is anything to dump: without this the
+            // node would have to be dirtied EVERY frame, which is exactly what the
+            // canvas's vertex cache exists to avoid.
             bool operator==(const PanelComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -74,18 +74,18 @@ namespace DonTopo
             bool operator!=(const PanelComponent& o) const { return !(*this == o); }
     };
 
-    // Nombre del nodo vivo de un Panel dentro del canvas. Prefijo DISTINTO al
-    // del botón ("go:"), el texto ("txt:"), la barra ("bar:") y el contenedor
-    // ("lay:") por lo mismo que aquellos entre sí: un GameObject puede llevar
-    // varios componentes de UI a la vez, y dos nodos hermanos con el mismo
-    // nombre harían que el gizmo y el picking cogieran el que no toca.
+    // Name of a Panel's live node inside the canvas. DIFFERENT prefix from the
+    // button's ("go:"), the text's ("txt:"), the bar's ("bar:") and the container's
+    // ("lay:") for the same reason those differ among themselves: a GameObject can carry
+    // several UI components at once, and two sibling nodes with the same
+    // name would make the gizmo and picking grab the wrong one.
     inline std::string uiPanelNodeName(uint64_t ownerId)
     {
         return "pnl:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiPanelNodeName. Devuelve 0 si el nombre no es de un panel: 0
-    // no es un id válido de GameObject.
+    // Inverse of uiPanelNodeName. Returns 0 if the name is not a panel's: 0
+    // is not a valid GameObject id.
     inline uint64_t uiPanelOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("pnl:", 0) != 0) return 0;

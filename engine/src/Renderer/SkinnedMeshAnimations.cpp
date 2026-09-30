@@ -9,9 +9,9 @@ namespace DonTopo
     {
         constexpr float kEps = 1e-4f;
 
-        // Basta con comparar contra la PRIMERA key de la pista: si todas son
-        // iguales a la primera, todas son iguales entre sí, y si alguna difiere
-        // ya hay movimiento. No hace falta comparar cada par.
+        // It is enough to compare against the FIRST key of the track: if all are
+        // equal to the first, all are equal to each other, and if any differs
+        // there is already motion. There is no need to compare every pair.
         auto varia = [](const auto& keys, auto component) {
             for (size_t k = 1; k < keys.size(); k++)
                 for (int c = 0; c < component(keys[0]).length(); c++)
@@ -56,7 +56,7 @@ namespace DonTopo
         LoadedClips loaded = ModelLoader::loadAnimationClips(path, mesh.skeleton);
         for (auto& w : loaded.warnings) warnings.push_back(w);
 
-        if (loaded.clips.empty()) return false;   // el warning ya lo puso el loader
+        if (loaded.clips.empty()) return false;   // the loader already emitted the warning
 
         const std::string base = std::filesystem::path(path).stem().string();
         const std::string file = std::filesystem::path(path).filename().string();
@@ -68,17 +68,17 @@ namespace DonTopo
         for (size_t i = 0; i < loaded.clips.size(); i++)
         {
             AnimationClip clip = std::move(loaded.clips[i]);
-            // forcedNames manda; si se agota (el FBX trae más clips que la
-            // última vez), el resto cae en la regla normal de basename.
+            // forcedNames wins; if it runs out (the FBX has more clips than the
+            // last time), the rest fall under the normal basename rule.
             const bool forced = forcedNames && i < forcedNames->size();
             if (forced)
             {
-                // El nombre forzado manda SI está libre: uniqueClipName lo
-                // devuelve tal cual y un rename sobrevive a un save/load
-                // intacto. Si ya está en uso —por un clip previo, o por un
-                // forcedName anterior de esta misma importación— devuelve una
-                // variante con sufijo, así que comparar el resultado con lo
-                // pedido detecta la colisión sin duplicar la lógica de "taken".
+                // The forced name wins IF it is free: uniqueClipName returns it
+                // as is and a rename survives a save/load
+                // intact. If it is already in use (by a previous clip, or by an earlier
+                // forcedName of this same import) it returns a
+                // suffixed variant, so comparing the result with what was
+                // requested detects the collision without duplicating the "taken" logic.
                 const std::string& wanted = (*forcedNames)[i];
                 clip.name = uniqueClipName(mesh.animationClips, wanted);
                 if (clip.name != wanted)
@@ -110,7 +110,7 @@ namespace DonTopo
             {
                 if (mesh.animationClips[i].name != n) continue;
                 mesh.animationClips.erase(mesh.animationClips.begin() + (long)i);
-                break;   // los nombres son únicos: uno y solo uno por nombre
+                break;   // names are unique: one and only one per name
             }
         }
 
@@ -124,7 +124,7 @@ namespace DonTopo
         if (newName.empty() || oldName == newName) return false;
 
         for (const auto& c : mesh.animationClips)
-            if (c.name == newName) return false;      // duplicado
+            if (c.name == newName) return false;      // duplicate
 
         AnimationClip* target = nullptr;
         for (auto& c : mesh.animationClips)
@@ -148,16 +148,16 @@ namespace DonTopo
                         ? savedNames.size() : source.clipNames.size();
         if (n == 0) return;
 
-        // Snapshot ANTES de tocar nada: source.clipNames[i] se sobreescribe
-        // más abajo, y localizar cada clip en mesh.animationClips por su
-        // nombre ANTIGUO tiene que hacerse contra el estado previo a
-        // cualquier mutación — si no, un rename ya aplicado podría dejar dos
-        // clips con el mismo nombre temporalmente y una búsqueda por nombre
-        // más adelante en el bucle encontraría el equivocado.
+        // Snapshot BEFORE touching anything: source.clipNames[i] is overwritten
+        // further down, and locating each clip in mesh.animationClips by its
+        // OLD name has to be done against the state prior to
+        // any mutation; otherwise, an already applied rename could temporarily leave two
+        // clips with the same name and a later name lookup
+        // in the loop would find the wrong one.
         std::vector<std::string> oldNames(source.clipNames.begin(), source.clipNames.begin() + (long)n);
 
-        // Índice en animationClips de cada clip del lote, resuelto una sola
-        // vez contra oldNames (todavía intactos en este punto).
+        // Index into animationClips of each clip in the batch, resolved only once
+        // against oldNames (still intact at this point).
         std::vector<long> clipIdx(n, -1);
         for (size_t i = 0; i < n; i++)
             for (size_t k = 0; k < mesh.animationClips.size(); k++)
@@ -165,9 +165,9 @@ namespace DonTopo
 
         std::vector<bool> skip(n, false);
 
-        // 1) Duplicados entre los propios savedNames: dos índices apuntando
-        //    al mismo nombre destino dejarían un clip inalcanzable. Se
-        //    descartan ambos índices, no se aplica ninguno de los dos.
+        // 1) Duplicates among the savedNames themselves: two indices pointing
+        //    at the same target name would leave a clip unreachable. Both
+        //    indices are discarded, neither of the two is applied.
         for (size_t i = 0; i < n; i++)
         {
             for (size_t j = i + 1; j < n; j++)
@@ -181,20 +181,20 @@ namespace DonTopo
             }
         }
 
-        // batchSet: nombres ORIGINALES de los clips que forman este lote —
-        // "los clips que se están renombrando en esta misma operación", tal
-        // cual pide el finding. Un nombre destino que coincide con uno de
-        // estos no es una colisión externa (es, por ejemplo, el otro lado de
-        // un swap).
+        // batchSet: ORIGINAL names of the clips that make up this batch,
+        // "the clips being renamed in this same operation", exactly
+        // as the finding asks. A target name that matches one of
+        // these is not an external collision (it is, for example, the other side of
+        // a swap).
         auto inBatch = [&](const std::string& name) {
             for (size_t k = 0; k < n; k++)
                 if (oldNames[k] == name) return true;
             return false;
         };
 
-        // 2) Colisión con un clip AJENO al lote (otra fuente, u otro clip del
-        //    propio mesh fuera de estos n). Un nombre igual al que el clip ya
-        //    tiene es un no-op válido, nunca una colisión.
+        // 2) Collision with a clip OUTSIDE the batch (another source, or another clip of the
+        //    mesh itself outside these n). A name equal to the one the clip already
+        //    has is a valid no-op, never a collision.
         for (size_t i = 0; i < n; i++)
         {
             if (skip[i] || clipIdx[i] < 0) continue;
@@ -210,9 +210,9 @@ namespace DonTopo
             }
         }
 
-        // 3) Aplicar lo que sobrevivió: todo de una vez, así que un swap
-        //    (A->B y B->A a la vez) converge en vez de colisionar consigo
-        //    mismo como pasaría encadenando renameClip.
+        // 3) Apply what survived: all at once, so a swap
+        //    (A->B and B->A at the same time) converges instead of colliding with itself
+        //    as it would by chaining renameClip.
         for (size_t i = 0; i < n; i++)
         {
             if (skip[i] || clipIdx[i] < 0) continue;
@@ -240,8 +240,8 @@ namespace DonTopo
         {
             if (src.builtin)
             {
-                // Hasta el menor de los dos tamanos: un FBX reexportado con mas o
-                // menos clips no debe romper la carga.
+                // Up to the smaller of the two sizes: an FBX re-exported with more or
+                // fewer clips must not break loading.
                 if (mesh.animationSources.empty()) continue;
                 applyClipNamesPositionally(mesh, mesh.animationSources[0], src.clipNames, warnings);
                 continue;

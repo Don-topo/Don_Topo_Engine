@@ -1,26 +1,26 @@
 #version 450
 
-// Forward+ CLUSTERED. Rejilla 3D sobre la resolucion INTERNA del render: tiles
-// de 64x64 pixeles en XY y 24 cortes en Z repartidos logaritmicamente entre
-// zNear y zFar. Una invocacion por cluster, sin reduccion ni memoria compartida:
-// no lee la profundidad de la escena, asi que no depende del depth pre-pass.
+// CLUSTERED Forward+. 3D grid over the INTERNAL render resolution: tiles
+// of 64x64 pixels in XY and 24 slices in Z distributed logarithmically between
+// zNear and zFar. One invocation per cluster, without reduction or shared memory:
+// it does not read the scene depth, so it does not depend on the depth pre-pass.
 //
-// El corte k va de zNear*(zFar/zNear)^(k/gridZ) a zNear*(zFar/zNear)^((k+1)/gridZ),
-// que es exactamente lo que invierte el sliceScale/sliceBias que usa pbr.frag
-// para decidir en que cluster cae un fragmento.
+// Slice k goes from zNear*(zFar/zNear)^(k/gridZ) to zNear*(zFar/zNear)^((k+1)/gridZ),
+// which is exactly what the sliceScale/sliceBias used by pbr.frag invert
+// to decide which cluster a fragment falls in.
 
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
-// Debe coincidir con Renderer::kFpMaxLights.
+// It must match Renderer::kFpMaxLights.
 #define FP_MAX_LIGHTS 256
 
 struct FpLight
 {
-    vec4 posRadius;     // xyz mundo, w radio
-    vec4 color;         // rgb color, a intensidad
+    vec4 posRadius;     // xyz world, w radius
+    vec4 color;         // rgb color, a intensity
     vec4 viewPosR;      // xyz view space, w radio
-    vec4 direction;     // xyz dir, w tipo (0 point, 1 spot, 2 directional, 3 area)
-    vec4 params;        // range, cos interior, cos exterior, ancho
+    vec4 direction;     // xyz dir, w type (0 point, 1 spot, 2 directional, 3 area)
+    vec4 params;        // range, inner cos, outer cos, width
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer FpParamsBuf {
@@ -41,7 +41,7 @@ layout(std430, set = 0, binding = 0) readonly buffer FpParamsBuf {
 layout(std430, set = 0, binding = 1) readonly  buffer FpLightBuf { FpLight lights[]; };
 layout(std430, set = 0, binding = 2) writeonly buffer FpGridBuf  { uvec2   cells[];  };
 layout(std430, set = 0, binding = 3) writeonly buffer FpIndexBuf { uint    indices[]; };
-layout(set = 0, binding = 4) uniform sampler2D depthTex;    // declarado, no leido
+layout(set = 0, binding = 4) uniform sampler2D depthTex;    // declared, not read
 layout(std430, set = 0, binding = 5) buffer FpStatsBuf { uint stats[]; };
 
 layout(push_constant) uniform FpPush {
@@ -76,8 +76,8 @@ void main()
     float ny0 = 2.0 * y0 / float(pc.screenH) - 1.0;
     float ny1 = 2.0 * y1 / float(pc.screenH) - 1.0;
 
-    // x = k * viewDepth. p11 llega negativo (Y-flip en la proyeccion): min/max
-    // en vez de dar por hecho el orden.
+    // x = k * viewDepth. p11 arrives negative (Y-flip in the projection): min/max
+    // instead of assuming the order.
     float kxa  = nx0 / pc.p00;
     float kxb  = nx1 / pc.p00;
     float kya  = ny0 / pc.p11;
@@ -85,8 +85,8 @@ void main()
     float kxLo = min(kxa, kxb), kxHi = max(kxa, kxb);
     float kyLo = min(kya, kyb), kyHi = max(kya, kyb);
 
-    // AABB del cluster en view space: el rango de x/y se toma en los dos
-    // extremos de profundidad porque las k pueden ser negativas.
+    // Cluster AABB in view space: the x/y range is taken at the two
+    // depth extremes because the k may be negative.
     vec3 bmin = vec3(min(kxLo * zn, kxLo * zf), min(kyLo * zn, kyLo * zf), -zf);
     vec3 bmax = vec3(max(kxHi * zn, kxHi * zf), max(kyHi * zn, kyHi * zf), -zn);
 
@@ -94,16 +94,16 @@ void main()
     uint count = 0u;
     uint total = 0u;
 
-    // Recorrido ascendente: la lista sale en el mismo orden que la del tiled y
-    // el fragment shader suma los mismos terminos en el mismo orden.
+    // Ascending traversal: the list comes out in the same order as the tiled one's and
+    // the fragment shader sums the same terms in the same order.
     for (uint i = 0u; i < fp.numLights; i++)
     {
         vec3  p = lights[i].viewPosR.xyz;
         float r = lights[i].viewPosR.w;
         vec3  q = clamp(p, bmin, bmax);
         vec3  d = p - q;
-        // Una directional no tiene posicion ni alcance: ilumina TODO, asi que
-        // entra en cada cluster sin pasar por el AABB.
+        // A directional has neither position nor reach: it lights EVERYTHING, so it
+        // enters each cluster without going through the AABB.
         if (int(lights[i].direction.w + 0.5) == 2 || dot(d, d) <= r * r)
         {
             total++;

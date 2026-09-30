@@ -9,27 +9,27 @@ class EditorRenderer;
 class GameObject;
 
 struct ModelReimportResult {
-    int                      reimported = 0;   // objetos con la malla ya sustituida
-    int                      skipped    = 0;   // no se tocaron (carga en vuelo, o el FBX no carga)
-    std::vector<std::string> warnings;         // ya formateados para el Log Console
+    int                      reimported = 0;   // objects whose mesh has already been replaced
+    int                      skipped    = 0;   // not touched (load in flight, or the FBX does not load)
+    std::vector<std::string> warnings;         // already formatted for the Log Console
 };
 
-// Vuelve a importar `fbx` (con los ajustes que su sidecar tenga ahora: el
-// ModelLoader los lee solo) y sustituye la malla de CADA objeto de la escena que
-// venga de ese fichero -o que lo use como fuente de animacion externa-,
-// conservando transform, hijos, colliders, overrides de material y Animator.
+// Re-imports `fbx` (with whatever settings its sidecar has now: the
+// ModelLoader reads them on its own) and replaces the mesh of EVERY object in the scene that
+// comes from that file (or uses it as an external animation source),
+// keeping transform, children, colliders, material overrides and Animator.
 //
-// Una carga por sourcePath distinto: compartida entre los estaticos, una copia por
-// objeto en los skinned (a esa copia se le reaplica la config de fuentes de
-// animacion de la malla vieja y se hace rebindClips del Animator).
+// One load per distinct sourcePath: shared among the static ones, one copy per
+// object for the skinned ones (that copy gets the old mesh's animation-source
+// config re-applied and the Animator's rebindClips is done).
 //
-// Si el FBX ya no carga, los objetos se quedan INTACTOS con su malla anterior y
-// hay un aviso: nunca queda un objeto sin malla por un reimport fallido.
+// If the FBX no longer loads, the objects stay INTACT with their previous mesh and
+// a warning is issued: an object is never left without a mesh by a failed reimport.
 //
-// `renderer` puede ser nullptr (tests headless): entonces solo se cambia la parte
-// de CPU. Con renderer, cada objeto pasa por removeMeshComponent -> setMesh ->
-// addStaticMesh/addSkinnedMesh (la receta de MeshComponentCommand), con UN solo
-// flushUploadsAndWait al final: rebuildStaticMesh NO soporta cambiar vertices.
+// `renderer` can be nullptr (headless tests): then only the CPU part is changed.
+// With a renderer, each object goes through removeMeshComponent -> setMesh ->
+// addStaticMesh/addSkinnedMesh (the MeshComponentCommand recipe), with a SINGLE
+// flushUploadsAndWait at the end: rebuildStaticMesh does NOT support changing vertices.
 ModelReimportResult reimportModelUsers(GameObject* sceneRoot,
                                        const std::filesystem::path& fbx,
                                        EditorRenderer* renderer,

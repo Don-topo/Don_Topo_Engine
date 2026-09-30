@@ -19,93 +19,93 @@ namespace DonTopo {
 
 class GameObject;
 
-// Etiqueta del boton de icono del grid. El id de ImGui sale de ella, asi que no
-// puede cambiar cuando aparece la miniatura.
+// Label of the grid's icon button. The ImGui id comes from it, so it
+// cannot change when the thumbnail appears.
 std::string assetIconButtonLabel(const char* text, bool hasThumbnail);
 
-// Subcarpetas directas de dir, ordenadas por path, filtrando el ruido que
-// no interesa ver en el árbol del Content Browser: entradas ocultas (nombre
-// que empieza por '.') y el directorio de build. Devuelve vacío —sin
-// lanzar— si dir no existe, no es un directorio o no se puede leer.
-// Declarada aquí (y no en el anonymous namespace del .cpp) para que el test
-// headless pueda enlazarla.
+// Direct subfolders of dir, sorted by path, filtering out the noise that
+// is not interesting to see in the Content Browser tree: hidden entries (name
+// that starts with '.') and the build directory. Returns empty (without
+// throwing) if dir does not exist, is not a directory or cannot be read.
+// Declared here (and not in the .cpp's anonymous namespace) so the
+// headless test can link it.
 std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::path& dir);
 
-// Importa cada DroppedFile cuyo (screenX, screenY) caiga dentro del rect
-// (rectX, rectY, rectW, rectH) a targetDir; los que caen fuera no generan
-// ninguna entrada en el resultado (se ignoran en silencio). Un fallo
-// individual (extension no importable, conflicto de nombre) no aborta el
-// resto del lote. Declarada aquí, no en el anonymous namespace del .cpp,
-// para que el test headless pueda enlazarla.
+// Imports each DroppedFile whose (screenX, screenY) falls inside the rect
+// (rectX, rectY, rectW, rectH) into targetDir; those that fall outside generate
+// no entry in the result (they are silently ignored). An individual failure
+// (non-importable extension, name conflict) does not abort the
+// rest of the batch. Declared here, not in the .cpp's anonymous namespace,
+// so the headless test can link it.
 std::vector<AssetImportOutcome> importDroppedFilesInto(
     const std::vector<DroppedFile>& dropped,
     float rectX, float rectY, float rectW, float rectH,
     const std::filesystem::path& targetDir);
 
-// Tipo de un asset para el Content Browser: lo comparten el icono del grid y el
-// filtro por tipo, para que no puedan discrepar.
+// Type of an asset for the Content Browser: shared by the grid icon and the
+// type filter, so that they cannot disagree.
 enum class AssetKind { Folder, Model3D, Audio, Image, Font, Scene, Script, Shader, Material, Other };
 
-// ext con el punto y en cualquier combinación de mayúsculas ("" si no tiene). Una
-// carpeta es siempre Folder, aunque se llame "a.png".
+// ext with the dot and in any combination of case ("" if it has none). A
+// folder is always Folder, even if it is called "a.png".
 AssetKind classifyAsset(const std::string& ext, bool isDir);
 
-// Los tipos del grid que tienen miniatura: imagenes, modelos y materiales.
+// The grid types that have a thumbnail: images, models and materials.
 bool wantsThumbnail(AssetKind kind);
 
-// true si el asset pasa el filtro del grid: texto = subcadena sin distinguir
-// mayúsculas (vacío deja pasar todo) y kindFilter = igualdad exacta de tipo
-// (nullopt = todos). Ambos se combinan con AND, así que con un tipo elegido las
-// carpetas quedan fuera salvo que el tipo sea Folder.
+// true if the asset passes the grid filter: text = case-insensitive substring
+// (empty lets everything through) and kindFilter = exact type equality
+// (nullopt = all). Both are combined with AND, so with a type chosen the
+// folders are left out unless the type is Folder.
 bool assetMatchesFilter(const std::string& name, AssetKind kind,
                         const std::string& text, std::optional<AssetKind> kindFilter);
 
-// true si el grid debe iniciar un drag para este asset: carpetas, lo que ya
-// admite importación de fuera del proyecto (isImportableExtension), un .mat
-// (asset del proyecto, nunca se importa de fuera, así que isImportableExtension
-// no lo cubre) o cualquiera que forme parte de una selección múltiple (mover
-// no depende de qué zonas de drop sepan aceptar el tipo). Declarada aquí para
-// que el test headless pueda enlazarla sin instanciar ImGui.
+// true if the grid must start a drag for this asset: folders, what already
+// supports import from outside the project (isImportableExtension), a .mat
+// (a project asset, never imported from outside, so isImportableExtension
+// does not cover it) or any that is part of a multiple selection (moving
+// does not depend on which drop zones know how to accept the type). Declared here so
+// the headless test can link it without instantiating ImGui.
 bool isAssetDraggable(const std::string& ext, bool isDir, bool inMultiSelection);
 
-// Hallazgo del reviewer final: el Browse de textura del modal de edición de
-// un .mat aceptaba cualquier ruta absoluta de fuera del proyecto tal cual (a
-// diferencia del drop, que solo puede soltar un DT_ASSET_PATH ya dentro de
-// él). Ese path absoluto sobrevive en el .mat guardado y en el juego
-// exportado deja de existir en otra máquina. `path` de fuera del proyecto se
-// importa a assets/Imported/Textures (mismo destino que el resto del editor);
-// nullopt si la extensión no es de imagen o la copia falla. Sin `project`
-// (tests headless) se acepta tal cual, como el resto del editor sin proyecto
-// abierto.
+// Finding from the final reviewer: the texture Browse of the .mat edit
+// modal accepted any absolute path from outside the project as is (unlike
+// the drop, which can only drop a DT_ASSET_PATH already inside
+// it). That absolute path survives in the saved .mat and in the exported
+// game it stops existing on another machine. A `path` from outside the project is
+// imported into assets/Imported/Textures (same destination as the rest of the editor);
+// nullopt if the extension is not an image one or the copy fails. Without `project`
+// (headless tests) it is accepted as is, like the rest of the editor with no project
+// open.
 std::optional<std::filesystem::path> acceptOrImportMatTexture(const ProjectContext* project,
                                                                const std::filesystem::path& path);
 
-// Ficheros y carpetas visibles de UNA carpeta (no recursivo), ordenados por path.
-// Las carpetas ocultas y de build quedan fuera con el mismo predicado que el
-// árbol; los ficheros no se filtran. Vacío —sin lanzar— si dir no existe, es un
-// fichero o no se puede leer. Es lo que el grid pinta y lo que el polling compara
-// entre pasadas para detectar cambios hechos fuera del editor.
+// Visible files and folders of ONE folder (non-recursive), sorted by path.
+// Hidden and build folders are left out with the same predicate as the
+// tree; files are not filtered. Empty (without throwing) if dir does not exist, is a
+// file or cannot be read. It is what the grid draws and what the polling compares
+// between passes to detect changes made outside the editor.
 std::vector<std::filesystem::path> listVisibleEntries(const std::filesystem::path& dir);
 
-// Ancestro existente más cercano de dir sin salir de root: dir misma si existe,
-// y root si dir está fuera de root o no queda ningún nivel existente hasta ella.
-// Con esto el panel sigue funcionando si la carpeta actual se borra por fuera.
+// Nearest existing ancestor of dir without leaving root: dir itself if it exists,
+// and root if dir is outside root or no existing level remains up to it.
+// With this the panel keeps working if the current folder is deleted from outside.
 std::filesystem::path nearestExistingDir(const std::filesystem::path& dir,
                                          const std::filesystem::path& root);
 
-// Un tramo del breadcrumb: lo que se pinta y a dónde salta al pulsarlo.
+// One segment of the breadcrumb: what is drawn and where it jumps to when pressed.
 struct BreadcrumbSegment {
     std::string           name;
     std::filesystem::path path;
 };
 
-// Tramos desde la raíz del proyecto hasta current, con rutas acumulativas. Si
-// current es la propia raíz o no cuelga de ella, devuelve solo el tramo raíz.
+// Segments from the project root to current, with cumulative paths. If
+// current is the root itself or does not hang from it, it returns only the root segment.
 std::vector<BreadcrumbSegment> breadcrumbSegments(const std::filesystem::path& root,
                                                   const std::filesystem::path& current);
 
-// Selección del grid: los paths marcados (siempre en el orden en que se ven) y el
-// ancla desde la que Shift+clic calcula el rango.
+// Grid selection: the marked paths (always in the order they are seen) and the
+// anchor from which Shift+click computes the range.
 struct AssetSelection {
     std::vector<std::filesystem::path>   items;
     std::optional<std::filesystem::path> anchor;
@@ -114,52 +114,52 @@ struct AssetSelection {
     void clear() { items.clear(); anchor.reset(); }
 };
 
-// Aplica un clic sobre `clicked` a la selección. visible es el orden actual del
-// grid (con los filtros ya aplicados). Clic = solo ese; Ctrl = alterna ese; Shift
-// = rango desde el ancla hasta ese (sin ancla visible, como un clic normal).
+// Applies a click on `clicked` to the selection. visible is the grid's current
+// order (with the filters already applied). Click = only that one; Ctrl = toggles that one; Shift
+// = range from the anchor to that one (without a visible anchor, like a normal click).
 void applyAssetClick(AssetSelection& sel, const std::vector<std::filesystem::path>& visible,
                      const std::filesystem::path& clicked, bool ctrl, bool shift);
 
-// Quita de la selección lo que ya no está en existing; si el ancla desaparece se
-// olvida. Se llama tras cambiar de carpeta o rescanear.
+// Removes from the selection what is no longer in existing; if the anchor disappears it is
+// forgotten. Called after changing folder or rescanning.
 void pruneSelection(AssetSelection& sel, const std::vector<std::filesystem::path>& existing);
 
 enum class MoveResult {
     Moved,
-    RejectedSameFolder,    // destDir ya es la carpeta padre de src
-    RejectedIntoSelf,      // una carpeta dentro de sí misma o de un descendiente
-    RejectedNameConflict,  // ya hay algo con ese nombre en destDir
-    RejectedFailed,        // origen inexistente o error del sistema
+    RejectedSameFolder,    // destDir is already src's parent folder
+    RejectedIntoSelf,      // a folder inside itself or a descendant
+    RejectedNameConflict,  // something with that name already exists in destDir
+    RejectedFailed,        // nonexistent source or system error
 };
 
 struct MoveOutcome {
     MoveResult            result = MoveResult::RejectedFailed;
-    std::filesystem::path newPath;       // válido solo si result == Moved
-    // RejectedFailed: la causa. Moved: un AVISO si el asset se movio pero no su
-    // .import.json (vacio si todo fue bien).
+    std::filesystem::path newPath;       // valid only if result == Moved
+    // RejectedFailed: the cause. Moved: a WARNING if the asset was moved but not its
+    // .import.json (empty if everything went well).
     std::string           errorMessage;
 };
 
-// Renombra un fichero o carpeta llevandose el .import.json del fichero. Si el
-// destino ya tiene sidecar, se rechaza sin tocar nada. Nunca lanza.
+// Renames a file or folder taking the file's .import.json along. If the
+// destination already has a sidecar, it is rejected without touching anything. Never throws.
 struct RenameFileOutcome {
     bool        ok = false;
-    std::string error;    // causa si !ok
-    std::string warning;  // ok pero el sidecar no se pudo mover
+    std::string error;    // cause if !ok
+    std::string warning;  // ok but the sidecar could not be moved
 };
 RenameFileOutcome renameAssetFile(const std::filesystem::path& from, const std::filesystem::path& to,
                                   bool isDir);
 
 struct TextureImportApplyResult {
     bool        ok = false;
-    std::string error;       // causa si !ok (el modal la muestra y no se cierra)
-    int         refreshed = 0;   // objetos cuyo material se reconstruyo
+    std::string error;       // cause if !ok (the modal shows it and does not close)
+    int         refreshed = 0;   // objects whose material was rebuilt
 };
 
-// Escribe los ajustes de importacion de `asset` (el defecto borra el sidecar) y
-// llama a `rebuild` con cada objeto de la escena cuyo material use esa textura,
-// para que el cambio se vea sin reiniciar. Si el sidecar no se puede escribir no
-// se reconstruye nada. `rebuild` nula = solo se escribe (sin renderer).
+// Writes the import settings of `asset` (the default deletes the sidecar) and
+// calls `rebuild` with each scene object whose material uses that texture,
+// so that the change is visible without restarting. If the sidecar cannot be written
+// nothing is rebuilt. A null `rebuild` = only written (without a renderer).
 TextureImportApplyResult applyTextureImportSettings(GameObject* sceneRoot,
                                                     const std::filesystem::path& asset,
                                                     const TextureImportSettings& settings,
@@ -170,97 +170,97 @@ struct MaterialAssetApplyResult {
     std::string error;
     int         refreshed = 0;
 };
-// Escribe el .mat y reconstruye (rebuild) cada objeto de la escena que lo
-// referencie desde cualquier slot. Sin escritura, no reconstruye nada.
+// Writes the .mat and rebuilds (rebuild) each scene object that
+// references it from any slot. Without a write, it rebuilds nothing.
 MaterialAssetApplyResult applyMaterialAssetSettings(GameObject* sceneRoot, const std::filesystem::path& mat,
                                                     const MaterialAsset& asset,
                                                     const std::function<void(GameObject&)>& rebuild);
-// Nombre libre para un material nuevo dentro de dir, mismo patron que
-// uniqueFolderName: "Nuevo material.mat", "Nuevo material 2.mat"...
+// Free name for a new material inside dir, same pattern as
+// uniqueFolderName: "New material.mat", "New material 2.mat"...
 std::string uniqueMaterialName(const std::filesystem::path& dir);
 
-// Que ajustes de importacion ofrece un asset. El menu contextual y el modal se
-// deciden por esto, no por comprobaciones sueltas: un tipo nuevo (modelos) se
-// anade aqui.
+// Which import settings an asset offers. The context menu and the modal are
+// decided by this, not by loose checks: a new type (models) is
+// added here.
 enum class ImportSettingsKind { None, Texture, Audio, Model };
 ImportSettingsKind importSettingsKindFor(const std::string& ext, bool isDir);
 
 struct AudioImportApplyResult {
     bool        ok = false;
-    std::string error;       // causa si !ok (el modal la muestra y no se cierra)
+    std::string error;       // cause if !ok (the modal shows it and does not close)
 };
 
-// Escribe los ajustes de importacion del clip (el defecto borra el sidecar) y, si
-// se pudo, llama a `refresh` con la ruta para que las voces cargadas de ese
-// fichero los reciban sin reiniciar. Si el sidecar no se puede escribir no se
-// llama a `refresh`. `refresh` nula = solo se escribe (sin audio).
+// Writes the clip's import settings (the default deletes the sidecar) and, if
+// that worked, calls `refresh` with the path so that the voices loaded from that
+// file receive them without restarting. If the sidecar cannot be written `refresh` is not
+// called. A null `refresh` = only written (without audio).
 AudioImportApplyResult applyAudioImportSettings(const std::filesystem::path& asset,
                                                 const AudioImportSettings& settings,
                                                 const std::function<void(const std::string&)>& refresh);
 
 struct ModelImportApplyResult {
     bool        ok = false;
-    std::string error;       // causa si !ok (el modal la muestra y no se cierra)
-    int         refreshed = 0;   // objetos que reimport dice haber recargado
+    std::string error;       // cause if !ok (the modal shows it and does not close)
+    int         refreshed = 0;   // objects that reimport says it reloaded
 };
-// Escribe el sidecar del modelo (el defecto lo borra) y, SOLO si se pudo, llama a
-// `reimport(asset)` una vez: en el panel recarga en vivo los objetos de la escena
-// que usan ese FBX (reimportModelUsers) y devuelve cuantos. Sin `reimport` solo se
-// escribe. Un fallo de escritura no recarga nada.
+// Writes the model's sidecar (the default deletes it) and, ONLY if that worked, calls
+// `reimport(asset)` once: in the panel it live-reloads the scene objects
+// that use that FBX (reimportModelUsers) and returns how many. Without `reimport` it only
+// writes. A write failure reloads nothing.
 ModelImportApplyResult applyModelImportSettings(
     const std::filesystem::path& asset,
     const ModelImportSettings& settings,
     const std::function<int(const std::filesystem::path&, float scaleRatio)>& reimport);
 
-// Borra un fichero (con su .import.json) o una carpeta entera. El error del
-// sistema, si lo hay; vacio = borrado.
+// Deletes a file (with its .import.json) or a whole folder. The system
+// error, if any; empty = deleted.
 std::error_code removeAssetPath(const std::filesystem::path& path, bool isDir);
 
-// Mueve src (fichero o carpeta) dentro de destDir con el mismo nombre. Nunca
-// sobreescribe: un nombre ya ocupado es un rechazo, no un reemplazo. No toca la
-// escena: quien llama actualiza las referencias con updateSceneReferencesForRename.
-// Nunca lanza (sobrecargas con std::error_code).
+// Moves src (file or folder) into destDir with the same name. Never
+// overwrites: a name already taken is a rejection, not a replacement. It does not touch the
+// scene: the caller updates the references with updateSceneReferencesForRename.
+// Never throws (overloads with std::error_code).
 MoveOutcome moveAsset(const std::filesystem::path& src, const std::filesystem::path& destDir);
 
-// Nombre libre para una carpeta nueva dentro de dir: "Nueva carpeta", y si ya
-// hay algo (carpeta o fichero) con ese nombre, "Nueva carpeta 2", "3"...
+// Free name for a new folder inside dir: "New folder", and if something
+// (folder or file) already has that name, "New folder 2", "3"...
 std::string uniqueFolderName(const std::filesystem::path& dir);
 
-// Las tres funciones siguientes no tocan estado privado de ContentBrowserPanel
-// (sólo sus parámetros), así que se declaran aquí como funciones libres —igual
-// que listVisibleSubdirs— para que el test headless pueda enlazarlas sin
-// instanciar el panel completo (que arrastraría ImGui/Vulkan).
+// The next three functions do not touch ContentBrowserPanel's private state
+// (only their parameters), so they are declared here as free functions (like
+// listVisibleSubdirs) so that the headless test can link them without
+// instantiating the whole panel (which would drag in ImGui/Vulkan).
 
-// Cuenta cuántos GameObjects de sceneRoot referencian path (mesh o audio;
-// exacto si !isDir, por prefijo si isDir).
+// Counts how many GameObjects of sceneRoot reference path (mesh or audio;
+// exact if !isDir, by prefix if isDir).
 int countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
-// Recorre sceneRoot actualizando Mesh::sourcePath, los 3 paths de
-// Material y AudioClipComponent::getPath() que matcheen oldPath (exacto
-// si !isDir, por prefijo si isDir) al nuevo valor tras un rename en
-// disco ya realizado.
+// Walks sceneRoot updating Mesh::sourcePath, the 3 paths of
+// Material and AudioClipComponent::getPath() that match oldPath (exact
+// if !isDir, by prefix if isDir) to the new value after a rename on
+// disk that has already been done.
 void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
                                      const std::filesystem::path& oldPath,
                                      const std::filesystem::path& newPath, bool isDir);
-// Desengancha de la escena cualquier referencia a path antes de
-// borrarlo de disco: mesh en uso -> Renderer::removeMeshComponent;
-// audio en uso -> setAudioClip(nullptr); textura de Material en uso ->
-// el campo de path se limpia SIEMPRE (evita que un re-register intente
-// stbi_load un fichero ya borrado), pero el hot-swap de GPU a la
-// textura "missing" sólo se dispara si ctx.renderer && staticRenderIndex
-// >= 0: replaceStaticTextureWithMissing indexa la lista de objetos
-// estáticos, así que en skinned nunca ocurre — la GPU sigue mostrando
-// la textura vieja hasta que se recargue la escena.
+// Detaches from the scene any reference to path before
+// deleting it from disk: mesh in use -> Renderer::removeMeshComponent;
+// audio in use -> setAudioClip(nullptr); Material texture in use ->
+// the path field is ALWAYS cleared (it prevents a re-register from trying
+// stbi_load on an already deleted file), but the GPU hot-swap to the
+// "missing" texture only fires if ctx.renderer && staticRenderIndex
+// >= 0: replaceStaticTextureWithMissing indexes the list of static
+// objects, so on skinned it never happens: the GPU keeps showing
+// the old texture until the scene is reloaded.
 void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                                      const std::filesystem::path& path, bool isDir);
 
-// Ventana "Content Browser" — explorador de assets del proyecto (mesh,
-// audio, scripts), con rename/delete y detección de referencias en la
-// escena para desengancharlas antes de borrar/renombrar en disco.
+// "Content Browser" window: project asset explorer (mesh,
+// audio, scripts), with rename/delete and detection of references in the
+// scene to detach them before deleting/renaming on disk.
 class ContentBrowserPanel {
 public:
-    // Fuera de linea a proposito: el destructor necesita el tipo completo de
-    // IGFD::FileDialog (unique_ptr<T> incompleto), y este header solo lo
-    // forward-declara. Mismo patron que PropertiesPanel.
+    // Out of line on purpose: the destructor needs the complete type of
+    // IGFD::FileDialog (unique_ptr<T> incomplete), and this header only
+    // forward-declares it. Same pattern as PropertiesPanel.
     ContentBrowserPanel();
     ~ContentBrowserPanel();
 
@@ -268,82 +268,82 @@ public:
     bool* GetOpenPtr() { return &m_open; }
 
 private:
-    // Arma el popup modal "Rename Asset" precargado con el nombre actual de
-    // path (stem si es fichero, nombre completo si es carpeta).
+    // Sets up the "Rename Asset" modal popup preloaded with the current name of
+    // path (stem if it is a file, full name if it is a folder).
     void beginAssetRename(const std::filesystem::path& path, bool isDir);
-    // Arma el popup modal "Delete Asset", precalculando cuántos GameObjects
-    // referencian path (mesh o audio) para mostrarlo en el texto de aviso.
-    // targets = (ruta, esCarpeta) de todo lo seleccionado; un solo modal para todos.
+    // Sets up the "Delete Asset" modal popup, precomputing how many GameObjects
+    // reference path (mesh or audio) to show it in the warning text.
+    // targets = (path, isFolder) of everything selected; a single modal for all of them.
     void beginAssetDelete(GameObject* sceneRoot,
                           std::vector<std::pair<std::filesystem::path, bool>> targets);
-    // Pinta recursivamente dir y sus subcarpetas visibles como TreeNodes.
-    // Click en la etiqueta selecciona la carpeta (m_currentDir); click en la
-    // flecha sólo expande. Escanea disco en cada frame para los nodos
-    // abiertos: sin caché que invalidar y los cambios hechos fuera del editor
-    // aparecen solos.
+    // Recursively draws dir and its visible subfolders as TreeNodes.
+    // Click on the label selects the folder (m_currentDir); click on the
+    // arrow only expands. It scans disk every frame for the open
+    // nodes: no cache to invalidate and changes made outside the editor
+    // show up by themselves.
     void drawFolderTree(const std::filesystem::path& dir);
-    // Convierte el último ítem dibujado en destino de soltar un asset (fichero o
-    // carpeta del grid). NO mueve nada: anota en m_pendingMove, que draw() aplica
-    // fuera del recorrido del árbol/grid (mover a mitad invalidaría lo que se pinta).
+    // Turns the last drawn item into a drop target for an asset (file or
+    // folder of the grid). It does NOT move anything: it notes it in m_pendingMove, which draw() applies
+    // outside the tree/grid walk (moving midway would invalidate what is being drawn).
     void acceptAssetDropOnFolder(const std::filesystem::path& destDir);
-    // Aplica y vacía m_pendingMove: mueve en disco, reescribe las referencias de
-    // la escena y reubica m_currentDir si la carpeta movida la contenía.
+    // Applies and empties m_pendingMove: moves on disk, rewrites the scene's
+    // references and relocates m_currentDir if the moved folder contained it.
     void applyPendingMove(EditorContext& ctx, GameObject* sceneRoot);
 
     struct PendingMove {
-        std::vector<std::filesystem::path> srcs;   // uno, o toda la selección arrastrada
+        std::vector<std::filesystem::path> srcs;   // one, or the whole dragged selection
         std::filesystem::path              destDir;
     };
     std::optional<PendingMove> m_pendingMove;
 
-    // Selección del grid (ver AssetSelection). Se poda contra lo visible cada
-    // frame, así que cambiar de carpeta, filtrar o rescanear no deja fantasmas.
+    // Grid selection (see AssetSelection). It is pruned against what is visible every
+    // frame, so changing folder, filtering or rescanning leaves no ghosts.
     AssetSelection m_selection;
 
-    // Miniaturas de texturas. Se crea de forma perezosa cuando hay renderer con
-    // atlas de miniaturas Y JobSystem; sin ellos queda en nullptr y el grid pinta
-    // el icono de color de siempre.
+    // Texture thumbnails. Created lazily when there is a renderer with a
+    // thumbnail atlas AND a JobSystem; without them it stays nullptr and the grid draws
+    // the usual colored icon.
     std::unique_ptr<ThumbnailCache> m_thumbs;
     uint64_t                        m_thumbAtlasId = 0;
-    std::string                     m_thumbDir;    // carpeta de la generacion actual
+    std::string                     m_thumbDir;    // folder of the current generation
 
     bool m_open = true;
     bool m_scanned = false;
-    // Cada cuánto se relee la carpeta actual para detectar cambios hechos fuera
-    // del editor (mismo enfoque que ScriptManager::pollChanges: comparar en vez de
-    // vigilar). Latencia máxima de un refresco externo ≈ este intervalo.
+    // How often the current folder is re-read to detect changes made outside
+    // the editor (same approach as ScriptManager::pollChanges: compare instead of
+    // watching). Maximum latency of an external refresh ≈ this interval.
     static constexpr double kDirPollIntervalSeconds = 0.5;
     double m_lastPollTime = 0.0;
     std::string m_currentDir;
-    // Reveal de un solo frame: sólo el doble-clic en una carpeta del grid
-    // derecho la pone a true (esa carpeta puede no estar visible aún en el
-    // árbol). drawFolderTree la consulta para forzar abierta la rama
-    // ancestro de m_currentDir, y draw() la limpia justo después de esa
-    // llamada, así el usuario recupera el control para volver a colapsar esa
-    // rama a mano en el siguiente frame.
+    // One-frame reveal: only a double click on a folder of the right
+    // grid sets it to true (that folder may not be visible yet in the
+    // tree). drawFolderTree queries it to force open the ancestor
+    // branch of m_currentDir, and draw() clears it right after that
+    // call, so the user regains control to collapse that
+    // branch by hand again on the next frame.
     bool m_revealCurrentDir = false;
-    // Raíz del proyecto (canonicalizada una vez); es la raíz del árbol de
-    // carpetas, y por tanto el límite natural de navegación del panel.
+    // Project root (canonicalized once); it is the root of the folder tree,
+    // and therefore the panel's natural navigation limit.
     std::filesystem::path m_projectRoot;
     std::vector<std::filesystem::path> m_assets;
 
-    // Filtros del grid (solo la carpeta actual). m_filterKindIndex indexa la
-    // tabla de opciones del combo en draw(); m_filterKind es su traducción y
-    // se recalcula cada frame.
+    // Grid filters (current folder only). m_filterKindIndex indexes the
+    // table of combo options in draw(); m_filterKind is its translation and
+    // is recomputed every frame.
     char                    m_filterText[64] = {};
     int                     m_filterKindIndex = 0;
     std::optional<AssetKind> m_filterKind;
 
-    // Asset rename — popup modal disparado por right-click > Rename en el
-    // grid derecho del Content Browser.
+    // Asset rename: modal popup triggered by right-click > Rename in the
+    // Content Browser's right grid.
     std::filesystem::path m_assetRenameTarget;
     bool                   m_assetRenameIsDir = false;
     char                   m_assetRenameBuffer[128] = {};
     std::string            m_assetRenameError;
     bool                   m_openAssetRenamePopup = false;
 
-    // Import Settings — modal disparado por right-click > Import Settings... sobre
-    // UNA textura. m_importEdit es la copia que se edita; Aplicar la escribe.
+    // Import Settings: modal triggered by right-click > Import Settings... on
+    // ONE texture. m_importEdit is the copy being edited; Apply writes it.
     std::filesystem::path  m_importTarget;
     TextureImportSettings  m_importEdit;
     ImportSettingsKind     m_importKind = ImportSettingsKind::None;
@@ -352,38 +352,38 @@ private:
     std::string            m_importError;
     bool                   m_openImportPopup = false;
 
-    // Edicion de un .mat, disparada por doble clic en el grid.
+    // Editing of a .mat, triggered by double click in the grid.
     std::filesystem::path m_matAssetTarget;
     MaterialAsset          m_matAssetEdit;
     std::string            m_matAssetError;
-    // Ventana flotante NO modal (ImGui::Begin, no popup): ver el comentario
-    // junto a su uso en el .cpp — un popup modal bloqueaba el resto del
-    // editor y hacia imposible arrastrar una textura desde el grid hasta
+    // NON-modal floating window (ImGui::Begin, not a popup): see the comment
+    // next to its use in the .cpp. A modal popup blocked the rest of the
+    // editor and made it impossible to drag a texture from the grid to
     // "Drop image here".
     bool                   m_matAssetWindowOpen = false;
     bool                   m_matAssetDlgOpen     = false;
     DonTopo::MaterialTextureSlot m_matAssetDlgSlot = DonTopo::MaterialTextureSlot::Albedo;
     std::unique_ptr<IGFD::FileDialog> m_matAssetFileDialog;
 
-    // Asset delete — popup modal disparado por right-click > Delete.
+    // Asset delete: modal popup triggered by right-click > Delete.
     std::vector<std::pair<std::filesystem::path, bool>> m_assetDeleteTargets;
     int                    m_assetDeleteAffectedCount = 0;
     bool                   m_openAssetDeletePopup = false;
     std::string            m_assetDeleteError;
 
-    // Doble clic en un .json del grid: cargar esa escena (doble y no simple,
-    // igual que las carpetas y los .lua — un clic simple ocurre al pasar por
-    // encima seleccionando y cargaría escenas sin querer). Si la actual tiene
-    // cambios sin guardar se pregunta antes con un modal de tres opciones.
+    // Double click on a .json in the grid: load that scene (double and not single,
+    // like folders and .lua files: a single click happens while passing over
+    // selecting and would load scenes by accident). If the current one has
+    // unsaved changes, a three-option modal asks first.
     enum class ScenePromptChoice { None, Save, Discard };
-    // Escena que se cargará (vacío = ninguna pendiente). Cancelar en el modal
-    // lo limpia y no se carga nada.
+    // Scene that will be loaded (empty = none pending). Cancel in the modal
+    // clears it and nothing is loaded.
     std::filesystem::path  m_sceneLoadTarget;
     bool                   m_openScenePromptPopup = false;
-    // Decisión tomada dentro del popup. Se consume al principio del frame
-    // SIGUIENTE, fuera de todo Begin/BeginPopupModal: cargar una escena destruye
-    // el árbol de GameObjects y toca la GPU, y hacerlo desde dentro del popup
-    // sería reentrar en medio del propio dibujado del panel.
+    // Decision made inside the popup. It is consumed at the start of the NEXT
+    // frame, outside any Begin/BeginPopupModal: loading a scene destroys
+    // the GameObject tree and touches the GPU, and doing it from inside the popup
+    // would be re-entering in the middle of the panel's own drawing.
     ScenePromptChoice      m_scenePromptChoice = ScenePromptChoice::None;
 };
 

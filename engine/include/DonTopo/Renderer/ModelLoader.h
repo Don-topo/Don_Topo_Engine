@@ -20,11 +20,11 @@ namespace DonTopo
     struct PreviewImage
     {
         int                  w = 0, h = 0;
-        std::vector<uint8_t> rgba;          // w*h*4, sRGB tal cual el fichero; vacía = sin textura
+        std::vector<uint8_t> rgba;          // w*h*4, sRGB as in the file; empty = no texture
     };
 
-    // Lo minimo para pintar una miniatura: geometria en bind pose y el albedo
-    // reducido. Sin animaciones, esqueleto, normal map ni ORM (ver loadPreview).
+    // The minimum to paint a thumbnail: geometry in bind pose and the reduced
+    // albedo. Without animations, skeleton, normal map or ORM (see loadPreview).
     struct PreviewPart
     {
         std::vector<glm::vec3> positions, normals, colors;
@@ -35,22 +35,22 @@ namespace DonTopo
         float                  roughness = 0.5f;
     };
 
-    // Filtro de caja a kPreviewMaxTexture en el lado mayor, conservando la
-    // proporcion. Lo que ya cabe no se toca. rgba: w*h*4. Vive en
-    // PreviewImage.cpp junto al resto de la decodificacion del preview.
+    // Box filter down to kPreviewMaxTexture on the larger side, keeping the
+    // aspect ratio. What already fits is not touched. rgba: w*h*4. Lives in
+    // PreviewImage.cpp alongside the rest of the preview decoding.
     PreviewImage downscalePreviewImage(const uint8_t* rgba, int w, int h);
 
     struct ModelPreview
     {
         PreviewStatus                      status = PreviewStatus::Unreadable;
         std::vector<PreviewPart>           parts;
-        // Sidecar, .mtl de un .obj y texturas externas, cada uno sellado ANTES de leerlo.
+        // Sidecar, .mtl of an .obj and external textures, each one stamped BEFORE reading it.
         std::vector<FileStamp>             dependencies;
     };
 
-    // Resultado de importar SOLO las animaciones de un fichero. warnings lleva
-    // los mensajes ya formateados para el Log Console; mapped/totalChannels
-    // dejan al caller decidir si eso es un fichero válido o un rig equivocado.
+    // Result of importing ONLY the animations of a file. warnings carries
+    // the messages already formatted for the Log Console; mapped/totalChannels
+    // let the caller decide whether that is a valid file or a wrong rig.
     struct LoadedClips
     {
         std::vector<AnimationClip> clips;
@@ -62,14 +62,14 @@ namespace DonTopo
     struct ModelPiece
     {
         int         piece = 0;        // indice en scene->mMeshes
-        std::string name;             // nombre del nodo (o de la malla si el nodo no tiene)
-        glm::mat4   transform{1.0f};  // relativa a la raiz; traslacion x escala del sidecar
+        std::string name;             // name of the node (or of the mesh if the node has none)
+        glm::mat4   transform{1.0f};  // relative to the root; translation x sidecar scale
     };
 
     struct StaticModel
     {
-        std::vector<Mesh>       meshes;   // una por scene->mMeshes; meshes[i].piece == i
-        std::vector<ModelPiece> pieces;   // apariciones, en profundidad
+        std::vector<Mesh>       meshes;   // one per scene->mMeshes; meshes[i].piece == i
+        std::vector<ModelPiece> pieces;   // occurrences, depth-first
     };
 
     class ModelLoader
@@ -78,73 +78,73 @@ namespace DonTopo
             static Mesh load(const std::string& path);
             static SkinnedMesh loadSkinned(const std::string& path);
 
-            // Un solo ReadFile: todas las mallas del fichero y donde aparece cada
-            // una en los nodos. Para modelos SIN huesos (con huesos, loadSkinned).
-            // La transformacion de cada pieza es relativa a la raiz (la de un FBX
-            // lleva la conversion de unidades) y su traslacion va por la escala
-            // del sidecar. Las mallas sin triangulos no son pieza. Lanza como load.
+            // A single ReadFile: all the meshes of the file and where each
+            // one appears in the nodes. For models WITHOUT bones (with bones, loadSkinned).
+            // The transformation of each piece is relative to the root (that of an FBX
+            // carries the unit conversion) and its translation is scaled by the
+            // sidecar's scale. Meshes without triangles are not a piece. Throws like load.
             static StaticModel loadStatic(const std::string& path);
 
-            // La malla `piece` del fichero, sin transformacion. load(path) es
-            // load(path, 0). Pieza fuera de rango: std::runtime_error.
+            // The mesh `piece` of the file, without transformation. load(path) is
+            // load(path, 0). Piece out of range: std::runtime_error.
             static Mesh load(const std::string& path, int piece);
 
-            // Importa las animaciones de path mapeando cada canal al esqueleto
-            // skel POR NOMBRE de hueso. No construye geometría ni materiales:
-            // un FBX de Mixamo trae la malla entera y aquí sobra.
+            // Imports the animations of path mapping each channel to the skeleton
+            // skel BY bone NAME. It does not build geometry or materials:
+            // a Mixamo FBX brings the whole mesh and it is not needed here.
             //
-            // No lanza: un fichero ilegible devuelve clips vacío y un warning.
+            // Does not throw: an unreadable file returns empty clips and a warning.
             static LoadedClips loadAnimationClips(const std::string& path, const Skeleton& skel);
 
-            // true si algún aiMesh del fichero declara huesos. Es lo que separa
-            // un personaje de un prop: sin huesos no hay pesos por vértice, y
-            // sin pesos no hay nada que una animación pueda deformar.
+            // true if any aiMesh of the file declares bones. It is what separates
+            // a character from a prop: without bones there are no per-vertex weights, and
+            // without weights there is nothing an animation can deform.
             //
-            // No lanza. Un fichero ilegible devuelve false y deja que load()
-            // dé el error de verdad, con su mensaje.
+            // Does not throw. An unreadable file returns false and lets load()
+            // give the real error, with its message.
             static bool hasBones(const std::string& path);
 
-            // Decide estático vs skinned mirando el fichero, no al llamante. Un
-            // FBX con huesos entra siempre como SkinnedMesh, aunque no traiga ni
-            // una animación: es lo que habilita el Animator, y los clips pueden
-            // venir después de otros ficheros (ver addAnimationSource).
+            // Decides static vs skinned by looking at the file, not the caller. An
+            // FBX with bones always comes in as SkinnedMesh, even if it brings not
+            // a single animation: it is what enables the Animator, and the clips may
+            // come later from other files (see addAnimationSource).
             //
-            // Propaga las excepciones de load()/loadSkinned(): los llamantes ya
-            // tienen su try/catch y su mensaje de error para el usuario.
+            // Propagates the exceptions of load()/loadSkinned(): the callers already
+            // have their try/catch and their error message for the user.
             static std::shared_ptr<Mesh> loadAuto(const std::string& path);
 
-            // Lectura ligera para las miniaturas del Content Browser. Pinta lo
-            // mismo que el motor (con huesos, todas las mallas como loadSkinned;
-            // sin huesos, solo la primera como load) y respeta el sidecar en lo
-            // que cambia el aspecto. Sin malla pero con clips -> AnimationOnly.
-            // Nunca lanza.
+            // Lightweight read for the Content Browser thumbnails. It draws the
+            // same as the engine (with bones, all the meshes like loadSkinned;
+            // without bones, only the first like load) and respects the sidecar in
+            // what changes the look. Without a mesh but with clips -> AnimationOnly.
+            // Never throws.
             static ModelPreview loadPreview(const std::string& path);
 
-            // Textura reducida a kPreviewMaxTexture en el lado mayor, conservando
-            // la proporcion. Vacia si no se puede leer o si pasa de
-            // kPreviewMaxSourcePixels (se mira la cabecera antes de decodificar).
+            // Texture reduced to kPreviewMaxTexture on the larger side, keeping
+            // the aspect ratio. Empty if it cannot be read or if it exceeds
+            // kPreviewMaxSourcePixels (the header is looked at before decoding).
             static PreviewImage loadPreviewImage(const std::filesystem::path& path);
             static PreviewImage decodePreviewImage(const uint8_t* bytes, size_t size);
 
-            // Formatos de modelo que Assimp tiene compilados. La UNICA lista: el
-            // editor entero pregunta aqui (clasificar, Add Mesh, importar,
-            // miniaturas, Animator). Sin distinguir mayusculas; ext con el punto.
+            // Model formats that Assimp has compiled in. The ONLY list: the
+            // whole editor asks here (classify, Add Mesh, import,
+            // thumbnails, Animator). Case-insensitive; ext with the dot.
             static bool isSupportedModelExtension(const std::string& ext);
-            // Filtro para ImGuiFileDialog con los mismos formatos.
+            // Filter for ImGuiFileDialog with the same formats.
             static const char* supportedModelFilter();
 
-            // Ruta de una textura externa referenciada por el modelo: primero la
-            // ruta relativa TAL CUAL respecto a modelDir (textures/x.png); si no
-            // existe, el nombre suelto junto al modelo, que es lo de siempre. Una
-            // ruta absoluta o que salga de la carpeta (..) solo prueba el nombre.
+            // Path of an external texture referenced by the model: first the
+            // relative path AS IS with respect to modelDir (textures/x.png); if it does not
+            // exist, the bare name next to the model, which is the usual behavior. An
+            // absolute path or one that leaves the folder (..) only tries the name.
             static std::filesystem::path resolveModelTexture(const std::filesystem::path& modelDir,
                                                              const std::string& raw);
 
-            // Ficheros que el modelo lee ademas de si mismo, en rutas RELATIVAS a
-            // su carpeta (separador /), sin duplicados: los mtllib de un .obj y
-            // los buffers[].uri e images[].uri externos de un .gltf (decodificados
-            // de %XX; data:, absolutas y con .. fuera). .glb y .fbx: ninguno.
-            // Nunca lanza: un fichero ilegible devuelve vacio.
+            // Files the model reads besides itself, in paths RELATIVE to
+            // its folder (separator /), without duplicates: the mtllib of an .obj and
+            // the external buffers[].uri and images[].uri of a .gltf (decoded
+            // from %XX; data:, absolute and with .. out). .glb and .fbx: none.
+            // Never throws: an unreadable file returns empty.
             static std::vector<std::string> modelCompanionFiles(const std::string& path);
     };
 }

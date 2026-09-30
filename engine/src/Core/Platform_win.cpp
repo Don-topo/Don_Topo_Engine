@@ -29,8 +29,8 @@ namespace DonTopo::platform
         return w;
     }
 
-    // MessageBoxW y no A: el texto viene en UTF-8 y la version ANSI lo leeria
-    // con la codepage del sistema (acentos rotos).
+    // MessageBoxW and not A: the text comes in UTF-8 and the ANSI version would read it
+    // with the system codepage (broken accents).
     void showFatalError(const std::string& title, const std::string& messageUtf8)
     {
         MessageBoxW(nullptr, widen(messageUtf8).c_str(), widen(title).c_str(), MB_OK | MB_ICONERROR);
@@ -52,14 +52,14 @@ namespace DonTopo::platform
             ULARGE_INTEGER kk{}, uu{};
             kk.LowPart = k.dwLowDateTime; kk.HighPart = k.dwHighDateTime;
             uu.LowPart = u.dwLowDateTime; uu.HighPart = u.dwHighDateTime;
-            s.cpuSeconds = double(kk.QuadPart + uu.QuadPart) / 1e7;   // unidades de 100 ns
+            s.cpuSeconds = double(kk.QuadPart + uu.QuadPart) / 1e7;   // units of 100 ns
         }
         return s;
     }
 
-    // VRAM: DXGI da el uso REAL del proceso y el presupuesto que le concede el
-    // sistema. Vulkan por si solo no lo expone sin VK_EXT_memory_budget. El
-    // adaptador se abre una vez y vive lo que el proceso.
+    // VRAM: DXGI gives the REAL usage of the process and the budget the system grants it.
+    // Vulkan alone does not expose it without VK_EXT_memory_budget. The
+    // adapter is opened once and lives as long as the process.
     std::optional<GpuMemoryBudget> gpuMemoryBudget()
     {
         static bool           tried   = false;
@@ -71,8 +71,8 @@ namespace DonTopo::platform
             if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory)) && factory)
             {
                 IDXGIAdapter1* adapter1 = nullptr;
-                // Adaptador 0: el motor no expone el LUID del device de Vulkan, y en
-                // una maquina de un solo GPU dedicado es el mismo.
+                // Adapter 0: the engine does not expose the Vulkan device LUID, and on
+                // a single dedicated GPU machine it is the same.
                 if (SUCCEEDED(factory->EnumAdapters1(0, &adapter1)) && adapter1)
                 {
                     IDXGIAdapter3* adapter3 = nullptr;

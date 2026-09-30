@@ -13,12 +13,12 @@
 using namespace physx;
 
 namespace {
-    // Mínimo positivo del radio: PhysX rechaza una PxSphereGeometry degenerada,
-    // y con escala 0 el producto daría exactamente eso.
+    // Positive minimum radius: PhysX rejects a degenerate PxSphereGeometry,
+    // and with scale 0 the product would give exactly that.
     constexpr float kMinRadius = 1e-4f;
 
-    // Una esfera no puede deformarse en elipsoide: manda el eje mayor. abs()
-    // porque una escala negativa es un espejo, no encoge la esfera.
+    // A sphere cannot deform into an ellipsoid: the largest axis wins. abs()
+    // because a negative scale is a mirror, it does not shrink the sphere.
     float scaledRadius(float radius, const glm::vec3& scale)
     {
         const float s = std::max({std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z)});
@@ -26,9 +26,9 @@ namespace {
         return v > kMinRadius ? v : kMinRadius;
     }
 
-    // Tolerancia, no igualdad: glm::decompose devuelve 1±1e-7 en matrices con
-    // rotación, y ese ruido no debe reescribir la geometría de una escena sin
-    // escalar (con escala 1 no se llama nunca a setGeometry).
+    // Tolerance, not equality: glm::decompose returns 1±1e-7 on matrices with
+    // rotation, and that noise must not rewrite the geometry of an unscaled scene
+    // (with scale 1 setGeometry is never called).
     bool sameScale(const glm::vec3& a, const glm::vec3& b)
     {
         return std::fabs(a.x - b.x) < 1e-6f
@@ -57,7 +57,7 @@ SphereCollider::SphereCollider(void* actor, void* shape, float radius,
 SphereCollider::~SphereCollider()
 {
 #ifdef DT_PHYSX_ENABLED
-    // release() vía base PxActor: funciona para static y dynamic.
+    // release() through the PxActor base: works for static and dynamic.
     if (m_actor) static_cast<PxActor*>(m_actor)->release();
 #endif
 }
@@ -131,7 +131,7 @@ glm::mat4 SphereCollider::getWorldTransform() const
     glm::quat rotation(pose.q.w, pose.q.x, pose.q.y, pose.q.z);
     glm::mat4 rotationMat = glm::mat4_cast(rotation);
 
-    // Con interpolación apagada (default) devuelve la pose cruda del actor.
+    // With interpolation off (default) it returns the raw actor pose.
     return blendWithPreviousPose(translation * rotationMat);
 #else
     return glm::mat4(1.0f);
@@ -147,8 +147,8 @@ void SphereCollider::syncTransform(const glm::mat4& worldTransform)
     glm::vec4 perspective;
     glm::quat rotation;
     const PxTransform pose = poseFromWorld(worldTransform, &scale);
-    // La escala no cabe en la PxTransform: se hornea en la geometría. No-op si
-    // no cambió desde la última vez (el caso normal, escala 1).
+    // The scale does not fit in the PxTransform: it is baked into the geometry. No-op if
+    // it did not change since last time (the normal case, scale 1).
     setWorldScale(scale);
     auto* dyn = static_cast<PxRigidActor*>(m_actor)->is<PxRigidDynamic>();
     if (dyn && (dyn->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC))
@@ -170,11 +170,11 @@ void SphereCollider::teleport(const glm::mat4& worldTransform)
     glm::quat rotation;
     const PxTransform pose = poseFromWorld(worldTransform, &scale);
 
-    setWorldScale(scale); // ver nota en syncTransform
+    setWorldScale(scale); // see note in syncTransform
 
     auto* actor = static_cast<PxRigidActor*>(m_actor);
     actor->setGlobalPose(pose);
-    // Reset de velocidad solo en cuerpo dinámico real (no static/kinematic).
+    // Velocity reset only on a real dynamic body (not static/kinematic).
     if (auto* dyn = actor->is<PxRigidDynamic>())
         if (!(dyn->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC))
         {

@@ -9,12 +9,12 @@ namespace DonTopo
 {
     namespace
     {
-        // La misma ruta que usa InputActionsPanel (directorio de trabajo).
+        // The same path InputActionsPanel uses (working directory).
         const char* kInputActionsFile = "input_actions.json";
 
-        // Umbral de activación de un eje y umbral de suelta. Separados a
-        // propósito: con uno solo, un stick dejado justo en el límite alterna
-        // activo/inactivo y dispara un IsActionPressed por frame.
+        // Activation threshold of an axis and release threshold. Separate on
+        // purpose: with only one, a stick left right at the limit toggles
+        // active/inactive and fires an IsActionPressed per frame.
         constexpr float kAxisPressThreshold   = 0.5f;
         constexpr float kAxisReleaseThreshold = 0.4f;
 
@@ -52,9 +52,9 @@ namespace DonTopo
         for (int b = 0; b <= GLFW_MOUSE_BUTTON_LAST; ++b)
             s_mCurr[b] = glfwGetMouseButton(s_window, b) == GLFW_PRESS;
 
-        // Primer mando conectado con mapeo conocido. Sin mando, todo a false:
-        // desconectarlo a mitad de partida suelta los botones, no los deja
-        // pegados (y el frame siguiente da el flanco de subida).
+        // First connected gamepad with a known mapping. With no gamepad, everything is false:
+        // disconnecting it mid-game releases the buttons, it does not leave them
+        // stuck (and the next frame gives the rising edge).
         s_padPrev  = s_padCurr;
         s_axisPrev = s_axisCurr;
         GLFWgamepadstate pad{};
@@ -62,8 +62,8 @@ namespace DonTopo
         {
             for (int b = 0; b <= GLFW_GAMEPAD_BUTTON_LAST; ++b)
                 s_padCurr[b] = pad.buttons[b] == GLFW_PRESS;
-            // La histéresis mira el estado del frame anterior, de ahí s_axisPrev
-            // (s_axisCurr ya se está pisando en este mismo bucle).
+            // The hysteresis looks at the previous frame state, hence s_axisPrev
+            // (s_axisCurr is already being overwritten in this same loop).
             for (int c = 0; c < kPadAxisBindingCount; ++c)
                 s_axisCurr[c] = padAxisActive(c, pad.axes[padAxisIndex(c)], s_axisPrev[c]);
         }
@@ -88,12 +88,12 @@ namespace DonTopo
     }
     bool Input::isMouseButtonDown(int button)
     {
-        // Acotado y contra el snapshot del frame, exactamente igual que
-        // isKeyDown de aquí arriba. Antes preguntaba a GLFW en vivo y sin
-        // acotar, con dos consecuencias: un código inválido provocaba un error
-        // de GLFW por consulta y por frame, y el valor podía no coincidir con el
-        // que ven isActionPressed/isActionReleased, que sí leen s_mCurr/s_mPrev.
-        // Down, Pressed y Released miran ahora la misma foto.
+        // Bounded and against the frame snapshot, exactly like
+        // isKeyDown above. It used to ask GLFW live and unbounded,
+        // with two consequences: an invalid code caused a GLFW error
+        // per query and per frame, and the value might not match the
+        // one seen by isActionPressed/isActionReleased, which do read s_mCurr/s_mPrev.
+        // Down, Pressed and Released now look at the same snapshot.
         return button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST && s_mCurr[button];
     }
     bool Input::isPadButtonDown(int button)
@@ -116,14 +116,14 @@ namespace DonTopo
         float value = rawValue;
         if (isTriggerAxis(axis))
         {
-            // Un gatillo solo se aprieta hacia un lado: la dirección negativa
-            // no es bindeable y no puede activarse nunca.
+            // A trigger is only pressed toward one side: the negative direction
+            // is not bindable and can never activate.
             if (negative) return false;
-            value = (rawValue + 1.0f) * 0.5f;   // [-1,1] en reposo -1 => [0,1]
+            value = (rawValue + 1.0f) * 0.5f;   // [-1,1] with rest at -1 => [0,1]
         }
         else if (negative)
         {
-            value = -value;   // el binding mira su lado del eje
+            value = -value;   // the binding looks at its side of the axis
         }
 
         return value > (wasActive ? kAxisReleaseThreshold : kAxisPressThreshold);
@@ -142,21 +142,21 @@ namespace DonTopo
     void Input::ensureActionsLoaded()
     {
         if (s_actionsLoaded) return;
-        s_actionsLoaded = true;   // antes de leer: un fichero ilegible no se reintenta cada frame
+        s_actionsLoaded = true;   // before reading: an unreadable file is not retried every frame
         loadActionsFromDisk();
     }
 
     void Input::loadActionsFromDisk()
     {
-        // Los avisos son los de ESTA carga: se limpian al entrar, nunca durante.
-        // Sin esto, guardar dos veces el panel con un binding malo los duplicaría
-        // (mismo criterio que Scene::m_warnings).
+        // The warnings are those of THIS load: they are cleared on entry, never during.
+        // Without this, saving the panel twice with a bad binding would duplicate them
+        // (same criterion as Scene::m_warnings).
         s_actionDiagnostics.clear();
 
         std::ifstream file(kInputActionsFile);
-        if (!file.is_open()) return;   // sin fichero de acciones: mapa vacío, no es un error
+        if (!file.is_open()) return;   // no actions file: empty map, not an error
 
-        // Un JSON roto deja el mapa vacío; nunca sube una excepción al script.
+        // A broken JSON leaves the map empty; an exception never rises to the script.
         nlohmann::json j = nlohmann::json::parse(file, nullptr, false);
         if (j.is_discarded() || !j.is_object()) return;
 
@@ -171,8 +171,8 @@ namespace DonTopo
             const std::string name = nameIt->get<std::string>();
             if (name.empty()) continue;
 
-            // Solo "glfw": "bindings" son valores de ImGuiKey que Core no sabe
-            // traducir. Una acción sin "glfw" existe pero no dispara nunca.
+            // Only "glfw": "bindings" are ImGuiKey values that Core cannot
+            // translate. An action without "glfw" exists but never fires.
             std::vector<ActionBinding> bindings;
             auto glfwIt = aj.find("glfw");
             if (glfwIt != aj.end() && glfwIt->is_array())
@@ -189,24 +189,24 @@ namespace DonTopo
                     ActionBinding b;
                     b.code = codeIt->get<int>();
 
-                    // Código fuera de rango (fichero de otra versión, edición a
-                    // mano): se descarta AQUÍ y no en cada consulta. Y se NOMBRA:
-                    // una acción que no dispara nunca porque su binding se
-                    // descartó al cargar es indistinguible de una mal
-                    // configurada si esto se traga en silencio.
+                    // Code out of range (file from another version, hand
+                    // edit): it is discarded HERE and not on every query. And it is NAMED:
+                    // an action that never fires because its binding was
+                    // discarded at load is indistinguishable from a badly
+                    // configured one if this is swallowed silently.
                     //
-                    // La regla estaba escrita —con este mismo comentario— pero
-                    // aplicada SOLO a padaxis, así que los códigos de key, mouse
-                    // y pad entraban sin mirar. El de mouse era el que más se
-                    // notaba: isActionDown lo resolvía con isMouseButtonDown, que
-                    // se lo pasaba a GLFW sin acotar (un error de GLFW por
-                    // consulta y por frame), mientras isActionPressed y
-                    // isActionReleased sí lo acotaban — tres funciones de la
-                    // misma familia comportándose distinto ante el mismo fichero.
+                    // The rule was written —with this same comment— but
+                    // applied ONLY to padaxis, so the key, mouse
+                    // and pad codes came in unchecked. The mouse one was the most
+                    // noticeable: isActionDown resolved it with isMouseButtonDown, which
+                    // passed it to GLFW unbounded (one GLFW error per
+                    // query and per frame), while isActionPressed and
+                    // isActionReleased did bound it — three functions of the
+                    // same family behaving differently on the same file.
                     //
-                    // Validar en el cargador y no en las tres consultas es lo que
-                    // hace que la cuarta consulta que alguien escriba herede la
-                    // guarda sin tener que acordarse.
+                    // Validating in the loader and not in the three queries is what
+                    // makes the fourth query someone writes inherit the
+                    // guard without having to remember.
                     const auto descarta = [&](const char* queDispositivo) {
                         s_actionDiagnostics.push_back(
                             "Input: action '" + name + "' has a binding of " +

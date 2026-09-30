@@ -12,23 +12,23 @@ public:
     Window(const Window&)            = delete;
     Window& operator=(const Window&) = delete;
 
-    // iconPath: ruta a un PNG (RGBA o no) para el icono de la ventana y de
-    // la barra de tareas (glfwSetWindowIcon). nullptr = icono por defecto
-    // del sistema.
+    // iconPath: path to a PNG (RGBA or not) for the window icon and the
+    // taskbar icon (glfwSetWindowIcon). nullptr = system default
+    // icon.
     //
-    // showOnInit=false deja la ventana OCULTA al volver: el caller la enseña
-    // con show() cuando tenga algo que pintar. Es el remedio que recomienda
-    // GLFW para el "white flash" del arranque — entre que la ventana se hace
-    // visible y que se presenta el primer frame, Windows pinta el area de
-    // cliente con el fondo por defecto (blanco). El runtime tarda ~520ms en
-    // levantar Vulkan, asi que ese blanco se ve de sobra. El editor usa el
-    // default (true) y no cambia.
+    // showOnInit=false leaves the window HIDDEN on return: the caller shows it
+    // with show() when it has something to draw. It is the remedy GLFW recommends
+    // for the startup "white flash": between the window becoming visible and the
+    // first frame being presented, Windows paints the client area with the
+    // default background (white). The runtime takes ~520ms to bring up Vulkan,
+    // so that white is plainly visible. The editor uses the default (true) and
+    // does not change.
     void init(int width, int height, const char* title, const char* iconPath = nullptr,
               bool showOnInit = true);
     void shutdown();
 
-    // Hace visible la ventana. Idempotente (glfwShowWindow lo es). Solo hace
-    // falta si se llamo a init con showOnInit=false.
+    // Makes the window visible. Idempotent (glfwShowWindow is). Only needed
+    // if init was called with showOnInit=false.
     void show() const;
 
     bool shouldClose() const;

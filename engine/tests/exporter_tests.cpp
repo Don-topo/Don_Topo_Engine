@@ -1,10 +1,10 @@
-// Test headless del exportador de juego (sin GUI, sin GPU, sin PhysX, sin
-// Lua). Plain main + asserts, mismo patrón que content_browser_tests.cpp.
+// Headless test of the game exporter (no GUI, no GPU, no PhysX, no
+// Lua). Plain main + asserts, same pattern as content_browser_tests.cpp.
 //
-// Los Mesh se construyen a mano en vez de vía ModelLoader: el test no
-// necesita geometría real, solo los campos de path. Y no se crea ningún
-// collider, así que no se instancia PhysicsManager — el motor solo admite una
-// PxFoundation por proceso.
+// The Meshes are built by hand instead of via ModelLoader: the test does not
+// need real geometry, only the path fields. And no collider is created, so
+// PhysicsManager is not instantiated: the engine only supports one
+// PxFoundation per process.
 #include "DonTopo/Editor/GameExporter.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
@@ -34,8 +34,8 @@ namespace fs = std::filesystem;
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
-// Crea un proyecto de mentira en disco con los ficheros que la escena de
-// prueba referenciará. Devuelve la raíz canonicalizada.
+// Creates a fake project on disk with the files that the test scene
+// will reference. Returns the canonicalized root.
 static fs::path makeProjectFixture()
 {
     std::error_code ec;
@@ -49,15 +49,15 @@ static fs::path makeProjectFixture()
     std::ofstream(root / "assets" / "step.wav")            << "wav";
     std::ofstream(root / "Scripts" / "Player.lua")         << "-- lua";
     std::ofstream(root / "assets" / "ui_atlas.png")        << "png";
-    // La fuente por defecto de la UI vive DENTRO del proyecto: el fixture la
-    // reproduce en su misma ruta relativa.
+    // The default UI font lives INSIDE the project: the fixture
+    // reproduces it at its same relative path.
     fs::create_directories((root / DonTopo::kDefaultUiFontPath).parent_path(), ec);
     std::ofstream(root / DonTopo::kDefaultUiFontPath)      << "ttf";
     fs::path canon = fs::canonical(root, ec);
     return ec ? root : canon;
 }
 
-// Mesh estático con path de origen y, opcionalmente, textura difusa.
+// Static mesh with a source path and, optionally, a diffuse texture.
 static std::shared_ptr<Mesh> makeMesh(const fs::path& source, const fs::path& diffuse = {})
 {
     auto m = std::make_shared<Mesh>();
@@ -67,8 +67,8 @@ static std::shared_ptr<Mesh> makeMesh(const fs::path& source, const fs::path& di
     return m;
 }
 
-// Criterio de aceptación 2: 2 meshes + 1 textura + 1 script + 1 audio -> 5
-// paths exactos, ni uno más.
+// Acceptance criterion 2: 2 meshes + 1 texture + 1 script + 1 audio -> 5
+// exact paths, not one more.
 static void test_collects_exactly_referenced(const fs::path& root)
 {
     Scene scene;
@@ -89,7 +89,7 @@ static void test_collects_exactly_referenced(const fs::path& root)
     for (const ExportAsset& a : assets)
         CHECK(a.existsOnDisk);
 
-    // Ordenado por packagePath: el orden es determinista y comprobable.
+    // Sorted by packagePath: the order is deterministic and checkable.
     std::vector<std::string> pkg;
     for (const ExportAsset& a : assets) pkg.push_back(a.packagePath);
     CHECK(std::find(pkg.begin(), pkg.end(), "assets/hero.fbx")         != pkg.end());
@@ -99,22 +99,22 @@ static void test_collects_exactly_referenced(const fs::path& root)
     CHECK(std::find(pkg.begin(), pkg.end(), "Scripts/Player.lua")      != pkg.end());
 }
 
-// Un Button aporta su atlas y su fuente. Sin fuente propia, la que viaja es la
-// de por defecto: es la que dibujará el runtime, y sin ella el juego exportado
-// sale con los botones mudos.
+// A Button contributes its atlas and its font. Without its own font, the one that travels is the
+// default one: it is the one the runtime will draw, and without it the exported game
+// comes out with mute buttons.
 static void test_button_assets(const fs::path& root)
 {
     const std::map<std::string, fs::path> noScripts;
 
-    {   // Sin texto no hay etiqueta que dibujar: ninguna fuente que copiar.
+    {   // Without text there is no label to draw: no font to copy.
         Scene scene;
         auto* go = scene.addGameObject("mudo");
         go->setButton(std::make_shared<ButtonComponent>());
         CHECK(collectSceneAssets(scene, root, noScripts).empty());
     }
 
-    {   // Con texto y sin fuente propia: la de por defecto, y con su ruta
-        // relativa del proyecto intacta dentro del paquete.
+    {   // With text and without its own font: the default one, and with its
+        // project-relative path intact inside the package.
         Scene scene;
         auto* go = scene.addGameObject("aceptar");
         auto b = std::make_shared<ButtonComponent>();
@@ -130,13 +130,13 @@ static void test_button_assets(const fs::path& root)
         }
     }
 
-    {   // Atlas propio + fuente propia: las suyas, y la de por defecto NO.
+    {   // Own atlas + own font: its own, and the default one is NOT copied.
         Scene scene;
         auto* go = scene.addGameObject("skin");
         auto b = std::make_shared<ButtonComponent>();
         b->text      = "Jugar";
         b->atlasPath = (root / "assets" / "ui_atlas.png").string();
-        b->fontPath  = (root / "assets" / "hero.fbx").string();   // vale cualquier fichero
+        b->fontPath  = (root / "assets" / "hero.fbx").string();   // any file will do
         go->setButton(b);
 
         std::vector<ExportAsset> assets = collectSceneAssets(scene, root, noScripts);
@@ -147,8 +147,8 @@ static void test_button_assets(const fs::path& root)
         CHECK(std::find(pkg.begin(), pkg.end(), "assets/hero.fbx")     != pkg.end());
         CHECK(std::find(pkg.begin(), pkg.end(), DonTopo::kDefaultUiFontPath) == pkg.end());
 
-        // Y el .scene sale apuntando a las rutas DEL PAQUETE, no a las del PC
-        // que exportó.
+        // And the .scene comes out pointing to the PACKAGE's paths, not to those of the PC
+        // that exported.
         std::map<std::string, std::string> sourceToPackage;
         for (const ExportAsset& a : assets)
             sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
@@ -161,18 +161,18 @@ static void test_button_assets(const fs::path& root)
     }
 }
 
-// Mesh procedural (Cube/Sphere/Plane/Capsule): sourcePath vacío, geometría ya
-// serializada en el .scene. No aporta ningún asset.
+// Procedural mesh (Cube/Sphere/Plane/Capsule): empty sourcePath, geometry already
+// serialized in the .scene. It contributes no asset.
 static void test_procedural_mesh_contributes_nothing(const fs::path& root)
 {
     Scene scene;
     auto* cube = scene.addGameObject("cube");
-    cube->setMesh(std::make_shared<Mesh>()); // sourcePath vacío
+    cube->setMesh(std::make_shared<Mesh>()); // empty sourcePath
 
     CHECK(collectSceneAssets(scene, root, {}).empty());
 }
 
-// Dos GameObjects con el mismo FBX -> una sola entrada.
+// Two GameObjects with the same FBX -> a single entry.
 static void test_deduplicates_shared_mesh(const fs::path& root)
 {
     Scene scene;
@@ -182,8 +182,8 @@ static void test_deduplicates_shared_mesh(const fs::path& root)
     CHECK(collectSceneAssets(scene, root, {}).size() == 1);
 }
 
-// Las animationSources extra se recolectan; la fuente builtin comparte valor
-// con sourcePath y no debe duplicarlo.
+// The extra animationSources are collected; the builtin source shares its value
+// with sourcePath and must not duplicate it.
 static void test_animation_sources(const fs::path& root)
 {
     std::ofstream(root / "assets" / "run.fbx") << "fbx";
@@ -199,13 +199,13 @@ static void test_animation_sources(const fs::path& root)
     CHECK(assets.size() == 2);
 }
 
-// loadSkinned NUNCA puebla el Material heredado de Mesh: reparte uno por
-// submalla en SkinnedMesh::materials. materialsOf() tiene una rama aparte
-// para leer justo ese vector, y sin este test nadie la ejercitaba (el resto
-// de tests deja SkinnedMesh::materials vacío). Ese punto ciego exacto ya
-// causó un bug real en el Content Browser: borrar una textura usada por un
-// personaje con rig informaba "0 objetos afectados" en un diálogo
-// destructivo, porque el buscador de referencias solo miraba `mesh.material`.
+// loadSkinned NEVER populates the Material inherited from Mesh: it hands out one per
+// submesh in SkinnedMesh::materials. materialsOf() has a separate branch
+// to read exactly that vector, and without this test nobody exercised it (the rest
+// of the tests leave SkinnedMesh::materials empty). That exact blind spot already
+// caused a real bug in the Content Browser: deleting a texture used by a
+// rigged character reported "0 objects affected" in a destructive
+// dialog, because the reference finder only looked at `mesh.material`.
 static void test_skinned_mesh_materials(const fs::path& root)
 {
     std::ofstream(root / "assets" / "hero_skin.png") << "png";
@@ -224,24 +224,24 @@ static void test_skinned_mesh_materials(const fs::path& root)
     for (const ExportAsset& a : assets) pkg.push_back(a.packagePath);
     CHECK(std::find(pkg.begin(), pkg.end(), "assets/hero_skin.png") != pkg.end());
 
-    // Y la textura debe llegar marcada como existente, no solo presente.
+    // And the texture must arrive marked as existing, not just present.
     auto it = std::find_if(assets.begin(), assets.end(), [](const ExportAsset& a) {
         return a.packagePath == "assets/hero_skin.png";
     });
     CHECK(it != assets.end() && it->existsOnDisk);
 }
 
-// Asset fuera de la raíz del proyecto -> assets/_external/, con sufijo ante
-// colisión de nombres.
+// Asset outside the project root -> assets/_external/, with a suffix on
+// name collision.
 static void test_external_assets(const fs::path& root)
 {
     std::error_code ec;
     fs::path tempRoot = fs::temp_directory_path(ec);
     if (ec || tempRoot.empty())
     {
-        // Sin directorio temporal no hay sitio seguro donde escribir: se falla
-        // el test en vez de caer a una ruta relativa al CWD, que dejaría los
-        // remove_all de abajo apuntando dentro del repo.
+        // Without a temporary directory there is no safe place to write: the test fails
+        // instead of falling back to a path relative to the CWD, which would leave the
+        // remove_all calls below pointing inside the repo.
         CHECK(false);
         return;
     }
@@ -250,9 +250,9 @@ static void test_external_assets(const fs::path& root)
     fs::remove_all(outside, ec);
     fs::create_directories(outside / "a", ec);
     fs::create_directories(outside / "b", ec);
-    // Cada FBX con su textura hermana y EL MISMO nombre en las dos carpetas:
-    // es el caso que el esquema viejo (aplanar a assets/_external/<nombre> con
-    // sufijo numérico) rompía en silencio.
+    // Each FBX with its sibling texture and THE SAME name in both folders:
+    // it is the case that the old scheme (flatten to assets/_external/<name> with
+    // numeric suffix) silently broke.
     std::ofstream(outside / "a" / "prop.fbx") << "fbx";
     std::ofstream(outside / "a" / "prop.png") << "png";
     std::ofstream(outside / "b" / "prop.fbx") << "fbx";
@@ -267,13 +267,13 @@ static void test_external_assets(const fs::path& root)
     for (const ExportAsset& a : assets)
         CHECK(a.packagePath.rfind("assets/_external/", 0) == 0);
 
-    // El invariante que de verdad importa no son las rutas literales, sino que
-    // cada FBX siga siendo hermano de SU textura: ModelLoader deriva la
-    // textura como dirname(fbx)/basename (ModelLoader.cpp:156), así que si los
-    // dos pares acaban en la misma carpeta, el segundo modelo carga la textura
-    // del primero y el render sale mal sin ningún error. Afirmar solo
-    // "packagePath[0] != packagePath[1]" no detectaba eso: el esquema viejo
-    // también daba nombres distintos.
+    // The invariant that really matters is not the literal paths, but that
+    // each FBX remains a sibling of ITS texture: ModelLoader derives the
+    // texture as dirname(fbx)/basename (ModelLoader.cpp:156), so if the
+    // two pairs end up in the same folder, the second model loads the texture
+    // of the first and the render comes out wrong with no error. Asserting only
+    // "packagePath[0] != packagePath[1]" did not detect that: the old scheme
+    // also gave different names.
     auto packagePathOf = [&](const fs::path& source) {
         const std::string key = exportPathKey(source.string());
         for (const ExportAsset& a : assets)
@@ -287,15 +287,15 @@ static void test_external_assets(const fs::path& root)
     const fs::path texB = fs::path(packagePathOf(outside / "b" / "prop.png")).parent_path();
 
     CHECK(!fbxA.empty() && !fbxB.empty());
-    CHECK(fbxA == texA);   // el par de 'a' viaja junto
-    CHECK(fbxB == texB);   // el par de 'b' viaja junto
-    CHECK(fbxA != fbxB);   // y los dos pares van a carpetas distintas
+    CHECK(fbxA == texA);   // the pair of 'a' travels together
+    CHECK(fbxB == texB);   // the pair of 'b' travels together
+    CHECK(fbxA != fbxB);   // and the two pairs go to different folders
 
     fs::remove_all(outside, ec);
 }
 
-// Un asset referenciado que no está en disco se marca, no se filtra: el
-// llamador necesita listarlos en el error.
+// A referenced asset that is not on disk is flagged, not filtered out: the
+// caller needs to list them in the error.
 static void test_missing_asset_flagged(const fs::path& root)
 {
     Scene scene;
@@ -306,8 +306,8 @@ static void test_missing_asset_flagged(const fs::path& root)
     CHECK(!assets[0].existsOnDisk);
 }
 
-// Tras reescribir, ningún path del .scene puede seguir siendo absoluto: el
-// paquete se ejecuta en otra máquina y otro directorio.
+// After rewriting, no path in the .scene can remain absolute: the
+// package runs on another machine and another directory.
 static void test_rewrite_makes_paths_relative(const fs::path& root)
 {
     Scene scene;
@@ -328,8 +328,8 @@ static void test_rewrite_makes_paths_relative(const fs::path& root)
     nlohmann::json j = scene.toJson();
     int rewritten = rewriteScenePaths(j, sourceToPackage, scene.assetRoot());
 
-    // hero.fbx (mesh) + hero.fbx (animationSource builtin? no lo hay) +
-    // run.fbx + step.wav = 3 campos reescritos.
+    // hero.fbx (mesh) + hero.fbx (builtin animationSource? there is none) +
+    // run.fbx + step.wav = 3 rewritten fields.
     CHECK(rewritten == 3);
 
     const nlohmann::json& node = j["root"]["children"][0];
@@ -337,13 +337,13 @@ static void test_rewrite_makes_paths_relative(const fs::path& root)
     CHECK(node["mesh"]["animationSources"][0]["path"].get<std::string>() == "assets/run.fbx");
     CHECK(node["audioClip"]["path"].get<std::string>() == "assets/step.wav");
 
-    // Ningún path absoluto residual (en Windows: sin ':' de unidad).
+    // No residual absolute path (on Windows: no drive ':').
     CHECK(node["mesh"]["sourcePath"].get<std::string>().find(':') == std::string::npos);
     CHECK(node["audioClip"]["path"].get<std::string>().find(':') == std::string::npos);
 }
 
-// Review Focus (exportador): el .mat viaja con la escena, y matAsset se
-// reescribe a su ruta dentro del paquete.
+// Review Focus (exporter): the .mat travels with the scene, and matAsset is
+// rewritten to its path inside the package.
 static void test_mat_asset_is_collected_and_rewritten(const fs::path& root)
 {
     const fs::path mat = root / "assets" / "rojo.mat";
@@ -426,7 +426,7 @@ static void test_rewrite_resolves_paths_stored_relative_to_project(const fs::pat
     fs::remove_all(root / "projects", ec);
 }
 
-// Un path que no está en el mapa se deja intacto, no se borra ni se vacía.
+// A path that is not in the map is left intact, it is neither deleted nor emptied.
 static void test_rewrite_leaves_unknown_paths(const fs::path& root)
 {
     nlohmann::json j;
@@ -440,23 +440,23 @@ static void test_rewrite_leaves_unknown_paths(const fs::path& root)
     CHECK(j["root"]["mesh"]["sourcePath"].get<std::string>() == "C:/otro/sitio/x.fbx");
 }
 
-// El bloque mesh.materials (overrides de textura puestos a mano desde
-// Properties, Task 6) es tan asset como sourcePath o audioClip, pero
-// rewriteNode no lo conocía: el fichero SÍ se empaquetaba de sobra
-// (collectSceneAssets ya lo recorre vía materialsOf), pero la ruta que
-// quedaba escrita en el game.scene del paquete seguía siendo la de disco del
-// editor. Un override FUERA de la raíz del proyecto es el caso que lo
-// delata: toStoredPath ya la deja absoluta para ese caso (igual que hace con
-// sourcePath), así que sin el fix llega intacta al paquete, apuntando a la
-// máquina que exportó y no a assets/_external/.
+// The mesh.materials block (texture overrides set by hand from
+// Properties, Task 6) is as much an asset as sourcePath or audioClip, but
+// rewriteNode did not know about it: the file WAS packaged needlessly
+// (collectSceneAssets already walks it via materialsOf), but the path that
+// ended up written in the package's game.scene was still the editor's
+// on-disk one. An override OUTSIDE the project root is the case that
+// gives it away: toStoredPath already leaves it absolute for that case (same as it does
+// with sourcePath), so without the fix it reaches the package intact, pointing to the
+// machine that exported and not to assets/_external/.
 static void test_rewrite_materials_override_outside_root(const fs::path& root)
 {
     std::error_code ec;
     fs::path tempRoot = fs::temp_directory_path(ec);
     if (ec || tempRoot.empty())
     {
-        // Mismo criterio que test_external_assets: sin temp_directory_path no
-        // hay dónde escribir con seguridad.
+        // Same criterion as test_external_assets: without temp_directory_path there is
+        // nowhere to write safely.
         CHECK(false);
         return;
     }
@@ -471,11 +471,11 @@ static void test_rewrite_materials_override_outside_root(const fs::path& root)
 
     auto* go = scene.addGameObject("prop");
     auto mesh = makeMesh(root / "assets" / "hero.fbx");
-    // El override vive en dos sitios a la vez: Material (lo que
-    // collectSceneAssets recorre vía materialsOf) y
-    // GameObject::materialOverrides (lo que nodeToJson serializa). En el
-    // camino real los pone applyMaterialOverrides juntos; aquí, con la malla
-    // construida a mano, se replican los dos a propósito.
+    // The override lives in two places at once: Material (what
+    // collectSceneAssets walks via materialsOf) and
+    // GameObject::materialOverrides (what nodeToJson serializes). In the
+    // real path applyMaterialOverrides sets them together; here, with the mesh
+    // built by hand, both are replicated on purpose.
     mesh->material.texturePath = albedoFile.string();
     go->setMesh(mesh);
     MaterialOverride ov;
@@ -491,44 +491,44 @@ static void test_rewrite_materials_override_outside_root(const fs::path& root)
     CHECK(!expectedPackagePath.empty());
 
     nlohmann::json j = scene.toJson();
-    // Antes de reescribir: el override sigue absoluto, tal cual toStoredPath
-    // lo dejó por caer fuera de la raíz. Si esto fallara, el resto del test
-    // no estaría probando lo que dice probar.
+    // Before rewriting: the override is still absolute, exactly as toStoredPath
+    // left it for falling outside the root. If this failed, the rest of the test
+    // would not be testing what it claims to test.
     CHECK(j["root"]["children"][0]["mesh"]["materials"][0]["albedo"].get<std::string>()
           == albedoFile.string());
 
     int rewritten = rewriteScenePaths(j, sourceToPackage, scene.assetRoot());
-    // sourcePath (hero.fbx, dentro de la raíz) + materials[0].albedo: 2 campos.
+    // sourcePath (hero.fbx, inside the root) + materials[0].albedo: 2 fields.
     CHECK(rewritten == 2);
 
     const nlohmann::json& mats = j["root"]["children"][0]["mesh"]["materials"];
     CHECK(mats.size() == 1);
     const std::string albedoAfter = mats[0]["albedo"].get<std::string>();
     CHECK(albedoAfter == expectedPackagePath);
-    // Y sobre todo: ya no es la ruta absoluta de la máquina que exportó.
+    // And above all: it is no longer the absolute path of the machine that exported.
     CHECK(albedoAfter.find(':') == std::string::npos);
 
     fs::remove_all(outside, ec);
 }
 
-// El paquete contiene el exe renombrado, game.scene, los assets del plan, el
-// skybox, los shaders y Scripts/ — y ningún asset del proyecto que la escena
-// no referencie (criterio de aceptación 3).
+// The package contains the renamed exe, game.scene, the plan's assets, the
+// skybox, the shaders and Scripts/, and no project asset that the scene
+// does not reference (acceptance criterion 3).
 static void test_package_contents(const fs::path& root)
 {
     std::error_code ec;
 
-    // Completar el fixture con lo que writeExportPackage añade por su cuenta.
+    // Complete the fixture with what writeExportPackage adds on its own.
     fs::create_directories(root / "assets" / "skybox", ec);
     for (const char* face : { "px", "nx", "py", "ny", "pz", "nz" })
         std::ofstream(root / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
     fs::create_directories(root / "shaders", ec);
     std::ofstream(root / "shaders" / "triangle.vert.spv") << "spv";
-    // Los .dxil del backend DirectX 12 viajan junto a los .spv.
+    // The DirectX 12 backend .dxil files travel alongside the .spv.
     std::ofstream(root / "shaders" / "triangle.vert.dxil") << "dxil";
-    // Asset del proyecto que la escena NO referencia: no debe acabar copiado.
+    // Project asset that the scene does NOT reference: it must not end up copied.
     std::ofstream(root / "assets" / "huerfano.fbx") << "fbx";
-    // Runtime de mentira.
+    // Fake runtime.
     std::ofstream(root / "DonTopoRuntime.exe") << "MZ";
 
     Scene scene;
@@ -536,11 +536,11 @@ static void test_package_contents(const fs::path& root)
     std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
 
     fs::path tempRoot = fs::temp_directory_path(ec);
-    // Sin temp_directory_path no hay dónde escribir con seguridad: si ec
-    // queda puesto o el path vuelve vacío, "dest" pasaría a ser relativo al
-    // directorio de trabajo actual y el remove_all/writeExportPackage de
-    // abajo operarían fuera del temp, rompiendo el contrato de que este test
-    // solo toca fs::temp_directory_path().
+    // Without temp_directory_path there is nowhere to write safely: if ec
+    // is set or the path comes back empty, "dest" would become relative to the
+    // current working directory and the remove_all/writeExportPackage below
+    // would operate outside the temp, breaking the contract that this test
+    // only touches fs::temp_directory_path().
     if (ec || tempRoot.empty())
     {
         CHECK(!ec && !tempRoot.empty());
@@ -549,17 +549,17 @@ static void test_package_contents(const fs::path& root)
     fs::path dest = tempRoot / "dt_exporter_out";
     fs::remove_all(dest, ec);
 
-    // Se exporta pidiendo DirectX 12 a propósito, y no el valor por defecto:
-    // con Vulkan, un game.cfg que no se escribiera nunca daría exactamente el
-    // mismo resultado que uno escrito bien.
+    // It is exported asking for DirectX 12 on purpose, and not the default:
+    // with Vulkan, a game.cfg that was never written would give exactly the
+    // same result as one written correctly.
     ExportResult r = writeExportPackage(assets, scene.toJson(), dest, "MiJuego",
                                         root, root / "Scripts", root / "DonTopoRuntime.exe",
                                         RenderBackend::D3D12);
 
     const fs::path pkg = dest / "MiJuego";
     CHECK(r.ok);
-    // El nombre del ejecutable lo decide la tabla de la plataforma que exporta:
-    // MiJuego.exe en Windows, MiJuego en Linux.
+    // The executable name is decided by the table of the exporting platform:
+    // MiJuego.exe on Windows, MiJuego on Linux.
     CHECK(fs::exists(pkg / ("MiJuego" + exportPlatformFor(platform::currentOs()).executableSuffix)));
     CHECK(fs::exists(pkg / "game.scene"));
     CHECK(fs::exists(pkg / "assets" / "hero.fbx"));
@@ -569,8 +569,8 @@ static void test_package_contents(const fs::path& root)
     CHECK(fs::exists(pkg / "shaders" / "triangle.vert.dxil"));
     CHECK(fs::exists(pkg / "Scripts" / "Player.lua"));
 
-    // El backend elegido llega al paquete, y llega con el nombre que el runtime
-    // sabe leer.
+    // The chosen backend reaches the package, and arrives with the name the runtime
+    // knows how to read.
     CHECK(fs::exists(pkg / "game.cfg"));
     {
         std::ifstream  cfgIn(pkg / "game.cfg");
@@ -584,30 +584,30 @@ static void test_package_contents(const fs::path& root)
         CHECK(parsed && cfg.is_object() && cfg.contains("renderBackend"));
         CHECK(parsed && cfg.value("renderBackend", std::string{}) == "DirectX 12");
     }
-    // Criterio 3: el asset no referenciado se queda fuera.
+    // Criterion 3: the unreferenced asset stays out.
     CHECK(!fs::exists(pkg / "assets" / "huerfano.fbx"));
 
-    // Número exacto de ficheros, no solo "> 0": un off-by-one o una
-    // categoría contada de más no lo detectaría un CHECK laxo. Desglose para
-    // esta escena/fixture concretos:
-    //   1  MiJuego.exe            (runtimeExe renombrado)
-    //   1  assets/hero.fbx        (único asset que la escena referencia)
-    //   6  assets/skybox/*.png    (las 6 caras, hardcoded, van siempre)
-    //   1  shaders/triangle.vert.spv (único .spv creado por este fixture)
-    //   1  shaders/triangle.vert.dxil (único .dxil creado por este fixture)
-    //   1  Scripts/Player.lua     (único fichero bajo Scripts/ en el fixture)
-    //   0  fmod.dll               (este fixture no lo crea)
+    // Exact number of files, not just "> 0": an off-by-one or a
+    // category counted too many would not be detected by a lax CHECK. Breakdown for
+    // this specific scene/fixture:
+    //   1  MiJuego.exe            (renamed runtimeExe)
+    //   1  assets/hero.fbx        (only asset the scene references)
+    //   6  assets/skybox/*.png    (the 6 faces, hardcoded, always go)
+    //   1  shaders/triangle.vert.spv (only .spv created by this fixture)
+    //   1  shaders/triangle.vert.dxil (only .dxil created by this fixture)
+    //   1  Scripts/Player.lua     (only file under Scripts/ in the fixture)
+    //   0  fmod.dll               (this fixture does not create it)
     //   1  game.scene
-    //   1  game.cfg               (backend de arranque)
+    //   1  game.cfg               (startup backend)
     //  = 13
     CHECK(r.fileCount == 13);
     CHECK(r.totalBytes > 0);
 
-    // Hallazgo 1: totalBytes debe incluir también game.scene. Se comprueba
-    // recalculando el tamaño real en disco de todo el paquete copiado y
-    // exigiendo que coincida exactamente con lo reportado; sin sumar
-    // game.scene, este CHECK fallaría por debajo en justo el tamaño de ese
-    // fichero.
+    // Finding 1: totalBytes must also include game.scene. It is checked by
+    // recomputing the real on-disk size of the whole copied package and
+    // demanding that it match exactly what was reported; without adding
+    // game.scene, this CHECK would fail on the low side by exactly the size of that
+    // file.
     std::uintmax_t diskTotal = 0;
     std::error_code walkEc;
     for (fs::recursive_directory_iterator it(pkg, walkEc), end; !walkEc && it != end; it.increment(walkEc))
@@ -621,10 +621,10 @@ static void test_package_contents(const fs::path& root)
     fs::remove_all(dest, ec);
 }
 
-// El logo del splash se copia como splash.png junto al .exe aunque la escena
-// no lo referencie (la escena no lo referencia; el runtime lo busca por ese
-// nombre fijo). Reutiliza skybox/shaders/DonTopoRuntime.exe que
-// test_package_contents ya dejó en root.
+// The splash logo is copied as splash.png next to the .exe even if the scene
+// does not reference it (the scene does not reference it; the runtime looks for it by that
+// fixed name). It reuses the skybox/shaders/DonTopoRuntime.exe that
+// test_package_contents already left in root.
 static void test_package_includes_splash(const fs::path& root)
 {
     std::error_code ec;
@@ -653,18 +653,18 @@ static void test_package_includes_splash(const fs::path& root)
     fs::remove_all(dest, ec);
 }
 
-// Re-exportar sobre un paquete de un export anterior lo deja limpio: nada
-// del export viejo sobrevive. La carpeta lleva game.scene, la única marca
-// que inspectExportTarget acepta como "esto es mio y lo puedo regenerar"
-// (GameExporter.cpp: inspectExportTarget) — sin ella este mismo fixture
-// pasaria a ser Occupied y writeExportPackage abortaria sin borrar nada,
-// que es justo el otro caso que cubre test_writeExportPackage_aborts_on_occupied.
+// Re-exporting over a package from a previous export leaves it clean: nothing
+// from the old export survives. The folder carries game.scene, the only mark
+// that inspectExportTarget accepts as "this is mine and I can regenerate it"
+// (GameExporter.cpp: inspectExportTarget); without it this same fixture
+// would become Occupied and writeExportPackage would abort without deleting anything,
+// which is exactly the other case covered by test_writeExportPackage_aborts_on_occupied.
 static void test_package_overwrite_is_clean(const fs::path& root)
 {
     std::error_code ec;
     fs::path tempRoot = fs::temp_directory_path(ec);
-    // Mismo motivo que en test_package_contents: sin esta comprobación, un
-    // fallo de temp_directory_path haría que "dest" cayera fuera del temp.
+    // Same reason as in test_package_contents: without this check, a
+    // temp_directory_path failure would make "dest" fall outside the temp.
     if (ec || tempRoot.empty())
     {
         CHECK(!ec && !tempRoot.empty());
@@ -751,11 +751,11 @@ static void test_mat_textures_are_packaged_and_repointed(const fs::path& root)
     fs::remove(mat, ec);
 }
 
-// Un directorio destino con contenido ajeno (sin game.scene) hace abortar a
-// writeExportPackage SIN tocar nada: ni se borra lo que habia ni se crea el
-// paquete. Es el caso que rompia antes de inspectExportTarget/Occupied — el
-// ejemplo real es <repo>/assets, que remove_all se llevaba por delante
-// (ver comentario de writeExportPackage sobre el estado del destino).
+// A destination directory with foreign content (without game.scene) makes
+// writeExportPackage abort WITHOUT touching anything: what was there is neither deleted nor is the
+// package created. It is the case that broke before inspectExportTarget/Occupied; the
+// real example is <repo>/assets, which remove_all used to take out
+// (see the writeExportPackage comment about the destination state).
 static void test_writeExportPackage_aborts_on_occupied(const fs::path& root)
 {
     std::error_code ec;
@@ -778,16 +778,16 @@ static void test_writeExportPackage_aborts_on_occupied(const fs::path& root)
                                         root / "DonTopoRuntime.exe");
     CHECK(!r.ok);
     CHECK(!r.messages.empty());
-    // El contenido ajeno sigue exactamente donde estaba: ni un remove_all
-    // parcial ni un create_directories encima lo tocaron.
+    // The foreign content is still exactly where it was: neither a partial
+    // remove_all nor a create_directories on top of it touched it.
     CHECK(fs::exists(dest / "MiJuego" / "algo_del_usuario.fbx"));
 
     fs::remove_all(dest, ec);
 }
 
-// inspectExportTarget en sus cuatro estados: la clasificacion mira QUE hay
-// dentro del directorio, no DONDE esta, y falla en cerrado (Occupied) ante
-// cualquier cosa que no encaje en un patron reconocido.
+// inspectExportTarget in its four states: the classification looks at WHAT is
+// inside the directory, not WHERE it is, and fails closed (Occupied) on
+// anything that does not fit a recognized pattern.
 static void test_inspect_export_target_states()
 {
     std::error_code ec;
@@ -795,28 +795,28 @@ static void test_inspect_export_target_states()
     fs::remove_all(base, ec);
     fs::create_directories(base, ec);
 
-    // Missing: no existe en absoluto.
+    // Missing: it does not exist at all.
     CHECK(inspectExportTarget(base / "no_existe") == ExportTargetState::Missing);
 
-    // Empty: existe y esta vacio.
+    // Empty: it exists and is empty.
     fs::path empty = base / "vacia";
     fs::create_directories(empty, ec);
     CHECK(inspectExportTarget(empty) == ExportTargetState::Empty);
 
-    // PriorPackage: existe y contiene game.scene en su raiz.
+    // PriorPackage: it exists and contains game.scene at its root.
     fs::path prior = base / "paquete_previo";
     fs::create_directories(prior, ec);
     std::ofstream(prior / "game.scene") << "{}";
     CHECK(inspectExportTarget(prior) == ExportTargetState::PriorPackage);
 
-    // Occupied: existe con contenido que no es un game.scene.
+    // Occupied: it exists with content that is not a game.scene.
     fs::path occupied = base / "ocupada";
     fs::create_directories(occupied, ec);
     std::ofstream(occupied / "documento_del_usuario.txt") << "no me borres";
     CHECK(inspectExportTarget(occupied) == ExportTargetState::Occupied);
 
-    // Occupied tambien para un fichero (no un directorio) con ese nombre:
-    // remove_all se lo llevaria igual, y no es un paquete nuestro.
+    // Occupied also for a file (not a directory) with that name:
+    // remove_all would take it out all the same, and it is not a package of ours.
     fs::path fileTarget = base / "esto_es_un_fichero.txt";
     std::ofstream(fileTarget) << "x";
     CHECK(inspectExportTarget(fileTarget) == ExportTargetState::Occupied);
@@ -824,29 +824,29 @@ static void test_inspect_export_target_states()
     fs::remove_all(base, ec);
 }
 
-// isValidExportGameName: los casos que writeExportPackage necesita rechazar
-// antes de construir destDir/name, porque ese path es el que luego borra.
+// isValidExportGameName: the cases that writeExportPackage needs to reject
+// before building destDir/name, because that path is the one it later deletes.
 static void test_valid_export_game_name()
 {
     std::string reason;
-    CHECK(!isValidExportGameName("..", reason));               // sube un nivel
-    CHECK(!isValidExportGameName(".", reason));                 // Win32 lo descarta al crear la carpeta
-    CHECK(!isValidExportGameName("C:\\Windows", reason));       // absoluto: operator/ ignoraria destDir
-    CHECK(!isValidExportGameName("carpeta/nombre", reason));    // separador '/'
-    CHECK(!isValidExportGameName("carpeta\\nombre", reason));   // separador '\'
-    CHECK(!isValidExportGameName("nombre*raro", reason));       // caracter reservado de Windows
-    CHECK(!isValidExportGameName("   ", reason));                // solo espacios en blanco
-    CHECK(!isValidExportGameName("NUL", reason));                // nombre de dispositivo reservado
+    CHECK(!isValidExportGameName("..", reason));               // goes up one level
+    CHECK(!isValidExportGameName(".", reason));                 // Win32 discards it when creating the folder
+    CHECK(!isValidExportGameName("C:\\Windows", reason));       // absolute: operator/ would ignore destDir
+    CHECK(!isValidExportGameName("carpeta/nombre", reason));    // separator '/'
+    CHECK(!isValidExportGameName("carpeta\\nombre", reason));   // separator '\'
+    CHECK(!isValidExportGameName("nombre*raro", reason));       // reserved Windows character
+    CHECK(!isValidExportGameName("   ", reason));                // whitespace only
+    CHECK(!isValidExportGameName("NUL", reason));                // reserved device name
     CHECK(isValidExportGameName("MiJuegoValido", reason));
 }
 
-// Sin binario de runtime no se exporta nada: error explícito y carpeta sin crear.
+// Without a runtime binary nothing is exported: explicit error and folder not created.
 static void test_missing_runtime_aborts(const fs::path& root)
 {
     std::error_code ec;
     fs::path tempRoot = fs::temp_directory_path(ec);
-    // Mismo motivo que en test_package_contents: sin esta comprobación, un
-    // fallo de temp_directory_path haría que "dest" cayera fuera del temp.
+    // Same reason as in test_package_contents: without this check, a
+    // temp_directory_path failure would make "dest" fall outside the temp.
     if (ec || tempRoot.empty())
     {
         CHECK(!ec && !tempRoot.empty());
@@ -860,16 +860,16 @@ static void test_missing_runtime_aborts(const fs::path& root)
                                         root, root / "Scripts", root / "no_existe_runtime.exe");
     CHECK(!r.ok);
     CHECK(!r.messages.empty());
-    // Contrato: sin runtime no se llega a crear ni siquiera la carpeta
-    // destino, no solo se aborta "a medias".
+    // Contract: without a runtime not even the destination folder
+    // is created, it is not merely aborted "halfway".
     CHECK(!fs::exists(dest / "MiJuego"));
 
     fs::remove_all(dest, ec);
 }
 
-// Skybox incompleto (falta una de las 6 caras) -> ok == false con mensaje:
-// Skybox.cpp:84 lanza al arrancar si falta cualquiera, asi que un export
-// "completado" con menos de 6 caras produce un paquete que no arranca.
+// Incomplete skybox (one of the 6 faces is missing) -> ok == false with a message:
+// Skybox.cpp:84 throws at startup if any is missing, so an export
+// "completed" with fewer than 6 faces produces a package that does not start.
 static void test_incomplete_skybox_marks_not_ok()
 {
     std::error_code ec;
@@ -877,7 +877,7 @@ static void test_incomplete_skybox_marks_not_ok()
     fs::remove_all(fixRoot, ec);
     fs::create_directories(fixRoot / "assets" / "skybox", ec);
     fs::create_directories(fixRoot / "shaders", ec);
-    // Solo 5 de las 6 caras: falta "nz".
+    // Only 5 of the 6 faces: "nz" is missing.
     for (const char* face : { "px", "nx", "py", "ny", "pz" })
         std::ofstream(fixRoot / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
     std::ofstream(fixRoot / "shaders" / "triangle.vert.spv") << "spv";
@@ -900,16 +900,16 @@ static void test_incomplete_skybox_marks_not_ok()
     fs::remove_all(dest, ec);
 }
 
-// Cero shaders .spv copiados -> ok == false con mensaje: sin ninguno el
-// runtime muere en createPipeline, y un Log que diga "completado" esconderia
-// justo el fallo que hace inarrancable al paquete.
+// Zero .spv shaders copied -> ok == false with a message: without any the
+// runtime dies in createPipeline, and a Log saying "completed" would hide
+// exactly the failure that makes the package unbootable.
 static void test_zero_shaders_marks_not_ok()
 {
     std::error_code ec;
     fs::path fixRoot = fs::temp_directory_path(ec) / "dt_exporter_noshader_fixture";
     fs::remove_all(fixRoot, ec);
     fs::create_directories(fixRoot / "assets" / "skybox", ec);
-    fs::create_directories(fixRoot / "shaders", ec); // existe pero vacia: 0 .spv
+    fs::create_directories(fixRoot / "shaders", ec); // exists but empty: 0 .spv
     for (const char* face : { "px", "nx", "py", "ny", "pz", "nz" })
         std::ofstream(fixRoot / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
     std::ofstream(fixRoot / "DonTopoRuntime.exe") << "MZ";
@@ -931,15 +931,15 @@ static void test_zero_shaders_marks_not_ok()
     fs::remove_all(dest, ec);
 }
 
-// Un paquete exportado desde un editor Debug enlaza el CRT de depuracion de
-// MSVC, que no es redistribuible: arranca en la maquina que lo exporto y falla
-// con "falta ucrtbased.dll" en la de cualquier otro. El export sigue siendo
-// valido (probar en local es legitimo), pero tiene que decirlo, porque es un
-// fallo que ninguna prueba en la maquina del desarrollador puede destapar.
+// A package exported from a Debug editor links the MSVC debug CRT, which is not
+// redistributable: it starts on the machine that exported it and fails with
+// "ucrtbased.dll is missing" on anyone else's. The export is still
+// valid (testing locally is legitimate), but it has to say so, because it is a
+// failure that no test on the developer's machine can uncover.
 //
-// El test comprueba las DOS ramas segun como se compilo el propio test: en
-// Debug el aviso tiene que estar, y en Release NO puede estar (un aviso que
-// saliera siempre seria ruido que se acaba ignorando, justo cuando importa).
+// The test checks BOTH branches depending on how the test itself was compiled: in
+// Debug the warning has to be there, and in Release it CANNOT be (a warning that
+// always showed up would be noise that ends up ignored, exactly when it matters).
 static void test_debug_build_warns_about_crt(const fs::path& root)
 {
     std::error_code ec;
@@ -959,10 +959,10 @@ static void test_debug_build_warns_about_crt(const fs::path& root)
     Scene scene;
     ExportResult r = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
                                         fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe",
-                                        // Prueba el CRT de MSVC: fila de Windows, se ejecute donde se ejecute.
+                                        // Tests the MSVC CRT: a Windows row, wherever it runs.
                                         RenderBackend::Vulkan, "assets/skybox",
                                         exportPlatformFor(platform::Os::Windows));
-    CHECK(r.ok); // el paquete es correcto: esto es un aviso, no un error
+    CHECK(r.ok); // the package is correct: this is a warning, not an error
 
     bool avisa = std::any_of(r.messages.begin(), r.messages.end(), [](const std::string& m) {
         return m.find("Debug") != std::string::npos && m.find("ucrtbased") != std::string::npos;
@@ -977,16 +977,16 @@ static void test_debug_build_warns_about_crt(const fs::path& root)
     fs::remove_all(dest, ec);
 }
 
-// Un paquete Release tiene que llevarse el CRT de MSVC (VCRUNTIME140.dll,
-// MSVCP140.dll...) dentro: en una maquina sin Visual Studio ni el VC++
-// Redistributable el .exe no arranca. Las DLL se recogen de junto al editor
-// (aqui, del fixture que hace de projectRoot), igual que fmod.dll.
+// A Release package has to carry the MSVC CRT (VCRUNTIME140.dll,
+// MSVCP140.dll...) inside: on a machine without Visual Studio or the VC++
+// Redistributable the .exe does not start. The DLLs are collected from next to the editor
+// (here, from the fixture acting as projectRoot), same as fmod.dll.
 //
-// Se comprueban las DOS ramas segun como se compilo el test, y en Debug la
-// exigencia es la contraria: NO copiar nada. El CRT de depuracion no es
-// redistribuible, asi que un Debug que lo copiara estaria repartiendo DLL que
-// Microsoft no permite redistribuir, y el aviso de Debug dejaria de tener
-// sentido.
+// BOTH branches are checked depending on how the test was compiled, and in Debug the
+// requirement is the opposite: do NOT copy anything. The debug CRT is not
+// redistributable, so a Debug that copied it would be handing out DLLs that
+// Microsoft does not allow to be redistributed, and the Debug warning would stop making
+// sense.
 static void test_release_package_bundles_msvc_crt()
 {
     std::error_code ec;
@@ -998,13 +998,13 @@ static void test_release_package_bundles_msvc_crt()
         std::ofstream(fixRoot / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
     std::ofstream(fixRoot / "shaders" / "triangle.vert.spv") << "spv";
     std::ofstream(fixRoot / "DonTopoRuntime.exe") << "MZ";
-    // Las tres DLL del CRT con distinta capitalizacion: el filtro compara en
-    // minusculas y en Windows los nombres reales vienen con mayusculas.
+    // The three CRT DLLs with different capitalization: the filter compares in
+    // lowercase and on Windows the real names come with uppercase letters.
     std::ofstream(fixRoot / "MSVCP140.dll")      << "dll";
     std::ofstream(fixRoot / "VCRUNTIME140.dll")  << "dll";
     std::ofstream(fixRoot / "vcruntime140_1.dll") << "dll";
-    // Señuelos: una DLL que no es del CRT y un fichero cuyo nombre empieza
-    // igual pero no es .dll. Copiarlos meteria basura en el paquete.
+    // Decoys: a DLL that is not from the CRT and a file whose name starts
+    // the same but is not .dll. Copying them would put garbage in the package.
     std::ofstream(fixRoot / "otra.dll")          << "dll";
     std::ofstream(fixRoot / "msvcp140.lib")      << "lib";
 
@@ -1014,21 +1014,21 @@ static void test_release_package_bundles_msvc_crt()
     Scene scene;
     ExportResult r = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
                                         fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe",
-                                        // Prueba el CRT de MSVC: fila de Windows, se ejecute donde se ejecute.
+                                        // Tests the MSVC CRT: a Windows row, wherever it runs.
                                         RenderBackend::Vulkan, "assets/skybox",
                                         exportPlatformFor(platform::Os::Windows));
     const fs::path pkg = dest / "MiJuego";
     CHECK(r.ok);
 
-    // Base del paquete para este fixture: MiJuego.exe + 6 caras de skybox +
-    // 1 .spv + game.scene = 9 ficheros. En Release se suman las 3 DLL del CRT.
+    // Base of the package for this fixture: MiJuego.exe + 6 skybox faces +
+    // 1 .spv + game.scene = 9 files. In Release the 3 CRT DLLs are added.
 #ifdef NDEBUG
     CHECK(fs::exists(pkg / "MSVCP140.dll"));
     CHECK(fs::exists(pkg / "VCRUNTIME140.dll"));
     CHECK(fs::exists(pkg / "vcruntime140_1.dll"));
     CHECK(!fs::exists(pkg / "otra.dll"));
     CHECK(!fs::exists(pkg / "msvcp140.lib"));
-    // +1 sobre lo que contaba antes de que existiera game.cfg.
+    // +1 over what it counted before game.cfg existed.
     CHECK(r.fileCount == 13);
 #else
     CHECK(!fs::exists(pkg / "MSVCP140.dll"));
@@ -1037,9 +1037,9 @@ static void test_release_package_bundles_msvc_crt()
     CHECK(r.fileCount == 10);
 #endif
 
-    // Sin ninguna DLL del CRT al lado del editor: aviso en Release (no error,
-    // el resto del paquete es correcto) y silencio absoluto en Debug, donde no
-    // copiar el CRT es lo correcto y avisar seria ruido.
+    // Without any CRT DLL next to the editor: warning in Release (not an error,
+    // the rest of the package is correct) and absolute silence in Debug, where not
+    // copying the CRT is correct and warning would be noise.
     fs::remove(fixRoot / "MSVCP140.dll", ec);
     fs::remove(fixRoot / "VCRUNTIME140.dll", ec);
     fs::remove(fixRoot / "vcruntime140_1.dll", ec);
@@ -1066,16 +1066,16 @@ static void test_release_package_bundles_msvc_crt()
     fs::remove_all(dest, ec);
 }
 
-// exportGame aborta sin camara en la escena, antes de tocar disco: sin ella
-// el juego no podria renderizar y el fallo debe ocurrir aqui, no en un .exe
-// que abre una ventana negra.
+// exportGame aborts without a camera in the scene, before touching disk: without one
+// the game could not render and the failure must happen here, not in an .exe
+// that opens a black window.
 static void test_exportGame_aborts_without_camera(const fs::path& root)
 {
     std::error_code ec;
     if (!fs::exists(root / "DonTopoRuntime.exe", ec))
         std::ofstream(root / "DonTopoRuntime.exe") << "MZ";
 
-    Scene scene; // sin CameraComponent en ningun GameObject
+    Scene scene; // no CameraComponent on any GameObject
     scene.addGameObject("hero")->setMesh(makeMesh(root / "assets" / "hero.fbx"));
 
     fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_nocam_out";
@@ -1085,14 +1085,14 @@ static void test_exportGame_aborts_without_camera(const fs::path& root)
                                 root / "Scripts", root / "DonTopoRuntime.exe");
     CHECK(!r.ok);
     CHECK(!r.messages.empty());
-    CHECK(!fs::exists(dest / "MiJuego")); // aborta antes de crear nada
+    CHECK(!fs::exists(dest / "MiJuego")); // aborts before creating anything
 
     fs::remove_all(dest, ec);
 }
 
-// exportGame aborta si algun asset referenciado no existe en disco. La
-// escena SI tiene camara, para aislar exactamente esta guarda de la de
-// arriba.
+// exportGame aborts if any referenced asset does not exist on disk. The
+// scene DOES have a camera, to isolate exactly this guard from the one
+// above.
 static void test_exportGame_aborts_missing_asset(const fs::path& root)
 {
     std::error_code ec;
@@ -1116,8 +1116,8 @@ static void test_exportGame_aborts_missing_asset(const fs::path& root)
     fs::remove_all(dest, ec);
 }
 
-// Las dos filas de la tabla, comprobadas desde cualquier SO: la de Linux no
-// queda sin probar hasta que alguien exporte en Linux.
+// The two rows of the table, checked from any OS: the Linux one is not
+// left untested until someone exports on Linux.
 static void test_export_platform_rows()
 {
     const ExportPlatform w = exportPlatformFor(platform::Os::Windows);
@@ -1128,17 +1128,17 @@ static void test_export_platform_rows()
     CHECK(l.executableSuffix.empty() && l.setExecutableBit && !l.copyMsvcCrt && !l.warnDebugCrt && l.warnGlibc);
     CHECK(l.audioLibPrefixes == std::vector<std::string>{"libfmod.so."});
 
-    // Solo el soname: la .so de desarrollo y la version completa son el mismo
-    // fichero repetido.
+    // Only the soname: the development .so and the full version are the same
+    // file repeated.
     CHECK(isAudioLibFile("libfmod.so.13", l));
     CHECK(!isAudioLibFile("libfmod.so", l) && !isAudioLibFile("libfmod.so.13.2", l));
-    CHECK(!isAudioLibFile("libfmodL.so.13", l));   // la variante de logging no va
+    CHECK(!isAudioLibFile("libfmodL.so.13", l));   // the logging variant does not go
     CHECK(isAudioLibFile("fmod.dll", w) && !isAudioLibFile("fmodL.dll", w));
 }
 
-// Un paquete de LINUX escrito desde cualquier SO. Reutiliza el skybox, los
-// shaders y el runtime falso que test_package_contents dejo en root. Va el
-// ultimo en main: deja bibliotecas falsas en root y las borra al acabar.
+// A LINUX package written from any OS. It reuses the skybox, the
+// shaders and the fake runtime that test_package_contents left in root. It goes
+// last in main: it leaves fake libraries in root and deletes them when it finishes.
 static void test_linux_package(const fs::path& root)
 {
     std::error_code ec;
@@ -1178,8 +1178,8 @@ static void test_linux_package(const fs::path& root)
         fs::remove(root / f, ec);
 }
 
-// El runtime lee "<textura>.import.json" relativo a la textura: tiene que viajar
-// en el paquete con la misma jerarquia. Solo las texturas de MATERIAL.
+// The runtime reads "<texture>.import.json" relative to the texture: it has to travel
+// in the package with the same hierarchy. Only MATERIAL textures.
 static void test_texture_sidecar_travels_with_the_texture(const fs::path& root)
 {
     std::error_code ec;
@@ -1190,7 +1190,7 @@ static void test_texture_sidecar_travels_with_the_texture(const fs::path& root)
     std::string err;
     CHECK(saveTextureImportSettings(tex, s, &err));
 
-    const fs::path plain = root / "assets" / "liso.png";        // sin sidecar
+    const fs::path plain = root / "assets" / "liso.png";        // no sidecar
     std::ofstream(plain) << "png";
 
     Scene scene;
@@ -1214,8 +1214,8 @@ static void test_texture_sidecar_travels_with_the_texture(const fs::path& root)
     fs::remove(plain, ec);
 }
 
-// El sidecar de un clip viaja con el clip, con la misma jerarquia (o
-// assets/_external/N si el clip esta fuera del proyecto: Review Focus 7).
+// A clip's sidecar travels with the clip, with the same hierarchy (or
+// assets/_external/N if the clip is outside the project: Review Focus 7).
 static void test_audio_sidecar_travels_with_the_clip(const fs::path& root)
 {
     std::error_code ec;
@@ -1226,9 +1226,9 @@ static void test_audio_sidecar_travels_with_the_clip(const fs::path& root)
     const fs::path inside = root / "assets" / "step.wav";
     CHECK(saveAudioImportSettings(inside, s, &err));
     const fs::path plain = root / "assets" / "chars" / "plain.wav";
-    std::ofstream(plain) << "wav";                                   // sin sidecar
+    std::ofstream(plain) << "wav";                                   // no sidecar
 
-    // Un clip fuera del proyecto, con sidecar.
+    // A clip outside the project, with a sidecar.
     const fs::path outside = fs::temp_directory_path(ec) / "dt_exporter_audio_outside" / "voz.wav";
     fs::create_directories(outside.parent_path(), ec);
     std::ofstream(outside) << "wav";
@@ -1251,7 +1251,7 @@ static void test_audio_sidecar_travels_with_the_clip(const fs::path& root)
     CHECK(has("assets/step.wav.import.json"));
     CHECK(has("assets/chars/plain.wav"));
     CHECK(!has("assets/chars/plain.wav.import.json"));
-    // El de fuera: el sidecar cae en la MISMA subcarpeta _external que su clip.
+    // The outside one: the sidecar lands in the SAME _external subfolder as its clip.
     std::string outClip, outSide;
     for (const std::string& p : pkg)
     {
@@ -1268,16 +1268,16 @@ static void test_audio_sidecar_travels_with_the_clip(const fs::path& root)
     fs::remove_all(outside.parent_path(), ec);
 }
 
-// Review Focus 6: el sidecar de un modelo viaja con el FBX, y el de cada fuente de
-// animacion externa con SU fichero (cada FBX usa su propio sidecar).
+// Review Focus 6: a model's sidecar travels with the FBX, and that of each external
+// animation source with ITS file (each FBX uses its own sidecar).
 static void test_model_sidecar_travels_with_the_fbx_and_its_animation_sources(const fs::path& root)
 {
     std::error_code ec;
-    // Nombres propios: hero.fbx y compania son del fixture y otros tests los usan.
+    // Own names: hero.fbx and company are from the fixture and other tests use them.
     const fs::path hero = root / "assets" / "dt_modelo_hero.fbx";
     const fs::path run  = root / "assets" / "dt_modelo_run.fbx";
-    const fs::path idle = root / "assets" / "dt_modelo_idle.fbx";   // sin sidecar
-    const fs::path prop = root / "assets" / "dt_modelo_prop.fbx";   // estatico, sin sidecar
+    const fs::path idle = root / "assets" / "dt_modelo_idle.fbx";   // no sidecar
+    const fs::path prop = root / "assets" / "dt_modelo_prop.fbx";   // static, no sidecar
     for (const fs::path& p : { hero, run, idle, prop })
         std::ofstream(p) << "fbx";
 
@@ -1341,7 +1341,7 @@ static void writeGltfWithCompanions(const fs::path& dir)
     std::ofstream(dir / "textures" / "rojo x.tga") << "tga";
 }
 
-// Dentro del proyecto: la jerarquia se conserva y el .bin y la textura viajan.
+// Inside the project: the hierarchy is preserved and the .bin and the texture travel.
 static void test_gltf_inside_the_project_travels_with_its_companions(const fs::path& root)
 {
     const fs::path dir = root / "assets" / "gl";
@@ -1356,8 +1356,8 @@ static void test_gltf_inside_the_project_travels_with_its_companions(const fs::p
     fs::remove_all(dir, ec);
 }
 
-// Review Focus 4: fuera del proyecto, el .bin y la textura de la subcarpeta quedan
-// en la MISMA assets/_external/N que el .gltf, con su subcarpeta.
+// Review Focus 4: outside the project, the .bin and the subfolder texture end up
+// in the SAME assets/_external/N as the .gltf, with their subfolder.
 static void test_gltf_outside_the_project_keeps_its_companions_together(const fs::path& root)
 {
     std::error_code ec;
@@ -1375,7 +1375,7 @@ static void test_gltf_outside_the_project_keeps_its_companions_together(const fs
     const std::vector<std::string> pkg = packagePaths(assets);
     CHECK(contains(pkg, base + "/tri.bin"));
     CHECK(contains(pkg, base + "/textures/rojo x.tga"));
-    CHECK(assets.size() == 3);                                  // la textura del material no se duplica
+    CHECK(assets.size() == 3);                                  // the material texture is not duplicated
     fs::remove_all(outside, ec);
 }
 
@@ -1402,9 +1402,9 @@ static std::string packagePathOf(const std::vector<ExportAsset>& assets, const f
     return {};
 }
 
-// Revision final, Important 3a: la textura del material que cuelga de la carpeta
-// del modelo se coloca respecto al modelo en el paquete, como un asociado. El
-// runtime la deriva de ahi (el game.scene no guarda la textura base).
+// Final review, Important 3a: the material texture hanging from the model folder
+// is placed relative to the model in the package, like an associated file. The
+// runtime derives it from there (game.scene does not store the base texture).
 static void test_external_model_texture_in_subfolder_stays_with_the_model(const fs::path& root)
 {
     std::error_code ec;
@@ -1421,8 +1421,8 @@ static void test_external_model_texture_in_subfolder_stays_with_the_model(const 
     fs::remove_all(outside, ec);
 }
 
-// Revision final, Important 3b: aunque otro objeto recorrido ANTES use la misma
-// textura por su material, la colocacion la decide el modelo que la lee.
+// Final review, Important 3b: even if another object walked BEFORE uses the same
+// texture through its material, the placement is decided by the model that reads it.
 static void test_model_companions_win_over_an_earlier_material_use(const fs::path& root)
 {
     std::error_code ec;
@@ -1443,8 +1443,8 @@ static void test_model_companions_win_over_an_earlier_material_use(const fs::pat
     fs::remove_all(b, ec);
 }
 
-// Revision final, Important 3c: el sidecar de un asociado va JUNTO a su asset en
-// el paquete, no donde lo pondria la regla general.
+// Final review, Important 3c: the sidecar of an associated file goes NEXT TO its asset in
+// the package, not where the general rule would put it.
 static void test_companion_sidecar_travels_next_to_it(const fs::path& root)
 {
     std::error_code ec;

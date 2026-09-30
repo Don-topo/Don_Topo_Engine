@@ -5,118 +5,118 @@
 
 namespace DonTopo
 {
-    // Capa de merge de clips: sin Vulkan a propósito, igual que
-    // SkinnedMeshPacking. Dentro del Renderer solo se podría probar con un
-    // VkDevice vivo, es decir, no se podría probar.
+    // Clip merge layer: no Vulkan on purpose, same as
+    // SkinnedMeshPacking. Inside the Renderer it could only be tested with a
+    // live VkDevice, that is, it could not be tested.
 
-    // true si el clip anima algo: algún canal en el que algún valor cambie a lo
-    // largo del tiempo. Un clip que no lo cumple deja al personaje clavado en su
-    // bind pose por muy larga que sea su duration y por muchas keys que traiga.
+    // true if the clip animates something: some channel in which some value changes
+    // over time. A clip that does not meet this leaves the character stuck in its
+    // bind pose however long its duration is and however many keys it carries.
     //
-    // Se comparan VALORES, no cuentas de keys. Los FBX de personaje de Mixamo
-    // traen un take "mixamo.com" de un tick cuyo canal de Hips tiene dos keys
-    // por pista con el MISMO valor en t=0 y t=1, y el resto de canales una sola
-    // key: contar keys lo daría por animado. Ese take acababa ocupando el clip
-    // 0 — justo el índice al que caen todos los caminos degradados del motor
-    // (estado sin resolver, clipIndex fuera de rango, grafo huérfano), así que
-    // cualquier desajuste se veía como un personaje en T-pose.
+    // VALUES are compared, not key counts. Mixamo character FBX files
+    // carry a one-tick "mixamo.com" take whose Hips channel has two keys
+    // per track with the SAME value at t=0 and t=1, and the rest of the channels a single
+    // key: counting keys would report it as animated. That take ended up occupying clip
+    // 0, precisely the index that all the engine's degraded paths fall to
+    // (unresolved state, clipIndex out of range, orphan graph), so
+    // any mismatch showed up as a character in T-pose.
     //
-    // Tolerancia absoluta de 1e-4: por debajo de eso hay jitter de exportador,
-    // no intención de animar. En unidades Mixamo (personaje de ~236 de alto)
-    // son micras, y en un cuaternión, milésimas de grado.
+    // Absolute tolerance of 1e-4: below that there is exporter jitter,
+    // not intent to animate. In Mixamo units (a character ~236 tall)
+    // that is microns, and in a quaternion, thousandths of a degree.
     bool clipHasMotion(const AnimationClip& clip);
 
-    // Devuelve base si ningún clip de existing lo usa; si no, base + " (N)" con
-    // el primer N libre. base vacío -> "Animation": el Animator resuelve los
-    // clips por nombre, así que un nombre vacío o repetido deja clips
-    // inalcanzables.
+    // Returns base if no clip in existing uses it; otherwise, base + " (N)" with
+    // the first free N. Empty base -> "Animation": the Animator resolves
+    // clips by name, so an empty or repeated name leaves clips
+    // unreachable.
     std::string uniqueClipName(const std::vector<AnimationClip>& existing,
                                const std::string& base);
 
-    // Importa las animaciones de path y las añade a mesh.animationClips,
-    // registrando la fuente en mesh.animationSources.
+    // Imports the animations of path and adds them to mesh.animationClips,
+    // registering the source in mesh.animationSources.
     //
-    // Los clips se nombran por el basename del fichero (walk.fbx -> "walk",
-    // "walk (1)"...): el nombre interno de un FBX de Mixamo es "mixamo.com"
-    // para todos, y con eso la lista de clips no se puede leer.
+    // Clips are named by the file's basename (walk.fbx -> "walk",
+    // "walk (1)"...): the internal name of a Mixamo FBX is "mixamo.com"
+    // for all of them, and with that the clip list cannot be read.
     //
-    // forcedNames, si no es nullptr, pisa esos nombres en orden hasta agotarse.
-    // Lo usan la carga de escena y el undo de un remove: sin él, un clip
-    // renombrado volvería con el nombre del fichero y los estados del grafo que
-    // lo referencian quedarían huérfanos.
+    // forcedNames, if it is not nullptr, overrides those names in order until exhausted.
+    // It is used by scene loading and by the undo of a remove: without it, a renamed
+    // clip would come back with the file's name and the graph states that
+    // reference it would be left orphaned.
     //
-    // Un forcedName ya en uso (por un clip existente o por otro forcedName
-    // anterior de esta misma llamada) NO se duplica: cae en uniqueClipName y se
-    // añade un warning. Duplicar el nombre dejaría uno de los dos clips
-    // inalcanzable, porque el Animator resuelve por nombre.
+    // A forcedName already in use (by an existing clip or by another earlier
+    // forcedName of this same call) is NOT duplicated: it falls to uniqueClipName and a
+    // warning is added. Duplicating the name would leave one of the two clips
+    // unreachable, because the Animator resolves by name.
     //
-    // Devuelve false y deja mesh INTACTO si el fichero no aporta nada (ilegible,
-    // sin animaciones, o ningún hueso en común con mesh.skeleton).
+    // Returns false and leaves mesh UNTOUCHED if the file contributes nothing (unreadable,
+    // without animations, or no bone in common with mesh.skeleton).
     bool addAnimationSource(SkinnedMesh& mesh, const std::string& path,
                             std::vector<std::string>& warnings,
                             const std::vector<std::string>* forcedNames = nullptr);
 
-    // Quita la fuente y los clips que aportó. false si el índice está fuera de
-    // rango o apunta a la fuente builtin (esa es el modelo, no se puede quitar).
+    // Removes the source and the clips it contributed. false if the index is out of
+    // range or points to the builtin source (that is the model, it cannot be removed).
     //
-    // Los índices de los clips supervivientes se recolocan; no hace falta
-    // arreglar nada en el grafo porque los estados referencian por nombre y
-    // AnimatorComponent::bindClips los vuelve a resolver.
+    // The indices of the surviving clips are shifted; nothing needs to be
+    // fixed in the graph because the states reference by name and
+    // AnimatorComponent::bindClips resolves them again.
     bool removeAnimationSource(SkinnedMesh& mesh, size_t sourceIndex);
 
-    // Renombra un clip y actualiza el clipNames de su fuente. false si oldName
-    // no existe, newName está vacío o newName ya está en uso.
+    // Renames a clip and updates the clipNames of its source. false if oldName
+    // does not exist, newName is empty or newName is already in use.
     //
-    // NO toca los estados del Animator: eso lo hace
-    // AnimatorComponent::renameClipReferences, que vive en Core (este módulo es
-    // Renderer y no debe depender de Core).
+    // Does NOT touch the Animator states: that is done by
+    // AnimatorComponent::renameClipReferences, which lives in Core (this module is
+    // Renderer and must not depend on Core).
     bool renameClip(SkinnedMesh& mesh, const std::string& oldName,
                     const std::string& newName);
 
-    // Aplica savedNames POSICIONALMENTE, de una sola vez, a los primeros
-    // min(savedNames.size(), source.clipNames.size()) clips de source —
-    // pensado para restaurar los renames guardados de una escena sobre la
-    // fuente builtin recién reconstruida por loadSkinned.
+    // Applies savedNames POSITIONALLY, all at once, to the first
+    // min(savedNames.size(), source.clipNames.size()) clips of source,
+    // meant to restore the saved renames of a scene onto the builtin
+    // source just rebuilt by loadSkinned.
     //
-    // A diferencia de encadenar renameClip clip a clip, esto resuelve
-    // CUALQUIER permutación correctamente: un swap de dos nombres con
-    // renameClip secuencial colisiona consigo mismo (el segundo rename choca
-    // con el nombre que el primero acaba de dejar libre, en el hueco
-    // equivocado) y no aplica nada — los clips se quedan con el nombre que
-    // trae el FBX y un Animator que referencia el nombre guardado bindea al
-    // clip EQUIVOCADO en silencio, que es peor que un huérfano.
+    // Unlike chaining renameClip clip by clip, this resolves
+    // ANY permutation correctly: a swap of two names with
+    // sequential renameClip collides with itself (the second rename hits the
+    // name the first one just freed, in the wrong slot)
+    // and applies nothing, so the clips keep the name that
+    // the FBX brings and an Animator that references the saved name binds to the
+    // WRONG clip silently, which is worse than an orphan.
     //
-    // Guarda el invariante de nombres únicos: si savedNames trae duplicados
-    // entre sí, o un nombre guardado ya pertenece a un clip que NO es parte
-    // de este mismo lote (otra fuente, u otro clip fuera de los n primeros),
-    // ESE índice no se aplica —se deja el clip con el nombre que ya tenía— y
-    // se avisa nombrando el clip. Un nombre guardado igual al que el clip ya
-    // tiene es un no-op válido, no una colisión.
+    // It guards the unique-names invariant: if savedNames carries duplicates
+    // among themselves, or a saved name already belongs to a clip that is NOT part
+    // of this same batch (another source, or another clip outside the first n),
+    // THAT index is not applied (the clip is left with the name it already had)
+    // and a warning is issued naming the clip. A saved name equal to the one the clip already
+    // has is a valid no-op, not a collision.
     void applyClipNamesPositionally(SkinnedMesh& mesh, AnimationSource& source,
                                     const std::vector<std::string>& savedNames,
                                     std::vector<std::string>& warnings);
 
-    // Configuracion de UNA fuente de animacion de una malla skinned, tal y como la
-    // guarda la escena. Es lo que hay que recordar de la malla vieja para
-    // reconstruirla sobre una recien cargada (reimport de un modelo) y lo que
-    // Scene::fromJson lee de su JSON: una sola forma de aplicarla.
+    // Configuration of ONE animation source of a skinned mesh, as the
+    // scene saves it. It is what has to be remembered from the old mesh to
+    // rebuild it on a freshly loaded one (model reimport) and what
+    // Scene::fromJson reads from its JSON: a single way to apply it.
     struct AnimationSourceConfig
     {
         std::string              path;
         bool                     builtin = false;
-        std::vector<std::string> clipNames;   // nombres finales, en orden
+        std::vector<std::string> clipNames;   // final names, in order
     };
 
-    // Las fuentes de mesh, en el mismo orden.
+    // The sources of mesh, in the same order.
     std::vector<AnimationSourceConfig> animationSourceConfigOf(const SkinnedMesh& mesh);
 
-    // Reaplica `sources` sobre una malla recien cargada por loadSkinned: la fuente
-    // BUILTIN ya existe y solo recupera los NOMBRES (posicionalmente, de una
-    // vez: encadenar renameClip colisiona consigo mismo ante un swap de dos
-    // nombres); las externas se reanaden con esos nombres. Una fuente externa que
-    // ya no carga (movida, borrada, otro rig) se AVISA y se sigue: perder la
-    // escena entera por eso seria mucho peor, y los estados que usaran sus clips
-    // los marca bindClips como huerfanos. Nunca lanza.
+    // Reapplies `sources` onto a mesh freshly loaded by loadSkinned: the BUILTIN
+    // source already exists and only recovers the NAMES (positionally, all at
+    // once: chaining renameClip collides with itself on a swap of two
+    // names); the external ones are re-added with those names. An external source that
+    // no longer loads (moved, deleted, another rig) is WARNED about and skipped: losing the
+    // whole scene for that would be much worse, and the states that used its clips
+    // are marked orphaned by bindClips. Never throws.
     void applyAnimationSourceConfig(SkinnedMesh& mesh,
                                     const std::vector<AnimationSourceConfig>& sources,
                                     std::vector<std::string>& warnings);

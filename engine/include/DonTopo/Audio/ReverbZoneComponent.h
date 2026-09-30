@@ -3,36 +3,36 @@
 
 namespace DonTopo
 {
-    // Ambiente sonoro con forma de esfera: dentro de él, todo lo que suene coge
-    // la reverberación del preset. Es la Reverb Zone de Unity.
+    // Sound ambience shaped like a sphere: inside it, everything that plays takes
+    // the preset's reverb. It is Unity's Reverb Zone.
     //
-    // Al contrario que el AudioClip, este componente NO envuelve ningún recurso
-    // de FMOD: la zona viva (un FMOD::Reverb3D) la crea y la destruye
-    // AudioManager, emparejándola por el id del GameObject. Así el componente
-    // sigue siendo un puñado de datos serializables y se puede copiar, mientras
-    // que el recurso nativo tiene un único dueño.
+    // Unlike the AudioClip, this component does NOT wrap any FMOD resource:
+    // the live zone (an FMOD::Reverb3D) is created and destroyed by
+    // AudioManager, paired by the GameObject id. This way the component
+    // remains a handful of serializable data and can be copied, while
+    // the native resource has a single owner.
     //
-    // La mezcla entre zonas solapadas la hace FMOD, no nosotros: por eso el
-    // componente solo aporta radios y preset.
+    // The mixing between overlapping zones is done by FMOD, not by us: that is why the
+    // component only contributes radii and preset.
     //
-    // Puede haber VARIAS por escena, a diferencia del Audio Listener. FMOD tiene
-    // un tope de instancias 3D simultáneas y el manager avisa cuando se pasa.
+    // There can be SEVERAL per scene, unlike the Audio Listener. FMOD has
+    // a cap on simultaneous 3D instances and the manager warns when it is exceeded.
     class ReverbZoneComponent
     {
         public:
-            // Nombres de preset de FMOD Core (FMOD_PRESET_*), en minúsculas. Se
-            // guardan por NOMBRE en la escena, nunca por índice: añadir un
-            // preset a la lista no puede cambiar el ambiente de una escena ya
-            // guardada.
+            // FMOD Core preset names (FMOD_PRESET_*), lowercase. They are
+            // saved by NAME in the scene, never by index: adding a
+            // preset to the list cannot change the ambience of an already
+            // saved scene.
             //
-            // No están los 20 y pico de FMOD, solo los que se piden de verdad;
-            // ampliar la lista es añadir una línea en AudioManager.
+            // The 20-odd from FMOD are not all here, only the ones actually requested;
+            // extending the list is adding one line in AudioManager.
             const std::string& getPreset() const { return m_preset; }
             void setPreset(std::string preset) { m_preset = std::move(preset); }
 
-            // Dentro de minDistance la reverb se aplica a tope; entre min y max
-            // se desvanece. Fuera de max no hay efecto. Mismo esquema que la
-            // atenuación de un AudioClip 3D, y mismo gizmo de dos esferas.
+            // Within minDistance the reverb is applied fully; between min and max
+            // it fades out. Outside max there is no effect. Same scheme as the
+            // attenuation of a 3D AudioClip, and the same two-sphere gizmo.
             float getMinDistance() const { return m_minDistance; }
             float getMaxDistance() const { return m_maxDistance; }
             void setMinDistance(float d);
@@ -43,8 +43,8 @@ namespace DonTopo
 
         private:
             std::string m_preset = "room";
-            // Rangos a la escala de este repo (primitivas de 50 unidades), como
-            // los del AudioClip.
+            // Ranges at this repo's scale (50-unit primitives), like
+            // the AudioClip ones.
             float m_minDistance = 50.0f;
             float m_maxDistance = 200.0f;
             bool  m_enabled = true;

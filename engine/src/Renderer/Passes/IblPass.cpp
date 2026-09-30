@@ -17,8 +17,8 @@ namespace DonTopo {
 
 void IblPass::createResources(const Context& ctx)
 {
-    // 1. Las dos imagenes. No usan m_res.createImage: esa fija arrayLayers y
-    // mipLevels a 1, y aqui hacen falta 6 capas (y mips en el prefiltrado).
+    // 1. The two images. They do not use m_res.createImage: that one fixes arrayLayers and
+    // mipLevels to 1, and here 6 layers are needed (and mips in the prefilter).
     auto makeCube = [&](uint32_t size, uint32_t mips, VkImage& image, VkDeviceMemory& memory)
     {
         VkImageCreateInfo ci{};
@@ -31,7 +31,7 @@ void IblPass::createResources(const Context& ctx)
         ci.arrayLayers   = 6;
         ci.samples       = VK_SAMPLE_COUNT_1_BIT;
         ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        // TRANSFER_DST es pa el clear neutro de mas abajo, no pa una copia.
+        // TRANSFER_DST is for the neutral clear below, not for a copy.
         ci.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT
                          | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
@@ -53,9 +53,9 @@ void IblPass::createResources(const Context& ctx)
     makeCube(kIrradianceSize, 1,              m_irradianceImage, m_irradianceMemory);
     makeCube(kPrefilterSize,  kPrefilterMips, m_prefilterImage,  m_prefilterMemory);
 
-    // 2. Vistas. La CUBE es la que va en los descriptor sets de los objetos;
-    // las 2D_ARRAY solo existen pa que el compute las escriba como storage
-    // image, una por nivel de mip porque imageStore no elige nivel.
+    // 2. Views. The CUBE one is the one that goes in the objects' descriptor sets;
+    // the 2D_ARRAY ones only exist so the compute can write them as a storage
+    // image, one per mip level because imageStore does not choose the level.
     auto makeView = [&](VkImage image, VkImageViewType type, uint32_t baseMip, uint32_t mipCount, VkImageView& view)
     {
         VkImageViewCreateInfo vi{};
@@ -78,8 +78,8 @@ void IblPass::createResources(const Context& ctx)
     for (uint32_t m = 0; m < kPrefilterMips; m++)
         makeView(m_prefilterImage, VK_IMAGE_VIEW_TYPE_2D_ARRAY, m, 1, m_prefilterStore[m]);
 
-    // 3. Sampler comun. maxLod cubre los mips del prefiltrado; la vista de
-    // irradiancia solo tiene un nivel, asi que ahi el LOD se recorta solo.
+    // 3. Common sampler. maxLod covers the prefilter's mips; the irradiance view
+    // only has one level, so there the LOD is clamped on its own.
     VkSamplerCreateInfo si{};
     si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     si.magFilter    = VK_FILTER_LINEAR;
@@ -92,9 +92,9 @@ void IblPass::createResources(const Context& ctx)
     if (vkCreateSampler(ctx.gpu.device(), &si, nullptr, &m_sampler) != VK_SUCCESS)
         throw std::runtime_error("failed to create IBL sampler!");
 
-    // 4. Contenido neutro. Es lo que se ve si nunca se llama a initSkybox (o
-    // si el cubemap no carga): el mismo ambiente plano de antes, en vez de
-    // un descriptor apuntando a basura.
+    // 4. Neutral content. It is what is seen if initSkybox is never called (or
+    // if the cubemap fails to load): the same flat ambient as before, instead of
+    // a descriptor pointing at garbage.
     {
         VkCommandBuffer cmd = ctx.gpu.beginOneTimeCommands();
 
@@ -128,8 +128,8 @@ void IblPass::createResources(const Context& ctx)
                                  0, 0, nullptr, 0, nullptr, 1, &b);
         };
 
-        // Los mismos numeros que tenia el ambiente hemisferico de pbr.frag:
-        // la media de cielo y suelo pal difuso, el cielo pal especular.
+        // The same numbers that pbr.frag's hemispheric ambient had:
+        // the average of sky and ground for the diffuse, the sky for the specular.
         const VkClearColorValue irradianceNeutral{{ 0.075f, 0.080f, 0.090f, 1.0f }};
         const VkClearColorValue prefilterNeutral {{ 0.100f, 0.120f, 0.150f, 1.0f }};
         clearTo(m_irradianceImage, 1,              irradianceNeutral);
@@ -138,8 +138,8 @@ void IblPass::createResources(const Context& ctx)
         ctx.gpu.endOneTimeCommands(cmd);
     }
 
-    // 5. Descriptor set layout, pool y pipelines de la precomputacion. Layout
-    // propio y no el de createComputePipelines: ese son 8 storage buffers.
+    // 5. Descriptor set layout, pool and pipelines of the precomputation. Its own layout
+    // and not createComputePipelines's: that one is 8 storage buffers.
     VkDescriptorSetLayoutBinding iblBindings[2]{};
     iblBindings[0].binding         = 0;
     iblBindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -171,8 +171,8 @@ void IblPass::createResources(const Context& ctx)
     if (vkCreatePipelineLayout(ctx.gpu.device(), &pli, nullptr, &m_pipelineLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create IBL pipeline layout!");
 
-    // Un set pa la irradiancia y uno por mip del prefiltrado: cada uno lleva
-    // una storage image distinta, asi que no se pueden reutilizar.
+    // One set for the irradiance and one per prefilter mip: each one carries
+    // a different storage image, so they cannot be reused.
     const uint32_t setCount = 1 + kPrefilterMips;
     VkDescriptorPoolSize iblSizes[2]{};
     iblSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -230,14 +230,14 @@ void IblPass::destroyResources(const Context& ctx)
 
 void IblPass::precompute(const Context& ctx)
 {
-    // Sin cubemap de entorno no hay nada que convolucionar: se quedan los
-    // valores neutros que dejo createResources.
+    // Without an environment cubemap there is nothing to convolve: the neutral
+    // values that createResources left remain.
     if (ctx.envView == VK_NULL_HANDLE) return;
 
     const auto t0 = std::chrono::steady_clock::now();
 
-    // Reset y no free: initSkybox podria llamarse otra vez (cambio de
-    // entorno) y los sets de la vez anterior ya no valen.
+    // Reset and not free: initSkybox could be called again (environment change)
+    // and the sets from the previous time are no longer valid.
     vkResetDescriptorPool(ctx.gpu.device(), m_descPool, 0);
 
     const uint32_t setCount = 1 + kPrefilterMips;
@@ -257,8 +257,8 @@ void IblPass::precompute(const Context& ctx)
     envInfo.imageView   = ctx.envView;
     envInfo.sampler     = ctx.envSampler;
 
-    // Los VkDescriptorImageInfo tienen que seguir vivos hasta el
-    // vkUpdateDescriptorSets, asi que el vector se dimensiona de golpe.
+    // The VkDescriptorImageInfo have to stay alive until
+    // vkUpdateDescriptorSets, so the vector is sized all at once.
     std::vector<VkDescriptorImageInfo>  storeInfos(setCount);
     std::vector<VkWriteDescriptorSet>   writes;
     writes.reserve(setCount * 2);
@@ -300,7 +300,7 @@ void IblPass::precompute(const Context& ctx)
     barriers[1].image = m_prefilterImage;
     barriers[1].subresourceRange.levelCount = kPrefilterMips;
 
-    // A GENERAL: es el unico layout que admite imageStore.
+    // To GENERAL: it is the only layout that supports imageStore.
     for (int i = 0; i < 2; i++)
     {
         barriers[i].oldLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -311,19 +311,19 @@ void IblPass::precompute(const Context& ctx)
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 0, nullptr, 0, nullptr, 2, barriers);
 
-    // Irradiancia: una invocacion por texel, 6 capas en z.
+    // Irradiance: one invocation per texel, 6 layers in z.
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_irradiancePipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout,
                             0, 1, &sets[0], 0, nullptr);
-    // intensity 1.0: el IBL global no escala nada, asi que los dos cubemaps
-    // salen bit a bit como antes de que el push llevara ese campo.
+    // intensity 1.0: the global IBL scales nothing, so the two cubemaps
+    // come out bit for bit as before the push carried that field.
     Push push{ 0.0f, kIrradianceSize, 1.0f };
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     const uint32_t irrGroups = (kIrradianceSize + 7) / 8;
     vkCmdDispatch(cmd, irrGroups, irrGroups, 6);
 
-    // Prefiltrado: un dispatch por mip. Escriben regiones disjuntas y nadie
-    // las lee entre medias, asi que no hacen falta barreras intermedias.
+    // Prefilter: one dispatch per mip. They write disjoint regions and nobody
+    // reads them in between, so no intermediate barriers are needed.
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_prefilterPipeline);
     for (uint32_t m = 0; m < kPrefilterMips; m++)
     {
@@ -346,7 +346,7 @@ void IblPass::precompute(const Context& ctx)
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          0, 0, nullptr, 0, nullptr, 2, barriers);
 
-    // Bloquea hasta que la cola termina, asi que el ms medido incluye la GPU.
+    // Blocks until the queue finishes, so the measured ms includes the GPU.
     ctx.gpu.endOneTimeCommands(cmd);
 
     const double ms = std::chrono::duration<double, std::milli>(
@@ -384,11 +384,11 @@ void IblPass::fillIblWrites(VkDescriptorSet set, VkImageView irradiance,
 void IblPass::writeBindings(const Context& ctx, VkDescriptorSet set,
                             VkImageView irradiance, VkImageView prefilter) const
 {
-    // Un write suelto sobre un set YA alojado, igual que writeSsaoBinding:
-    // reescribir los bindings del IBL es lo unico que hace falta para que un
-    // objeto pase del cubemap global al de una sonda. Ni layout nuevo, ni
-    // miembro nuevo en el UBO, ni un indice en PushData (que esta a 80 bytes
-    // justos).
+    // A standalone write on an ALREADY allocated set, like writeSsaoBinding:
+    // rewriting the IBL bindings is the only thing needed for an
+    // object to go from the global cubemap to a probe's. No new layout, no new
+    // member in the UBO, no index in PushData (which is at exactly 80
+    // bytes).
     VkDescriptorImageInfo infos[2]{};
     VkWriteDescriptorSet  w[2]{};
     fillIblWrites(set, irradiance, prefilter, m_sampler, infos, w);

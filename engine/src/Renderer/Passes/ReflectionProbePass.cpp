@@ -15,25 +15,25 @@
 
 namespace DonTopo {
 
-// Frames en vuelo del Renderer: es el tamaño de los arrays de descriptor sets
-// de SharedGpuMesh y de SkinnedMatGfx, que este pase reescribe.
+// Renderer frames in flight: the size of the descriptor set arrays of
+// SharedGpuMesh and SkinnedMatGfx, which this pass rewrites.
 static constexpr int kFrames = 2;
 static_assert(sizeof(SharedGpuMesh::descriptorSets) / sizeof(VkDescriptorSet) == kFrames,
               "kFrames must follow the number of descriptor sets per shared mesh");
 
 // ── Reflection probes ───────────────────────────────────────────────────────
-// Nada de lo que hay aqui graba un solo comando en el command buffer del
-// frame: el bake son submits propios, disparados por un evento. Con las sondas
-// ya bakeadas el frame cuesta exactamente lo mismo que con ninguna, porque lo
-// unico que cambia son DOS descriptores (bindings 5 y 6 del set 0) que ya
-// estaban ahi apuntando al IBL global.
+// Nothing in here records a single command into the frame's command buffer:
+// the bake uses its own submits, triggered by an event. With the probes
+// already baked, the frame costs exactly the same as with none, because the
+// only thing that changes is TWO descriptors (bindings 5 and 6 of set 0) that
+// were already there pointing at the global IBL.
 
 void ReflectionProbePass::createCapture(const Context& ctx)
 {
-    // Cubemap intermedio del bake, UNO solo pa todas las sondas: solo tiene
-    // que vivir entre el render de las 6 caras y la convolucion. Se crea la
-    // primera vez que hay algo que bakear, asi que una escena sin sondas no
-    // gasta ni un byte por esta feature.
+    // Intermediate bake cubemap, ONE for all the probes: it only has to live
+    // between the render of the 6 faces and the convolution. It is created the
+    // first time there is something to bake, so a scene without probes does not
+    // spend a single byte on this feature.
     VkImageCreateInfo ci{};
     ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     ci.flags         = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
@@ -44,7 +44,7 @@ void ReflectionProbePass::createCapture(const Context& ctx)
     ci.arrayLayers   = 6;
     ci.samples       = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
-    // TRANSFER_DST: destino del blit desde el HDR de la escena, una cara por submit.
+    // TRANSFER_DST: destination of the blit from the scene HDR, one face per submit.
     ci.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -74,9 +74,9 @@ void ReflectionProbePass::createCapture(const Context& ctx)
     if (vkCreateImageView(ctx.gpu.device(), &vi, nullptr, &m_captureView) != VK_SUCCESS)
         throw std::runtime_error("failed to create probe capture view!");
 
-    // Arranca en SHADER_READ_ONLY, que es el layout desde el que el bake la
-    // mueve a TRANSFER_DST y al que la devuelve. El contenido inicial da
-    // igual: el bake escribe las 6 caras antes de que nadie las lea.
+    // It starts in SHADER_READ_ONLY, which is the layout the bake moves it from
+    // to TRANSFER_DST and returns it to. The initial content does not matter:
+    // the bake writes the 6 faces before anyone reads them.
     {
         VkCommandBuffer cmd = ctx.gpu.beginOneTimeCommands();
         VkImageMemoryBarrier b{};
@@ -94,8 +94,8 @@ void ReflectionProbePass::createCapture(const Context& ctx)
         ctx.gpu.endOneTimeCommands(cmd);
     }
 
-    // Query pool propio del bake: 7 pares (6 caras + convolucion). No se
-    // mezcla con el del AA ni con el del bloom, que se resetean por frame.
+    // The bake's own query pool: 7 pairs (6 faces + convolution). It is not
+    // shared with the AA one or the bloom one, which are reset every frame.
     if (ctx.timestampsSupported && m_queryPool == VK_NULL_HANDLE)
     {
         VkQueryPoolCreateInfo qi{};
@@ -109,8 +109,8 @@ void ReflectionProbePass::createCapture(const Context& ctx)
 
 void ReflectionProbePass::createProbeImages(const Context& ctx, GpuProbe& probe)
 {
-    // Mismas dos imagenes que el IBL global (IblPass::createResources), pero
-    // por sonda. m_res.createImage no vale: fija arrayLayers y mipLevels a 1.
+    // The same two images as the global IBL (IblPass::createResources), but
+    // per probe. m_res.createImage does not work: it fixes arrayLayers and mipLevels to 1.
     auto makeCube = [&](uint32_t size, uint32_t mips, VkImage& image, VkDeviceMemory& memory)
     {
         VkImageCreateInfo ci{};
@@ -166,11 +166,10 @@ void ReflectionProbePass::createProbeImages(const Context& ctx, GpuProbe& probe)
     for (uint32_t m = 0; m < IblPass::kPrefilterMips; m++)
         makeView(probe.prefilterImage, VK_IMAGE_VIEW_TYPE_2D_ARRAY, m, 1, probe.prefilterStore[m]);
 
-    // Contenido neutro, por el mismo motivo que en IblPass: entre que la sonda
-    // existe y que alguien pulsa Bake, sus vistas ya estan en descriptor sets y
-    // no pueden apuntar a memoria sin definir. Los mismos valores que el IBL
-    // neutro, asi que una sonda recien creada y sin bakear se ve igual que el
-    // ambiente plano de siempre.
+    // Neutral content, for the same reason as in IblPass: between the probe
+    // existing and someone pressing Bake, its views are already in descriptor sets and
+    // cannot point at undefined memory. The same values as the neutral IBL, so a
+    // freshly created, unbaked probe looks the same as the usual flat ambient.
     {
         VkCommandBuffer cmd = ctx.gpu.beginOneTimeCommands();
 
@@ -215,9 +214,9 @@ void ReflectionProbePass::createProbeImages(const Context& ctx, GpuProbe& probe)
 
 void ReflectionProbePass::destroyProbeImages(const Context& ctx, GpuProbe& probe)
 {
-    // El caller ya ha esperado a que la GPU quede libre y ha reescrito los
-    // bindings 5/6 que apuntaban aqui: al llegar a esta funcion ningun
-    // descriptor set referencia estas vistas.
+    // The caller has already waited for the GPU to become idle and has rewritten the
+    // bindings 5/6 that pointed here: by the time this function is reached, no
+    // descriptor set references these views.
     vkDestroyImageView(ctx.gpu.device(), probe.irradianceView,  nullptr);
     vkDestroyImageView(ctx.gpu.device(), probe.irradianceStore, nullptr);
     vkDestroyImage(ctx.gpu.device(), probe.irradianceImage, nullptr);
@@ -232,8 +231,8 @@ void ReflectionProbePass::destroyProbeImages(const Context& ctx, GpuProbe& probe
 
 void ReflectionProbePass::destroy(const Context& ctx)
 {
-    // El cubemap de captura y el query pool solo existen si alguna vez se
-    // bakeo algo; las sondas, si la escena tenia alguna.
+    // The capture cubemap and the query pool only exist if something was ever
+    // baked; the probes, if the scene had any.
     for (GpuProbe& probe : m_probes) destroyProbeImages(ctx, probe);
     m_probes.clear();
     if (m_captureView != VK_NULL_HANDLE)
@@ -253,16 +252,15 @@ void ReflectionProbePass::destroy(const Context& ctx)
 void ReflectionProbePass::writeIblBindings(const Context& ctx, VkDescriptorSet set,
                                            VkImageView irradiance, VkImageView prefilter) const
 {
-    // Un write suelto sobre un set YA alojado, igual que writeSsaoBinding:
-    // reescribir los bindings del IBL es lo unico que hace falta para que un
-    // objeto pase del cubemap global al de una sonda. Ni layout nuevo, ni
-    // miembro nuevo en el UBO, ni un indice en PushData (que esta a 80 bytes
-    // justos).
+    // A standalone write on an ALREADY allocated set, like writeSsaoBinding:
+    // rewriting the IBL bindings is the only thing needed for an object to go
+    // from the global cubemap to a probe's. No new layout, no new member in the
+    // UBO, no index in PushData (which is at exactly 80 bytes).
     //
-    // Los writes salen de IblPass, que es el dueño de esos dos bindings. Esta
-    // era la CUARTA copia del mismo bloque —con las mallas, los personajes y el
-    // propio IblPass—, y divergir aqui es de lo que no avisa nadie: el objeto
-    // muestrearia el ambiente de otro.
+    // The writes come from IblPass, which owns those two bindings. This was the
+    // FOURTH copy of the same block (with the meshes, the characters and IblPass
+    // itself), and diverging here is the kind of thing nobody warns you about:
+    // the object would sample another object's ambient.
     VkDescriptorImageInfo infos[2]{};
     VkWriteDescriptorSet  w[2]{};
     IblPass::fillIblWrites(set, irradiance, prefilter, ctx.iblSampler, infos, w);
@@ -271,8 +269,8 @@ void ReflectionProbePass::writeIblBindings(const Context& ctx, VkDescriptorSet s
 
 int ReflectionProbePass::pickProbeFor(const glm::vec3& worldPos) const
 {
-    // La sonda MAS CERCANA cuyo radio contiene el punto. -1 = ninguna, y
-    // entonces el objeto se queda con el IBL global de siempre.
+    // The NEAREST probe whose radius contains the point. -1 = none, and then
+    // the object keeps the usual global IBL.
     int   best     = -1;
     float bestDist = 0.0f;
     for (size_t i = 0; i < m_probes.size(); i++)
@@ -286,18 +284,18 @@ int ReflectionProbePass::pickProbeFor(const glm::vec3& worldPos) const
 
 void ReflectionProbePass::refreshAssignment(const Context& ctx)
 {
-    // Calcula la asignacion DESEADA y solo toca la GPU si difiere de la ya
-    // escrita. En regimen estacionario esto son unas cuantas restas de
-    // vectores en CPU y cero trabajo de GPU: ni un comando, ni un write.
+    // Computes the DESIRED assignment and only touches the GPU if it differs from
+    // the one already written. In steady state this is a few vector subtractions
+    // on the CPU and zero GPU work: no command, no write.
     std::unordered_map<int, int> wantShared;
     for (const auto& obj : ctx.objects)
     {
         const SharedGpuMesh* gpu = ctx.sharedMeshes.get(obj.sharedIndex);
         if (!gpu) continue;
-        // El descriptor set es POR MALLA COMPARTIDA, no por GameObject: dos
-        // instancias de la misma malla bajo sondas distintas comparten
-        // sonda, y gana la del primer objeto del recorrido. Es el precio de
-        // no duplicar los sets (y con el, el instancing).
+        // The descriptor set is PER SHARED MESH, not per GameObject: two instances
+        // of the same mesh under different probes share a probe, and the first
+        // object in the traversal wins. That is the price of not duplicating the
+        // sets (and with it, instancing).
         if (wantShared.find(obj.sharedIndex) != wantShared.end()) continue;
         const glm::vec3 local  = gpu->hasBounds ? (gpu->aabbMin + gpu->aabbMax) * 0.5f : glm::vec3(0.0f);
         const glm::vec3 center = glm::vec3(obj.transform * glm::vec4(local, 1.0f));
@@ -310,7 +308,7 @@ void ReflectionProbePass::refreshAssignment(const Context& ctx)
 
     if (wantShared == m_assignShared && wantSkinned == m_assignSkinned) return;
 
-    // Hay cambios: los sets pueden estar en uso por frames en vuelo.
+    // There are changes: the sets may be in use by frames in flight.
     vkDeviceWaitIdle(ctx.gpu.device());
 
     auto viewsFor = [&](int probeIndex, VkImageView& irr, VkImageView& pre)
@@ -338,8 +336,8 @@ void ReflectionProbePass::refreshAssignment(const Context& ctx)
         for (int i = 0; i < kFrames; i++)
             if (gpu->descriptorSets[i]) writeIblBindings(ctx, gpu->descriptorSets[i], irr, pre);
     }
-    // Mallas que YA NO estan en el mapa deseado (objeto borrado) no hace
-    // falta devolverlas al IBL global: sus sets se liberan con la malla.
+    // Meshes that are NO LONGER in the desired map (deleted object) do not need
+    // to be returned to the global IBL: their sets are freed along with the mesh.
 
     for (size_t si = 0; si < ctx.skinnedObjects.size(); si++)
     {
@@ -358,13 +356,13 @@ void ReflectionProbePass::refreshAssignment(const Context& ctx)
 
 void ReflectionProbePass::assignAllToGlobalIbl(const Context& ctx)
 {
-    // Devuelve TODOS los objetos al IBL global. Se llama justo antes de una
-    // tanda de bakes y no es un detalle: la captura reusa el pass de escena,
-    // que ilumina cada objeto con lo que tenga en sus bindings 5/6. Si eso
-    // es el cubemap de la propia sonda, cada bake vuelve a capturar la luz
-    // que ya llevaba la intensidad aplicada y el efecto se amplifica bake a
-    // bake (o se apaga, con intensidades bajas). Capturando siempre con el
-    // IBL global el bake es idempotente y no depende del orden de las sondas.
+    // Returns ALL the objects to the global IBL. It is called right before a
+    // batch of bakes and it is not a detail: the capture reuses the scene pass,
+    // which lights each object with whatever it has in its bindings 5/6. If that
+    // is the probe's own cubemap, each bake captures again the light that already
+    // carried the intensity applied, and the effect is amplified from bake to bake
+    // (or fades out, with low intensities). Always capturing with the global
+    // IBL makes the bake idempotent and independent of the order of the probes.
     if (m_assignShared.empty() && m_assignSkinned.empty()) return;
 
     vkDeviceWaitIdle(ctx.gpu.device());
@@ -383,48 +381,48 @@ void ReflectionProbePass::assignAllToGlobalIbl(const Context& ctx)
                     writeIblBindings(ctx, mgfx.descSets[i],
                                      ctx.globalIrradianceView, ctx.globalPrefilterView);
 
-    // Las caches quedan vacias a proposito: refreshAssignment, al final de
-    // sync(), vuelve a escribir la asignacion real.
+    // The caches are left empty on purpose: refreshAssignment, at the end of
+    // sync(), writes the real assignment again.
     m_assignShared.clear();
     m_assignSkinned.clear();
 }
 
 void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
 {
-    // Sin framebuffer de escena (init temprano) o sin el SSBO de instancias
-    // no hay contra que dibujar: la peticion se reintenta en otro frame.
+    // Without a scene framebuffer (early init) or without the instance SSBO
+    // there is nothing to draw against: the request is retried in another frame.
     if (ctx.sceneFramebuffer == VK_NULL_HANDLE) return;
     if (ctx.instanceSet      == VK_NULL_HANDLE) return;
 
     if (m_captureImage == VK_NULL_HANDLE) createCapture(ctx);
 
-    // Las 6 caras dibujan sobre el HDR del slot 0 y leen el UBO del frame 0,
-    // que pueden estar en vuelo. Esto es un evento, no un pass: se puede esperar.
+    // The 6 faces draw onto the HDR of slot 0 and read the UBO of frame 0,
+    // which may be in flight. This is an event, not a pass: waiting is fine.
     vkDeviceWaitIdle(ctx.gpu.device());
 
     const uint32_t faceRender = std::min(kFaceSize,
                                          std::min(ctx.renderExtent.width, ctx.renderExtent.height));
     if (faceRender == 0) return;
 
-    // Base: el UBO del frame 0 TAL CUAL. Luces, matrices de cascada y splits
-    // se conservan a proposito — el shadow map que hay en la GPU es el de
-    // esas matrices, y recomputarlas aqui lo descuadraria.
+    // Base: the UBO of frame 0 AS IS. Lights, cascade matrices and splits are
+    // kept on purpose: the shadow map on the GPU is the one for those
+    // matrices, and recomputing them here would put it out of sync.
     UniformBufferObject ubo{};
     memcpy(&ubo, ctx.uboMapped, sizeof(ubo));
     ubo.viewPos = glm::vec4(probe.position, 1.0f);
 
-    // Forward+ a Off durante la captura: su rejilla se culleo contra el
-    // frustum de la camara del frame, no contra estas 6 caras. mode 0 es el
-    // bucle clasico sobre las luces del UBO, con todas ellas. Se restaura al
-    // salir; el modo que la UI tiene pedido no se toca.
+    // Forward+ set to Off during the capture: its grid was culled against the
+    // frustum of the frame's camera, not against these 6 faces. mode 0 is the
+    // classic loop over the UBO lights, with all of them. It is restored on
+    // exit; the mode the UI has requested is not touched.
     ForwardPlusPass::ParamsGpu savedFp{};
     const bool restoreFp = ctx.fp.overrideModeOff(savedFp);
 
-    // Direcciones y "up" de las 6 caras. Los up son los OPUESTOS a los de la
-    // lista clasica de OpenGL, y la proyeccion invierte X ademas de la Y de
-    // Vulkan: dos espejos son una rotacion, asi que el winding (y con el, el
-    // face culling del pipeline) se conserva, y la cara sale con la
-    // orientacion que espera el muestreo de un samplerCube.
+    // Directions and "up" of the 6 faces. The ups are the OPPOSITE of those in
+    // the classic OpenGL list, and the projection flips X in addition to Vulkan's
+    // Y: two mirrors make a rotation, so the winding (and with it the pipeline's
+    // face culling) is preserved, and the face comes out with the orientation
+    // that samplerCube sampling expects.
     static const glm::vec3 kDirs[6] = {
         {  1.0f,  0.0f,  0.0f }, { -1.0f,  0.0f,  0.0f },
         {  0.0f,  1.0f,  0.0f }, {  0.0f, -1.0f,  0.0f },
@@ -455,22 +453,22 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
 
         if (ctx.timestampsSupported && m_queryPool != VK_NULL_HANDLE)
         {
-            // Reset unico de las 14 en el primer submit: los writes de los
-            // submits siguientes van detras en la misma cola.
+            // Single reset of all 14 in the first submit: the writes of the following
+            // submits go behind it in the same queue.
             if (face == 0) vkCmdResetQueryPool(cmd, m_queryPool, 0, kQueryCount);
             vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_queryPool, face * 2);
         }
 
-        // El mapa de AO que hay en la GPU es el de la camara del frame: dejarlo
-        // hornearia oclusion de otro punto de vista dentro del cubemap. A 1.0
-        // = sin oclusion; el frame siguiente lo recalcula si el SSAO esta
-        // activo, y si no lo esta ya valia 1.0.
+        // The AO map on the GPU is the frame camera's: leaving it would bake
+        // occlusion from another point of view into the cubemap. At 1.0
+        // = no occlusion; the next frame recomputes it if SSAO is
+        // active, and if it is not, it was already 1.0.
         if (face == 0 && ctx.ssaoBlurImage != VK_NULL_HANDLE)
         {
-            // oldLayout UNDEFINED y no GENERAL: si el SSAO nunca ha corrido
-            // sobre este slot la imagen no se ha transicionado nunca, y los
-            // draws de aqui abajo la muestrean por el binding 7 (declarado
-            // GENERAL). Descartar el contenido no cuesta nada: se limpia.
+            // oldLayout UNDEFINED and not GENERAL: if SSAO has never run
+            // on this slot the image has never been transitioned, and the
+            // draws below sample it through binding 7 (declared
+            // GENERAL). Discarding the content costs nothing: it is cleared.
             VkImageMemoryBarrier ao{};
             ao.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             ao.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -503,9 +501,9 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
         rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpInfo.renderPass        = ctx.sceneRenderPass;
         rpInfo.framebuffer       = ctx.sceneFramebuffer;
-        // Cuadrada y en la esquina: el framebuffer es el del viewport (16:9
-        // con cualquier suerte) y una cara de cubemap tiene que salir de una
-        // proyeccion de aspecto 1. El resto del framebuffer ni se toca.
+        // Square and in the corner: the framebuffer is the viewport's (16:9
+        // with any luck) and a cubemap face has to come out of an
+        // aspect 1 projection. The rest of the framebuffer is not touched at all.
         rpInfo.renderArea.offset = {0, 0};
         rpInfo.renderArea.extent = { faceRender, faceRender };
         rpInfo.clearValueCount   = 2;
@@ -523,12 +521,12 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
         scissor.extent = { faceRender, faceRender };
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // Pipeline de escena de siempre. El wireframe NO se respeta aqui a
-        // proposito: lo que se captura es el entorno iluminado, no la ayuda
-        // de edicion.
+        // The usual scene pipeline. Wireframe is NOT honored here on
+        // purpose: what is captured is the lit environment, not the editing
+        // aid.
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.scenePipeline);
-        // Set 1: el SSBO de instancias sigue siendo obligatorio (el vertex
-        // shader lo declara), aunque aqui no se instancie nada.
+        // Set 1: the instance SSBO is still mandatory (the vertex
+        // shader declares it), even though nothing is instanced here.
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             ctx.scenePipelineLayout, 1, 1, &ctx.instanceSet, 0, nullptr);
         const VkDescriptorSet fpBakeSet = ctx.fp.set(0);
@@ -546,19 +544,19 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 ctx.scenePipelineLayout, 0, 1, &gpu->descriptorSets[0], 0, nullptr);
             PushData push;
-            // Sin instancing (flags.x = 0): la matriz va en el push, que es
-            // la ruta que ya usan los skinned. Asi el bake no toca el SSBO
-            // del frame ni su cursor.
+            // No instancing (flags.x = 0): the matrix goes in the push, which is
+            // the path the skinned meshes already use. That way the bake does not touch the
+            // frame's SSBO or its cursor.
             push.transform = obj.transform;
-            // Del OBJETO, como el transform de la línea de arriba: los factores
-            // dejaron de vivir en la entrada compartida. Aquí no hay agrupado
-            // que consultar —el bake dibuja objeto a objeto—, así que se leen
-            // directamente y sin intermediario.
+            // From the OBJECT, like the transform on the line above: the factors
+            // no longer live in the shared entry. There is no grouping to consult
+            // here (the bake draws object by object), so they are read
+            // directly, with no intermediary.
             push.metallic  = obj.metallic;
             push.roughness = obj.roughness;
             push.flags.x   = 0.0f;
-            // flags.y = 0: el alfa del HDR es la mascara de SSR y aqui no hay
-            // pass de SSR que la lea.
+            // flags.y = 0: the HDR alpha is the SSR mask and there is no SSR
+            // pass here to read it.
             push.flags.y   = 0.0f;
             vkCmdPushConstants(cmd, ctx.scenePipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -609,9 +607,9 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
 
         vkCmdEndRenderPass(cmd);
 
-        // ── Cara -> capa del cubemap de captura ──────────────────────────
-        // El pass deja el HDR en SHADER_READ_ONLY (finalLayout del
-        // attachment de resolve, y del de color sin MSAA).
+        // ── Face -> capture cubemap layer ────────────────────────────────
+        // The pass leaves the HDR in SHADER_READ_ONLY (finalLayout of the
+        // resolve attachment, and of the color one without MSAA).
         b.image            = ctx.hdrImage;
         b.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
         b.oldLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -631,9 +629,9 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
 
-        // Blit y no copy: el render sale a faceRender (recortado por el
-        // tamano del viewport) y la cara del cubemap es siempre de
-        // kFaceSize, asi que hay que escalar.
+        // Blit and not copy: the render goes out to faceRender (cropped to the
+        // viewport size) and the cubemap face is always kFaceSize,
+        // so it has to be scaled.
         VkImageBlit blit{};
         blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
         blit.srcOffsets[0]  = { 0, 0, 0 };
@@ -646,8 +644,8 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
                        m_captureImage,   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &blit, VK_FILTER_LINEAR);
 
-        // De vuelta a los layouts de partida: el HDR lo lee el bloom y
-        // la composicion del frame siguiente, y la captura la lee el compute.
+        // Back to the starting layouts: the HDR is read by the bloom and the
+        // composition of the next frame, and the capture is read by the compute.
         toDst.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toDst.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         toDst.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -665,12 +663,12 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
         if (ctx.timestampsSupported && m_queryPool != VK_NULL_HANDLE)
             vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_queryPool, face * 2 + 1);
 
-        // Bloquea hasta que la cola vacia: el UBO del frame 0 se reescribe
-        // en la vuelta siguiente y no puede pisarse un draw en vuelo.
+        // Blocks until the queue is empty: the UBO of frame 0 is rewritten
+        // on the next iteration and a draw in flight cannot be overwritten.
         ctx.gpu.endOneTimeCommands(cmd);
     }
 
-    // ── Convolucion: los MISMOS dos compute del IBL global ──────────────
+    // ── Convolution: the SAME two computes as the global IBL ──────────────
     {
         vkResetDescriptorPool(ctx.gpu.device(), ctx.iblDescPool, 0);
 
@@ -782,23 +780,23 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
 
     if (restoreFp) ctx.fp.restoreParams(savedFp);
 
-    // El UBO del frame 0 se queda con la ultima cara; updateUniformBuffer lo
-    // reescribe entero antes del proximo submit del frame, asi que no hace
-    // falta restaurarlo.
+    // The UBO of frame 0 is left with the last face; updateUniformBuffer rewrites
+    // it entirely before the next submit of the frame, so it does not
+    // need to be restored.
 
     probe.baked  = true;
     probe.bakeMs = 0.0f;
     if (ctx.timestampsSupported && m_queryPool != VK_NULL_HANDLE)
     {
         uint64_t stamps[kQueryCount] = {};
-        // WAIT_BIT y no polling: la cola ya esta vacia (endOneTimeCommands
-        // bloquea), asi que los 14 resultados estan listos.
+        // WAIT_BIT and not polling: the queue is already empty (endOneTimeCommands
+        // blocks), so all 14 results are ready.
         if (vkGetQueryPoolResults(ctx.gpu.device(), m_queryPool, 0, kQueryCount,
                                   sizeof(stamps), stamps, sizeof(uint64_t),
                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS)
         {
-            // Suma de los 7 deltas y no ultimo-menos-primero: entre submits
-            // hay esperas del host que no son coste de GPU.
+            // Sum of the 7 deltas and not last-minus-first: between submits
+            // there are host waits that are not GPU cost.
             double total = 0.0;
             for (uint32_t p = 0; p < kQueryCount / 2; p++)
                 total += (double)(stamps[p * 2 + 1] - stamps[p * 2]) * ctx.timestampPeriod * 1e-6;
@@ -809,16 +807,16 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
 
 void ReflectionProbePass::sync(const Context& ctx)
 {
-    // Camino rapido: ni sondas en la escena ni nada que deshacer. Es el caso
-    // de TODAS las escenas de hoy, y sale de aqui sin tocar la GPU.
+    // Fast path: no probes in the scene and nothing to undo. It is the case of
+    // ALL of today's scenes, and it leaves here without touching the GPU.
     const bool nothingToDo = m_probes.empty() && m_assignShared.empty()
                           && m_assignSkinned.empty() && m_bakeQueue.empty()
                           && !m_bakeAllQueued;
     if (!ctx.scene && nothingToDo) return;
 
-    // 1. Reconciliar la lista de sondas con la escena. Es lo unico que corre
-    //    por frame cuando hay sondas: un recorrido del arbol (el mismo que
-    //    ya hacen el gizmo y la fisica) y unas comparaciones de float.
+    // 1. Reconcile the probe list with the scene. It is the only thing that runs
+    //    per frame when there are probes: one tree traversal (the same one the
+    //    gizmo and the physics already do) and a few float comparisons.
     struct Desc { uint64_t id; glm::vec3 pos; float radius; float intensity; };
     std::vector<Desc> descs;
     if (ctx.scene)
@@ -832,25 +830,25 @@ void ReflectionProbePass::sync(const Context& ctx)
     }
     if (descs.empty() && nothingToDo) return;
 
-    // Bajas: sondas cuyo GameObject ya no esta (borrado o cambio de escena).
+    // Removals: probes whose GameObject is no longer there (deleted or scene change).
     for (size_t i = m_probes.size(); i-- > 0; )
     {
         bool alive = false;
         for (const Desc& d : descs) if (d.id == m_probes[i].ownerId) { alive = true; break; }
         if (alive) continue;
-        // ANTES de destruir: devolver al IBL global todo lo que apuntaba a
-        // esta sonda, o quedarian descriptor sets con vistas muertas. Se
-        // borra de la lista primero para que pickProbeFor ya no la elija.
+        // BEFORE destroying: return to the global IBL everything that pointed at
+        // this probe, or descriptor sets with dead views would remain. It is
+        // removed from the list first so that pickProbeFor no longer picks it.
         GpuProbe dying = m_probes[i];
         m_probes.erase(m_probes.begin() + (long)i);
-        m_assignShared.clear();     // fuerza la reescritura de todos
+        m_assignShared.clear();     // forces the rewrite of all of them
         m_assignSkinned.clear();
         refreshAssignment(ctx);
         vkDeviceWaitIdle(ctx.gpu.device());
         destroyProbeImages(ctx, dying);
     }
 
-    // Altas y cambios de ajustes.
+    // Additions and settings changes.
     bool geometryChanged = false;
     for (const Desc& d : descs)
     {
@@ -867,9 +865,9 @@ void ReflectionProbePass::sync(const Context& ctx)
         }
         if (found->position != d.pos || found->radius != d.radius)
             geometryChanged = true;
-        // Mover la sonda invalida lo capturado, y cambiar la intensidad
-        // invalida el cubemap convolucionado (la intensidad se hornea en
-        // el). El radio NO: solo cambia a quien afecta, no lo que se ve.
+        // Moving the probe invalidates what was captured, and changing the intensity
+        // invalidates the convolved cubemap (the intensity is baked into
+        // it). The radius does NOT: it only changes whom it affects, not what is seen.
         const bool dirty = (found->position != d.pos) || (found->intensity != d.intensity);
         if (dirty) { found->baked = false; found->settleFrames = 0; }
         else if (!found->baked) found->settleFrames++;
@@ -879,8 +877,8 @@ void ReflectionProbePass::sync(const Context& ctx)
     }
     (void)geometryChanged;
 
-    // 2. Bakes. Sin un frame previo el UBO del slot 0 es basura (no lleva ni
-    //    luces ni las matrices del shadow map): las peticiones esperan.
+    // 2. Bakes. Without a previous frame the UBO of slot 0 is garbage (it has neither
+    //    lights nor the shadow map matrices): the requests wait.
     if (ctx.uboWritten)
     {
         const bool bakeAll = m_bakeAllQueued;
@@ -896,11 +894,11 @@ void ReflectionProbePass::sync(const Context& ctx)
                 toBake.push_back(&p);
                 continue;
             }
-            // Auto-bake de las que no tienen captura valida: es lo que hace
-            // que cargar una escena (o arrancar DonTopoRuntime) de la misma
-            // imagen que el editor sin pulsar nada. settleFrames espera a
-            // que los ajustes dejen de moverse, asi que arrastrar un slider
-            // no dispara un bake por frame: solo uno al soltar.
+            // Auto-bake of the probes without a valid capture: it is what makes
+            // loading a scene (or starting DonTopoRuntime) give the same
+            // image as the editor without pressing anything. settleFrames waits for
+            // the settings to stop moving, so dragging a slider
+            // does not trigger a bake per frame: only one on release.
             if (!p.baked && p.settleFrames >= 1) toBake.push_back(&p);
         }
 
@@ -908,8 +906,8 @@ void ReflectionProbePass::sync(const Context& ctx)
         int   count = 0;
         if (!toBake.empty())
         {
-            // ANTES de capturar nada: si no, la escena se fotografia
-            // iluminada por las propias sondas y el efecto se realimenta.
+            // BEFORE capturing anything: otherwise the scene is photographed
+            // lit by the probes themselves and the effect feeds back on itself.
             assignAllToGlobalIbl(ctx);
             for (GpuProbe* p : toBake)
             {
@@ -931,7 +929,7 @@ void ReflectionProbePass::sync(const Context& ctx)
         }
     }
 
-    // 3. Asignacion sonda->objeto. Sale sin escribir nada si no ha cambiado.
+    // 3. Probe->object assignment. It returns without writing anything if nothing changed.
     refreshAssignment(ctx);
 }
 

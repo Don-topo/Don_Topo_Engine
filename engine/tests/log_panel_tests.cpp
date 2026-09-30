@@ -1,14 +1,14 @@
-// Test headless del buffer del Log (sin GUI). Plain main + asserts, sin
-// framework — mismo patrón que content_browser_tests.cpp.
+// Headless test of the Log buffer (no GUI). Plain main + asserts, no
+// framework, same pattern as content_browser_tests.cpp.
 //
-// Qué se cubre y por qué: el panel pinta las filas con ImGuiListClipper, que
-// asume que TODAS miden lo mismo. Un mensaje con '\n' dentro (los errores de
-// Lua traen "stack traceback:" en varias líneas) ocupa 2 o 3 renglones, el
-// clipper cuenta 1, y el contenido real acaba más abajo de donde el clipper
-// cree. Consecuencia medida: SetScrollHereY(1.0f) apunta 52 px por encima del
-// fondo de verdad y el panel se sube solo cada vez que el usuario llega abajo.
-// Por eso push() trocea el mensaje en una entrada por línea: así todas las
-// filas miden un renglón y el clipper vuelve a decir la verdad.
+// What is covered and why: the panel draws the rows with ImGuiListClipper, which
+// assumes ALL of them have the same height. A message with '\n' inside (Lua
+// errors carry "stack traceback:" over several lines) takes 2 or 3 lines, the
+// clipper counts 1, and the real content ends up lower than where the clipper
+// thinks. Measured consequence: SetScrollHereY(1.0f) points 52 px above the real
+// bottom and the panel scrolls up by itself every time the user reaches the
+// bottom. That is why push() splits the message into one entry per line: that way
+// all rows are one line tall and the clipper tells the truth again.
 #include "DonTopo/Editor/LogPanel.h"
 
 #include <cstdio>
@@ -17,12 +17,12 @@
 using namespace DonTopo;
 
 static int g_failures = 0;
-// El fflush no es adorno: indexar un deque fuera de rango aborta con exit 3 y
-// sin una línea de salida, así que lo que ya se sabía tiene que estar en el
-// terminal ANTES del siguiente CHECK.
+// The fflush is not decoration: indexing a deque out of range aborts with exit 3
+// and without a single line of output, so what was already known has to be in the
+// terminal BEFORE the next CHECK.
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); std::fflush(stdout); ++g_failures; } } while (0)
-// Contar mal no puede convertirse en un abort mudo: si el número de filas no es
-// el esperado, el test lo dice y se sale antes de tocar los índices.
+// Miscounting cannot turn into a silent abort: if the number of rows is not the
+// expected one, the test says so and exits before touching the indices.
 #define REQUIRE_COUNT(log, n) do { CHECK((log).entryCount() == (n)); if ((log).entryCount() != (n)) return; } while (0)
 
 static void test_single_line_is_one_entry()
@@ -41,8 +41,7 @@ static void test_newline_splits_into_rows()
     CHECK(log.entryMessage(0) == "Script 'x': error");
     CHECK(log.entryMessage(1) == "stack traceback:");
     CHECK(log.entryMessage(2) == "\tx.lua:1: in main chunk");
-    // Ninguna fila puede conservar el salto: es justo lo que descuadra al
-    // clipper.
+    // No row may keep the line break: it is exactly what throws the clipper off.
     for (size_t i = 0; i < log.entryCount(); ++i)
         CHECK(log.entryMessage(i).find('\n') == std::string::npos);
 }
@@ -75,8 +74,8 @@ static void test_empty_message_still_logs_one_row()
 static void test_module_applies_to_every_line()
 {
     LogPanel log;
-    // El protocolo "[Modulo] " del push de un argumento tiene que sobrevivir al
-    // troceado: las líneas 2 y 3 llevan el mismo chip que la primera.
+    // The "[Module] " protocol of the one-argument push has to survive the
+    // splitting: lines 2 and 3 carry the same chip as the first.
     log.push("[Lua] error\nsegunda linea\ntercera");
     REQUIRE_COUNT(log, 3u);
     for (size_t i = 0; i < log.entryCount(); ++i)
@@ -96,14 +95,14 @@ static void test_explicit_module_applies_to_every_line()
 static void test_ring_buffer_cap_survives_a_huge_message()
 {
     LogPanel log;
-    // 500 líneas de golpe: el tope del ring buffer se aplica por FILA, no por
-    // llamada, o un solo mensaje largo se saltaría el límite.
+    // 500 lines at once: the ring buffer cap is applied per ROW, not per
+    // call, or a single long message would skip the limit.
     std::string big;
     for (int i = 0; i < 500; ++i)
         big += "linea " + std::to_string(i) + "\n";
     log.push(big);
     REQUIRE_COUNT(log, 200u);
-    // Se quedan las últimas, como con cualquier otro desbordamiento.
+    // The last ones stay, as with any other overflow.
     CHECK(log.entryMessage(log.entryCount() - 1) == "linea 499");
 }
 

@@ -8,11 +8,11 @@
 
 namespace DonTopo
 {
-    // Eje y sentido del relleno de la barra. Enum PROPIO del componente y no el
-    // UiFillDirection de UiWidgets.h: aquel solo distingue Horizontal/Vertical
-    // (el modo Filled del Image), y aquí hace falta también el SENTIDO — una
-    // barra de vida que baja hacia la izquierda no es la misma que una que baja
-    // hacia la derecha.
+    // Axis and direction of the bar's fill. The component's OWN enum and not
+    // UiFillDirection from UiWidgets.h: that one only distinguishes Horizontal/Vertical
+    // (Image's Filled mode), and here the DIRECTION is also needed. A
+    // health bar that drains toward the left is not the same as one that drains
+    // toward the right.
     enum class UiProgressFillDirection
     {
         LeftToRight,
@@ -21,16 +21,16 @@ namespace DonTopo
         TopToBottom
     };
 
-    // Una barra de progreso de la UI 2D como componente de GameObject, con el
-    // MISMO contrato que CanvasComponent, ButtonComponent y TextComponent: SOLO
-    // DATOS. El árbol vivo lo tiene el Renderer (Renderer::uiCanvas()) y lo
-    // monta/actualiza syncUiWidgets() cada frame.
+    // A 2D UI progress bar as a GameObject component, with the
+    // SAME contract as CanvasComponent, ButtonComponent and TextComponent: DATA
+    // ONLY. The live tree is held by the Renderer (Renderer::uiCanvas()) and
+    // syncUiWidgets() builds/updates it every frame.
     //
-    // Se dibuja por COMPOSICIÓN: el núcleo (DonTopo::ProgressBar, UiWidgets.h)
-    // es un stub sin valor ni colores, y UiSpriteBatch no sabe emitir un relleno
-    // parcial. Así que el sync monta DOS nodos —el fondo (el rect entero) y un
-    // hijo con el rect del relleno— exactamente como la etiqueta del Button. El
-    // componente no toca el core de UI.
+    // It is drawn by COMPOSITION: the core (DonTopo::ProgressBar, UiWidgets.h)
+    // is a stub with no value or colors, and UiSpriteBatch does not know how to emit a partial
+    // fill. So the sync assembles TWO nodes (the background, the whole rect, and a
+    // child with the fill rect), exactly like the Button's label. The
+    // component does not touch the UI core.
     class ProgressBarComponent
     {
         public:
@@ -38,40 +38,40 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};    // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};    // px, relative to the anchor
             glm::vec2 size{160.0f, 20.0f};     // px
-            glm::vec4 color{0.2f, 0.2f, 0.2f, 1.0f};   // color del FONDO
+            glm::vec4 color{0.2f, 0.2f, 0.2f, 1.0f};   // color of the BACKGROUND
             bool      visible = true;
 
-            // --- Valor ---------------------------------------------------------
-            // Sin clamp AQUÍ a propósito: el componente no interpreta nada (mismo
-            // criterio que el resto). Quien normaliza es el sync, al calcular el
-            // rect del relleno.
+            // --- Value ---------------------------------------------------------
+            // No clamp HERE on purpose: the component interprets nothing (same
+            // criterion as the rest). The sync normalizes, when computing the
+            // fill rect.
             float value    = 0.5f;
             float minValue = 0.0f;
             float maxValue = 1.0f;
 
-            // --- Relleno -------------------------------------------------------
+            // --- Fill ----------------------------------------------------------
             glm::vec4 fillColor{0.25f, 0.7f, 1.0f, 1.0f};
 
             UiProgressFillDirection fillDirection = UiProgressFillDirection::LeftToRight;
 
             // --- Assets --------------------------------------------------------
-            // TRES rutas de imagen, no nombres de sprite: un "sprite" del núcleo
-            // es un sub-rect que hay que registrar a mano con
-            // UiTextureAtlas::addSprite, y el editor no registra ninguno (una
-            // imagen suelta se usa entera, que es lo que devuelve uvRect sin
-            // nombre). Así que cada parte trae su propio fichero.
+            // THREE image paths, not sprite names: a core "sprite"
+            // is a sub-rect that has to be registered by hand with
+            // UiTextureAtlas::addSprite, and the editor registers none (a loose
+            // image is used whole, which is what uvRect returns without a
+            // name). So each part brings its own file.
             //
-            // atlasPath es el fallback COMPARTIDO: lo que se usa en la parte que
-            // no tenga ruta propia. Las tres vacías = quads de color plano.
+            // atlasPath is the SHARED fallback: what is used for any part that
+            // has no path of its own. All three empty = flat-color quads.
             std::string atlasPath;
             std::string backgroundPath;
             std::string fillPath;
 
-            // Fracción del rect que ocupa el relleno, ya acotada a [0,1]. Un
-            // rango degenerado (max <= min) da 0: no hay forma de repartir un
-            // intervalo vacío, y una barra llena sería mentir sobre el dato.
+            // Fraction of the rect that the fill occupies, already bounded to [0,1]. A
+            // degenerate range (max <= min) gives 0: there is no way to split an
+            // empty interval, and a full bar would be lying about the data.
             float normalizedValue() const
             {
                 if (!(maxValue > minValue)) return 0.0f;
@@ -79,9 +79,9 @@ namespace DonTopo
                 return std::clamp(t, 0.0f, 1.0f);
             }
 
-            // Rect del relleno EN COORDENADAS DEL PADRE (el nodo de fondo), que
-            // es de donde cuelga. Aquí y no en el sync para poder probarlo sin
-            // canvas ni GPU.
+            // Rect of the fill IN PARENT COORDINATES (the background node), which
+            // is what it hangs from. Here and not in the sync so it can be tested without
+            // canvas or GPU.
             void fillRect(glm::vec2& outPos, glm::vec2& outSize) const
             {
                 const float t = normalizedValue();
@@ -94,8 +94,8 @@ namespace DonTopo
                         outSize = glm::vec2(w * t, h);
                         break;
                     case UiProgressFillDirection::TopToBottom:
-                        // La Y del canvas crece hacia ABAJO: llenar desde arriba
-                        // es dejar el origen quieto y crecer el alto.
+                        // The canvas Y grows DOWNWARD: filling from the top
+                        // means leaving the origin still and growing the height.
                         outPos  = glm::vec2(0.0f, 0.0f);
                         outSize = glm::vec2(w, h * t);
                         break;
@@ -110,8 +110,8 @@ namespace DonTopo
                 }
             }
 
-            // Vuelca el rect y el fondo en el nodo vivo. NO toca `atlas` (es un
-            // puntero a GPU: lo resuelve el sync).
+            // Dumps the rect and the background into the live node. Does NOT touch `atlas` (it is a
+            // GPU pointer: the sync resolves it).
             void applyTo(ProgressBar& p) const
             {
                 p.anchorMin = anchorMin;
@@ -123,9 +123,9 @@ namespace DonTopo
                 p.visible   = visible;
             }
 
-            // Y lo mismo para el hijo del relleno. Anclas y pivot a cero: su rect
-            // se cuenta en píxeles desde la esquina del fondo, que es justo lo
-            // que devuelve fillRect().
+            // And the same for the fill child. Anchors and pivot at zero: its rect
+            // is counted in pixels from the background's corner, which is exactly
+            // what fillRect() returns.
             void applyToFill(UiElement& f) const
             {
                 glm::vec2 pos{0.0f};
@@ -139,15 +139,15 @@ namespace DonTopo
                 f.size      = sz;
                 f.color     = fillColor;
                 f.visible   = true;
-                // A valor 0 el rect es degenerado: mejor no emitir el quad que
-                // emitir uno de área nula (y con un sprite, uno de 0 px de ancho
-                // con UVs completas).
+                // At value 0 the rect is degenerate: better not to emit the quad than to
+                // emit one of zero area (and with a sprite, one of 0 px width
+                // with full UVs).
                 f.drawable  = (sz.x > 0.0f && sz.y > 0.0f);
             }
 
-            // El sync lo usa para saber si hay algo que volcar: sin esto habría
-            // que ensuciar el nodo TODOS los frames, que es justo lo que la
-            // caché de vértices del canvas existe para evitar.
+            // The sync uses it to know whether there is anything to dump: without this the
+            // node would have to be dirtied EVERY frame, which is exactly what the
+            // canvas's vertex cache exists to avoid.
             bool operator==(const ProgressBarComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -161,19 +161,19 @@ namespace DonTopo
             bool operator!=(const ProgressBarComponent& o) const { return !(*this == o); }
     };
 
-    // Nombre del nodo vivo de una ProgressBar dentro del canvas. Mismo papel que
-    // uiButtonNodeName/uiTextNodeName y con prefijo DISTINTO a propósito: un
-    // GameObject puede llevar los tres componentes a la vez, y dos nodos
-    // hermanos con el mismo nombre harían que el gizmo y el picking cogieran el
-    // que no toca.
+    // Name of a ProgressBar's live node inside the canvas. Same role as
+    // uiButtonNodeName/uiTextNodeName and with a DIFFERENT prefix on purpose: a
+    // GameObject can carry all three components at once, and two sibling nodes
+    // with the same name would make the gizmo and picking grab the
+    // wrong one.
     inline std::string uiProgressBarNodeName(uint64_t ownerId)
     {
         return "bar:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiProgressBarNodeName. Devuelve 0 si el nombre no es de una
-    // barra: 0 no es un id válido de GameObject. El corte por '/' hace que el
-    // nodo del relleno ("bar:7/Fill") devuelva también su dueño.
+    // Inverse of uiProgressBarNodeName. Returns 0 if the name is not a
+    // bar's: 0 is not a valid GameObject id. Cutting at '/' makes the
+    // fill node ("bar:7/Fill") also return its owner.
     inline uint64_t uiProgressBarOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("bar:", 0) != 0) return 0;

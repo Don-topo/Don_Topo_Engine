@@ -1,20 +1,20 @@
 #version 450
 
-// El atlas de sprites es una imagen SRGB: el sampler ya devuelve lineal y el
-// attachment del pase de UI (B8G8R8A8_SRGB) reconvierte al escribir. Por ese
-// camino no hay que aplicar ninguna correccion de gamma extra aqui — pero por
-// el del pase de ESCENA si, y de eso va pc.linearOutput (ver el final de main).
+// The sprite atlas is an SRGB image: the sampler already returns linear and the
+// UI pass attachment (B8G8R8A8_SRGB) reconverts when writing. On that
+// path no extra gamma correction has to be applied here, but on
+// the SCENE pass's path it does, and that is what pc.linearOutput is about (see the end of main).
 //
-// El atlas de una FUENTE, en cambio, es UNORM: un MSDF son distancias, no
-// color, y muestrearlo por una vista SRGB las deforma sin dar ni un aviso de
-// validacion. Quien lo declara es UiFont, no este shader.
+// A FONT's atlas, on the other hand, is UNORM: an MSDF is distances, not
+// color, and sampling it through an SRGB view distorts them without a single validation
+// warning. It is UiFont that declares it, not this shader.
 
 layout(set = 0, binding = 0) uniform sampler2D uAtlas;
 
-// El MISMO bloque que declara ui.vert, miembro a miembro: el push constant es
-// uno solo para las dos etapas. Aqui solo se lee linearOutput, pero la mat4
-// tiene que estar declarada delante o el flag caeria en otro offset — y eso no
-// da ni error de compilacion ni aviso de validacion, solo un flag con basura.
+// The SAME block that ui.vert declares, member by member: the push constant is
+// a single one for both stages. Here only linearOutput is read, but the mat4
+// has to be declared in front or the flag would land at another offset, and that
+// gives neither a compile error nor a validation warning, just a flag with garbage.
 layout(push_constant) uniform Push {
     mat4 proj;
     int  linearOutput;
@@ -27,8 +27,8 @@ layout(location = 3) in vec4 vEffect;
 
 layout(location = 0) out vec4 outColor;
 
-// La mediana de los tres canales es la distancia con signo reconstruida: es lo
-// que hace que las esquinas sigan siendo esquinas al ampliar.
+// The median of the three channels is the reconstructed signed distance: it is what
+// makes corners remain corners when magnifying.
 float median3(vec3 c)
 {
     return max(min(c.r, c.g), min(max(c.r, c.g), c.b));
@@ -38,31 +38,31 @@ void main()
 {
     vec4 tex = texture(uAtlas, vUv);
 
-    // El color se calcula en una local y se escribe UNA sola vez al final: la
-    // correccion de gamma de abajo tiene que pasar por los tres caminos, y con
-    // un `return` por rama se olvidaria en dos de ellos sin que nada avisara.
+    // The color is computed into a local and written ONCE at the end: the
+    // gamma correction below has to go through the three paths, and with
+    // a `return` per branch it would be forgotten in two of them without anything warning.
     vec4 color;
 
-    // Modo 0: exactamente lo de siempre. Un quad de sprite o de color plano
-    // sale igual que antes de que existiera el texto, y en el mismo lote.
+    // Mode 0: exactly as always. A sprite or flat color quad
+    // comes out the same as before text existed, and in the same batch.
     if (vParams.x < 0.5)
     {
-        // Alpha recto: el blending de fuera hace SRC_ALPHA / ONE_MINUS_SRC_ALPHA,
-        // asi que aqui NO se premultiplica el color por el alfa.
+        // Straight alpha: the outside blending does SRC_ALPHA / ONE_MINUS_SRC_ALPHA,
+        // so the color is NOT premultiplied by the alpha here.
         color = tex * vColor;
     }
     else
     {
-        // Distancia en PIXELES DE PANTALLA: 0.5 es el borde y screenPxRange convierte
-        // el rango normalizado del MSDF al tamano al que se esta dibujando el quad.
+        // Distance in SCREEN PIXELS: 0.5 is the edge and screenPxRange converts
+        // the MSDF's normalized range to the size the quad is being drawn at.
         float px = vParams.y * (median3(tex.rgb) - 0.5);
 
         float fill = clamp(px + 0.5, 0.0, 1.0);
 
         if (vParams.z > 0.0)
         {
-            // El outline es la MISMA distancia desplazada: ni segunda textura ni
-            // rehornear nada.
+            // The outline is the SAME distance shifted: neither a second texture nor
+            // re-baking anything.
             float outer = clamp(px + vParams.z + 0.5, 0.0, 1.0);
             vec3  rgb   = mix(vEffect.rgb, vColor.rgb, fill);
             float alpha = mix(vEffect.a * outer, vColor.a, fill);
@@ -74,18 +74,18 @@ void main()
         }
     }
 
-    // El pase de UI escribe en un attachment SRGB: el hardware codifica al
-    // escribir, asi que ahi este numero YA ES la luz lineal que se ve.
+    // The UI pass writes to an SRGB attachment: the hardware encodes when
+    // writing, so there this number IS ALREADY the linear light that is seen.
     //
-    // El pase de ESCENA no: es HDR LINEAL (kHdrFormat) y todo lo que se escribe
-    // ahi pasa despues por bloom_composite.frag (ACES + pow(1/2.2)). Escribir
-    // el mismo numero lo saca LAVADO — un 0.5 acaba en ~0.80 en pantalla, no en
-    // 0.5. Deshacer aqui la gamma lo devuelve a su sitio (~0.60); lo que queda
-    // de diferencia es el tonemap, y ESO es deseable: un cartel que esta en el
-    // mundo tiene que exponerse como el resto de la escena. Ninguna capa de
-    // validacion dice una palabra de esto, el sintoma es solo el color.
+    // The SCENE pass does not: it is LINEAR HDR (kHdrFormat) and everything written
+    // there later goes through bloom_composite.frag (ACES + pow(1/2.2)). Writing
+    // the same number makes it come out WASHED OUT: a 0.5 ends up at ~0.80 on screen, not at
+    // 0.5. Undoing the gamma here puts it back in its place (~0.60); what remains
+    // as a difference is the tonemap, and THAT is desirable: a sign that is in the
+    // world has to be exposed like the rest of the scene. No validation
+    // layer says a word about this, the symptom is only the color.
     //
-    // El max() es porque pow() con base negativa es comportamiento indefinido.
+    // The max() is because pow() with a negative base is undefined behavior.
     if (pc.linearOutput != 0)
         color.rgb = pow(max(color.rgb, vec3(0.0)), vec3(2.2));
 

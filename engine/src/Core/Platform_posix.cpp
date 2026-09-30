@@ -22,7 +22,7 @@ namespace DonTopo::platform
         std::fprintf(stderr, "%s: %s\n", title.c_str(), messageUtf8.c_str());
     }
 
-    // VmRSS / VmHWM vienen en kB.
+    // VmRSS / VmHWM come in kB.
     ProcessStats processStats()
     {
         ProcessStats s;

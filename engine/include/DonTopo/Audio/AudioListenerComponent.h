@@ -2,27 +2,27 @@
 
 namespace DonTopo
 {
-    // Oído de la escena: el GameObject que lo lleva marca desde dónde se oye el
-    // audio 3D. Como mucho UNO por escena — el invariante lo imponen
-    // Scene::findAudioListener (gana el primero en pre-orden) y el gate del menú
-    // "Add" de Properties, no esta clase.
+    // Ear of the scene: the GameObject that carries it marks from where 3D
+    // audio is heard. At most ONE per scene — the invariant is enforced by
+    // Scene::findAudioListener (the first in pre-order wins) and by the gate of the
+    // Properties "Add" menu, not by this class.
     //
-    // NO guarda posición ni orientación: las dos salen del worldTransform del
-    // GameObject dueño (posición = columna 3, forward = -Z local, up = +Y
-    // local), igual que CameraComponent y LightComponent — mover o rotar el
-    // objeto mueve el listener.
+    // It does NOT store position or orientation: both come from the worldTransform of the
+    // owner GameObject (position = column 3, forward = local -Z, up = local
+    // +Y), just like CameraComponent and LightComponent — moving or rotating the
+    // object moves the listener.
     //
-    // Sin listener en la escena los AudioClip suenan IGUAL: el audio 3D se oye
-    // entonces desde la cámara, fallback que resuelven las rutas de host cada
-    // frame (sandbox/src/main.cpp, runtime/main.cpp), y el Log lo dice una vez
-    // al entrar en Play. No hay ningún gate que impida reproducir: lo hubo, pero
-    // solo cubría playOnAwake y ni AudioClip:Play de Lua ni el botón Play del
-    // inspector lo consultaban. Dentro de AudioManager/AudioClipComponent no
-    // puede vivir (esas dos se prueban sin escena), así que imponerlo obligaría
-    // a repetirlo en las cuatro rutas de reproducción.
+    // Without a listener in the scene the AudioClips play ALL THE SAME: 3D audio is then heard
+    // from the camera, a fallback that the host paths resolve every
+    // frame (sandbox/src/main.cpp, runtime/main.cpp), and the Log says so once
+    // on entering Play. There is no gate that prevents playing: there was one, but
+    // it only covered playOnAwake and neither Lua's AudioClip:Play nor the inspector's
+    // Play button consulted it. It cannot live inside AudioManager/AudioClipComponent
+    // (those two are tested without a scene), so enforcing it would force repeating it
+    // in the four playback paths.
     //
-    // Header-only a propósito: solo lleva un bool, y así no hace falta añadir un
-    // .cpp a la lista de fuentes de DonTopoCore.
+    // Header-only on purpose: it only carries a bool, and this way there is no need to add a
+    // .cpp to the DonTopoCore source list.
     class AudioListenerComponent
     {
         public:

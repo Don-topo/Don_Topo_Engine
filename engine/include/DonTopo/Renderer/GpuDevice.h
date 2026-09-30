@@ -15,36 +15,36 @@ public:
     void init(GLFWwindow* window);
     void shutdown();
 
-    // ── Tope de asignaciones de memoria ─────────────────────────────────────
+    // ── Memory allocation limit ─────────────────────────────────────────────
     //
-    // Vulkan pide una asignación al driver POR RECURSO y el device impone un
-    // máximo de asignaciones VIVAS a la vez. Cada malla se lleva dos —el buffer
-    // de vértices y el de índices—, así que el tope se traduce directamente a
-    // un número de mallas.
+    // Vulkan asks the driver for one allocation PER RESOURCE and the device imposes a
+    // maximum of LIVE allocations at a time. Each mesh takes two (the vertex
+    // buffer and the index buffer), so the limit translates directly into
+    // a number of meshes.
     //
-    // El número varía MUCHO entre implementaciones: la especificación garantiza
-    // 4096 como mínimo, y una NVIDIA de escritorio devuelve 4.189.151 (medido).
-    // O sea que el techo es un muro real en unas GPU y no existe en otras, y por
-    // eso se lee del device en vez de darlo por sabido.
+    // The number varies A LOT between implementations: the specification guarantees
+    // 4096 as a minimum, and a desktop NVIDIA returns 4,189,151 (measured).
+    // So the ceiling is a real wall on some GPUs and does not exist on others, and
+    // that is why it is read from the device instead of assumed.
     //
-    // Estas dos son puras y viven aquí para poder probarlas sin device.
+    // These two are pure and live here so they can be tested without a device.
     static uint32_t meshesWithinAllocationLimit(uint32_t maxAllocations)
     {
-        return maxAllocations / 2;   // vértices + índices por malla
+        return maxAllocations / 2;   // vertices + indices per mesh
     }
-    // ¿Conviene avisar? Solo en implementaciones cerca del mínimo de la spec:
-    // por encima de esto, agotar el tope exige una escena que no cabría en VRAM
-    // mucho antes.
+    // Is a warning worthwhile? Only on implementations near the spec minimum:
+    // above this, exhausting the limit requires a scene that would not fit in VRAM
+    // long before.
     static bool allocationLimitIsTight(uint32_t maxAllocations)
     {
         return maxAllocations < 100000u;
     }
-    // Lo que dijo ESTE device. 0 antes de elegir la GPU.
+    // What THIS device said. 0 before the GPU is chosen.
     uint32_t maxMemoryAllocations() const { return m_maxMemoryAllocations; }
-    // El UBO mas grande que acepta ESTE device. La spec garantiza 16 KB como
-    // minimo, pero el minimo de la spec no es el limite real (ver H72): se lee
-    // del device y no se supone. Lo mira createUniformBuffers, que es quien
-    // conoce el tamaño del bloque.
+    // The largest UBO that THIS device accepts. The spec guarantees 16 KB as a
+    // minimum, but the spec minimum is not the real limit (see H72): it is read from the
+    // device and not assumed. createUniformBuffers looks at it, since it is the one
+    // that knows the size of the block.
     uint32_t maxUniformBufferRange() const { return m_maxUniformBufferRange; }
 
     VkDevice         device()         const { return m_device; }
@@ -79,7 +79,7 @@ private:
     VkDebugUtilsMessengerEXT m_debugMessenger = VK_NULL_HANDLE;
     VkSurfaceKHR             m_surface        = VK_NULL_HANDLE;
     VkPhysicalDevice         m_physicalDevice = VK_NULL_HANDLE;
-    // Se lee del device al elegirlo, en pickPhysicalDevice.
+    // Read from the device when it is chosen, in pickPhysicalDevice.
     uint32_t                 m_maxMemoryAllocations  = 0;
     uint32_t                 m_maxUniformBufferRange = 0;
     VkDevice                 m_device         = VK_NULL_HANDLE;

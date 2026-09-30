@@ -14,9 +14,9 @@ namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// Compartida por bloom_down.comp y bloom_up.comp: comparten pipeline
-// layout, asi que declaran el mismo bloque aunque cada uno ignore
-// parte de los campos.
+// Shared by bloom_down.comp and bloom_up.comp: they share a pipeline
+// layout, so they declare the same block even though each one ignores
+// part of the fields.
 struct BloomPush {
     float    srcTexelX;
     float    srcTexelY;
@@ -34,9 +34,9 @@ void BloomPass::markClearPending()
 
 void BloomPass::createPipelines(const Context& ctx)
 {
-    // Sampler comun de toda la cadena. CLAMP_TO_EDGE es obligatorio: con
-    // repeat, los taps del borde del filtro traerian el brillo del lado
-    // opuesto de la pantalla y se veria sangrar luz por los bordes.
+    // Common sampler of the whole chain. CLAMP_TO_EDGE is mandatory: with
+    // repeat, the filter's edge taps would bring in brightness from the opposite
+    // side of the screen and light would be seen bleeding through the edges.
     VkSamplerCreateInfo si{};
     si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     si.magFilter    = VK_FILTER_LINEAR;
@@ -48,7 +48,7 @@ void BloomPass::createPipelines(const Context& ctx)
     if (vkCreateSampler(ctx.gpu.device(), &si, nullptr, &m_sampler) != VK_SUCCESS)
         throw std::runtime_error("failed to create bloom sampler!");
 
-    // --- Compute: origen muestreado + destino como storage image ---------
+    // --- Compute: sampled source + destination as a storage image ---------
     VkDescriptorSetLayoutBinding bloomBindings[2]{};
     bloomBindings[0].binding         = 0;
     bloomBindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -66,8 +66,8 @@ void BloomPass::createPipelines(const Context& ctx)
     if (vkCreateDescriptorSetLayout(ctx.gpu.device(), &dsl, nullptr, &m_descLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create bloom descriptor set layout!");
 
-    // Un set por nivel y por sentido (bajada y subida), por frame en vuelo:
-    // cada uno lleva un par origen/destino distinto y no se pueden reutilizar.
+    // One set per level and per direction (down and up), per frame in flight:
+    // each one carries a different source/destination pair and they cannot be reused.
     const uint32_t bloomSets = kFramesInFlight * kMaxMips * 2;
     VkDescriptorPoolSize bloomSizes[2]{};
     bloomSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -117,9 +117,9 @@ void BloomPass::createPipelines(const Context& ctx)
     makeBloomPipeline("shaders/bloom_down.comp.spv", m_downPipeline);
     makeBloomPipeline("shaders/bloom_up.comp.spv",   m_upPipeline);
 
-    // --- Medicion del coste GPU -----------------------------------------
-    // El soporte y el periodo los resolvio el Renderer justo antes de llamar
-    // aqui: son propiedades del device y las comparten todos los pases.
+    // --- GPU cost measurement -----------------------------------------
+    // The support and the period were resolved by the Renderer right before calling
+    // here: they are device properties and are shared by all the passes.
     if (ctx.timestampsSupported)
     {
         VkQueryPoolCreateInfo qpi{};
@@ -148,8 +148,8 @@ void BloomPass::destroyPipelines(const Context& ctx)
 
 void BloomPass::createImages(const Context& ctx)
 {
-    // Cadena a media resolucion: el bloom es un desenfoque ancho, no aporta
-    // nada resolverlo a tamano completo y cuesta 4x.
+    // Chain at half resolution: the bloom is a wide blur, resolving it at full
+    // size adds nothing and costs 4x.
     uint32_t w = ctx.renderExtent.width  / 2;
     uint32_t h = ctx.renderExtent.height / 2;
     m_mipCount = 0;
@@ -160,13 +160,13 @@ void BloomPass::createImages(const Context& ctx)
         w = (w / 2 < 1) ? 1u : w / 2;
         h = (h / 2 < 1) ? 1u : h / 2;
     }
-    // Viewport diminuto (ventana casi cerrada): sin niveles no hay bloom que
-    // calcular. record() y la composicion lo comprueban.
+    // Tiny viewport (window almost closed): without levels there is no bloom to
+    // compute. record() and the composition check it.
     if (m_mipCount == 0) return;
 
     for (int f = 0; f < kFramesInFlight; f++)
     {
-        // Inline y no GpuResources::createImage: esa fija mipLevels a 1.
+        // Inline and not GpuResources::createImage: that one fixes mipLevels to 1.
         VkImageCreateInfo ci{};
         ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         ci.imageType     = VK_IMAGE_TYPE_2D;
@@ -176,8 +176,8 @@ void BloomPass::createImages(const Context& ctx)
         ci.arrayLayers   = 1;
         ci.samples       = VK_SAMPLE_COUNT_1_BIT;
         ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        // TRANSFER_DST: con el efecto apagado la cadena se limpia a negro en
-        // vez de calcularse, y la composicion la sigue muestreando.
+        // TRANSFER_DST: with the effect off the chain is cleared to black instead
+        // of being computed, and the composition keeps sampling it.
         ci.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -210,14 +210,14 @@ void BloomPass::createImages(const Context& ctx)
                 throw std::runtime_error("failed to create bloom mip view!");
         }
 
-        // Recien creada: contenido indefinido y layout UNDEFINED. Con el bloom
-        // encendido lo arregla record(); apagado, el clear la deja en
-        // negro y en GENERAL, que es lo que declara el set de composicion.
+        // Freshly created: undefined content and UNDEFINED layout. With the bloom
+        // on, record() fixes it; off, the clear leaves it in
+        // black and in GENERAL, which is what the composition set declares.
         m_clearPending[f] = true;
     }
 
-    // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
-    // free, igual que hace precomputeIbl al recargar el entorno.
+    // The sets from the previous time point to already destroyed views: reset and not
+    // free, as precomputeIbl does when reloading the environment.
     vkResetDescriptorPool(ctx.gpu.device(), m_descPool, 0);
 
     for (int f = 0; f < kFramesInFlight; f++)
@@ -234,8 +234,8 @@ void BloomPass::createImages(const Context& ctx)
         if (vkAllocateDescriptorSets(ctx.gpu.device(), &ai, sets.data()) != VK_SUCCESS)
             throw std::runtime_error("failed to allocate bloom descriptor sets!");
 
-        // Los VkDescriptorImageInfo tienen que seguir vivos hasta el
-        // vkUpdateDescriptorSets, asi que se dimensionan de golpe.
+        // The VkDescriptorImageInfo have to stay alive until
+        // vkUpdateDescriptorSets, so they are sized all at once.
         std::vector<VkDescriptorImageInfo> srcInfos(setCount);
         std::vector<VkDescriptorImageInfo> dstInfos(setCount);
         std::vector<VkWriteDescriptorSet>  writes;
@@ -268,17 +268,17 @@ void BloomPass::createImages(const Context& ctx)
 
         for (uint32_t m = 0; m < m_mipCount; m++)
         {
-            // Bajada: el nivel 0 lee la escena HDR (que sale del render pass
-            // en SHADER_READ_ONLY); los demas leen el mip anterior, que vive
-            // en GENERAL toda la cadena.
+            // Down: level 0 reads the HDR scene (which comes out of the render pass
+            // in SHADER_READ_ONLY); the others read the previous mip, which lives
+            // in GENERAL for the whole chain.
             m_downSets[f][m] = sets[m];
             pushPair(m, sets[m],
                      m == 0 ? ctx.hdrView[f] : m_mipView[f][m - 1],
                      m == 0 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL,
                      m_mipView[f][m]);
 
-            // Subida: lee el nivel m y acumula sobre el m-1. El nivel 0 no
-            // tiene destino, asi que su set se queda sin usar.
+            // Up: reads level m and accumulates onto m-1. Level 0 has no
+            // destination, so its set is left unused.
             m_upSets[f][m] = VK_NULL_HANDLE;
             if (m > 0)
             {
@@ -323,9 +323,9 @@ void BloomPass::destroyImages(const Context& ctx)
 
 void BloomPass::beginQuery(const Context& ctx, VkCommandBuffer cmd)
 {
-    // Lectura de los timestamps de hace dos frames en este mismo slot: la
-    // fence de currentFrame ya la esperó drawFrame, así que los
-    // resultados están sin bloquear a nadie.
+    // Reading the timestamps from two frames ago in this same slot: the
+    // fence of currentFrame was already awaited by drawFrame, so the
+    // results are available without blocking anyone.
     if (ctx.timestampsSupported && m_queryPending[ctx.currentFrame])
     {
         uint64_t stamps[2] = {};
@@ -369,8 +369,8 @@ void BloomPass::recordClear(const Context& ctx, VkCommandBuffer cmd)
     b.image               = m_image[ctx.currentFrame];
     b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     b.subresourceRange.baseMipLevel   = 0;
-    // Toda la cadena, no solo el mip 0: así los niveles quedan en GENERAL de
-    // una vez y al reencender el bloom no hay layouts a medias.
+    // The whole chain, not just mip 0: that way the levels are left in GENERAL at
+    // once and when the bloom is turned back on there are no half-done layouts.
     b.subresourceRange.levelCount     = m_mipCount;
     b.subresourceRange.baseArrayLayer = 0;
     b.subresourceRange.layerCount     = 1;
@@ -408,10 +408,10 @@ void BloomPass::record(const Context& ctx, VkCommandBuffer cmd)
     b.subresourceRange.baseArrayLayer = 0;
     b.subresourceRange.layerCount     = 1;
 
-    // Toda la cadena vive en GENERAL: es el unico layout que admite
-    // imageStore y a la vez es valido para muestrear, asi que el ping-pong
-    // de layouts entre pasos se reduce a barreras de memoria. Se entra desde
-    // UNDEFINED porque el contenido del frame anterior no se reutiliza.
+    // The whole chain lives in GENERAL: it is the only layout that supports
+    // imageStore and is at the same time valid for sampling, so the layout
+    // ping-pong between passes is reduced to memory barriers. It is entered from
+    // UNDEFINED because the previous frame's content is not reused.
     b.oldLayout                     = VK_IMAGE_LAYOUT_UNDEFINED;
     b.newLayout                     = VK_IMAGE_LAYOUT_GENERAL;
     b.srcAccessMask                 = 0;
@@ -421,16 +421,16 @@ void BloomPass::record(const Context& ctx, VkCommandBuffer cmd)
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 0, nullptr, 0, nullptr, 1, &b);
 
-    // Barrera entre pasos: lo que acaba de escribir un dispatch lo lee el
-    // siguiente. Se acota al mip implicado para no serializar de mas.
+    // Barrier between passes: what a dispatch has just written is read by the
+    // next one. It is bounded to the mip involved so as not to serialize more than needed.
     auto writeToRead = [&](uint32_t mip)
     {
         b.oldLayout                     = VK_IMAGE_LAYOUT_GENERAL;
         b.newLayout                     = VK_IMAGE_LAYOUT_GENERAL;
         b.srcAccessMask                 = VK_ACCESS_SHADER_WRITE_BIT;
-        // SHADER_WRITE ademas de READ: la subida hace imageLoad Y imageStore
-        // sobre el mismo nivel que escribio la bajada, asi que sin esto
-        // quedaria un write-after-write sin ordenar.
+        // SHADER_WRITE in addition to READ: the up pass does imageLoad AND imageStore
+        // on the same level that the down pass wrote, so without this
+        // there would be an unordered write-after-write.
         b.dstAccessMask                 = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         b.subresourceRange.baseMipLevel = mip;
         b.subresourceRange.levelCount   = 1;
@@ -443,7 +443,7 @@ void BloomPass::record(const Context& ctx, VkCommandBuffer cmd)
     push.knee      = glm::max(ctx.state.bloomKnee(), 1e-3f);
     push.radius    = 1.0f;
 
-    // ── Bajada: HDR → mip 0 (con umbral) → mip 1 → ... ───────────────────
+    // ── Down: HDR → mip 0 (with threshold) → mip 1 → ... ───────────────────
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_downPipeline);
     for (uint32_t m = 0; m < m_mipCount; m++)
     {
@@ -462,13 +462,13 @@ void BloomPass::record(const Context& ctx, VkCommandBuffer cmd)
         if (m + 1 < m_mipCount) writeToRead(m);
     }
 
-    // ── Subida: cada mip se suma al de arriba con un tent 3x3 ────────────
+    // ── Up: each mip is added to the one above with a 3x3 tent ────────────
     push.prefilter = 0;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_upPipeline);
     for (uint32_t m = m_mipCount - 1; m > 0; m--)
     {
-        // El mip m acaba de escribirse (por la bajada si es el ultimo, por la
-        // iteracion anterior de esta subida si no) y ahora se lee.
+        // Mip m has just been written (by the down pass if it is the last one, by the
+        // previous iteration of this up pass if not) and is now read.
         writeToRead(m);
 
         const VkExtent2D src = m_mipExtent[m];
@@ -482,7 +482,7 @@ void BloomPass::record(const Context& ctx, VkCommandBuffer cmd)
         vkCmdDispatch(cmd, (dst.width + 7) / 8, (dst.height + 7) / 8, 1);
     }
 
-    // El mip 0 pasa a leerse desde el fragment shader de la composicion.
+    // Mip 0 becomes readable from the composition's fragment shader.
     b.oldLayout                     = VK_IMAGE_LAYOUT_GENERAL;
     b.newLayout                     = VK_IMAGE_LAYOUT_GENERAL;
     b.srcAccessMask                 = VK_ACCESS_SHADER_WRITE_BIT;

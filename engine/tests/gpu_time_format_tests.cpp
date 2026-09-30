@@ -1,12 +1,12 @@
-// Test headless del formato de los tiempos de GPU (sin GUI, sin ImGui).
-// gpuMsText es formato puro, asi que la regla que gobierna los dos sitios donde
-// se pintan esos tiempos se puede afirmar aqui entera. Plain main + asserts,
-// coherente con frustum_tests.cpp.
+// Headless test of the GPU time format (no GUI, no ImGui).
+// gpuMsText is pure formatting, so the rule governing the two places where those
+// times are drawn can be asserted here in full. Plain main + asserts, consistent
+// with frustum_tests.cpp.
 //
-// Lo que se protege es la distincion entre "no hay medida" y "cuesta cero". El
-// menu View sacaba "0.000 ms" para un pase apagado (H57), que se lee como «este
-// efecto es gratis» — la conclusion contraria, y ademas indistinguible de un
-// pase que de verdad no cuesta nada.
+// What is protected is the distinction between "no measurement" and "costs zero".
+// The View menu showed "0.000 ms" for a disabled pass (H57), which reads as "this
+// effect is free", the opposite conclusion, and also indistinguishable from a
+// pass that really costs nothing.
 #include "DonTopo/Editor/GpuTimeFormat.h"
 
 #include <cstdio>
@@ -26,8 +26,8 @@ static void test_sin_medida()
 {
     char buf[kGpuMsTextSize];
 
-    // Los tres casos en que el pase NO ha corrido: apagado, sin los dos frames
-    // de la captura, o un contador que aun no se ha escrito.
+    // The three cases in which the pass has NOT run: disabled, without the two
+    // capture frames, or a counter that has not been written yet.
     CHECK(std::strcmp(fmt(0.0f, buf), "--") == 0);
     CHECK(std::strcmp(fmt(-1.0f, buf), "--") == 0);
     CHECK(std::strcmp(fmt(-0.001f, buf), "--") == 0);
@@ -40,16 +40,16 @@ static void test_con_medida()
     CHECK(std::strcmp(fmt(0.123f, buf), "0.123") == 0);
     CHECK(std::strcmp(fmt(12.5f, buf), "12.500") == 0);
 
-    // Un pase medible pero baratisimo NO es lo mismo que uno sin medir: tiene
-    // que salir con sus tres decimales, no como "--". Es la mitad de la
-    // distincion que este helper existe para mantener.
+    // A measurable but very cheap pass is NOT the same as an unmeasured one: it has
+    // to come out with its three decimals, not as "--". It is half of the
+    // distinction this helper exists to maintain.
     CHECK(std::strcmp(fmt(0.0004f, buf), "0.000") == 0);
     CHECK(std::strcmp(fmt(0.0004f, buf), "--") != 0);
 }
 
-// El helper devuelve el propio buffer para poder llamarlo dentro de un
-// ImGui::Text sin variable intermedia; si devolviera otra cosa, los dos
-// llamantes pintarian basura.
+// The helper returns the buffer itself so it can be called inside an
+// ImGui::Text without an intermediate variable; if it returned anything else,
+// both callers would draw garbage.
 static void test_devuelve_el_buffer()
 {
     char buf[kGpuMsTextSize];

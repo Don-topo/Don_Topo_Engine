@@ -13,9 +13,9 @@
 
 namespace DonTopo
 {
-    // Una textura ya decodificada a RGBA8 por el worker. El hilo principal solo
-    // hace el upload: el stbi_load, que es la mitad del coste de cargar un
-    // modelo, ya ocurrió fuera.
+    // A texture already decoded to RGBA8 by the worker. The main thread only
+    // does the upload: the stbi_load, which is half the cost of loading a
+    // model, already happened elsewhere.
     struct DecodedImage
     {
         enum Slot { Albedo, Normal, ORM };
@@ -23,46 +23,46 @@ namespace DonTopo
         Slot                 slot = Albedo;
         int                  w    = 0;
         int                  h    = 0;
-        std::vector<uint8_t> pixels;   // w*h*4, RGBA8, sin padding
-        // Ajustes de importacion de la textura (sidecar): quien sube a GPU
-        // resuelve el formato con resolveSrgb y sube los niveles.
+        std::vector<uint8_t> pixels;   // w*h*4, RGBA8, no padding
+        // Import settings of the texture (sidecar): whoever uploads to the GPU
+        // resolves the format with resolveSrgb and uploads the levels.
         ColorSpaceOverride      colorSpace = ColorSpaceOverride::Auto;
         std::vector<TextureMip> mips;
     };
 
-    // Resultado de una petición. Viaja por valor del worker al hilo principal:
-    // ni un puntero compartido mutable, ni un GameObject*.
+    // Result of a request. It travels by value from the worker to the main thread:
+    // no mutable shared pointer, no GameObject*.
     struct LoadedMesh
     {
         JobSystem::JobId                         job      = 0;
-        uint64_t                                 targetId = 0;   // GameObject::id, nunca un puntero
+        uint64_t                                 targetId = 0;   // GameObject::id, never a pointer
         std::string                              path;
-        std::shared_ptr<Mesh>                    mesh;           // puede ser SkinnedMesh (loadAuto)
+        std::shared_ptr<Mesh>                    mesh;           // may be a SkinnedMesh (loadAuto)
         std::vector<DecodedImage>                images;
-        std::string                              error;          // no vacío = falló
-        int                                       piece = 0;     // que pieza de mesh->sourcePath es esta
-        std::vector<ModelPiece>                  pieces;        // apariciones, si es estatico con > 1
-        std::vector<std::shared_ptr<const Mesh>> pieceMeshes;   // todas las mallas del fichero, si pieces no esta vacio
+        std::string                              error;          // not empty = failed
+        int                                       piece = 0;     // which piece of mesh->sourcePath this is
+        std::vector<ModelPiece>                  pieces;        // occurrences, if static with > 1
+        std::vector<std::shared_ptr<const Mesh>> pieceMeshes;   // all the meshes of the file, if pieces is not empty
     };
 
-    struct MaterialOverride;   // GameObject.h; solo referencia, ver más abajo
+    struct MaterialOverride;   // GameObject.h; reference only, see below
 
-    // Quita de `images` los slots que un override ACTIVO (index == 0, el
-    // único que decodeSlot llega a poblar — ver el comentario de runJob en el
-    // .cpp) haya pisado. Pura función de datos, sin GPU ni Scene, para que el
-    // seam entre "qué decodificó el worker" y "qué pidió el usuario" se pueda
-    // probar sin EditorRenderer: applyLoadedMesh es su único caller, y lo
-    // llama tras applyMaterialOverrides y antes de subir nada a GPU, porque
-    // Renderer::createSharedGpuMesh (Vulkan) PREFIERE una imagen ya decodificada
-    // sobre la ruta del material — sin este filtro, un override sobre un FBX
-    // que trae textura propia subiría a GPU la del FBX, no la del override.
+    // Removes from `images` the slots that an ACTIVE override (index == 0, the
+    // only one decodeSlot gets to populate; see the runJob comment in the
+    // .cpp) has overridden. Pure data function, no GPU or Scene, so that the
+    // seam between "what the worker decoded" and "what the user asked for" can be
+    // tested without EditorRenderer: applyLoadedMesh is its only caller, and it
+    // calls it after applyMaterialOverrides and before uploading anything to the GPU, because
+    // Renderer::createSharedGpuMesh (Vulkan) PREFERS an already decoded image
+    // over the material's path. Without this filter, an override on an FBX
+    // that brings its own texture would upload the FBX's to the GPU, not the override's.
     void discardOverriddenDecodedImages(std::vector<DecodedImage>& images,
                                         const std::vector<MaterialOverride>& overrides);
 
-    // Traduce peticiones de asset a jobs y guarda los resultados en un buzón que
-    // el hilo principal drena una vez por frame.
+    // Translates asset requests into jobs and stores the results in a mailbox that
+    // the main thread drains once per frame.
     //
-    // No conoce Vulkan: produce bytes en RAM. Quien los sube es el Renderer.
+    // It does not know Vulkan: it produces bytes in RAM. Whoever uploads them is the Renderer.
     class AsyncAssetLoader
     {
         public:
@@ -70,69 +70,69 @@ namespace DonTopo
             AsyncAssetLoader(const AsyncAssetLoader&)            = delete;
             AsyncAssetLoader& operator=(const AsyncAssetLoader&) = delete;
 
-            // targetId es el GameObject::id al que asignar el mesh. El pump
-            // resuelve por id sobre la escena viva: si el objeto se borró
-            // mientras cargaba, el resultado se descarta sin tocar memoria
-            // liberada. piece es la pieza del fichero (ModelLoader::load(path,
-            // piece) para el camino sincrono); 0 = el fichero entero o su
-            // primera/unica malla, igual que hoy.
+            // targetId is the GameObject::id to assign the mesh to. The pump
+            // resolves by id on the live scene: if the object was deleted
+            // while loading, the result is discarded without touching freed
+            // memory. piece is the piece of the file (ModelLoader::load(path,
+            // piece) for the synchronous path); 0 = the whole file or its
+            // first/only mesh, same as today.
             JobSystem::JobId requestMesh(const std::string& path, uint64_t targetId, int piece = 0);
 
             void cancel(JobSystem::JobId id);
 
-            // Hilo principal. Devuelve los resultados listos, parando cuando se
-            // agota budgetMs. Lo no devuelto sigue en el buzón para el próximo
-            // frame — jamás se descarta por presupuesto.
+            // Main thread. Returns the ready results, stopping when
+            // budgetMs runs out. What is not returned stays in the mailbox for the next
+            // frame; it is never discarded because of the budget.
             std::vector<LoadedMesh> pumpCompleted(float budgetMs);
 
-            // Peticiones aún sin recoger por pumpCompleted (en cola, en vuelo o
-            // en el buzón). Es lo que lee el modal de progreso.
+            // Requests not yet collected by pumpCompleted (queued, in flight or
+            // in the mailbox). It is what the progress modal reads.
             int pending() const;
 
-            // Solo para tests: cuántos ReadFile de verdad se han hecho. Es la
-            // única forma de comprobar el dedup desde fuera — contar resultados
-            // no distingue "un ReadFile compartido" de "cuatro ReadFile".
+            // Tests only: how many real ReadFile calls have been made. It is the
+            // only way to check the dedup from outside: counting results
+            // does not distinguish "one shared ReadFile" from "four ReadFile".
             int readFileCount() const;
 
-            // Cancela todas las peticiones vivas y vacía el buzón. Lo llama el
-            // botón Cancelar del modal de carga (Task 9). Los jobs ya arrancados
-            // terminan igual — no se puede parar un ReadFile a medias — pero sus
-            // resultados se descartan.
+            // Cancels all live requests and empties the mailbox. Called by the
+            // Cancel button of the loading modal (Task 9). Jobs already started
+            // finish anyway (a ReadFile cannot be stopped halfway), but their
+            // results are discarded.
             void cancelAllPending();
 
         private:
-            // Peticiones agrupadas por path mientras el job está en vuelo. El
-            // primero que pide un path arranca UN job (jobId); los que llegan
-            // mientras sigue en vuelo se apuntan como waiters al mismo. Al
-            // terminar, el worker construye un LoadedMesh por cada waiter
-            // (copiando el Mesh) y vacía el grupo.
+            // Requests grouped by path while the job is in flight. The
+            // first one to ask for a path starts ONE job (jobId); those that arrive
+            // while it is still in flight are recorded as waiters of the same one. When
+            // it finishes, the worker builds a LoadedMesh for each waiter
+            // (copying the Mesh) and empties the group.
             //
-            // jobId se guarda aparte de los waiters a propósito: es el id con
-            // el que se encoló el job, que sigue siendo válido aunque su waiter
-            // original se cancele mientras otros siguen esperando el ReadFile.
+            // jobId is stored apart from the waiters on purpose: it is the id the
+            // job was enqueued with, which stays valid even if its original waiter
+            // is cancelled while others keep waiting for the ReadFile.
             //
-            // Un waiter ya no es solo (job, targetId): dos peticiones del mismo
-            // path pueden pedir piezas distintas (dos GameObject del mismo
-            // modelo estatico), y esa pieza tiene que viajar con el waiter para
-            // que buildResultFor sepa cual de las mallas del ReadFile servirle.
+            // A waiter is no longer just (job, targetId): two requests for the same
+            // path can ask for different pieces (two GameObjects of the same
+            // static model), and that piece has to travel with the waiter so
+            // that buildResultFor knows which of the ReadFile's meshes to serve it.
             struct Waiter { JobSystem::JobId job; uint64_t targetId; int piece; };
 
             struct PendingGroup
             {
-                JobSystem::JobId     jobId = 0;   // id encolado en el JobSystem (primer waiter)
+                JobSystem::JobId     jobId = 0;   // id enqueued in the JobSystem (first waiter)
                 std::vector<Waiter>  waiters;
             };
 
             void      runJob(const std::string& path);
 
-            // decodedImages y pieceMeshes ya vienen calculados por runJob,
-            // UNA vez por job, no una vez por waiter: decodedImages es la
-            // textura de la pieza de ESTE waiter (nulo si no aplica), y
-            // pieceMeshes es el vector de TODAS las mallas del fichero,
-            // compartido (shared_ptr) entre todos los waiters del grupo. Este
-            // método solo copia — nunca decodifica ni construye Mesh nuevos
-            // salvo el propio de w.piece, que sí es una copia por waiter (ver
-            // el comentario de la rama personaje, en el .cpp).
+            // decodedImages and pieceMeshes already come computed by runJob,
+            // ONCE per job, not once per waiter: decodedImages is the
+            // texture of THIS waiter's piece (null if not applicable), and
+            // pieceMeshes is the vector of ALL the file's meshes,
+            // shared (shared_ptr) among all the waiters of the group. This
+            // method only copies; it never decodes nor builds new Mesh
+            // except the one for w.piece itself, which is a per-waiter copy (see
+            // the comment of the character branch, in the .cpp).
             LoadedMesh buildResultFor(const LoadedMesh& src, const StaticModel* model,
                                       const Waiter& w,
                                       const std::vector<DecodedImage>* decodedImages,
@@ -146,14 +146,14 @@ namespace DonTopo
             std::unordered_map<std::string, PendingGroup> m_groups;
             int                                           m_readFileCount = 0;
 
-            // Generación de cancelación en bloque. cancelAllPending() la
-            // incrementa; un job ya arrancado (incancelable) captura la
-            // generación al sacar sus waiters del grupo y, al ir a postar sus
-            // resultados, los descarta si la generación cambió mientras copiaba
-            // fuera del lock — esos targets se cancelaron y su m_pending ya se
-            // puso a 0. Sin esto, postar tras un cancelAllPending dejaría
-            // m_pending negativo para siempre (el loader es longevo) y
-            // entregaría meshes de objetos ya cancelados. Ver runJob().
+            // Bulk cancellation generation. cancelAllPending() increments
+            // it; a job already started (uncancellable) captures the
+            // generation when taking its waiters out of the group and, when about to post its
+            // results, discards them if the generation changed while it was copying
+            // outside the lock: those targets were cancelled and their m_pending was already
+            // set to 0. Without this, posting after a cancelAllPending would leave
+            // m_pending negative forever (the loader is long-lived) and
+            // would deliver meshes of objects already cancelled. See runJob().
             uint64_t                                      m_epoch = 0;
     };
 
@@ -161,20 +161,20 @@ namespace DonTopo
     class Renderer;
     class EditorRenderer;
 
-    // Aplica un resultado a la escena resolviendo por targetId sobre la escena
-    // VIVA. Devuelve false si el GameObject ya no existe (borrado mientras
-    // cargaba) o si el resultado trae error; en ese caso outError, si no es
-    // nulo, recibe el mensaje para el log.
+    // Applies a result to the scene, resolving by targetId on the LIVE
+    // scene. Returns false if the GameObject no longer exists (deleted while
+    // loading) or if the result carries an error; in that case outError, if it is not
+    // null, receives the message for the log.
     //
-    // No llama a flushPendingUploads: el caller decide cuándo cerrar el batch,
-    // porque el sentido de todo esto es agrupar N resultados en UN submit.
+    // It does not call flushPendingUploads: the caller decides when to close the batch,
+    // because the point of all this is to group N results into ONE submit.
     //
-    // outWarnings es un canal APARTE de outError, y no un segundo mensaje por
-    // el mismo: un índice de material fuera de rango no hace fallar la carga
-    // —la malla entra igual y el resto de overrides se aplican—, así que
-    // meterlo en outError, que el caller lee como "esto ha fallado", diría lo
-    // que no es. Nulo = no interesa. Este es el camino normal de una escena
-    // grande: sin él, el aviso que Scene::fromJson sí da se pierde entero.
+    // outWarnings is a SEPARATE channel from outError, and not a second message through
+    // the same one: a material index out of range does not make the load fail
+    // (the mesh goes in anyway and the rest of the overrides are applied), so
+    // putting it in outError, which the caller reads as "this failed", would say
+    // something that is not true. Null = not interested. This is the normal path of a large
+    // scene: without it, the warning that Scene::fromJson does give is lost entirely.
     bool applyLoadedMesh(LoadedMesh& r, Scene& scene, EditorRenderer& renderer,
                          std::string* outError,
                          std::vector<std::string>* outWarnings = nullptr);

@@ -25,16 +25,16 @@ AudioClipComponent::~AudioClipComponent()
 
 void AudioClipComponent::play(const glm::vec3& worldPos)
 {
-    // Las distancias viajan con la llamada, no se escriben en el FMOD::Sound:
-    // desde que el sonido se comparte entre clips (caché por path+modo),
-    // escribirlas allí le cambiaría el radio de atenuación a todos los objetos
-    // que usen el mismo fichero.
+    // The distances travel with the call, they are not written to the FMOD::Sound:
+    // since the sound is shared between clips (cache by path+mode),
+    // writing them there would change the attenuation radius of all the objects
+    // that use the same file.
     if (!m_audio) return;
     m_audio->playSound(m_soundId, worldPos, m_volume, m_pitch, m_bus,
                        m_minDistance, m_maxDistance,
                        m_spread, m_stereoPan, m_dopplerLevel);
-    // Después de arrancar la voz: así un objeto guardado como mudo sigue mudo
-    // al reproducirlo, en vez de sonar hasta que alguien vuelva a mutearlo.
+    // After starting the voice: this way an object saved as muted stays muted
+    // when played, instead of sounding until someone mutes it again.
     if (m_mute) m_audio->setSoundMute(m_soundId, true);
 }
 
@@ -45,14 +45,14 @@ void AudioClipComponent::stop()
 
 void AudioClipComponent::playOneShot(const glm::vec3& worldPos)
 {
-    // Dos cosas van juntas aquí porque salen del mismo hecho: la voz de un
-    // one-shot no se guarda en ningún sitio.
+    // Two things go together here because they come from the same fact: the voice of a
+    // one-shot is not stored anywhere.
     //
-    // 1) Las distancias tienen que viajar en la llamada, o el disparo se queda
-    //    con las de fábrica de FMOD (1 / 10000) y se oiría igual de fuerte a
-    //    900 unidades que a 5.
-    // 2) Un clip muteado ni dispara: no habría forma de silenciar esa voz
-    //    después, así que salir aquí es lo único que respeta el mute.
+    // 1) The distances have to travel in the call, or the shot ends up
+    //    with FMOD's factory ones (1 / 10000) and would sound just as loud at
+    //    900 units as at 5.
+    // 2) A muted clip does not even fire: there would be no way to silence that voice
+    //    afterwards, so leaving here is the only thing that respects the mute.
     if (!m_audio || m_mute) return;
     m_audio->playSoundOneShot(m_soundId, worldPos, m_volume, m_pitch, m_bus,
                               m_minDistance, m_maxDistance,
@@ -82,8 +82,8 @@ void AudioClipComponent::resume()
 void AudioClipComponent::setMute(bool mute)
 {
     m_mute = mute;
-    // Se empuja a la voz viva para que el cambio se oiga ya; y viaja también en
-    // play(), para que una reproducción nueva nazca muda si toca.
+    // It is pushed to the live voice so that the change is heard right away; and it also travels in
+    // play(), so that a new playback is born muted if applicable.
     if (m_audio) m_audio->setSoundMute(m_soundId, mute);
 }
 
@@ -99,9 +99,9 @@ void AudioClipComponent::setTime(float seconds)
 
 void AudioClipComponent::updateSpatial(const glm::vec3& worldPos, float dt)
 {
-    // El gate por m_is3D es local (un bool), así que un clip 2D ni siquiera
-    // entra en AudioManager: esto se llama por frame y por cada clip de la
-    // escena, y la mayoría son 2D.
+    // The gate by m_is3D is local (a bool), so a 2D clip does not even
+    // enter AudioManager: this is called per frame and for every clip of the
+    // scene, and most are 2D.
     if (!m_audio || !m_is3D) return;
     m_audio->setSoundPosition(m_soundId, worldPos, dt);
 }
@@ -132,8 +132,8 @@ void AudioClipComponent::setRolloff(AudioRolloff rolloff)
     reload();
 }
 
-// Los tres siguientes NO recargan: son de la voz. Mismo guard de no-finitos que
-// volume/pitch — un NaN aqui acabaria en el .scene como "null".
+// The following three do NOT reload: they belong to the voice. Same non-finite guard as
+// volume/pitch — a NaN here would end up in the .scene as "null".
 void AudioClipComponent::setSpread(float degrees)
 {
     if (!std::isfinite(degrees)) return;
@@ -161,22 +161,22 @@ void AudioClipComponent::setIs3D(bool is3D)
 
 void AudioClipComponent::setVolume(float volume)
 {
-    // std::clamp(NaN, lo, hi) devuelve NaN: toda comparación con NaN es
-    // falsa, así que el clamp de abajo NO lo detiene (un infinito, en
-    // cambio, sí se clampa bien: clamp(+inf,0,1) == 1.0 — el peligroso de
-    // verdad es el NaN). Un NaN aquí acaba serializado en el .scene como
-    // "null" (nlohmann no tiene forma de escribir NaN) y esa es la cadena
-    // que tumbaba Scene::fromJson entero por un solo campo corrupto (ver
-    // Scene.cpp). Se rechaza aquí, antes del clamp, conservando el valor
-    // anterior. Sin log: este componente no tiene canal al Log Console.
-    // Cuando la llamada viene de Lua (ScriptBindings.cpp), el binding SÍ
-    // avisa antes de llegar aquí — pero este setter también se llama
-    // directamente sin pasar por Lua: el slider de Volume del Inspector
-    // (PropertiesPanel.cpp) y el apply() del Undo/Redo de ese mismo slider
-    // llaman a setVolume/setPitch a pelo. Por esas dos rutas un valor
-    // corrupto se descarta aquí SIN ningún feedback al usuario (ni Log ni
-    // UI) — no hay contradicción con el guard, solo una asimetría de canal
-    // de aviso pendiente de resolver si algún día el slider necesita avisar.
+    // std::clamp(NaN, lo, hi) returns NaN: every comparison with NaN is
+    // false, so the clamp below does NOT stop it (an infinity, on the other
+    // hand, is clamped fine: clamp(+inf,0,1) == 1.0 — the truly dangerous one
+    // is NaN). A NaN here ends up serialized in the .scene as
+    // "null" (nlohmann has no way to write NaN) and that is the chain
+    // that took down the whole Scene::fromJson over a single corrupt field (see
+    // Scene.cpp). It is rejected here, before the clamp, keeping the previous
+    // value. No log: this component has no channel to the Log Console.
+    // When the call comes from Lua (ScriptBindings.cpp), the binding DOES
+    // warn before getting here — but this setter is also called
+    // directly without going through Lua: the Volume slider of the Inspector
+    // (PropertiesPanel.cpp) and the apply() of the Undo/Redo of that same slider
+    // call setVolume/setPitch directly. Through those two paths a corrupt
+    // value is discarded here WITHOUT any feedback to the user (neither Log nor
+    // UI) — there is no contradiction with the guard, just an asymmetry of warning
+    // channel pending to be resolved if some day the slider needs to warn.
     if (!std::isfinite(volume)) return;
     m_volume = std::clamp(volume, 0.0f, 1.0f);
     if (m_audio) m_audio->setChannelVolume(m_soundId, m_volume);
@@ -184,7 +184,7 @@ void AudioClipComponent::setVolume(float volume)
 
 void AudioClipComponent::setPitch(float pitch)
 {
-    // Mismo razonamiento que setVolume: NaN se cuela por el clamp, Inf no.
+    // Same reasoning as setVolume: NaN slips through the clamp, Inf does not.
     if (!std::isfinite(pitch)) return;
     m_pitch = std::clamp(pitch, 0.5f, 2.0f);
     if (m_audio) m_audio->setChannelPitch(m_soundId, m_pitch);
@@ -192,11 +192,11 @@ void AudioClipComponent::setPitch(float pitch)
 
 void AudioClipComponent::setMinDistance(float d)
 {
-    // Mismo razonamiento que setVolume con el NaN: se rechaza antes del clamp.
+    // Same reasoning as setVolume with NaN: it is rejected before the clamp.
     if (!std::isfinite(d)) return;
     m_minDistance = std::clamp(d, 0.1f, 50.0f);
-    // El invariante min <= max vive aquí, no en la UI: un .scene editado a mano
-    // tampoco puede instalar una atenuación invertida.
+    // The invariant min <= max lives here, not in the UI: a hand-edited .scene
+    // cannot install an inverted attenuation either.
     if (m_maxDistance < m_minDistance) m_maxDistance = m_minDistance;
     applyDistances();
 }
@@ -211,8 +211,8 @@ void AudioClipComponent::setMaxDistance(float d)
 
 void AudioClipComponent::applyDistances()
 {
-    // El no-op en 2D lo decide AudioManager mirando el FMOD_MODE del sonido:
-    // así el valor guardado aquí no se pierde al alternar is3D.
+    // The no-op in 2D is decided by AudioManager looking at the sound's FMOD_MODE:
+    // this way the value stored here is not lost when toggling is3D.
     if (m_audio) m_audio->setSound3DMinMaxDistance(m_soundId, m_minDistance, m_maxDistance);
 }
 
@@ -221,8 +221,8 @@ void AudioClipComponent::reload()
     if (!m_audio) return;
     m_audio->unloadSound(m_soundId);
     m_soundId = m_audio->loadSound(m_path, m_is3D, m_loop, m_loadMode, m_rolloff);
-    // El sonido nuevo arranca con el min/max por defecto de FMOD: hay que
-    // reescribirle el del componente (importa al pasar de 2D a 3D).
+    // The new sound starts with FMOD's default min/max: the component's
+    // has to be rewritten onto it (it matters when going from 2D to 3D).
     applyDistances();
 }
 

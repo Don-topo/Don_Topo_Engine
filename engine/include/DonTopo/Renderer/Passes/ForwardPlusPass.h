@@ -10,34 +10,34 @@ namespace DonTopo {
 class GpuDevice;
 class GpuResources;
 
-// Forward+ : el dispatch de culling de luces y los buffers que consume
-// pbr.frag. A diferencia de los demas pases, este NO escribe una imagen: llena
-// una rejilla que lee el pass de ESCENA, asi que su descriptor set y su layout
-// salen a la interfaz publica.
+// Forward+: the light culling dispatch and the buffers that pbr.frag
+// consumes. Unlike the other passes, this one does NOT write an image: it fills
+// a grid read by the SCENE pass, so its descriptor set and its layout
+// come out in the public interface.
 //
-// Ataduras con codigo que no es suyo:
-//  - descLayout(): es el set 2 del pipeline layout de escena.
-//  - set(frame): lo bindea el pass de escena y tambien el bakeo de sondas.
-//  - overrideModeOff()/restoreParams(): el bakeo de sondas apaga el Forward+
-//    mientras captura las seis caras, porque la rejilla se culleo contra el
-//    frustum de la camara del frame y no contra esas caras.
+// Ties with code that is not its own:
+//  - descLayout(): it is set 2 of the scene pipeline layout.
+//  - set(frame): bound by the scene pass and also by the probe bake.
+//  - overrideModeOff()/restoreParams(): the probe bake turns Forward+ off
+//    while capturing the six faces, because the grid was culled against the
+//    frame camera's frustum and not against those faces.
 class ForwardPlusPass {
 public:
-    // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
+    // It must match Renderer::MAX_FRAMES (checked with static_assert in Renderer.cpp).
     static constexpr int kFramesInFlight = 2;
 
-    // Tope de luces que entran en el culling y, a la vez, ancho de la
-    // mascara de bits de light_cull_tiled.comp (256 / 32 = 8 palabras).
+    // Cap of lights that enter the culling and, at the same time, width of the
+    // bit mask of light_cull_tiled.comp (256 / 32 = 8 words).
     static constexpr uint32_t kMaxLights     = 256;
-    // Tope de luces por celda. Una celda que se pase PIERDE luces: por
-    // eso se cuentan aparte y se enseñan en la UI.
+    // Cap of lights per cell. A cell that goes over it LOSES lights: that is
+    // why they are counted separately and shown in the UI.
     static constexpr uint32_t kMaxPerCell    = 64;
     static constexpr uint32_t kTileSize      = 16;   // tiled
     static constexpr uint32_t kClusterTile   = 64;   // clustered, XY
     static constexpr uint32_t kClusterSlices = 24;   // clustered, Z
 
-    // Bloque de parametros tal cual lo declaran los dos .comp y pbr.frag.
-    // std430 con puros escalares de 4 bytes: los offsets son secuenciales.
+    // Parameter block exactly as declared by the two .comp files and pbr.frag.
+    // std430 with only 4-byte scalars: the offsets are sequential.
     struct ParamsGpu {
         uint32_t mode;
         uint32_t gridX;
@@ -57,15 +57,15 @@ public:
     struct Context {
         GpuDevice&        gpu;
         GpuResources&     res;
-        // Resolucion INTERNA del render y NO la del swapchain: con SSAA el
-        // render es mayor que la ventana, y dimensionar con el de la ventana
-        // dejaria a pbr.frag leyendo celdas fuera del buffer.
+        // INTERNAL render resolution and NOT the swapchain's: with SSAA the
+        // render is larger than the window, and sizing with the window's
+        // would leave pbr.frag reading cells outside the buffer.
         const VkExtent2D& renderExtent;
         int               currentFrame;
-        // Modo CONGELADO del frame, no el que pide la UI.
+        // The frame's FROZEN mode, not the one the UI requests.
         RendererState::FpMode activeMode;
-        // La profundidad del depth pre-pass y su sampler: el culling tiled
-        // reduce el maximo de profundidad de cada tile a partir de ella.
+        // The depth from the depth pre-pass and its sampler: the tiled culling
+        // reduces each tile's maximum depth from it.
         const VkImageView*    depthView;   // [kFramesInFlight]
         VkSampler             depthSampler;
         bool                  timestampsSupported;
@@ -76,36 +76,36 @@ public:
     ForwardPlusPass(const ForwardPlusPass&)            = delete;
     ForwardPlusPass& operator=(const ForwardPlusPass&) = delete;
 
-    // Layout, pool, los dos pipelines, los buffers que NO dependen del tamano
-    // (parametros, luces y contadores, todos con mapeo persistente) y el pool
-    // de queries. Una sola vez, en el init.
+    // Layout, pool, the two pipelines, the buffers that do NOT depend on the size
+    // (parameters, lights and counters, all with persistent mapping) and the query
+    // pool. Only once, in init.
     void createPipelines(const Context& ctx);
     void destroyPipelines(const Context& ctx);
-    // La rejilla y la lista de indices, mas los descriptor sets: dependen del
-    // tamano, asi que van con el swapchain.
+    // The grid and the index list, plus the descriptor sets: they depend on the
+    // size, so they go with the swapchain.
     void createBuffers(const Context& ctx);
     void destroyBuffers(const Context& ctx);
 
-    // El dispatch de culling del modo activo. Va DESPUES del depth pre-pass
-    // (el tiled lo necesita) y ANTES del pass de escena.
+    // The culling dispatch of the active mode. It goes AFTER the depth pre-pass
+    // (the tiled one needs it) and BEFORE the scene pass.
     void record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& proj);
-    // Bloque de parametros y lista de luces del frame. Se escribe SIEMPRE,
-    // tambien en Off: pbr.frag lee el modo de aqui para decidir por que rama
-    // va.
+    // Parameter block and light list of the frame. It is ALWAYS written,
+    // also in Off: pbr.frag reads the mode from here to decide which branch to
+    // take.
     void uploadFrameData(const Context& ctx, const glm::mat4& view, const glm::mat4& proj,
                          const std::vector<Light>& lights,
                          const std::vector<float>& lightRadii, float defaultRadius);
 
-    // Dimensiones de la rejilla del modo dado con el extent del contexto.
+    // Dimensions of the grid of the given mode with the context's extent.
     void gridDims(const Context& ctx, RendererState::FpMode mode,
                   uint32_t& gridX, uint32_t& gridY, uint32_t& gridZ, uint32_t& tileSize) const;
 
-    // El set 2 del pipeline de escena y su layout.
+    // Set 2 of the scene pipeline and its layout.
     VkDescriptorSetLayout descLayout()    const { return m_descLayout; }
     VkDescriptorSet       set(int frame)  const { return m_sets[frame]; }
 
-    // Deja el modo en Off sin tocar el que pide la UI, y devuelve lo que habia
-    // para restaurarlo. false si el buffer aun no existe.
+    // Leaves the mode at Off without touching the one the UI requests, and returns what was there
+    // so it can be restored. false if the buffer does not exist yet.
     bool overrideModeOff(ParamsGpu& saved);
     void restoreParams(const ParamsGpu& saved);
 
@@ -120,7 +120,7 @@ private:
     VkPipeline            m_tiledPipeline                   = VK_NULL_HANDLE;
     VkPipeline            m_clusteredPipeline               = VK_NULL_HANDLE;
     VkDescriptorSet       m_sets[kFramesInFlight]           = {};
-    // Mapeo persistente, igual que el UBO.
+    // Persistent mapping, like the UBO.
     VkBuffer              m_paramsBuffer[kFramesInFlight]   = {};
     VkDeviceMemory        m_paramsMemory[kFramesInFlight]   = {};
     void*                 m_paramsMapped[kFramesInFlight]   = {};
@@ -130,7 +130,7 @@ private:
     VkBuffer              m_statsBuffer[kFramesInFlight]    = {};
     VkDeviceMemory        m_statsMemory[kFramesInFlight]    = {};
     void*                 m_statsMapped[kFramesInFlight]    = {};
-    // Dependen del tamano de la rejilla.
+    // They depend on the grid's size.
     VkBuffer              m_gridBuffer[kFramesInFlight]     = {};
     VkDeviceMemory        m_gridMemory[kFramesInFlight]     = {};
     VkBuffer              m_indexBuffer[kFramesInFlight]    = {};

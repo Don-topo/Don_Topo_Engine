@@ -33,8 +33,8 @@ namespace DonTopo
         out.pixels.reset(px);
         if (!px) { out.w = out.h = 0; return out; }
 
-        // Solo las de FICHERO tienen sidecar. Se lee despues de decodificar bien:
-        // un fichero que no se lee no gasta una lectura mas.
+        // Only FILE textures have a sidecar. It is read after a successful decode:
+        // a file that fails to read does not cost one more read.
         if (chooseTextureSource(path, embedded) == TextureSource::Path)
         {
             std::string warning;

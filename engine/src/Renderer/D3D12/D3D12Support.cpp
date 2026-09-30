@@ -50,14 +50,14 @@ SupportInfo querySupport() {
         if (FAILED(adapter->GetDesc1(&desc))) {
             continue;
         }
-        // WARP renderiza por CPU: arrancaría, pero a una velocidad que no sirve
-        // como backend de un editor. Si no hay GPU real, mejor decir que no.
+        // WARP renders on the CPU: it would start, but at a speed that is useless
+        // as an editor backend. If there is no real GPU, better to say no.
         if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
             continue;
         }
 
-        // Con pDevice a nullptr, D3D12CreateDevice solo comprueba el soporte:
-        // no crea nada y no hay nada que liberar.
+        // With pDevice set to nullptr, D3D12CreateDevice only checks for support:
+        // it creates nothing and there is nothing to release.
         if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
                                         __uuidof(ID3D12Device), nullptr))) {
             info.supported = true;

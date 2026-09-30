@@ -5,9 +5,9 @@
 
 namespace DonTopo {
 
-// Espacio de color con el que se interpreta una textura de material. Auto = lo
-// decide el slot del material (color base sRGB, normal/ORM lineal), que es lo
-// que pasaba antes de que existiera el ajuste.
+// Color space with which a material texture is interpreted. Auto = decided
+// by the material slot (base color sRGB, normal/ORM linear), which is what
+// happened before the setting existed.
 enum class ColorSpaceOverride : uint8_t { Auto, Srgb, Linear };
 
 struct TextureImportSettings
@@ -22,28 +22,28 @@ inline bool operator==(const TextureImportSettings& a, const TextureImportSettin
 }
 inline bool isDefault(const TextureImportSettings& s) { return s == TextureImportSettings{}; }
 
-// El ajuste vive en "<asset>.import.json", junto al asset, y solo existe si
-// difiere del defecto.
+// The setting lives in "<asset>.import.json", next to the asset, and only exists if
+// it differs from the default.
 inline constexpr const char* kImportSidecarSuffix = ".import.json";
 
 std::filesystem::path importSidecarPath(const std::filesystem::path& asset);
 bool                  isImportSidecar(const std::filesystem::path& p);
 
-// Nunca lanza. Ausente = defecto y SIN aviso. Roto, de version o tipo
-// desconocido o mayor de 64 KiB = defecto y `warning` explica por que. Un valor
-// desconocido en un campo suelto deja los demas campos leidos.
+// Never throws. Absent = default and NO warning. Broken, of unknown version or type
+// or larger than 64 KiB = default and `warning` explains why. An unknown value
+// in a single field leaves the other fields read.
 TextureImportSettings loadTextureImportSettings(const std::filesystem::path& asset,
                                                 std::string* warning = nullptr);
 
-// Guardar el defecto BORRA el sidecar. false = no se pudo (y `error` lo dice).
+// Saving the default DELETES the sidecar. false = it could not (and `error` says so).
 bool saveTextureImportSettings(const std::filesystem::path& asset,
                                const TextureImportSettings& settings,
                                std::string* error = nullptr);
 
 // ── Audio ────────────────────────────────────────────────────────────────────
 
-// Propiedades del FICHERO de audio, no del componente: la ganancia se suma al
-// volumen de toda voz de ese clip y el mono mezcla sus canales a uno.
+// Properties of the audio FILE, not of the component: the gain is added to the
+// volume of every voice of that clip and mono mixes its channels down to one.
 struct AudioImportSettings
 {
     float gainDb    = 0.0f;    // [kAudioGainMinDb, kAudioGainMaxDb]
@@ -58,30 +58,30 @@ inline bool operator==(const AudioImportSettings& a, const AudioImportSettings& 
 }
 inline bool isDefault(const AudioImportSettings& s) { return s == AudioImportSettings{}; }
 
-// Acota a [-30, +12] dB; NaN -> 0. Una ganancia sin techo, o NaN metida en un
-// canal de FMOD, ensordece o silencia sin decir nada.
+// Bounds to [-30, +12] dB; NaN -> 0. A gain without a ceiling, or a NaN put into an
+// FMOD channel, deafens or silences without saying anything.
 float clampAudioGainDb(float gainDb);
-// 10^(dB/20), con el dB acotado antes. 0 dB da EXACTAMENTE 1.0f.
+// 10^(dB/20), with the dB bounded first. 0 dB gives EXACTLY 1.0f.
 float audioGainLinear(float gainDb);
 
-// Misma tolerancia que las texturas (ver loadTextureImportSettings): nunca lanza.
+// Same tolerance as the textures (see loadTextureImportSettings): never throws.
 AudioImportSettings loadAudioImportSettings(const std::filesystem::path& asset,
                                             std::string* warning = nullptr);
-// Guardar el defecto BORRA el sidecar. El dB se escribe ya acotado.
+// Saving the default DELETES the sidecar. The dB is written already bounded.
 bool saveAudioImportSettings(const std::filesystem::path& asset,
                              const AudioImportSettings& settings,
                              std::string* error = nullptr);
 
-// ── Modelos ──────────────────────────────────────────────────────────────────
+// ── Models ───────────────────────────────────────────────────────────────────
 
-// De donde salen las normales de la malla. File = las del fichero (y planas si
-// faltan), que es lo que pasaba antes de que existiera el ajuste; Smooth y Flat
-// las REGENERAN siempre, aunque el fichero las traiga.
+// Where the mesh normals come from. File = those of the file (and flat if
+// missing), which is what happened before the setting existed; Smooth and Flat
+// ALWAYS REGENERATE them, even if the file brings them.
 enum class NormalsMode : uint8_t { File, Smooth, Flat };
 
-// Propiedades del FICHERO del modelo, no del objeto: el Transform.scale del
-// GameObject va aparte y se multiplica encima. La escala se hornea en la
-// geometria al importar (FBX en cm frente a m).
+// Properties of the model FILE, not of the object: the GameObject's Transform.scale
+// is separate and multiplies on top. The scale is baked into the
+// geometry on import (FBX in cm versus m).
 struct ModelImportSettings
 {
     float       scale            = 1.0f;               // [kModelScaleMin, kModelScaleMax]
@@ -100,36 +100,36 @@ inline bool operator==(const ModelImportSettings& a, const ModelImportSettings& 
 }
 inline bool isDefault(const ModelImportSettings& s) { return s == ModelImportSettings{}; }
 
-// NaN o <= 0 -> 1 (una escala 0 colapsaria la malla); el resto se acota a
-// [0.001, 1000] (+inf da 1000).
+// NaN or <= 0 -> 1 (a scale of 0 would collapse the mesh); the rest is bounded to
+// [0.001, 1000] (+inf gives 1000).
 float clampModelScale(float scale);
 
-// Misma tolerancia que texturas y audio: nunca lanza.
+// Same tolerance as textures and audio: never throws.
 ModelImportSettings loadModelImportSettings(const std::filesystem::path& asset,
                                             std::string* warning = nullptr);
-// Guardar el defecto BORRA el sidecar. La escala se escribe ya acotada.
+// Saving the default DELETES the sidecar. The scale is written already bounded.
 bool saveModelImportSettings(const std::filesystem::path& asset,
                              const ModelImportSettings& settings,
                              std::string* error = nullptr);
 
-// Dos rutas que nombran el mismo fichero (exista o no). Existentes: equivalent;
-// si no, la forma canonica debil de cada una, y en ultimo caso la lexica.
+// Two paths that name the same file (whether or not it exists). Existing ones: equivalent;
+// otherwise, the weakly canonical form of each, and lastly the lexical one.
 bool sameAssetPath(const std::filesystem::path& a, const std::filesystem::path& b);
 
-// ── Ciclo de vida del sidecar: viaja con el asset ────────────────────────────
+// ── Sidecar life cycle: it travels with the asset ────────────────────────────
 
-// true si el asset de origen Y el de destino ya tienen sidecar: mover uno encima
-// del otro pisaria los ajustes del destino, asi que quien mueve o renombra lo
-// rechaza antes de tocar nada.
+// true if the source asset AND the destination one already have a sidecar: moving one over
+// the other would overwrite the destination's settings, so whoever moves or renames
+// rejects it before touching anything.
 bool importSidecarConflict(const std::filesystem::path& from, const std::filesystem::path& to);
 
-// Mueve el sidecar de oldAsset a newAsset. true si no habia nada que mover.
+// Moves the sidecar from oldAsset to newAsset. true if there was nothing to move.
 bool moveImportSidecar(const std::filesystem::path& oldAsset, const std::filesystem::path& newAsset,
                        std::string* error = nullptr);
-// Copia el sidecar de srcAsset a dstAsset (sin pisar uno existente). true si no habia.
+// Copies the sidecar from srcAsset to dstAsset (without overwriting an existing one). true if there was none.
 bool copyImportSidecar(const std::filesystem::path& srcAsset, const std::filesystem::path& dstAsset,
                        std::string* error = nullptr);
-// Borra el sidecar de asset, si existe. Silencioso.
+// Deletes the sidecar of asset, if it exists. Silent.
 void removeImportSidecar(const std::filesystem::path& asset);
 
 } // namespace DonTopo

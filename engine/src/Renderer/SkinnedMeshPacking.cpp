@@ -7,17 +7,17 @@ namespace DonTopo
     {
         const Skeleton& skel      = mesh.skeleton;
         const int       boneCount = (int)skel.names.size();
-        // Malla sin animaciones: un bloque igualmente, con todos los counts a 0.
+        // Mesh without animations: a block all the same, with all counts at 0.
         const size_t clipCount = mesh.animationClips.empty() ? 1u : mesh.animationClips.size();
 
         PackedClips out;
         out.boneInfos.resize(clipCount * (size_t)boneCount);
 
-        // Profundidad de cada hueso, una vez por malla (es del esqueleto, no
-        // del clip). El orden es topológico (padre < hijo, ModelLoader), así
-        // que basta una pasada. Un padre fuera de rango o posterior se trata
-        // como raíz: mejor una raíz de más que leer una profundidad aún sin
-        // calcular.
+        // Depth of each bone, once per mesh (it belongs to the skeleton, not to
+        // the clip). The order is topological (parent < child, ModelLoader), so
+        // a single pass is enough. A parent that is out of range or later is treated
+        // as a root: better one root too many than reading a depth not yet
+        // computed.
         std::vector<int32_t> depth((size_t)boneCount, 0);
         for (int b = 0; b < boneCount; b++)
         {
@@ -36,18 +36,18 @@ namespace DonTopo
                 bi.inverseBindPose = skel.inverseBindPose[b];
                 bi.depth           = depth[b];
 
-                // Local de bind pose, el valor por defecto de un hueso del que
-                // el clip activo no dice nada. La identidad NO sirve: borraría
-                // el offset del hueso respecto a su padre y lo colapsaría sobre
-                // él, arrastrando toda su cadena descendiente (un brazo entero
-                // acababa a la altura de la cabeza).
+                // Local bind pose, the default value for a bone that the active clip
+                // says nothing about. Identity does NOT work: it would erase the
+                // bone's offset from its parent and collapse it onto
+                // it, dragging its whole descendant chain along (an entire arm
+                // ended up at head height).
                 //
                 //   globalBind[b] = inverse(inverseBindPose[b])
-                //   localBind[b]  = inverse(globalBind[padre]) * globalBind[b]
+                //   localBind[b]  = inverse(globalBind[parent]) * globalBind[b]
                 //
-                // y como inverse(globalBind[padre]) ES inverseBindPose[padre],
-                // basta una inversión por hueso en vez de dos. Se pasa la matriz
-                // entera a la GPU en vez de descomponerla en TRS: así es exacta.
+                // and since inverse(globalBind[parent]) IS inverseBindPose[parent],
+                // one inversion per bone is enough instead of two. The whole matrix is
+                // passed to the GPU instead of decomposing it into TRS: that way it is exact.
                 const glm::mat4 globalBind = glm::inverse(skel.inverseBindPose[b]);
                 const int       padre      = skel.parentIndex[b];
                 bi.bindLocal = (padre < 0) ? globalBind
@@ -91,7 +91,7 @@ namespace DonTopo
             }
         }
 
-        // Vulkan no acepta buffers de tamaño 0
+        // Vulkan does not accept buffers of size 0
         if (out.pos.empty())   out.pos.push_back({});
         if (out.rot.empty())   out.rot.push_back({});
         if (out.scale.empty()) out.scale.push_back({});

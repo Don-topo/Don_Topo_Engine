@@ -16,11 +16,11 @@ namespace DonTopo {
 GameObject* duplicateAsSibling(Scene& scene, GameObject* src,
                                 PhysicsManager& physics, AudioManager& audio)
 {
-    // Sin padre es la raíz de la escena: no tiene hermanos posibles y
-    // cloneGameObject la rechaza igualmente.
+    // Without a parent it is the scene root: it cannot have siblings and
+    // cloneGameObject rejects it anyway.
     if (!src || !src->parent) return nullptr;
-    // HERMANO: el padre del duplicado es el del ORIGINAL, no el original. Pasar
-    // `src` aquí lo colgaría de sí mismo y cada Ctrl+D anidaría un nivel más.
+    // SIBLING: the duplicate's parent is the ORIGINAL's parent, not the original. Passing
+    // `src` here would hang it from itself and every Ctrl+D would nest one more level.
     return scene.cloneGameObject(src, src->parent, physics, audio);
 }
 
@@ -74,11 +74,11 @@ void ReparentCommand::moveTo(uint64_t parentId, size_t index)
     GameObject* newParent = m_scene.findById(parentId);
     if (!node || !newParent) return;
 
-    // El movimiento en sí vive en Scene::reparent (Core) desde que Lua también
-    // lo necesita: dos copias del mismo corta-y-pega sobre unique_ptr es como
-    // se arreglan los ciclos en una y no en la otra. Los índices que este
-    // comando guarda ya son índices sobre la lista sin el nodo, que es
-    // exactamente lo que reparent espera.
+    // The move itself lives in Scene::reparent (Core) since Lua also
+    // needs it: two copies of the same cut-and-paste over unique_ptr is how
+    // cycles get fixed in one and not in the other. The indices this
+    // command stores are already indices over the list without the node, which is
+    // exactly what reparent expects.
     m_scene.reparent(node, newParent, index);
 }
 
@@ -94,8 +94,8 @@ void DeleteGameObjectCommand::execute()
     GameObject* node = m_scene.findById(id);
     if (!node) return;
     m_meshes = m_scene.collectMeshes(node);
-    // La GPU la suelta Scene::removeGameObject via su oyente (P8): este era
-    // el tercer sitio que tenia que acordarse, y el unico sin hook propio.
+    // The GPU is released by Scene::removeGameObject via its listener (P8): this was
+    // the third place that had to remember, and the only one without its own hook.
     m_scene.removeGameObject(node);
 }
 
@@ -106,9 +106,9 @@ void DeleteGameObjectCommand::undo()
     if (node)
     {
         m_renderer.registerGameObject(node);
-        // registerGameObject encola el upload en el batch diferido; sin flush
-        // el objeto recreado quedaría invisible ~2 frames (pop-in). Esta es una
-        // transición síncrona iniciada por el usuario, así que se bloquea.
+        // registerGameObject enqueues the upload in the deferred batch; without a flush
+        // the recreated object would be invisible for ~2 frames (pop-in). This is a
+        // synchronous, user-initiated transition, so it blocks.
         m_renderer.flushUploadsAndWait();
     }
 }
@@ -129,8 +129,8 @@ void CreateGameObjectCommand::execute()
     if (node)
     {
         m_renderer.registerGameObject(node);
-        // Mismo motivo que en DeleteGameObjectCommand::undo: subida síncrona
-        // para que el objeto creado sea visible ya, sin pop-in de ~2 frames.
+        // Same reason as in DeleteGameObjectCommand::undo: synchronous upload
+        // so that the created object is visible right away, without a ~2 frame pop-in.
         m_renderer.flushUploadsAndWait();
     }
 }
@@ -163,7 +163,7 @@ void CameraComponentCommand::apply(bool add)
 
     auto cam = std::make_shared<CameraComponent>();
     cam->setMode(m_state.mode);
-    // far antes que near: setNear clampa contra el far actual (ver
+    // far before near: setNear clamps against the current far (see
     // CameraComponent::setNear).
     cam->setFar(m_state.farPlane);
     cam->setNear(m_state.nearPlane);
@@ -209,19 +209,19 @@ void AudioClipComponentCommand::apply(bool add)
         go->setAudioClip(nullptr);
         return;
     }
-    // is3D y loop van horneados en el FMOD_MODE del sonido, así que se pasan a
-    // la factory en vez de asignarse después: hacerlo con los setters forzaría
-    // un reload inmediato del sonido recién creado.
+    // is3D and loop are baked into the sound's FMOD_MODE, so they are passed to
+    // the factory instead of being assigned afterwards: doing it with the setters would force
+    // an immediate reload of the freshly created sound.
     auto clip = m_audio.createAudioClipComponent(m_path, m_state.is3D, m_state.loop);
-    // El asset pudo desaparecer del disco entre el Remove y el Ctrl+Z. El
-    // GameObject se queda sin clip en vez de con uno roto, que es lo mismo que
-    // hace Scene::fromJson en ese caso.
+    // The asset may have disappeared from disk between the Remove and the Ctrl+Z. The
+    // GameObject is left without a clip instead of with a broken one, which is what
+    // Scene::fromJson does in that case.
     if (!clip) return;
     clip->setPlayOnAwake(m_state.playOnAwake);
     clip->setVolume(m_state.volume);
     clip->setPitch(m_state.pitch);
-    // Max antes que min por el invariante min <= max de los setters, igual que
-    // en la carga de escena.
+    // Max before min because of the min <= max invariant of the setters, same as
+    // in scene loading.
     clip->setMaxDistance(m_state.maxDistance);
     clip->setMinDistance(m_state.minDistance);
     go->setAudioClip(std::move(clip));
@@ -528,19 +528,19 @@ void AnimatorGraphCommand::apply(const AnimatorComponent::Graph& g)
     GameObject* go = m_scene.findById(m_id);
     if (!go || !go->getAnimator()) return;
     go->getAnimator()->applyGraph(g);
-    // El snapshot trae los clipIndex de cuando se tomó, y una fuente de
-    // animación añadida o quitada entretanto cambia la lista de clips: se
-    // vuelven a resolver por nombre. rebindClips y no bindClips: esto corre en
-    // Edit Mode —Ctrl+Z está deshabilitado en Play (ver
-    // EditorUI::handleUndoRedoShortcut)—, donde el reloj de previsualización
-    // sigue corriendo y los valores de parámetro que se ven en el panel son
-    // los vivos; bindClips's reset() los pondría a cero y el preview saltaría
-    // de golpe al estado de entrada, visible para el usuario. Secundariamente
-    // también protege un futuro undo a mitad de Play.
+    // The snapshot carries the clipIndex values from when it was taken, and an animation
+    // source added or removed in the meantime changes the clip list: they are
+    // resolved again by name. rebindClips and not bindClips: this runs in
+    // Edit Mode (Ctrl+Z is disabled in Play, see
+    // EditorUI::handleUndoRedoShortcut), where the preview clock
+    // keeps running and the parameter values seen in the panel are
+    // the live ones; bindClips's reset() would zero them and the preview would jump
+    // abruptly to the entry state, visible to the user. Secondarily
+    // it also protects a future undo in the middle of Play.
     if (const SkinnedMesh* mesh = go->getSkinnedMesh())
         go->getAnimator()->rebindClips(*mesh, nullptr);
-    // El snapshot trae los clips de propiedades enteros: sus índices y el
-    // `resolved` de cada pista se rehacen igual que los clipIndex.
+    // The snapshot carries the whole property clips: their indices and each track's
+    // `resolved` are redone just like the clipIndex values.
     go->getAnimator()->bindProperties(go, nullptr);
 }
 
@@ -560,44 +560,44 @@ void AnimationSourceCommand::applyAdd()
 {
     GameObject* go = m_scene.findById(m_id);
     if (!go) return;
-    // Escribe clips/fuentes: editSkinnedMesh copia la malla si está compartida.
+    // Writes clips/sources: editSkinnedMesh copies the mesh if it is shared.
     SkinnedMesh* mesh = go->editSkinnedMesh();
     if (!mesh) return;
 
     std::vector<std::string> warnings;
-    // m_clipNames vacío = primera vez (el usuario acaba de elegir el
-    // fichero): los nombres los decide addAnimationSource y se guardan aquí
-    // para que un redo posterior reproduzca exactamente los mismos.
+    // Empty m_clipNames = first time (the user has just chosen the
+    // file): the names are decided by addAnimationSource and stored here
+    // so that a later redo reproduces exactly the same ones.
     const std::vector<std::string>* forced = m_clipNames.empty() ? nullptr : &m_clipNames;
     if (!addAnimationSource(*mesh, m_path, warnings, forced)) return;
 
     m_clipNames = mesh->animationSources.back().clipNames;
-    // addAnimationSource siempre añade al final: la fuente que acabamos de
-    // (re)meter es, por definición, la última con ese path — occurrence 0
-    // contado desde el final. Esto se recalcula en cada applyAdd (tanto el
-    // Add real como el undo de un Remove que reinserta al final) para que un
-    // applyRemove posterior siga apuntando a ELLA y no a la ordinal que se
-    // capturó en el clic original, que tras el reinsert ya no describe su
-    // posición (ver comentario largo en applyRemove).
+    // addAnimationSource always adds at the end: the source we have just
+    // (re)inserted is, by definition, the last one with that path (occurrence 0
+    // counted from the end). This is recomputed in every applyAdd (both the
+    // real Add and the undo of a Remove that reinserts at the end) so that a later
+    // applyRemove keeps pointing to IT and not to the ordinal that was
+    // captured at the original click, which after the reinsert no longer describes its
+    // position (see the long comment in applyRemove).
     m_pathOccurrence = 0;
 
-    // bindClips resuelve por nombre en Scene::nodeFromJson, pero eso solo
-    // corre en una carga de escena: aquí el mesh muta en caliente (puede que
-    // a mitad de Play Mode) y nadie más re-resuelve clipIndex. Sin esto, los
-    // estados quedan con el índice VIEJO, que tras el add sigue siendo
-    // válido como índice pero puede apuntar a un clip distinto (Finding 1 de
-    // la revisión: "Remove" desplaza el resto de la lista). rebindClips (sin
-    // el reset() de bindClips) preserva m_currentState y los parámetros del
-    // usuario, que bindClips destruiría.
+    // bindClips resolves by name in Scene::nodeFromJson, but that only
+    // runs on a scene load: here the mesh mutates live (possibly
+    // in the middle of Play Mode) and nobody else re-resolves clipIndex. Without this, the
+    // states keep the OLD index, which after the add is still
+    // valid as an index but may point to a different clip (Finding 1 of
+    // the review: "Remove" shifts the rest of the list). rebindClips (without
+    // the reset() of bindClips) preserves m_currentState and the user's
+    // parameters, which bindClips would destroy.
     if (go->hasAnimator())
     {
         std::vector<std::string> bindWarnings;
         go->getAnimator()->rebindClips(*mesh, &bindWarnings);
         go->getAnimator()->bindProperties(go, &bindWarnings);
-        // Sin canal de log desde Command.cpp (ICommand no conoce
-        // EditorContext/pushLog, a diferencia de AnimatorPanel): se
-        // descartan, mismo precedente que ya sienta este mismo método unas
-        // líneas arriba con los warnings de addAnimationSource.
+        // No log channel from Command.cpp (ICommand does not know
+        // EditorContext/pushLog, unlike AnimatorPanel): they are
+        // discarded, same precedent that this very method already sets a few
+        // lines above with the addAnimationSource warnings.
     }
 
     if (m_renderer && go->skinnedRenderIndex >= 0)
@@ -608,32 +608,32 @@ void AnimationSourceCommand::applyRemove()
 {
     GameObject* go = m_scene.findById(m_id);
     if (!go) return;
-    // Escribe clips/fuentes: editSkinnedMesh copia la malla si está compartida.
+    // Writes clips/sources: editSkinnedMesh copies the mesh if it is shared.
     SkinnedMesh* mesh = go->editSkinnedMesh();
     if (!mesh) return;
 
-    // Localización por IDENTIDAD, no por posición: m_pathOccurrence es
-    // "la fuente N-ésima con este path, contando desde el final del vector",
-    // y eso es estable para UN comando aislado, pero se rompe con comandos
-    // INTERCALADOS. applyAdd (más arriba) SIEMPRE reinserta al final; así que
-    // cuando el undo de un Remove pendiente reinserta una fuente, el "final"
-    // que el pathOccurrence de OTRO comando en el stack daba por supuesto se
-    // ha desplazado por debajo. Ejemplo real (revisión final, bloqueante):
-    // sources=[B,S1], se reimporta el mismo FBX (cmdA, sources=[B,S1,S2]), se
-    // quita la fila S1 (cmdB, pathOccurrence=1 porque S2 queda por delante,
-    // sources=[B,S2]); Ctrl+Z de cmdB reinserta S1 al final (sources=
-    // [B,S2,S1]); Ctrl+Z de cmdA, con su pathOccurrence=0, encuentra la
-    // PRIMERA fuente no-builtin escaneando desde el final — que ahora es el
-    // S1 recién recuperado, no el S2 que cmdA realmente insertó.
+    // Location by IDENTITY, not by position: m_pathOccurrence is
+    // "the Nth source with this path, counting from the end of the vector",
+    // and that is stable for ONE isolated command, but it breaks with
+    // INTERLEAVED commands. applyAdd (further up) ALWAYS reinserts at the end; so
+    // when the undo of a pending Remove reinserts a source, the "end"
+    // that the pathOccurrence of ANOTHER command in the stack assumed has
+    // shifted underneath. Real example (final review, blocking):
+    // sources=[B,S1], the same FBX is reimported (cmdA, sources=[B,S1,S2]), row
+    // S1 is removed (cmdB, pathOccurrence=1 because S2 stays ahead,
+    // sources=[B,S2]); Ctrl+Z of cmdB reinserts S1 at the end (sources=
+    // [B,S2,S1]); Ctrl+Z of cmdA, with its pathOccurrence=0, finds the
+    // FIRST non-builtin source scanning from the end, which is now the
+    // just-recovered S1, not the S2 that cmdA actually inserted.
     //
-    // uniqueClipName (SkinnedMeshAnimations.cpp) garantiza que los nombres de
-    // clip son únicos dentro de la malla — removeAnimationSource ya se apoya
-    // en esa invariante (ver su comentario) — así que el conjunto exacto de
-    // clipNames de una fuente la identifica sin ambigüedad, sea cual sea su
-    // posición actual en el vector. m_clipNames viaja siempre con el comando:
-    // lo pasa el panel (src.clipNames) o lo recalcula applyAdd tras un
-    // (re)import con éxito, así que en el camino normal nunca está vacío
-    // cuando llegamos aquí.
+    // uniqueClipName (SkinnedMeshAnimations.cpp) guarantees that clip names
+    // are unique within the mesh (removeAnimationSource already relies on
+    // that invariant, see its comment), so the exact set of
+    // clipNames of a source identifies it unambiguously, whatever its current
+    // position in the vector. m_clipNames always travels with the command:
+    // the panel passes it (src.clipNames) or applyAdd recomputes it after a
+    // successful (re)import, so in the normal path it is never empty
+    // when we get here.
     bool removed = false;
     if (!m_clipNames.empty())
     {
@@ -647,12 +647,12 @@ void AnimationSourceCommand::applyRemove()
         }
     }
 
-    // Fallback posicional: solo puede disparar si m_clipNames llega vacío
-    // (no debería en el camino normal) o si ninguna fuente viva coincide por
-    // nombres (p.ej. redo tras recarga de escena, con el mesh reconstruido
-    // desde JSON). Se conserva el escaneo original, contado desde el final
-    // por el mismo motivo de siempre: applyAdd reinserta al final, así que
-    // pathOccurrence=0 sigue apuntando a lo último reinsertado.
+    // Positional fallback: it can only fire if m_clipNames arrives empty
+    // (it should not in the normal path) or if no live source matches by
+    // names (e.g. redo after a scene reload, with the mesh rebuilt
+    // from JSON). The original scan is kept, counted from the end
+    // for the same reason as always: applyAdd reinserts at the end, so
+    // pathOccurrence=0 still points to the last one reinserted.
     if (!removed)
     {
         size_t skipped = 0;
@@ -668,25 +668,25 @@ void AnimationSourceCommand::applyRemove()
         }
     }
 
-    // Nada que quitar (redo tras recarga de escena, o mesh reemplazado entre
-    // execute() y undo()): rebuildSkinnedMesh es un vkDeviceWaitIdle + un
-    // destroy/recreate completo de buffers/texturas/descriptor sets, y
-    // pagarlo por una malla que no cambió es puro desperdicio (applyAdd ya
-    // hacía este mismo early-return con su "if (!addAnimationSource(...))
+    // Nothing to remove (redo after a scene reload, or mesh replaced between
+    // execute() and undo()): rebuildSkinnedMesh is a vkDeviceWaitIdle + a
+    // full destroy/recreate of buffers/textures/descriptor sets, and
+    // paying for it for a mesh that did not change is pure waste (applyAdd already
+    // did this same early-return with its "if (!addAnimationSource(...))
     // return;").
     if (!removed) return;
 
-    // Mismo motivo que en applyAdd: el mesh mutó en caliente y clipIndex
-    // apunta a índices que ya no describen los mismos clips (el hueco que
-    // deja el clip quitado desplaza a los de detrás). reset() no: se
-    // preserva el estado runtime del Animator.
+    // Same reason as in applyAdd: the mesh mutated live and clipIndex
+    // points to indices that no longer describe the same clips (the gap
+    // left by the removed clip shifts the ones behind it). Not reset(): the
+    // Animator's runtime state is preserved.
     if (go->hasAnimator())
     {
         std::vector<std::string> bindWarnings;
         go->getAnimator()->rebindClips(*mesh, &bindWarnings);
         go->getAnimator()->bindProperties(go, &bindWarnings);
-        // Se descartan por el mismo motivo que en applyAdd: no hay canal de
-        // log disponible desde un ICommand.
+        // They are discarded for the same reason as in applyAdd: there is no log
+        // channel available from an ICommand.
     }
 
     if (m_renderer && go->skinnedRenderIndex >= 0)
@@ -705,7 +705,7 @@ void ClipRenameCommand::apply(const std::string& from, const std::string& to)
 {
     GameObject* go = m_scene.findById(m_id);
     if (!go) return;
-    // Escribe clips/fuentes: editSkinnedMesh copia la malla si está compartida.
+    // Writes clips/sources: editSkinnedMesh copies the mesh if it is shared.
     SkinnedMesh* mesh = go->editSkinnedMesh();
     if (!mesh) return;
     if (!renameClip(*mesh, from, to)) return;
@@ -754,16 +754,16 @@ void MaterialTextureCommand::apply(const std::string& path)
     GameObject* go = m_scene.findById(m_id);
     if (!go || !go->hasMesh()) return;
 
-    // El material_index era válido cuando se construyó este comando, pero el
-    // replay (undo/redo) puede llegar mucho después: quitar el componente Mesh
-    // no apila comando (no reordena la pila), así que un Ctrl+Y sobre ESTE
-    // comando puede caer con el GameObject ya llevando OTRA malla, con menos
-    // materiales que la de entonces. setMaterialTextureOverride se deja SIN
-    // este corte a propósito —es la primitiva compartida con el lector de
-    // escena, y su tolerancia a un índice fuera de rango es la que permite que
-    // un .scene con más materiales de los que trae el mesh cargado ahora mismo
-    // no pierda el override—, pero este llamante sí conoce el mesh vivo y
-    // puede evitar escribir un índice que ya no existe en él.
+    // The material_index was valid when this command was built, but the
+    // replay (undo/redo) can arrive much later: removing the Mesh component
+    // does not push a command (it does not reorder the stack), so a Ctrl+Y on THIS
+    // command can land with the GameObject already carrying ANOTHER mesh, with fewer
+    // materials than the one from back then. setMaterialTextureOverride is left WITHOUT
+    // this cut on purpose (it is the primitive shared with the scene reader, and its
+    // tolerance for an out-of-range index is what lets
+    // a .scene with more materials than the currently loaded mesh has
+    // not lose the override), but this caller does know the live mesh and
+    // can avoid writing an index that no longer exists in it.
     const std::vector<const Material*> mats = materialsOfMesh(*go);
     if (m_materialIndex < 0 || m_materialIndex >= (int)mats.size()) return;
 
@@ -771,9 +771,9 @@ void MaterialTextureCommand::apply(const std::string& path)
 
     if (!m_renderer) return;
 
-    // Skinned y estático van por caminos distintos porque los recursos de GPU
-    // lo son: el personaje se reconstruye entero (es lo único que hay), el
-    // estático solo cambia de material.
+    // Skinned and static go through different paths because the GPU resources
+    // are different: the character is rebuilt whole (it is the only thing there is), the
+    // static one just changes material.
     if (const SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
         m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
     else if (go->staticRenderIndex >= 0)
@@ -861,10 +861,10 @@ void MaterialFactorCommand::apply(float value)
     GameObject* go = m_scene.findById(m_id);
     if (!go || !go->hasMesh()) return;
 
-    // Mismo corte que MaterialTextureCommand::apply, mismo motivo: el índice
-    // era válido cuando se construyó este comando, pero el replay (undo/redo)
-    // puede llegar con el GameObject llevando otra malla, con menos
-    // materiales que la de entonces.
+    // Same cut as MaterialTextureCommand::apply, same reason: the index
+    // was valid when this command was built, but the replay (undo/redo)
+    // can arrive with the GameObject carrying another mesh, with fewer
+    // materials than the one from back then.
     const std::vector<const Material*> mats = materialsOfMesh(*go);
     if (m_materialIndex < 0 || m_materialIndex >= (int)mats.size()) return;
 
@@ -872,17 +872,17 @@ void MaterialFactorCommand::apply(float value)
 
     if (!m_renderer) return;
 
-    // El estático ya NO se reconstruye: los factores salieron de la clave de
-    // dedup (makeSharedMeshKey), así que son dos floats por objeto y basta con
-    // escribirlos. Antes hacía falta un rebuildStaticMesh entero —con
-    // waitForGpu y tres texturas de vuelta— solo porque cambiar un número
-    // cambiaba la clave del objeto.
+    // The static one is NO LONGER rebuilt: the factors left the dedup key
+    // (makeSharedMeshKey), so they are two floats per object and it is enough to
+    // write them. Before, a whole rebuildStaticMesh was needed (with
+    // waitForGpu and three textures coming back) just because changing a number
+    // changed the object's key.
     //
-    // El SKINNED sigue con su rebuild: sus factores viven por SUBMALLA (Vulkan
-    // en SkinnedMatGfx, D3D12 en SkinnedSubMesh) y no hay setter por submalla,
-    // que sería otro método público más. Es el camino caro, pero un personaje
-    // tiene un puñado de submallas y esto solo corre al SOLTAR el slider o en un
-    // undo, nunca por frame de arrastre.
+    // The SKINNED one still does its rebuild: its factors live per SUBMESH (Vulkan
+    // in SkinnedMatGfx, D3D12 in SkinnedSubMesh) and there is no per-submesh setter,
+    // which would be yet another public method. It is the expensive path, but a character
+    // has a handful of submeshes and this only runs on slider RELEASE or on an
+    // undo, never per drag frame.
     if (const SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
         m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
     else if (go->staticRenderIndex >= 0)
@@ -902,23 +902,23 @@ void MeshComponentCommand::undo()    { if (m_add) remove(); else put();    }
 void MeshComponentCommand::remove()
 {
     GameObject* go = m_scene.findById(m_id);
-    // Solo la NUESTRA: si llegó otra por un camino sin undo, no es de este
-    // comando.
+    // Only OURS: if another arrived through a path without undo, it is not this
+    // command's.
     if (!go || !go->hasMesh() || go->getMesh() != m_meshVista.lock()) return;
 
-    // A partir de aquí el comando es el dueño: el objeto la suelta ahora.
+    // From here on the command is the owner: the object releases it now.
     m_mesh = go->getMesh();
 
-    // El backend suelta la GPU y hace setMesh(nullptr). Sin renderer (tests
-    // headless) queda solo la parte de CPU.
+    // The backend releases the GPU and does setMesh(nullptr). Without a renderer (headless
+    // tests) only the CPU part remains.
     if (m_renderer) m_renderer->removeMeshComponent(go);
     else            go->setMesh(nullptr);
 
-    // Guarda por hasMesh(), la MISMA señal que decide si el panel dibuja la
-    // sección Mesh y si acepta cargar un reemplazo. Si un backend volviera a
-    // dejar la malla puesta, vaciar igualmente dejaría el Material enseñando
-    // la textura del override sin nada que la escriba en el .scene: la
-    // asignación se perdería al recargar sin que nada lo avisara.
+    // Guard by hasMesh(), the SAME signal that decides whether the panel draws the
+    // Mesh section and whether it accepts loading a replacement. If a backend went back to
+    // leaving the mesh in place, emptying anyway would leave the Material showing
+    // the override's texture with nothing writing it to the .scene: the
+    // assignment would be lost on reload with nothing warning about it.
     if (!go->hasMesh())
         go->materialOverrides.clear();
 }
@@ -930,13 +930,13 @@ void MeshComponentCommand::put()
     if (go->hasMesh() || go->pendingMeshJob != 0) return;
 
     go->setMesh(m_mesh);
-    // Vuelve a ser del objeto: el comando la suelta para no contar como dueño
-    // (ver m_meshVista) y se queda solo con la vista.
+    // It belongs to the object again: the command releases it so as not to count as owner
+    // (see m_meshVista) and keeps only the view.
     m_meshVista = m_mesh;
     m_mesh.reset();
-    // DESPUÉS de setMesh, que baja los base*Taken: con los baselines del
-    // snapshot en alto, applyMaterialOverrides no recaptura como original lo
-    // que la malla guardada ya lleva horneado.
+    // AFTER setMesh, which lowers the base*Taken: with the snapshot's baselines
+    // raised, applyMaterialOverrides does not recapture as original what
+    // the stored mesh already carries baked in.
     go->materialOverrides = m_overrides;
     applyMaterialOverrides(*go);
 
@@ -945,8 +945,8 @@ void MeshComponentCommand::put()
         go->skinnedRenderIndex = m_renderer->addSkinnedMesh(*sk, nullptr);
     else
         go->staticRenderIndex  = m_renderer->addStaticMesh(*go->getMesh(), nullptr);
-    // Mismo motivo que DeleteGameObjectCommand::undo: sin esperar, el objeto
-    // recuperado aparecería ~2 frames tarde.
+    // Same reason as DeleteGameObjectCommand::undo: without waiting, the recovered
+    // object would appear ~2 frames late.
     m_renderer->flushUploadsAndWait();
 }
 

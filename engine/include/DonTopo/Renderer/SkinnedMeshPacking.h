@@ -4,20 +4,20 @@
 
 namespace DonTopo
 {
-    // Keyframes de TODOS los clips concatenados en los mismos vectores, listos
-    // pa subir a los 3 SSBOs de una sola vez al construir el objeto. Cambiar de
-    // clip en runtime no vuelve a tocar VRAM: solo cambia el clipBase del push
-    // constant.
+    // Keyframes of ALL the clips concatenated in the same vectors, ready
+    // to upload to the 3 SSBOs in one go when building the object. Switching
+    // clip at runtime does not touch VRAM again: only the clipBase of the push
+    // constant changes.
     //
-    // boneInfos va en layout [clip][hueso]: la entrada del hueso b en el clip c
-    // está en boneInfos[c * boneCount + b], y c * boneCount es exactamente el
-    // clipBase que consume bone_eval.comp.
+    // boneInfos goes in [clip][bone] layout: the entry of bone b in clip c
+    // is at boneInfos[c * boneCount + b], and c * boneCount is exactly the
+    // clipBase that bone_eval.comp consumes.
     //
-    // parentIndex e inverseBindPose son del ESQUELETO, no del clip, así que se
-    // replican idénticos en cada bloque. Eso cuesta 96 B por hueso y clip (2,4 %
-    // sobre los keyframes de un personaje típico) y a cambio deja el bloque del
-    // clip 0 sirviendo de jerarquía válida pa cualquier clip — por eso
-    // bone_hierarchy.comp no necesita saber nada de clips.
+    // parentIndex and inverseBindPose belong to the SKELETON, not the clip, so they are
+    // replicated identically in each block. That costs 96 B per bone and clip (2.4 %
+    // over the keyframes of a typical character) and in exchange leaves the block of
+    // clip 0 serving as a valid hierarchy for any clip, which is why
+    // bone_hierarchy.comp does not need to know anything about clips.
     struct PackedClips
     {
         std::vector<GpuPosKey>   pos;
@@ -26,25 +26,25 @@ namespace DonTopo
         std::vector<GpuBoneInfo> boneInfos;
     };
 
-    // Función libre y pura (sin Vulkan) a propósito: dentro de
-    // Renderer::addSkinnedMesh este empaquetado solo se podría probar con un
-    // VkDevice vivo, es decir, no se podría probar.
+    // Free and pure function (no Vulkan) on purpose: inside
+    // Renderer::addSkinnedMesh this packing could only be tested with a
+    // live VkDevice, that is, it could not be tested.
     PackedClips packSkinnedClips(const SkinnedMesh& mesh);
 
-    // Bloques de clip que lleva el SSBO de BoneInfos. Nunca 0: sin animaciones
-    // se empaqueta igual un bloque, así que el clip 0 siempre es válido.
+    // Clip blocks that the BoneInfos SSBO carries. Never 0: without animations a
+    // block is packed anyway, so clip 0 is always valid.
     inline uint32_t skinnedClipCount(const SkinnedMesh& mesh)
     {
         return mesh.animationClips.empty() ? 1u : (uint32_t)mesh.animationClips.size();
     }
 
-    // Índice de clip listo para multiplicar por boneCount. Fuera de rango cae al
-    // clip 0: la lista de clips puede haber encogido, o llegar un -1 de un
-    // estado sin resolver (0xFFFFFFFF tras el cast), y clip * boneCount
-    // apuntaría fuera del SSBO con el compute leyendo basura en silencio.
+    // Clip index ready to multiply by boneCount. Out of range it falls back to
+    // clip 0: the clip list may have shrunk, or a -1 may arrive from an
+    // unresolved state (0xFFFFFFFF after the cast), and clip * boneCount
+    // would point outside the SSBO with the compute silently reading garbage.
     //
-    // Vive aquí y no en cada backend porque la guarda existía en Vulkan y
-    // faltaba en D3D12: una sola función impide que vuelvan a separarse.
+    // It lives here and not in each backend because the guard existed in Vulkan and
+    // was missing in D3D12: a single function keeps them from drifting apart again.
     inline uint32_t clampClipIndex(uint32_t clip, uint32_t clipCount)
     {
         return clip < clipCount ? clip : 0u;

@@ -8,22 +8,22 @@ namespace DonTopo {
 class GpuDevice;
 class GpuResources;
 
-// Anti-aliasing: el pass de RESOLUCION (FXAA, SSAA y TAA), su imagen
-// intermedia, el historial del TAA y el jitter de la proyeccion.
+// Anti-aliasing: the RESOLVE pass (FXAA, SSAA and TAA), its intermediate
+// image, the TAA history and the projection jitter.
 //
-// Lo que NO es suyo y se queda en el Renderer, porque gobierna a otros:
-//  - el numero de muestras del MSAA y los render passes de escena y
-//    composicion que dependen de el (el resolve del MSAA ocurre dentro de
-//    esos passes, no aqui),
-//  - m_renderExtent y su recalculo,
-//  - el pool de queries, que ademas cronometra el frame entero sin UI: este
-//    pase solo escribe el par [0,1].
+// What is NOT its own and stays in the Renderer, because it governs others:
+//  - the MSAA sample count and the scene and composition render passes
+//    that depend on it (the MSAA resolve happens inside those passes,
+//    not here),
+//  - m_renderExtent and its recomputation,
+//  - the query pool, which also times the whole frame without UI: this
+//    pass only writes the pair [0,1].
 //
-// El pass de resolucion es grafico y no compute: el swapchain es
-// B8G8R8A8_SRGB y Vulkan prohibe las storage images en formatos sRGB.
+// The resolve pass is graphics and not compute: the swapchain is
+// B8G8R8A8_SRGB and Vulkan forbids storage images in sRGB formats.
 class AaPass {
 public:
-    // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
+    // It must match Renderer::MAX_FRAMES (checked with static_assert in Renderer.cpp).
     static constexpr int kFramesInFlight = 2;
 
     using AaMode = RendererState::AaMode;
@@ -32,26 +32,26 @@ public:
         GpuDevice&           gpu;
         GpuResources&        res;
         const RendererState& state;
-        // Resolucion INTERNA del render (mayor que la ventana con SSAA) y
-        // tamano de PRESENTACION: este pase es justo el que baja de una a otra.
+        // INTERNAL render resolution (larger than the window with SSAA) and
+        // PRESENTATION size: this pass is precisely the one that goes down from one to the other.
         const VkExtent2D&    renderExtent;
         VkExtent2D           viewport;
         int                  currentFrame;
-        // Modo CONSTRUIDO, el que corresponde a los recursos que existen ahora.
+        // BUILT mode, the one that corresponds to the resources that exist now.
         AaMode               activeMode;
         VkFormat             swapChainFormat;
-        // Destino final: la imagen que muestrea la UI y que blitea el runtime.
+        // Final destination: the image that the UI samples and that the runtime blits.
         const VkImageView*   offscreenView;      // [kFramesInFlight]
-        // El depth de la escena, que comparte el framebuffer de composicion.
+        // The scene's depth, which the composition framebuffer shares.
         VkImageView          sceneDepthView;
-        // El render pass de composicion: este pase le fabrica un framebuffer
-        // alternativo que escribe en la imagen intermedia.
+        // The composition render pass: this pass builds an alternative framebuffer
+        // for it that writes into the intermediate image.
         VkRenderPass         compositeRenderPass;
-        // La profundidad del depth pre-pass y su sampler: el TAA reproyecta con
-        // ella (sin jitter, que es la geometrica).
+        // The depth from the depth pre-pass and its sampler: TAA reprojects with
+        // it (without jitter, which is the geometric one).
         const VkImageView*   prepassDepthView;   // [kFramesInFlight]
         VkSampler            prepassDepthSampler;
-        // El pool lo posee el Renderer porque tambien mide el frame entero.
+        // The pool is owned by the Renderer because it also measures the whole frame.
         VkQueryPool          queryPool;
         bool                 timestampsSupported;
         float                ssaaFactor;
@@ -61,46 +61,46 @@ public:
     AaPass(const AaPass&)            = delete;
     AaPass& operator=(const AaPass&) = delete;
 
-    // Los dos render passes de resolucion (uno de un attachment, el del TAA de
-    // dos) y los tres pipelines con su sampler, layouts y pools. Independientes
-    // del tamano y del modo: una sola vez en el init.
+    // The two resolve render passes (a one-attachment one, and TAA's two-attachment one)
+    // and the three pipelines with their sampler, layouts and pools. Independent
+    // of the size and the mode: only once in init.
     void createRenderPasses(const Context& ctx);
     void createPipelines(const Context& ctx);
     void destroyPipelinesAndRenderPasses(const Context& ctx);
-    // Imagen intermedia, historial del TAA, framebuffers y sets. Todo depende
-    // del tamano y del modo, asi que va colgado de
+    // Intermediate image, TAA history, framebuffers and sets. Everything depends
+    // on the size and the mode, so it hangs from
     // createOffscreenImages/destroyOffscreenImages.
     void createImages(const Context& ctx);
     void destroyImages(const Context& ctx);
 
-    // Lee la imagen intermedia (lo que escribio la composicion) y escribe la
-    // offscreen con el pipeline del modo activo. En None y en MSAA no graba
-    // NADA: la composicion ya habra escrito directamente en la offscreen.
+    // Reads the intermediate image (what the composition wrote) and writes the
+    // offscreen with the active mode's pipeline. In None and in MSAA it records
+    // NOTHING: the composition will have already written directly to the offscreen.
     void record(const Context& ctx, VkCommandBuffer cmd);
 
-    // Relevo prev<-curr y jitter de la proyeccion del frame. Se llama SIEMPRE,
-    // tambien con el TAA apagado: el motion blur reproyecta con las mismas dos
+    // prev<-curr handover and frame projection jitter. It is ALWAYS called,
+    // also with TAA off: motion blur reprojects with the same two
     // matrices.
     void updateFrameMatrices(const Context& ctx, const glm::mat4& view, const glm::mat4& proj);
 
-    // La proyeccion que usa el pass de escena: jittereada solo en TAA.
+    // The projection used by the scene pass: jittered only in TAA.
     const glm::mat4& jitteredProj() const { return m_jitteredProj; }
-    // Las dos que consumen el TAA y el motion blur.
+    // The two consumed by TAA and motion blur.
     const glm::mat4& currViewProj() const { return m_currViewProj; }
     const glm::mat4& prevViewProj() const { return m_prevViewProj; }
-    // El framebuffer al que tiene que escribir la composicion cuando hay pass
-    // de resolucion detras. VK_NULL_HANDLE si no lo hay.
+    // The framebuffer the composition has to write to when there is a
+    // resolve pass behind it. VK_NULL_HANDLE if there is none.
     VkFramebuffer compositeFramebuffer(int frame) const { return m_srcFramebuffer[frame]; }
-    // Si este frame llego a escribir el par [0,1] del pool.
+    // Whether this frame got to write the pair [0,1] of the pool.
     bool passStamped(int frame) const { return m_passStamped[frame]; }
 
 private:
-    // Destino alternativo de la composicion, a resolucion INTERNA.
+    // Alternative destination of the composition, at INTERNAL resolution.
     VkImage        m_srcImage[kFramesInFlight]       = {};
     VkDeviceMemory m_srcMemory[kFramesInFlight]      = {};
     VkImageView    m_srcView[kFramesInFlight]        = {};
     VkFramebuffer  m_srcFramebuffer[kFramesInFlight] = {};
-    // Pass de resolucion: escribe en la offscreen a tamano de ventana.
+    // Resolve pass: writes into the offscreen at window size.
     VkRenderPass   m_renderPass                      = VK_NULL_HANDLE;
     VkFramebuffer  m_framebuffer[kFramesInFlight]    = {};
     VkSampler      m_sampler                         = VK_NULL_HANDLE;
@@ -111,7 +111,7 @@ private:
     VkPipeline       m_fxaaPipeline                  = VK_NULL_HANDLE;
     VkPipelineLayout m_ssaaPipelineLayout            = VK_NULL_HANDLE;
     VkPipeline       m_ssaaPipeline                  = VK_NULL_HANDLE;
-    // TAA: historial, su render pass de dos attachments y sus sets de tres.
+    // TAA: history, its two-attachment render pass and its three-binding sets.
     VkImage        m_historyImage[kFramesInFlight]       = {};
     VkDeviceMemory m_historyMemory[kFramesInFlight]      = {};
     VkImageView    m_historyView[kFramesInFlight]        = {};
@@ -123,14 +123,14 @@ private:
     VkPipelineLayout      m_taaPipelineLayout            = VK_NULL_HANDLE;
     VkPipeline            m_taaPipeline                  = VK_NULL_HANDLE;
     bool                  m_historyValid                 = false;
-    // Jitter y matrices del frame.
+    // Jitter and matrices of the frame.
     uint32_t   m_jitterIndex  = 0;
     glm::vec2  m_jitter       = glm::vec2(0.0f);
     glm::mat4  m_jitteredProj = glm::mat4(1.0f);
     glm::mat4  m_prevViewProj = glm::mat4(1.0f);
     glm::mat4  m_currViewProj = glm::mat4(1.0f);
-    // Si el frame llego a escribir el par [0,1]; el pool y la medida son
-    // del Renderer, que con el mismo pool cronometra el frame entero.
+    // Whether the frame got to write the pair [0,1]; the pool and the measurement belong
+    // to the Renderer, which with the same pool times the whole frame.
     bool m_passStamped[kFramesInFlight] = {};
 };
 

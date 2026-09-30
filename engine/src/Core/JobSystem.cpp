@@ -9,31 +9,31 @@ namespace DonTopo
         if (threads == 0)
         {
             const unsigned hw = std::thread::hardware_concurrency();
-            // hw puede devolver 0 si el SO no lo sabe; el clamp lo cubre.
+            // hw may return 0 if the OS does not know; the clamp covers it.
             const unsigned avail = (hw > 1) ? (hw - 1) : 1;
             threads = std::clamp(avail, 2u, 8u);
         }
 
-        // El lock se mantiene durante todo el spawn: si no, dos start()
-        // concurrentes pueden pasar los dos el "if (!m_threads.empty())"
-        // (check-then-act sin protección) y arrancar el doble de hilos. Es
-        // seguro tenerlo cogido aquí: un worker recién creado simplemente se
-        // bloquea en m_cv.wait hasta que este scope suelte el mutex, no hay
+        // The lock is held for the whole spawn: otherwise two concurrent start()
+        // calls could both pass the "if (!m_threads.empty())"
+        // (unprotected check-then-act) and start twice the threads. It is
+        // safe to hold it here: a freshly created worker simply
+        // blocks in m_cv.wait until this scope releases the mutex, there is no
         // deadlock.
         std::unique_lock<std::mutex> lock(m_mutex);
 
-        // Esperar a que un shutdown() concurrente termine DEL TODO (incluida
-        // su limpieza final de m_queue/m_cancelled) antes de mirar si hay
-        // que arrancar. Sin esto: un shutdown() ganador mueve m_threads y lo
-        // deja vacío, suelta el mutex para hacer join (lento) de los hilos
-        // viejos, y en esa ventana un start() vería m_threads vacío,
-        // lanzaría un pool nuevo y ya arrancado — para que el shutdown()
-        // viejo, al re-adquirir el mutex, le vaciara la cola al pool NUEVO
-        // con su m_queue.clear() de cierre. m_shuttingDown cierra esa
-        // ventana: mientras siga puesto, start() no toca nada.
+        // Wait for a concurrent shutdown() to finish COMPLETELY (including
+        // its final m_queue/m_cancelled cleanup) before checking whether we have
+        // to start. Without this: a winning shutdown() moves m_threads and leaves it
+        // empty, releases the mutex to join (slow) the old threads, and in that
+        // window a start() would see m_threads empty and
+        // launch a new, already running pool — so that the old shutdown(),
+        // when re-acquiring the mutex, would empty the queue of the NEW pool
+        // with its closing m_queue.clear(). m_shuttingDown closes that
+        // window: while it is set, start() touches nothing.
         m_shutdownCv.wait(lock, [this] { return !m_shuttingDown; });
 
-        if (!m_threads.empty()) return;   // ya arrancado
+        if (!m_threads.empty()) return;   // already started
         m_stop = false;
 
         m_threads.reserve(threads);
@@ -47,49 +47,49 @@ namespace DonTopo
         {
             std::unique_lock<std::mutex> lock(m_mutex);
 
-            // Otra llamada a shutdown() ya está en marcha (desde otro hilo:
-            // dos shutdown() manuales, o uno manual junto al del destructor
-            // al final del mismo scope). En vez de retornar ya -que es lo
-            // que hacía la guarda original-, ESPERAMOS a que la ganadora
-            // termine de drenar, notificar a los workers y hacer join, y
-            // retornamos justo después: para esta llamada ya no queda nada
-            // que hacer, todo lo que había que parar ya está parado. Si no
-            // esperáramos, "shutdown() ha retornado" dejaría de significar
-            // "no queda ningún worker vivo" para el que pierde la carrera:
-            // podría retornar con la ganadora todavía bloqueada en join(), y
-            // si ese que pierde es el destructor, destruye
-            // m_mutex/m_cv/m_queue con workers reales todavía usándolos.
+            // Another shutdown() call is already in progress (from another thread:
+            // two manual shutdown() calls, or a manual one next to the destructor's
+            // at the end of the same scope). Instead of returning right away -which is
+            // what the original guard did-, we WAIT for the winner to
+            // finish draining, notifying the workers and joining, and we
+            // return right after: for this call there is nothing left
+            // to do, everything that had to be stopped is already stopped. If we
+            // did not wait, "shutdown() has returned" would stop meaning
+            // "no worker is alive" for the one that loses the race:
+            // it could return with the winner still blocked in join(), and
+            // if the loser is the destructor, it destroys
+            // m_mutex/m_cv/m_queue with real workers still using them.
             if (m_shuttingDown)
             {
                 m_shutdownCv.wait(lock, [this] { return !m_shuttingDown; });
                 return;
             }
 
-            // Idempotencia para el caso puramente secuencial (nadie más
-            // llamando a la vez): si no hay hilos que parar es que ya se
-            // hizo shutdown del todo antes y nadie lo está haciendo ahora
-            // -si lo estuviera, la rama de arriba ya nos habría hecho
-            // esperar y retornar-. Nótese que esta guarda YA NO es la que
-            // evita perder jobs en la carrera concurrente -eso ahora lo
-            // hace la rama de arriba esperando en vez de retornar ya-; sin
-            // ella, una llamada secuencial redundante (p.ej. el destructor
-            // tras un shutdown() manual) repetiría el "vaciar, notificar,
-            // unir nada, limpiar nada" entero sin hacer daño -m_threads y
-            // m_queue ya están vacíos-, solo trabajo de más.
+            // Idempotence for the purely sequential case (nobody else
+            // calling at the same time): if there are no threads to stop, a full
+            // shutdown was already done before and nobody is doing it now
+            // -if someone were, the branch above would already have made us
+            // wait and return-. Note that this guard is NO LONGER the one that
+            // avoids losing jobs in the concurrent race -that is now done by
+            // the branch above by waiting instead of returning right away-; without
+            // it, a redundant sequential call (e.g. the destructor
+            // after a manual shutdown()) would repeat the whole "empty, notify,
+            // join nothing, clean nothing" without harm -m_threads and
+            // m_queue are already empty-, just extra work.
             if (m_threads.empty()) return;
 
             m_shuttingDown = true;
             m_stop         = true;
-            // Vaciar el vector aquí, bajo el lock, es lo que hace que
-            // m_threads.empty() sea una lectura fiable para submit()/
-            // threadCount()/start()/otro shutdown() mientras el join (lento,
-            // fuera del lock) está en marcha.
+            // Emptying the vector here, under the lock, is what makes
+            // m_threads.empty() a reliable read for submit()/
+            // threadCount()/start()/another shutdown() while the join (slow,
+            // outside the lock) is in progress.
             threadsToJoin = std::move(m_threads);
-            // move-asignación deja la fuente "válida pero no especificada",
-            // no garantiza vacío por norma — en la práctica todas las
-            // implementaciones la dejan vacía, pero la guarda de arriba
-            // (m_threads.empty()) depende de que lo esté SIEMPRE. clear()
-            // convierte ese detalle de implementación en garantía real.
+            // move-assignment leaves the source "valid but unspecified",
+            // it does not guarantee empty by the standard — in practice all
+            // implementations leave it empty, but the guard above
+            // (m_threads.empty()) depends on it being so ALWAYS. clear()
+            // turns that implementation detail into a real guarantee.
             m_threads.clear();
         }
         m_cv.notify_all();
@@ -103,9 +103,9 @@ namespace DonTopo
             m_cancelled.clear();
             m_shuttingDown = false;
         }
-        // Fuera del lock: a quien esperaba (otro shutdown() perdedor, o un
-        // start() que aguardaba su turno) le basta con despertar y volver a
-        // adquirir el mutex, no hace falta tenerlo cogido para notificar.
+        // Outside the lock: whoever was waiting (another losing shutdown(), or a
+        // start() waiting for its turn) only needs to wake up and re-acquire
+        // the mutex, it does not need to be held to notify.
         m_shutdownCv.notify_all();
     }
 
@@ -174,44 +174,44 @@ namespace DonTopo
                 std::unique_lock<std::mutex> lock(m_mutex);
                 m_cv.wait(lock, [this] { return m_stop || !m_queue.empty(); });
 
-                // Con m_stop y cola vacía se sale. Con m_stop y cola llena NO se
-                // sale: shutdown() promete drenar lo encolado. Al revés, un
-                // Load Scene cancelado a medias dejaría GameObjects sin mesh y
-                // sin nadie que lo reporte.
+                // With m_stop and an empty queue it exits. With m_stop and a full queue it does NOT
+                // exit: shutdown() promises to drain what was enqueued. Otherwise, a
+                // Load Scene cancelled halfway would leave GameObjects without a mesh and
+                // with nobody to report it.
                 if (m_queue.empty()) return;
 
                 job = std::move(m_queue.front());
                 m_queue.pop_front();
 
                 if (m_cancelled.erase(job.id) > 0)
-                    continue;   // cancelado antes de arrancar: ni se ejecuta
+                    continue;   // cancelled before starting: it is not even run
 
                 ++m_inFlight;
             }
 
-            // Una excepción escapando de aquí es std::terminate: el hilo no
-            // tiene a nadie por encima que la capture. Cada job de verdad ya
-            // convierte sus fallos en un string de error, pero el catch(...) es
-            // la red de seguridad de que ninguno se olvide.
+            // An exception escaping from here is std::terminate: the thread has
+            // nobody above it to catch it. Every real job already
+            // converts its failures into an error string, but the catch(...) is
+            // the safety net so that none is forgotten.
             try { job.fn(); }
             catch (...) { }
 
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
                 --m_inFlight;
-                // La marca de cancelación se retira TAMBIÉN aquí, no solo al
-                // desencolar. Un cancel() que llega con el job ya corriendo no
-                // lo puede parar —eso ya lo dice el header: un Assimp::ReadFile
-                // no se interrumpe a medias— pero su id se quedaba en el set
-                // para el resto de la vida del pool, porque el worker ya lo
-                // había desencolado y nadie iba a volver a mirarlo. Y ese es
-                // justo el caso que se da de verdad: AsyncAssetLoader cancela
-                // cargas en vuelo, así que una sesión larga de editor con
-                // muchos Load Scene hacía crecer el set y no bajarlo nunca.
+                // The cancellation mark is removed HERE TOO, not only when
+                // dequeuing. A cancel() that arrives with the job already running cannot
+                // stop it —the header already says so: an Assimp::ReadFile
+                // is not interrupted halfway— but its id stayed in the set
+                // for the rest of the pool's life, because the worker had already
+                // dequeued it and nobody was going to look at it again. And that is
+                // precisely the case that really happens: AsyncAssetLoader cancels
+                // in-flight loads, so a long editor session with
+                // many Load Scenes made the set grow and never shrink.
                 //
-                // Retirarla aquí no cambia nada de lo que ya estaba decidido: el
-                // job ha terminado, y quien descarta su resultado es el
-                // consumidor (pumpCompleted), que no consulta este set.
+                // Removing it here changes nothing of what was already decided: the
+                // job has finished, and whoever discards its result is the
+                // consumer (pumpCompleted), which does not consult this set.
                 m_cancelled.erase(job.id);
             }
         }

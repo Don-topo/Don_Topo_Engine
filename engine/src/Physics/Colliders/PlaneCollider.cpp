@@ -11,10 +11,10 @@
 using namespace physx;
 
 namespace {
-    // Mismo truco que CapsuleCollider: PxPlaneGeometry define la normal del
-    // plano como el eje X local del shape. Esta rotación fija (90° sobre Z)
-    // mapea ese eje X a Y, dejando la normal por defecto apuntando "arriba"
-    // en el espacio local del actor.
+    // Same trick as CapsuleCollider: PxPlaneGeometry defines the plane normal as
+    // the local X axis of the shape. This fixed rotation (90° about Z)
+    // maps that X axis to Y, leaving the default normal pointing "up"
+    // in the local space of the actor.
     PxQuat axisCorrection() { return PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f)); }
 }
 #endif
@@ -36,7 +36,7 @@ PlaneCollider::PlaneCollider(void* actor, void* shape, const glm::vec3& center)
 PlaneCollider::~PlaneCollider()
 {
 #ifdef DT_PHYSX_ENABLED
-    // release() vía base PxActor (uniforme con el resto de colliders).
+    // release() through the PxActor base (uniform with the rest of the colliders).
     if (m_actor) static_cast<PxActor*>(m_actor)->release();
 #endif
 }
@@ -112,8 +112,8 @@ void PlaneCollider::teleport(const glm::mat4& worldTransform)
     glm::quat rotation;
     const PxTransform pose = poseFromWorld(worldTransform, &scale);
 
-    // Sin reset de velocidad: PlaneCollider siempre es kinematic, y PhysX
-    // prohíbe set{Linear,Angular}Velocity sobre un actor kinematic.
+    // No velocity reset: PlaneCollider is always kinematic, and PhysX
+    // forbids set{Linear,Angular}Velocity on a kinematic actor.
     static_cast<PxRigidDynamic*>(m_actor)->setGlobalPose(pose);
 #else
     (void)worldTransform;

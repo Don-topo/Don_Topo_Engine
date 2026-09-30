@@ -16,22 +16,22 @@ namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// Una luz del SSBO. viewPosR es la MISMA luz en view space: la calcula
-// la CPU para que el culling no necesite la matriz de vista.
+// A light from the SSBO. viewPosR is the SAME light in view space: the CPU computes it
+// so that the culling does not need the view matrix.
 struct FpLightGpu {
     glm::vec4 posRadius;
     glm::vec4 color;
     glm::vec4 viewPosR;
-    // Los dos campos de tipo de DonTopo::Light. Sin ellos el
-    // fragment shader no sabria evaluar un spot ni una directional
-    // por la ruta Forward+, y el binning no podria dejar la
-    // directional siempre visible.
-    glm::vec4 direction;    // xyz dir, w tipo
-    glm::vec4 params;       // range, cos interior, cos exterior, ancho
+    // The two type fields of DonTopo::Light. Without them the
+    // fragment shader would not know how to evaluate a spot or a directional
+    // through the Forward+ path, and the binning could not leave the
+    // directional always visible.
+    glm::vec4 direction;    // xyz dir, w type
+    glm::vec4 params;       // range, inner cos, outer cos, width
 };
 static_assert(sizeof(FpLightGpu) == 80, "FpLightGpu must stay at 80 bytes: it is the std430 stride of the light array");
 
-// Push constant compartida por los dos .comp.
+// Push constant shared by the two .comp files.
 struct FpPush {
     float    p00;
     float    p11;
@@ -49,10 +49,10 @@ void ForwardPlusPass::gridDims(const Context& ctx, RendererState::FpMode mode,
                                uint32_t& gridX, uint32_t& gridY,
                                uint32_t& gridZ, uint32_t& tileSize) const
 {
-    // Con renderExtent y NO con el del swapchain: con SSAA el render es
-    // mayor que la ventana, y dimensionar con el de la ventana dejaria a
-    // pbr.frag leyendo celdas fuera del buffer sin que la validacion diga
-    // nada (gl_FragCoord va en pixeles del target).
+    // With renderExtent and NOT the swapchain's: with SSAA the render is
+    // larger than the window, and sizing with the window's would leave
+    // pbr.frag reading cells outside the buffer without the validation saying
+    // anything (gl_FragCoord is in target pixels).
     if (mode == RendererState::FpMode::Clustered)
     {
         tileSize = kClusterTile;
@@ -69,9 +69,9 @@ void ForwardPlusPass::gridDims(const Context& ctx, RendererState::FpMode mode,
 
 void ForwardPlusPass::createPipelines(const Context& ctx)
 {
-    // Seis bindings. Los cuatro primeros los ve tambien pbr.frag (set 2); la
-    // profundidad y los contadores son solo del compute, y que el fragment
-    // shader no los declare es legal.
+    // Six bindings. The first four are also seen by pbr.frag (set 2); the
+    // depth and the counters are only the compute's, and it is legal for the fragment
+    // shader not to declare them.
     VkDescriptorSetLayoutBinding bindings[6]{};
     for (uint32_t i = 0; i < 6; i++)
     {
@@ -104,9 +104,9 @@ void ForwardPlusPass::createPipelines(const Context& ctx)
     if (vkCreateDescriptorPool(ctx.gpu.device(), &dpi, nullptr, &m_descPool) != VK_SUCCESS)
         throw std::runtime_error("failed to create forward+ descriptor pool!");
 
-    // El pipeline de culling declara el set en el indice 0; el de escena lo
-    // declara en el 2. Es el mismo VkDescriptorSet: un set encaja en
-    // cualquier indice mientras el VkDescriptorSetLayout coincida.
+    // The culling pipeline declares the set at index 0; the scene one
+    // declares it at 2. It is the same VkDescriptorSet: a set fits at
+    // any index as long as the VkDescriptorSetLayout matches.
     VkPushConstantRange pcr{};
     pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pcr.offset     = 0;
@@ -141,10 +141,10 @@ void ForwardPlusPass::createPipelines(const Context& ctx)
     makePipeline("shaders/light_cull_tiled.comp.spv",     m_tiledPipeline);
     makePipeline("shaders/light_cull_clustered.comp.spv", m_clusteredPipeline);
 
-    // Parametros, luces y contadores: no dependen del tamano, viven todo el
-    // proceso y se escriben desde la CPU cada frame (mapeo persistente, igual
-    // que el UBO). Los contadores ademas se LEEN: los escribe la GPU con
-    // atomicos y la CPU los recoge dos frames despues.
+    // Parameters, lights and counters: they do not depend on the size, live the whole
+    // process and are written from the CPU every frame (persistent mapping, like
+    // the UBO). The counters are also READ: the GPU writes them with
+    // atomics and the CPU collects them two frames later.
     const VkMemoryPropertyFlags hostFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     for (int f = 0; f < kFramesInFlight; f++)
@@ -160,16 +160,16 @@ void ForwardPlusPass::createPipelines(const Context& ctx)
         vkMapMemory(ctx.gpu.device(), m_lightMemory[f], 0, lightSize, 0, &m_lightMapped[f]);
         memset(m_lightMapped[f], 0, (size_t)lightSize);
 
-        // 4 uint: [0] suma de luces asignadas, [1] celdas no vacias,
-        // [2] celdas desbordadas, [3] sin usar (alineacion).
+        // 4 uint: [0] sum of assigned lights, [1] non-empty cells,
+        // [2] overflowed cells, [3] unused (alignment).
         ctx.res.createBuffer(sizeof(uint32_t) * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, hostFlags,
                              m_statsBuffer[f], m_statsMemory[f]);
         vkMapMemory(ctx.gpu.device(), m_statsMemory[f], 0, sizeof(uint32_t) * 4, 0, &m_statsMapped[f]);
         memset(m_statsMapped[f], 0, sizeof(uint32_t) * 4);
     }
 
-    // Queries propias: mezclarlas con las del SSAO o las del AA juntaria dos
-    // medidas.
+    // Own queries: mixing them with the SSAO's or the AA's would lump two
+    // measurements together.
     if (ctx.timestampsSupported)
     {
         VkQueryPoolCreateInfo qpi{};
@@ -190,8 +190,8 @@ void ForwardPlusPass::destroyPipelines(const Context& ctx)
     vkDestroyPipelineLayout(ctx.gpu.device(), m_pipelineLayout, nullptr);
     vkDestroyDescriptorPool(ctx.gpu.device(), m_descPool, nullptr);
     vkDestroyDescriptorSetLayout(ctx.gpu.device(), m_descLayout, nullptr);
-    // Los tres buffers mapeados en persistente no necesitan unmap: el mapeo
-    // muere con la memoria, igual que en el UBO y en el SSBO de instancias.
+    // The three persistently mapped buffers do not need unmap: the mapping
+    // dies with the memory, as with the UBO and the instance SSBO.
     for (int f = 0; f < kFramesInFlight; f++)
     {
         vkDestroyBuffer(ctx.gpu.device(), m_paramsBuffer[f], nullptr);
@@ -210,17 +210,17 @@ void ForwardPlusPass::destroyPipelines(const Context& ctx)
 
 void ForwardPlusPass::createBuffers(const Context& ctx)
 {
-    // Al MAYOR de las dos rejillas: asi cambiar de modo en caliente no
-    // recrea nada y no puede quedar un frame grabado con los buffers del modo
-    // anterior. La diferencia de memoria entre una y otra es despreciable al
-    // lado de tener dos juegos de buffers.
+    // To the LARGER of the two grids: that way switching mode at runtime does not
+    // recreate anything and a frame cannot be recorded with the buffers of the
+    // previous mode. The memory difference between one and the other is negligible
+    // next to having two sets of buffers.
     uint32_t gx = 0, gy = 0, gz = 0, ts = 0;
     gridDims(ctx, RendererState::FpMode::Tiled, gx, gy, gz, ts);
     uint32_t maxCells = gx * gy * gz;
     gridDims(ctx, RendererState::FpMode::Clustered, gx, gy, gz, ts);
     maxCells = std::max(maxCells, gx * gy * gz);
-    // Viewport degenerado: nada que dimensionar. El resto del frame ya se
-    // salta el pass entero.
+    // Degenerate viewport: nothing to size. The rest of the frame already skips
+    // the whole pass.
     if (maxCells == 0) return;
 
     for (int f = 0; f < kFramesInFlight; f++)
@@ -235,8 +235,8 @@ void ForwardPlusPass::createBuffers(const Context& ctx)
                              m_indexBuffer[f], m_indexMemory[f]);
     }
 
-    // Los sets de la vez anterior apuntan a buffers ya destruidos: reset y no
-    // free, igual que en el bloom y en el SSAO.
+    // The sets from the previous time point to already destroyed buffers: reset and not
+    // free, as in the bloom and the SSAO.
     vkResetDescriptorPool(ctx.gpu.device(), m_descPool, 0);
 
     for (int f = 0; f < kFramesInFlight; f++)
@@ -257,9 +257,9 @@ void ForwardPlusPass::createBuffers(const Context& ctx)
         bufs[4].buffer = m_statsBuffer[f];
         for (int i = 0; i < 5; i++) bufs[i].range = VK_WHOLE_SIZE;
 
-        // La profundidad del depth pre-pass, la misma que muestrea el SSAO, y
-        // con su mismo sampler NEAREST: es D32_SFLOAT y el culling la lee a
-        // texel exacto.
+        // The depth from the depth pre-pass, the same one SSAO samples, and
+        // with the same NEAREST sampler: it is D32_SFLOAT and the culling reads it at
+        // exact texel.
         VkDescriptorImageInfo depthInfo{};
         depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         depthInfo.imageView   = ctx.depthView[f];
@@ -318,17 +318,17 @@ void ForwardPlusPass::uploadFrameData(const Context& ctx, const glm::mat4& view,
                                       const std::vector<Light>& lights,
                                       const std::vector<float>& lightRadii, float defaultRadius)
 {
-    // Se escribe SIEMPRE, tambien en Off: pbr.frag lee fp.mode de aqui para
-    // decidir por que rama va, y con 0 no toca ni un buffer mas.
+    // It is ALWAYS written, also in Off: pbr.frag reads fp.mode from here to
+    // decide which branch to take, and with 0 it does not touch a single extra buffer.
     if (!m_paramsMapped[ctx.currentFrame]) return;
 
     uint32_t gx = 0, gy = 0, gz = 0, ts = 0;
     gridDims(ctx, ctx.activeMode, gx, gy, gz, ts);
 
-    // zNear/zFar salen de la propia proyeccion (RH_ZO): p22 = f/(n-f) y
-    // p32 = f*n/(n-f), asi que n = p32/p22 y f = p32/(p22+1). Es la unica
-    // forma de que la rejilla siga a la camara del CameraComponent en Play
-    // sin duplicar aqui los planos de la camara del editor.
+    // zNear/zFar come from the projection itself (RH_ZO): p22 = f/(n-f) and
+    // p32 = f*n/(n-f), so n = p32/p22 and f = p32/(p22+1). It is the only
+    // way for the grid to follow the CameraComponent's camera in Play
+    // without duplicating here the editor camera's planes.
     const float p22 = proj[2][2];
     const float p32 = proj[3][2];
     const float zNear = (p22 != 0.0f) ? p32 / p22 : 0.1f;
@@ -346,7 +346,7 @@ void ForwardPlusPass::uploadFrameData(const Context& ctx, const glm::mat4& view,
     fp.numLights  = count;
     fp.zNear      = zNear;
     fp.zFar       = zFar;
-    // Inverso del reparto logaritmico de light_cull_clustered.comp:
+    // Inverse of the logarithmic split of light_cull_clustered.comp:
     // slice = log2(z)*scale + bias.
     const float logRatio = std::log2(std::max(zFar / zNear, 1.0001f));
     fp.sliceScale = (float)gz / logRatio;
@@ -358,13 +358,13 @@ void ForwardPlusPass::uploadFrameData(const Context& ctx, const glm::mat4& view,
         FpLightGpu* dst = (FpLightGpu*)m_lightMapped[ctx.currentFrame];
         for (uint32_t i = 0; i < count; i++)
         {
-            // El radio es el unico dato que Light no lleva: por luz si el
-            // usuario lo ha dado, y si no el global. En el UBO no cabe sin
-            // mover el layout std140 que declaran 5 shaders.
+            // The radius is the only piece of data that Light does not carry: per light if the
+            // user has given it, and if not the global one. It does not fit in the UBO without
+            // moving the std140 layout that 5 shaders declare.
             const float radius = (i < lightRadii.size()) ? lightRadii[i] : defaultRadius;
             const glm::vec3 wp = glm::vec3(lights[i].position);
-            // La misma luz en view space, para que el culling no necesite
-            // la matriz de vista ni la recalcule por celda.
+            // The same light in view space, so that the culling does not need
+            // the view matrix or recompute it per cell.
             const glm::vec3 vp = glm::vec3(view * glm::vec4(wp, 1.0f));
             dst[i].posRadius = glm::vec4(wp, radius);
             dst[i].color     = lights[i].color;
@@ -392,14 +392,14 @@ void ForwardPlusPass::restoreParams(const ParamsGpu& saved)
 
 void ForwardPlusPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& proj)
 {
-    // Apagado: ni un comando. Es lo que hace que la imagen y el coste sean
-    // exactamente los de antes de la feature.
+    // Off: not a single command. It is what makes the image and the cost be
+    // exactly those from before the feature.
     if (ctx.activeMode == RendererState::FpMode::Off) { m_gpuMs = 0.0f; return; }
     if (m_sets[ctx.currentFrame] == VK_NULL_HANDLE) return;
 
-    // Contadores de hace dos frames en este mismo slot: su fence ya la espero
-    // drawFrame, asi que la lectura no bloquea. Se leen ANTES de ponerlos a
-    // cero para este frame.
+    // Counters from two frames ago in this same slot: its fence was already awaited by
+    // drawFrame, so the read does not block. They are read BEFORE zeroing
+    // them for this frame.
     if (m_statsMapped[ctx.currentFrame])
     {
         const uint32_t* s = (const uint32_t*)m_statsMapped[ctx.currentFrame];
@@ -437,9 +437,9 @@ void ForwardPlusPass::record(const Context& ctx, VkCommandBuffer cmd, const glm:
     gridDims(ctx, ctx.activeMode, gx, gy, gz, ts);
 
     FpPush push{};
-    // La proyeccion EFECTIVA del frame, con el Y-flip de Vulkan dentro: es la
-    // misma con la que se grabo el depth pre-pass, asi que reconstruir
-    // profundidad y levantar los planos del tile es consistente.
+    // The frame's EFFECTIVE projection, with Vulkan's Y-flip inside: it is the
+    // same one the depth pre-pass was recorded with, so reconstructing
+    // depth and lifting the tile's planes is consistent.
     push.p00     = proj[0][0];
     push.p11     = proj[1][1];
     push.p22     = proj[2][2];
@@ -455,17 +455,17 @@ void ForwardPlusPass::record(const Context& ctx, VkCommandBuffer cmd, const glm:
 
     if (ctx.activeMode == RendererState::FpMode::Tiled)
     {
-        // Un workgroup de 16x16 POR TILE: el shader lee un texel por
-        // invocacion para reducir el maximo de profundidad del tile.
+        // One 16x16 workgroup PER TILE: the shader reads one texel per
+        // invocation to reduce the tile's maximum depth.
         vkCmdDispatch(cmd, gx, gy, 1);
     }
     else
     {
-        // Una invocacion por cluster, en grupos de 4x4x4.
+        // One invocation per cluster, in groups of 4x4x4.
         vkCmdDispatch(cmd, (gx + 3) / 4, (gy + 3) / 4, (gz + 3) / 4);
     }
 
-    // La rejilla y la lista de indices las lee pbr.frag en el pass de escena.
+    // The grid and the index list are read by pbr.frag in the scene pass.
     VkMemoryBarrier mb{};
     mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -473,7 +473,7 @@ void ForwardPlusPass::record(const Context& ctx, VkCommandBuffer cmd, const glm:
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          0, 1, &mb, 0, nullptr, 0, nullptr);
 
-    // Y los contadores los lee la CPU dos frames despues.
+    // And the counters are read by the CPU two frames later.
     VkMemoryBarrier hostMb{};
     hostMb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     hostMb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;

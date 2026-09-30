@@ -1,8 +1,8 @@
-// Test headless de la caché de texturas compartidas (sin device). Handles
-// falsos con identidad propia: dos objetos solo comparten imagen si la entrada
-// NO se ha creado dos veces. Lo que se prueba son las dos formas de romperlo:
-// compartir de más (dos texturas distintas en la misma imagen) y liberar de
-// más (soltar un personaje y dejar a sus gemelos muestreando memoria libre).
+// Headless test of the shared texture cache (no device). Fake handles with their
+// own identity: two objects only share an image if the entry has NOT been created
+// twice. What is tested are the two ways to break it: sharing too much (two
+// different textures on the same image) and releasing too much (dropping one
+// character and leaving its twins sampling freed memory).
 #include "DonTopo/Renderer/SharedTextureCache.h"
 
 #include <cstdio>
@@ -62,7 +62,7 @@ static void test_release_destroys_at_zero()
     c.release(h, destruir);
     CHECK(g_destruidas == 1);
     CHECK(!c.contains(h));
-    c.release(h, destruir);                 // ya no está: no-op
+    c.release(h, destruir);                 // no longer there: no-op
     CHECK(g_destruidas == 1);
 }
 
@@ -78,11 +78,11 @@ static void test_empty_key_is_not_cached()
     CHECK(h1 != h2);
     CHECK(c.size() == 0u);
     c.release(h1, [](const int&) { ++g_destruidas; });
-    CHECK(g_destruidas == 0);               // no era suya: el llamante sigue su camino
+    CHECK(g_destruidas == 0);               // it was not theirs: the caller goes on its way
 }
 
-// Si crear falla (handle vacío), no queda una entrada nula que devolver al
-// siguiente: se vuelve a intentar.
+// If creation fails (empty handle), no null entry is left to hand out to the
+// next caller: it tries again.
 static void test_failed_create_is_not_cached()
 {
     reiniciar();

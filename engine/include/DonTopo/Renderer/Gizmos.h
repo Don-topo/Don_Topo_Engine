@@ -13,12 +13,12 @@ struct GizmoVertex {
     glm::vec3 color;
 };
 
-// Sistema de dibujo de depuración sin iluminación (líneas), estilo Unity
-// Gizmos/Debug.DrawLine. API estática respaldada por un singleton interno;
-// Renderer controla init/draw/clear (ciclo de vida), el resto del engine
-// solo llama a Gizmos::drawX(...) durante su update, antes de que
-// Renderer::drawFrame() se invoque ese mismo ciclo — las líneas dibujadas
-// no persisten al frame siguiente salvo que se vuelvan a llamar.
+// Unlit debug drawing system (lines), Unity-style
+// Gizmos/Debug.DrawLine. Static API backed by an internal singleton;
+// Renderer controls init/draw/clear (lifecycle), the rest of the engine
+// only calls Gizmos::drawX(...) during its update, before
+// Renderer::drawFrame() is invoked in that same cycle. The lines drawn
+// do not persist to the next frame unless they are called again.
 class Gizmos {
 public:
     static void setEnabled(bool enabled);
@@ -38,58 +38,58 @@ public:
     static void drawWireCapsule(const glm::mat4& transform, const glm::vec3& center,
                                 float radius, float halfHeight, const glm::vec3& color);
     static void drawAxes(const glm::mat4& transform, float scale = 1.0f);
-    // depthZeroToOne: la matriz viewProj puede venir de dos convenciones de
-    // profundidad distintas. glm::perspective/ortho por defecto (sin
-    // GLM_FORCE_DEPTH_ZERO_TO_ONE) son NO: near -> z_ndc=-1, pensadas pa
-    // OpenGL. CameraComponent::projectionMatrix usa *_ZO (near -> z_ndc=0)
-    // porque Vulkan clipea 0<=z<=w. Reconstruir corners con el z_ndc
-    // equivocado descoloca la cara cercana: en ortográfica se va detrás del
-    // ojo, en perspectiva se queda por delante del near plane. El default
-    // false mantiene intactos los callers existentes (p.ej. sandbox/main.cpp,
-    // que usa una matriz NO de glm sin tocar).
+    // depthZeroToOne: the viewProj matrix can come from two different depth
+    // conventions. glm::perspective/ortho by default (without
+    // GLM_FORCE_DEPTH_ZERO_TO_ONE) are NO: near -> z_ndc=-1, meant for
+    // OpenGL. CameraComponent::projectionMatrix uses *_ZO (near -> z_ndc=0)
+    // because Vulkan clips 0<=z<=w. Reconstructing corners with the wrong
+    // z_ndc misplaces the near face: in orthographic it goes behind the
+    // eye, in perspective it stays in front of the near plane. The default
+    // false keeps existing callers intact (e.g. sandbox/main.cpp,
+    // which uses a NO glm matrix untouched).
     static void drawFrustum(const glm::mat4& viewProj, const glm::vec3& color,
                             bool depthZeroToOne = false);
 
-    // Uso exclusivo de Renderer.
-    // colorFormat: no usado (el renderPass ya lo lleva), se mantiene por simetría con Skybox::init.
-    // samples: muestras del render pass en el que se dibujan (el de composición).
-    // Lo impone el modo de anti-aliasing del Renderer.
+    // For Renderer's exclusive use.
+    // colorFormat: unused (the renderPass already carries it), kept for symmetry with Skybox::init.
+    // samples: samples of the render pass they are drawn in (the composition one).
+    // Imposed by the Renderer's anti-aliasing mode.
     static void init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
                      VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
-    // Rehace SOLO el pipeline, para cuando el MSAA cambia el número de muestras:
-    // en Vulkan 1.0 rasterizationSamples no es estado dinámico.
+    // Rebuilds ONLY the pipeline, for when MSAA changes the sample count:
+    // in Vulkan 1.0 rasterizationSamples is not dynamic state.
     static void recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples);
     static void shutdown(GpuDevice& gpu);
 
-    // ── Consumir VACÍA, y por eso no hay un clear() que se pueda olvidar ─────
+    // ── Consuming EMPTIES, and that is why there is no clear() that can be forgotten ─────
     //
-    // Antes esto era un `vertices()` que solo miraba, más un `clear()` aparte
-    // que el consumidor tenía que acordarse de llamar. Se olvidó: el camino de
-    // DirectX 12 leía los vértices y no vaciaba, así que el vector crecía frame
-    // tras frame hasta agotar kMaxGizmoVertices y lo único que se veía era el
-    // aviso de capacidad (H16). Se arregló añadiendo un clear() a mano, que es
-    // exactamente lo mismo que se puede volver a olvidar en el siguiente
+    // This used to be a `vertices()` that only looked, plus a separate `clear()`
+    // that the consumer had to remember to call. It was forgotten: the DirectX 12
+    // path read the vertices and did not empty them, so the vector grew frame
+    // after frame until kMaxGizmoVertices was exhausted and the only thing seen was the
+    // capacity warning (H16). It was fixed by adding a clear() by hand, which is
+    // exactly the same thing that can be forgotten again in the next
     // backend.
     //
-    // Sube y dibuja los vértices de este ciclo, y deja el buffer vacío. Vacía
-    // SIEMPRE, aunque no llegue a dibujar —gizmos apagados, o init() todavía no
-    // llamado—: si el vaciado dependiera de haber dibujado, el caso de no
-    // dibujar volvería a acumular para siempre.
+    // Uploads and draws this cycle's vertices, and leaves the buffer empty. It empties
+    // ALWAYS, even if it does not get to draw (gizmos off, or init() not yet
+    // called): if the emptying depended on having drawn, the not-drawing case
+    // would go back to accumulating forever.
     static void draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex);
 
-    // Se lleva los vértices de este ciclo y deja el buffer vacío. Para los
-    // backends que no son Vulkan, que los suben por su cuenta
+    // Takes this cycle's vertices and leaves the buffer empty. For the
+    // non-Vulkan backends, which upload them on their own
     // (D3D12Renderer::submitDebugLines).
     static std::vector<GizmoVertex> takeVertices();
 
-    // Tira lo acumulado SIN dibujarlo. Solo para el frame que no se llega a
-    // dibujar —swapchain obsoleto, o el selector de proyectos delante—: si no,
-    // esas líneas se arrastrarían duplicadas al siguiente frame que sí dibuje.
-    // Se llama discard y no clear a propósito: obliga a justificar por qué se
-    // tira el trabajo, en vez de parecerse a "ya lo he consumido".
+    // Throws away what has accumulated WITHOUT drawing it. Only for a frame that does not get
+    // drawn (obsolete swapchain, or the project selector in front): otherwise
+    // those lines would be carried over duplicated to the next frame that does draw.
+    // It is called discard and not clear on purpose: it forces you to justify why the
+    // work is thrown away, instead of looking like "I already consumed it".
     static void discard();
 
-    // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
+    // Must match Renderer::MAX_FRAMES (checked with static_assert in Renderer.cpp).
     static constexpr int kFramesInFlight = 2;
 
 private:

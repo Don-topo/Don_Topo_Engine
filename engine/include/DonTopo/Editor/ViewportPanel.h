@@ -11,162 +11,163 @@ class Camera;
 class Scene;
 struct EditorContext;
 
-// Qué manipula el gizmo del viewport sobre el objeto seleccionado. Uno de los
-// tres a la vez, como en Unity: los tres juegos de handles a la vez serían
-// imposibles de clicar.
+// What the viewport gizmo manipulates on the selected object. One of the three at
+// a time, as in Unity: all three sets of handles at once would be impossible to
+// click.
 //
-// Enum propio y no `ImGuizmo::OPERATION` para no meter ImGuizmo.h —y con él
-// imgui.h— en un header que incluyen la toolbar y los tests. La traducción a
-// los enums de la librería vive en el .cpp, en un solo sitio.
+// Own enum and not `ImGuizmo::OPERATION` so as not to pull ImGuizmo.h (and with it
+// imgui.h) into a header that the toolbar and the tests include. The translation
+// to the library enums lives in the .cpp, in a single place.
 enum class GizmoMode { Translate, Rotate, Scale };
 
-// Etiqueta del canal que edita cada modo, tal y como la escriben el Log Console
-// y el panel Properties: "Position", "Rotation", "Scale". Es lo que hace que la
-// línea del log del gizmo sea indistinguible de la que emite Properties al
-// editar el mismo valor a mano.
+// Label of the channel that each mode edits, exactly as the Log Console and the
+// Properties panel write it: "Position", "Rotation", "Scale". It is what makes the
+// gizmo log line indistinguishable from the one Properties emits when editing the
+// same value by hand.
 const char* gizmoChannelLabel(GizmoMode mode);
 
-// Los tres números que enseña el log tras un arrastre, sacados de la matriz
-// LOCAL resultante: la posición en unidades de mundo, la rotación en GRADOS
-// (no radianes: el inspector enseña grados) o la escala como factor.
+// The three numbers the log shows after a drag, taken from the resulting LOCAL
+// matrix: the position in world units, the rotation in DEGREES (not radians: the
+// inspector shows degrees) or the scale as a factor.
 //
-// Va junto a gizmoChannelLabel y no dentro de él porque es lo que de verdad se
-// puede equivocar — un copia-pega que deje el modo Rotate informando de la
-// posición compila igual de bien y solo se nota leyendo el log.
+// It sits next to gizmoChannelLabel and not inside it because it is what can
+// really go wrong: a copy-paste that leaves Rotate mode reporting the position
+// compiles just as well and is only noticed by reading the log.
 glm::vec3 gizmoLoggedValue(GizmoMode mode, const glm::mat4& localTransform);
 
-// Qué se le pide a ImGuizmo para cada modo: `outOperation` es un
-// `ImGuizmo::OPERATION` y `outSpace` un `ImGuizmo::MODE`, los dos como int para
-// no arrastrar ImGuizmo.h —y con él imgui.h— hasta este header. Quien los use
-// los vuelve a castear; quien los pruebe los compara contra los enums de
-// verdad.
+// What is asked of ImGuizmo for each mode: `outOperation` is an
+// `ImGuizmo::OPERATION` and `outSpace` an `ImGuizmo::MODE`, both as int so as not
+// to drag ImGuizmo.h (and with it imgui.h) into this header. Whoever uses them
+// casts them back; whoever tests them compares them against the real enums.
 //
-// El espacio NO es el mismo en los tres, y es una decisión, no un descuido:
-//   - Translate → WORLD: arrastrar "X" mueve en la X del mundo.
-//   - Rotate    → LOCAL: los anillos salen pegados a los ejes del objeto; en
-//     WORLD se dibujan alineados al mundo y, con el objeto inclinado, no se
-//     corresponden con nada de lo que se ve.
-//   - Scale     → LOCAL obligatorio. ImGuizmo hace
-//     `ComputeContext(..., (operation & SCALE) ? LOCAL : mode)` y descarta lo
-//     que se le pase; se le pasa LOCAL para que la llamada no mienta.
+// The space is NOT the same in the three, and that is a decision, not an oversight:
+//   - Translate -> WORLD: dragging "X" moves along the world X.
+//   - Rotate    -> LOCAL: the rings stick to the object's axes; in
+//     WORLD they are drawn aligned to the world and, with a tilted object, they do
+//     not match anything that can be seen.
+//   - Scale     -> LOCAL is mandatory. ImGuizmo does
+//     `ComputeContext(..., (operation & SCALE) ? LOCAL : mode)` and discards what
+//     it is given; LOCAL is passed so the call does not lie.
 //
-// Está aquí fuera porque es lo ÚNICO del despacho por modo que se puede probar
-// sin GUI: mandar Rotate a TRANSLATE compila, corre y solo se ve en pantalla.
+// It is out here because it is the ONLY part of the per-mode dispatch that can be
+// tested without a GUI: sending Rotate to TRANSLATE compiles, runs and is only
+// visible on screen.
 void gizmoImGuizmoEnums(GizmoMode mode, int& outOperation, int& outSpace);
 
-// Matriz LOCAL que deja al objeto exactamente en newWorld, dado el
-// worldTransform de su padre (identidad si no tiene padre).
+// LOCAL matrix that leaves the object exactly at newWorld, given the
+// worldTransform of its parent (identity if it has no parent).
 //
-// ImGuizmo manipula una matriz de MUNDO, pero lo que la escena serializa, lo
-// que edita el panel Properties y lo que apila el undo es `localTransform`.
-// Escribir el mundo en el local funcionaría SOLO en las raíces: un hijo daría
-// el salto de aplicarle el transform del padre por segunda vez.
+// ImGuizmo manipulates a WORLD matrix, but what the scene serializes, what the
+// Properties panel edits and what the undo stacks is `localTransform`. Writing the
+// world into the local would work ONLY on roots: a child would jump by having the
+// parent's transform applied to it a second time.
 //
-// Vive fuera de la clase —y en el header— porque es el único trozo de la
-// manipulación que se puede probar sin GUI: la interacción de ratón no se
-// puede simular headless, la aritmética de matrices sí.
+// It lives outside the class (and in the header) because it is the only piece of
+// the manipulation that can be tested without a GUI: mouse interaction cannot be
+// simulated headless, matrix arithmetic can.
 glm::mat4 localFromWorld(const glm::mat4& parentWorld, const glm::mat4& newWorld);
 
-// Escribe t como localTransform del objeto con ese id, propaga el mundo a sus
-// hijos y teletransporta su collider si tiene. No-op si el id ya no existe.
+// Writes t as the localTransform of the object with that id, propagates the world
+// to its children and teleports its collider if it has one. No-op if the id no
+// longer exists.
 //
-// Es el cuerpo del comando de undo del manipulador, aquí fuera por lo mismo que
-// localFromWorld: es la parte que se puede afirmar sin GUI. El objeto se busca
-// por ID y no por puntero a propósito — entre apilar el comando y deshacerlo
-// caben un borrado y una carga de escena, y el GameObject reconstruido conserva
-// el id pero no la dirección.
+// It is the body of the manipulator's undo command, out here for the same reason
+// as localFromWorld: it is the part that can be asserted without a GUI. The
+// object is looked up by ID and not by pointer on purpose: between stacking the
+// command and undoing it a deletion and a scene load can happen, and the rebuilt
+// GameObject keeps the id but not the address.
 void applyLocalTransform(Scene& scene, uint64_t id, const glm::mat4& t);
 
-// Ventana "Viewport" — render 3D embebido (textura del Renderer) + gizmo de
-// ejes/wireframe de collider sobre la selección activa.
+// "Viewport" window: embedded 3D render (Renderer texture) + axes/collider
+// wireframe gizmo over the active selection.
 class ViewportPanel {
 public:
-    // viewportTexture es un handle opaco del backend activo (VkDescriptorSet
-    // con Vulkan, descriptor GPU con DirectX 12): solo se reenvía a
-    // ImGui::Image, que lo trata igual en los dos casos.
+    // viewportTexture is an opaque handle of the active backend (VkDescriptorSet
+    // with Vulkan, GPU descriptor with DirectX 12): it is only forwarded to
+    // ImGui::Image, which treats it the same in both cases.
     void draw(EditorContext& ctx, uint64_t viewportTexture, const glm::mat4& cameraView);
-    // Centra la cámara en ctx.selected (no-op si no hay selección). Usado
-    // por el atajo de teclado "F" en main.cpp vía EditorUI::focusSelected.
+    // Centers the camera on ctx.selected (no-op if there is no selection). Used
+    // by the "F" keyboard shortcut in main.cpp via EditorUI::focusSelected.
     void focusSelected(EditorContext& ctx, Camera& camera);
     bool isHovered() const { return m_hovered; }
     bool* GetOpenPtr() { return &m_open; }
-    // Área de imagen del panel en píxeles, la del último draw(). El Renderer
-    // renderiza EXACTAMENTE a este tamaño: si renderizara al de la ventana,
-    // ImGui reescalaría la imagen al dibujarla y ese filtrado bilineal se
-    // comería el escalonado (y con él la diferencia entre modos de
-    // anti-aliasing), además de deformar la escena cuando el aspect del panel
-    // no coincide con el de la ventana. (0,0) mientras el panel esté cerrado.
+    // Image area of the panel in pixels, the one from the last draw(). The Renderer
+    // renders EXACTLY at this size: if it rendered at the window size, ImGui would
+    // rescale the image when drawing it and that bilinear filtering would eat the
+    // stair-stepping (and with it the difference between anti-aliasing modes), and
+    // would also distort the scene when the panel aspect does not match the window's.
+    // (0,0) while the panel is closed.
     uint32_t contentWidth()  const { return m_contentWidth; }
     uint32_t contentHeight() const { return m_contentHeight; }
 
-    // Esquina superior izquierda de la IMAGEN en coordenadas de pantalla, y si
-    // el ratón está sobre ella (no sobre la ventana: un popup por encima no
-    // cuenta). Como la imagen se dibuja 1:1 con el render, restarle esta
-    // esquina al ratón da directamente el píxel del canvas de UI.
+    // Top-left corner of the IMAGE in screen coordinates, and whether the mouse is
+    // over it (not over the window: a popup on top does not count). Since the image
+    // is drawn 1:1 with the render, subtracting this corner from the mouse directly
+    // gives the UI canvas pixel.
     glm::vec2 imagePos()     const { return m_imagePos; }
     bool      imageHovered() const { return m_imageHovered; }
 
-    // Modo del gizmo. Lo escriben los tres botones de la toolbar y los atajos
-    // W/E/R, los dos en EditorUI; el estado vive aquí porque es de este panel
-    // —quien lo lee es el manipulador— y así no hace falta un campo más en
-    // EditorContext ni que el panel y la toolbar se pasen el dato cada frame.
+    // Gizmo mode. It is written by the three toolbar buttons and the W/E/R shortcuts,
+    // both in EditorUI; the state lives here because it belongs to this panel (whoever
+    // reads it is the manipulator) and so no extra field is needed in EditorContext
+    // nor do the panel and the toolbar have to pass the value to each other every
+    // frame.
     GizmoMode gizmoMode() const     { return m_gizmoMode; }
     void setGizmoMode(GizmoMode m)  { m_gizmoMode = m; }
 
 private:
     void drawSelectionGizmo(EditorContext& ctx);
-    // Manipulador de transformación (ImGuizmo) sobre el objeto seleccionado, en
-    // el modo que diga m_gizmoMode. Es lo único de este panel que EDITA la
-    // escena: drawSelectionGizmo y los otros trece solo pintan.
+    // Transform manipulator (ImGuizmo) on the selected object, in the mode that
+    // m_gizmoMode says. It is the only thing in this panel that EDITS the scene:
+    // drawSelectionGizmo and the other thirteen only paint.
     //
-    // imagePos/imageSize son el rect de la IMAGEN, no el de la ventana: el
-    // manipulador tiene que caer sobre el mismo pixel que el objeto, y la
-    // ventana lleva encima la barra de título y los bordes del dock.
+    // imagePos/imageSize are the rect of the IMAGE, not of the window: the
+    // manipulator has to land on the same pixel as the object, and the window carries
+    // the title bar and the dock borders on top.
     void drawTransformGizmo(EditorContext& ctx, const glm::mat4& cameraView,
                              const glm::vec2& imagePos, const glm::vec2& imageSize);
-    // Wireframe del frustum de la cámara de la escena, siempre visible en
-    // edición (no solo al seleccionarla). Solo el frustum: los ejes del
-    // transform ya los dibuja drawSelectionGizmo al seleccionar cualquier
-    // objeto, y repetirlos aquí daría dos juegos de ejes superpuestos de
-    // distinta longitud.
+    // Wireframe of the scene camera frustum, always visible in edit mode (not only
+    // when selecting it). Only the frustum: the transform axes are already drawn by
+    // drawSelectionGizmo when selecting any object, and repeating them here would
+    // give two overlapping sets of axes of different length.
     void drawCameraGizmo(EditorContext& ctx);
-    // Gizmo de TODAS las luces de la escena (no solo la seleccionada), en
-    // edición y en Play. Vive en el editor a propósito: es lo que garantiza que
-    // no salga en el juego exportado, que no compila este panel.
+    // Gizmo of ALL the lights in the scene (not only the selected one), in edit mode
+    // and in Play. It lives in the editor on purpose: that guarantees it does not show
+    // up in the exported game, which does not compile this panel.
     void drawLightGizmos(EditorContext& ctx);
-    // Rectángulo del ÁREA ÚTIL del Canvas seleccionado, en 2D sobre la imagen
-    // del viewport (la UI es espacio de pantalla, no mundo: no pasa por
-    // Gizmos). El rect SALE del canvas vivo (uiOrigin/uiScale/referenceSize),
-    // no se recalcula aquí: safe area y aspect ratio ya vienen aplicados.
+    // Rectangle of the USABLE AREA of the selected Canvas, in 2D over the viewport
+    // image (the UI is screen space, not world: it does not go through Gizmos). The
+    // rect COMES from the live canvas (uiOrigin/uiScale/referenceSize), it is not
+    // recomputed here: safe area and aspect ratio are already applied.
     void drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                           const glm::vec2& imageSize);
-    // Rect + ejes X/Y del Button seleccionado, en 2D sobre la imagen igual que
-    // el gizmo del Canvas. El rect sale del nodo VIVO del canvas (anclas y
-    // escala ya aplicadas), no de los campos del componente.
+    // Rect + X/Y axes of the selected Button, in 2D over the image just like the
+    // Canvas gizmo. The rect comes from the LIVE canvas node (anchors and scale
+    // already applied), not from the component fields.
     void drawButtonGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                           const glm::vec2& imageSize);
-    // Lo mismo para el Text seleccionado. Es otro nodo del canvas (nombre con
-    // otro prefijo), así que un GameObject con Button y Text pinta los dos.
+    // The same for the selected Text. It is another canvas node (name with a
+    // different prefix), so a GameObject with Button and Text paints both.
     void drawTextGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                         const glm::vec2& imageSize);
-    // Y lo mismo para la ProgressBar seleccionada. El rect es el del FONDO (el
-    // nodo raíz de la barra), no el del relleno: el relleno se encoge con el
-    // valor y el gizmo mide el widget, no el dato.
+    // And the same for the selected ProgressBar. The rect is the BACKGROUND one (the
+    // root node of the bar), not the fill one: the fill shrinks with the value and the
+    // gizmo measures the widget, not the data.
     void drawProgressBarGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                                const glm::vec2& imageSize);
-    // Y el del contenedor de Layout, que es el ÚNICO que no se puede clicar en
-    // el viewport (no es raycastTarget: un grupo que no pinta no debe comerse
-    // los clics). Se selecciona desde el Hierarchy, y este gizmo es lo único que
-    // enseña dónde está su rect.
+    // And the one for the Layout container, which is the ONLY one that cannot be
+    // clicked in the viewport (it is not a raycastTarget: a group that paints nothing
+    // must not eat the clicks). It is selected from the Hierarchy, and this gizmo is
+    // the only thing that shows where its rect is.
     void drawLayoutGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                           const glm::vec2& imageSize);
-    // Y los del resto de widgets de UI. Mismo criterio que los de arriba: el
-    // rect sale del nodo VIVO, no de los campos del componente, asi que ya trae
-    // aplicadas las anclas, la escala del canvas y el layout.
+    // And those of the rest of the UI widgets. Same criterion as the ones above: the
+    // rect comes from the LIVE node, not from the component fields, so it already has
+    // the anchors, the canvas scale and the layout applied.
     //
-    // El del ScrollView mide el VIEWPORT (el nodo que recorta) y no el
-    // contenido: el contenido se mueve y es mas grande que la vista, asi que su
-    // rect no dice donde esta el widget.
+    // The ScrollView one measures the VIEWPORT (the node that clips) and not the
+    // content: the content moves and is bigger than the view, so its rect does not
+    // say where the widget is.
     void drawInputFieldGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                        const glm::vec2& imageSize);
     void drawDropdownGizmo(EditorContext& ctx, const glm::vec2& imagePos,
@@ -185,51 +186,51 @@ private:
                          const glm::vec2& imageSize);
     void drawImageGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                          const glm::vec2& imageSize);
-    // Selección por clic de un widget de UI: hit test 2D del canvas, que manda
-    // sobre el raycast 3D porque la UI se dibuja ENCIMA de la escena. mousePx
-    // va en píxeles relativos a la esquina de la imagen, igual que en
-    // pickObject. nullptr si el clic no cae en ningún widget.
+    // Click selection of a UI widget: 2D hit test of the canvas, which takes
+    // precedence over the 3D raycast because the UI is drawn ON TOP of the scene.
+    // mousePx is in pixels relative to the image corner, same as in
+    // pickObject. nullptr if the click does not land on any widget.
     GameObject* pickUiObject(EditorContext& ctx, const glm::vec2& mousePx,
                               const glm::vec2& imageSize) const;
-    // Longitud de eje proporcional al bbox local del mesh de node (mitad
-    // del eje más largo); si node no tiene mesh (o el mesh no tiene
-    // vértices), valor fijo de repliegue.
+    // Axis length proportional to the local bbox of the mesh of node (half of
+    // the longest axis); if node has no mesh (or the mesh has no vertices), a fixed
+    // fallback value.
     float selectionAxisScale(GameObject* node) const;
-    // Picking por rayo en CPU: desproyecta mousePx (píxeles RELATIVOS a la
-    // esquina superior izquierda de la imagen del viewport, no de la ventana
-    // ImGui) con la cámara del frame —la de vuelo del editor o la de la escena
-    // en Play— y devuelve el objeto con malla cuya esfera envolvente corta el
-    // rayo más cerca de la cámara. nullptr si no corta ninguna.
+    // CPU ray picking: unprojects mousePx (pixels RELATIVE to the top-left corner of
+    // the viewport image, not of the ImGui window) with the camera of the frame (the
+    // editor fly camera or the scene one in Play) and returns the object with a mesh
+    // whose bounding sphere the ray cuts closest to the camera. nullptr if it cuts
+    // none.
     GameObject* pickObject(EditorContext& ctx, const glm::mat4& cameraView,
                            const glm::vec2& mousePx, const glm::vec2& imageSize) const;
 
     bool m_open = true;
-    // La `view` de la cámara con la que se dibujó el último frame. La rellena
-    // draw() nada más entrar, igual que ya rellena m_imagePos y m_contentWidth.
+    // The camera `view` with which the last frame was drawn. draw() fills it in right
+    // on entry, just as it already fills m_imagePos and m_contentWidth.
     //
-    // Existe porque los gizmos de widget de un canvas de MUNDO tienen que
-    // PROYECTAR su rect, y proyectar pide la vista por partida doble: para la
-    // matriz de cámara y para el billboard del canvas. Los trece drawXGizmo la
-    // leen de aquí y se la pasan a drawUiNodeGizmo. Un parámetro en esas trece
-    // firmas sería lo mismo con más ruido; lo que NO vale es un estático de
-    // fichero, que dejaría el dato fuera del alcance del panel.
+    // It exists because the widget gizmos of a WORLD canvas have to PROJECT their
+    // rect, and projecting needs the view twice over: for the camera matrix and for
+    // the canvas billboard. The thirteen drawXGizmo read it from here and pass it to
+    // drawUiNodeGizmo. A parameter in those thirteen signatures would be the same
+    // with more noise; what does NOT work is a file-level static, which would leave
+    // the data outside the panel's reach.
     glm::mat4 m_cameraView{1.0f};
 
-    // Estado del arrastre del manipulador de traslación. Existe para que un
-    // arrastre entero deje UN solo comando en el undo, no uno por frame: el
-    // `before` se captura en el flanco de entrada y el comando se apila en el
-    // de salida, igual que PropertiesPanel hace con IsItemActivated /
-    // IsItemDeactivatedAfterEdit en sus DragFloat.
+    // State of the translation manipulator drag. It exists so that a whole drag
+    // leaves a SINGLE command in the undo, not one per frame: `before` is captured on
+    // the entry edge and the command is stacked on the exit edge, just as
+    // PropertiesPanel does with IsItemActivated / IsItemDeactivatedAfterEdit in its
+    // DragFloat.
     GizmoMode m_gizmoMode  = GizmoMode::Translate;
-    // El modo con el que EMPEZÓ el arrastre en curso, para la línea del log.
-    // Los atajos siguen respondiendo mientras se arrastra.
+    // The mode with which the drag in progress STARTED, for the log line. The
+    // shortcuts keep responding while dragging.
     GizmoMode m_gizmoModeAtGrab = GizmoMode::Translate;
     bool      m_gizmoUsing = false;
     glm::mat4 m_gizmoBefore{1.0f};
-    // Y el objeto se recuerda por ID, no por puntero: entre el flanco de
-    // entrada y el de salida caben una carga de escena y un borrado, y un
-    // GameObject* guardado se quedaría colgando. Mismo criterio que la lambda
-    // del PropertyCommand, que también resuelve por findById.
+    // And the object is remembered by ID, not by pointer: between the entry edge and
+    // the exit edge a scene load and a deletion can happen, and a stored GameObject*
+    // would be left dangling. Same criterion as the PropertyCommand lambda, which
+    // also resolves by findById.
     uint64_t    m_gizmoId = 0;
     std::string m_gizmoName;
 

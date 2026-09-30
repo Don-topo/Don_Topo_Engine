@@ -127,8 +127,8 @@ void Gizmos::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCou
 
     VkPipelineMultisampleStateCreateInfo ms{};
     ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    // Lo fija el modo de anti-aliasing del Renderer: los gizmos viven en el pass
-    // de composición y tienen que declarar las mismas muestras que él.
+    // Set by the Renderer's anti-aliasing mode: the gizmos live in the
+    // composition pass and must declare the same sample count as it does.
     ms.rasterizationSamples = samples;
 
     VkPipelineDepthStencilStateCreateInfo ds{};
@@ -162,8 +162,8 @@ void Gizmos::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCou
     layoutCI.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutCI.pushConstantRangeCount = 1;
     layoutCI.pPushConstantRanges    = &push;
-    // Al recrear el pipeline por un cambio de muestras el layout no cambia:
-    // crearlo otra vez sería una fuga silenciosa.
+    // Recreating the pipeline for a sample-count change does not change the layout:
+    // creating it again would be a silent leak.
     if (m_pipeLayout == VK_NULL_HANDLE &&
         vkCreatePipelineLayout(gpu.device(), &layoutCI, nullptr, &m_pipeLayout) != VK_SUCCESS)
         throw std::runtime_error("Gizmos: failed to create pipeline layout");
@@ -194,15 +194,15 @@ void Gizmos::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCou
 void Gizmos::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
                   VkSampleCountFlagBits samples)
 {
-    (void)colorFormat; // el renderPass ya tiene el formato correcto
+    (void)colorFormat; // the renderPass already has the right format
     get().createBuffer(gpu);
     get().createPipeline(gpu, renderPass, samples);
 }
 
 void Gizmos::recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples)
 {
-    // Solo el pipeline: el layout y los buffers de vértices no dependen ni del
-    // render pass ni del número de muestras.
+    // Only the pipeline: the layout and the vertex buffers depend neither on the
+    // render pass nor on the sample count.
     if (get().m_pipeline != VK_NULL_HANDLE)
     {
         vkDestroyPipeline(gpu.device(), get().m_pipeline, nullptr);
@@ -230,10 +230,10 @@ void Gizmos::draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex
 {
     Gizmos& g = get();
 
-    // Dibujar es opcional; vaciar NO. Los tres motivos para no dibujar —gizmos
-    // apagados, nada que dibujar, o init() sin llamar— dejaban antes el buffer
-    // intacto, y en el tercero eso significa acumular para siempre. Ver la nota
-    // de H16 en el header.
+    // Drawing is optional; clearing is NOT. The three reasons not to draw (gizmos
+    // off, nothing to draw, or init() never called) used to leave the buffer
+    // untouched, and in the third case that means accumulating forever. See the
+    // H16 note in the header.
     if (g.m_enabled && !g.m_vertices.empty() && g.m_pipeline != VK_NULL_HANDLE)
     {
         VkDeviceSize copySize = sizeof(GizmoVertex) * (VkDeviceSize)g.m_vertices.size();
@@ -259,11 +259,11 @@ void Gizmos::discard()
 std::vector<GizmoVertex> Gizmos::takeVertices()
 {
     Gizmos& g = get();
-    // Se lleva el vector entero y deja uno vacio en su sitio: mover no copia los
-    // vertices, asi que consumir no cuesta mas que mirar. La capacidad se pierde
-    // —el vector nuevo empieza a cero— y eso es justo lo que se quiere: si algo
-    // acumulo 65536 vertices en un frame suelto, esa memoria no se queda
-    // reservada para siempre.
+    // Takes the whole vector and leaves an empty one in its place: moving does not
+    // copy the vertices, so consuming costs no more than looking. The capacity is
+    // lost (the new vector starts at zero) and that is exactly what we want: if
+    // something piled up 65536 vertices in a one-off frame, that memory does not
+    // stay reserved forever.
     std::vector<GizmoVertex> salida = std::move(g.m_vertices);
     g.m_vertices.clear();
     g.m_capacityWarned = false;
@@ -331,9 +331,9 @@ void Gizmos::drawFrustum(const glm::mat4& viewProj, const glm::vec3& color, bool
 {
     if (!get().m_enabled) return;
     glm::mat4 invVP = glm::inverse(viewProj);
-    // La cara cercana (los 4 primeros corners) usa el z_ndc de near según la
-    // convención de la matriz recibida; la cara lejana siempre es z=1 en
-    // ambas (NO y ZO coinciden en el far plane).
+    // The near face (the first 4 corners) uses near's z_ndc according to the
+    // convention of the matrix received; the far face is always z=1 in
+    // both (NO and ZO agree at the far plane).
     const float zNear = depthZeroToOne ? 0.0f : -1.0f;
     std::array<glm::vec3, 8> ndc = {
         glm::vec3(-1,-1,zNear), glm::vec3( 1,-1,zNear), glm::vec3( 1, 1,zNear), glm::vec3(-1, 1,zNear),
@@ -396,19 +396,19 @@ void Gizmos::drawWireCapsule(const glm::mat4& transform, const glm::vec3& center
     glm::vec3 top    = center + glm::vec3(0.0f,  halfHeight, 0.0f);
     glm::vec3 bottom = center + glm::vec3(0.0f, -halfHeight, 0.0f);
 
-    // Anillos ecuatoriales (plano XZ) en cada extremo del cilindro.
+    // Equatorial rings (XZ plane) at each end of the cylinder.
     get().addArc(transform, top,    glm::vec3(1,0,0), glm::vec3(0,0,1), radius, 0.0f, kTwoPi, kSegments, color);
     get().addArc(transform, bottom, glm::vec3(1,0,0), glm::vec3(0,0,1), radius, 0.0f, kTwoPi, kSegments, color);
 
-    // Domo superior: dos arcos perpendiculares abombando hacia +Y.
+    // Top dome: two perpendicular arcs bulging towards +Y.
     get().addArc(transform, top, glm::vec3(1,0,0), glm::vec3(0, 1,0), radius, 0.0f, kPi, kArcSegments, color);
     get().addArc(transform, top, glm::vec3(0,0,1), glm::vec3(0, 1,0), radius, 0.0f, kPi, kArcSegments, color);
 
-    // Domo inferior: dos arcos perpendiculares abombando hacia -Y.
+    // Bottom dome: two perpendicular arcs bulging towards -Y.
     get().addArc(transform, bottom, glm::vec3(1,0,0), glm::vec3(0,-1,0), radius, 0.0f, kPi, kArcSegments, color);
     get().addArc(transform, bottom, glm::vec3(0,0,1), glm::vec3(0,-1,0), radius, 0.0f, kPi, kArcSegments, color);
 
-    // 4 líneas laterales (silueta recta del cilindro).
+    // 4 side lines (straight silhouette of the cylinder).
     std::array<glm::vec3, 4> offsets = {
         glm::vec3(radius, 0.0f, 0.0f), glm::vec3(-radius, 0.0f, 0.0f),
         glm::vec3(0.0f, 0.0f, radius), glm::vec3(0.0f, 0.0f, -radius),

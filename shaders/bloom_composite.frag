@@ -1,8 +1,8 @@
 #version 450
 
-// Paso final: escena HDR + bloom, y AQUI es donde se tonemapea. La formula es
-// literalmente la ultima linea que tenia pbr.frag (ACES + gamma 2.2), asi que
-// con intensity = 0 el resultado es el mismo byte a byte que antes de la feature.
+// Final step: HDR scene + bloom, and HERE is where tonemapping happens. The formula is
+// literally the last line pbr.frag had (ACES + gamma 2.2), so
+// with intensity = 0 the result is byte-for-byte the same as before the feature.
 layout(location = 0) in  vec2 inUv;
 layout(location = 0) out vec4 outColor;
 

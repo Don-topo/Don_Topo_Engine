@@ -1,12 +1,12 @@
-// Test headless del frustum culling (sin GUI, sin Vulkan). Renderer::
-// frustumFromViewProj y Renderer::aabbVisible son estáticas justo para poder
-// ejercitarlas sin un Renderer inicializado. Plain main + asserts, sin
-// framework — coherente con camera_tests.cpp.
+// Headless test of frustum culling (no GUI, no Vulkan). Renderer::
+// frustumFromViewProj and Renderer::aabbVisible are static precisely so they can
+// be exercised without an initialized Renderer. Plain main + asserts, no
+// framework, consistent with camera_tests.cpp.
 //
-// Lo que de verdad se prueba aquí no es "¿culea?" sino "¿culea de MENOS?": un
-// falso negativo es un objeto que desaparece de pantalla, así que cada caso
-// dentro del frustum se afirma visible, y los casos de fuera se ponen bien
-// lejos para que ninguna holgura conservadora los salve por accidente.
+// What is really tested here is not "does it cull?" but "does it cull TOO LITTLE?": a
+// false negative is an object that disappears from the screen, so every case
+// inside the frustum is asserted visible, and the outside cases are placed well
+// away so that no conservative slack saves them by accident.
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 
@@ -22,8 +22,8 @@ using namespace DonTopo;
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
-// Cámara en el origen mirando hacia -Z, que es el convenio de glm::lookAt y el
-// que usa el motor. Devuelve proj*view listo para frustumFromViewProj.
+// Camera at the origin looking toward -Z, which is the glm::lookAt convention and the
+// one the engine uses. Returns proj*view ready for frustumFromViewProj.
 static glm::mat4 makeViewProj(bool zeroToOne)
 {
     const glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f),
@@ -32,12 +32,12 @@ static glm::mat4 makeViewProj(bool zeroToOne)
     glm::mat4 proj = zeroToOne
         ? glm::perspectiveRH_ZO(glm::radians(45.0f), 1.0f, 1.0f, 1000.0f)
         : glm::perspective(glm::radians(45.0f), 1.0f, 1.0f, 1000.0f);
-    proj[1][1] *= -1.0f; // Y-flip de Vulkan, igual que currentFrameCamera()
+    proj[1][1] *= -1.0f; // Vulkan Y-flip, same as currentFrameCamera()
     return proj * view;
 }
 
-// Cubo unidad centrado en el origen local: todo lo posiciona el model matrix,
-// como los RenderObject reales.
+// Unit cube centered at the local origin: everything is positioned by the model matrix,
+// like the real RenderObjects.
 static const glm::vec3 kMin(-10.0f, -10.0f, -10.0f);
 static const glm::vec3 kMax( 10.0f,  10.0f,  10.0f);
 
@@ -46,89 +46,89 @@ static glm::mat4 at(float x, float y, float z)
     return glm::translate(glm::mat4(1.0f), glm::vec3(x, y, z));
 }
 
-// Delante de la cámara = visible; detrás, a los lados y más allá del far = no.
-// Se prueba con los DOS rangos de profundidad porque el motor mezcla los dos
-// (glm::perspective en el editor, *RH_ZO en CameraComponent y en la luz).
+// In front of the camera = visible; behind, to the sides and beyond the far plane = not.
+// It is tested with BOTH depth ranges because the engine mixes the two
+// (glm::perspective in the editor, *RH_ZO in CameraComponent and in the light).
 static void test_dentro_y_fuera(bool zeroToOne)
 {
     const Renderer::Frustum f = Renderer::frustumFromViewProj(makeViewProj(zeroToOne));
 
-    // Justo delante, a media distancia: el caso trivial que NO puede fallar.
+    // Straight ahead, at mid distance: the trivial case that CANNOT fail.
     CHECK(Renderer::aabbVisible(f, kMin, kMax, at(0.0f, 0.0f, -100.0f)));
-    // Cerca de la cámara pero delante. Es el caso que rompería si el plano
-    // cercano se extrajera con el convenio equivocado sobre esta matriz.
+    // Close to the camera but in front. It is the case that would break if the near
+    // plane were extracted with the wrong convention on this matrix.
     //
-    // Tiene que ser una caja PEQUEÑA y muy cerca: con el cubo de semilado 10 de
-    // los demás casos, una esquina asoma siempre lo bastante lejos como para
-    // que el test conservador la salve, y el caso no discriminaría nada
-    // (comprobado saboteando el plano a mano: pasaba igual). Con semilado 0.2 a
-    // 1.5 de la cámara, extraer el cercano como "fila 2 a secas" sobre la
-    // matriz [-1,1] sí lo descarta.
+    // It has to be a SMALL box and very close: with the half-side 10 cube of
+    // the other cases, a corner always sticks out far enough for
+    // the conservative test to save it, and the case would discriminate nothing
+    // (checked by sabotaging the plane by hand: it passed anyway). With half-side 0.2 at
+    // 1.5 from the camera, extracting the near plane as "plain row 2" on the
+    // [-1,1] matrix does discard it.
     const glm::vec3 chicoMin(-0.2f, -0.2f, -0.2f);
     const glm::vec3 chicoMax( 0.2f,  0.2f,  0.2f);
     CHECK(Renderer::aabbVisible(f, chicoMin, chicoMax, at(0.0f, 0.0f, -1.5f)));
-    // Casi rozando el far, todavía dentro.
+    // Almost touching the far plane, still inside.
     CHECK(Renderer::aabbVisible(f, kMin, kMax, at(0.0f, 0.0f, -900.0f)));
 
-    // Detrás de la cámara.
+    // Behind the camera.
     CHECK(!Renderer::aabbVisible(f, kMin, kMax, at(0.0f, 0.0f, 500.0f)));
-    // Fuera por la derecha y por la izquierda (a 100 de profundidad el semiancho
-    // del frustum de 45° es ~41, así que 400 está holgadamente fuera).
+    // Outside on the right and on the left (at a depth of 100 the half-width
+    // of the 45° frustum is ~41, so 400 is comfortably outside).
     CHECK(!Renderer::aabbVisible(f, kMin, kMax, at(400.0f, 0.0f, -100.0f)));
     CHECK(!Renderer::aabbVisible(f, kMin, kMax, at(-400.0f, 0.0f, -100.0f)));
-    // Fuera por arriba y por abajo.
+    // Outside above and below.
     CHECK(!Renderer::aabbVisible(f, kMin, kMax, at(0.0f, 400.0f, -100.0f)));
     CHECK(!Renderer::aabbVisible(f, kMin, kMax, at(0.0f, -400.0f, -100.0f)));
-    // Más allá del plano lejano.
+    // Beyond the far plane.
     CHECK(!Renderer::aabbVisible(f, kMin, kMax, at(0.0f, 0.0f, -5000.0f)));
 }
 
-// Un objeto que asoma por el borde tiene que seguir dibujándose: el test es
-// conservador, y el error que importa es el falso negativo.
+// An object that peeks in over the edge has to keep being drawn: the test is
+// conservative, and the error that matters is the false negative.
 static void test_borde_cuenta_como_visible()
 {
     const Renderer::Frustum f = Renderer::frustumFromViewProj(makeViewProj(true));
 
-    // A 100 de profundidad el semiancho es ~41.4. Un cubo de semilado 10
-    // centrado en x=48 tiene su centro FUERA y su esquina DENTRO.
+    // At a depth of 100 the half-width is ~41.4. A cube of half-side 10
+    // centered at x=48 has its center OUTSIDE and its corner INSIDE.
     CHECK(Renderer::aabbVisible(f, kMin, kMax, at(48.0f, 0.0f, -100.0f)));
-    // Mismo caso por arriba.
+    // Same case for the top.
     CHECK(Renderer::aabbVisible(f, kMin, kMax, at(0.0f, 48.0f, -100.0f)));
 }
 
-// La AABB va en espacio LOCAL: el test tiene que aplicar el model matrix
-// entero, rotación y escala incluidas. Sin el valor absoluto de la 3x3 en
-// aabbVisible, una caja rotada se acotaría de menos y desaparecería por el
-// borde.
+// The AABB is in LOCAL space: the test has to apply the whole model matrix,
+// rotation and scale included. Without the absolute value of the 3x3 in
+// aabbVisible, a rotated box would be bounded too small and would disappear at the
+// edge.
 static void test_rotacion_y_escala()
 {
     const Renderer::Frustum f = Renderer::frustumFromViewProj(makeViewProj(true));
 
-    // Rotada sobre Y: la caja alineada a ejes que la envuelve crece un factor
-    // ~1.41, así que asoma por el borde aunque sin rotar no llegara.
+    // Rotated about Y: the axis-aligned box that wraps it grows by a factor
+    // ~1.41, so it peeks in at the edge even though unrotated it would not reach.
     //
-    // 135° y no 45° a propósito: con 45° las tres contribuciones a extent.x son
-    // positivas y sumar con o sin valor absoluto da lo mismo, así que el caso no
-    // probaría nada (comprobado quitando el abs a mano: pasaba igual). A 135°
-    // los términos son +0.707 y -0.707, y sin el abs se cancelan dejando la
-    // caja con anchura cero.
+    // 135° and not 45° on purpose: with 45° the three contributions to extent.x are
+    // positive and summing with or without absolute value gives the same, so the case would
+    // prove nothing (checked by removing the abs by hand: it passed anyway). At 135°
+    // the terms are +0.707 and -0.707, and without the abs they cancel, leaving the
+    // box with zero width.
     glm::mat4 rotada = glm::translate(glm::mat4(1.0f), glm::vec3(53.0f, 0.0f, -100.0f));
     rotada = glm::rotate(rotada, glm::radians(135.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     CHECK(Renderer::aabbVisible(f, kMin, kMax, rotada));
 
-    // Escalada x10 desde una posición donde el cubo sin escalar quedaría fuera:
-    // el objeto grande sí entra en cámara.
+    // Scaled x10 from a position where the unscaled cube would be outside:
+    // the big object does come into the camera.
     glm::mat4 grande = glm::translate(glm::mat4(1.0f), glm::vec3(120.0f, 0.0f, -100.0f));
     grande = glm::scale(grande, glm::vec3(10.0f));
     CHECK(Renderer::aabbVisible(f, kMin, kMax, grande));
-    // Y el mismo sitio SIN escalar queda fuera — sin esta pareja, el CHECK de
-    // arriba pasaría igual aunque aabbVisible ignorara la escala.
+    // And the same place WITHOUT scaling is outside; without this pair, the CHECK
+    // above would pass anyway even if aabbVisible ignored the scale.
     CHECK(!Renderer::aabbVisible(f, kMin, kMax, at(120.0f, 0.0f, -100.0f)));
 }
 
-// El pass de sombras culea contra la matriz de la luz, que es ortográfica y
-// acotada a ±350 alrededor del origen (ver shadowLightSpaceMatrix). Lo que
-// queda fuera de ese volumen no cabe en el shadow map.
+// The shadow pass culls against the light matrix, which is orthographic and
+// bounded to ±350 around the origin (see shadowLightSpaceMatrix). What
+// falls outside that volume does not fit in the shadow map.
 static void test_frustum_ortografico_de_la_luz()
 {
     glm::mat4 lightView = glm::lookAt(glm::vec3(0.0f, 500.0f, 300.0f),
@@ -138,17 +138,17 @@ static void test_frustum_ortografico_de_la_luz()
     lightProj[1][1] *= -1.0f;
     const Renderer::Frustum f = Renderer::frustumFromViewProj(lightProj * lightView);
 
-    // En el centro del volumen: proyecta sombra.
+    // At the center of the volume: it casts a shadow.
     CHECK(Renderer::aabbVisible(f, kMin, kMax, at(0.0f, 0.0f, 0.0f)));
     CHECK(Renderer::aabbVisible(f, kMin, kMax, at(300.0f, 0.0f, 0.0f)));
-    // Muy lejos en X: fuera de los ±350 de la ortográfica.
+    // Very far in X: outside the ±350 of the orthographic.
     CHECK(!Renderer::aabbVisible(f, kMin, kMax, at(2000.0f, 0.0f, 0.0f)));
     CHECK(!Renderer::aabbVisible(f, kMin, kMax, at(-2000.0f, 0.0f, 0.0f)));
 }
 
-// Los planos salen normalizados, así que dot(n,c)+d es una distancia real. Si
-// no lo estuvieran, el radio proyectado de la AABB no sería comparable con esa
-// distancia y el margen del test quedaría escalado por un factor arbitrario.
+// The planes come out normalized, so dot(n,c)+d is a real distance. If
+// they were not, the projected radius of the AABB would not be comparable with that
+// distance and the test margin would be scaled by an arbitrary factor.
 static void test_planos_normalizados()
 {
     const Renderer::Frustum f = Renderer::frustumFromViewProj(makeViewProj(true));
@@ -159,15 +159,15 @@ static void test_planos_normalizados()
     }
 }
 
-// ── Cota de los objetos skinned ──────────────────────────────────────────────
-// Rig de dos huesos: la raíz en el origen y un "brazo" cuyo origen está en
-// (0,1,0). El único vértice CUELGA del brazo hacia abajo, en (0,0.5,0), así que
-// en reposo queda a 0.5 del origen del modelo. El clip gira el brazo 180°, que
-// lo lleva a (0,1.5,0): tres veces más lejos.
+// ── Bound of skinned objects ──────────────────────────────────────────────
+// Two-bone rig: the root at the origin and an "arm" whose origin is at
+// (0,1,0). The only vertex HANGS from the arm downward, at (0,0.5,0), so
+// at rest it is 0.5 from the model origin. The clip rotates the arm 180°, which
+// takes it to (0,1.5,0): three times farther.
 //
-// Ese es exactamente el caso que hace desaparecer a un personaje si la cota se
-// saca de la malla en reposo, y por eso el rig se monta al revés de lo intuitivo
-// (el vértice hacia dentro, no hacia fuera).
+// That is exactly the case that makes a character disappear if the bound is
+// taken from the mesh at rest, and that is why the rig is built the opposite way to the intuitive one
+// (the vertex inward, not outward).
 static const float kPi = 3.14159265358979f;
 
 static SkinnedMesh makeRigDeDosHuesos(bool conClip)
@@ -180,7 +180,7 @@ static SkinnedMesh makeRigDeDosHuesos(bool conClip)
     skel.parentIndex = { -1, 0 };
     skel.inverseBindPose = {
         glm::mat4(1.0f),
-        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1.0f, 0.0f)) // brazo en (0,1,0)
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1.0f, 0.0f)) // arm at (0,1,0)
     };
     skel.boneMap = { {"raiz", 0}, {"brazo", 1} };
 
@@ -209,8 +209,8 @@ static SkinnedMesh makeRigDeDosHuesos(bool conClip)
     return mesh;
 }
 
-// Ningún instante del clip -incluidos los INTERPOLADOS, que es donde muestrear
-// keyframes se quedaría corto- puede salirse de la cota.
+// No instant of the clip (INTERPOLATED ones included, which is where sampling
+// keyframes would fall short) can get outside the bound.
 static void test_cota_skinned_cubre_toda_la_animacion()
 {
     const SkinnedMesh mesh = makeRigDeDosHuesos(/*conClip=*/true);
@@ -222,28 +222,28 @@ static void test_cota_skinned_cubre_toda_la_animacion()
     for (int i = 0; i <= 64; i++)
     {
         const float t = (float)i / 64.0f;
-        // Lo que hacen bone_eval + bone_hierarchy para este rig: la raíz se
-        // queda en la identidad y el brazo gira slerpeando de 0 a 180°.
+        // What bone_eval + bone_hierarchy do for this rig: the root
+        // stays at identity and the arm rotates slerping from 0 to 180°.
         const glm::mat4 mundo = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 1.0f, 0.0f))
                               * glm::mat4_cast(glm::angleAxis(kPi * t, glm::vec3(0.0f, 0.0f, 1.0f)));
         const glm::vec3 p = glm::vec3(mundo * invBind * glm::vec4(bind, 1.0f));
         maxReal = std::max(maxReal, glm::length(p));
         CHECK(glm::length(p) <= R + 1e-4f);
     }
-    // El barrido de arriba lo pasaría igual una cota absurdamente grande, así
-    // que se afirman los dos lados: que llega a la pose extrema (1.5, o sea que
-    // NO se sacó de la malla en reposo, que da 0.5) y que no se dispara.
+    // The sweep above would also be passed by an absurdly large bound, so
+    // both sides are asserted: that it reaches the extreme pose (1.5, which means it was
+    // NOT taken from the mesh at rest, which gives 0.5) and that it does not blow up.
     CHECK(maxReal > 1.49f);
     CHECK(R >= maxReal);
-    // 2.0 es el guardarraíl contra cotas infladas: acotar la escala del hueso
-    // con la norma de Frobenius en vez de con la espectral da 2.598 aquí, y en
-    // un esqueleto real se multiplica por cada nivel de la jerarquía.
+    // 2.0 is the guardrail against inflated bounds: bounding the bone scale
+    // with the Frobenius norm instead of the spectral one gives 2.598 here, and in
+    // a real skeleton it multiplies at every level of the hierarchy.
     CHECK(R < 2.0f);
 }
 
-// Sin clips, la pose es la de bind pose — pero la cota tiene que seguir contando
-// el offset del hueso respecto al origen del modelo (el bindLocal), no sólo el
-// radio de los vértices.
+// Without clips, the pose is the bind pose, but the bound still has to count
+// the bone offset relative to the model origin (the bindLocal), not just the
+// radius of the vertices.
 static void test_cota_skinned_sin_clips()
 {
     const SkinnedMesh mesh = makeRigDeDosHuesos(/*conClip=*/false);
@@ -251,8 +251,8 @@ static void test_cota_skinned_sin_clips()
     CHECK(std::fabs(R - 1.5f) < 1e-3f);
 }
 
-// Sin huesos o sin vértices no hay con qué acotar: 0 significa "no culees", que
-// es el lado seguro.
+// Without bones or without vertices there is nothing to bound with: 0 means "do not cull", which
+// is the safe side.
 static void test_cota_skinned_sin_nada()
 {
     CHECK(Renderer::skinnedBoundRadius(SkinnedMesh{}) == 0.0f);
@@ -262,8 +262,8 @@ static void test_cota_skinned_sin_nada()
     CHECK(Renderer::skinnedBoundRadius(sinVertices) == 0.0f);
 }
 
-// La cota es una esfera centrada en el ORIGEN LOCAL, así que el sitio lo pone
-// entero el transform del objeto — igual que con los estáticos.
+// The bound is a sphere centered at the LOCAL ORIGIN, so the placement is set
+// entirely by the object's transform, same as with the statics.
 static void test_cota_skinned_se_culea_con_el_transform()
 {
     const SkinnedMesh mesh = makeRigDeDosHuesos(/*conClip=*/true);
@@ -272,77 +272,77 @@ static void test_cota_skinned_se_culea_con_el_transform()
     const Renderer::Frustum f = Renderer::frustumFromViewProj(makeViewProj(true));
 
     CHECK(Renderer::aabbVisible(f, cotaMin, cotaMax, at(0.0f, 0.0f, -50.0f)));
-    CHECK(!Renderer::aabbVisible(f, cotaMin, cotaMax, at(0.0f, 0.0f, 50.0f)));   // detrás
-    CHECK(!Renderer::aabbVisible(f, cotaMin, cotaMax, at(500.0f, 0.0f, -50.0f))); // al lado
+    CHECK(!Renderer::aabbVisible(f, cotaMin, cotaMax, at(0.0f, 0.0f, 50.0f)));   // behind
+    CHECK(!Renderer::aabbVisible(f, cotaMin, cotaMax, at(500.0f, 0.0f, -50.0f))); // to the side
 }
 
 
-// ── Sitio en el SSBO de instancias (H23) ────────────────────────────────────
+// ── Room in the instance SSBO (H23) ────────────────────────────────────
 //
-// El culling decide QUE se dibuja; esto decide si CABE. Van en el mismo fichero
-// porque los dos contestan a la misma pregunta del pase de sombras, y el fallo
-// de esta parte no se ve: un personaje que no cabe pierde su sombra en silencio.
+// Culling decides WHAT is drawn; this decides whether it FITS. They go in the same file
+// because both answer the same question of the shadow pass, and the failure
+// of this part is not visible: a character that does not fit loses its shadow silently.
 
-// Los skinned cuentan. Esta es la regresion: la cuenta salia solo de los
-// objetos estaticos, asi que una escena de puros personajes reservaba CERO.
+// Skinned ones count. This is the regression: the count came only from the
+// static objects, so a scene of pure characters reserved ZERO.
 static void test_capacidad_cuenta_los_skinned()
 {
     CHECK(shadowInstanceCapacity(0, 3) == 3u * (SHADOW_CASCADES + 2));
     CHECK(shadowInstanceCapacity(2, 3) == 5u * (SHADOW_CASCADES + 2));
 }
 
-// El peor caso de verdad: cada objeto visible en las cuatro cascadas, en el
-// pase de escena y en el pre-pase de profundidad.
+// The real worst case: every object visible in the four cascades, in the
+// scene pass and in the depth pre-pass.
 static void test_capacidad_es_el_peor_caso()
 {
     CHECK(shadowInstanceCapacity(10, 0) == 60u);   // 10 * (4 + 2)
 }
 
-// Escena vacia: cero, y que sea el llamante quien ponga su minimo. Devolver un
-// minimo aqui escondería el caso de "no cabe nada" detras de un numero magico.
+// Empty scene: zero, and let the caller be the one to set its minimum. Returning a
+// minimum here would hide the "nothing fits" case behind a magic number.
 static void test_capacidad_de_escena_vacia()
 {
     CHECK(shadowInstanceCapacity(0, 0) == 0u);
 }
 
-// Una escena absurda no puede dar la vuelta al contador y pedir una capacidad
-// pequena: eso reservaria de menos y volveria al fallo silencioso, pero peor.
+// An absurd scene cannot wrap the counter around and ask for a small capacity:
+// that would reserve too little and bring back the silent failure, but worse.
 static void test_capacidad_no_desborda()
 {
     const uint32_t enorme = shadowInstanceCapacity(1000u * 1000u * 1000u, 0);
-    CHECK(enorme == 0xFFFFFFFFu);   // saturado, no envuelto
+    CHECK(enorme == 0xFFFFFFFFu);   // saturated, not wrapped
 }
 
 
-// ── Tope de asignaciones de memoria del device (H72) ────────────────────────
+// ── Device memory allocation cap (H72) ────────────────────────
 //
-// Vulkan pide una asignacion por recurso y cada malla se lleva DOS vivas
-// (vertices e indices), asi que el tope del device se traduce a un numero de
-// mallas. El minimo que garantiza la especificacion es 4096; una NVIDIA
-// devuelve 4.189.151, o sea que el techo es real en unas GPU y no existe en
-// otras. Esto es lo unico de la guarda que se puede probar sin device.
+// Vulkan asks for one allocation per resource and each mesh takes TWO alive
+// (vertices and indices), so the device cap translates into a number of
+// meshes. The minimum that the specification guarantees is 4096; an NVIDIA
+// returns 4,189,151, so the ceiling is real on some GPUs and does not exist on
+// others. This is the only part of the guard that can be tested without a device.
 
 static void test_mallas_que_caben_en_el_minimo_de_la_spec()
 {
-    // 4096 / 2 = 2048 mallas. Es el caso que documenta la auditoria.
+    // 4096 / 2 = 2048 meshes. It is the case that the audit documents.
     CHECK(GpuDevice::meshesWithinAllocationLimit(4096) == 2048u);
 }
 
-// Una GPU generosa no tiene techo practico y no debe avisar de nada.
+// A generous GPU has no practical ceiling and must not warn about anything.
 static void test_una_gpu_generosa_no_tiene_techo()
 {
     CHECK(GpuDevice::meshesWithinAllocationLimit(4189151u) == 2094575u);
     CHECK(!GpuDevice::allocationLimitIsTight(4189151u));
 }
 
-// El aviso salta con el minimo de la spec, que es donde el techo se alcanza de
-// verdad con una escena grande.
+// The warning fires with the spec minimum, which is where the ceiling is really
+// reached with a large scene.
 static void test_el_minimo_de_la_spec_si_es_estrecho()
 {
     CHECK(GpuDevice::allocationLimitIsTight(4096));
 }
 
-// Un tope absurdo no puede dar la vuelta ni dividir por cero.
+// An absurd cap cannot wrap around or divide by zero.
 static void test_tope_degenerado()
 {
     CHECK(GpuDevice::meshesWithinAllocationLimit(0) == 0u);

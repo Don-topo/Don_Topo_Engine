@@ -9,9 +9,9 @@
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 #include "DonTopo/Core/CameraComponent.h"
-#include "DonTopo/Core/GameObject.h" // MaterialOverride y Mesh, para MeshComponentCommand
+#include "DonTopo/Core/GameObject.h" // MaterialOverride and Mesh, for MeshComponentCommand
 #include "DonTopo/Core/AnimatorComponent.h"
-#include "DonTopo/Renderer/ModelLoader.h" // ModelPiece, para insertModelPieces
+#include "DonTopo/Renderer/ModelLoader.h" // ModelPiece, for insertModelPieces
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
@@ -26,33 +26,33 @@ class AudioManager;
 
 class GameObject;
 
-// Duplica `src` como HERMANO suyo —mismo padre, no hijo del original— y
-// devuelve el clon, o nullptr si no se puede duplicar (raíz de la escena, o
-// fallo de Scene::cloneGameObject).
+// Duplicates `src` as its SIBLING (same parent, not a child of the original) and
+// returns the clone, or nullptr if it cannot be duplicated (scene root, or
+// failure of Scene::cloneGameObject).
 //
-// El copiado en sí es Scene::cloneGameObject y no se reimplementa aquí: lo
-// único que añade esta función es la DECISIÓN de padre. Vive fuera de EditorUI
-// para poder probarla sin GUI, igual que `makeRenderSettingCommand` es el seam
-// de los ajustes de render: EditorUI solo mira el gate del atajo, llama aquí y
-// apila un CreateGameObjectCommand con el snapshot del resultado.
+// The copying itself is Scene::cloneGameObject and is not reimplemented here: the
+// only thing this function adds is the parent DECISION. It lives outside EditorUI
+// so it can be tested without a GUI, just as `makeRenderSettingCommand` is the seam
+// of the render settings: EditorUI only looks at the shortcut's gate, calls here and
+// pushes a CreateGameObjectCommand with the result's snapshot.
 //
-// NO da de alta el clon en la GPU ni lo apila en el undo: eso es del caller,
-// que es quien tiene el EditorRenderer y el UndoManager.
+// It does NOT register the clone on the GPU nor push it onto the undo stack: that is the caller's job,
+// which is the one holding the EditorRenderer and the UndoManager.
 GameObject* duplicateAsSibling(Scene& scene, GameObject* src,
                                 PhysicsManager& physics, AudioManager& audio);
 
 class ICommand {
 public:
     virtual ~ICommand() = default;
-    virtual void execute() = 0;   // aplica "after" (redo)
-    virtual void undo() = 0;      // aplica "before"
+    virtual void execute() = 0;   // applies "after" (redo)
+    virtual void undo() = 0;      // applies "before"
     virtual std::string label() const = 0;   // pa Log Console
 };
 
-// Varios comandos como UN paso de undo: execute en orden, undo en orden
-// inverso. Nace para "Add Mesh" de un modelo de varias piezas -un
-// CreateGameObjectCommand por hijo creado-, pero no depende de eso: agrupa
-// cualquier lista de ICommand.
+// Several commands as ONE undo step: execute in order, undo in reverse
+// order. It was born for "Add Mesh" of a multi-piece model (one
+// CreateGameObjectCommand per child created), but does not depend on that: it groups
+// any list of ICommand.
 class CompositeCommand : public ICommand {
 public:
     explicit CompositeCommand(std::string label) : m_label(std::move(label)) {}
@@ -66,10 +66,10 @@ private:
     std::vector<std::unique_ptr<ICommand>> m_cmds;
 };
 
-// Comando genérico pa cualquier propiedad value-type de un GameObject o de
-// uno de sus componentes. apply() resuelve el objeto en vivo cada vez que se
-// invoca (nunca captura un GameObject* crudo) — sobrevive a que el
-// GameObject se haya reconstruido entretanto por un Undo de Delete.
+// Generic command for any value-type property of a GameObject or of
+// one of its components. apply() resolves the live object every time it is
+// invoked (it never captures a raw GameObject*), so it survives the
+// GameObject having been rebuilt in the meantime by an Undo of Delete.
 template <typename T>
 class PropertyCommand : public ICommand {
 public:
@@ -89,22 +89,22 @@ private:
     std::function<void(const T&)> m_apply;
 };
 
-// Comando de un AJUSTE DE RENDER (los del menú View: bloom, SSAO, niebla, AA…).
+// Command for a RENDER SETTING (those of the View menu: bloom, SSAO, fog, AA...).
 //
-// Es un PropertyCommand<T> con dos diferencias que vienen de dónde vive el
-// dato, no de qué tipo tiene:
+// It is a PropertyCommand<T> with two differences that come from where the
+// data lives, not from what type it has:
 //
-//  1. `persist` se llama SIEMPRE junto al setter. Un ajuste de render no está
-//     en la escena, está en el project.json: un undo que aplica el valor pero
-//     no reescribe el fichero corrige la imagen y deja lo deshecho esperando a
-//     que se reabra el proyecto. Ir emparejados en el helper es lo que impide
-//     que un llamante de los 39 se deje uno.
-//  2. Se empuja con `UndoManager::push(cmd, /*dirtiesScene=*/false)`: mover un
-//     slider de bloom no es una edición de la escena y no puede disparar el
-//     modal de «hay cambios sin guardar».
+//  1. `persist` is ALWAYS called together with the setter. A render setting is not
+//     in the scene, it is in project.json: an undo that applies the value but
+//     does not rewrite the file fixes the image and leaves the undone thing waiting for
+//     the project to be reopened. Having them paired in the helper is what prevents
+//     any of the 39 callers from forgetting one.
+//  2. It is pushed with `UndoManager::push(cmd, /*dirtiesScene=*/false)`: moving a
+//     bloom slider is not a scene edit and cannot trigger the
+//     "there are unsaved changes" modal.
 //
-// El helper NO aplica nada al construirse: el widget de ImGui ya escribió el
-// valor nuevo cuando devolvió true, igual que en el resto del editor.
+// The helper does NOT apply anything when constructed: the ImGui widget already wrote the
+// new value when it returned true, just like in the rest of the editor.
 template <typename T, typename Setter, typename Persist>
 std::unique_ptr<ICommand> makeRenderSettingCommand(std::string label, T before, T after,
                                                     Setter set, Persist persist)
@@ -117,12 +117,12 @@ std::unique_ptr<ICommand> makeRenderSettingCommand(std::string label, T before, 
         });
 }
 
-// Snapshots value-type pa cada tipo de collider — T de PropertyCommand<T>
-// en las secciones Box/Sphere/Capsule/Plane Collider del panel Properties.
-// La gravedad ya no vive en el collider (pasó al Rigidbody): ver RigidbodyState.
-// staticFriction/dynamicFriction/bounciness: material de física por collider.
-// Van en el snapshot para que el undo de la sección los cubra igual que
-// center/size; los defaults coinciden con los de Collider (0.5 / 0.5 / 0.1).
+// Value-type snapshots for each collider type: T of PropertyCommand<T>
+// in the Box/Sphere/Capsule/Plane Collider sections of the Properties panel.
+// Gravity no longer lives in the collider (it moved to the Rigidbody): see RigidbodyState.
+// staticFriction/dynamicFriction/bounciness: physics material per collider.
+// They go in the snapshot so that the section's undo covers them just like
+// center/size; the defaults match those of Collider (0.5 / 0.5 / 0.1).
 struct BoxColliderState     { glm::vec3 center; glm::vec3 size; bool isTrigger;
                               float staticFriction; float dynamicFriction; float bounciness; };
 struct SphereColliderState  { glm::vec3 center; float radius; bool isTrigger;
@@ -132,8 +132,8 @@ struct CapsuleColliderState { glm::vec3 center; float radius; float height; bool
 struct PlaneColliderState   { glm::vec3 center; bool isTrigger;
                               float staticFriction; float dynamicFriction; float bounciness; };
 
-// Snapshot value-type del Rigidbody — T de PropertyCommand<T> en la sección
-// Rigidbody del panel Properties.
+// Value-type snapshot of the Rigidbody: T of PropertyCommand<T> in the
+// Rigidbody section of the Properties panel.
 struct RigidbodyState {
     float    mass;
     bool     useGravity;
@@ -145,15 +145,15 @@ struct RigidbodyState {
     bool     interpolate;
 };
 
-// Snapshot value-type del AudioClipComponent — T de PropertyCommand<T> en la
-// sección Audio Clip del panel Properties. Los cuatro sliders (volumen, pitch y
-// las dos distancias 3D) MÁS los tres checkboxes: antes loop/is3D/playOnAwake se
-// escribían directos y no tenían undo, así que desmarcar "Is 3D?" con un clip
-// sonando lo cortaba en seco y Ctrl+Z no lo devolvía.
+// Value-type snapshot of the AudioClipComponent: T of PropertyCommand<T> in the
+// Audio Clip section of the Properties panel. The four sliders (volume, pitch and
+// the two 3D distances) PLUS the three checkboxes: before, loop/is3D/playOnAwake were
+// written directly and had no undo, so unchecking "Is 3D?" with a clip
+// playing cut it off abruptly and Ctrl+Z did not bring it back.
 //
-// Los tres van en el mismo struct que los sliders, no en uno aparte: un solo
-// tipo de comando para toda la sección hace que un undo restaure el estado
-// completo aunque se hayan tocado sliders y checkboxes en distinto orden.
+// The three go in the same struct as the sliders, not in a separate one: a single
+// command type for the whole section makes an undo restore the complete state
+// even if sliders and checkboxes were touched in a different order.
 struct AudioClipState {
     float volume;
     float pitch;
@@ -162,10 +162,10 @@ struct AudioClipState {
     bool  loop;
     bool  is3D;
     bool  playOnAwake;
-    // Bus de salida. Va en el mismo snapshot que el resto por lo mismo que los
-    // checkboxes: un solo comando para toda la seccion.
+    // Output bus. It goes in the same snapshot as the rest for the same reason as the
+    // checkboxes: a single command for the whole section.
     AudioBus bus;
-    // Como loop e is3D: cambiarlo recarga el sonido.
+    // Like loop and is3D: changing it reloads the sound.
     AudioLoadMode loadMode;
     AudioRolloff  rolloff;
     float spread;
@@ -174,8 +174,8 @@ struct AudioClipState {
     bool  mute;
 };
 
-// Snapshot value-type del CameraComponent — T de PropertyCommand<T> en la
-// sección Camera del panel Properties.
+// Value-type snapshot of the CameraComponent: T of PropertyCommand<T> in the
+// Camera section of the Properties panel.
 struct CameraState {
     CameraComponent::ProjectionMode mode;
     float fov;
@@ -205,11 +205,11 @@ private:
     size_t m_newIndex;
 };
 
-// Borra un GameObject ya existente (execute) / lo reconstruye desde un
-// snapshot JSON tomado ANTES de borrarlo (undo). El snapshot conserva el id
-// original (Scene::subtreeToJson/nodeToJson serializan "id"), así que
-// comandos posteriores en el stack que referencien ese id lo siguen
-// resolviendo tras un undo() de este comando.
+// Deletes an already existing GameObject (execute) / rebuilds it from a
+// JSON snapshot taken BEFORE deleting it (undo). The snapshot keeps the original
+// id (Scene::subtreeToJson/nodeToJson serialize "id"), so later
+// commands in the stack that reference that id still resolve
+// it after an undo() of this command.
 class DeleteGameObjectCommand : public ICommand {
 public:
     DeleteGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio, EditorRenderer& renderer,
@@ -227,28 +227,28 @@ private:
     uint64_t m_parentId;
     size_t m_index;
     nlohmann::json m_snapshot;
-    // Mallas vivas del subárbol, tomadas en execute() antes de borrar: el undo
-    // las reutiliza en vez de releer los FBX (~230 ms por personaje).
-    // Mismo tipo que Scene::PreloadedMeshCache, escrito a mano para no arrastrar
-    // Scene.h a todo el que incluye Command.h.
+    // Live meshes of the subtree, taken in execute() before deleting: undo
+    // reuses them instead of re-reading the FBX files (~230 ms per character).
+    // Same type as Scene::PreloadedMeshCache, written by hand so as not to drag
+    // Scene.h into everything that includes Command.h.
     std::unordered_map<std::string, std::shared_ptr<const Mesh>> m_meshes;
 };
 
-// Mismo tipo que el PreloadedMeshCache de Scene.h (sourcePath/pieza -> malla
-// viva). Se repite aquí, en vez de incluir Scene.h, por el mismo motivo que el
-// m_meshes a mano de DeleteGameObjectCommand: Scene.h arrastraría medio motor
-// a todo el que incluye Command.h. Redeclarar el mismo alias en el mismo
-// namespace con el mismo tipo subyacente es legal.
+// Same type as Scene.h's PreloadedMeshCache (sourcePath/piece -> live
+// mesh). It is repeated here, instead of including Scene.h, for the same reason as
+// DeleteGameObjectCommand's hand-written m_meshes: Scene.h would drag half the engine
+// into everything that includes Command.h. Redeclaring the same alias in the same
+// namespace with the same underlying type is legal.
 using PreloadedMeshCache = std::unordered_map<std::string, std::shared_ptr<const Mesh>>;
 
-// Inverso de DeleteGameObjectCommand: reconstruye desde snapshot (execute) /
-// borra (undo). snapshot ya incluye el subárbol completo tal y como quedó
-// justo después de crearlo (mismo formato que DeleteGameObjectCommand).
+// Inverse of DeleteGameObjectCommand: rebuilds from snapshot (execute) /
+// deletes (undo). snapshot already includes the complete subtree exactly as it was
+// right after creating it (same format as DeleteGameObjectCommand).
 class CreateGameObjectCommand : public ICommand {
 public:
-    // preloaded: mallas ya en RAM para insertFromJson (ver Scene::insertFromJson).
-    // Con ellas, un redo no relee el fichero de origen — vacío (el default) se
-    // comporta como antes: insertFromJson recibe nullptr y lee de disco.
+    // preloaded: meshes already in RAM for insertFromJson (see Scene::insertFromJson).
+    // With them, a redo does not re-read the source file. Empty (the default) behaves
+    // as before: insertFromJson receives nullptr and reads from disk.
     CreateGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio, EditorRenderer& renderer,
                              std::string label, uint64_t parentId, size_t index, nlohmann::json snapshot,
                              PreloadedMeshCache preloaded = {});
@@ -268,30 +268,30 @@ private:
     PreloadedMeshCache m_preloaded;
 };
 
-// Crea un hijo de `parent` por aparicion de `pieces`, al final de sus hijos,
-// con el nombre y la transformacion de la pieza y la malla meshes[piece] (sin
-// leer disco). Una transformacion con algun valor no finito pasa a identidad
-// con un aviso en `warnings`. Devuelve los hijos creados, en orden; indices de
-// render a -1 (el llamante registra). Es el seam que se prueba sin GPU.
+// Creates a child of `parent` per occurrence of `pieces`, at the end of its children,
+// with the piece's name and transform and the mesh meshes[piece] (without
+// reading disk). A transform with any non-finite value becomes identity
+// with a warning in `warnings`. Returns the created children, in order; render
+// indices at -1 (the caller registers). It is the seam that is tested without a GPU.
 std::vector<GameObject*> insertModelPieces(Scene& scene, GameObject* parent, const std::string& sourcePath,
                                            const std::vector<ModelPiece>& pieces,
                                            const std::vector<std::shared_ptr<const Mesh>>& meshes,
                                            PhysicsManager& physics, AudioManager& audio,
                                            std::vector<std::string>* warnings);
 
-// Añade (add=true) o quita (add=false) el CameraComponent del GameObject id;
-// undo() hace lo contrario.
+// Adds (add=true) or removes (add=false) the CameraComponent of GameObject id;
+// undo() does the opposite.
 //
-// A diferencia de los Add de collider/Rigidbody (que no pasan por el stack),
-// el de cámara SÍ: sin esto se puede llegar a dos cámaras en escena — Add a X,
-// Delete X (el snapshot se lleva la cámara), Add a Z (permitido, findCamera()
-// es nullptr), Ctrl+Z resucita X CON su cámara. Con el Add en el stack, para
-// deshacer el Delete de X hay que deshacer antes el Add de Z, y el orden impone
-// el invariante sin descartar nada.
+// Unlike the Add of collider/Rigidbody (which do not go through the stack),
+// the camera one DOES: without this you can end up with two cameras in the scene: Add to X,
+// Delete X (the snapshot takes the camera with it), Add to Z (allowed, findCamera()
+// is nullptr), Ctrl+Z resurrects X WITH its camera. With the Add in the stack, to
+// undo X's Delete you first have to undo Z's Add, and the order enforces
+// the invariant without discarding anything.
 //
-// Resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
-// mismo contrato que PropertyCommand. m_state conserva los valores pa que un
-// Add-undo-redo no los devuelva a los defaults.
+// It resolves the GameObject by id on every execute()/undo() (never a raw pointer),
+// same contract as PropertyCommand. m_state keeps the values so that an
+// Add-undo-redo does not return them to the defaults.
 class CameraComponentCommand : public ICommand {
 public:
     CameraComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -310,10 +310,10 @@ private:
     CameraState m_state;
 };
 
-// Add/Remove del CanvasComponent, mismo contrato que CameraComponentCommand:
-// resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
-// y m_state es una COPIA del componente entero (10 campos, todo POD) pa que un
-// Add-undo-redo no devuelva la resolución a los defaults.
+// Add/Remove of the CanvasComponent, same contract as CameraComponentCommand:
+// it resolves the GameObject by id on every execute()/undo() (never a raw pointer),
+// and m_state is a COPY of the whole component (10 fields, all POD) so that an
+// Add-undo-redo does not return the resolution to the defaults.
 class CanvasComponentCommand : public ICommand {
 public:
     CanvasComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -332,15 +332,15 @@ private:
     CanvasComponent m_state;
 };
 
-// Add/Remove del AudioClipComponent. Mismo patrón que CanvasComponentCommand
-// (resuelve el GameObject por id en cada execute()/undo(), nunca puntero crudo)
-// con una diferencia obligada: AudioClipComponent NO es copiable —envuelve un
-// soundId de FMOD y su destructor descarga el sonido—, así que el snapshot son
-// datos planos (path + AudioClipState) y rehacer el Add recrea el componente
-// con createAudioClipComponent, la misma factory que usa Scene::fromJson.
+// Add/Remove of the AudioClipComponent. Same pattern as CanvasComponentCommand
+// (it resolves the GameObject by id on every execute()/undo(), never a raw pointer)
+// with one forced difference: AudioClipComponent is NOT copyable (it wraps an FMOD
+// soundId and its destructor unloads the sound), so the snapshot is
+// plain data (path + AudioClipState) and redoing the Add recreates the component
+// with createAudioClipComponent, the same factory used by Scene::fromJson.
 //
-// Sin esto, quitar un Audio Clip perdía para siempre volumen, pitch y las dos
-// distancias ajustadas a mano, y Ctrl+Z no devolvía nada.
+// Without this, removing an Audio Clip permanently lost the volume, pitch and the two
+// hand-tuned distances, and Ctrl+Z brought back nothing.
 class AudioClipComponentCommand : public ICommand {
 public:
     AudioClipComponentCommand(Scene& scene, AudioManager& audio, std::string label,
@@ -361,9 +361,9 @@ private:
     AudioClipState m_state;
 };
 
-// Add/Remove del AudioListenerComponent. Su estado entero es un bool, pero el
-// comando existe por la misma razón que los demás: que añadirlo y quitarlo pase
-// por el stack de undo como todo lo demás del panel.
+// Add/Remove of the AudioListenerComponent. Its whole state is a bool, but the
+// command exists for the same reason as the others: adding and removing it goes
+// through the undo stack like everything else in the panel.
 class AudioListenerComponentCommand : public ICommand {
 public:
     AudioListenerComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -382,10 +382,10 @@ private:
     bool        m_enabled;
 };
 
-// Add/Remove del ButtonComponent, calcado de CanvasComponentCommand: resuelve el
-// GameObject por id en cada execute()/undo() (nunca puntero crudo), y m_state es
-// una COPIA del componente entero pa que un Add-undo-redo no devuelva los
-// colores, el texto ni las rutas a los defaults.
+// Add/Remove of the ButtonComponent, copied from CanvasComponentCommand: it resolves the
+// GameObject by id on every execute()/undo() (never a raw pointer), and m_state is
+// a COPY of the whole component so that an Add-undo-redo does not return the
+// colors, the text or the paths to the defaults.
 class ButtonComponentCommand : public ICommand {
 public:
     ButtonComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -404,10 +404,10 @@ private:
     ButtonComponent m_state;
 };
 
-// Add/Remove del TextComponent, calcado de ButtonComponentCommand: resuelve el
-// GameObject por id en cada execute()/undo() (nunca puntero crudo), y m_state es
-// una COPIA del componente entero pa que un Add-undo-redo no devuelva el texto,
-// los colores ni la ruta de la fuente a los defaults.
+// Add/Remove of the TextComponent, copied from ButtonComponentCommand: it resolves the
+// GameObject by id on every execute()/undo() (never a raw pointer), and m_state is
+// a COPY of the whole component so that an Add-undo-redo does not return the text,
+// the colors or the font path to the defaults.
 class TextComponentCommand : public ICommand {
 public:
     TextComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -426,10 +426,10 @@ private:
     TextComponent m_state;
 };
 
-// Add/Remove del ProgressBarComponent, calcado de TextComponentCommand: resuelve
-// el GameObject por id en cada execute()/undo() (nunca puntero crudo), y m_state
-// es una COPIA del componente entero pa que un Add-undo-redo no devuelva el
-// valor, los colores ni las rutas de los sprites a los defaults.
+// Add/Remove of the ProgressBarComponent, copied from TextComponentCommand: it resolves
+// the GameObject by id on every execute()/undo() (never a raw pointer), and m_state
+// is a COPY of the whole component so that an Add-undo-redo does not return the
+// value, the colors or the sprite paths to the defaults.
 class ProgressBarComponentCommand : public ICommand {
 public:
     ProgressBarComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -448,10 +448,10 @@ private:
     ProgressBarComponent m_state;
 };
 
-// Add/Remove del LayoutComponent, calcado de ProgressBarComponentCommand:
-// resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
-// y m_state es una COPIA del componente entero pa que un Add-undo-redo no
-// devuelva el modo, el padding ni la celda a los defaults.
+// Add/Remove of the LayoutComponent, copied from ProgressBarComponentCommand:
+// it resolves the GameObject by id on every execute()/undo() (never a raw pointer),
+// and m_state is a COPY of the whole component so that an Add-undo-redo does not
+// return the mode, the padding or the cell to the defaults.
 class LayoutComponentCommand : public ICommand {
 public:
     LayoutComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -470,10 +470,10 @@ private:
     LayoutComponent m_state;
 };
 
-// Add/Remove del PanelComponent, calcado de LayoutComponentCommand: resuelve el
-// GameObject por id en cada execute()/undo() (nunca puntero crudo), y m_state es
-// una COPIA del componente entero pa que un Add-undo-redo no devuelva el rect,
-// el color ni el sprite a los defaults.
+// Add/Remove of the PanelComponent, copied from LayoutComponentCommand: it resolves the
+// GameObject by id on every execute()/undo() (never a raw pointer), and m_state is
+// a COPY of the whole component so that an Add-undo-redo does not return the rect,
+// the color or the sprite to the defaults.
 class PanelComponentCommand : public ICommand {
 public:
     PanelComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -492,9 +492,9 @@ private:
     PanelComponent m_state;
 };
 
-// Add/Remove del ImageComponent, mismo patrón: m_state es una COPIA del
-// componente entero pa que un Add-undo-redo no devuelva el modo, los bordes del
-// 9-slice ni el bloque de Filled a los defaults.
+// Add/Remove of the ImageComponent, same pattern: m_state is a COPY of the
+// whole component so that an Add-undo-redo does not return the mode, the 9-slice
+// borders or the Filled block to the defaults.
 class ImageComponentCommand : public ICommand {
 public:
     ImageComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -513,10 +513,10 @@ private:
     ImageComponent m_state;
 };
 
-// Add/Remove del SliderComponent, mismo patron: m_state es una COPIA del
-// componente entero pa que un Add-undo-redo no devuelva el valor, el rango ni
-// los colores a los defaults. La copia ESTRENA callbacks (UiSliderCallbackSlot
-// no los copia), asi que un undo no revive el handler de un script muerto.
+// Add/Remove of the SliderComponent, same pattern: m_state is a COPY of the
+// whole component so that an Add-undo-redo does not return the value, the range or
+// the colors to the defaults. The copy starts with FRESH callbacks (UiSliderCallbackSlot
+// does not copy them), so an undo does not revive the handler of a dead script.
 class SliderComponentCommand : public ICommand {
 public:
     SliderComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -535,10 +535,10 @@ private:
     SliderComponent m_state;
 };
 
-// Add/Remove del CheckboxComponent, mismo patron que los demas: m_state es una COPIA
-// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
-// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
-// no revive el handler de un script muerto.
+// Add/Remove of the CheckboxComponent, same pattern as the others: m_state is a COPY
+// of the whole component so that an Add-undo-redo does not return its fields to the
+// defaults, and the copy starts with FRESH callbacks (the slot does not copy them) so an undo
+// does not revive the handler of a dead script.
 class CheckboxComponentCommand : public ICommand {
 public:
     CheckboxComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -556,10 +556,10 @@ private:
     bool m_add;
     CheckboxComponent m_state;
 };
-// Add/Remove del ToggleComponent, mismo patron que los demas: m_state es una COPIA
-// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
-// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
-// no revive el handler de un script muerto.
+// Add/Remove of the ToggleComponent, same pattern as the others: m_state is a COPY
+// of the whole component so that an Add-undo-redo does not return its fields to the
+// defaults, and the copy starts with FRESH callbacks (the slot does not copy them) so an undo
+// does not revive the handler of a dead script.
 class ToggleComponentCommand : public ICommand {
 public:
     ToggleComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -577,10 +577,10 @@ private:
     bool m_add;
     ToggleComponent m_state;
 };
-// Add/Remove del ScrollbarComponent, mismo patron que los demas: m_state es una COPIA
-// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
-// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
-// no revive el handler de un script muerto.
+// Add/Remove of the ScrollbarComponent, same pattern as the others: m_state is a COPY
+// of the whole component so that an Add-undo-redo does not return its fields to the
+// defaults, and the copy starts with FRESH callbacks (the slot does not copy them) so an undo
+// does not revive the handler of a dead script.
 class ScrollbarComponentCommand : public ICommand {
 public:
     ScrollbarComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -599,10 +599,10 @@ private:
     ScrollbarComponent m_state;
 };
 
-// Add/Remove del InputFieldComponent, mismo patron que los demas: m_state es una COPIA
-// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
-// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
-// no revive el handler de un script muerto.
+// Add/Remove of the InputFieldComponent, same pattern as the others: m_state is a COPY
+// of the whole component so that an Add-undo-redo does not return its fields to the
+// defaults, and the copy starts with FRESH callbacks (the slot does not copy them) so an undo
+// does not revive the handler of a dead script.
 class InputFieldComponentCommand : public ICommand {
 public:
     InputFieldComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -620,10 +620,10 @@ private:
     bool m_add;
     InputFieldComponent m_state;
 };
-// Add/Remove del DropdownComponent, mismo patron que los demas: m_state es una COPIA
-// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
-// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
-// no revive el handler de un script muerto.
+// Add/Remove of the DropdownComponent, same pattern as the others: m_state is a COPY
+// of the whole component so that an Add-undo-redo does not return its fields to the
+// defaults, and the copy starts with FRESH callbacks (the slot does not copy them) so an undo
+// does not revive the handler of a dead script.
 class DropdownComponentCommand : public ICommand {
 public:
     DropdownComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -641,10 +641,10 @@ private:
     bool m_add;
     DropdownComponent m_state;
 };
-// Add/Remove del ScrollViewComponent, mismo patron que los demas: m_state es una COPIA
-// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
-// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
-// no revive el handler de un script muerto.
+// Add/Remove of the ScrollViewComponent, same pattern as the others: m_state is a COPY
+// of the whole component so that an Add-undo-redo does not return its fields to the
+// defaults, and the copy starts with FRESH callbacks (the slot does not copy them) so an undo
+// does not revive the handler of a dead script.
 class ScrollViewComponentCommand : public ICommand {
 public:
     ScrollViewComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -663,15 +663,15 @@ private:
     ScrollViewComponent m_state;
 };
 
-// Add/Remove del AnimatorComponent, mismo contrato que CameraComponentCommand:
-// resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
-// y m_state conserva el grafo pa que un Add-undo-redo no lo devuelva vacío.
+// Add/Remove of the AnimatorComponent, same contract as CameraComponentCommand:
+// it resolves the GameObject by id on every execute()/undo() (never a raw pointer),
+// and m_state keeps the graph so that an Add-undo-redo does not return it empty.
 //
-// El estado es una COPIA del componente entero, no un POD de campos como
-// CameraState: el "estado" de un Animator es el grafo completo, y
-// AnimatorComponent es copiable (solo vectores, mapas y PODs). Serializarlo a
-// JSON pa esto no compraría nada — las funciones de JSON viven en el anon
-// namespace de Scene.cpp y no son accesibles desde aquí.
+// The state is a COPY of the whole component, not a POD of fields like
+// CameraState: an Animator's "state" is the complete graph, and
+// AnimatorComponent is copyable (only vectors, maps and PODs). Serializing it to
+// JSON for this would buy nothing: the JSON functions live in the anonymous
+// namespace of Scene.cpp and are not accessible from here.
 class AnimatorComponentCommand : public ICommand {
 public:
     AnimatorComponentCommand(Scene& scene, std::string label, uint64_t id,
@@ -690,18 +690,18 @@ private:
     AnimatorComponent m_state;
 };
 
-// Edición del GRAFO de un Animator que ya existe (estados, transiciones,
-// condiciones, parámetros, entrada), por el stack de undo. La crea
-// AnimatorGraphUndoTracker al terminar un gesto en el AnimatorPanel, con el
-// cambio YA aplicado: se empuja sin execute().
+// Edit of the GRAPH of an Animator that already exists (states, transitions,
+// conditions, parameters, entry), through the undo stack. It is created by
+// AnimatorGraphUndoTracker at the end of a gesture in the AnimatorPanel, with the
+// change ALREADY applied: it is pushed without execute().
 //
-// A diferencia de AnimatorComponentCommand, que pone o quita el componente
-// entero, esto aplica solo lo autorado vía applyGraph: los valores de los
-// parámetros y el playhead sobreviven, así que un undo en Play no se lleva por
-// delante lo que el script venía escribiendo (H4).
+// Unlike AnimatorComponentCommand, which adds or removes the whole
+// component, this applies only what is authored via applyGraph: the parameter
+// values and the playhead survive, so an undo in Play does not take away
+// what the script was writing (H4).
 //
-// Resuelve el GameObject por id en cada aplicación, nunca por puntero. Si el
-// objeto o su Animator ya no existen, no hace nada.
+// It resolves the GameObject by id on each application, never by pointer. If the
+// object or its Animator no longer exist, it does nothing.
 class AnimatorGraphCommand : public ICommand {
 public:
     AnimatorGraphCommand(Scene& scene, std::string label, uint64_t id,
@@ -720,32 +720,32 @@ private:
     AnimatorComponent::Graph m_after;
 };
 
-// Añade (add=true) o quita (add=false) una fuente de animación del SkinnedMesh
-// del GameObject id; undo() hace lo contrario. Mismo contrato que el resto:
-// resuelve el GameObject por id en cada execute()/undo().
+// Adds (add=true) or removes (add=false) an animation source of the SkinnedMesh
+// of GameObject id; undo() does the opposite. Same contract as the rest:
+// it resolves the GameObject by id on every execute()/undo().
 //
-// m_clipNames guarda los nombres que la fuente aportó, y hace dos trabajos.
-// Uno: sin él, deshacer un Remove reimportaría el fichero con los nombres del
-// FBX y se perdería cualquier rename — dejando huérfanos los estados del grafo
-// que los usaban. Dos: es la IDENTIDAD con la que applyRemove localiza su
-// fuente. Los nombres de clip son únicos dentro del mesh (uniqueClipName lo
-// garantiza) y viajan CON la fuente, mientras que una posición describe dónde
-// estaba: applyAdd re-añade al final, así que cualquier ordinal guardado por
-// otro comando del stack cambia de significado en cuanto se deshace un Remove.
+// m_clipNames stores the names the source contributed, and does two jobs.
+// One: without it, undoing a Remove would reimport the file with the FBX's names
+// and any rename would be lost, leaving orphaned the graph states
+// that used them. Two: it is the IDENTITY with which applyRemove locates its
+// source. Clip names are unique within the mesh (uniqueClipName guarantees it)
+// and travel WITH the source, whereas a position describes where it
+// was: applyAdd re-adds at the end, so any ordinal stored by
+// another command in the stack changes meaning as soon as a Remove is undone.
 //
-// renderer puede ser nullptr (tests headless). Cuando no lo es, los SSBOs del
-// objeto skinned se rehacen: la lista de clips ha cambiado y la GPU tiene la
-// vieja.
+// renderer can be nullptr (headless tests). When it is not, the skinned
+// object's SSBOs are rebuilt: the clip list has changed and the GPU has the
+// old one.
 class AnimationSourceCommand : public ICommand {
 public:
-    // pathOccurrence: FALLBACK posicional para applyRemove — qué fuente
-    // no-builtin con ese path quitar, CONTADO DESDE EL FINAL del vector
-    // (0 = la más reciente/última). Solo se usa cuando la búsqueda por
-    // identidad (m_clipNames) no encuentra nada, p.ej. con m_clipNames vacío.
-    // Importar el mismo FBX dos veces es legal, y AnimatorPanel distingue las
-    // filas con este mismo ordinal. 0 por defecto vale tanto para un Add real
-    // (nada que desambiguar, la fuente nueva siempre va al final) como para el
-    // undo de un Add.
+    // pathOccurrence: positional FALLBACK for applyRemove: which non-builtin
+    // source with that path to remove, COUNTED FROM THE END of the vector
+    // (0 = the most recent/last one). It is only used when the search by
+    // identity (m_clipNames) finds nothing, e.g. with an empty m_clipNames.
+    // Importing the same FBX twice is legal, and AnimatorPanel distinguishes the
+    // rows with this same ordinal. 0 by default is valid both for a real Add
+    // (nothing to disambiguate, the new source always goes at the end) and for the
+    // undo of an Add.
     AnimationSourceCommand(Scene& scene, EditorRenderer* renderer, std::string label,
                             uint64_t id, bool add, std::string path,
                             std::vector<std::string> clipNames,
@@ -768,9 +768,9 @@ private:
     size_t m_pathOccurrence;
 };
 
-// Renombra un clip del mesh y arrastra los estados del Animator que lo usaban.
-// No toca la GPU: los buffers van por índice de clip, y renombrar no reordena
-// nada.
+// Renames a clip of the mesh and carries along the Animator states that used it.
+// It does not touch the GPU: the buffers go by clip index, and renaming does not reorder
+// anything.
 class ClipRenameCommand : public ICommand {
 public:
     ClipRenameCommand(Scene& scene, std::string label, uint64_t id,
@@ -791,23 +791,23 @@ private:
 
 enum class MaterialTextureSlot { Albedo, Normal, Orm };
 
-// Escribe UNA ruta de textura en el override del material `materialIndex` y la
-// aplica al Material. Crea la entrada del override si no existe.
+// Writes ONE texture path into the override of material `materialIndex` and
+// applies it to the Material. It creates the override entry if it does not exist.
 //
-// Existe para que "escribir el override" y "aplicarlo" no puedan ir por
-// separado: son dos pasos, se olvidaría el segundo, y el síntoma sería que el
-// panel enseña la ruta nueva y el viewport la vieja. El comando y el panel
-// (mas adelante) llaman los dos por aquí, nunca directamente a
+// It exists so that "writing the override" and "applying it" cannot go
+// separately: they are two steps, the second would be forgotten, and the symptom would be that the
+// panel shows the new path and the viewport the old one. The command and the panel
+// (later on) both call through here, never directly to
 // go.materialOverrides.
 void setMaterialTextureOverride(GameObject& go, int materialIndex,
                                  MaterialTextureSlot slot, const std::string& path);
 
-// Cambio de UNA textura de UN material, por el stack de undo.
+// Change of ONE texture of ONE material, through the undo stack.
 //
-// El renderer es PUNTERO y puede ser nullptr (tests headless): mismo patrón
-// que AnimationSourceCommand. Resuelve el GameObject por id en cada
-// aplicación, nunca por puntero, para sobrevivir a un undo de Delete que lo
-// reconstruya.
+// The renderer is a POINTER and can be nullptr (headless tests): same pattern
+// as AnimationSourceCommand. It resolves the GameObject by id on every
+// application, never by pointer, to survive an undo of Delete that
+// rebuilds it.
 class MaterialTextureCommand : public ICommand {
 public:
     MaterialTextureCommand(Scene& scene, EditorRenderer* renderer, std::string label,
@@ -830,12 +830,12 @@ private:
     std::string         m_after;
 };
 
-// Escribe la ruta de un .mat en el override del material `materialIndex` y lo
-// aplica al Material. Simetrico a setMaterialTextureOverride.
+// Writes the path of a .mat into the override of material `materialIndex` and
+// applies it to the Material. Symmetric to setMaterialTextureOverride.
 void setMaterialAssetOverride(GameObject& go, int materialIndex, const std::string& matAssetPath);
 
-// Cambio del .mat vinculado a UN material, por el stack de undo. Mismo patron
-// que MaterialTextureCommand: resuelve por id, renderer opcional.
+// Change of the .mat linked to ONE material, through the undo stack. Same pattern
+// as MaterialTextureCommand: it resolves by id, optional renderer.
 class MaterialAssetCommand : public ICommand {
 public:
     MaterialAssetCommand(Scene& scene, EditorRenderer* renderer, std::string label,
@@ -858,34 +858,34 @@ private:
 
 enum class MaterialFactorSlot { Metallic, Roughness };
 
-// Escribe UN factor PBR (metallic o roughness) en el override del material
-// `materialIndex` y lo aplica al Material. Simétrico a
-// setMaterialTextureOverride: crea la entrada del override si no existe, y es
-// el único sitio (junto al de texturas) que escribe en materialOverrides —el
-// comando y el panel llaman aquí, nunca directamente a go.materialOverrides.
+// Writes ONE PBR factor (metallic or roughness) into the override of material
+// `materialIndex` and applies it to the Material. Symmetric to
+// setMaterialTextureOverride: it creates the override entry if it does not exist, and it is
+// the only place (together with the texture one) that writes to materialOverrides; the
+// command and the panel call here, never directly to go.materialOverrides.
 //
-// `value` puede ser un valor de slider (0..1) O el centinela -1.0f de "sin
-// override" (ver MaterialOverride en GameObject.h) -- el undo de la primera
-// edición de un factor pasa el centinela aquí en producción (ver
-// currentFactorOverride() en PropertiesPanel.cpp, que es de donde sale el
-// "before" del comando). Este setter no distingue los dos casos: escribe
-// `value` tal cual en el override y deja que applyMaterialOverrides sea
-// quien interprete el signo.
+// `value` can be a slider value (0..1) OR the sentinel -1.0f for "no
+// override" (see MaterialOverride in GameObject.h); the undo of the first
+// edit of a factor passes the sentinel here in production (see
+// currentFactorOverride() in PropertiesPanel.cpp, which is where the command's
+// "before" comes from). This setter does not distinguish the two cases: it writes
+// `value` as is into the override and lets applyMaterialOverrides be
+// the one to interpret the sign.
 void setMaterialFactorOverride(GameObject& go, int materialIndex,
                                 MaterialFactorSlot slot, float value);
 
-// Cambio de UN factor PBR de UN material, por el stack de undo. Calcado de
-// MaterialTextureCommand (mismos tres guardas: resuelve el GameObject por id
-// en cada aplicación, corta si el índice ya no describe un material del mesh
-// vivo, y rebuild solo si hay renderer) con el tipo del valor cambiado de
-// std::string a float — dos comandos independientes (Metallic y Roughness
-// son dos MaterialFactorSlot distintos) en vez de uno que cargue los dos
-// factores a la vez: si compartieran un solo comando con snapshot combinado
-// como AudioClipState, arrastrar SOLO Metallic tendría que reescribir
-// también el override de Roughness con su valor actual para poder deshacer
-// los dos juntos, y eso lo "tocaría" (activaría su centinela) aunque el
-// usuario nunca lo arrastró — el factor que no se tocó se serializaría igual
-// que el que sí.
+// Change of ONE PBR factor of ONE material, through the undo stack. Copied from
+// MaterialTextureCommand (same three guards: it resolves the GameObject by id
+// on every application, it cuts if the index no longer describes a material of the live
+// mesh, and rebuild only if there is a renderer) with the value type changed from
+// std::string to float. Two independent commands (Metallic and Roughness
+// are two distinct MaterialFactorSlot) instead of one that carries both
+// factors at once: if they shared a single command with a combined snapshot
+// like AudioClipState, dragging ONLY Metallic would have to rewrite
+// Roughness's override too with its current value in order to undo
+// both together, and that would "touch" it (activate its sentinel) even though the
+// user never dragged it, and the factor that was not touched would be serialized the same
+// as the one that was.
 class MaterialFactorCommand : public ICommand {
 public:
     MaterialFactorCommand(Scene& scene, EditorRenderer* renderer, std::string label,
@@ -908,50 +908,50 @@ private:
     float              m_after;
 };
 
-// Añadir o quitar el componente Mesh, por el stack de undo. Mismo contrato que
-// CameraComponentCommand: `add` dice qué hace execute(), y undo() hace lo
-// contrario. Las dos direcciones son las mismas dos operaciones -poner esta
-// malla con estos overrides, y quitarla- con los papeles cambiados.
+// Add or remove the Mesh component, through the undo stack. Same contract as
+// CameraComponentCommand: `add` says what execute() does, and undo() does the
+// opposite. The two directions are the same two operations (set this
+// mesh with these overrides, and remove it) with the roles swapped.
 //
-// QUITAR: el panel construye, llama a execute() y apila, como el resto.
+// REMOVE: the panel builds, calls execute() and pushes, like the rest.
 //
-// AÑADIR: se apila SIN execute(), cuando la carga ya ha aterrizado. Añadir un
-// Mesh es asíncrono: el botón solo encola, y hasta que applyLoadedMesh no hace
-// el setMesh no hay malla que guardar. Por eso lo apila EditorUI::onAssetsLoaded
-// y no el panel, y solo para las cargas que pidió el usuario desde Properties
-// (la carga de escena usa el mismo requestMesh y no es una edición).
+// ADD: it is pushed WITHOUT execute(), when the load has already landed. Adding a
+// Mesh is asynchronous: the button only enqueues, and until applyLoadedMesh does
+// the setMesh there is no mesh to store. That is why EditorUI::onAssetsLoaded pushes it
+// and not the panel, and only for the loads the user requested from Properties
+// (the scene load uses the same requestMesh and is not an edit).
 //
-// Antes la "x" de la sección Mesh quitaba la malla y VACIABA materialOverrides
-// fuera del undo: Ctrl+Z no la devolvía, y con ella se perdían las texturas y
-// los factores asignados a mano. Vaciar es lo correcto -sin eso, un Remove +
-// Add con un FBX de menos materiales reescribiría overrides con índices que ya
-// no existen, por un camino que ningún clamp detecta porque el índice era
-// válido cuando se escribió-; lo que faltaba era poder deshacerlo.
+// Before, the "x" of the Mesh section removed the mesh and EMPTIED materialOverrides
+// outside the undo: Ctrl+Z did not bring it back, and with it the textures and
+// the hand-assigned factors were lost. Emptying is the right thing (without it, a Remove +
+// Add with an FBX with fewer materials would rewrite overrides with indices that no
+// longer exist, through a path that no clamp detects because the index was
+// valid when it was written); what was missing was being able to undo it.
 //
-// Guarda el shared_ptr de la malla, no su ruta: el undo es síncrono, sin volver
-// a leer el FBX ni pasar por la carga async, y devuelve EXACTAMENTE la misma
-// malla (un procedural no tiene ruta que releer). Y guarda los overrides
-// ENTEROS, baselines incluidos, para restaurarlos DESPUÉS de setMesh: setMesh
-// baja los flags base*Taken, y la malla guardada ya lleva los overrides
-// horneados en su Material, así que sin ese orden applyMaterialOverrides
-// recapturaría como "original del FBX" la textura del usuario, y un Clear
-// posterior la devolvería a ella.
+// It stores the mesh's shared_ptr, not its path: the undo is synchronous, without
+// re-reading the FBX or going through the async load, and it returns EXACTLY the same
+// mesh (a procedural one has no path to re-read). And it stores the WHOLE overrides,
+// baselines included, to restore them AFTER setMesh: setMesh
+// lowers the base*Taken flags, and the stored mesh already carries the overrides
+// baked into its Material, so without that order applyMaterialOverrides
+// would recapture the user's texture as the "FBX original", and a later
+// Clear would return it to that.
 //
-// Dos guardas, una por dirección, porque hay caminos que cambian la malla SIN
-// pasar por el undo (borrar un FBX en uso desde el Content Browser, o una
-// carga que aterriza después):
-//  - poner no hace nada si el objeto ya tiene una malla o una carga en vuelo:
-//    restaurar la nuestra pisaría la otra sin que se pudiera recuperar;
-//  - quitar solo quita LA NUESTRA (misma instancia): si la malla ya es otra, no
-//    es este comando quien debe llevársela.
+// Two guards, one per direction, because there are paths that change the mesh WITHOUT
+// going through the undo (deleting an FBX in use from the Content Browser, or a
+// load that lands later):
+//  - setting does nothing if the object already has a mesh or a load in flight:
+//    restoring ours would overwrite the other with no way to recover it;
+//  - removing only removes OURS (same instance): if the mesh is already another one, it is
+//    not this command's job to take it away.
 //
-// El renderer es PUNTERO y puede ser nullptr (tests headless), como en
+// The renderer is a POINTER and can be nullptr (headless tests), as in
 // MaterialTextureCommand.
 class MeshComponentCommand : public ICommand {
 public:
-    // Captura la malla y los overrides de `go` tal como están AHORA: con add
-    // = false, justo antes del execute(); con add = true, justo después de que
-    // la carga aterrizó.
+    // Captures the mesh and the overrides of `go` exactly as they are NOW: with add
+    // = false, right before execute(); with add = true, right after
+    // the load landed.
     MeshComponentCommand(Scene& scene, EditorRenderer* renderer, std::string label,
                           GameObject& go, bool add);
     void execute() override;
@@ -967,10 +967,10 @@ private:
     std::string                   m_label;
     uint64_t                      m_id;
     bool                          m_add;
-    // Dueño de la malla SOLO mientras está quitada. Mientras está puesta en el
-    // objeto, el comando no la retiene (m_meshVista): si la retuviera, el objeto
-    // la vería compartida, editMesh() la copiaría al primer cambio de material,
-    // y la comparación "¿es la nuestra?" de remove() dejaría de casar sola.
+    // Owner of the mesh ONLY while it is removed. While it is set on the
+    // object, the command does not retain it (m_meshVista): if it retained it, the object
+    // would see it as shared, editMesh() would copy it on the first material change,
+    // and the "is it ours?" comparison in remove() would stop matching by itself.
     std::shared_ptr<const Mesh>   m_mesh;
     std::weak_ptr<const Mesh>     m_meshVista;
     std::vector<MaterialOverride> m_overrides;

@@ -17,9 +17,9 @@ namespace DonTopo
 {
     namespace
     {
-        // uint16 para los índices: 4 vértices por quad, así que el techo son
-        // 16383 quads por frame. Pasado ese punto se deja de emitir en vez de
-        // desbordar el índice en silencio.
+        // uint16 for the indices: 4 vertices per quad, so the ceiling is
+        // 16383 quads per frame. Past that point emission stops instead of
+        // silently overflowing the index.
         constexpr size_t kMaxVertices = 65532;
 
         constexpr uint32_t kInitialVertexCapacity = 1024;   // 256 quads
@@ -29,8 +29,8 @@ namespace DonTopo
         {
             if (size.x <= 0.0f || size.y <= 0.0f) return {};
 
-            // Hacia fuera (floor/ceil): recortar de menos deja el borde del
-            // sprite; recortar de más se come una fila de píxeles.
+            // Outwards (floor/ceil): clipping too little leaves the sprite's edge;
+            // clipping too much eats a row of pixels.
             const float fx0 = std::floor(pos.x);
             const float fy0 = std::floor(pos.y);
             const float fx1 = std::ceil(pos.x + size.x);
@@ -44,8 +44,8 @@ namespace DonTopo
             return s;
         }
 
-        // Intersección, NO reemplazo: un hijo nunca puede pintar fuera de lo que
-        // su padre ya había recortado.
+        // Intersection, NOT replacement: a child can never paint outside what
+        // its parent had already clipped.
         UiScissor intersectScissor(const UiScissor& a, const UiScissor& b)
         {
             if (a.empty() || b.empty()) return {};
@@ -65,19 +65,19 @@ namespace DonTopo
             return s;
         }
 
-        // Un quad con TODO explícito: atlas, UVs, color y los dos vec4 de
-        // parámetros. El de texto no puede salir de node.sprite porque un glyph
-        // no tiene nombre, así que la regla de romper el lote vive aquí y solo
-        // aquí.
-        // dxTop/dxBottom desplazan en X el borde superior y el inferior: es la
-        // cizalla de la cursiva, que así no necesita ni matriz ni un vértice más
-        // ancho. A 0 el quad sale exactamente igual que siempre.
-        // ── Rotación del quad ───────────────────────────────────────────────
-        // Estado de módulo y no un parámetro más: la rotación tiene que llegar
-        // a los N quads que emite un Image y a cada glyph de un Text sin
-        // ensuciar seis firmas. El build de la UI es de un solo hilo y
-        // determinista, y quien la enciende (emitNode) la deja como estaba
-        // antes de bajar a los hijos.
+        // A quad with EVERYTHING explicit: atlas, UVs, color and the two parameter
+        // vec4s. The text one cannot come from node.sprite because a glyph
+        // has no name, so the rule for breaking the batch lives here and only
+        // here.
+        // dxTop/dxBottom shift the top and bottom edges in X: it is the
+        // italic shear, which this way needs neither a matrix nor a wider
+        // vertex. At 0 the quad comes out exactly as it always did.
+        // ── Quad rotation ───────────────────────────────────────────────────
+        // Module state and not one more parameter: the rotation has to reach
+        // the N quads that an Image emits and every glyph of a Text without
+        // dirtying six signatures. The UI build is single-threaded and
+        // deterministic, and whoever turns it on (emitNode) leaves it as it was
+        // before descending into the children.
         struct QuadRotation
         {
             bool      activa = false;
@@ -88,12 +88,12 @@ namespace DonTopo
 
         QuadRotation g_rot;
 
-        // ── Resolución del canvas ───────────────────────────────────────────
-        // El árbol entero (layout, anclas, texto, animaciones) se resuelve en
-        // unidades de REFERENCIA y no sabe que esto existe. La escala y el
-        // origen entran UNA sola vez, al pasar el rect ya resuelto de cada nodo
-        // a píxeles del render. Estado de módulo por lo mismo que g_rot: el
-        // build de la UI es de un solo hilo y determinista.
+        // ── Canvas resolution ───────────────────────────────────────────────
+        // The whole tree (layout, anchors, text, animations) is resolved in
+        // REFERENCE units and does not know this exists. The scale and the
+        // origin enter ONCE, when the already resolved rect of each node is
+        // turned into render pixels. Module state for the same reason as g_rot: the
+        // UI build is single-threaded and deterministic.
         struct CanvasXform
         {
             glm::vec2 origen{0.0f, 0.0f};
@@ -109,17 +109,17 @@ namespace DonTopo
                     g_rot.centro.y + d.x * g_rot.sen + d.y * g_rot.cs};
         }
 
-        // ── Caché por nodo ──────────────────────────────────────────────────
-        // Mientras g_rec apunta a un nodo, cada quad que salga se copia TAMBIÉN
-        // a su caché, troceado por (atlas, scissor) igual que los lotes. Nulo
-        // fuera de la emisión de un nodo, o sea siempre que la caché sirve.
+        // ── Per-node cache ──────────────────────────────────────────────────
+        // While g_rec points at a node, every quad that comes out is ALSO copied
+        // into its cache, split by (atlas, scissor) just like the batches. Null
+        // outside a node's emission, that is, whenever the cache is being used.
         const UiElement* g_rec = nullptr;
 
-        // Nodos que han reemitido en el build en curso.
+        // Nodes that have re-emitted in the current build.
         uint32_t g_rebuilt = 0;
 
-        // Un quad recién emitido, tal cual, dentro de la caché del nodo activo.
-        // Los índices se guardan RELATIVOS al primer vértice del nodo.
+        // A freshly emitted quad, as is, into the active node's cache.
+        // The indices are stored RELATIVE to the node's first vertex.
         void grabaQuad(const UiTextureAtlas* atlas, const UiScissor& scissor,
                        const UiVertex* verts, const uint16_t* quad, uint16_t quadBase)
         {
@@ -143,9 +143,9 @@ namespace DonTopo
             segs.back().indexCount  += 6;
         }
 
-        // Vuelca la caché de un nodo limpio. Reabre lote con EL MISMO criterio
-        // que emitRawQuad y rebasa los índices sobre la base de destino: salen
-        // los mismos uint16 y el mismo corte de lotes que si se hubiera emitido.
+        // Dumps the cache of a clean node. Reopens a batch with THE SAME criterion
+        // as emitRawQuad and rebases the indices onto the destination base: the
+        // same uint16s and the same batch cut come out as if it had been emitted.
         void reproduceCache(const UiElement& node, UiDrawData& out)
         {
             size_t vRead = 0;
@@ -153,9 +153,9 @@ namespace DonTopo
 
             for (const UiElement::CacheSegment& seg : node.cacheSegments)
             {
-                // El mismo tope que emitRawQuad. Con la misma escena y el mismo
-                // orden no salta nunca; está para que no pueda salir un índice
-                // por encima de 65535 si algún día salta.
+                // The same ceiling as emitRawQuad. With the same scene and the same
+                // order it never triggers; it is there so that an index above
+                // 65535 cannot come out if it ever does.
                 if (out.vertices.size() + seg.vertexCount > kMaxVertices) return;
 
                 if (out.batches.empty() ||
@@ -199,10 +199,10 @@ namespace DonTopo
         {
             if (out.vertices.size() + 4 > kMaxVertices) return;
 
-            // Un lote solo puede llevar UN atlas y UN scissor: cualquiera de los
-            // dos que cambie obliga a cerrar el actual y abrir otro. El modo, el
-            // outline y el color van por vértice justamente para NO aparecer
-            // aquí.
+            // A batch can only carry ONE atlas and ONE scissor: whichever of the
+            // two changes forces closing the current one and opening another. The mode, the
+            // outline and the color go per vertex precisely so as NOT to show up
+            // here.
             if (out.batches.empty() ||
                 out.batches.back().atlas != atlas ||
                 out.batches.back().scissor != scissor)
@@ -224,10 +224,10 @@ namespace DonTopo
                 {pos.x + dxBottom,          pos.y + size.y}
             };
 
-            // Sin rotación NO se toca ni una coordenada: girar por 0 pasaría
-            // igualmente por centro + (p - centro), y eso en coma flotante NO
-            // devuelve p exacto. Con la rama, un árbol sin rotation sale bit a
-            // bit como salía.
+            // Without rotation not a single coordinate is touched: rotating by 0 would
+            // still go through center + (p - center), and in floating point that does NOT
+            // return p exactly. With the branch, a tree without rotation comes out bit for
+            // bit as it did.
             glm::vec2 v0 = esquina[0], v1 = esquina[1], v2 = esquina[2], v3 = esquina[3];
             if (g_rot.activa)
             {
@@ -237,8 +237,8 @@ namespace DonTopo
                 v3 = rotaQuad(esquina[3]);
             }
 
-            // Sentido horario en pantalla empezando arriba a la izquierda. El
-            // vértice inferior tiene la Y MAYOR: +Y va hacia abajo.
+            // Clockwise on screen starting at the top left. The
+            // bottom vertex has the GREATER Y: +Y goes down.
             out.vertices.push_back({v0, {uv.u0, uv.v0}, color, params, effect});
             out.vertices.push_back({v1, {uv.u1, uv.v0}, color, params, effect});
             out.vertices.push_back({v2, {uv.u1, uv.v1}, color, params, effect});
@@ -252,14 +252,14 @@ namespace DonTopo
             grabaQuad(atlas, scissor, out.vertices.data() + base, quad, base);
         }
 
-        // ── Modos de dibujo del Image ───────────────────────────────────────
-        // Los cuatro se resuelven AQUÍ, en CPU, emitiendo N quads con el mismo
-        // atlas y el mismo scissor: por eso ninguno parte el lote y ninguno
-        // necesita una rama en el shader ni un campo en el vértice.
+        // ── Image draw modes ────────────────────────────────────────────────
+        // All four are resolved HERE, on the CPU, emitting N quads with the same
+        // atlas and the same scissor: that is why none of them splits the batch and none
+        // needs a branch in the shader or a field in the vertex.
 
-        // Tamaño del sprite EN PÍXELES DEL ATLAS. Una textura suelta (un atlas
-        // sin ninguna entrada con ese nombre) mide lo que mide el atlas entero:
-        // es la misma regla que ya usa uvRect al caer a 0..1.
+        // Size of the sprite IN ATLAS PIXELS. A loose texture (an atlas
+        // with no entry of that name) measures what the whole atlas measures:
+        // it is the same rule uvRect already uses when falling back to 0..1.
         glm::vec2 spriteNativeSize(const UiElement& node)
         {
             if (!node.atlas) return {0.0f, 0.0f};
@@ -268,9 +268,9 @@ namespace DonTopo
             return {(float)node.atlas->width(), (float)node.atlas->height()};
         }
 
-        // Repite el sprite a su tamaño nativo. La fila y la columna del final NO
-        // se escalan: se recortan por UV, que es lo que distingue un tiling de un
-        // stretch con más pasos.
+        // Repeats the sprite at its native size. The last row and column are NOT
+        // scaled: they are cut by UV, which is what distinguishes a tiling from a
+        // stretch with more steps.
         bool emitTiled(const UiElement& node, const Image& img,
                        const glm::vec2& pos, const glm::vec2& size, const UiUvRect& uv,
                        const glm::vec4& color, const UiScissor& scissor, UiDrawData& out)
@@ -282,8 +282,8 @@ namespace DonTopo
             const double rows = std::ceil((double)size.y / (double)tile.y);
             if (cols <= 0.0 || rows <= 0.0) return false;
 
-            // El tope se comprueba en double y ANTES de convertir: con un sprite
-            // de 2 px y un rect grande el producto se sale de un uint32.
+            // The cap is checked in double and BEFORE converting: with a 2 px
+            // sprite and a large rect the product overflows a uint32.
             if (cols * rows > (double)img.maxTiles) return false;
 
             const float du = uv.u1 - uv.u0;
@@ -314,11 +314,11 @@ namespace DonTopo
             return true;
         }
 
-        // 9-slice. Las esquinas salen SIEMPRE a su tamaño nativo, los bordes se
-        // estiran solo en su eje y el centro rellena el hueco. Si los bordes de
-        // un eje no caben en el rect se escalan los dos proporcionalmente: es la
-        // única forma de que no se solapen, y encoger es lo contrario de
-        // estirar una esquina.
+        // 9-slice. The corners ALWAYS come out at their native size, the edges
+        // stretch only along their axis and the center fills the gap. If the edges of
+        // one axis do not fit in the rect, both are scaled proportionally: it is the
+        // only way they do not overlap, and shrinking is the opposite of
+        // stretching a corner.
         bool emitSliced(const UiElement& node, const Image& img,
                         const glm::vec2& pos, const glm::vec2& size, const UiUvRect& uv,
                         const glm::vec4& color, const UiScissor& scissor, UiDrawData& out)
@@ -326,8 +326,8 @@ namespace DonTopo
             const glm::vec2 native = spriteNativeSize(node);
             if (native.x <= 0.0f || native.y <= 0.0f) return false;
 
-            // Bordes en píxeles del sprite, acotados al propio sprite: unos
-            // bordes mayores que la textura darían UVs cruzadas.
+            // Borders in sprite pixels, clamped to the sprite itself: borders
+            // larger than the texture would give crossed UVs.
             float sl = std::max(0.0f, img.borderLeft);
             float sr = std::max(0.0f, img.borderRight);
             float st = std::max(0.0f, img.borderTop);
@@ -344,8 +344,8 @@ namespace DonTopo
                 st *= k; sb *= k;
             }
 
-            // Y ahora en píxeles de pantalla: el mismo valor, salvo que no quepa
-            // en el rect.
+            // And now in screen pixels: the same value, unless it does not fit
+            // in the rect.
             float gl = sl, gr = sr, gt = st, gb = sb;
             if (gl + gr > size.x && gl + gr > 0.0f)
             {
@@ -385,16 +385,16 @@ namespace DonTopo
             return true;
         }
 
-        // Recorta posición y UV A LA VEZ: el trozo visible enseña SU parte del
-        // sprite, no el sprite entero comprimido. A 1 devuelve false para que
-        // salga por el camino Normal y dé vértice a vértice lo mismo que antes.
+        // Clips position and UV AT THE SAME TIME: the visible piece shows ITS part of the
+        // sprite, not the whole sprite squeezed. At 1 it returns false so that it
+        // goes through the Normal path and gives vertex by vertex the same as before.
         bool emitFilled(const UiElement& node, const Image& img,
                         const glm::vec2& pos, const glm::vec2& size, const UiUvRect& uv,
                         const glm::vec4& color, const UiScissor& scissor, UiDrawData& out)
         {
             const float amount = std::min(1.0f, std::max(0.0f, img.fillAmount));
-            if (amount <= 0.0f) return true;    // manejado: ni un quad
-            if (amount >= 1.0f) return false;   // idéntico a Normal
+            if (amount <= 0.0f) return true;    // handled: not a single quad
+            if (amount >= 1.0f) return false;   // identical to Normal
 
             glm::vec2 p = pos;
             glm::vec2 s = size;
@@ -426,14 +426,14 @@ namespace DonTopo
             UiUvRect uv{};
             if (node.atlas) uv = node.atlas->uvRect(node.sprite);
 
-            // La opacidad acumulada del árbol viaja POR VÉRTICE: así no parte el
-            // lote, que solo puede cambiar por atlas o por scissor.
+            // The tree's accumulated opacity travels PER VERTEX: this way it does not split the
+            // batch, which can only change by atlas or by scissor.
             glm::vec4 color = node.color;
             color.a *= opacity;
 
-            // Los modos del Image son N quads del mismo lote. El que no puede
-            // resolverse (sin tamaño nativo, o con más tiles que el tope) cae a
-            // Normal en vez de desaparecer.
+            // The Image modes are N quads of the same batch. The one that cannot
+            // be resolved (without native size, or with more tiles than the limit) falls to
+            // Normal instead of disappearing.
             const Image* img = node.asImage();
             if (img && img->mode != UiImageMode::Normal)
             {
@@ -448,18 +448,18 @@ namespace DonTopo
                 if (handled) return;
             }
 
-            // params.x = 0: el shader hace exactamente lo de siempre.
+            // params.x = 0: the shader does exactly what it always did.
             emitRawQuad(node.atlas, pos, size, uv, color,
                         glm::vec4(0.0f), glm::vec4(0.0f), scissor, out);
         }
 
-        // ── Texto ───────────────────────────────────────────────────────────
-        // Todo el rich text se resuelve AQUÍ, en CPU: ni un shader ni un
-        // pipeline ni una fuente más. El parseo produce glyphs ya "planchados"
-        // (con su color, su escala y su avance en píxeles de mundo) y el corte
-        // de líneas trabaja sobre ese array, no sobre la cadena.
+        // ── Text ───────────────────────────────────────────────────────────
+        // All the rich text is resolved HERE, on CPU: neither a shader nor a
+        // pipeline nor another font. The parsing produces glyphs already "ironed out"
+        // (with their color, their scale and their advance in world pixels) and the line
+        // breaking works on that array, not on the string.
 
-        // Estilo vigente en un punto del texto. Es lo que la pila apila.
+        // Current style at a point in the text. This is what the stack stacks.
         struct TextStyle
         {
             glm::vec4 color{1.0f};
@@ -477,40 +477,40 @@ namespace DonTopo
             Italic
         };
 
-        // Cada apertura guarda el estilo de FUERA: el cierre no "deshace" campo
-        // a campo, restaura el de antes entero. Así anidan sin sorpresas.
+        // Each opening saves the style from OUTSIDE: the closing does not "undo" field
+        // by field, it restores the entire previous one. So they nest without surprises.
         struct StyleEntry
         {
             TagKind   kind = TagKind::None;
             TextStyle previous{};
         };
 
-        // Un glyph ya resuelto. A partir de aquí no se vuelve a mirar ni la
-        // cadena ni la pila de estilos.
+        // A glyph already resolved. From here on neither the
+        // string nor the style stack is looked at anymore.
         struct ShapedGlyph
         {
             const UiGlyph* glyph = nullptr;
             glm::vec2 scale{1.0f, 1.0f};
             glm::vec4 color{1.0f};
-            float     kern    = 0.0f;   // corrección ANTES de este glyph, en px de mundo
-            float     advance = 0.0f;   // en px de mundo
-            float     sizePx  = 0.0f;   // tamaño del tramo, para el grosor de la negrita
+            float     kern    = 0.0f;   // correction BEFORE this glyph, in world px
+            float     advance = 0.0f;   // in world px
+            float     sizePx  = 0.0f;   // size of the segment, for the thickness of the bold
             bool      bold    = false;
             bool      italic  = false;
             bool      space   = false;
-            bool      newline = false;  // '\n': ni se dibuja ni avanza, solo corta
+            bool      newline = false;  // '\n': neither drawn nor advances, only breaks
         };
 
         struct TextLine
         {
             uint32_t first = 0;
-            uint32_t count = 0;   // ya SIN los espacios del final: no se dibujan ni se alinean
-            uint32_t spaces = 0;  // espacios interiores: los que reparte Justify
+            uint32_t count = 0;   // already WITHOUT trailing spaces: they are not drawn nor aligned
+            uint32_t spaces = 0;  // interior spaces: the ones that Justify distributes
             float    width = 0.0f;
-            bool     hardBreak = false;   // la cortó un '\n', así que Justify no la toca
+            bool     hardBreak = false;   // '\n' broke it, so Justify does not touch it
 
-            // Los puntos suspensivos van al final de s.glyphs, no dentro de la
-            // línea: recortar la línea es mover un contador, no mover glyphs.
+            // The ellipsis goes at the end of s.glyphs, not inside the
+            // line: clipping the line is moving a counter, not moving glyphs.
             uint32_t ellipsisFirst = 0;
             uint32_t ellipsisCount = 0;
         };
@@ -524,17 +524,17 @@ namespace DonTopo
             glm::vec2                block{0.0f, 0.0f};
         };
 
-        // El buffer REUTILIZADO entre frames. build() es estática, así que el
-        // "miembro" es este bloque por hilo: tras el primer frame ni el parseo
-        // ni el corte de líneas asignan nada.
+        // The REUSED buffer between frames. build() is static, so the
+        // "member" is this block per thread: after the first frame neither the parsing
+        // nor the line breaking allocates anything.
         TextScratch& textScratch()
         {
             static thread_local TextScratch s;
             return s;
         }
 
-        // Comparación ASCII sin distinguir mayúsculas contra un literal. El
-        // nombre del tag tiene que casar ENTERO: "colorr" no es "color".
+        // ASCII comparison case-insensitive against a literal. The
+        // tag name has to match ENTIRELY: "colorr" is not "color".
         bool tagIs(const std::vector<uint32_t>& cps, size_t first, size_t count, const char* name)
         {
             size_t i = 0;
@@ -547,8 +547,8 @@ namespace DonTopo
             return i == count && name[i] == '\0';
         }
 
-        // #RRGGBB o #RRGGBBAA. Cualquier otra longitud o un dígito que no sea
-        // hexadecimal = no es un color.
+        // #RRGGBB or #RRGGBBAA. Any other length or a digit that is not
+        // hexadecimal = not a color.
         bool parseHexColor(const std::vector<uint32_t>& cps, size_t first, size_t count, glm::vec4& out)
         {
             if (count != 6 && count != 8) return false;
@@ -570,9 +570,9 @@ namespace DonTopo
             return true;
         }
 
-        // Decimal sin signo, con parte fraccionaria opcional. Sin dígitos o con
-        // basura detrás no hay número: "<size=>" es texto, no un tamaño 0 que
-        // haría desaparecer el tramo en silencio.
+        // Unsigned decimal, with optional fractional part. No digits or with
+        // garbage after means no number: "<size=>" is text, not a size 0 that
+        // would make the segment disappear silently.
         bool parseNumber(const std::vector<uint32_t>& cps, size_t first, size_t count, float& out)
         {
             if (count == 0) return false;
@@ -602,14 +602,14 @@ namespace DonTopo
             return true;
         }
 
-        // Intenta leer un tag en 'at' (que apunta a un '<'). Devuelve cuántos
-        // codepoints consume, INCLUIDOS '<' y '>', o 0 si ahí no había un tag
-        // válido. Ese 0 es toda la regla: lo que no se entiende se dibuja.
+        // Tries to read a tag at 'at' (which points to a '<'). Returns how many
+        // codepoints it consumes, INCLUDING '<' and '>', or 0 if there was no valid tag
+        // there. That 0 is the entire rule: whatever is not understood is drawn.
         size_t applyTag(const std::vector<uint32_t>& cps, size_t at,
                         TextStyle& style, std::vector<StyleEntry>& stack)
         {
-            // Un tag no puede ser infinito: sin '>' cerca, o con otro '<' por
-            // medio, esto era texto.
+            // A tag cannot be infinite: without '>' nearby, or with another '<'
+            // in between, this was text.
             constexpr size_t kMaxTag = 32;
 
             const size_t stop = std::min(cps.size(), at + 1 + kMaxTag);
@@ -634,8 +634,8 @@ namespace DonTopo
                 else if (tagIs(cps, first, count, "/b"))     kind = TagKind::Bold;
                 else if (tagIs(cps, first, count, "/i"))     kind = TagKind::Italic;
 
-                // Un cierre huérfano o cruzado NO desapila a ciegas: sale como
-                // texto, que es lo único que no puede perder información.
+                // An orphan or crossing closing does NOT pop blindly: it comes out as
+                // text, which is the only thing that cannot lose information.
                 if (kind == TagKind::None) return 0;
                 if (stack.empty() || stack.back().kind != kind) return 0;
 
@@ -659,8 +659,8 @@ namespace DonTopo
             if (count > 7 && tagIs(cps, first, 6, "color=") && cps[first + 6] == '#')
             {
                 glm::vec4 color{};
-                // Se parsea ANTES de apilar: un color inválido no deja la pila
-                // tocada, así que el '</color>' de después tampoco casa.
+                // Parsed BEFORE stacking: an invalid color does not leave the stack
+                // touched, so the '</color>' after it does not match either.
                 if (!parseHexColor(cps, first + 7, count - 7, color)) return 0;
                 stack.push_back(StyleEntry{TagKind::Color, style});
                 style.color = color;
@@ -678,7 +678,7 @@ namespace DonTopo
             return 0;
         }
 
-        // Cadena -> array de glyphs con estilo, ya en píxeles de mundo.
+        // String -> array of glyphs with style, already in world pixels.
         void shapeText(const Text& text, const glm::vec2& worldScale, TextScratch& s)
         {
             const UiFont* font = text.font;
@@ -705,7 +705,7 @@ namespace DonTopo
                         i += consumed;
                         continue;
                     }
-                    // No era un tag: el '<' sigue siendo un carácter como otro.
+                    // It was not a tag: the '<' is still a character like any other.
                 }
 
                 ++i;
@@ -722,13 +722,13 @@ namespace DonTopo
                 const UiGlyph* glyph = font->findGlyph(cp);
                 if (!glyph)
                 {
-                    // Sin glyph no hay ni avance ni par de kerning que valga.
+                    // Without glyph there is neither advance nor kerning pair that counts.
                     previous = 0;
                     continue;
                 }
 
-                // fontSize/bakeSize: el atlas se horneó a UN tamaño y el resto
-                // sale de escalar el quad, que es de lo que va un MSDF.
+                // fontSize/bakeSize: the atlas was baked at ONE size and the rest
+                // comes from scaling the quad, which is what MSDF does.
                 const float unit = font->scaleFor(style.sizePx);
 
                 ShapedGlyph g{};
@@ -747,9 +747,9 @@ namespace DonTopo
             }
         }
 
-        // Corta en líneas. Con availWidth <= 0 (un Text sin rect) no hay contra
-        // qué cortar: queda una sola línea por cada '\n', que es exactamente lo
-        // de la fase anterior.
+        // Breaks into lines. With availWidth <= 0 (a Text without rect) there is nothing to
+        // break against: there is one line per '\n', which is exactly what
+        // the previous phase did.
         void breakLines(const Text& text, float availWidth, TextScratch& s)
         {
             s.lines.clear();
@@ -758,13 +758,13 @@ namespace DonTopo
             const size_t n    = s.glyphs.size();
 
             size_t   lineFirst     = 0;
-            float    lineWidth     = 0.0f;   // con los espacios del final incluidos
+            float    lineWidth     = 0.0f;   // with trailing spaces included
             uint32_t spaces        = 0;
-            uint32_t trailing      = 0;      // espacios seguidos al final de la línea
+            uint32_t trailing      = 0;      // spaces in a row at the end of the line
             float    trailingWidth = 0.0f;
 
-            // El kerning del PRIMER glyph de una línea no cuenta: su par se
-            // quedó en la línea de arriba.
+            // The kerning of the FIRST glyph of a line does not count: its pair
+            // is left on the line above.
             auto glyphWidth = [&](size_t idx) {
                 return (idx == lineFirst ? 0.0f : s.glyphs[idx].kern) + s.glyphs[idx].advance;
             };
@@ -806,8 +806,8 @@ namespace DonTopo
                     continue;
                 }
 
-                // La palabra se mide ENTERA antes de decidir dónde va: es lo que
-                // distingue un wrap por palabras de uno por caracteres.
+                // The word is measured ENTIRELY before deciding where it goes: this is what
+                // distinguishes a word wrap from a character wrap.
                 size_t wordEnd   = i;
                 float  wordWidth = 0.0f;
                 while (wordEnd < n && !s.glyphs[wordEnd].space && !s.glyphs[wordEnd].newline)
@@ -821,22 +821,22 @@ namespace DonTopo
 
                 if (wrap && !atLineStart && lineWidth + lead + wordWidth > availWidth)
                 {
-                    // La palabra entera baja. Se reevalúa sin avanzar: ya en
-                    // cabeza de línea puede seguir sin caber.
+                    // The entire word goes down. Re-evaluated without advancing: already at
+                    // line head it may continue without fitting.
                     closeLine(i, i, false);
                     continue;
                 }
 
                 if (wrap && atLineStart && wordWidth > availWidth)
                 {
-                    // No cabe ni sola: se parte por glyph, con al menos uno por
-                    // línea (si no, un rect más estrecho que un glyph no
-                    // terminaría nunca).
+                    // It does not fit even alone: it is broken by glyph, with at least one per
+                    // line (otherwise, a rect narrower than a glyph would
+                    // never end).
                     for (size_t k = i; k < wordEnd; ++k)
                     {
                         if (k > lineFirst && lineWidth + glyphWidth(k) > availWidth)
                             closeLine(k, k, false);
-                        lineWidth += glyphWidth(k);   // recalculado: lineFirst pudo cambiar
+                        lineWidth += glyphWidth(k);   // recalculated: lineFirst could have changed
                     }
                     trailing      = 0;
                     trailingWidth = 0.0f;
@@ -850,14 +850,14 @@ namespace DonTopo
                 i = wordEnd;
             }
 
-            // La última línea (o la única, aunque el texto esté vacío de glyphs
-            // dibujables) se cierra igual.
+            // The last line (or the only one, even if the text is empty of drawable
+            // glyphs) is closed the same way.
             if (lineFirst < n || s.lines.empty()) closeLine(n, n, false);
         }
 
-        // Recorta a las líneas que caben de alto y le pone '…' al final de la
-        // última. Sin ese glyph en el atlas se cae a "...", y sin ninguno de los
-        // dos se deja el texto tal cual antes que dibujar un hueco.
+        // Clips to the lines that fit in height and puts '…' at the end of the
+        // last one. Without that glyph in the atlas it falls back to "...", and without any of the
+        // two it leaves the text as it was before rather than draw a hole.
         void applyEllipsis(const Text& text, const glm::vec2& worldScale,
                            float availWidth, float availHeight, float lineStep, TextScratch& s)
         {
@@ -890,8 +890,8 @@ namespace DonTopo
             const glm::vec2 scale = glm::vec2(unit) * worldScale;
             const float ellipsisWidth = mark->advance * scale.x * (float)repeat;
 
-            // Se quitan glyphs del final hasta que quepan los puntos. Puede
-            // quedarse en cero: más vale solo '…' que pasarse del rect.
+            // Glyphs are removed from the end until the dots fit. It can
+            // stay at zero: just '…' is better than overflowing the rect.
             while (last.count > 0 && last.width + ellipsisWidth > availWidth)
             {
                 const uint32_t     idx = last.first + last.count - 1;
@@ -915,9 +915,9 @@ namespace DonTopo
             last.width += ellipsisWidth;
         }
 
-        // Parseo + corte + puntos suspensivos, y de paso el tamaño del bloque:
-        // ancho de la línea más larga y alto por lineHeight. Es lo mismo que
-        // consume el pase de medida y lo que emite el de dibujo.
+        // Parsing + breaking + ellipsis, and along the way the block size:
+        // width of the longest line and height by lineHeight. It is the same as
+        // what the measurement pass consumes and what the drawing pass emits.
         void layoutText(const Text& text, const glm::vec2& worldScale,
                         float availWidth, float availHeight, TextScratch& s)
         {
@@ -951,16 +951,16 @@ namespace DonTopo
             layoutText(text, worldScale, worldSize.x, worldSize.y, s);
             if (s.glyphs.empty() || s.lines.empty()) return;
 
-            // Clip reutiliza el scissor de siempre, así que lo único que cuesta
-            // es partir el lote; Overflow no toca nada y no lo parte.
+            // Clip reuses the usual scissor, so the only cost is
+            // breaking the batch; Overflow touches nothing and does not break it.
             if (text.overflow == UiTextOverflow::Clip)
             {
                 scissor = intersectScissor(scissor, scissorFromRect(worldPos, worldSize));
                 if (scissor.empty()) return;
             }
 
-            // El atlas de la fuente es la clave del lote, igual que cualquier
-            // otro: dos textos de la misma fuente caen en el mismo draw.
+            // The font atlas is the batch key, just like any
+            // other: two texts of the same font fall in the same draw.
             const UiTextureAtlas* atlas = &font->atlas();
 
             glm::vec4 outline = text.outlineColor;
@@ -975,14 +975,13 @@ namespace DonTopo
             const float lineStep = font->lineHeight() * unit * worldScale.y;
             const float avail    = worldSize.x;
 
-            // Desplazamiento vertical del BLOQUE entero. Con Top sale 0 y la
-            // línea base queda a un ascent del borde de arriba, que es lo que
-            // hacía esto antes de que existiera vAlign.
+            // Vertical displacement of the ENTIRE BLOCK. With Top it comes out 0 and the
+            // baseline is at an ascent from the top edge, which is what
+            // this did before vAlign existed.
             //
-            // El alto del bloque es el interlineado por línea; se usa ese y no
-            // la caja real de los glyphs a propósito, porque así "CENTRADO" y
-            // "centrado" quedan a la misma altura en vez de bailar según lleven
-            // mayúsculas o letras con cola.
+            // The block height is the line height per line; it uses that and not
+            // the actual box of the glyphs on purpose, so "CENTERED" and
+            // "centered" are at the same height instead of bouncing according to capitals or descenders.
             float vOffset = 0.0f;
             if (text.vAlign != UiTextVAlign::Top && worldSize.y > 0.0f)
             {
@@ -991,14 +990,14 @@ namespace DonTopo
                 vOffset = (text.vAlign == UiTextVAlign::Middle) ? slack * 0.5f : slack;
             }
 
-            // La sombra es un pase ENTERO por delante: mismo atlas y mismo
-            // scissor, así que no parte el lote ni necesita otro pass.
+            // The shadow is an ENTIRE pass in front: same atlas and same
+            // scissor, so it does not break the batch nor need another pass.
             for (int pass = hasShadow ? 0 : 1; pass < 2; ++pass)
             {
                 const bool isShadow = (pass == 0);
 
-                // La línea base cae a un ascent del borde superior del rect, más
-                // lo que desplace la alineación vertical del bloque.
+                // The baseline is at an ascent from the top edge of the rect, plus
+                // what the block's vertical alignment displaces.
                 float baseline = worldPos.y + vOffset + font->ascent() * unit * worldScale.y;
                 if (isShadow) baseline += shadowOffset.y;
 
@@ -1024,8 +1023,8 @@ namespace DonTopo
 
                     float pen = startX;
 
-                    // Parte 0 = la línea; parte 1 = los puntos suspensivos, que
-                    // viven al final del array.
+                    // Part 0 = the line; part 1 = the ellipsis,
+                    // which live at the end of the array.
                     for (int part = 0; part < 2; ++part)
                     {
                         const uint32_t first = part == 0 ? line.first : line.ellipsisFirst;
@@ -1036,7 +1035,7 @@ namespace DonTopo
                             const ShapedGlyph& g = s.glyphs[first + k];
                             if (part > 0 || k > 0) pen += g.kern;
 
-                            // Un espacio no tiene contorno: avanza el cursor y ya.
+                            // A space has no outline: it advances the cursor and that is it.
                             if (g.glyph->rect.width > 0.0f && g.glyph->rect.height > 0.0f)
                             {
                                 const glm::vec2 pos{pen + g.glyph->bearingX * g.scale.x,
@@ -1044,13 +1043,13 @@ namespace DonTopo
                                 const glm::vec2 size{g.glyph->rect.width  * g.scale.x,
                                                      g.glyph->rect.height * g.scale.y};
 
-                                // screenPxRange: el rango del campo de distancia
-                                // llevado al tamaño al que se va a dibujar.
+                                // screenPxRange: the range of the distance field
+                                // scaled to the size it will be drawn at.
                                 const float screenPxRange = font->pixelRange() * g.scale.y;
 
-                                // <b> engorda por el MISMO canal que el outline:
-                                // sin outline propio, el "borde" se pinta del
-                                // color del relleno y el glyph sale más gordo.
+                                // <b> fattens by the SAME channel as the outline:
+                                // without its own outline, the "edge" is painted
+                                // the fill color and the glyph comes out fatter.
                                 const float bold = g.bold ? text.boldStrength * g.sizePx * worldScale.y : 0.0f;
 
                                 glm::vec4 fill = g.color;
@@ -1063,9 +1062,9 @@ namespace DonTopo
                                 if (bold > 0.0f && (isShadow || text.outlineWidth <= 0.0f))
                                     effect = isShadow ? shadow : fill;
 
-                                // <i> es una cizalla sobre la línea base: el
-                                // borde de arriba se va a la derecha y el de
-                                // abajo a la izquierda. Ni una UV cambia.
+                                // <i> is a shear on the baseline: the
+                                // top edge goes to the right and the
+                                // bottom to the left. Not a single UV changes.
                                 float dxTop    = 0.0f;
                                 float dxBottom = 0.0f;
                                 if (g.italic)
@@ -1089,18 +1088,18 @@ namespace DonTopo
             }
         }
 
-        // ── Pase de medida ──────────────────────────────────────────────────
-        // Los content size fitters van de abajo arriba (el tamaño del padre sale
-        // de los hijos) y la colocación de arriba abajo, así que hacen falta dos
-        // pases. El árbol NO se muta: la medida vive en un vector local en
-        // pre-orden y la colocación lo indexa.
+        // ── Measurement Pass ──────────────────────────────────────────────────
+        // Content size fitters go bottom-up (the parent's size comes
+        // from the children) and placement goes top-down, so two
+        // passes are needed. The tree is NOT mutated: the measurement lives in a local vector in
+        // pre-order and the placement indexes it.
         struct MeasuredNode
         {
-            glm::vec2 size{0.0f, 0.0f};   // tamaño local ya resuelto (fitters aplicados)
-            // Nodos que ocupa este subárbol, este incluido. Es lo que permite
-            // saltar de un hijo al siguiente sin recorrerlo: emitNode sale antes
-            // por !visible y por scissor vacío, y con un cursor que solo avanza
-            // de uno en uno esas salidas desincronizarían todas las medidas.
+            glm::vec2 size{0.0f, 0.0f};   // local size already resolved (fitters applied)
+            // Nodes occupied by this subtree, including this one. This is what allows
+            // skipping from one child to the next without traversing it: emitNode exits before
+            // due to !visible and empty scissor, and with a cursor that only advances
+            // one by one those exits would desynchronize all measurements.
             uint32_t subtree = 1;
         };
 
@@ -1109,19 +1108,19 @@ namespace DonTopo
             return node.visible && !node.ignoreLayout;
         }
 
-        // El hueco que ocupa un hijo dentro del layout de su padre, en unidades
-        // LOCALES del padre. Grid impone la celda y con ella se come el scale
-        // del hijo (si no, un scale distinto rompería la rejilla); Horizontal y
-        // Vertical respetan el tamaño del hijo ya escalado.
+        // The space occupied by a child within its parent's layout, in
+        // LOCAL units of the parent. Grid imposes the cell and with it consumes the scale
+        // of the child (otherwise, a different scale would break the grid); Horizontal and
+        // Vertical respect the size of the child already scaled.
         glm::vec2 layoutSlotSize(const UiElement& parent, const UiElement& child, const glm::vec2& childSize)
         {
             if (parent.layoutMode == UiLayoutMode::Grid) return parent.cellSize;
             return childSize * child.scale;
         }
 
-        // columns == 0 = las que quepan a lo ancho. Se mide contra node.size.x y
-        // NO contra el tamaño ya ajustado: con fitWidth serían mutuamente
-        // recursivos. Medida y colocación llaman a esto con los mismos datos.
+        // columns == 0 = the ones that fit in width. It is measured against node.size.x and
+        // NOT against the already-adjusted size: with fitWidth they would be mutually
+        // recursive. Measurement and placement call this with the same data.
         uint32_t gridColumns(const UiElement& node, uint32_t count)
         {
             if (count == 0) return 1;
@@ -1141,8 +1140,8 @@ namespace DonTopo
             const size_t self = out.size();
             out.push_back(MeasuredNode{});
 
-            // El contenido se acumula DURANTE la recursión: así no hace falta ni
-            // un vector de hijos por nodo, solo el de medidas.
+            // Content accumulates DURING the recursion: so there is no need for
+            // a vector of children per node, only the measurement vector.
             float    mainSum  = 0.0f;
             float    crossMax = 0.0f;
             uint32_t laid     = 0;
@@ -1171,11 +1170,11 @@ namespace DonTopo
 
             glm::vec2 size = node.size;
 
-            // El bloque de texto ES el contenido de un Text: el fitter crece
-            // hasta él igual que un contenedor crece hasta sus hijos, y desde ahí
-            // el layout del padre ya suma la medida como la de cualquier otro.
-            // Se mide contra node.size (no contra el ya ajustado) por lo mismo
-            // que gridColumns: con fitWidth serían mutuamente recursivos.
+            // The text block IS the content of a Text: the fitter grows
+            // up to it just as a container grows up to its children, and from there
+            // the parent's layout already sums the measurement like any other.
+            // It is measured against node.size (not against the already-adjusted one) for the same
+            // reason as gridColumns: with fitWidth they would be mutually recursive.
             const Text* asText = node.asText();
             const bool  fitsText = asText && asText->font && asText->font->hasGlyphs() &&
                                    !asText->text.empty() && (node.fitWidth || node.fitHeight);
@@ -1223,10 +1222,10 @@ namespace DonTopo
             out[self].subtree = (uint32_t)(out.size() - self);
         }
 
-        // ── Pase de colocación ──────────────────────────────────────────────
+        // ── Placement Pass ──────────────────────────────────────────────────
 
-        // Rect ya resuelto por el layout del padre. Sin él, el nodo se coloca
-        // por sus anclas como siempre.
+        // Rect already resolved by the parent's layout. Without it, the node is placed
+        // by its anchors as always.
         struct LayoutPlacement
         {
             bool      active = false;
@@ -1241,18 +1240,18 @@ namespace DonTopo
             return 0.0f;
         }
 
-        // Un subárbol que el emisor NO recorre (invisible, o recortado a cero) se
-        // queda sin rect resuelto. Marcarlo es lo que impide que el hit test del
-        // input siga usando el rect del frame anterior, que ya no significa nada.
+        // A subtree that the emitter does NOT traverse (invisible, or clipped to zero) is
+        // left without a resolved rect. Marking it is what prevents the input's hit test from
+        // continuing to use the rect from the previous frame, which now means nothing.
         void invalidateRects(const UiElement& node)
         {
             node.rectValid = false;
             for (const auto& child : node.children()) invalidateRects(*child);
         }
 
-        // Resuelve la colocación del nodo y la deja EN SU CACHÉ. Es exactamente
-        // el cálculo que hacía emitNode en línea; sale aparte solo para poder
-        // saltárselo entero cuando ni Transform ni Layout están sucios.
+        // Resolves the node's placement and leaves it IN ITS CACHE. It is exactly
+        // the calculation that emitNode did inline; it is separated only to be able to
+        // skip it entirely when neither Transform nor Layout are dirty.
         void colocaNodo(const UiElement& node, uint32_t index, const std::vector<MeasuredNode>& measured,
                         const glm::vec2& parentPos, const glm::vec2& parentScale,
                         const glm::vec2& parentSize, const LayoutPlacement& placement,
@@ -1266,19 +1265,19 @@ namespace DonTopo
 
             if (placement.active)
             {
-                // Lo colocó el layout del padre: sus anclas, sus márgenes y su
-                // position no se leen.
+                // The layout placed it: its anchors, its margins and its
+                // position are not read.
                 worldPos  = placement.worldPos;
                 worldSize = placement.worldSize;
             }
             else
             {
-                // Eje a eje. Con anchorMin == anchorMax sale exactamente la
-                // fórmula de siempre: ancla sobre el rect DEL PADRE, pivot sobre
-                // el PROPIO, y con todo a {0,0}, parentPos + position*parentScale.
-                // Con anchorMin != anchorMax el eje se ESTIRA y mandan los
-                // márgenes: size y pivot de ese eje no se leen.
-                // node.rotation se sigue ignorando a propósito.
+                // Axis by axis. With anchorMin == anchorMax the formula comes out exactly the
+                // same as always: anchor on the PARENT's rect, pivot on
+                // the OWN, and with everything at {0,0}, parentPos + position*parentScale.
+                // With anchorMin != anchorMax the axis STRETCHES and the margins rule:
+                // size and pivot of that axis are not read.
+                // node.rotation is still intentionally ignored.
                 if (node.anchorMin.x != node.anchorMax.x)
                 {
                     const float x0 = parentPos.x + node.anchorMin.x * parentSize.x + node.marginLeft  * parentScale.x;
@@ -1312,20 +1311,20 @@ namespace DonTopo
 
             const float opacity = parentOpacity * node.opacity;
 
-            // Un contenedor sin tamaño (la raíz, o un grupo que solo agrupa) no
-            // define área de anclaje: sus hijos siguen anclando contra la del
-            // padre en vez de colapsar todos contra su esquina.
+            // A container without size (the root, or a group that only groups) does
+            // not define an anchor area: its children continue anchoring against the parent's
+            // instead of collapsing all against its corner.
             const glm::vec2 childArea = (worldSize.x > 0.0f && worldSize.y > 0.0f) ? worldSize : parentSize;
 
-            // La máscara: el rect del elemento metido hacia dentro por sus
-            // insets, INTERSECADO con lo que venía del padre (nunca un
-            // reemplazo, así que una máscara anidada solo puede recortar más).
-            // Con maskSelf el propio elemento entra en ella; sin él solo sus
-            // descendientes.
-            // ÚNICO punto donde entra la escala del canvas: de aquí para abajo
-            // se trabaja en píxeles del render, y de aquí para arriba (medida,
-            // layout, anclas, márgenes, padding) en unidades de referencia. Con
-            // escala 1 y origen {0,0} el float que sale es el MISMO bit a bit.
+            // The mask: the element's rect pushed inward by its
+            // insets, INTERSECTED with what came from the parent (never a
+            // replacement, so a nested mask can only clip more).
+            // With maskSelf the element itself enters it; without it only its
+            // descendants.
+            // ONLY point where the canvas's scale enters: from here down
+            // everything is in render pixels, and from here up (measurement,
+            // layout, anchors, margins, padding) in reference units. With
+            // scale 1 and origin {0,0} the float that comes out is the SAME bit by bit.
             const glm::vec2 screenPos  = g_xf.origen + worldPos * g_xf.escala;
             const glm::vec2 screenSize = worldSize * g_xf.escala;
 
@@ -1337,9 +1336,9 @@ namespace DonTopo
             {
                 const glm::vec2 maskPos {screenPos.x + node.maskInsetLeft * g_xf.escala,
                                          screenPos.y + node.maskInsetTop  * g_xf.escala};
-                // Insets que se cruzan dejan tamaño <= 0 y scissorFromRect
-                // devuelve vacío: JAMÁS un width/height negativo, que en un
-                // VkRect2D es un crash.
+                // Insets that cross leave size <= 0 and scissorFromRect
+                // returns empty: NEVER a negative width/height, which in a
+                // VkRect2D is a crash.
                 const glm::vec2 maskSize{screenSize.x - node.maskInsetLeft * g_xf.escala - node.maskInsetRight  * g_xf.escala,
                                          screenSize.y - node.maskInsetTop  * g_xf.escala - node.maskInsetBottom * g_xf.escala};
 
@@ -1348,9 +1347,9 @@ namespace DonTopo
                 if (node.maskSelf)
                 {
                     selfScissor = childScissor;
-                    // Intersección vacía: ni este nodo ni ninguno de sus hijos
-                    // puede verse, así que no se emite ni un draw con
-                    // width/height 0.
+                    // Empty intersection: neither this node nor any of its children
+                    // can be seen, so not even a draw with
+                    // width/height 0 is emitted.
                     culled = selfScissor.empty();
                 }
             }
@@ -1373,12 +1372,12 @@ namespace DonTopo
                       const glm::vec2& parentSize, const LayoutPlacement& placement,
                       UiScissor scissor, float parentOpacity, UiDrawData& out)
         {
-            // enabled NO se mira aquí: es para el input, no para el dibujado.
+            // enabled is NOT looked at here: it is for input, not for drawing.
             if (!node.visible) { invalidateRects(node); return; }
 
-            // Ni Transform ni Layout sucios quiere decir que tampoco lo están en
-            // ningún ancestro (los dos SUBEN y BAJAN), o sea que las entradas de
-            // la colocación son las MISMAS y volvería a salir bit a bit igual.
+            // Neither Transform nor Layout dirty means they are not dirty either in
+            // any ancestor (the two GO UP and DOWN), so the inputs of
+            // the placement are the SAME and it would come out bit by bit the same.
             const bool geomFresca =
                 node.cacheGeomValid &&
                 (node.dirty & (UiElement::DirtyTransform | UiElement::DirtyLayout)) == 0;
@@ -1399,23 +1398,23 @@ namespace DonTopo
 
             if (node.cacheSelfCulled) { invalidateRects(node); return; }
 
-            // El rect ya está resuelto: se GUARDA para que el input lo reutilice
-            // sin recorrer el árbol otra vez. No altera ni un vértice ni un lote.
-            // Es el MISMO scissor con el que se dibuja el nodo, que es lo que
-            // hace que el hit test respete la máscara sin código propio.
+            // The rect is already resolved: it is SAVED so the input reuses it
+            // without traversing the tree again. It does not alter a vertex or a batch.
+            // It is the SAME scissor with which the node is drawn, which is what
+            // makes the hit test respect the mask without its own code.
             node.screenPos     = screenPos;
             node.screenSize    = screenSize;
             node.screenScissor = selfScissor;
             node.rectValid     = true;
 
-            // Un Text con fuente dibuja sus glyphs EN VEZ de su propio quad: si
-            // no, cada texto arrastraría un rectángulo blanco detrás. Sin fuente
-            // (o sin nada que decir) vuelve a comportarse como su base, que es lo
-            // que hace que un Text a medio configurar no desaparezca en silencio.
-            // Aquí está TODO el ahorro. Un nodo sin ni un bit sucio emitió sus
-            // vértices desde las mismas entradas que ahora, así que se vuelcan
-            // tal cual en vez de medir glyphs o trocear un sliced otra vez. El
-            // recorrido del árbol no cambia: se salta el trabajo, no el nodo.
+            // A Text with font draws its glyphs INSTEAD of its own quad: if
+            // not, each text would drag a white rectangle behind it. Without font
+            // (or with nothing to say) it behaves like its base again, which is what
+            // makes a half-configured Text not disappear silently.
+            // Here is ALL the savings. A node without a single dirty bit emitted its
+            // vertices from the same inputs as now, so they are dumped
+            // as-is instead of measuring glyphs or cutting up a sliced again. The
+            // tree traversal does not change: the work is skipped, not the node.
             if (node.cacheValid && node.dirty == 0)
             {
                 reproduceCache(node, out);
@@ -1429,9 +1428,9 @@ namespace DonTopo
                 const Text* text = node.asText();
                 const bool  drawsText = text && text->font && text->font->hasGlyphs() && !text->text.empty();
 
-                // La rotación vale para lo que emite ESTE nodo (su quad, sus N
-                // quads de Image o sus glyphs) y para nada más: los hijos vuelven
-                // al estado de antes, y el scissor de arriba es el AABB sin rotar.
+                // The rotation applies to what THIS node emits (its quad, its N
+                // quads of Image or its glyphs) and nothing else: the children return
+                // to the state from before, and the scissor from above is the AABB unrotated.
                 const QuadRotation rotPrevia = g_rot;
                 if (node.rotation != 0.0f)
                 {
@@ -1457,8 +1456,8 @@ namespace DonTopo
 
             node.dirty = 0;
 
-            // Máscara vacía con maskSelf a false: el elemento ya se ha dibujado
-            // entero, pero por su máscara no pasa ni un vértice de sus hijos.
+            // Empty mask with maskSelf false: the element has already been drawn
+            // entirely, but not a single vertex of its children passes through its mask.
             if (childScissor.empty())
             {
                 for (const auto& child : node.children()) invalidateRects(*child);
@@ -1467,8 +1466,8 @@ namespace DonTopo
 
             scissor = childScissor;
 
-            // El índice del primer hijo es el siguiente en pre-orden, y cada
-            // hermano está a un subárbol entero del anterior.
+            // The index of the first child is the next in pre-order, and each
+            // sibling is an entire subtree away from the previous one.
             uint32_t childIndex = index + 1;
 
             if (node.layoutMode == UiLayoutMode::None)
@@ -1482,8 +1481,8 @@ namespace DonTopo
                 return;
             }
 
-            // El layout trabaja ya en píxeles de mundo: así un contenedor
-            // estirado o colocado por otro layout reparte sobre su rect real.
+            // The layout works already in world pixels: so a container
+            // stretched or placed by another layout distributes over its actual rect.
             const glm::vec2 padMin{node.paddingLeft * worldScale.x, node.paddingTop * worldScale.y};
             const glm::vec2 padMax{node.paddingRight * worldScale.x, node.paddingBottom * worldScale.y};
             const glm::vec2 gap = node.spacing * worldScale;
@@ -1496,7 +1495,7 @@ namespace DonTopo
 
             const uint32_t cols = node.layoutMode == UiLayoutMode::Grid ? gridColumns(node, laidCount) : 1;
 
-            float    cursor    = 0.0f;   // avance en el eje principal, en píxeles de mundo
+            float    cursor    = 0.0f;   // advance on the main axis, in world pixels
             uint32_t laidIndex = 0;
 
             for (const auto& child : node.children())
@@ -1506,9 +1505,9 @@ namespace DonTopo
 
                 if (!participatesInLayout(*child))
                 {
-                    // ignoreLayout se dibuja anclado como si el padre no tuviera
-                    // layout; el invisible ni se visita (pero su hueco en el
-                    // vector de medidas ya se ha saltado arriba).
+                    // ignoreLayout is drawn anchored as if the parent did not have
+                    // layout; the invisible is not even visited (but its hole in the
+                    // measurement vector has already been skipped above).
                     if (child->visible)
                         emitNode(*child, ci, measured, worldPos, worldScale, childArea,
                                  LayoutPlacement{}, scissor, opacity, out);
@@ -1535,8 +1534,8 @@ namespace DonTopo
                 }
                 else
                 {
-                    // Grid: la celda es uniforme, así que la posición sale de la
-                    // fila y la columna, no de un cursor acumulado.
+                    // Grid: the cell is uniform, so the position comes from the
+                    // row and column, not from an accumulated cursor.
                     const uint32_t col = laidIndex % cols;
                     const uint32_t row = laidIndex / cols;
                     placed.worldPos.x = origin.x + (float)col * (slot.x + gap.x);
@@ -1555,16 +1554,16 @@ namespace DonTopo
 
     void UiSpriteBatch::build(const UiCanvas& canvas, uint32_t width, uint32_t height, UiDrawData& out)
     {
-        // ── Área útil, en este orden y no en otro ───────────────────────────
-        // (a) el render entero.
+        // ── Useful area, in this order and no other ───────────────────────────
+        // (a) the entire render.
         float x0 = 0.0f;
         float y0 = 0.0f;
         float x1 = (float)width;
         float y1 = (float)height;
 
-        // (b) los insets del safe area, en píxeles reales. Negativos se ignoran
-        // (agrandar el área útil por encima del render no significa nada) y unos
-        // insets que se cruzan dejan área 0, nunca un rect del revés.
+        // (b) the safe area insets, in real pixels. Negative ones are ignored
+        // (expanding the useful area above the render does not mean anything) and
+        // insets that cross leave area 0, never a rect backwards.
         if (canvas.safeArea.left   > 0.0f) x0 += canvas.safeArea.left;
         if (canvas.safeArea.top    > 0.0f) y0 += canvas.safeArea.top;
         if (canvas.safeArea.right  > 0.0f) x1 -= canvas.safeArea.right;
@@ -1575,9 +1574,9 @@ namespace DonTopo
         float uw = x1 - x0;
         float uh = y1 - y0;
 
-        // (c) el aspect ratio, recortando CENTRADO. Lo que sobra son barras
-        // (letterbox si el área es más ancha de la cuenta, pillarbox si es más
-        // alta) y la UI no las ocupa.
+        // (c) the aspect ratio, clipped CENTERED. What is left over are bars
+        // (letterbox if the area is wider than expected, pillarbox if it is
+        // taller) and the UI does not occupy them.
         const float ar = canvas.aspectRatio;
         if (ar > 0.0f && std::isfinite(ar) && uw > 0.0f && uh > 0.0f)
         {
@@ -1595,7 +1594,7 @@ namespace DonTopo
             }
         }
 
-        // (d) una escala ÚNICA y UNIFORME, del área útil.
+        // (d) a UNIQUE and UNIFORM scale, of the useful area.
         float escala = 1.0f;
         switch (canvas.scaleMode)
         {
@@ -1609,7 +1608,7 @@ namespace DonTopo
                 const float ry = uh / refH;
 
                 float m = canvas.matchWidthOrHeight;
-                if (!(m >= 0.0f)) m = 0.0f;    // pilla también el NaN
+                if (!(m >= 0.0f)) m = 0.0f;    // also catches NaN
                 if (m > 1.0f)     m = 1.0f;
 
                 switch (canvas.screenMatch)
@@ -1618,9 +1617,9 @@ namespace DonTopo
                 case UiScreenMatch::Shrink: escala = (rx > ry) ? rx : ry; break;
                 case UiScreenMatch::MatchWidthOrHeight:
                 default:
-                    // Lerp LOGARÍTMICO: con m = 0 sigue al ancho, con m = 1 al
-                    // alto, y en medio cae entre los dos sin que un lado se
-                    // coma al otro (que es lo que pasa con la media aritmética).
+                    // LOGARITHMIC lerp: with m = 0 it follows the width, with m = 1 the
+                    // height, and in between it falls between the two without one side
+                    // eating the other (which is what happens with arithmetic mean).
                     escala = std::pow(rx, 1.0f - m) * std::pow(ry, m);
                     break;
                 }
@@ -1630,8 +1629,8 @@ namespace DonTopo
         }
         case UiScaleMode::ConstantPhysicalSize:
         {
-            // screenDpi <= 0 es "no se sabe": el fallback evita que un SO que no
-            // lo reporte deje la UI a escala 0.
+            // screenDpi <= 0 means "unknown": the fallback prevents an OS that does not
+            // report it from leaving the UI at scale 0.
             const float dpi = (canvas.screenDpi > 0.0f) ? canvas.screenDpi : canvas.fallbackDpi;
             if (canvas.referenceDpi > 0.0f) escala = (dpi / canvas.referenceDpi) * canvas.scaleFactor;
             break;
@@ -1642,16 +1641,16 @@ namespace DonTopo
             break;
         }
 
-        // Una escala <= 0 o no finita no encoge la UI: la hace desaparecer o la
-        // llena de NaN. Cae a 1 y sigue.
+        // A scale <= 0 or not finite does not shrink the UI: it makes it disappear or
+        // fills it with NaN. Falls back to 1 and continues.
         if (!std::isfinite(escala) || escala <= 0.0f) escala = 1.0f;
 
         const glm::vec2 nuevoOrigen{x0, y0};
         const glm::vec2 nuevaRef{uw / escala, uh / escala};
 
-        // Si cambia el tamaño del render, la escala, el origen o el área útil,
-        // se mueve la colocación de TODOS los nodos: no hay ni una caché que
-        // siga valiendo, así que se ensucia el árbol entero antes de recorrerlo.
+        // If the render size, scale, origin or useful area changes,
+        // the placement of ALL nodes is moved: there is no cache that
+        // stays valid, so the entire tree is dirtied before traversing it.
         if (canvas.m_lastWidth     != width  ||
             canvas.m_lastHeight    != height ||
             canvas.m_uiScale       != escala ||
@@ -1669,27 +1668,27 @@ namespace DonTopo
         canvas.m_rebuiltNodes  = 0;
         g_rebuilt              = 0;
 
-        // Canvas vacío: ni se mide, ni se reserva el vector, ni se recorre nada.
-        // La resolución ya está resuelta, así que los getters valen igual.
+        // Empty canvas: it is not measured, the vector is not reserved, nothing is traversed.
+        // The resolution is already resolved, so the getters work the same.
         if (canvas.root().children().empty()) return;
 
-        // Área útil de 0 píxeles (safe area que se come el render entero): no
-        // hay dónde dibujar y los rects del frame anterior no pueden quedarse.
+        // Useful area of 0 pixels (safe area that eats the entire render): there is
+        // nowhere to draw and the rects from the previous frame cannot remain.
         if (uw <= 0.0f || uh <= 0.0f) { invalidateRects(canvas.root()); return; }
 
-        // El scissor raíz ES el área útil: lo que cae en las barras del aspect
-        // ratio o fuera del safe area no se dibuja. El hit test lee este mismo
-        // scissor, así que los eventos salen coherentes sin código propio.
+        // The root scissor IS the useful area: what falls on the aspect
+        // ratio bars or outside the safe area is not drawn. The hit test reads this same
+        // scissor, so the events come out coherent without its own code.
         const UiScissor full = scissorFromRect({x0, y0}, {uw, uh});
 
-        // El "padre" de la raíz es el área útil en unidades de REFERENCIA: los
-        // elementos de primer nivel anclan contra ese rect y no ven la escala.
+        // The "parent" of the root is the useful area in REFERENCE units: the
+        // first-level elements anchor against that rect and do not see the scale.
         const glm::vec2 screen = canvas.m_referenceSize;
 
         g_xf.origen = {x0, y0};
         g_xf.escala = escala;
 
-        // Medida bottom-up primero (resuelve los fitters), colocación después.
+        // Bottom-up measurement first (resolves the fitters), then placement.
         std::vector<MeasuredNode> measured;
         measureNode(canvas.root(), measured);
 
@@ -1698,7 +1697,7 @@ namespace DonTopo
 
         canvas.m_rebuiltNodes = g_rebuilt;
 
-        // Que no se quede encendida para el siguiente canvas ni para el hit test.
+        // Leave it off for the next canvas and for the hit test.
         g_xf = CanvasXform{};
     }
 
@@ -1720,8 +1719,8 @@ namespace DonTopo
         if (vkCreateDescriptorSetLayout(gpu.device(), &dslInfo, nullptr, &m_descLayout) != VK_SUCCESS)
             throw std::runtime_error("failed to create ui descriptor set layout!");
 
-        // Pool propio: un set por atlas (más el blanco). 32 cubre de sobra la
-        // UI de un juego y los sets viven todo el proceso.
+        // Own pool: one set per atlas (plus the white one). 32 is more than enough for a
+        // game's UI and the sets live the entire process.
         VkDescriptorPoolSize poolSize{};
         poolSize.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         poolSize.descriptorCount = 32;
@@ -1738,11 +1737,11 @@ namespace DonTopo
 
         const uint8_t white[4] = { 255, 255, 255, 255 };
         res.createSolidColorImage(white, m_whiteImage, m_whiteMemory);
-        // UNORM y no el SRGB por defecto de createTextureImageView: la imagen la
-        // crea createSolidColorImage como R8G8B8A8_UNORM, y la vista tiene que
-        // declarar EXACTAMENTE ese formato (la imagen no es MUTABLE_FORMAT).
-        // Da igual visualmente — 255 es 1.0 en los dos — pero es un error de
-        // validacion y comportamiento indefinido.
+        // UNORM and not the default SRGB of createTextureImageView: the image is
+        // created by createSolidColorImage as R8G8B8A8_UNORM, and the view has to
+        // declare EXACTLY that format (the image is not MUTABLE_FORMAT).
+        // It is the same visually — 255 is 1.0 in both — but it is a
+        // validation error and undefined behavior.
         res.createTextureImageView(m_whiteImage, m_whiteView, VK_FORMAT_R8G8B8A8_UNORM);
 
         VkDescriptorSetAllocateInfo allocInfo{};
@@ -1767,9 +1766,9 @@ namespace DonTopo
         write.pImageInfo      = &imageInfo;
         vkUpdateDescriptorSets(gpu.device(), 1, &write, 0, nullptr);
 
-        // VERTEX | FRAGMENT: la mat4 la lee ui.vert y el flag linearOutput lo
-        // lee ui.frag, pero el bloque es UNO SOLO y el rango tiene que cubrir
-        // los dos miembros para las dos etapas.
+        // VERTEX | FRAGMENT: the mat4 is read by ui.vert and the linearOutput flag is
+        // read by ui.frag, but the block is ONE ONLY and the range has to cover
+        // the two members for the two stages.
         VkPushConstantRange pcr{};
         pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pcr.offset     = 0;
@@ -1784,14 +1783,14 @@ namespace DonTopo
         if (vkCreatePipelineLayout(gpu.device(), &pli, nullptr, &m_layout) != VK_SUCCESS)
             throw std::runtime_error("failed to create ui pipeline layout!");
 
-        // La de pantalla nunca testea profundidad: va encima de todo.
+        // The screen one never tests depth: it goes on top of everything.
         createPipeline(gpu, renderPass, samples, false, m_pipeline);
     }
 
     void UiSpriteBatch::recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass,
                                          VkSampleCountFlagBits samples)
     {
-        if (m_layout == VK_NULL_HANDLE) return;   // sin init (headless sin UI)
+        if (m_layout == VK_NULL_HANDLE) return;   // no init (headless without UI)
         if (m_pipeline != VK_NULL_HANDLE)
         {
             vkDestroyPipeline(gpu.device(), m_pipeline, nullptr);
@@ -1803,10 +1802,10 @@ namespace DonTopo
     void UiSpriteBatch::initWorldPipelines(GpuDevice& gpu, VkRenderPass scenePass,
                                            VkSampleCountFlagBits samples)
     {
-        if (m_layout == VK_NULL_HANDLE) return;   // sin init (headless sin UI)
+        if (m_layout == VK_NULL_HANDLE) return;   // no init (headless without UI)
 
-        // Destruir primero: esta funcion es tambien el "recreate" del cambio de
-        // AA, y el llamante ya ha hecho vkDeviceWaitIdle antes de tocar el
+        // Destroy first: this function is also the "recreate" of the AA change,
+        // and the caller has already done vkDeviceWaitIdle before touching the
         // renderpass.
         if (m_worldPipelineDepth != VK_NULL_HANDLE)
         {
@@ -1845,9 +1844,9 @@ namespace DonTopo
         bindingDesc.stride    = sizeof(UiVertex);
         bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-        // Las cinco localizaciones tienen que decir LO MISMO que ui.vert: un
-        // desajuste de offset o de formato no da ni error ni aviso, solo
-        // basura en pantalla.
+        // The five locations have to say THE SAME as ui.vert: a
+        // mismatch of offset or format gives neither error nor warning, just
+        // garbage on screen.
         VkVertexInputAttributeDescription attrs[5]{};
         attrs[0].location = 0;
         attrs[0].binding  = 0;
@@ -1889,37 +1888,37 @@ namespace DonTopo
         VkPipelineRasterizationStateCreateInfo rs{};
         rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
         rs.polygonMode = VK_POLYGON_MODE_FILL;
-        // NONE: los quads salen en el orden en que los emite el batcher y su
-        // orientación no depende del frontFace del resto del motor.
+        // NONE: the quads come out in the order the batcher emits them and their
+        // orientation does not depend on the rest of the engine's frontFace.
         rs.cullMode    = VK_CULL_MODE_NONE;
         rs.lineWidth   = 1.0f;
 
         VkPipelineMultisampleStateCreateInfo ms{};
         ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        // Las mismas muestras que el pass contra el que se compila: el de UI va
-        // siempre a una, y el de ESCENA a las que diga el modo de AA. Un
-        // pipeline que declare otras no es compatible con su pass.
+        // The same samples as the pass it is compiled against: the UI pass always goes
+        // to one, and the SCENE pass to whatever the AA mode says. A
+        // pipeline that declares others is not compatible with its pass.
         ms.rasterizationSamples = samples;
 
-        // depthTest apagado = la variante de pantalla (su pass no tiene nada que
-        // testear, va encima de todo) y la de mundo "siempre encima".
-        // Encendido = la de mundo ocluida, para que una pared tape el cartel.
+        // depthTest off = the screen variant (its pass has nothing to
+        // test, it goes on top of everything) and the world one "always on top".
+        // On = the world one occluded, so a wall hides the sign.
         //
-        // depthWrite SIEMPRE apagado en las TRES: la UI va con alpha, y escribir
-        // profundidad haria que los quads de un mismo canvas se recortaran entre
-        // si segun el orden en que salieran del batcher (el texto taparia el
-        // panel que tiene detras en vez de mezclarse con el).
+        // depthWrite ALWAYS off in ALL THREE: the UI goes with alpha, and writing
+        // depth would make quads of the same canvas clip each other
+        // according to the order they came out of the batcher (the text would hide the
+        // panel behind it instead of blending with it).
         //
-        // LESS_OR_EQUAL y no LESS: un canvas pegado a la superficie de una pared
-        // tiene que verse, no perder el empate contra ella.
+        // LESS_OR_EQUAL and not LESS: a canvas stuck to a wall's surface
+        // has to be visible, not lose the tie against it.
         VkPipelineDepthStencilStateCreateInfo ds{};
         ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         ds.depthTestEnable  = depthTest ? VK_TRUE : VK_FALSE;
         ds.depthWriteEnable = VK_FALSE;
         ds.depthCompareOp   = depthTest ? VK_COMPARE_OP_LESS_OR_EQUAL : VK_COMPARE_OP_ALWAYS;
 
-        // Alpha recto (SRC_ALPHA / ONE_MINUS_SRC_ALPHA): el color del sprite NO
-        // viene premultiplicado.
+        // Straight alpha (SRC_ALPHA / ONE_MINUS_SRC_ALPHA): the sprite's color is NOT
+        // premultiplied.
         VkPipelineColorBlendAttachmentState blend{};
         blend.blendEnable         = VK_TRUE;
         blend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
@@ -2037,7 +2036,7 @@ namespace DonTopo
                 throw std::runtime_error("failed to allocate ui buffer memory!");
             vkBindBufferMemory(gpu.device(), buffer, memory, 0);
 
-            // Mapeo persistente: se reescribe entero cada frame.
+            // Persistent mapping: completely rewritten each frame.
             vkMapMemory(gpu.device(), memory, 0, size, 0, &mapped);
             capacity = next;
         };
@@ -2072,20 +2071,18 @@ namespace DonTopo
 
     void UiSpriteBatch::beginFrame(GpuDevice& gpu, int frame, uint32_t totalVertices, uint32_t totalIndices)
     {
-        // Se dimensiona contra el ACUMULADO de TODOS los canvas del FRAME —los
-        // de mundo, que se graban en el pase de escena, y los de pantalla, que
-        // se graban en el de UI—, no contra el tamaño de uno solo ni contra el
-        // de un pase: con cualquiera de esas dos, el primer canvas reservaría de
-        // sobra pero el siguiente encontraría el buffer ya lleno y ensureBuffers
-        // lo recrearía A MITAD del frame, invalidando el bind que un canvas
-        // anterior ya dejó grabado en el command buffer (apuntaría a un VkBuffer
-        // destruido). Contrato completo en el header: UNA vez por frame, antes
-        // del pase de ESCENA (que es donde cae el primer record del frame,
-        // porque corre antes que el de UI).
+        // It is sized against the ACCUMULATED total of ALL canvas of the FRAME — the world ones,
+        // which are recorded in the scene pass, and the screen ones, which are recorded in the UI
+        // pass — not against the size of just one nor against the size of one pass: with either of
+        // those two, the first canvas would reserve plenty but the next one would find the buffer
+        // already full and ensureBuffers would recreate it MID-frame, invalidating the bind that a
+        // previous canvas already left recorded in the command buffer (it would point to a
+        // destroyed VkBuffer). Full contract in the header: ONE time per frame, before the SCENE
+        // pass (which is where the frame's first record falls, because it runs before the UI pass).
         if (totalVertices > 0 || totalIndices > 0)
             ensureBuffers(gpu, frame, totalVertices, totalIndices);
 
-        // Un frame nuevo empieza a repartir desde el principio del buffer.
+        // A new frame starts distributing from the beginning of the buffer.
         m_frameVertexCursor[frame] = 0;
         m_frameIndexCursor[frame]  = 0;
     }
@@ -2094,11 +2091,11 @@ namespace DonTopo
                                const glm::mat4& transform,
                                VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame)
     {
-        (void)gpu;   // el crecimiento del buffer ya lo resolvió beginFrame()
+        (void)gpu;   // the buffer growth was already solved by beginFrame()
 
-        // linearOutput = false: el pase de UI escribe en un attachment SRGB y el
-        // hardware ya codifica al escribir. scissorCompleto = false: en pantalla
-        // el scissor del batcher SÍ vale, escalado al framebuffer.
+        // linearOutput = false: the UI pass writes into an SRGB attachment and the
+        // hardware already encodes when writing. scissorCompleto = false: on screen
+        // the batcher's scissor DOES apply, scaled to the framebuffer.
         recordInto(cmd, data, transform, m_pipeline, false, false,
                    canvasExtent, fbExtent, frame);
     }
@@ -2107,14 +2104,14 @@ namespace DonTopo
                                     const glm::mat4& transform, bool depthTest,
                                     VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame)
     {
-        (void)gpu;   // el crecimiento del buffer ya lo resolvió beginFrame()
+        (void)gpu;   // the buffer growth was already solved by beginFrame()
 
         const VkPipeline pipeline = depthTest ? m_worldPipelineDepth : m_worldPipelineNoDepth;
 
-        // linearOutput = true: el pase de escena es HDR LINEAL y ui.frag tiene
-        // que deshacer la gamma o el color sale lavado. scissorCompleto = true:
-        // el canvas está proyectado y el rect del batcher ya no lo representa
-        // (limitación conocida — clipChildren no recorta en modo mundo).
+        // linearOutput = true: the scene pass is LINEAR HDR and ui.frag has to
+        // undo the gamma or the color comes out washed out. scissorCompleto = true:
+        // the canvas is projected and the batcher's rect no longer represents it
+        // (known limitation — clipChildren does not clip in world mode).
         recordInto(cmd, data, transform, pipeline, true, true,
                    canvasExtent, fbExtent, frame);
     }
@@ -2124,23 +2121,23 @@ namespace DonTopo
                                    bool linearOutput, bool scissorCompleto,
                                    VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame)
     {
-        // Canvas vacío = ni un comando, ni un buffer creado, ni un mapeo. Es la
-        // condición que hace que la escena 3D salga EXACTAMENTE igual que antes.
+        // Empty canvas = neither a command, nor a created buffer, nor a mapping. It is the
+        // condition that makes the 3D scene come out EXACTLY the same as before.
         if (data.empty() || pipeline == VK_NULL_HANDLE) return;
         if (canvasExtent.width == 0 || canvasExtent.height == 0) return;
         if (fbExtent.width == 0 || fbExtent.height == 0) return;
         if (!m_vertexMapped[frame] || !m_indexMapped[frame]) return;
 
-        // Sub-asignación DENTRO del buffer del frame: cada canvas escribe a
-        // partir de donde dejó el anterior, no siempre en el offset 0.
+        // Sub-allocation INSIDE the frame's buffer: each canvas writes from
+        // where the previous one left off, not always at offset 0.
         const uint32_t vertexBase = bumpUiCursor(m_frameVertexCursor[frame], (uint32_t)data.vertices.size());
         const uint32_t indexBase  = bumpUiCursor(m_frameIndexCursor[frame],  (uint32_t)data.indices.size());
 
-        // El cursor lo dimensiona beginFrame() con el total del PASE. Si
-        // alguien llama a record() sin él, o con un total corto (o dos veces
-        // seguidas sin que beginFrame() vuelva a reservar), esto escribiría
-        // FUERA de la memoria mapeada: una escritura de host que ninguna capa
-        // de validación ve. Mejor no dibujar ese canvas que corromper el
+        // The cursor is sized by beginFrame() with the total of the PASS. If
+        // someone calls record() without it, or with a short total (or twice
+        // in a row without beginFrame() reserving again), this would write
+        // OUTSIDE the mapped memory: a host write that no validation
+        // layer sees. Better not to draw that canvas than corrupt the
         // buffer.
         if (!uiCursorFits(vertexBase, (uint32_t)data.vertices.size(), m_vertexCapacity[frame]) ||
             !uiCursorFits(indexBase,  (uint32_t)data.indices.size(),  m_indexCapacity[frame]))
@@ -2151,17 +2148,17 @@ namespace DonTopo
         std::memcpy(static_cast<uint16_t*>(m_indexMapped[frame]) + indexBase,
                     data.indices.data(), data.indices.size() * sizeof(uint16_t));
 
-        // Los scissor SÍ van en píxeles del framebuffer: un VkRect2D no conoce
-        // otro espacio. Hacia fuera (floor/ceil) por lo mismo que
-        // scissorFromRect, y con los dos extents iguales el entero sale intacto.
+        // The scissors DO go in framebuffer pixels: a VkRect2D knows
+        // no other space. Outward (floor/ceil) for the same reason as
+        // scissorFromRect, and with both extents equal the entire thing comes out intact.
         const double sx = (double)fbExtent.width  / (double)canvasExtent.width;
         const double sy = (double)fbExtent.height / (double)canvasExtent.height;
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-        // Un solo bloque para las dos etapas, y se empujan EXACTAMENTE los
-        // kUiPushConstantSize bytes útiles: sizeof(UiPushConstants) mete 12
-        // bytes de relleno detrás (alineación de glm::mat4) que serían basura.
+        // One block for both stages, and exactly
+        // kUiPushConstantSize useful bytes are pushed: sizeof(UiPushConstants) adds 12
+        // padding bytes after (glm::mat4 alignment) that would be garbage.
         UiPushConstants pc{};
         pc.transform    = transform;
         pc.linearOutput = linearOutput ? 1 : 0;
@@ -2169,27 +2166,27 @@ namespace DonTopo
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, kUiPushConstantSize, &pc);
 
-        // El offset de bind es el de ESTE canvas dentro del buffer compartido
-        // del frame: con él ya aplicado, los índices del batch (batch.firstIndex
-        // más abajo) se quedan LOCALES a este canvas, sin tocarlos.
+        // The bind offset is THAT of THIS canvas within the shared buffer
+        // of the frame: with it already applied, the batch indices (batch.firstIndex
+        // below) stay LOCAL to this canvas, without touching them.
         const VkDeviceSize vertexOffset = (VkDeviceSize)vertexBase * sizeof(UiVertex);
         const VkDeviceSize indexOffset  = (VkDeviceSize)indexBase  * sizeof(uint16_t);
         vkCmdBindVertexBuffers(cmd, 0, 1, &m_vertexBuffers[frame], &vertexOffset);
         vkCmdBindIndexBuffer(cmd, m_indexBuffers[frame], indexOffset, VK_INDEX_TYPE_UINT16);
 
-        // El rectángulo completo del framebuffer. Sirve de dos cosas: es el
-        // scissor de TODOS los lotes de un canvas de mundo, y es con lo que se
-        // deja el estado dinámico al salir en los dos casos.
+        // The complete framebuffer rectangle. It serves two things: it is the
+        // scissor of ALL batches of a world canvas, and it is what
+        // leaves the dynamic state when exiting in both cases.
         VkRect2D full{};
         full.offset = {0, 0};
         full.extent = fbExtent;
 
-        // Canvas de MUNDO: un scissor y ya, fuera del bucle. El del batcher está
-        // en píxeles de canvas y aquí el canvas está PROYECTADO — puede salir
-        // rotado, en perspectiva o partido por el borde de la pantalla —, así
-        // que no hay VkRect2D alineado a los ejes que lo represente y aplicar el
-        // rect sin proyectar taparía trozos que sí se ven.
-        // LIMITACIÓN CONOCIDA: clipChildren no recorta en un canvas de mundo.
+        // WORLD canvas: one scissor and that is it, out of the loop. The batcher's is in
+        // canvas pixels and here the canvas is PROJECTED — it can come out
+        // rotated, in perspective or split by the screen edge — so
+        // there is no axis-aligned VkRect2D that represents it and applying the
+        // rect without projecting would hide pieces that actually are visible.
+        // KNOWN LIMITATION: clipChildren does not clip in a world canvas.
         if (scissorCompleto)
             vkCmdSetScissor(cmd, 0, 1, &full);
 
@@ -2199,12 +2196,12 @@ namespace DonTopo
 
             if (scissorCompleto)
             {
-                // Sin recorte por lote: el scissor ya está puesto arriba. El
-                // lote sigue partiéndose por scissor en el batcher (es la clave
-                // de agrupado), solo que aquí todos los trozos se dibujan
-                // enteros. Ojo: `batch.scissor.empty()` de arriba SÍ se respeta
-                // — un nodo cuyo clip se quedó a cero no emite nada ni en
-                // pantalla ni en el mundo.
+                // No clipping per batch: the scissor is already set above. The
+                // batch still breaks by scissor in the batcher (it is the key
+                // to grouping), only here all the pieces are drawn
+                // whole. Careful: `batch.scissor.empty()` from above IS respected
+                // — a node whose clip stayed at zero does not emit anything on
+                // screen nor in the world.
                 VkDescriptorSet set = (batch.atlas && batch.atlas->descriptorSet() != VK_NULL_HANDLE)
                                     ? batch.atlas->descriptorSet() : m_whiteSet;
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &set, 0, nullptr);
@@ -2217,8 +2214,8 @@ namespace DonTopo
             int64_t x1 = (int64_t)std::ceil((batch.scissor.x + (double)batch.scissor.width)  * sx);
             int64_t y1 = (int64_t)std::ceil((batch.scissor.y + (double)batch.scissor.height) * sy);
 
-            // Recortado al framebuffer: un scissor que se sale es inválido, y
-            // el redondeo hacia fuera puede empujar el borde un píxel.
+            // Clipped to the framebuffer: a scissor that goes outside is invalid, and
+            // the rounding outward can push the edge one pixel.
             x0 = std::max<int64_t>(x0, 0);
             y0 = std::max<int64_t>(y0, 0);
             x1 = std::min<int64_t>(x1, fbExtent.width);
@@ -2238,10 +2235,10 @@ namespace DonTopo
             vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.firstIndex, 0, 0);
         }
 
-        // El scissor es estado dinámico del command buffer: dejarlo recortado
-        // afectaría a lo que se grabe después en este mismo buffer. Y en el pase
-        // de ESCENA eso importa MÁS que en el de UI, porque detrás de un canvas
-        // de mundo todavía queda el resto del pase.
+        // The scissor is dynamic state of the command buffer: leaving it clipped
+        // would affect what is recorded after in this same buffer. And in the
+        // SCENE pass this matters MORE than in the UI pass, because behind a world
+        // canvas there is still the rest of the pass.
         vkCmdSetScissor(cmd, 0, 1, &full);
     }
 
@@ -2250,8 +2247,8 @@ namespace DonTopo
         for (int i = 0; i < kFrames; ++i) destroyBuffers(gpu, i);
 
         if (m_pipeline != VK_NULL_HANDLE)   vkDestroyPipeline(gpu.device(), m_pipeline, nullptr);
-        // Las dos de mundo: sin esto son una fuga que SOLO sale por
-        // vkDestroyDevice, o sea al cerrar y con el proceso ya medio muerto.
+        // The two world ones: without this they are a leak that ONLY comes out through
+        // vkDestroyDevice, that is when closing and the process is already half dead.
         if (m_worldPipelineDepth != VK_NULL_HANDLE)
             vkDestroyPipeline(gpu.device(), m_worldPipelineDepth, nullptr);
         if (m_worldPipelineNoDepth != VK_NULL_HANDLE)
@@ -2261,8 +2258,8 @@ namespace DonTopo
         if (m_whiteImage != VK_NULL_HANDLE) vkDestroyImage(gpu.device(), m_whiteImage, nullptr);
         if (m_whiteMemory != VK_NULL_HANDLE)vkFreeMemory(gpu.device(), m_whiteMemory, nullptr);
         if (m_sampler != VK_NULL_HANDLE)    vkDestroySampler(gpu.device(), m_sampler, nullptr);
-        // El pool se lleva por delante todos los sets (el blanco y los de los
-        // atlas), así que no hay que liberarlos uno a uno.
+        // The pool takes with it all the sets (the white one and the atlas ones),
+        // so there is no need to free them one by one.
         if (m_descPool != VK_NULL_HANDLE)   vkDestroyDescriptorPool(gpu.device(), m_descPool, nullptr);
         if (m_descLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(gpu.device(), m_descLayout, nullptr);
 

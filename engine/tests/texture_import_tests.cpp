@@ -1,5 +1,5 @@
-// Test headless de TextureImport (cadena de mips, resolucion sRGB, claves) y de
-// como decodeMaterialTexture lee los ajustes. Sin GPU. Desde la raiz del repo.
+// Headless test of TextureImport (mip chain, sRGB resolution, keys) and of
+// how decodeMaterialTexture reads the settings. No GPU. From the repo root.
 #include "DonTopo/Renderer/TextureImport.h"
 #include "DonTopo/Renderer/SharedTextureCache.h"
 #include "DonTopo/Renderer/MaterialTextureSource.h"
@@ -46,11 +46,11 @@ static void test_mip_chain_shapes()
         for (size_t i = 0; i < m.rgba.size(); i += 4)
             CHECK(m.rgba[i] == 255 && m.rgba[i + 1] == 0 && m.rgba[i + 2] == 0 && m.rgba[i + 3] == 255);
 
-    // 1x1: sin niveles extra.
+    // 1x1: no extra levels.
     const uint8_t one[4] = { 1, 2, 3, 255 };
     CHECK(buildMipChain(one, 1, 1).empty());
 
-    // No potencia de 2 y tiras 1xN.
+    // Non power of 2 and 1xN strips.
     std::vector<uint8_t> a(5 * 3 * 4, 200);
     chain = buildMipChain(a.data(), 5, 3);
     CHECK(chain.size() == 2);
@@ -64,23 +64,23 @@ static void test_mip_chain_shapes()
     CHECK(chain.size() == 3 && chain[1].w == 1 && chain[1].h == 2);
     CHECK(chain.size() == 3 && chain[2].w == 1 && chain[2].h == 1);
 
-    // Entrada invalida: vacio, sin lanzar.
+    // Invalid input: empty, without throwing.
     CHECK(buildMipChain(nullptr, 4, 4).empty());
     CHECK(buildMipChain(px.data(), 0, 4).empty());
 }
 
-// El nivel 0 no se toca y los pixeles transparentes no oscurecen a los opacos.
+// Level 0 is not touched and transparent pixels do not darken opaque ones.
 static void test_mip_chain_alpha_weighted_and_input_untouched()
 {
-    // 2x1: un pixel rojo opaco y uno TRANSPARENTE negro.
+    // 2x1: one opaque red pixel and one TRANSPARENT black one.
     std::vector<uint8_t> px = { 255, 0, 0, 255,   0, 0, 0, 0 };
     const std::vector<uint8_t> before = px;
     const auto chain = buildMipChain(px.data(), 2, 1);
     CHECK(px == before);
     CHECK(chain.size() == 1);
     CHECK(chain.size() == 1 && chain[0].w == 1 && chain[0].h == 1);
-    CHECK(chain.size() == 1 && chain[0].rgba[0] == 255);    // el rojo no se oscurece a 128
-    CHECK(chain.size() == 1 && chain[0].rgba[3] == 128);    // el alfa si es la media
+    CHECK(chain.size() == 1 && chain[0].rgba[0] == 255);    // the red is not darkened to 128
+    CHECK(chain.size() == 1 && chain[0].rgba[3] == 128);    // the alpha is the average
 }
 
 static void test_resolve_srgb_table()
@@ -112,9 +112,9 @@ static void test_texture_key_suffix_and_key()
     const std::string a = (d / "a.png").string();
 
     CHECK(textureKeySuffix("").empty());
-    CHECK(textureKeySuffix(a).empty());                       // sin sidecar: la clave de hoy
+    CHECK(textureKeySuffix(a).empty());                       // no sidecar: today's key
     CHECK(makeTextureKey(a, {}, TextureKind::BaseColor, textureKeySuffix(a)) ==
-          makeTextureKey(a, {}, TextureKind::BaseColor));     // y no cambia
+          makeTextureKey(a, {}, TextureKind::BaseColor));     // and it does not change
 
     TextureImportSettings lin;
     lin.colorSpace = ColorSpaceOverride::Linear;
@@ -135,7 +135,7 @@ static void test_texture_key_suffix_and_key()
     CHECK(makeTextureKey(a, {}, TextureKind::BaseColor, sufLin) !=
           makeTextureKey(a, {}, TextureKind::BaseColor));
 
-    // Sin ruta, el sufijo no cuenta (una textura embebida no tiene sidecar).
+    // Without a path, the suffix does not count (an embedded texture has no sidecar).
     const std::vector<uint8_t> emb = { 1, 2, 3 };
     CHECK(makeTextureKey("", emb, TextureKind::BaseColor, "#s") ==
           makeTextureKey("", emb, TextureKind::BaseColor));
@@ -191,7 +191,7 @@ static void test_decode_1x1_with_mipmaps_has_no_extra_levels()
     CHECK(tex && tex.mips.empty());
 }
 
-// Un sidecar roto no impide cargar la textura: defecto.
+// A broken sidecar does not prevent loading the texture: default.
 static void test_decode_with_broken_sidecar_falls_back_to_default()
 {
     const fs::path d = makeDir();
@@ -201,7 +201,7 @@ static void test_decode_with_broken_sidecar_falls_back_to_default()
     CHECK(tex && tex.colorSpace == ColorSpaceOverride::Auto && tex.mips.empty());
 }
 
-// Las embebidas del FBX no tienen sidecar: siempre el defecto.
+// The FBX embedded ones have no sidecar: always the default.
 static void test_decode_embedded_ignores_sidecars()
 {
     const fs::path d = makeDir();
@@ -230,9 +230,9 @@ static size_t countOf(const std::string& hay, const std::string& needle)
     return n;
 }
 
-// Politica: el formato de una textura de material lo decide resolveSrgb, no un
-// literal en cada uploader. Si alguien vuelve a hardcodear el formato de un slot,
-// los ajustes de importacion dejan de respetarse en silencio.
+// Policy: the format of a material texture is decided by resolveSrgb, not by a
+// literal in each uploader. If someone hardcodes the format of a slot again,
+// the import settings silently stop being respected.
 static void test_policy_vulkan_material_format_comes_from_resolveSrgb()
 {
     const std::string res = readAll("engine/src/Renderer/GpuResources.cpp");
@@ -251,11 +251,11 @@ static void test_policy_d3d12_material_format_comes_from_resolveSrgb()
     const std::string d3d = readAll("engine/src/Renderer/D3D12/D3D12Renderer.cpp");
     CHECK(!d3d.empty());
     CHECK(countOf(d3d, "resolveSrgb(") >= 1);                                       // uploadMaterialTexture
-    // La regla antigua ("srgb ? UNORM_SRGB : UNORM" segun el slot) y las vistas de
-    // reuso con el formato escrito a mano ya no existen.
+    // The old rule ("srgb ? UNORM_SRGB : UNORM" depending on the slot) and the reuse
+    // views with a hand-written format no longer exist.
     CHECK(countOf(d3d, "srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM") == 1);
     CHECK(countOf(d3d, "DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, slot + 0)") == 0);
-    // Y la firma de uploadMaterialTexture ya no recibe un bool srgb.
+    // And the signature of uploadMaterialTexture no longer takes a bool srgb.
     CHECK(countOf(d3d, "const std::string& path, const std::vector<uint8_t>& embedded, bool srgb, UINT srvIndex") == 0);
 }
 

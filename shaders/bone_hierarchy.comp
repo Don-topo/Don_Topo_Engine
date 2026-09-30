@@ -1,13 +1,13 @@
 #version 450
-// Un workgroup por personaje (el dispatch sigue siendo 1,1,1). Antes era un
-// solo hilo recorriendo todos los huesos en serie: 1,93 ms de 11,16 con 30
-// personajes (docs/animation-audit.md, fila 10).
+// One workgroup per character (the dispatch is still 1,1,1). Before it was a
+// single thread walking all the bones serially: 1.93 ms of 11.16 with 30
+// characters (docs/animation-audit.md, row 10).
 layout(local_size_x = 64) in;
 
-// Layout std430, espejo de GpuBoneInfo (engine/include/DonTopo/Renderer/SkinnedMesh.h)
-// y del mismo struct en bone_eval.comp. Este shader no lee bindLocal, pero el
-// campo tiene que estar igualmente: comparten la misma SSBO (binding 3) y
-// omitirlo desplazaría la lectura de inverseBindPose de los huesos siguientes.
+// std430 layout, mirror of GpuBoneInfo (engine/include/DonTopo/Renderer/SkinnedMesh.h)
+// and of the same struct in bone_eval.comp. This shader does not read bindLocal, but the
+// field has to be there anyway: they share the same SSBO (binding 3) and
+// omitting it would shift the read of inverseBindPose of the following bones.
 struct BoneInfo {
     int posOffset, posCount;
     int rotOffset, rotCount;
@@ -24,12 +24,12 @@ layout(set=0, binding=5, std430) buffer FinalBones           { mat4 data[]; }   
 layout(push_constant) uniform PC {
     uint boneCount;
     uint vertexCount;
-    // --- Solo los lee bone_eval.comp (ver allí) ---
+    // --- Only read by bone_eval.comp (see there) ---
     uint rootMotionMode;
     uint poseBlockOffset;
     // --- bone_ik.comp y bone_hierarchy.comp ---
-    uint ikBlockOffset;   // en uints: copia del bloque de IK de este frame
-    uint flags;           // bit 0: la jerarquía escribe SOLO mundo (para bone_ik)
+    uint ikBlockOffset;   // in uints: copy of this frame's IK block
+    uint flags;           // bit 0: the hierarchy writes ONLY world (for bone_ik)
 } push;
 
 shared uint sMaxDepth;
@@ -38,8 +38,8 @@ void main()
 {
     const uint t = gl_LocalInvocationID.x;
 
-    // Profundidad máxima del esqueleto, reducida en memoria compartida: no hay
-    // hueco libre en el push constant (los que quedan los usa bone_eval).
+    // Maximum depth of the skeleton, reduced in shared memory: there is no free
+    // slot in the push constant (the ones left are used by bone_eval).
     if (t == 0u) sMaxDepth = 0u;
     barrier();
     for (uint i = t; i < push.boneCount; i += 64u)
@@ -47,10 +47,10 @@ void main()
     barrier();
     const uint maxDepth = sMaxDepth;
 
-    // Pasada 1: transform de mundo, nivel a nivel. Todos los huesos de un nivel
-    // son independientes entre sí; el padre está en el nivel anterior, ya
-    // escrito y visible tras la barrera. maxDepth es uniforme en el workgroup,
-    // así que todos los hilos llegan a las mismas barreras.
+    // Pass 1: world transform, level by level. All the bones of a level
+    // are independent of each other; the parent is in the previous level, already
+    // written and visible after the barrier. maxDepth is uniform across the workgroup,
+    // so all the threads reach the same barriers.
     for (uint d = 0u; d <= maxDepth; d++)
     {
         for (uint i = t; i < push.boneCount; i += 64u)
@@ -65,13 +65,13 @@ void main()
         barrier();
     }
 
-    // Pasada 2: inverse bind pose, independiente hueso a hueso. Va después de
-    // la última barrera: sobrescribe en sitio y nadie lee ya el de mundo.
+    // Pass 2: inverse bind pose, independent bone by bone. It goes after
+    // the last barrier: it overwrites in place and nobody reads the world one anymore.
     //
-    // Con el bit 0 de flags NO se hace: bone_ik necesita los transforms de
-    // MUNDO, así que en los personajes con IK este shader corre dos veces —
-    // la primera solo mundo, y la segunda (ya con los locales corregidos)
-    // entera.
+    // With bit 0 of flags it is NOT done: bone_ik needs the WORLD transforms,
+    // so for characters with IK this shader runs twice:
+    // the first time world only, and the second (already with the corrected locals)
+    // in full.
     if ((push.flags & 1u) != 0u) return;
     for (uint i = t; i < push.boneCount; i += 64u)
         finalBones.data[i] = finalBones.data[i] * boneInfos.data[i].inverseBindPose;

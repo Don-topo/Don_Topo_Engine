@@ -4,13 +4,13 @@
 
 namespace DonTopo
 {
-    // Lo que el Animator pide a bone_eval cada frame, por capas: cada muestra
-    // (clip, tiempo en ticks, peso) lleva su capa; cada capa, su peso, su modo,
-    // su máscara y su pose congelada. Dentro de una capa los pesos (con la
-    // congelada) suman 1. Vive fuera de AnimatorComponent.h para que la
-    // interfaz del backend no tenga que incluir el Animator.
+    // What the Animator asks bone_eval every frame, by layers: each sample
+    // (clip, time in ticks, weight) carries its layer; each layer, its weight, its mode,
+    // its mask and its frozen pose. Within a layer the weights (with the
+    // frozen one) sum to 1. It lives outside AnimatorComponent.h so that the
+    // backend interface does not have to include the Animator.
     static constexpr int kMaxLayersPose          = 8;
-    // 3 por estado en un fade entre dos estados con blend 2D.
+    // 3 per state in a fade between two states with 2D blend.
     static constexpr int kMaxPoseSamplesPerLayer = 6;
 
     struct PoseSample { int clip = 0; float time = 0.0f; float weight = 0.0f; int layer = 0; };
@@ -19,13 +19,13 @@ namespace DonTopo
     {
         float    weight       = 1.0f;
         uint32_t mode         = 0;      // 0 override, 1 additive
-        float    frozenWeight = 0.0f;   // 0 = no se usa la congelada
-        // Este frame: copiar la pose de la capa a su congelada ANTES de
-        // evaluar. Lo apaga quien la manda al backend (applySkinnedFrame), con
+        float    frozenWeight = 0.0f;   // 0 = the frozen pose is not used
+        // This frame: copy the layer pose to its frozen pose BEFORE
+        // evaluating. Whoever sends it to the backend (applySkinnedFrame) turns it off, with
         // AnimatorComponent::clearFreezeRequest.
         bool     freezeNow    = false;
-        // Uno por hueso (1 = la capa lo toca); null = todo el cuerpo. Lo posee
-        // el Animator y solo vale durante setAnimationPose: el backend lo copia.
+        // One per bone (1 = the layer touches it); null = whole body. Owned
+        // by the Animator and only valid during setAnimationPose: the backend copies it.
         const std::vector<uint8_t>* mask = nullptr;
     };
 

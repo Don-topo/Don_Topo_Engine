@@ -19,29 +19,29 @@ class AsyncAssetLoader;
 class ProjectContext;
 class JobSystem;
 
-// Fichero soltado sobre la ventana del editor desde fuera del proceso (drag
-// desde el Explorador de Windows), con la posicion de pantalla en la que
-// cayo. screenX/screenY son coordenadas de pantalla de ImGui (las mismas que
-// ImGui::GetMousePos()/GetWindowPos()), no coordenadas de la ventana GLFW.
+// File dropped onto the editor window from outside the process (drag
+// from Windows Explorer), with the screen position where it
+// landed. screenX/screenY are ImGui screen coordinates (the same as
+// ImGui::GetMousePos()/GetWindowPos()), not GLFW window coordinates.
 struct DroppedFile {
     std::filesystem::path path;
     float screenX = 0.0f;
     float screenY = 0.0f;
 };
 
-// Estado compartido entre los paneles del editor, construido de nuevo cada
-// frame dentro de EditorUI::draw() y pasado por referencia a cada
-// Panel::draw(). `selected` es una referencia real a EditorUI::m_selected:
-// un panel que la reasigna (p.ej. ScenePanel al hacer click en un nodo)
-// propaga el cambio a los paneles que se dibujan después en el mismo frame
-// (Viewport, Properties), igual que hacía el m_selected único de EditorUI.
+// State shared between the editor panels, rebuilt every
+// frame inside EditorUI::draw() and passed by reference to each
+// Panel::draw(). `selected` is a real reference to EditorUI::m_selected:
+// a panel that reassigns it (e.g. ScenePanel when clicking a node)
+// propagates the change to the panels drawn later in the same frame
+// (Viewport, Properties), just like EditorUI's single m_selected used to.
 struct EditorContext {
     GameObject*& selected;
     bool&        isPlaying;
 
     PhysicsManager* physics       = nullptr;
-    // La interfaz, no el Renderer de Vulkan: los paneles solo usan lo que
-    // cualquier backend puede dar.
+    // The interface, not the Vulkan Renderer: the panels only use what
+    // any backend can provide.
     EditorRenderer* renderer      = nullptr;
     AudioManager*   audio         = nullptr;
     Scene*          scene         = nullptr;
@@ -49,89 +49,89 @@ struct EditorContext {
     UndoManager*    undo          = nullptr;
 
     std::function<void(const std::string&)>   pushLog;
-    // Igual que pushLog pero etiquetando la línea con un módulo ("Renderer",
-    // "Physics", ...), que el Log Console pinta como chip de color. Viaja por
-    // el mismo callback de un argumento —el panel decodifica el prefijo
-    // "[Modulo] "—, así que los callers de pushLog no cambian.
+    // Same as pushLog but tagging the line with a module ("Renderer",
+    // "Physics", ...), which the Log Console draws as a colored chip. It travels through
+    // the same one-argument callback (the panel decodes the "[Module] "
+    // prefix), so pushLog callers do not change.
     void logModule(const std::string& module, const std::string& message) const
     {
         if (pushLog)
             pushLog("[" + module + "] " + message);
     }
-    // Aquí vivía onDelete, que servía para soltar la GPU del subárbol antes de
-    // borrarlo. Se fue: ahora avisa Scene::setOnNodeRemoved, que cubre a los
-    // tres llamantes de removeGameObject en vez de solo a este panel.
+    // onDelete used to live here, and it served to release the subtree's GPU resources before
+    // deleting it. It is gone: now Scene::setOnNodeRemoved notifies, which covers the
+    // three callers of removeGameObject instead of just this panel.
     std::function<void(const glm::vec3&)>     onAxisSelected;
-    // Abre path en el Script Editor (EditorUI::m_scriptEditor, fuera del
-    // Consumes original de PropertiesPanel — Task 5 añadió este callback
-    // porque drawScriptsSection/drawNewScriptPopup necesitan abrir el
-    // fichero .lua tras editar/crear un script, y ScriptEditorPanel sigue
-    // siendo propiedad de EditorUI, no de ningún panel). Vacío/no asignado
-    // por defecto — solo lo rellena EditorUI::draw().
+    // Opens path in the Script Editor (EditorUI::m_scriptEditor, outside the
+    // original scope of PropertiesPanel; Task 5 added this callback
+    // because drawScriptsSection/drawNewScriptPopup need to open the
+    // .lua file after editing/creating a script, and ScriptEditorPanel is still
+    // owned by EditorUI, not by any panel). Empty/unassigned
+    // by default; only EditorUI::draw() fills it in.
     std::function<void(const std::filesystem::path&)> openScript;
-    // Abre el panel Animator (EditorUI::m_animatorPanel, fuera del alcance de
-    // PropertiesPanel — mismo caso y mismo patrón que openScript). Vacío por
-    // defecto: solo lo rellena EditorUI::draw().
+    // Opens the Animator panel (EditorUI::m_animatorPanel, outside the scope of
+    // PropertiesPanel; same case and same pattern as openScript). Empty by
+    // default: only EditorUI::draw() fills it in.
     std::function<void()> openAnimator;
-    // Abre el editor de sprites sobre esa imagen (EditorUI::m_spriteEditor,
-    // fuera del alcance de PropertiesPanel — mismo patrón que openAnimator).
+    // Opens the sprite editor on that image (EditorUI::m_spriteEditor,
+    // outside the scope of PropertiesPanel; same pattern as openAnimator).
     std::function<void(const std::string&)> openSpriteEditor;
-    // Alguien ha cambiado los sub-rects de un atlas. Lo usa PropertiesPanel para
-    // tirar su caché de nombres: sin esto los combos siguen enseñando la lista
-    // anterior hasta cambiar de ruta. Vacío por defecto.
+    // Someone has changed the sub-rects of an atlas. PropertiesPanel uses it to
+    // drop its name cache: without this the combos keep showing the previous
+    // list until the path changes. Empty by default.
     std::function<void()> onSpritesChanged;
-    // Guarda los ajustes del proyecto (project.json). Lo usa RenderingPanel:
-    // sus 41 controles se aplican Y persisten, y el comando de deshacer de cada
-    // uno vuelve a llamarlo para que deshacer deje el fichero como estaba. El
-    // dueño del project.json sigue siendo EditorUI. Vacío por defecto.
+    // Saves the project settings (project.json). Used by RenderingPanel:
+    // its 41 controls are applied AND persisted, and each one's undo command
+    // calls it again so that undoing leaves the file as it was. The
+    // owner of project.json is still EditorUI. Empty by default.
     std::function<void()> saveSettings;
-    // Abre la ventana de ambiente/skybox (EditorUI::m_environmentWindowOpen).
-    // Mismo patrón que openAnimator: la ventana vive en EditorUI —está atada a
-    // su diálogo de carpetas y a applySkyboxFolder— y RenderingPanel solo tiene
-    // el botón que la abre. Vacío por defecto.
+    // Opens the ambient/skybox window (EditorUI::m_environmentWindowOpen).
+    // Same pattern as openAnimator: the window lives in EditorUI (it is tied to
+    // its folder dialog and to applySkyboxFolder) and RenderingPanel only has
+    // the button that opens it. Empty by default.
     std::function<void()> openEnvironment;
 
-    // Loader de assets asíncrono (vive en main.cpp, no-propietario). Sin él,
-    // el drop de FBX no encola nada (loadMeshForSelected es no-op). Lo rellena
-    // EditorUI::draw() a partir de EditorUI::m_assetLoader.
+    // Asynchronous asset loader (lives in main.cpp, non-owning). Without it,
+    // the FBX drop enqueues nothing (loadMeshForSelected is a no-op). Filled in by
+    // EditorUI::draw() from EditorUI::m_assetLoader.
     AsyncAssetLoader* assetLoader = nullptr;
 
-    // Proyecto abierto (vive en main(), no-propietario). Decide qué rutas puede
-    // leer o escribir un panel: todo lo del usuario —escenas, scripts, assets—
-    // pasa por project->contains() antes de tocar disco. nullptr en los tests
-    // headless y en cualquier ruta anterior al selector: sin proyecto no hay
-    // sandbox y el comportamiento es el de siempre.
+    // Open project (lives in main(), non-owning). Decides which paths a panel may
+    // read or write: everything belonging to the user (scenes, scripts, assets)
+    // goes through project->contains() before touching disk. nullptr in the headless
+    // tests and in any path before the selector: without a project there is no
+    // sandbox and the behavior is the usual one.
     const ProjectContext* project = nullptr;
 
-    // true mientras el modal de carga está activo (Load Scene en vuelo). Veta la
-    // edición —gizmo, reparent de jerarquía, drops de asset— pero NO el render:
-    // la ventana sigue pintando frames. Los sitios de edición lo consultan con
-    // `if (!ctx.editingLocked)`. Default false: fuera de Load Scene todo se edita
-    // como siempre (los tests headless lo dejan en su default).
+    // true while the loading modal is active (Load Scene in flight). It vetoes
+    // editing (gizmo, hierarchy reparent, asset drops) but NOT rendering:
+    // the window keeps drawing frames. Editing sites check it with
+    // `if (!ctx.editingLocked)`. Default false: outside Load Scene everything is edited
+    // as usual (the headless tests leave it at its default).
     bool editingLocked = false;
 
-    // Carga la escena de disco en path por la misma ruta que el Load Scene del
-    // menú File (validación de JSON + reloadSceneFromJson + clear del undo).
-    // Mismo patrón que openScript/openAnimator: sólo lo rellena
-    // EditorUI::draw(), vacío por defecto en los tests headless.
+    // Loads the scene from disk at path through the same route as the File menu's
+    // Load Scene (JSON validation + reloadSceneFromJson + undo clear).
+    // Same pattern as openScript/openAnimator: only
+    // EditorUI::draw() fills it in, empty by default in the headless tests.
     std::function<void(const std::filesystem::path&)> requestLoadScene;
-    // Guarda la escena actual y, si el guardado sale bien, carga thenLoad (vacío
-    // = no cargar nada después). Si la escena nunca se guardó, abre el mismo
-    // diálogo Save Scene del menú File y encadena la carga a su confirmación;
-    // si el usuario lo cancela, no se carga nada.
+    // Saves the current scene and, if saving succeeds, loads thenLoad (empty
+    // = load nothing afterwards). If the scene was never saved, it opens the same
+    // Save Scene dialog as the File menu and chains the load to its confirmation;
+    // if the user cancels it, nothing is loaded.
     std::function<void(const std::filesystem::path& thenLoad)> requestSaveScene;
 
-    // Vacia la cola de ficheros soltados sobre la ventana este frame (drop
-    // OS-level via glfwSetDropCallback, no el drag&drop interno de ImGui
-    // payloads DT_ASSET_PATH). Se consume una vez: llamarlo dos veces en el
-    // mismo frame devuelve vacio la segunda. Vacio/no asignado en los tests
-    // headless y en runtime — solo lo rellena EditorUI::draw() a partir de
-    // EditorUI::m_droppedFilesProvider (wiring de sandbox/main.cpp).
+    // Empties the queue of files dropped onto the window this frame (OS-level
+    // drop via glfwSetDropCallback, not ImGui's internal drag&drop of
+    // DT_ASSET_PATH payloads). It is consumed once: calling it twice in the
+    // same frame returns empty the second time. Empty/unassigned in the headless
+    // tests and at runtime; only EditorUI::draw() fills it in from
+    // EditorUI::m_droppedFilesProvider (wiring in sandbox/main.cpp).
     std::function<std::vector<DroppedFile>()> takeDroppedFiles;
 
-    // Pool de workers del motor (vive en main.cpp, no-propietario). Lo usan las
-    // miniaturas del Content Browser para decodificar imagenes fuera del hilo
-    // principal. Sin el, no hay miniaturas y el grid se comporta como siempre.
+    // The engine's worker pool (lives in main.cpp, non-owning). Used by the
+    // Content Browser thumbnails to decode images off the main thread.
+    // Without it, there are no thumbnails and the grid behaves as usual.
     JobSystem* jobs = nullptr;
 };
 

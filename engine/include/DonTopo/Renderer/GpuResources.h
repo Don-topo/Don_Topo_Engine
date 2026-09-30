@@ -11,12 +11,12 @@ namespace DonTopo {
 class GpuDevice;
 class TransferBatch;
 
-// Una región rectangular de píxeles RGBA8 que sustituye a otra dentro de una
-// imagen ya creada. Es lo que necesita el atlas de miniaturas: copiar UNA casilla
-// sin volver a subir los 16 MB del atlas.
+// A rectangular region of RGBA8 pixels that replaces another inside an
+// already created image. It is what the thumbnail atlas needs: copy ONE cell
+// without re-uploading the atlas's 16 MB.
 struct ImageTileUpload
 {
-    uint32_t       x = 0, y = 0;    // esquina superior izquierda dentro de la imagen
+    uint32_t       x = 0, y = 0;    // top-left corner inside the image
     uint32_t       w = 0, h = 0;
     const uint8_t* rgba = nullptr;  // w*h*4 bytes
 };
@@ -49,41 +49,41 @@ public:
                            uint32_t w, uint32_t h,
                            TransferBatch* batch = nullptr);
 
-    // Sube `w * h * 4` bytes de RGBA a una imagen NUEVA, con su staging, su
-    // copia y sus dos transiciones. Es el cuerpo que estaba copiado en SIETE
-    // sitios —las cinco create*Image de aquí, ensurePlaceholder y
-    // UiTextureAtlas::loadFromPixels—, y lo único que variaba entre ellos era
-    // de dónde salen los píxeles y el formato. Los píxeles se copian dentro,
-    // así que el llamante puede liberarlos al volver.
+    // Uploads `w * h * 4` bytes of RGBA to a NEW image, with its staging, its
+    // copy and its two transitions. It is the body that was copied in SEVEN
+    // places (the five create*Image here, ensurePlaceholder and
+    // UiTextureAtlas::loadFromPixels), and the only thing that varied between them was
+    // where the pixels come from and the format. The pixels are copied inside,
+    // so the caller can free them on return.
     //
-    // Sin `batch`, las tres operaciones van en UN command buffer y por tanto en
-    // UNA espera, no en tres: medido a 0,41 ms por espera, o sea ~1,2 ms por
-    // imagen antes y ~0,4 después. Con `batch` no hay espera ninguna: el submit
-    // y la fence son de quien lo posee, y la imagen no es legible hasta que
-    // señale.
+    // Without `batch`, the three operations go in ONE command buffer and therefore in
+    // ONE wait, not three: measured at 0.41 ms per wait, that is ~1.2 ms per
+    // image before and ~0.4 after. With `batch` there is no wait at all: the submit
+    // and the fence belong to whoever owns it, and the image is not readable until it
+    // signals.
     //
-    // `mips` son los niveles 1..N-1 de la cadena (el 0 es `pixels`); van en el
-    // MISMO staging y la MISMA copia, y la barrera cubre todos los niveles.
+    // `mips` are levels 1..N-1 of the chain (0 is `pixels`); they go in the
+    // SAME staging and the SAME copy, and the barrier covers all the levels.
     void uploadPixelsToImage(const void* pixels, uint32_t w, uint32_t h, VkFormat fmt,
                              VkImage& img, VkDeviceMemory& mem,
                              TransferBatch* batch = nullptr,
                              const TextureMip* mips = nullptr, size_t mipCount = 0);
 
-    // Imagen NUEVA, toda transparente y ya en SHADER_READ_ONLY_OPTIMAL. Para
-    // texturas que se irán rellenando por regiones (uploadPixelsToImageRegions).
+    // NEW image, fully transparent and already in SHADER_READ_ONLY_OPTIMAL. For
+    // textures that will be filled in by regions (uploadPixelsToImageRegions).
     void createBlankImage(uint32_t w, uint32_t h, VkFormat fmt,
                           VkImage& img, VkDeviceMemory& mem,
                           TransferBatch* batch = nullptr);
 
-    // Copia N regiones a una imagen que ya está en SHADER_READ_ONLY_OPTIMAL y la
-    // deja igual. Un solo staging, un solo command buffer y —sin batch— UNA sola
-    // espera para las N regiones. La barrera de entrada cubre las lecturas de
-    // shader de frames ya enviados a la misma cola.
+    // Copies N regions to an image that is already in SHADER_READ_ONLY_OPTIMAL and
+    // leaves it the same. A single staging, a single command buffer and (without batch) a single
+    // wait for the N regions. The entry barrier covers the shader
+    // reads of frames already submitted to the same queue.
     void uploadPixelsToImageRegions(VkImage img, const ImageTileUpload* tiles, size_t count,
                                     TransferBatch* batch = nullptr);
 
-    // `outFormat` (opcional) recibe el formato con el que quedo la imagen: lo
-    // decide resolveSrgb (slot + sidecar) y la VISTA tiene que declarar el mismo.
+    // `outFormat` (optional) receives the format the image ended up with: it is
+    // decided by resolveSrgb (slot + sidecar) and the VIEW has to declare the same one.
     void createTextureImage(const std::string& path,
                             const std::vector<uint8_t>& embedded,
                             VkImage& img, VkDeviceMemory& mem,
@@ -98,87 +98,87 @@ public:
                                VkImage& img, VkDeviceMemory& mem,
                                TransferBatch* batch = nullptr);
 
-    // Variantes que reciben los píxeles ya decodificados por el worker. Son las
-    // que usa la carga asíncrona: repetir el stbi_load en el hilo principal
-    // tiraría por tierra la mitad de la ganancia.
-    // El formato lo decide quien llama (resolveSrgb sobre el slot y los ajustes
-    // que trajo el worker); los mips son los niveles 1..N-1.
+    // Variants that receive the pixels already decoded by the worker. They are
+    // the ones used by async loading: repeating the stbi_load on the main
+    // thread would throw away half the gain.
+    // The format is decided by the caller (resolveSrgb over the slot and the settings
+    // the worker brought); the mips are levels 1..N-1.
     void createMaterialImageFromPixels(const uint8_t* rgba, uint32_t w, uint32_t h, VkFormat fmt,
                                        const TextureMip* mips, size_t mipCount,
                                        VkImage& img, VkDeviceMemory& mem,
                                        TransferBatch* batch = nullptr);
     void createTextureImageView(VkImage img, VkImageView& view,
                                 VkFormat fmt = VK_FORMAT_R8G8B8A8_SRGB);
-    // Crea un sampler NUEVO, que pasa a ser del llamante y este debe destruir.
-    // Para las texturas de un material NO se usa: ver sharedMaterialSampler.
+    // Creates a NEW sampler, which becomes the caller's and which the caller must destroy.
+    // It is NOT used for a material's textures: see sharedMaterialSampler.
     void createTextureSampler(VkSampler& out);
 
-    // El sampler de las texturas de material. UNO para todo el motor, prestado:
-    // el llamante NO debe destruirlo.
+    // The sampler for material textures. ONE for the whole engine, lent out:
+    // the caller must NOT destroy it.
     //
-    // createTextureSampler no recibe un solo parametro, o sea que todos los
-    // samplers que produce son byte a byte identicos. Aun asi se creaba uno por
-    // TEXTURA y por MALLA —difusa, normal y ORM: tres por malla—, y eso no es
-    // solo desperdicio: maxSamplerAllocationCount suele valer 4000, asi que una
-    // escena de ~1330 mallas se quedaba sin samplers y fallaba al cargar en una
-    // GPU donde sobra memoria. Compartirlo quita ese techo entero.
+    // createTextureSampler takes not a single parameter, so all the
+    // samplers it produces are byte-for-byte identical. Even so, one was created per
+    // TEXTURE and per MESH (diffuse, normal and ORM: three per mesh), and that is not
+    // just waste: maxSamplerAllocationCount is usually 4000, so a
+    // scene of ~1330 meshes ran out of samplers and failed to load on a
+    // GPU with plenty of spare memory. Sharing it removes that ceiling entirely.
     //
-    // Se crea la primera vez que se pide y lo destruye destroySharedSampler.
+    // It is created the first time it is requested and destroySharedSampler destroys it.
     VkSampler sharedMaterialSampler();
-    // En el teardown del Renderer, con el device todavia vivo.
+    // In the Renderer teardown, with the device still alive.
     void destroySharedSampler();
 
-    // ── Texturas de relleno compartidas ─────────────────────────────────────
+    // ── Shared filler textures ──────────────────────────────────────────────
     //
-    // Una malla SIN material recibia hasta ahora sus PROPIAS tres imagenes de
-    // relleno —1x1 blanca, normal plana, ORM blanca—, cada una con su
-    // asignacion de memoria y su buffer de staging, que tambien asigna. Seis
-    // asignaciones por malla para pintar los mismos pocos pixeles una y otra
-    // vez. Y `maxMemoryAllocationCount` suele valer 4096 (ver H72).
+    // A mesh WITHOUT a material used to receive its OWN three filler images
+    // (1x1 white, flat normal, white ORM), each with its own memory
+    // allocation and its staging buffer, which also allocates. Six
+    // allocations per mesh to paint the same few pixels over and over.
+    // And `maxMemoryAllocationCount` is usually 4096 (see H72).
     //
-    // Ahora existen UNA vez y se prestan. Los tres create* de abajo las
-    // devuelven solas cuando el material no pide textura; el llamante no elige,
-    // asi que el criterio de "esto es relleno" vive en un solo sitio.
+    // Now they exist ONCE and are lent out. The three create* below
+    // return them on their own when the material asks for no texture; the caller does not choose,
+    // so the criterion for "this is filler" lives in a single place.
     //
-    // Quien las recibe NO debe destruirlas: para eso esta releaseMaterialImage,
-    // que es el UNICO sitio que sabe distinguirlas. Hay tres caminos que
-    // liberan texturas de material (malla estatica, personaje, y el borrado
-    // diferido al cambiar una textura desde el editor) y los tres pasan por el.
-    // La blanca UNORM del slot ORM. Es la unica de las tres que se pide a mano:
-    // createSolidColorImage no se toca porque UiSpriteBatch la usa y SI destruye
-    // la suya.
+    // Whoever receives them must NOT destroy them: that is what releaseMaterialImage is for,
+    // which is the ONLY place that knows how to tell them apart. There are three paths that
+    // free material textures (static mesh, character, and the deferred
+    // delete when a texture is changed from the editor) and all three go through it.
+    // The white UNORM of the ORM slot. It is the only one of the three that is requested by hand:
+    // createSolidColorImage is not touched because UiSpriteBatch uses it and DOES destroy
+    // its own.
     void sharedWhiteOrm(VkImage& img, VkDeviceMemory& mem);
     bool isSharedPlaceholder(VkImage img) const;
-    // ¿Ya se soltaron las tres de relleno? A partir de ahí NADIE debería estar
-    // liberando texturas de material: los rellenos son las últimas.
+    // Have the three fillers already been released? From then on NOBODY should be
+    // freeing material textures: the fillers are the last ones.
     bool placeholdersDestroyed() const { return m_placeholdersDestroyed; }
-    // Destruye imagen y memoria SALVO que sean prestadas. La VISTA no entra:
-    // esa si es de cada malla —se crea con createTextureImageView— y la destruye
-    // el llamante como siempre.
+    // Destroys image and memory EXCEPT if they are lent. The VIEW does not count:
+    // that one does belong to each mesh (it is created with createTextureImageView) and is destroyed
+    // by the caller as usual.
     void releaseMaterialImage(VkImage img, VkDeviceMemory mem);
     void destroySharedPlaceholders();
 
 private:
-    // Sube una de las tres de relleno la primera vez que hace falta.
+    // Uploads one of the three fillers the first time it is needed.
     void ensurePlaceholder(VkImage& img, VkDeviceMemory& mem,
                            const uint8_t rgba[4], VkFormat fmt);
 
     const GpuDevice& m_gpu;
     VkSampler        m_materialSampler = VK_NULL_HANDLE;
 
-    // Blanca en SRGB (difusa), normal plana en UNORM, y blanca en UNORM (ORM).
-    // El formato importa: la imagen no se crea con MUTABLE_FORMAT, asi que la
-    // vista tiene que usar EXACTAMENTE el mismo con el que se creo.
+    // White in SRGB (diffuse), flat normal in UNORM, and white in UNORM (ORM).
+    // The format matters: the image is not created with MUTABLE_FORMAT, so the
+    // view has to use EXACTLY the same one it was created with.
     VkImage        m_whiteSrgb        = VK_NULL_HANDLE;
     VkDeviceMemory m_whiteSrgbMem     = VK_NULL_HANDLE;
     VkImage        m_flatNormal       = VK_NULL_HANDLE;
     VkDeviceMemory m_flatNormalMem    = VK_NULL_HANDLE;
     VkImage        m_whiteUnorm       = VK_NULL_HANDLE;
     VkDeviceMemory m_whiteUnormMem    = VK_NULL_HANDLE;
-    // isSharedPlaceholder decide comparando contra los tres handles de arriba,
-    // y destroySharedPlaceholders los pone a VK_NULL_HANDLE: sin esta marca, la
-    // guarda se apaga sola y las siguientes liberaciones de material los
-    // destruyen POR SEGUNDA VEZ, en silencio (H79).
+    // isSharedPlaceholder decides by comparing against the three handles above,
+    // and destroySharedPlaceholders sets them to VK_NULL_HANDLE: without this flag, the
+    // guard turns itself off and the following material releases destroy them
+    // A SECOND TIME, silently (H79).
     bool           m_placeholdersDestroyed = false;
 };
 

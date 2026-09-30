@@ -1,5 +1,5 @@
-// Test headless de los overrides de textura del Mesh (sin GPU). Plain main +
-// asserts, sin framework — mismo patrón que content_browser_tests.cpp.
+// Headless test of the Mesh texture overrides (no GPU). Plain main +
+// asserts, no framework, same pattern as content_browser_tests.cpp.
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Core/Scene.h"
@@ -27,9 +27,9 @@ using namespace DonTopo;
 
 static int g_failures = 0;
 
-// Alias de la malla que NO cuenta como dueño (ver el mismo helper en
-// animator_tests.cpp): sin él, el shared_ptr del test haría que editMesh()
-// viera la malla compartida y la copiara.
+// Alias of the mesh that does NOT count as an owner (see the same helper in
+// animator_tests.cpp): without it, the test's shared_ptr would make editMesh()
+// see the mesh as shared and copy it.
 template <typename M>
 static std::shared_ptr<M> soloObservador(const std::shared_ptr<M>& m)
 {
@@ -37,7 +37,7 @@ static std::shared_ptr<M> soloObservador(const std::shared_ptr<M>& m)
 }
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
-// Estático con una textura de albedo venida del FBX.
+// Static with an albedo texture coming from the FBX.
 static std::unique_ptr<GameObject> makeStaticFixture()
 {
     auto go = std::make_unique<GameObject>("Estatico");
@@ -48,7 +48,7 @@ static std::unique_ptr<GameObject> makeStaticFixture()
     return go;
 }
 
-// Skinned con TRES materiales por submalla, cada uno con su albedo del FBX.
+// Skinned with THREE per-submesh materials, each with its albedo from the FBX.
 static std::unique_ptr<GameObject> makeSkinnedFixture()
 {
     auto go = std::make_unique<GameObject>("Personaje");
@@ -62,8 +62,8 @@ static std::unique_ptr<GameObject> makeSkinnedFixture()
     return go;
 }
 
-// Un estático expone UN material: el heredado. El vector materials de un
-// SkinnedMesh vacío no cuenta.
+// A static one exposes ONE material: the inherited one. The materials vector of an
+// empty SkinnedMesh does not count.
 static void test_materials_of_static_mesh()
 {
     auto go = makeStaticFixture();
@@ -73,7 +73,7 @@ static void test_materials_of_static_mesh()
         CHECK(mats[0]->texturePath == "assets/fbx_albedo.png");
 }
 
-// Un skinned con submallas expone SUS materiales, no el heredado.
+// A skinned one with submeshes exposes ITS materials, not the inherited one.
 static void test_materials_of_skinned_mesh()
 {
     auto go = makeSkinnedFixture();
@@ -83,7 +83,7 @@ static void test_materials_of_skinned_mesh()
         CHECK(mats[2]->texturePath == "assets/pelo.png");
 }
 
-// Asignar pisa el material y guarda como baseline lo que traía el FBX.
+// Assigning overwrites the material and stores as baseline what the FBX brought.
 static void test_override_writes_material_and_captures_baseline()
 {
     auto go = makeStaticFixture();
@@ -98,9 +98,9 @@ static void test_override_writes_material_and_captures_baseline()
     CHECK(go->materialOverrides[0].baseAlbedo == "assets/fbx_albedo.png");
 }
 
-// Cambiar de textura NO mueve el baseline: sigue siendo el del FBX, no el
-// override intermedio. Sin esto, un Clear tras dos cambios devolvería la
-// primera textura que puso el usuario en vez de la del modelo.
+// Changing the texture does NOT move the baseline: it is still the FBX one, not the
+// intermediate override. Without this, a Clear after two changes would give back the
+// first texture the user set instead of the model's.
 static void test_second_override_keeps_original_baseline()
 {
     auto go = makeStaticFixture();
@@ -116,7 +116,7 @@ static void test_second_override_keeps_original_baseline()
     CHECK(go->materialOverrides[0].baseAlbedo == "assets/fbx_albedo.png");
 }
 
-// Clear = vaciar el override. El material vuelve al baseline capturado.
+// Clear = empty the override. The material goes back to the captured baseline.
 static void test_clear_restores_baseline()
 {
     auto go = makeStaticFixture();
@@ -131,7 +131,7 @@ static void test_clear_restores_baseline()
     CHECK(go->getMesh()->material.texturePath == "assets/fbx_albedo.png");
 }
 
-// El override de una submalla no toca a las vecinas.
+// The override of one submesh does not touch its neighbors.
 static void test_skinned_override_touches_only_its_index()
 {
     auto go = makeSkinnedFixture();
@@ -148,8 +148,8 @@ static void test_skinned_override_touches_only_its_index()
     CHECK(sm->materials[1].texturePath == "assets/ropa.png");
 }
 
-// Índice que ya no existe (FBX reexportado con menos submallas): se ignora sin
-// tocar nada y sin crash.
+// Index that no longer exists (FBX re-exported with fewer submeshes): it is ignored without
+// touching anything and without a crash.
 static void test_out_of_range_index_is_ignored()
 {
     auto go = makeSkinnedFixture();
@@ -166,7 +166,7 @@ static void test_out_of_range_index_is_ignored()
     CHECK(sm->materials[2].texturePath == "assets/pelo.png");
 }
 
-// Los tres slots son independientes: pisar el albedo no toca normal ni ORM.
+// The three slots are independent: overwriting the albedo does not touch normal or ORM.
 static void test_slots_are_independent()
 {
     auto go = makeStaticFixture();
@@ -183,11 +183,11 @@ static void test_slots_are_independent()
     CHECK(go->getMesh()->material.metallicRoughnessPath == "assets/fbx_orm.png");
 }
 
-// El override de normal y el de ORM escriben cada uno su propio campo, no el
-// de al lado. Sin este test, un cableado con copy-paste equivocado en
-// applyMaterialOverrides (p.ej. pasar mat.texturePath como destino del
-// normal) habría pasado los tests de arriba: ninguno de ellos toca ov.normal
-// ni ov.orm.
+// The normal override and the ORM one each write their own field, not the
+// neighboring one. Without this test, a wrong copy-paste wiring in
+// applyMaterialOverrides (e.g. passing mat.texturePath as the destination of the
+// normal) would have passed the tests above: none of them touches ov.normal
+// or ov.orm.
 static void test_normal_and_orm_overrides_write_their_own_field()
 {
     auto go = makeStaticFixture();
@@ -204,24 +204,24 @@ static void test_normal_and_orm_overrides_write_their_own_field()
 
     CHECK(go->getMesh()->material.normalMapPath == "assets/mi_normal.png");
     CHECK(go->getMesh()->material.metallicRoughnessPath == "assets/mi_orm.png");
-    // El albedo, sin override en este slot, no se ha tocado.
+    // The albedo, with no override in this slot, has not been touched.
     CHECK(go->getMesh()->material.texturePath == "assets/fbx_albedo.png");
     CHECK(go->materialOverrides[0].baseNormal == "assets/fbx_normal.png");
     CHECK(go->materialOverrides[0].baseOrm    == "assets/fbx_orm.png");
 }
 
-// Caso que justifica los flags baseAlbedoTaken/baseNormalTaken/baseOrmTaken:
-// un mesh procedural (sin textura del FBX) tiene texturePath vacío DESDE EL
-// PRINCIPIO, y ese vacío legítimo no se puede distinguir de "aún no se ha
-// tomado el baseline" mirando solo si base* está vacío. Si applyMaterialOverrides
-// usara esa heurística en vez de los flags explícitos, Clear no restauraría
-// el vacío original: dejaría puesta la textura que puso el usuario.
+// Case that justifies the baseAlbedoTaken/baseNormalTaken/baseOrmTaken flags:
+// a procedural mesh (no FBX texture) has an empty texturePath FROM THE
+// START, and that legitimate emptiness cannot be told apart from "the baseline has not yet been
+// taken" by looking only at whether base* is empty. If applyMaterialOverrides
+// used that heuristic instead of the explicit flags, Clear would not restore
+// the original emptiness: it would leave in place the texture the user set.
 static void test_clear_restores_empty_baseline_on_procedural_mesh()
 {
     auto go = std::make_unique<GameObject>("Procedural");
     auto mesh = std::make_shared<Mesh>();
     mesh->name = "esfera";
-    // texturePath se deja vacío a propósito: no viene de ningún FBX.
+    // texturePath is left empty on purpose: it does not come from any FBX.
     go->setMesh(std::move(mesh));
 
     MaterialOverride ov;
@@ -237,12 +237,12 @@ static void test_clear_restores_empty_baseline_on_procedural_mesh()
     CHECK(go->getMesh()->material.texturePath.empty());
 }
 
-// Task 7: el override se aplica sobre la malla que LLEGA, no después: si se
-// aplicara tras registrar en el renderer (AsyncAssetLoader::applyLoadedMesh),
-// la GPU subiría la textura del FBX y la del usuario no se vería hasta el
-// siguiente rebuild. Este test es el mecanismo puro (sin EditorRenderer, que
-// son 73 virtuales puras); que applyLoadedMesh lo llame en el orden correcto
-// se verifica en GUI, igual que test_remove_notifies_listener en
+// Task 7: the override is applied to the mesh that ARRIVES, not afterwards: if it
+// were applied after registering with the renderer (AsyncAssetLoader::applyLoadedMesh),
+// the GPU would upload the FBX texture and the user's would not be seen until the
+// next rebuild. This test is the pure mechanism (without EditorRenderer, which
+// is 73 pure virtuals); that applyLoadedMesh calls it in the right order
+// is verified in the GUI, like test_remove_notifies_listener in
 // camera_tests.cpp.
 static void test_overrides_applied_to_incoming_mesh()
 {
@@ -252,7 +252,7 @@ static void test_overrides_applied_to_incoming_mesh()
     ov.albedo = "assets/mia.png";
     go->materialOverrides.push_back(ov);
 
-    // La malla que "llega" trae lo del FBX.
+    // The mesh that "arrives" carries what is in the FBX.
     auto llegada = std::make_shared<Mesh>();
     llegada->material.texturePath = "assets/fbx_albedo.png";
     go->setMesh(llegada);
@@ -262,7 +262,7 @@ static void test_overrides_applied_to_incoming_mesh()
     CHECK(go->getMesh()->material.texturePath == "assets/mia.png");
 }
 
-// Un GameObject sin mesh no revienta.
+// A GameObject without a mesh does not blow up.
 static void test_no_mesh_is_noop()
 {
     GameObject go("Vacio");
@@ -271,37 +271,37 @@ static void test_no_mesh_is_noop()
     CHECK(materialsOfMesh(go).empty());
 }
 
-// La ruta explícita GANA a los bytes embebidos. Es lo contrario de lo que hacía
-// el motor antes de esta feature, y es lo que hace posible el Clear: si ganara
-// la embebida, asignar una textura a mano exigiría destruir los bytes del FBX y
-// no habría a que volver.
+// The explicit path WINS over the embedded bytes. It is the opposite of what the
+// engine did before this feature, and it is what makes Clear possible: if the
+// embedded one won, assigning a texture by hand would require destroying the FBX bytes and
+// there would be nothing to go back to.
 static void test_path_wins_over_embedded()
 {
     const std::vector<uint8_t> bytes{1, 2, 3};
     CHECK(chooseTextureSource("assets/x.png", bytes) == TextureSource::Path);
 }
 
-// Sin ruta, la embebida.
+// Without a path, the embedded one.
 static void test_embedded_when_no_path()
 {
     const std::vector<uint8_t> bytes{1, 2, 3};
     CHECK(chooseTextureSource("", bytes) == TextureSource::Embedded);
 }
 
-// Sin nada, nada: el caller pone su relleno (blanca compartida en Vulkan,
-// neutro global en D3D12).
+// With nothing, nothing: the caller puts in its own filler (shared white in Vulkan,
+// global neutral in D3D12).
 static void test_none_when_empty()
 {
     CHECK(chooseTextureSource("", {}) == TextureSource::None);
 }
 
-// Solo ruta.
+// Path only.
 static void test_path_when_no_embedded()
 {
     CHECK(chooseTextureSource("assets/x.png", {}) == TextureSource::Path);
 }
 
-// Round-trip: los overrides de TODOS los índices sobreviven a guardar y cargar.
+// Round-trip: the overrides of ALL the indices survive saving and loading.
 static void test_overrides_survive_round_trip(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -330,13 +330,13 @@ static void test_overrides_survive_round_trip(PhysicsManager& pm, AudioManager& 
     CHECK(leido->materialOverrides[0].albedo == "assets/cuerpo.png");
     CHECK(leido->materialOverrides[1].index  == 2);
     CHECK(leido->materialOverrides[1].normal == "assets/pelo_n.png");
-    // El baseline NO viaja: se recaptura al aplicar sobre el material recién
-    // derivado del FBX.
+    // The baseline does NOT travel: it is recaptured when applying over the freshly
+    // derived material from the FBX.
     CHECK(leido->materialOverrides[0].baseAlbedo.empty());
 }
 
-// Review Focus 6: una entrada con SOLO matAsset (sin texturas ni factores) no
-// se omite al guardar, y sobrevive a guardar y cargar.
+// Review Focus 6: an entry with ONLY matAsset (no textures or factors) is not
+// omitted on save, and it survives saving and loading.
 static void test_mat_asset_survives_round_trip_alone(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -363,7 +363,7 @@ static void test_mat_asset_survives_round_trip_alone(PhysicsManager& pm, AudioMa
     CHECK(leido->materialOverrides[0].matAsset == "assets/rojo.mat");
 }
 
-// Una escena vieja, sin el campo matAsset en absoluto, carga igual que hoy.
+// An old scene, without the matAsset field at all, loads the same as today.
 static void test_scene_without_mat_asset_field_loads_unchanged(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -385,8 +385,8 @@ static void test_scene_without_mat_asset_field_loads_unchanged(PhysicsManager& p
     if (leido) CHECK(leido->materialOverrides[0].matAsset.empty());
 }
 
-// Un objeto sin overrides no escribe la clave: las escenas viejas y las nuevas
-// sin texturas tocadas son byte a byte iguales.
+// An object without overrides does not write the key: old scenes and new ones
+// without touched textures are byte for byte equal.
 static void test_no_overrides_writes_no_key()
 {
     Scene scene("Test");
@@ -396,14 +396,14 @@ static void test_no_overrides_writes_no_key()
     go->setMesh(std::move(mesh));
 
     const nlohmann::json j = scene.toJson();
-    // El nodo raíz cuelga de "root"; localizar el hijo por nombre en vez de
-    // asumir el índice.
+    // The root node hangs from "root"; locate the child by name instead of
+    // assuming the index.
     CHECK(!j.dump().empty());
     CHECK(j.dump().find("\"materials\"") == std::string::npos);
 }
 
-// Escena SIN la clave materials: carga exactamente igual que hoy, sin overrides
-// y sin avisos.
+// Scene WITHOUT the materials key: it loads exactly the same as today, without overrides
+// and without warnings.
 static void test_scene_without_materials_key_loads_clean(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -421,7 +421,7 @@ static void test_scene_without_materials_key_loads_clean(PhysicsManager& pm, Aud
     if (leido) CHECK(leido->materialOverrides.empty());
 }
 
-// Con raíz de proyecto fijada, una ruta bajo ella se guarda RELATIVA con "/".
+// With a project root set, a path under it is saved RELATIVE with "/".
 static void test_path_under_root_is_stored_relative(PhysicsManager& pm, AudioManager& am)
 {
     namespace fs = std::filesystem;
@@ -442,7 +442,7 @@ static void test_path_under_root_is_stored_relative(PhysicsManager& pm, AudioMan
     CHECK(texto.find("assets/x.png") != std::string::npos);
     CHECK(texto.find(root.string()) == std::string::npos);
 
-    // Y al leerla con la misma raíz vuelve absoluta.
+    // And when read with the same root it comes back absolute.
     Scene cargada("Vacia");
     cargada.setAssetRoot(root.string());
     CHECK(cargada.fromJson(scene.toJson(), pm, am));
@@ -453,8 +453,8 @@ static void test_path_under_root_is_stored_relative(PhysicsManager& pm, AudioMan
         CHECK(fs::path(leido->materialOverrides[0].albedo) == (root / "assets" / "x.png"));
 }
 
-// Una ruta FUERA de la raíz se guarda absoluta tal cual: relativizarla daría
-// una ristra de ".." que no sobrevive a mover el proyecto.
+// A path OUTSIDE the root is saved absolute as is: making it relative would give
+// a string of ".." that does not survive moving the project.
 static void test_path_outside_root_stays_absolute()
 {
     namespace fs = std::filesystem;
@@ -477,7 +477,7 @@ static void test_path_outside_root_stays_absolute()
     CHECK(texto.find("..") == std::string::npos);
 }
 
-// Sin raíz fijada (tests, runtime headless), la ruta va y vuelve IDÉNTICA.
+// Without a root set (tests, headless runtime), the path goes and comes back IDENTICAL.
 static void test_without_root_path_is_verbatim(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -498,27 +498,27 @@ static void test_without_root_path_is_verbatim(PhysicsManager& pm, AudioManager&
         CHECK(leido->materialOverrides[0].albedo == "assets/tal/cual.png");
 }
 
-// Un bloque "materials" corrupto no tumba la carga: avisa y sigue.
+// A corrupt "materials" block does not bring down the load: it warns and carries on.
 static void test_corrupt_materials_block_warns(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
-    // Mesh PROCEDURAL (sourcePath vacío), no "assets/cubo.fbx": ese fichero no
-    // existe en assets/, así que ModelLoader::load lanzaría, el catch de
-    // nodeFromJson empujaría SU PROPIO aviso de "no se pudo cargar la malla" y
-    // lastWarnings() ya saldría no-vacío ANTES de mirar el bloque materials —
-    // el CHECK de abajo pasaría aunque se borrara el aviso que dice comprobar.
-    // Con un mesh procedural (vértices/índices vacíos, se reconstruye sin
-    // tocar disco) el único aviso posible de esta carga es el del bloque
-    // materials corrupto.
+    // PROCEDURAL mesh (empty sourcePath), not "assets/cubo.fbx": that file does not
+    // exist in assets/, so ModelLoader::load would throw, nodeFromJson's catch
+    // would push ITS OWN "could not load the mesh" warning and
+    // lastWarnings() would already come out non-empty BEFORE looking at the materials block;
+    // the CHECK below would pass even if the warning it claims to check were deleted.
+    // With a procedural mesh (empty vertices/indices, rebuilt without
+    // touching disk) the only possible warning of this load is the one for the corrupt
+    // materials block.
     auto mesh = std::make_shared<Mesh>();
     go->setMesh(std::move(mesh));
     nlohmann::json j = scene.toJson();
 
-    // Inyectar basura donde iría el bloque: un objeto en vez de un array.
-    // Localizar el nodo del cubo recorriendo el JSON por nombre: toJson()
-    // cuelga los hijos de la raíz de root->children, cada uno con su propio
-    // "mesh" (aquí sin "materials" porque el Cubo no tiene overrides todavía).
+    // Inject garbage where the block would go: an object instead of an array.
+    // Locate the cube node by walking the JSON by name: toJson()
+    // hangs the root's children from root->children, each with its own
+    // "mesh" (here without "materials" because the Cube has no overrides yet).
     nlohmann::json& hijos = j["root"]["children"];
     nlohmann::json* cuboJson = nullptr;
     for (auto& hijo : hijos)
@@ -529,17 +529,17 @@ static void test_corrupt_materials_block_warns(PhysicsManager& pm, AudioManager&
 
     Scene cargada("Vacia");
     CHECK(cargada.fromJson(j, pm, am));
-    // La SUBCADENA del aviso que le toca a ESTE bloque, no solo "hay algún
-    // aviso": eso último pasaría igual aunque se borrara el push_back de la
-    // rama "!mats.is_array()" y algún otro aviso ajeno colara por casualidad.
+    // The SUBSTRING of the warning that belongs to THIS block, not just "there is some
+    // warning": the latter would pass all the same even if the push_back of the
+    // "!mats.is_array()" branch were deleted and some other unrelated warning slipped in by chance.
     bool warned = false;
     for (const auto& w : cargada.lastWarnings())
         if (w.find("not a list") != std::string::npos) { warned = true; break; }
     CHECK(warned);
 }
 
-// Una entrada sin "index" válido se descarta con aviso, sin tirar las demás
-// del mismo array: mismo fichero editado a mano que solo corrompe una entrada.
+// An entry without a valid "index" is discarded with a warning, without dropping the others
+// of the same array: same hand-edited file that only corrupts one entry.
 static void test_materials_entry_without_valid_index_is_discarded(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -560,8 +560,8 @@ static void test_materials_entry_without_valid_index_is_discarded(PhysicsManager
     CHECK(cuboJson != nullptr);
     if (!cuboJson) return;
     CHECK((*cuboJson)["mesh"].contains("materials"));
-    // Se añade una segunda entrada sin "index": tiene que descartarse SOLA,
-    // dejando viva la primera.
+    // A second entry without "index" is added: it has to be discarded ALONE,
+    // leaving the first one alive.
     (*cuboJson)["mesh"]["materials"].push_back({ {"albedo", "assets/sin_indice.png"} });
 
     Scene cargada("Vacia");
@@ -580,13 +580,13 @@ static void test_materials_entry_without_valid_index_is_discarded(PhysicsManager
     CHECK(warned);
 }
 
-// GUARDA DE LA DECISIÓN "en los caminos de memoria la ruta viaja verbatim"
-// (ronda 2 de revisión): con la raíz FIJADA en la escena, clonar un objeto
-// cuyo override es una ruta ABSOLUTA bajo esa raíz tiene que dejar al clon con
-// la MISMA cadena, byte a byte — ni relativizada, ni con los separadores
-// reescritos por el viaje relative()/weakly_canonical de toStoredPath. Sin
-// este test, devolver m_assetRoot a cloneGameObject deja la suite en verde
-// mientras el clon recibe una ruta distinta de la del original.
+// GUARD FOR THE DECISION "in the memory paths the path travels verbatim"
+// (review round 2): with the root SET in the scene, cloning an object
+// whose override is an ABSOLUTE path under that root has to leave the clone with the
+// SAME string, byte for byte: neither relativized, nor with the separators
+// rewritten by the relative()/weakly_canonical trip of toStoredPath. Without
+// this test, handing m_assetRoot back to cloneGameObject leaves the suite green
+// while the clone receives a different path from the original's.
 static void test_clone_keeps_override_path_verbatim_with_root_set(PhysicsManager& pm, AudioManager& am)
 {
     namespace fs = std::filesystem;
@@ -613,9 +613,9 @@ static void test_clone_keeps_override_path_verbatim_with_root_set(PhysicsManager
         CHECK(clone->materialOverrides[0].albedo == original);
 }
 
-// Misma guarda para el par subtreeToJson/insertFromJson que usa Undo/Redo de
-// Create/Delete: el ciclo completo (capturar snapshot, borrar el original,
-// reinsertar desde el snapshot) tiene que devolver la ruta idéntica.
+// Same guard for the subtreeToJson/insertFromJson pair used by the Undo/Redo of
+// Create/Delete: the full cycle (capture snapshot, delete the original,
+// reinsert from the snapshot) has to return the identical path.
 static void test_undo_redo_keeps_override_path_verbatim_with_root_set(PhysicsManager& pm, AudioManager& am)
 {
     namespace fs = std::filesystem;
@@ -635,8 +635,8 @@ static void test_undo_redo_keeps_override_path_verbatim_with_root_set(PhysicsMan
     const std::string original = go->materialOverrides[0].albedo;
     const nlohmann::json snapshot = scene.subtreeToJson(go);
 
-    // El ciclo real de un Undo de Delete: el nodo se destruye y se reconstruye
-    // desde el snapshot capturado ANTES de borrarlo.
+    // The real cycle of a Delete Undo: the node is destroyed and rebuilt
+    // from the snapshot captured BEFORE deleting it.
     scene.removeGameObject(go);
     GameObject* restored = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
     CHECK(restored != nullptr);
@@ -646,15 +646,15 @@ static void test_undo_redo_keeps_override_path_verbatim_with_root_set(PhysicsMan
         CHECK(restored->materialOverrides[0].albedo == original);
 }
 
-// Task 7: nodeFromJson tiene que llamar a applyMaterialOverrides con la malla
-// YA PUESTA, para cada una de las tres ramas de carga (aquí, la procedural).
-// Sin esa llamada, un objeto recién cargado desde disco se ve con la textura
-// del FBX hasta el primer edit que dispare un applyMaterialOverrides externo.
+// Task 7: nodeFromJson has to call applyMaterialOverrides with the mesh
+// ALREADY SET, for each of the three load branches (here, the procedural one).
+// Without that call, an object freshly loaded from disk looks like the FBX's texture
+// until the first edit that triggers an external applyMaterialOverrides.
 static void test_scene_load_applies_override_to_material(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
-    auto mesh = std::make_shared<Mesh>();   // procedural: sourcePath vacío
+    auto mesh = std::make_shared<Mesh>();   // procedural: empty sourcePath
     go->setMesh(std::move(mesh));
     MaterialOverride ov;
     ov.index  = 0;
@@ -673,19 +673,19 @@ static void test_scene_load_applies_override_to_material(PhysicsManager& pm, Aud
         CHECK(leido->getMesh()->material.texturePath == "assets/mia.png");
 }
 
-// Task 7, punto 2 de la revisión: el comentario de GameObject::applyMaterialOverrides
-// promete que "el aviso [de index fuera de rango] lo da el lector de escena,
-// que es quien tiene canal para darlo". Este test es esa promesa cumplida: un
-// index que ya no existe en el mesh recién cargado deja un aviso en
-// lastWarnings(), no un fallo silencioso.
+// Task 7, review point 2: the comment of GameObject::applyMaterialOverrides
+// promises that "the warning [for an out-of-range index] is given by the scene reader,
+// which is the one that has a channel to give it". This test is that promise kept: an
+// index that no longer exists in the freshly loaded mesh leaves a warning in
+// lastWarnings(), not a silent failure.
 static void test_out_of_range_index_warns_on_scene_load(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
-    auto mesh = std::make_shared<Mesh>();   // procedural: expone UN material (índice 0)
+    auto mesh = std::make_shared<Mesh>();   // procedural: exposes ONE material (index 0)
     go->setMesh(std::move(mesh));
     MaterialOverride ov;
-    ov.index  = 3;   // fuera de rango: el mesh procedural solo tiene el índice 0
+    ov.index  = 3;   // out of range: the procedural mesh only has index 0
     ov.albedo = "assets/fantasma.png";
     go->materialOverrides.push_back(ov);
 
@@ -693,24 +693,24 @@ static void test_out_of_range_index_warns_on_scene_load(PhysicsManager& pm, Audi
     Scene cargada("Vacia");
     CHECK(cargada.fromJson(j, pm, am));
 
-    // La SUBCADENA de ESTE aviso, no solo "hay algún aviso": mismo criterio
-    // que test_corrupt_materials_block_warns.
+    // The SUBSTRING of THIS warning, not just "there is some warning": same criterion
+    // as test_corrupt_materials_block_warns.
     bool warned = false;
     for (const auto& w : cargada.lastWarnings())
         if (w.find("out of range") != std::string::npos) { warned = true; break; }
     CHECK(warned);
 }
 
-// El mismo aviso, pero por el camino ASÍNCRONO. El de arriba solo cubre
-// Scene::fromJson; una escena grande carga sus mallas por el pump
-// (AsyncAssetLoader::applyLoadedMesh), que llamaba a applyMaterialOverrides a
-// secas y se comía el índice inválido sin una línea. El aviso vive ahora en
-// collectMaterialOverrideWarnings, que es lo que se prueba aquí: los dos
-// caminos dicen lo mismo porque llaman a la misma función.
+// The same warning, but through the ASYNCHRONOUS path. The one above only covers
+// Scene::fromJson; a large scene loads its meshes through the pump
+// (AsyncAssetLoader::applyLoadedMesh), which called applyMaterialOverrides
+// plain and swallowed the invalid index without a line. The warning now lives in
+// collectMaterialOverrideWarnings, which is what is tested here: both
+// paths say the same because they call the same function.
 static void test_override_warnings_helper()
 {
     GameObject go("Cubo");
-    auto mesh = std::make_shared<Mesh>();   // procedural: UN material (índice 0)
+    auto mesh = std::make_shared<Mesh>();   // procedural: ONE material (index 0)
     go.setMesh(std::move(mesh));
 
     MaterialOverride dentro;
@@ -720,9 +720,9 @@ static void test_override_warnings_helper()
 
     std::vector<std::string> avisos;
     collectMaterialOverrideWarnings(go, avisos);
-    // Un índice válido no dice nada: si avisara siempre, el aviso no
-    // distinguiría nada y el camino async se llenaría de ruido por cada
-    // objeto con overrides de una escena grande.
+    // A valid index says nothing: if it always warned, the warning would not
+    // distinguish anything and the async path would fill with noise for every
+    // object with overrides in a large scene.
     CHECK(avisos.empty());
 
     MaterialOverride fuera;
@@ -734,15 +734,15 @@ static void test_override_warnings_helper()
     CHECK(avisos.size() == 1);
     if (avisos.size() == 1)
     {
-        // El texto, no solo el número: es lo que el usuario lee en el Log, y
-        // tiene que decir de QUÉ objeto e índice habla.
+        // The text, not just the number: it is what the user reads in the Log, and
+        // it has to say WHICH object and index it is talking about.
         CHECK(avisos[0].find("Cubo") != std::string::npos);
         CHECK(avisos[0].find("index 3") != std::string::npos);
         CHECK(avisos[0].find("out of range") != std::string::npos);
     }
 
-    // Un negativo cuenta igual que un índice pasado: applyMaterialOverrides los
-    // descarta por la misma condición.
+    // A negative counts the same as an index past the end: applyMaterialOverrides discards them
+    // by the same condition.
     MaterialOverride negativo;
     negativo.index  = -1;
     negativo.albedo = "assets/otro.png";
@@ -751,10 +751,10 @@ static void test_override_warnings_helper()
     collectMaterialOverrideWarnings(go, avisos);
     CHECK(avisos.size() == 2);
 
-    // Sin malla no hay materiales contra los que comparar: no es que todos los
-    // índices estén fuera de rango, es que la pregunta no aplica todavía (el
-    // pump llama a esto DESPUÉS del setMesh, pero el orden lo garantiza el
-    // caller, no esta función).
+    // Without a mesh there are no materials to compare against: it is not that all the
+    // indices are out of range, it is that the question does not apply yet (the
+    // pump calls this AFTER setMesh, but the order is guaranteed by the
+    // caller, not by this function).
     GameObject sinMalla("Vacio");
     sinMalla.materialOverrides.push_back(fuera);
     avisos.clear();
@@ -762,20 +762,20 @@ static void test_override_warnings_helper()
     CHECK(avisos.empty());
 }
 
-// Task 7, punto 1 de la revisión: la trampa del clon. cloneGameObject siembra
-// la malla del clon desde una PreloadedMeshCache con la malla VIVA del
-// original, es decir con el material YA PISADO por el override. Sin el
-// baseline real viajando en el JSON de clonado (carryOverrideBaseline), el
-// clon capturaría como "original" la textura del override, y un Clear sobre
-// el clon dejaría puesta esa textura en vez de devolver la del FBX.
+// Task 7, review point 1: the clone trap. cloneGameObject seeds
+// the clone's mesh from a PreloadedMeshCache with the original's LIVE mesh,
+// that is, with the material ALREADY OVERWRITTEN by the override. Without the
+// real baseline traveling in the cloning JSON (carryOverrideBaseline), the
+// clone would capture the override's texture as "original", and a Clear on
+// the clone would leave that texture in place instead of returning the FBX's.
 static void test_clone_clear_restores_fbx_texture_not_override(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
     auto mesh = std::make_shared<Mesh>();
-    // sourcePath no vacío: es lo que hace que cloneGameObject use la
-    // PreloadedMeshCache (mallas) en vez de ir a disco (que fallaría, el
-    // fichero no existe, y el clon se quedaría sin mesh).
+    // Non-empty sourcePath: it is what makes cloneGameObject use the
+    // PreloadedMeshCache (meshes) instead of going to disk (which would fail, the
+    // file does not exist, and the clone would be left without a mesh).
     mesh->sourcePath = "assets/cubo.fbx";
     mesh->material.texturePath = "assets/fbx_albedo.png";
     go->setMesh(std::move(mesh));
@@ -784,8 +784,8 @@ static void test_clone_clear_restores_fbx_texture_not_override(PhysicsManager& p
     ov.index  = 0;
     ov.albedo = "assets/mia.png";
     go->materialOverrides.push_back(ov);
-    // El material VIVO de go ya trae el override horneado, igual que un
-    // objeto editado en el editor antes de duplicarlo.
+    // go's LIVE material already carries the baked override, just like an
+    // object edited in the editor before duplicating it.
     applyMaterialOverrides(*go);
     CHECK(go->getMesh()->material.texturePath == "assets/mia.png");
 
@@ -795,24 +795,24 @@ static void test_clone_clear_restores_fbx_texture_not_override(PhysicsManager& p
     CHECK(clone->materialOverrides.size() == 1);
     if (clone->materialOverrides.empty()) return;
 
-    // Clear en el CLON, no en el original.
+    // Clear on the CLONE, not on the original.
     clone->materialOverrides[0].albedo.clear();
     applyMaterialOverrides(*clone);
 
     CHECK(clone->getMesh()->material.texturePath == "assets/fbx_albedo.png");
 }
 
-// Ronda de revisión de Task 7, punto 1 (Critical): r.images trae los píxeles
-// que el worker decodificó del FBX ANTES de que ningún override pisara nada
-// (AsyncAssetLoader::runJob), y Renderer::createSharedGpuMesh (Vulkan)
-// PREFIERE esos píxeles ya decodificados sobre la ruta del material — sin
-// filtrarlos, un override sobre un FBX con textura propia subiría a GPU la
-// del FBX. Este es el único seam de ese bug que se puede probar sin GPU: la
-// función de filtrado en sí, aislada de applyLoadedMesh (que sí necesita un
-// EditorRenderer real y se queda sin cubrir a nivel de test, igual que el
-// resto de esa función — se verifica en GUI). Comprueba que SOLO se descarta
-// el slot que el override pisa, dejando los demás intactos para que el
-// trabajo del worker no se tire entero.
+// Task 7 review round, point 1 (Critical): r.images carries the pixels
+// the worker decoded from the FBX BEFORE any override overwrote anything
+// (AsyncAssetLoader::runJob), and Renderer::createSharedGpuMesh (Vulkan)
+// PREFERS those already decoded pixels over the material's path; without
+// filtering them, an override on an FBX with its own texture would upload the
+// FBX's to the GPU. This is the only seam of that bug that can be tested without a GPU: the
+// filtering function itself, isolated from applyLoadedMesh (which does need a
+// real EditorRenderer and is left uncovered at test level, like the
+// rest of that function; it is verified in the GUI). It checks that ONLY the slot
+// that the override overwrites is discarded, leaving the others intact so that the
+// worker's work is not thrown away entirely.
 static void test_discard_overridden_decoded_images_removes_only_overridden_slot()
 {
     DecodedImage albedo; albedo.slot = DecodedImage::Albedo; albedo.w = 1; albedo.h = 1; albedo.pixels = {1, 2, 3, 4};
@@ -822,7 +822,7 @@ static void test_discard_overridden_decoded_images_removes_only_overridden_slot(
 
     MaterialOverride ov;
     ov.index  = 0;
-    ov.albedo = "assets/mia.png";   // solo el albedo está overrideado
+    ov.albedo = "assets/mia.png";   // only the albedo is overridden
     std::vector<MaterialOverride> overrides{ov};
 
     discardOverriddenDecodedImages(images, overrides);
@@ -840,9 +840,9 @@ static void test_discard_overridden_decoded_images_removes_only_overridden_slot(
     CHECK(hasOrm);
 }
 
-// r.images solo decodifica Mesh::material (índice 0, ver el comentario de
-// runJob): un override de OTRO índice (SkinnedMesh multi-material) no tiene
-// nada que descartar en este vector.
+// r.images only decodes Mesh::material (index 0, see the comment of
+// runJob): an override of ANOTHER index (multi-material SkinnedMesh) has
+// nothing to discard in this vector.
 static void test_discard_overridden_decoded_images_ignores_other_index()
 {
     DecodedImage albedo; albedo.slot = DecodedImage::Albedo;
@@ -872,7 +872,7 @@ static void test_discard_overridden_decoded_images_considers_mat_asset()
     DecodedImage orm;    orm.slot    = DecodedImage::ORM;
     std::vector<DecodedImage> images{albedo, normal, orm};
 
-    MaterialOverride ov; ov.index = 0; ov.matAsset = (d / "x.mat").string();   // sin overrides propias
+    MaterialOverride ov; ov.index = 0; ov.matAsset = (d / "x.mat").string();   // without overrides of its own
     std::vector<MaterialOverride> overrides{ov};
 
     discardOverriddenDecodedImages(images, overrides);
@@ -884,16 +884,16 @@ static void test_discard_overridden_decoded_images_considers_mat_asset()
         if (img.slot == DecodedImage::Albedo) hasAlbedo = true;
         if (img.slot == DecodedImage::Normal) hasNormal = true;
     }
-    CHECK(hasAlbedo);    // el .mat no aporta albedo: la decodificada del FBX se queda
-    CHECK(!hasNormal);   // el .mat SI aporta normal: se descarta la del FBX
+    CHECK(hasAlbedo);    // the .mat provides no albedo: the FBX's decoded one stays
+    CHECK(!hasNormal);   // the .mat DOES provide normal: the FBX's is discarded
 }
 
-// Ronda de revisión de Task 7, punto 2 (Important): el baseline pertenece a
-// LA MALLA de la que salió. setMesh es el único punto por el que cambia la
-// malla, así que tiene que resetear ahí los base*/base*Taken — si
-// sobrevivieran a un cambio de malla (a null, o a otra distinta), un Clear
-// posterior devolvería la textura de un modelo que ya no es el que está
-// cargado.
+// Task 7 review round, point 2 (Important): the baseline belongs to
+// THE MESH it came from. setMesh is the only point through which the
+// mesh changes, so it has to reset the base*/base*Taken there; if
+// they survived a mesh change (to null, or to a different one), a later Clear
+// would return the texture of a model that is no longer the one
+// loaded.
 static void test_set_mesh_resets_stale_baseline()
 {
     auto go = makeStaticFixture();
@@ -905,22 +905,22 @@ static void test_set_mesh_resets_stale_baseline()
     CHECK(go->materialOverrides[0].baseAlbedoTaken);
     CHECK(go->materialOverrides[0].baseAlbedo == "assets/fbx_albedo.png");
 
-    // setMesh(nullptr): lo que hace el catch de AsyncAssetLoader::applyLoadedMesh
-    // (antes de este fix, restauraba la malla pero no el baseline) y lo que
-    // hace Renderer::removeMeshComponent al quitar el componente.
+    // setMesh(nullptr): what the catch of AsyncAssetLoader::applyLoadedMesh does
+    // (before this fix, it restored the mesh but not the baseline) and what
+    // Renderer::removeMeshComponent does when removing the component.
     go->setMesh(nullptr);
 
     CHECK(!go->materialOverrides[0].baseAlbedoTaken);
     CHECK(go->materialOverrides[0].baseAlbedo.empty());
-    // El override en sí sigue vivo (Remove no lo borra): solo el baseline se
-    // invalida.
+    // The override itself is still alive (Remove does not delete it): only the baseline
+    // is invalidated.
     CHECK(go->materialOverrides[0].albedo == "assets/mia.png");
 }
 
-// Mismo mecanismo que el test de arriba, pero de punta a punta con el
-// escenario exacto que describía la revisión: un load fallido captura un
-// baseline de una malla que nunca llega a cuajar, y el siguiente load
-// (distinto FBX) tiene que capturar el SUYO, no heredar el de antes.
+// Same mechanism as the test above, but end to end with the exact
+// scenario the review described: a failed load captures a baseline of a
+// mesh that never takes hold, and the next load (a different FBX) has to
+// capture ITS OWN, not inherit the earlier one.
 static void test_reload_after_failed_load_recaptures_correct_baseline()
 {
     auto go = makeStaticFixture();   // material.texturePath == "assets/fbx_albedo.png"
@@ -931,14 +931,14 @@ static void test_reload_after_failed_load_recaptures_correct_baseline()
     applyMaterialOverrides(*go);
     CHECK(go->materialOverrides[0].baseAlbedo == "assets/fbx_albedo.png");
 
-    // Simula el catch de applyLoadedMesh: el registro en GPU lanzó, se
-    // deshace el setMesh. Sin el reset de setMesh, el baseline de arriba
-    // ("assets/fbx_albedo.png") sobreviviría aquí aunque esa malla nunca
-    // llegó a quedarse cargada.
+    // Simulates the catch of applyLoadedMesh: the GPU registration threw, the
+    // setMesh is undone. Without the setMesh reset, the baseline above
+    // ("assets/fbx_albedo.png") would survive here even though that mesh never
+    // ended up loaded.
     go->setMesh(nullptr);
 
-    // Simula el siguiente intento con OTRO FBX, esta vez con éxito: setMesh
-    // seguido de applyMaterialOverrides, igual que hace applyLoadedMesh.
+    // Simulates the next attempt with ANOTHER FBX, this time successful: setMesh
+    // followed by applyMaterialOverrides, same as applyLoadedMesh does.
     auto otraMalla = std::make_shared<Mesh>();
     otraMalla->material.texturePath = "assets/otro_fbx.png";
     go->setMesh(otraMalla);
@@ -947,15 +947,15 @@ static void test_reload_after_failed_load_recaptures_correct_baseline()
     CHECK(go->materialOverrides[0].baseAlbedo == "assets/otro_fbx.png");
     CHECK(go->getMesh()->material.texturePath == "assets/mia.png");
 
-    // Clear: sin el fix, esto devolvía "assets/fbx_albedo.png" (la malla que
-    // nunca llegó a cargar), no la del FBX realmente cargado.
+    // Clear: without the fix, this returned "assets/fbx_albedo.png" (the mesh that
+    // never got loaded), not that of the FBX actually loaded.
     go->materialOverrides[0].albedo.clear();
     applyMaterialOverrides(*go);
     CHECK(go->getMesh()->material.texturePath == "assets/otro_fbx.png");
 }
 
-// Undo/redo de una asignación, con el renderer a nullptr (sin GPU): lo que se
-// prueba es el dato, que es lo único que sobrevive al ciclo.
+// Undo/redo of an assignment, with the renderer at nullptr (no GPU): what is
+// tested is the data, which is the only thing that survives the cycle.
 static void test_set_material_asset_override_creates_entry_and_applies()
 {
     auto go = makeStaticFixture();
@@ -1004,7 +1004,7 @@ static void test_command_undo_redo_assignment(PhysicsManager& pm, AudioManager& 
     (void)pm; (void)am;
 }
 
-// Undo de un Clear: vuelve a poner la ruta que el usuario había asignado.
+// Undo of a Clear: puts back the path the user had assigned.
 static void test_command_undo_of_clear(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1026,8 +1026,8 @@ static void test_command_undo_of_clear(PhysicsManager& pm, AudioManager& am)
     (void)pm; (void)am;
 }
 
-// El comando resuelve por id en CADA aplicación: un puntero guardado quedaría
-// colgando tras un undo de Delete que reconstruya el objeto.
+// The command resolves by id on EVERY application: a stored pointer would be left
+// dangling after a Delete undo that rebuilds the object.
 static void test_command_survives_object_rebuild(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1040,18 +1040,18 @@ static void test_command_survives_object_rebuild(PhysicsManager& pm, AudioManage
     MaterialTextureCommand cmd(scene, nullptr, "Textura", id, 0,
                                 MaterialTextureSlot::Albedo, "", "assets/mia.png");
 
-    // El objeto desaparece: el comando no puede reventar ni escribir en memoria
-    // liberada, solo no hacer nada.
+    // The object disappears: the command cannot blow up or write to freed
+    // memory, it must just do nothing.
     scene.removeGameObject(scene.findById(id));
     cmd.execute();
     CHECK(scene.findById(id) == nullptr);
     (void)pm; (void)am;
 }
 
-// Sin setMesh: el objeto no tiene material donde aplicar nada. Sin la guarda
-// !go->hasMesh() en apply(), setMaterialTextureOverride le crearía igual una
-// entrada huérfana en materialOverrides -- un override escrito sobre un
-// objeto que no tiene malla, sin efecto visible y sin que nada lo delate.
+// Without setMesh: the object has no material to apply anything to. Without the
+// !go->hasMesh() guard in apply(), setMaterialTextureOverride would still create
+// an orphan entry in materialOverrides -- an override written on an
+// object that has no mesh, with no visible effect and nothing to give it away.
 static void test_command_on_object_without_mesh_is_noop(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1065,16 +1065,16 @@ static void test_command_on_object_without_mesh_is_noop(PhysicsManager& pm, Audi
     (void)pm; (void)am;
 }
 
-// El índice era válido cuando se construyó el comando (skinned con 3
-// materiales, índice 2 = "pelo"), pero antes de que undo/redo lo reproduzca
-// la malla cambia a un Mesh plano de UN solo material -- el mismo escenario
-// que describe el comentario de la guarda en Command.cpp. Sin
-// "m_materialIndex >= mats.size()" en apply(), setMaterialTextureOverride
-// crearía igual una entrada huérfana con index=2 en materialOverrides (el
-// propio corte de applyMaterialOverrides evita la escritura fuera de rango
-// en el Material, pero no evita la entrada huérfana): el objeto se queda con
-// un override serializable que no describe ningún material real del mesh
-// actual, silencioso hasta el siguiente guardado.
+// The index was valid when the command was built (skinned with 3
+// materials, index 2 = "pelo"), but before undo/redo replays it
+// the mesh changes to a flat Mesh of a SINGLE material -- the same scenario
+// that the guard comment in Command.cpp describes. Without
+// "m_materialIndex >= mats.size()" in apply(), setMaterialTextureOverride
+// would still create an orphan entry with index=2 in materialOverrides (the
+// cut in applyMaterialOverrides itself avoids the out-of-range write
+// into the Material, but does not avoid the orphan entry): the object is left with a
+// serializable override that describes no real material of the current
+// mesh, silent until the next save.
 static void test_command_stale_index_after_mesh_shrinks(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1087,14 +1087,14 @@ static void test_command_stale_index_after_mesh_shrinks(PhysicsManager& pm, Audi
     go->setMesh(skinned);
     const uint64_t id = go->id;
 
-    // Comando construido para el índice 2 ("pelo") mientras el mesh es
-    // skinned con 3 materiales.
+    // Command built for index 2 ("pelo") while the mesh is
+    // skinned with 3 materials.
     MaterialTextureCommand cmd(scene, nullptr, "Textura de pelo", id, 2,
                                 MaterialTextureSlot::Albedo, "", "assets/mia.png");
 
-    // La malla se sustituye por un Mesh estático plano: UN solo material, sin
-    // que el comando se entere -- exactamente el reordenamiento que el
-    // comentario de la guarda advierte.
+    // The mesh is replaced by a flat static Mesh: a SINGLE material, without
+    // the command finding out -- exactly the reordering that the
+    // guard comment warns about.
     auto plano = std::make_shared<Mesh>();
     plano->material.texturePath = "assets/plano.png";
     go->setMesh(plano);
@@ -1110,15 +1110,15 @@ static void test_command_stale_index_after_mesh_shrinks(PhysicsManager& pm, Audi
 }
 
 // ---------------------------------------------------------------------------
-// Factores PBR (metallic/roughness) del material: mismo mecanismo que los
-// tres slots de textura de arriba, pero con un centinela float (-1.0f, fuera
-// del rango 0..1 del slider) en vez de una cadena vacía — ver la nota grande
-// de MaterialOverride en GameObject.h.
+// PBR factors (metallic/roughness) of the material: same mechanism as the
+// three texture slots above, but with a float sentinel (-1.0f, outside
+// the slider's 0..1 range) instead of an empty string; see the big note
+// of MaterialOverride in GameObject.h.
 // ---------------------------------------------------------------------------
 
-// Asignar un factor pisa el material y guarda como baseline lo que traía el
-// modelo (aquí, los defaults de Material: metallic=0.0f, roughness=0.5f). El
-// factor que no se toca se queda en su centinela, sin baseline capturado.
+// Assigning a factor overwrites the material and stores as baseline what the
+// model brought (here, the Material defaults: metallic=0.0f, roughness=0.5f). The
+// factor that is not touched stays at its sentinel, with no baseline captured.
 static void test_factor_override_writes_material_and_captures_baseline()
 {
     auto go = makeStaticFixture();
@@ -1132,16 +1132,16 @@ static void test_factor_override_writes_material_and_captures_baseline()
     CHECK(go->getMesh()->material.metallic == 0.8f);
     CHECK(go->materialOverrides[0].baseMetallic == 0.0f);
     CHECK(go->materialOverrides[0].baseMetallicTaken);
-    // roughness no se tocó: sigue en el centinela, y el material se queda con
-    // el default del modelo, no con 0.0.
+    // roughness was not touched: it is still at the sentinel, and the material stays with
+    // the model's default, not with 0.0.
     CHECK(go->materialOverrides[0].roughness < 0.0f);
     CHECK(!go->materialOverrides[0].baseRoughnessTaken);
     CHECK(go->getMesh()->material.roughness == 0.5f);
 }
 
-// Cambiar de valor NO mueve el baseline: sigue siendo el del modelo, no el
-// primer valor que puso el usuario. Mismo motivo que
-// test_second_override_keeps_original_baseline con las texturas.
+// Changing the value does NOT move the baseline: it is still the model's, not the
+// first value the user set. Same reason as
+// test_second_override_keeps_original_baseline with the textures.
 static void test_factor_second_change_keeps_original_baseline()
 {
     auto go = makeStaticFixture();
@@ -1157,10 +1157,10 @@ static void test_factor_second_change_keeps_original_baseline()
     CHECK(go->materialOverrides[0].baseMetallic == 0.0f);
 }
 
-// Clear (el centinela -1.0f) = el material vuelve al baseline capturado, o
-// sea al valor del modelo. No hay botón "Clear" propio para los factores en
-// el panel (a diferencia de las texturas), pero el mecanismo de datos es el
-// mismo y se prueba igual, directo sobre el override.
+// Clear (the -1.0f sentinel) = the material goes back to the captured baseline, that
+// is, to the model's value. There is no dedicated "Clear" button for the factors in
+// the panel (unlike the textures), but the data mechanism is the
+// same and is tested the same way, directly on the override.
 static void test_factor_clear_restores_baseline()
 {
     auto go = makeStaticFixture();
@@ -1176,9 +1176,9 @@ static void test_factor_clear_restores_baseline()
     CHECK(go->getMesh()->material.metallic == 0.0f);
 }
 
-// El baseline de un factor pertenece a LA MALLA de la que salió, igual que el
-// de una textura: setMesh es el único punto por el que cambia la malla, así
-// que tiene que resetear ahí baseMetallicTaken/baseRoughnessTaken.
+// A factor's baseline belongs to THE MESH it came from, just like a
+// texture's: setMesh is the only point through which the mesh changes, so
+// it has to reset baseMetallicTaken/baseRoughnessTaken there.
 static void test_set_mesh_resets_stale_factor_baseline()
 {
     auto go = makeStaticFixture();
@@ -1192,19 +1192,19 @@ static void test_set_mesh_resets_stale_factor_baseline()
     go->setMesh(nullptr);
 
     CHECK(!go->materialOverrides[0].baseMetallicTaken);
-    // El override en sí sigue vivo (Remove no lo borra): solo el baseline se
-    // invalida.
+    // The override itself is still alive (Remove does not delete it): only the baseline
+    // is invalidated.
     CHECK(go->materialOverrides[0].metallic == 0.5f);
 }
 
-// Round-trip: metallic Y roughness sobreviven a guardar y cargar.
+// Round-trip: metallic AND roughness survive saving and loading.
 static void test_factor_overrides_survive_round_trip(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
-    // Procedural: "assets/cubo.fbx" no existe en disco (ver el comentario de
-    // test_factor_absent_in_json_does_not_touch_material, más abajo) y este
-    // test SÍ necesita que la recarga deje malla puesta para comprobar el
+    // Procedural: "assets/cubo.fbx" does not exist on disk (see the comment of
+    // test_factor_absent_in_json_does_not_touch_material, further down) and this
+    // test DOES need the reload to leave a mesh set in order to check the
     // material.
     auto mesh = std::make_shared<Mesh>();
     go->setMesh(std::move(mesh));
@@ -1226,27 +1226,27 @@ static void test_factor_overrides_survive_round_trip(PhysicsManager& pm, AudioMa
     if (leido->materialOverrides.empty()) return;
     CHECK(leido->materialOverrides[0].metallic  == 0.6f);
     CHECK(leido->materialOverrides[0].roughness == 0.2f);
-    // El baseline NO viaja por disco: la aserción que de verdad lo prueba es
-    // que la CADENA "baseMetallic"/"baseRoughness" no aparece en el propio
-    // JSON (gateado por carryOverrideBaseline, que Scene::toJson() nunca
-    // pone a true) -- mismo criterio que
-    // test_factor_absent_in_json_does_not_touch_material con "metallic".
-    // Ronda de revisión: comprobar baseMetallicTaken/baseMetallic del objeto
-    // RECARGADO no discrimina nada, porque en este fixture el origen ya
-    // tiene baseMetallicTaken=false y baseMetallic=0.0f -- si el bug
-    // escribiera esas claves también en disco, LEERLAS daría los mismos dos
-    // valores (recapturar desde un Material fresco con metallic=0.0 produce
-    // exactamente "taken=true, base=0.0" igual que si esos valores
-    // vinieran del JSON), y el test pasaría con el bug puesto.
+    // The baseline does NOT travel through disk: the assertion that really proves it is
+    // that the STRING "baseMetallic"/"baseRoughness" does not appear in the JSON itself
+    // (gated by carryOverrideBaseline, which Scene::toJson() never
+    // sets to true); same criterion as
+    // test_factor_absent_in_json_does_not_touch_material with "metallic".
+    // Review round: checking baseMetallicTaken/baseMetallic of the RELOADED
+    // object discriminates nothing, because in this fixture the source already
+    // has baseMetallicTaken=false and baseMetallic=0.0f; if the bug
+    // also wrote those keys to disk, READING THEM would give the same two
+    // values (recapturing from a fresh Material with metallic=0.0 produces
+    // exactly "taken=true, base=0.0" just as if those values
+    // came from the JSON), and the test would pass with the bug in place.
     CHECK(j.dump().find("baseMetallic")  == std::string::npos);
     CHECK(j.dump().find("baseRoughness") == std::string::npos);
-    // Estas dos siguen siendo ciertas y documentan el comportamiento real
-    // (recaptura en la carga, no lectura del fichero), pero no son las que
-    // defienden la regresión -- las de arriba sí.
+    // These two are still true and document the real behavior
+    // (recapture on load, not reading from the file), but they are not the ones that
+    // defend against the regression; the ones above are.
     CHECK(leido->materialOverrides[0].baseMetallicTaken);
     CHECK(leido->materialOverrides[0].baseMetallic == 0.0f);
-    // Y ya aplicados sobre el material (nodeFromJson llama a
-    // applyMaterialOverrides con la malla puesta, Task 7).
+    // And already applied onto the material (nodeFromJson calls
+    // applyMaterialOverrides with the mesh set, Task 7).
     CHECK(leido->hasMesh());
     if (leido->hasMesh())
     {
@@ -1255,19 +1255,19 @@ static void test_factor_overrides_survive_round_trip(PhysicsManager& pm, AudioMa
     }
 }
 
-// Un metallic/roughness ausente en el JSON no toca el material: se queda con
-// el default del modelo, no se fuerza a 0. El override de albedo SÍ está
-// presente (para que el bloque "materials" exista en el JSON) pero sin las
-// claves "metallic"/"roughness".
+// A metallic/roughness absent from the JSON does not touch the material: it stays with
+// the model's default, it is not forced to 0. The albedo override IS
+// present (so that the "materials" block exists in the JSON) but without the
+// "metallic"/"roughness" keys.
 static void test_factor_absent_in_json_does_not_touch_material(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
-    // Procedural (sourcePath vacío): "assets/cubo.fbx" no existe en disco, y
-    // con un sourcePath que no resuelve, ModelLoader::load lanza y el catch de
-    // nodeFromJson deja el nodo sin mesh -- justo lo que este test necesita
-    // evitar para poder comprobar el material tras la recarga (mismo motivo
-    // que documenta test_corrupt_materials_block_warns más arriba).
+    // Procedural (empty sourcePath): "assets/cubo.fbx" does not exist on disk, and
+    // with a sourcePath that does not resolve, ModelLoader::load throws and the catch of
+    // nodeFromJson leaves the node without a mesh -- exactly what this test needs
+    // to avoid in order to check the material after the reload (same reason
+    // documented by test_corrupt_materials_block_warns above).
     auto mesh = std::make_shared<Mesh>();
     go->setMesh(std::move(mesh));
     MaterialOverride ov;
@@ -1291,9 +1291,9 @@ static void test_factor_absent_in_json_does_not_touch_material(PhysicsManager& p
     CHECK(leido->materialOverrides[0].roughness < 0.0f);
 }
 
-// Undo/redo de un MaterialFactorCommand, calcado de
-// test_command_undo_redo_assignment con las texturas: el "antes" es el
-// centinela -1.0f (sin override), igual que "" lo es para una ruta.
+// Undo/redo of a MaterialFactorCommand, modeled on
+// test_command_undo_redo_assignment with the textures: the "before" is the
+// -1.0f sentinel (no override), just as "" is for a path.
 static void test_factor_command_undo_redo(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1315,34 +1315,34 @@ static void test_factor_command_undo_redo(PhysicsManager& pm, AudioManager& am)
     (void)pm; (void)am;
 }
 
-// Ronda de revisión: el "before" de un MaterialFactorCommand construido por
-// el panel tiene que ser el OVERRIDE CRUDO (el centinela, si el slot nunca
-// se había tocado), NO el valor EFECTIVO ya aplicado (mat.metallic) --
-// exactamente el bug que tenía PropertiesPanel::drawTexturesSection antes de
-// este fix (antes de que currentFactorOverride() sustituyera a mat.metallic
-// como "before" en la construcción del comando). Con el efectivo como
-// "before", deshacer la PRIMERA edición sobre un factor nunca tocado
-// escribiría el valor del modelo COMO OVERRIDE ACTIVO -- y nodeToJson SÍ
-// serializa un override activo: el factor quedaría clavado en el .scene
-// para siempre, resucitando en cada carga aunque el usuario nunca lo
-// hubiera tocado (y pisando en silencio un metallic distinto si el FBX se
-// reexporta más tarde).
+// Review round: the "before" of a MaterialFactorCommand built by
+// the panel has to be the RAW OVERRIDE (the sentinel, if the slot was never
+// touched), NOT the already applied EFFECTIVE value (mat.metallic) --
+// exactly the bug that PropertiesPanel::drawTexturesSection had before
+// this fix (before currentFactorOverride() replaced mat.metallic
+// as the "before" in the command construction). With the effective one as
+// "before", undoing the FIRST edit on a never-touched factor
+// would write the model's value AS AN ACTIVE OVERRIDE -- and nodeToJson DOES
+// serialize an active override: the factor would be pinned in the .scene
+// forever, resurrecting on every load even though the user never
+// touched it (and silently overwriting a different metallic if the FBX is
+// re-exported later).
 static void test_factor_command_undo_of_first_edit_leaves_no_active_override(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
     auto mesh = std::make_shared<Mesh>();
-    // Sin override todavía: el estado que currentFactorOverride() lee como
-    // "-1.0f, sin override" y que mat.metallic lee como "0.0f, el default"
-    // -- las dos lecturas que el bug confundía.
+    // No override yet: the state that currentFactorOverride() reads as
+    // "-1.0f, no override" and that mat.metallic reads as "0.0f, the default"
+    // -- the two readings the bug confused.
     go->setMesh(std::move(mesh));
     const uint64_t id = go->id;
     CHECK(go->getMesh()->material.metallic == 0.0f);   // el EFECTIVO
-    CHECK(go->materialOverrides.empty());               // el override CRUDO: ninguno
+    CHECK(go->materialOverrides.empty());               // the RAW override: none
 
-    // before = -1.0f (el centinela; lo que currentFactorOverride() devuelve
-    // para un slot sin entrada en materialOverrides), NO 0.0f (lo que
-    // devolvería mat.metallic, el bug).
+    // before = -1.0f (the sentinel; what currentFactorOverride() returns
+    // for a slot with no entry in materialOverrides), NOT 0.0f (what
+    // mat.metallic would return, the bug).
     MaterialFactorCommand cmd(scene, nullptr, "Metallic de 'Cubo'", id, 0,
                                MaterialFactorSlot::Metallic, -1.0f, 0.8f);
     cmd.execute();
@@ -1352,9 +1352,9 @@ static void test_factor_command_undo_of_first_edit_leaves_no_active_override(Phy
 
     cmd.undo();
 
-    // Con el bug (before=0.0f, el efectivo) esto habría dejado
-    // materialOverrides[0].metallic == 0.0f -- un override ACTIVO con el
-    // valor del modelo, no el centinela. Con el fix, vuelve a -1.0f: sin
+    // With the bug (before=0.0f, the effective one) this would have left
+    // materialOverrides[0].metallic == 0.0f -- an ACTIVE override with the
+    // model's value, not the sentinel. With the fix, it goes back to -1.0f: no
     // override.
     GameObject* despues = scene.findById(id);
     CHECK(despues->materialOverrides.size() == 1);
@@ -1362,9 +1362,9 @@ static void test_factor_command_undo_of_first_edit_leaves_no_active_override(Phy
         CHECK(despues->materialOverrides[0].metallic < 0.0f);
     CHECK(despues->getMesh()->material.metallic == 0.0f);
 
-    // Y el round-trip por JSON no lo resucita: sin override activo (el
-    // centinela), nodeToJson no escribe la clave "metallic" para este
-    // objeto, así que una recarga no trae de vuelta nada.
+    // And the JSON round-trip does not resurrect it: with no active override (the
+    // sentinel), nodeToJson does not write the "metallic" key for this
+    // object, so a reload brings nothing back.
     const std::string texto = scene.toJson().dump();
     CHECK(texto.find("\"metallic\"") == std::string::npos);
 
@@ -1377,7 +1377,7 @@ static void test_factor_command_undo_of_first_edit_leaves_no_active_override(Phy
         CHECK(leido->getMesh()->material.metallic == 0.0f);
 }
 
-// Sin setMesh: mismo criterio que test_command_on_object_without_mesh_is_noop.
+// Without setMesh: same criterion as test_command_on_object_without_mesh_is_noop.
 static void test_factor_command_on_object_without_mesh_is_noop(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1391,8 +1391,8 @@ static void test_factor_command_on_object_without_mesh_is_noop(PhysicsManager& p
     (void)pm; (void)am;
 }
 
-// Índice válido al construir el comando, mesh encogido antes del replay:
-// mismo escenario que test_command_stale_index_after_mesh_shrinks.
+// Valid index when building the command, mesh shrunk before the replay:
+// same scenario as test_command_stale_index_after_mesh_shrinks.
 static void test_factor_command_stale_index_after_mesh_shrinks(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1416,8 +1416,8 @@ static void test_factor_command_stale_index_after_mesh_shrinks(PhysicsManager& p
     (void)pm; (void)am;
 }
 
-// El objeto desaparece entre construir el comando y ejecutarlo: mismo
-// criterio que test_command_survives_object_rebuild.
+// The object disappears between building the command and executing it: same
+// criterion as test_command_survives_object_rebuild.
 static void test_factor_command_survives_object_rebuild(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1435,23 +1435,23 @@ static void test_factor_command_survives_object_rebuild(PhysicsManager& pm, Audi
     (void)pm; (void)am;
 }
 
-// GUARDA para el mismo hallazgo que el baseline de textura en clonar (ver
-// test_clone_clear_restores_fbx_texture_not_override): sin
-// baseMetallic/baseMetallicTaken viajando en el JSON de MEMORIA
-// (carryOverrideBaseline, el que usa cloneGameObject), el clon capturaría
-// como "original" el valor YA HORNEADO del override, y un Clear sobre el
-// clon devolvería ESE valor en vez del metallic del modelo. Sin este test
-// pasaba desapercibido: ningún otro cubre el camino de memoria para los
-// factores, solo el de disco (test_factor_overrides_survive_round_trip,
-// que nunca lleva el baseline).
+// GUARD for the same finding as the texture baseline on clone (see
+// test_clone_clear_restores_fbx_texture_not_override): without
+// baseMetallic/baseMetallicTaken traveling in the MEMORY JSON
+// (carryOverrideBaseline, the one cloneGameObject uses), the clone would capture
+// the override's ALREADY BAKED value as "original", and a Clear on the
+// clone would return THAT value instead of the model's metallic. Without this test
+// it went unnoticed: no other covers the memory path for the
+// factors, only the disk one (test_factor_overrides_survive_round_trip,
+// which never carries the baseline).
 static void test_factor_clone_clear_restores_model_value_not_override(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
-    // sourcePath no vacío: mismo motivo que
-    // test_clone_clear_restores_fbx_texture_not_override -- hace que
-    // cloneGameObject reuse la malla YA CARGADA (PreloadedMeshCache) en vez
-    // de ir a disco, donde "assets/cubo.fbx" no existe.
+    // Non-empty sourcePath: same reason as
+    // test_clone_clear_restores_fbx_texture_not_override -- it makes
+    // cloneGameObject reuse the ALREADY LOADED mesh (PreloadedMeshCache) instead
+    // of going to disk, where "assets/cubo.fbx" does not exist.
     auto mesh = std::make_shared<Mesh>();
     mesh->sourcePath = "assets/cubo.fbx";
     go->setMesh(std::move(mesh));
@@ -1460,8 +1460,8 @@ static void test_factor_clone_clear_restores_model_value_not_override(PhysicsMan
     ov.index    = 0;
     ov.metallic = 0.9f;
     go->materialOverrides.push_back(ov);
-    // El material VIVO de go ya trae el override horneado, igual que un
-    // objeto editado en el editor antes de duplicarlo.
+    // go's LIVE material already carries the baked override, just like an
+    // object edited in the editor before duplicating it.
     applyMaterialOverrides(*go);
     CHECK(go->getMesh()->material.metallic == 0.9f);
 
@@ -1471,28 +1471,28 @@ static void test_factor_clone_clear_restores_model_value_not_override(PhysicsMan
     CHECK(clone->materialOverrides.size() == 1);
     if (clone->materialOverrides.empty()) return;
 
-    // Clear en el CLON, no en el original.
+    // Clear on the CLONE, not on the original.
     clone->materialOverrides[0].metallic = -1.0f;
     applyMaterialOverrides(*clone);
 
-    // Sin el fix, esto devolvía 0.9 (el override horneado que trajo el
-    // clon), no el default del modelo.
+    // Without the fix, this returned 0.9 (the baked override that the
+    // clone brought), not the model's default.
     CHECK(clone->getMesh()->material.metallic == 0.0f);
 }
 
-// --- MeshComponentCommand: añadir y quitar el Mesh por el stack de undo ---
+// --- MeshComponentCommand: adding and removing the Mesh through the undo stack ---
 //
-// Deuda aceptada en su dia: la "x" del Mesh quitaba la malla y vaciaba los
-// overrides fuera del undo, asi que Ctrl+Z no devolvia nada y las texturas
-// asignadas a mano se perdian. Sin renderer (nullptr): lo que se prueba es la
-// parte de CPU, que es donde vivian los dos riesgos de verdad.
+// Debt accepted at the time: the Mesh "x" removed the mesh and emptied the
+// overrides outside the undo, so Ctrl+Z gave nothing back and the textures
+// assigned by hand were lost. Without a renderer (nullptr): what is tested is the
+// CPU part, which is where the two real risks lived.
 
-// Quitar y deshacer devuelve LA MISMA malla con sus overrides, y un Clear
-// posterior devuelve lo del FBX, no lo del usuario. Esa segunda mitad es la que
-// exige restaurar los overrides DESPUES de setMesh: la malla guardada lleva lo
-// del usuario horneado en su Material, y con los baselines bajados
-// applyMaterialOverrides lo recapturaria como "original". El metallic de
-// partida es 0.3 y no el 0.0 por defecto, que no probaria que se leyo nada.
+// Removing and undoing returns THE SAME mesh with its overrides, and a later Clear
+// returns the FBX's, not the user's. That second half is the one that
+// requires restoring the overrides AFTER setMesh: the stored mesh carries the
+// user's baked into its Material, and with the baselines lowered
+// applyMaterialOverrides would recapture it as "original". The starting
+// metallic is 0.3 and not the default 0.0, which would not prove that anything was read.
 static void test_remove_mesh_undo_restores_mesh_and_overrides()
 {
     Scene scene("Test");
@@ -1512,28 +1512,28 @@ static void test_remove_mesh_undo_restores_mesh_and_overrides()
 
     cmd.undo();
     GameObject* vuelto = scene.findById(id);
-    CHECK(vuelto->getMesh() == mesh);   // la MISMA, no una recarga
+    CHECK(vuelto->getMesh() == mesh);   // the SAME one, not a reload
     CHECK(vuelto->materialOverrides.size() == 1);
     CHECK(mesh->material.texturePath == "assets/mia.png");
     CHECK(mesh->material.metallic == 0.8f);
 
-    // Clear de los dos: tiene que volver lo del FBX. Se lee a través del
-    // objeto: el comando sigue guardando la malla (para un redo), así que
-    // editarla la copia — es lo previsto — y `mesh` es la de antes.
+    // Clear of both: the FBX's has to come back. It is read through the
+    // object: the command still holds the mesh (for a redo), so
+    // editing it copies it, as intended, and `mesh` is the earlier one.
     setMaterialTextureOverride(*vuelto, 0, MaterialTextureSlot::Albedo, "");
     CHECK(vuelto->getMesh()->material.texturePath == "assets/fbx_albedo.png");
     setMaterialFactorOverride(*vuelto, 0, MaterialFactorSlot::Metallic, -1.0f);
     CHECK(vuelto->getMesh()->material.metallic == 0.3f);
 
-    // Redo: se vuelve a quitar.
+    // Redo: it is removed again.
     cmd.execute();
     CHECK(!scene.findById(id)->hasMesh());
     CHECK(scene.findById(id)->materialOverrides.empty());
 }
 
-// Añadir un Mesh NO pasa por el undo (es asincrono). "Quitar A, poner B,
-// Ctrl+Z" no puede pisar B con A: B no se podria recuperar. Y lo mismo con B
-// todavia cargando: su resultado aterrizaria encima de A.
+// Adding a Mesh does NOT go through the undo (it is asynchronous). "Remove A, put B,
+// Ctrl+Z" cannot overwrite B with A: B could not be recovered. And the same with B
+// still loading: its result would land on top of A.
 static void test_remove_mesh_undo_does_not_overwrite_newer_mesh()
 {
     Scene scene("Test");
@@ -1563,16 +1563,16 @@ static void test_remove_mesh_undo_does_not_overwrite_newer_mesh()
     CHECK(scene.findById(id)->materialOverrides.empty());
 }
 
-// Añadir: el comando se apila cuando la carga YA aterrizo (applyLoadedMesh hizo
-// el setMesh y aplico los overrides), SIN execute. Undo la quita; redo devuelve
-// la misma malla con sus overrides y el baseline del FBX intacto.
+// Adding: the command is stacked when the load ALREADY landed (applyLoadedMesh did
+// the setMesh and applied the overrides), WITHOUT execute. Undo removes it; redo returns
+// the same mesh with its overrides and the FBX baseline intact.
 static void test_add_mesh_command_undo_redo()
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
     auto mesh = std::make_shared<Mesh>();
     mesh->material.texturePath = "assets/fbx_albedo.png";
-    go->setMesh(mesh); mesh = soloObservador(mesh);   // lo que hace applyLoadedMesh al aterrizar
+    go->setMesh(mesh); mesh = soloObservador(mesh);   // what applyLoadedMesh does on landing
     const uint64_t id = go->id;
     setMaterialTextureOverride(*go, 0, MaterialTextureSlot::Albedo, "assets/mia.png");
 
@@ -1586,13 +1586,13 @@ static void test_add_mesh_command_undo_redo()
     CHECK(scene.findById(id)->getMesh() == mesh);
     CHECK(mesh->material.texturePath == "assets/mia.png");
     setMaterialTextureOverride(*scene.findById(id), 0, MaterialTextureSlot::Albedo, "");
-    // A través del objeto: el comando guarda la malla y editarla la copia.
+    // Through the object: the command holds the mesh and editing it copies it.
     CHECK(scene.findById(id)->getMesh()->material.texturePath == "assets/fbx_albedo.png");
 }
 
-// Deshacer "añadir A" solo quita A. Si la malla ya es otra -llego por un camino
-// sin undo, como borrar el FBX en uso desde el Content Browser y cargar otro-,
-// este comando no se la lleva.
+// Undoing "add A" only removes A. If the mesh is already another one (it arrived through a path
+// without undo, such as deleting the FBX in use from the Content Browser and loading another),
+// this command does not take it away.
 static void test_add_mesh_undo_only_removes_its_own_mesh()
 {
     Scene scene("Test");
@@ -1613,13 +1613,13 @@ static void test_add_mesh_undo_only_removes_its_own_mesh()
     CHECK(scene.findById(id)->materialOverrides.size() == 1);
 }
 
-// --- decodeMaterialTexture: la ruta gana, en los CUATRO uploaders ---
+// --- decodeMaterialTexture: the path wins, in the FOUR uploaders ---
 //
-// Deuda aceptada en su dia: cada uploader llevaba su propio switch sobre
-// chooseTextureSource, y los tests de chooseTextureSource no ataban a ninguno.
-// Revertir uno solo a "la embebida gana" dejaba la suite en verde. Ahora
-// decodifican todos por decodeMaterialTexture, y estos dos tests cubren las dos
-// mitades: que esa funcion elige bien, y que nadie decodifica por su cuenta.
+// Debt accepted at the time: each uploader carried its own switch on
+// chooseTextureSource, and the chooseTextureSource tests did not bind any of them.
+// Reverting just one to "the embedded one wins" left the suite green. Now
+// they all decode through decodeMaterialTexture, and these two tests cover the two
+// halves: that this function chooses correctly, and that nobody decodes on their own.
 
 static std::vector<uint8_t> leeFichero(const std::string& ruta)
 {
@@ -1627,13 +1627,13 @@ static std::vector<uint8_t> leeFichero(const std::string& ruta)
     return std::vector<uint8_t>(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
 }
 
-// Dos PNG de TAMAÑO distinto, para saber cual se decodifico sin comparar
-// pixeles: la ruta mide 512x512 y la "embebida" 672x768.
+// Two PNGs of DIFFERENT SIZE, to know which one was decoded without comparing
+// pixels: the path one measures 512x512 and the "embedded" one 672x768.
 static void test_decode_material_texture_path_beats_embedded()
 {
     const std::string          ruta     = "assets/skybox/_test_nx.png";
     const std::vector<uint8_t> embebida = leeFichero("assets/MainEngineLogo.png");
-    // Lanzado desde otro cwd no encuentra los assets: FALLA, no aprueba.
+    // Launched from another cwd it does not find the assets: it FAILS, it does not pass.
     CHECK(std::filesystem::exists(ruta));
     CHECK(!embebida.empty());
 
@@ -1643,17 +1643,17 @@ static void test_decode_material_texture_path_beats_embedded()
     const DecodedTexture soloEmbebida = decodeMaterialTexture("", embebida);
     CHECK(soloEmbebida && soloEmbebida.w == 672 && soloEmbebida.h == 768);
 
-    // Ruta rota con la embebida puesta: NADA, no la del FBX. Una ruta rota
-    // tiene que verse (damero en el caller), nunca taparse con la original.
+    // Broken path with the embedded one set: NOTHING, not the FBX's. A broken path
+    // has to be visible (checkerboard in the caller), never covered up with the original.
     const DecodedTexture rota = decodeMaterialTexture("assets/no_existe_en_el_repo.png", embebida);
     CHECK(!rota && rota.w == 0 && rota.h == 0);
 
     CHECK(!decodeMaterialTexture("", {}));
 }
 
-// La otra mitad: decodificar la embebida exige stbi_load_from_memory, asi que
-// un uploader que volviera a su propio switch tendria que llamarlo. Lee el
-// codigo en disco, como el test de includes de GameObject.h en camera_tests.
+// The other half: decoding the embedded one requires stbi_load_from_memory, so
+// an uploader that went back to its own switch would have to call it. It reads the
+// code on disk, like the GameObject.h includes test in camera_tests.
 static void test_no_uploader_decodes_embedded_on_its_own()
 {
     int ficheros = 0;
@@ -1668,17 +1668,17 @@ static void test_no_uploader_decodes_embedded_on_its_own()
             const std::string ext = e.path().extension().string();
             if (ext != ".cpp" && ext != ".h") continue;
             ++ficheros;
-            // El .cpp la llama y el .h la nombra en el comentario que explica
-            // todo esto: los dos son la casa de la funcion.
+            // The .cpp calls it and the .h names it in the comment that explains
+            // all this: the two are the function's home.
             if (e.path().stem() == "MaterialTextureSource") continue;
-            // Las miniaturas del Content Browser no son un uploader de material:
-            // leen SU fichero (por ifstream, que acepta rutas Unicode) y comprueban
-            // las dimensiones con stbi_info antes de decodificar. No hay embebida
-            // que elegir, que es lo unico que este test vigila.
+            // The Content Browser thumbnails are not a material uploader:
+            // they read THEIR file (through ifstream, which accepts Unicode paths) and check
+            // the dimensions with stbi_info before decoding. There is no embedded one
+            // to choose, which is the only thing this test watches.
             if (e.path().stem() == "Thumbnail") continue;
-            // Lo mismo para las texturas del preview de un modelo (miniaturas):
-            // el loader rellena ruta O embebida, nunca las dos, asi que tampoco
-            // hay nada que elegir. Solo este fichero; ModelLoader.cpp sigue vigilado.
+            // The same for the textures of a model preview (thumbnails):
+            // the loader fills in path OR embedded, never both, so there is also
+            // nothing to choose. Only this file; ModelLoader.cpp is still watched.
             if (e.path().stem() == "PreviewImage") continue;
             const std::vector<uint8_t> bytes = leeFichero(e.path().string());
             const std::string texto(bytes.begin(), bytes.end());
@@ -1688,17 +1688,17 @@ static void test_no_uploader_decodes_embedded_on_its_own()
     }
     for (const std::string& c : culpables)
         std::printf("  stbi_load_from_memory fuera de decodeMaterialTexture: %s\n", c.c_str());
-    CHECK(ficheros > 100);   // de verdad recorrio el arbol
+    CHECK(ficheros > 100);   // it really walked the tree
     CHECK(culpables.empty());
 }
 
-// --- Sliders de Metallic/Roughness contra un ImGui de VERDAD, sin ventana ---
+// --- Metallic/Roughness sliders against a REAL ImGui, without a window ---
 //
-// El bug que tapan estos tests no estaba en ningun comando ni en el Material:
-// estaba en QUE FRAME entrega ImGui el valor de un SliderFloat. Por eso se
-// conduce el widget real con eventos de raton, en vez de llamar a draw() con
-// valores inventados: un doble del slider habria heredado la misma suposicion
-// falsa que causo el bug.
+// The bug that these tests cover was not in any command or in the Material:
+// it was in WHICH FRAME ImGui delivers a SliderFloat's value. That is why the
+// real widget is driven with mouse events, instead of calling draw() with
+// made-up values: a double of the slider would have inherited the same false
+// assumption that caused the bug.
 struct ImGuiSinVentana
 {
     ImGuiContext* ctx = nullptr;
@@ -1711,8 +1711,8 @@ struct ImGuiSinVentana
         io.LogFilename  = nullptr;
         io.DisplaySize  = ImVec2(800.0f, 600.0f);
         io.DeltaTime    = 1.0f / 60.0f;
-        // Sin backend de render: con este flag el atlas de fuentes se construye
-        // solo en NewFrame y nadie tiene que subir la textura a ningun lado.
+        // Without a render backend: with this flag the font atlas is built
+        // only in NewFrame and nobody has to upload the texture anywhere.
         io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
         io.Fonts->AddFontDefault();
     }
@@ -1732,10 +1732,10 @@ struct ImGuiSinVentana
     }
 };
 
-// Clic al 10 % del slider, arrastre hasta pasado el tope derecho (clampa a 1.0)
-// y soltar. Un evento por frame: ImGui los reparte asi de todos modos
-// (ConfigInputTrickleEventQueue), y separados se sabe que frame hace que.
-// `body` dibuja el slider y nada detras, para que GetItemRect* sea el suyo.
+// Click at 10% of the slider, drag past the right end (clamps to 1.0)
+// and release. One event per frame: ImGui delivers them that way anyway
+// (ConfigInputTrickleEventQueue), and kept apart you can tell which frame does what.
+// `body` draws the slider and nothing behind it, so that GetItemRect* is its own.
 template<typename Fn>
 static void arrastraHastaElTope(ImGuiSinVentana& ui, Fn&& drawSlider)
 {
@@ -1749,18 +1749,18 @@ static void arrastraHastaElTope(ImGuiSinVentana& ui, Fn&& drawSlider)
     ui.frame(body);                                                  // layout
     const float y = (min.y + max.y) * 0.5f;
     io.AddMousePosEvent(min.x + (max.x - min.x) * 0.1f, y); ui.frame(body);  // hover
-    io.AddMouseButtonEvent(0, true);                        ui.frame(body);  // clic
-    io.AddMousePosEvent(max.x + 50.0f, y);                  ui.frame(body);  // arrastre
-    io.AddMouseButtonEvent(0, false);                       ui.frame(body);  // soltar
+    io.AddMouseButtonEvent(0, true);                        ui.frame(body);  // click
+    io.AddMousePosEvent(max.x + 50.0f, y);                  ui.frame(body);  // drag
+    io.AddMouseButtonEvent(0, false);                       ui.frame(body);  // release
     ui.frame(body);
 }
 
-// CARACTERIZACION de ImGui, no de codigo nuestro: es la premisa del arreglo, y
-// si una version futura de ImGui la cambia este test lo dice antes que nadie.
-// El patron que tenia el panel -local desde el dato, commit leyendo la local en
-// IsItemDeactivatedAfterEdit- con un dato que NO se escribe en vivo: ImGui SI
-// avisa de que hubo edicion, pero ese frame no escribe el valor, y la local
-// vale lo de antes del arrastre.
+// CHARACTERIZATION of ImGui, not of our code: it is the premise of the fix, and
+// if a future ImGui version changes it this test says so before anyone else.
+// The pattern the panel had (local from the data, commit reading the local in
+// IsItemDeactivatedAfterEdit) with data that is NOT written live: ImGui DOES
+// report that there was an edit, but that frame does not write the value, and the local
+// holds what it was before the drag.
 static void test_imgui_slider_release_frame_does_not_deliver_value()
 {
     ImGuiSinVentana ui;
@@ -1773,15 +1773,15 @@ static void test_imgui_slider_release_frame_does_not_deliver_value()
         if (ImGui::IsItemActive()) maxVisto = std::max(maxVisto, v);
         if (ImGui::IsItemDeactivatedAfterEdit()) { huboCommit = true; commitIngenuo = v; }
     });
-    CHECK(maxVisto > 0.99f);            // el arrastre llego al tope
-    CHECK(huboCommit);                  // e ImGui avisa de que hubo edicion
-    CHECK(commitIngenuo == material);   // pero la local no trae el valor
+    CHECK(maxVisto > 0.99f);            // the drag reached the end
+    CHECK(huboCommit);                  // and ImGui reports that there was an edit
+    CHECK(commitIngenuo == material);   // but the local does not carry the value
 }
 
-// El bug que vio el usuario: arrastrar Metallic a 1 y que al soltar el slider
-// volviera a 0 aunque el objeto se viera metalico. El commit tiene que traer el
-// valor ARRASTRADO, y `begin` el del dato antes del clic -0.25-, no el 0.1 al
-// que SliderFloat salta en el frame del clic.
+// The bug the user saw: dragging Metallic to 1 and, on release, the slider
+// going back to 0 even though the object looked metallic. The commit has to carry the
+// DRAGGED value, and `begin` that of the data before the click (-0.25), not the 0.1
+// that SliderFloat jumps to on the click frame.
 static void test_deferred_slider_commits_dragged_value()
 {
     ImGuiSinVentana ui;
@@ -1798,7 +1798,7 @@ static void test_deferred_slider_commits_dragged_value()
             ++commits;
             begin    = r.begin;
             value    = r.value;
-            material = r.value;   // lo que hace MaterialFactorCommand
+            material = r.value;   // what MaterialFactorCommand does
         }
     });
     CHECK(vivo);
@@ -1808,10 +1808,10 @@ static void test_deferred_slider_commits_dragged_value()
     CHECK(material > 0.99f);
 }
 
-// El widget desaparece a mitad de arrastre (la seleccion pasa a un objeto sin
-// malla) y vuelve despues: tiene que enseñar el dato, no el pendiente de un
-// arrastre que nunca se entrego. Sin la comprobacion de frame en draw(),
-// m_activeId se queda puesto y el slider reaparece con el valor abandonado.
+// The widget disappears mid-drag (the selection moves to an object without a
+// mesh) and comes back later: it has to show the data, not the pending value of a
+// drag that was never delivered. Without the frame check in draw(),
+// m_activeId stays set and the slider reappears with the abandoned value.
 static void test_deferred_slider_forgets_drag_of_vanished_widget()
 {
     ImGuiSinVentana ui;
@@ -1832,13 +1832,13 @@ static void test_deferred_slider_forgets_drag_of_vanished_widget()
     io.AddMousePosEvent(min.x + (max.x - min.x) * 0.1f, y); ui.frame(conSlider);
     io.AddMouseButtonEvent(0, true);                        ui.frame(conSlider);
     io.AddMousePosEvent(max.x + 50.0f, y);                  ui.frame(conSlider);
-    CHECK(r.active && r.value > 0.99f);   // el arrastre esta en marcha
+    CHECK(r.active && r.value > 0.99f);   // the drag is under way
 
-    // Varios frames sin el widget, como al ir a otro objeto y volver con un clic
-    // en el Hierarchy. Con UNO solo no vale: ImGui deja que un widget que
-    // reaparece justo al frame siguiente de perder el ActiveId vea esa
-    // desactivacion (IsItemDeactivatedAfterEdit), y eso ya es comportamiento de
-    // ImGui, no del arrastre abandonado que se prueba aqui.
+    // Several frames without the widget, as when going to another object and coming back with a click
+    // in the Hierarchy. With ONE it does not work: ImGui lets a widget that
+    // reappears right on the frame after losing the ActiveId see that
+    // deactivation (IsItemDeactivatedAfterEdit), and that is already ImGui
+    // behavior, not the abandoned drag that is tested here.
     ui.frame(sinSlider);
     io.AddMouseButtonEvent(0, false); ui.frame(sinSlider);
     io.AddMousePosEvent(0.0f, 0.0f);  ui.frame(sinSlider);
@@ -1858,10 +1858,10 @@ static std::filesystem::path matAssetTestDir(const char* name)
     return d;
 }
 
-// Hallazgo del reviewer final (spec linea 133): un .mat referenciado que
-// falta en disco tiene que avisar igual que uno roto, no solo lo ilegible —
-// antes de este fix, un .mat borrado fuera del editor cargaba la escena con
-// el modelo y sin ninguna pista de por que.
+// Finding from the final reviewer (spec line 133): a referenced .mat that
+// is missing on disk has to warn just like a broken one, not only the unreadable one;
+// before this fix, a .mat deleted outside the editor loaded the scene with
+// the model and without any clue as to why.
 static void test_missing_mat_asset_warns()
 {
     const auto d = matAssetTestDir("dt_matasset_missing_warns");
@@ -1876,9 +1876,9 @@ static void test_missing_mat_asset_warns()
         CHECK(avisos[0].find(go->materialOverrides[0].matAsset) != std::string::npos);
 }
 
-// Spec: "aviso unico por ruta". Dos objetos que comparten el mismo .mat roto
-// no duplican el aviso (una escena grande con muchos usuarios del mismo .mat
-// no debe llenar el Log con la misma linea repetida).
+// Spec: "single warning per path". Two objects that share the same broken .mat
+// do not duplicate the warning (a large scene with many users of the same .mat
+// must not fill the Log with the same repeated line).
 static void test_shared_broken_mat_asset_warns_once()
 {
     const auto d = matAssetTestDir("dt_matasset_shared_warns_once");
@@ -1900,7 +1900,7 @@ static void test_shared_broken_mat_asset_warns_once()
     CHECK(matches == 1);
 }
 
-// El .mat manda cuando NO hay override del objeto para ese campo.
+// The .mat rules when there is NO object override for that field.
 static void test_mat_asset_supplies_texture_when_no_override()
 {
     const auto d = matAssetTestDir("dt_matasset_no_override");
@@ -1916,7 +1916,7 @@ static void test_mat_asset_supplies_texture_when_no_override()
     CHECK(go->getMesh()->material.texturePath == m.albedo);
 }
 
-// La override del OBJETO manda sobre el .mat.
+// The OBJECT's override rules over the .mat.
 static void test_object_override_wins_over_mat_asset()
 {
     const auto d = matAssetTestDir("dt_matasset_object_wins");
@@ -1933,7 +1933,7 @@ static void test_object_override_wins_over_mat_asset()
     CHECK(go->getMesh()->material.texturePath == ov.albedo);
 }
 
-// Review Focus 3: un .mat con SOLO roughness deja las tres texturas del FBX.
+// Review Focus 3: a .mat with ONLY roughness leaves the three FBX textures.
 static void test_mat_asset_with_only_one_field_leaves_the_rest_alone()
 {
     const auto d = matAssetTestDir("dt_matasset_partial");
@@ -1947,11 +1947,11 @@ static void test_mat_asset_with_only_one_field_leaves_the_rest_alone()
     go->materialOverrides[0].matAsset = (d / "x.mat").string();
     applyMaterialOverrides(*go);
 
-    CHECK(go->getMesh()->material.texturePath == fbxAlbedo);   // intacta
+    CHECK(go->getMesh()->material.texturePath == fbxAlbedo);   // intact
     CHECK(go->getMesh()->material.roughness == 0.2f);
 }
 
-// Clear del objeto (override vacio) cae al .mat, no al modelo.
+// Clear of the object (empty override) falls to the .mat, not to the model.
 static void test_clear_falls_back_to_mat_asset_not_model()
 {
     const auto d = matAssetTestDir("dt_matasset_clear");
@@ -1969,11 +1969,11 @@ static void test_clear_falls_back_to_mat_asset_not_model()
 
     go->materialOverrides[0].albedo.clear();                  // Clear
     applyMaterialOverrides(*go);
-    CHECK(go->getMesh()->material.texturePath == m.albedo);   // al .mat, no al FBX
+    CHECK(go->getMesh()->material.texturePath == m.albedo);   // to the .mat, not to the FBX
     CHECK(go->getMesh()->material.texturePath != fbxAlbedo);
 }
 
-// Desvincular el .mat (matAsset = "") cae al modelo.
+// Unlinking the .mat (matAsset = "") falls to the model.
 static void test_unlinking_mat_asset_falls_back_to_model()
 {
     const auto d = matAssetTestDir("dt_matasset_unlink");
@@ -1993,7 +1993,7 @@ static void test_unlinking_mat_asset_falls_back_to_model()
     CHECK(go->getMesh()->material.texturePath == fbxAlbedo);
 }
 
-// Review Focus 1: un .mat inexistente hereda todo, sin lanzar.
+// Review Focus 1: a nonexistent .mat inherits everything, without throwing.
 static void test_missing_mat_asset_inherits_everything()
 {
     auto go = makeStaticFixture();
@@ -2004,7 +2004,7 @@ static void test_missing_mat_asset_inherits_everything()
     CHECK(go->getMesh()->material.texturePath == fbxAlbedo);
 }
 
-// El .mat funciona igual en skinned, en un indice distinto de 0.
+// The .mat works the same in skinned, at an index other than 0.
 static void test_mat_asset_on_skinned_slot_two()
 {
     const auto d = matAssetTestDir("dt_matasset_skinned");
@@ -2018,15 +2018,15 @@ static void test_mat_asset_on_skinned_slot_two()
     applyMaterialOverrides(*go);
 
     CHECK(go->getSkinnedMesh()->materials[2].metallic == 0.7f);
-    CHECK(go->getSkinnedMesh()->materials[0].metallic == 0.0f);   // el 0 no se toca
+    CHECK(go->getSkinnedMesh()->materials[0].metallic == 0.0f);   // 0 is not touched
 }
 
-// Sin matAsset (con o sin otras overrides), el resultado es IDENTICO a hoy.
+// Without matAsset (with or without other overrides), the result is IDENTICAL to today's.
 static void test_no_mat_asset_is_unchanged()
 {
     auto go = makeStaticFixture();
     const std::string before = go->getMesh()->material.texturePath;
-    go->materialOverrides.push_back(MaterialOverride{});   // sin matAsset, sin nada
+    go->materialOverrides.push_back(MaterialOverride{});   // without matAsset, without anything
     applyMaterialOverrides(*go);
     CHECK(go->getMesh()->material.texturePath == before);
 }
@@ -2046,9 +2046,9 @@ int main()
     test_mat_asset_on_skinned_slot_two();
     test_no_mat_asset_is_unchanged();
 
-    // PhysicsManager/AudioManager comparten instancia entre los tests que la
-    // necesitan: crear y destruir un PhysicsManager por test crashea al
-    // segundo init (una PxFoundation por proceso), mismo patrón que
+    // PhysicsManager/AudioManager share an instance among the tests that
+    // need it: creating and destroying a PhysicsManager per test crashes on the
+    // second init (one PxFoundation per process), same pattern as
     // audio_tests.cpp.
     PhysicsManager pm;
     pm.init();

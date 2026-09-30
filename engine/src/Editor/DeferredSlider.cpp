@@ -10,15 +10,15 @@ namespace DonTopo
         const unsigned int id    = ImGui::GetID(label);
         const int          frame = ImGui::GetFrameCount();
 
-        // El pendiente solo se enseña si ESTE widget estaba activo el frame
-        // anterior: el de soltar lo necesita (ImGui no escribe el valor ese
-        // frame), pero si el widget desaparecio a mitad de arrastre -la
-        // seleccion cambio a un objeto sin malla- m_activeId se queda puesto, y
-        // sin comprobar el frame el slider enseñaria un valor que nadie aplico.
+        // The pending value is only shown if THIS widget was active the previous frame:
+        // the release frame needs it (ImGui does not write the value that frame), but if
+        // the widget disappeared mid-drag (the selection changed to an object without a
+        // mesh) m_activeId stays set, and without checking the frame the slider would
+        // show a value nobody applied.
         const bool nuestro = m_activeId == id && m_lastActiveFrame == frame - 1;
-        // Y se OLVIDA, no solo se deja de enseñar: con m_activeId todavia
-        // apuntando aqui, el resto de la funcion seguiria devolviendo el
-        // pendiente abandonado como `value`.
+        // And it is FORGOTTEN, not just no longer shown: with m_activeId still pointing
+        // here, the rest of the function would keep returning the abandoned pending value
+        // as `value`.
         if (m_activeId == id && !nuestro) m_activeId = 0;
         float v = nuestro ? m_pending : current;
         const bool changed = ImGui::SliderFloat(label, &v, lo, hi, fmt);
@@ -36,8 +36,8 @@ namespace DonTopo
             return r;
         }
 
-        // `changed` ademas de IsItemActive: la edicion por texto (Ctrl+clic)
-        // puede entregar el valor en el mismo frame en que deja de estar activa.
+        // `changed` in addition to IsItemActive: text editing (Ctrl+click) can deliver
+        // the value in the same frame in which it stops being active.
         const bool active = ImGui::IsItemActive();
         if (changed || active) m_pending = v;
         if (active) m_lastActiveFrame = frame;

@@ -29,7 +29,7 @@ void AnimatorGraphUndoTracker::beginFrame(uint64_t goId, const AnimatorComponent
                                           uint64_t undoRevision)
 {
     if (!anim) { close(); return; }
-    if (m_open && m_id == goId) return;   // el gesto sigue desde un frame anterior
+    if (m_open && m_id == goId) return;   // the gesture continues from an earlier frame
     open(goId, *anim, undoRevision);
 }
 
@@ -43,8 +43,8 @@ std::unique_ptr<ICommand> AnimatorGraphUndoTracker::endFrame(Scene& scene,
 
     if (undoRevision != m_revision)
     {
-        // Alguien movió el historial en mitad del gesto. Nueva línea base: si el
-        // gesto sigue (un drag), lo que quede de él se medirá desde aquí.
+        // Someone moved the history in the middle of the gesture. New baseline: if the
+        // gesture continues (a drag), what remains of it will be measured from here.
         open(m_id, *anim, undoRevision);
         m_label = kEtiquetaPorDefecto;
         if (!anyItemActive) close();
@@ -52,7 +52,7 @@ std::unique_ptr<ICommand> AnimatorGraphUndoTracker::endFrame(Scene& scene,
     }
 
     if (animatorGraphKey(*anim) == m_beforeKey) { close(); return nullptr; }
-    if (anyItemActive) return nullptr;   // el drag sigue: un solo comando al soltar
+    if (anyItemActive) return nullptr;   // the drag continues: a single command on release
 
     auto cmd = std::make_unique<AnimatorGraphCommand>(scene, m_label, m_id,
                                                       std::move(m_before), anim->graph());

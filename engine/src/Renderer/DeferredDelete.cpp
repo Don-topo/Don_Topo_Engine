@@ -11,9 +11,9 @@ namespace DonTopo
 
     void DeferredDeleteQueue::tick(VkDevice device)
     {
-        // Recorrido con índice y swap-erase: un destroyer no puede encolar más
-        // trabajo (destruye, no crea), así que no hace falta protegerse de una
-        // invalidación por reentrada, pero sí de reordenar mientras se itera.
+        // Walk with an index and swap-erase: a destroyer cannot enqueue more
+        // work (it destroys, it does not create), so there is no need to guard against
+        // invalidation by reentrancy, but there is against reordering while iterating.
         for (size_t i = 0; i < m_entries.size();)
         {
             if (--m_entries[i].framesLeft > 0) { ++i; continue; }
@@ -26,8 +26,8 @@ namespace DonTopo
 
     void DeferredDeleteQueue::flushAll(VkDevice device)
     {
-        // El caller garantiza vkDeviceWaitIdle previo. Sin él, esto es
-        // exactamente el use-after-free que la cola existe para evitar.
+        // The caller guarantees a prior vkDeviceWaitIdle. Without it, this is
+        // exactly the use-after-free the queue exists to avoid.
         for (auto& e : m_entries)
             e.destroyer(device);
         m_entries.clear();

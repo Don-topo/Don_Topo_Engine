@@ -7,16 +7,16 @@
 
 namespace DonTopo
 {
-    // Un Image de la UI 2D como componente de GameObject, con el MISMO contrato
-    // que el resto: SOLO DATOS. El árbol vivo lo tiene el Renderer
-    // (Renderer::uiCanvas()) y lo monta/actualiza syncUiWidgets() cada frame.
+    // A 2D UI Image as a GameObject component, with the SAME contract
+    // as the rest: DATA ONLY. The live tree is held by the Renderer
+    // (Renderer::uiCanvas()) and syncUiWidgets() builds/updates it every frame.
     //
-    // A diferencia del Panel, el Image del núcleo (UiWidgets.h) SÍ tiene estado
-    // propio: los cuatro modos de reparto del sprite dentro del rect, los bordes
-    // del 9-slice, el tope de tiles y el bloque de Filled. Todos se resuelven en
-    // CPU dentro del batcher (N quads del mismo atlas y el mismo scissor), así
-    // que aquí no hay más trabajo que hacerlos llegar al nodo: el componente
-    // expone los NUEVE campos, ni uno menos.
+    // Unlike Panel, the core Image (UiWidgets.h) DOES have state of
+    // its own: the four modes of laying out the sprite inside the rect, the 9-slice
+    // borders, the tile cap and the Filled block. All of them are resolved on the
+    // CPU inside the batcher (N quads of the same atlas and the same scissor), so
+    // there is no more work here than getting them to the node: the component
+    // exposes the NINE fields, not one fewer.
     class ImageComponent
     {
         public:
@@ -24,18 +24,18 @@ namespace DonTopo
             glm::vec2 anchorMin{0.0f, 0.0f};
             glm::vec2 anchorMax{0.0f, 0.0f};
             glm::vec2 pivot{0.0f, 0.0f};
-            glm::vec2 position{0.0f, 0.0f};      // px, relativa al ancla
+            glm::vec2 position{0.0f, 0.0f};      // px, relative to the anchor
             glm::vec2 size{100.0f, 100.0f};      // px
-            glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};   // tinte del sprite
+            glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};   // sprite tint
             bool      visible = true;
 
-            // A false la imagen se sigue dibujando pero deja pasar el ratón.
+            // When false the image is still drawn but lets the mouse through.
             bool raycastTarget = true;
 
             // --- Sprite --------------------------------------------------------
-            // Vacías = quad de color plano. `sprite` es un NOMBRE dentro del
-            // atlas (los registra el sidecar <atlas>.sprites.json); vacío = la
-            // imagen entera.
+            // Empty = flat-color quad. `sprite` is a NAME inside the
+            // atlas (registered by the sidecar <atlas>.sprites.json); empty = the
+            // whole image.
             std::string atlasPath;
             std::string sprite;
 
@@ -43,9 +43,9 @@ namespace DonTopo
             UiImageMode mode = UiImageMode::Normal;
 
             // --- Sliced --------------------------------------------------------
-            // Bordes en píxeles DEL SPRITE, no del rect: escalar el elemento no
-            // los mueve. Sin centro salen 8 quads, que es lo que quiere un marco
-            // que deja ver lo de detrás.
+            // Borders in pixels OF THE SPRITE, not of the rect: scaling the element does not
+            // move them. Without a center it yields 8 quads, which is what a frame
+            // that shows what is behind it wants.
             float borderLeft   = 0.0f;
             float borderRight  = 0.0f;
             float borderTop    = 0.0f;
@@ -53,17 +53,17 @@ namespace DonTopo
             bool  fillCenter   = true;
 
             // --- Tiled ---------------------------------------------------------
-            // Tope duro de quads: pasado el tope el elemento se dibuja como
-            // Normal en vez de reventar el buffer de vértices.
+            // Hard quad cap: past the cap the element is drawn as
+            // Normal instead of blowing up the vertex buffer.
             uint32_t maxTiles = 1024;
 
             // --- Filled --------------------------------------------------------
             UiFillDirection fillDirection = UiFillDirection::Horizontal;
             UiFillOrigin    fillOrigin    = UiFillOrigin::Start;
-            float           fillAmount    = 1.0f;   // 0..1; a 0 no se emite ni un quad
+            float           fillAmount    = 1.0f;   // 0..1; at 0 not a single quad is emitted
 
-            // Vuelca el rect y los campos propios en el nodo vivo. NO toca
-            // `atlas` (es un puntero a GPU: lo resuelve el sync).
+            // Dumps the rect and its own fields into the live node. Does NOT touch
+            // `atlas` (it is a GPU pointer: the sync resolves it).
             void applyTo(Image& im) const
             {
                 im.anchorMin     = anchorMin;
@@ -89,9 +89,9 @@ namespace DonTopo
                 im.fillAmount    = fillAmount;
             }
 
-            // El sync lo usa para saber si hay algo que volcar: sin esto habría
-            // que ensuciar el nodo TODOS los frames, que es justo lo que la
-            // caché de vértices del canvas existe para evitar.
+            // The sync uses it to know whether there is anything to dump: without this the
+            // node would have to be dirtied EVERY frame, which is exactly what the
+            // canvas's vertex cache exists to avoid.
             bool operator==(const ImageComponent& o) const
             {
                 return anchorMin == o.anchorMin && anchorMax == o.anchorMax &&
@@ -109,17 +109,17 @@ namespace DonTopo
             bool operator!=(const ImageComponent& o) const { return !(*this == o); }
     };
 
-    // Nombre del nodo vivo de un Image dentro del canvas. Prefijo DISTINTO al de
-    // los demás por lo mismo que aquellos entre sí: un GameObject puede llevar
-    // varios componentes de UI a la vez, y dos nodos hermanos con el mismo
-    // nombre harían que el gizmo y el picking cogieran el que no toca.
+    // Name of an Image's live node inside the canvas. DIFFERENT prefix from that of
+    // the others for the same reason those differ among themselves: a GameObject can carry
+    // several UI components at once, and two sibling nodes with the same
+    // name would make the gizmo and picking grab the wrong one.
     inline std::string uiImageNodeName(uint64_t ownerId)
     {
         return "img:" + std::to_string(ownerId);
     }
 
-    // Inversa de uiImageNodeName. Devuelve 0 si el nombre no es de una imagen: 0
-    // no es un id válido de GameObject.
+    // Inverse of uiImageNodeName. Returns 0 if the name is not an image's: 0
+    // is not a valid GameObject id.
     inline uint64_t uiImageOwnerId(const std::string& nodeName)
     {
         if (nodeName.rfind("img:", 0) != 0) return 0;

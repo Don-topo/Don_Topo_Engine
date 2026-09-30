@@ -8,34 +8,34 @@ class GpuDevice;
 class GpuResources;
 class RendererState;
 
-// Oclusion ambiental en espacio de pantalla: los dos dispatches (oclusion +
-// blur) y sus imagenes. La PROFUNDIDAD que lee no es suya: la graba
-// DepthPrepassPass, que la comparte con el SSR, el TAA, el Forward+, la niebla
-// y el motion blur.
+// Screen-space ambient occlusion: the two dispatches (occlusion +
+// blur) and their images. The DEPTH it reads is not its own: it is recorded by
+// DepthPrepassPass, which shares it with SSR, TAA, Forward+, the fog
+// and motion blur.
 //
-// La grabacion va en dos trozos porque el depth pre-pass se cuela en medio:
-//   recordPreDepth()  → limpieza del mapa (apagado) o timestamps (encendido)
-//   [el Renderer graba el depth pre-pass]
-//   record()          → oclusion + blur
+// Recording goes in two pieces because the depth pre-pass slips in between:
+//   recordPreDepth()  → clearing the map (off) or timestamps (on)
+//   [the Renderer records the depth pre-pass]
+//   record()          → occlusion + blur
 class SsaoPass {
 public:
-    // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
+    // It must match Renderer::MAX_FRAMES (checked with static_assert in Renderer.cpp).
     static constexpr int kFramesInFlight = 2;
 
     struct Context {
         GpuDevice&           gpu;
         GpuResources&        res;
         const RendererState& state;
-        // Resolucion INTERNA del render, no la del swapchain.
+        // INTERNAL render resolution, not the swapchain's.
         const VkExtent2D&    renderExtent;
-        // La del swapchain, solo para el informe de medida.
+        // The swapchain's, only for the measurement report.
         const VkExtent2D&    swapChainExtent;
         int                  currentFrame;
-        // La profundidad del pre-pass y su sampler, los dos de
+        // The pre-pass depth and its sampler, both from
         // DepthPrepassPass.
         const VkImageView*   depthView;      // [kFramesInFlight]
         VkSampler            depthSampler;
-        // Los resolvio el bloom; aqui solo se leen.
+        // They were resolved by the bloom; here they are only read.
         bool                 timestampsSupported;
         float                timestampPeriod;
     };
@@ -44,32 +44,32 @@ public:
     SsaoPass(const SsaoPass&)            = delete;
     SsaoPass& operator=(const SsaoPass&) = delete;
 
-    // Lo que no depende del tamano: layout, pool, los dos pipelines compute y
-    // el pool de queries. Una sola vez, en el init.
+    // What does not depend on the size: layout, pool, the two compute pipelines and
+    // the query pool. Only once, in init.
     void createPipelines(const Context& ctx);
     void destroyPipelines(const Context& ctx);
-    // Las dos imagenes (AO crudo y AO emborronado) y sus sets: van con el
-    // swapchain, porque los sets referencian la profundidad del pre-pass.
+    // The two images (raw AO and blurred AO) and their sets: they go with the
+    // swapchain, because the sets reference the pre-pass depth.
     void createImages(const Context& ctx);
     void destroyImages(const Context& ctx);
 
-    // Primer trozo: con el efecto apagado deja el mapa en la identidad (solo
-    // cuando hay algo que limpiar); encendido, lee los timestamps del slot y
-    // abre el par de este frame. Va ANTES del depth pre-pass.
+    // First piece: with the effect off it leaves the map at identity (only
+    // when there is something to clear); on, it reads the slot's timestamps and
+    // opens this frame's pair. It goes BEFORE the depth pre-pass.
     void recordPreDepth(const Context& ctx, VkCommandBuffer cmd);
-    // Segundo trozo: oclusion + blur. Va DESPUES del depth pre-pass, y solo
-    // con el efecto encendido.
+    // Second piece: occlusion + blur. It goes AFTER the depth pre-pass, and only
+    // with the effect on.
     void record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& proj);
 
-    // Viewport degenerado o recursos aun sin crear.
+    // Degenerate viewport or resources not created yet.
     bool ready(int frame) const { return m_blurImage[frame] != VK_NULL_HANDLE; }
-    // Coste GPU de los dos dispatches en ms.
+    // GPU cost of the two dispatches in ms.
     float gpuMs() const { return m_gpuMs; }
-    // El mapa que consume pbr.frag por el binding 7: lo escribe el Renderer en
-    // los descriptor sets de cada objeto, que son suyos.
+    // The map that pbr.frag consumes through binding 7: the Renderer writes it into
+    // each object's descriptor sets, which are its own.
     const VkImageView* blurViews()      const { return m_blurView; }   // [kFramesInFlight]
     VkImage            blurImage(int f) const { return m_blurImage[f]; }
-    // Al apagar el efecto hay que volver a dejar el mapa en 1.0.
+    // When turning the effect off the map has to be left at 1.0 again.
     void markClearPending();
 
 private:
@@ -88,11 +88,11 @@ private:
     VkPipeline            m_blurPipeline                = VK_NULL_HANDLE;
     VkDescriptorSet       m_sets[kFramesInFlight]       = {};
     VkDescriptorSet       m_blurSets[kFramesInFlight]   = {};
-    // Con el efecto apagado el mapa tiene que valer 1.0 (identidad) y
-    // ademas estar en GENERAL, que es el layout que declaran los
-    // descriptor sets. Un clear resuelve las dos cosas de golpe, y solo se
-    // graba cuando hay algo que limpiar: al crear las imagenes y al
-    // apagar el efecto. Fuera de eso, apagado = cero trabajo por frame.
+    // With the effect off the map has to be 1.0 (identity) and
+    // also be in GENERAL, which is the layout the descriptor
+    // sets declare. A clear solves both things at once, and it is only
+    // recorded when there is something to clear: when creating the images and when
+    // turning the effect off. Apart from that, off = zero work per frame.
     bool                  m_clearPending[kFramesInFlight] = {};
     VkQueryPool           m_queryPool                     = VK_NULL_HANDLE;
     bool                  m_queryPending[kFramesInFlight] = {};

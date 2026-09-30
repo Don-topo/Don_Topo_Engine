@@ -16,56 +16,56 @@
 
 namespace DonTopo {
 
-// Mas de estos pixeles de origen y ni se intenta decodificar: un PNG de 16k x
-// 16k son 1 GB transitorios en un worker.
+// More than this many source pixels and decoding is not even attempted: a 16k x
+// 16k PNG is 1 GB transient in a worker.
 constexpr uint64_t kThumbMaxSourcePixels = 100'000'000;
 
 enum class ThumbnailStatus { Ok, Unreadable, TooLarge, AnimationOnly };
 
-// Un fichero del que depende una miniatura y su estado al generarla.
+// A file a thumbnail depends on and its state when it was generated.
 using ThumbnailDependency = FileStamp;
 
 struct ThumbnailResult
 {
     ThumbnailStatus                  status = ThumbnailStatus::Unreadable;
-    std::vector<uint8_t>             rgba;   // kThumbCell*kThumbCell*4 si status == Ok; vacio si no
-    // Lo que declara el decodificador, a poder ser SELLADO antes de leer cada
-    // fichero (stampFile). stampDependencies sella lo que llegue sin sellar y
-    // pone el propio asset delante.
+    std::vector<uint8_t>             rgba;   // kThumbCell*kThumbCell*4 if status == Ok; empty if not
+    // What the decoder declares, preferably SEALED before reading each
+    // file (stampFile). stampDependencies seals whatever arrives unsealed and
+    // puts the asset itself first.
     std::vector<ThumbnailDependency> dependencies;
 };
 
-inline constexpr float kNeutralAlbedo = 0.6f;   // lineal: el gris de un .mat que hereda
+inline constexpr float kNeutralAlbedo = 0.6f;   // linear: the gray of an inheriting .mat
 
-// Decodifica path y lo reduce a UNA casilla kThumbCell x kThumbCell RGBA8:
-// conserva la proporcion (filtro de caja ponderado por alfa), no amplia lo que
-// ya cabe, lo centra y deja el resto transparente. CPU pura: se llama desde un
-// worker. Nunca lanza.
+// Decodes path and reduces it to ONE kThumbCell x kThumbCell RGBA8 cell:
+// keeps the proportion (alpha-weighted box filter), does not enlarge what
+// already fits, centers it and leaves the rest transparent. Pure CPU: it is called from a
+// worker. Never throws.
 ThumbnailResult makeThumbnail(const std::filesystem::path& path);
 
-// Lo mismo desde un stream recien abierto (en su posicion 0). Solo se rebobina
-// (seekg) si la imagen pasa el filtro de tamano y hay que cargarla. Existe
-// aparte para poder probar que rechazar una imagen enorme cuesta su CABECERA y no
-// leer el fichero entero.
+// The same from a freshly opened stream (at its position 0). It only rewinds
+// (seekg) if the image passes the size filter and has to be loaded. It exists
+// separately to be able to test that rejecting a huge image costs its HEADER and not
+// reading the whole file.
 ThumbnailResult makeThumbnailFromStream(std::istream& in);
 
-// Pone `self` (el asset, sellado ANTES de decodificar) la primera, conserva el
-// sello de las dependencias que el decodificador ya sello y sella las que no.
-// Quita duplicados y el propio asset si el decodificador lo repitio.
+// Puts `self` (the asset, sealed BEFORE decoding) first, keeps the
+// seal of the dependencies the decoder already sealed and seals those that are not.
+// Removes duplicates and the asset itself if the decoder repeated it.
 void stampDependencies(ThumbnailResult& r, const ThumbnailDependency& self);
 
-// .fbx/.obj: los que tarda segundos en decodificar (ver el tope de ThumbnailCache).
+// .fbx/.obj: the ones that take seconds to decode (see the ThumbnailCache cap).
 bool isModelThumbnailPath(const std::filesystem::path& path);
 
-// Esfera con el albedo, metallic y roughness del .mat; lo heredado, neutro.
+// Sphere with the .mat's albedo, metallic and roughness; what is inherited, neutral.
 ThumbnailResult makeMaterialThumbnail(const std::filesystem::path& mat);
 
-// Decodificador por extension: imagen -> makeThumbnail; .fbx/.obj -> preview
-// rasterizado; .mat -> esfera. Cualquier otra cosa, Unreadable. Nunca lanza.
+// Decoder by extension: image -> makeThumbnail; .fbx/.obj -> rasterized
+// preview; .mat -> sphere. Anything else, Unreadable. Never throws.
 ThumbnailResult makeAssetThumbnail(const std::filesystem::path& path);
 
-// Reparto de las casillas del atlas entre claves (una por miniatura), con
-// desalojo LRU. "Uso" = pedir la casilla en el frame actual (assign/find).
+// Distribution of the atlas cells among keys (one per thumbnail), with
+// LRU eviction. "Use" = requesting the cell in the current frame (assign/find).
 class ThumbnailSlots
 {
 public:
@@ -73,19 +73,19 @@ public:
 
     explicit ThumbnailSlots(uint32_t capacity = kThumbSlotCount);
 
-    // Una vez por frame, antes de cualquier assign/find de ese frame.
+    // Once per frame, before any assign/find of that frame.
     void beginFrame() { ++m_frame; }
 
-    // Casilla de key: la que ya tenia (marcada como usada este frame) o una
-    // nueva. Sin hueco libre desaloja la menos usada recientemente que NO se usara
-    // este frame (empate: la de indice menor) y, si `evicted` no es nulo, dice
-    // cual. kNone si todas las casillas se usaron este frame.
+    // Cell of key: the one it already had (marked as used this frame) or a
+    // new one. With no free slot it evicts the least recently used one that will NOT be used
+    // this frame (tie: the lowest index) and, if `evicted` is not null, says
+    // which. kNone if all cells were used this frame.
     uint32_t assign(uint64_t key, std::optional<uint64_t>* evicted = nullptr);
 
-    // Casilla de key sin reservar ninguna (y marcandola como usada); kNone si no esta.
+    // Cell of key without reserving any (and marking it as used); kNone if it is not there.
     uint32_t find(uint64_t key);
 
-    // Libera la casilla de key, si tenia. No desaloja a nadie.
+    // Frees key's cell, if it had one. Evicts nobody.
     void release(uint64_t key);
 
     uint32_t capacity() const { return static_cast<uint32_t>(m_slots.size()); }
@@ -105,27 +105,27 @@ private:
 
 class ThumbnailDiskCache;
 
-// Orquesta las miniaturas: pedidos desde el grid, decodificacion asincrona y
-// subida al atlas. NO conoce GPU ni JobSystem: recibe un Runner (para lanzar
-// trabajo fuera del hilo principal) y un Uploader (para copiar casillas al
-// atlas), asi que se prueba entero sin ninguno de los dos. Todo el estado vive en
-// el hilo principal; los workers solo ejecutan makeThumbnail y dejan el
-// resultado en una cola con mutex.
+// Orchestrates the thumbnails: requests from the grid, asynchronous decoding and
+// upload to the atlas. It does NOT know GPU or JobSystem: it receives a Runner (to launch
+// work off the main thread) and an Uploader (to copy cells to the
+// atlas), so it is tested entirely without either. All the state lives on
+// the main thread; the workers only run makeThumbnail and leave the
+// result in a queue with a mutex.
 class ThumbnailCache
 {
 public:
-    // Lanza el job fuera del hilo principal. false = el pool lo rechazo (parado):
-    // la entrada queda en Failed y el hueco en vuelo se devuelve.
+    // Launches the job off the main thread. false = the pool rejected it (stopped):
+    // the entry ends up Failed and the in-flight slot is returned.
     using Runner   = std::function<bool(std::function<void()>)>;
-    // Copia el lote de casillas al atlas. false = no se pudo (todo el lote falla).
+    // Copies the batch of cells to the atlas. false = it could not (the whole batch fails).
     using Uploader = std::function<bool(const ThumbnailTile* tiles, size_t count)>;
-    // Decodifica UN asset a casilla. Por defecto makeAssetThumbnail; existe como
-    // parametro para poder probar un decodificador que lanza.
+    // Decodes ONE asset into a cell. By default makeAssetThumbnail; it exists as a
+    // parameter to be able to test a decoder that throws.
     using Decoder  = std::function<ThumbnailResult(const std::filesystem::path&)>;
 
-    // disk: opcional; el worker la consulta antes de decodificar y guarda lo que
-    // decodifica. maxModelsInFlight: de los maxInFlight, cuantos pueden ser
-    // modelos (isModelThumbnailPath), que tardan segundos.
+    // disk: optional; the worker consults it before decoding and stores what it
+    // decodes. maxModelsInFlight: of the maxInFlight, how many may be
+    // models (isModelThumbnailPath), which take seconds.
     ThumbnailCache(Runner run, Uploader upload, uint32_t maxInFlight = 4,
                    uint32_t slotCapacity = kThumbSlotCount, Decoder decode = {},
                    std::shared_ptr<const ThumbnailDiskCache> disk = {},
@@ -133,34 +133,34 @@ public:
     ThumbnailCache(const ThumbnailCache&)            = delete;
     ThumbnailCache& operator=(const ThumbnailCache&) = delete;
 
-    // Una vez por frame, antes de los request() de ese frame.
+    // Once per frame, before the request() calls of that frame.
     void beginFrame();
 
-    // Miniatura de path si ya esta en el atlas; nullopt = todavia no (pendiente,
-    // fallida o desalojada) y quien pide sigue con su icono. La primera vez que
-    // se pide una ruta se ENCOLA su decodificacion; nunca bloquea.
+    // Thumbnail of path if it is already in the atlas; nullopt = not yet (pending,
+    // failed or evicted) and the requester keeps its icon. The first time
+    // a path is requested its decoding is ENQUEUED; it never blocks.
     std::optional<UvRect> request(const std::filesystem::path& path);
 
-    // Recoge lo decodificado, sube como mucho maxUploads casillas en UNA llamada
-    // al Uploader y lanza decodificaciones hasta maxInFlight. Una vez por frame.
+    // Collects what was decoded, uploads at most maxUploads cells in ONE call
+    // to the Uploader and launches decodes up to maxInFlight. Once per frame.
     void pump(int maxUploads = 8);
 
-    // Vuelve a leer el mtime de lo pedido el frame anterior o este y descarta lo
-    // que cambio, para que se regenere. Lo llama el polling del panel, no cada frame.
+    // Re-reads the mtime of what was requested the previous frame or this one and discards what
+    // changed, so that it is regenerated. Called by the panel's polling, not every frame.
     void refreshStamps();
 
-    // Cambio de carpeta: descarta lo pendiente (en cola, en vuelo, decodificado sin
-    // subir). Lo ya subido y lo fallido se conserva; un resultado tardio de la
-    // generacion anterior se ignora.
+    // Folder change: discards what is pending (queued, in flight, decoded but not
+    // uploaded). What was already uploaded and what failed is kept; a late result from the
+    // previous generation is ignored.
     void newGeneration();
 
-    // Estado final de path: Ok si esta en el atlas; el motivo si fallo
-    // (Unreadable, TooLarge, AnimationOnly); nullopt si aun no se sabe.
+    // Final state of path: Ok if it is in the atlas; the reason if it failed
+    // (Unreadable, TooLarge, AnimationOnly); nullopt if it is not known yet.
     std::optional<ThumbnailStatus> status(const std::filesystem::path& path) const;
 
-    // Decodificaciones lanzadas cuyo resultado aun no se ha recogido.
+    // Launched decodes whose result has not been collected yet.
     uint32_t inFlight() const { return m_inFlight; }
-    // De ellas, las de modelos.
+    // Of those, the model ones.
     uint32_t modelsInFlight() const { return m_modelsInFlight; }
 
 private:
@@ -169,11 +169,11 @@ private:
     struct Entry
     {
         std::filesystem::path            path;
-        std::vector<ThumbnailDependency> deps;              // [0] = el propio asset
+        std::vector<ThumbnailDependency> deps;              // [0] = the asset itself
         uint64_t                         key = 0;
         State                            state = State::Queued;
-        ThumbnailStatus                  status = ThumbnailStatus::Ok;   // motivo si Failed
-        bool                             model = false;     // cuenta para el tope de modelos
+        ThumbnailStatus                  status = ThumbnailStatus::Ok;   // reason if Failed
+        bool                             model = false;     // counts toward the model cap
         std::vector<uint8_t>             pixels;            // solo en Decoded
         uint64_t                         lastRequestFrame = 0;
     };
@@ -186,8 +186,8 @@ private:
         ThumbnailResult result;
     };
 
-    // Lo unico que comparten los workers con el hilo principal. En un shared_ptr:
-    // un resultado que llega tras destruir el cache cae aqui y no toca memoria muerta.
+    // The only thing the workers share with the main thread. In a shared_ptr:
+    // a result that arrives after the cache is destroyed lands here and does not touch dead memory.
     struct Shared
     {
         std::mutex        mutex;

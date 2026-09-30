@@ -46,7 +46,7 @@ namespace DonTopo
         const glm::vec3 p0 = sampleRootPosition(mesh, clipIndex, 0.0);
         if (!loop)
             return sampleRootPosition(mesh, clipIndex, std::min(T, duration)) - p0;
-        // Ciclos completos + el resto: el wrap del loop no teletransporta.
+        // Whole cycles + the remainder: the loop wrap does not teleport.
         const double ciclos = std::floor(T / duration);
         const double resto  = T - ciclos * duration;
         const glm::vec3 porCiclo = sampleRootPosition(mesh, clipIndex, duration) - p0;
@@ -59,7 +59,7 @@ namespace DonTopo
         for (const auto& s : anim.rootMotionSamples())
             d += s.weight * (rootDisplacement(mesh, s.clip, s.ticks1, s.duration, s.loop)
                            - rootDisplacement(mesh, s.clip, s.ticks0, s.duration, s.loop));
-        // Solo horizontal: la Y de la raíz se queda en la pose (bone_eval, modo 2).
+        // Horizontal only: the root's Y stays in the pose (bone_eval, mode 2).
         d.y = 0.0f;
         return d;
     }

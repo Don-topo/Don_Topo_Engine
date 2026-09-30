@@ -37,15 +37,15 @@ namespace DonTopo {
 
 namespace {
 
-// Bbox LOCAL del mesh de go, el mismo cálculo por vértices que ya usan
-// selectionAxisScale/focusSelected. false si go no tiene malla o la malla está
-// vacía: esos objetos no entran en el picking.
+// LOCAL bbox of the mesh of go, the same per-vertex computation already used by
+// selectionAxisScale/focusSelected. false if go has no mesh or the mesh is
+// empty: those objects do not take part in picking.
 //
-// Un SkinnedMesh deja Mesh::vertices VACÍO —su geometría vive en
-// skinnedVertices—, así que hay que mirar ahí o los personajes animados no se
-// podrían picar. Es la pose de bind: la animación la aplica el compute de
-// skinning en GPU y aquí no hay pose evaluada, igual que el culling de skinned
-// del Renderer, que también usa un bound de bind pose.
+// A SkinnedMesh leaves Mesh::vertices EMPTY (its geometry lives in
+// skinnedVertices), so we have to look there or animated characters could not
+// be picked. It is the bind pose: the animation is applied by the skinning compute
+// on the GPU and there is no evaluated pose here, same as the skinned culling of
+// the Renderer, which also uses a bind pose bound.
 bool localBounds(GameObject* go, glm::vec3& bMin, glm::vec3& bMax)
 {
     if (!go->hasMesh())
@@ -81,11 +81,11 @@ bool localBounds(GameObject* go, glm::vec3& bMin, glm::vec3& bMax)
     return true;
 }
 
-// Esfera envolvente en mundo a partir del bbox local, escalada por la escala
-// máxima del worldTransform (el radio no puede depender del eje, así que manda
-// la mayor). Es SOLO el descarte rápido del picking: para una malla plana y
-// enorme —el suelo— la esfera es gigante y se traga a la cámara, así que quien
-// decide el impacto es rayAabbLocal, no esta.
+// Bounding sphere in world space from the local bbox, scaled by the maximum scale
+// of the worldTransform (the radius cannot depend on the axis, so the largest one
+// wins). It is ONLY the quick rejection of picking: for a flat and huge mesh
+// (the floor) the sphere is gigantic and swallows the camera, so what decides the
+// hit is rayAabbLocal, not this.
 void worldBoundingSphere(GameObject* go, const glm::vec3& bMin, const glm::vec3& bMax,
                          glm::vec3& center, float& radius)
 {
@@ -102,12 +102,12 @@ void worldBoundingSphere(GameObject* go, const glm::vec3& bMin, const glm::vec3&
     radius = localRadius * maxWorldScale;
 }
 
-// Corte rayo/AABB en el espacio LOCAL del objeto (el rayo se lleva allí con la
-// inversa del worldTransform), que en mundo es la caja orientada del objeto.
-// Devuelve el punto de entrada en MUNDO: con escalas distintas por eje el t
-// local no es distancia, así que la comparación entre objetos se hace fuera,
-// con la distancia real a la cámara. La cara de entrada se ignora si la cámara
-// está dentro (t < 0 en el eje de entrada): entonces el impacto es el origen.
+// Ray/AABB intersection in the object's LOCAL space (the ray is brought there with
+// the inverse of the worldTransform), which in world space is the object's oriented
+// box. It returns the entry point in WORLD space: with different scales per axis
+// the local t is not a distance, so the comparison between objects is done outside,
+// with the real distance to the camera. The entry face is ignored if the camera
+// is inside (t < 0 on the entry axis): then the hit is the origin.
 bool rayAabbLocal(const glm::mat4& world, const glm::vec3& bMin, const glm::vec3& bMax,
                   const glm::vec3& origin, const glm::vec3& dir, glm::vec3& hitWorld)
 {
@@ -122,8 +122,8 @@ bool rayAabbLocal(const glm::mat4& world, const glm::vec3& bMin, const glm::vec3
     {
         if (std::fabs(d[i]) < 1e-8f)
         {
-            // Rayo paralelo a este par de planos: o está dentro de la franja o
-            // no corta nunca.
+            // Ray parallel to this pair of planes: it is either inside the slab or
+            // it never intersects.
             if (o[i] < bMin[i] || o[i] > bMax[i])
                 return false;
             continue;
@@ -138,17 +138,17 @@ bool rayAabbLocal(const glm::mat4& world, const glm::vec3& bMin, const glm::vec3
     }
 
     if (tExit < 0.0f)
-        return false; // la caja entera queda detrás de la cámara
+        return false; // the whole box is behind the camera
 
-    const float t = tEnter >= 0.0f ? tEnter : 0.0f; // cámara dentro de la caja
+    const float t = tEnter >= 0.0f ? tEnter : 0.0f; // camera inside the box
     hitWorld = glm::vec3(world * glm::vec4(o + d * t, 1.0f));
     return true;
 }
 
-// Corte rayo/esfera. dir NORMALIZADA, así que t sale en unidades de mundo y se
-// puede comparar entre objetos. Con la cámara dentro de la esfera devuelve
-// t = 0 (impacto en el propio origen): el objeto que envuelve a la cámara es
-// el más cercano posible, no uno detrás de ella.
+// Ray/sphere intersection. dir is NORMALIZED, so t comes out in world units and
+// can be compared between objects. With the camera inside the sphere it returns
+// t = 0 (hit at the origin itself): the object that wraps the camera is the
+// closest possible, not one behind it.
 bool raySphere(const glm::vec3& origin, const glm::vec3& dir,
                const glm::vec3& center, float radius, float& t)
 {
@@ -164,7 +164,7 @@ bool raySphere(const glm::vec3& origin, const glm::vec3& dir,
     const float t1 = -b + s;
     if (t0 >= 0.0f) { t = t0;   return true; }
     if (t1 >= 0.0f) { t = 0.0f; return true; }
-    return false; // la esfera entera queda detrás de la cámara
+    return false; // the whole sphere is behind the camera
 }
 
 } // namespace
@@ -172,9 +172,9 @@ bool raySphere(const glm::vec3& origin, const glm::vec3& dir,
 float ViewportPanel::selectionAxisScale(GameObject* node) const
 {
     constexpr float kFallback = 50.0f;
-    // 2.0 en vez de 1.3: con 1.3 solo sobresalía un poco del mesh y costaba
-    // verlo; así el tramo visible fuera del objeto es tan largo como su
-    // propio medio-tamaño.
+    // 2.0 instead of 1.3: with 1.3 it only stuck out a little from the mesh and it was
+    // hard to see; this way the visible stretch outside the object is as long as its
+    // own half-size.
     constexpr float kFactor   = 2.0f;
 
     if (!node->hasMesh())
@@ -237,11 +237,11 @@ void ViewportPanel::focusSelected(EditorContext& ctx, Camera& camera)
 
 glm::mat4 localFromWorld(const glm::mat4& parentWorld, const glm::mat4& newWorld)
 {
-    // El orden importa y no es simétrico: worldTransform = parentWorld * local,
-    // así que despejar el local pide la inversa POR LA IZQUIERDA. Con la
-    // multiplicación al revés (newWorld * inverse(parentWorld)) un padre
-    // rotado manda el hijo a otra parte, y con un padre en la identidad —el
-    // caso de prueba fácil— las dos formas dan lo mismo y el error no sale.
+    // The order matters and is not symmetric: worldTransform = parentWorld * local,
+    // so solving for the local requires the inverse ON THE LEFT. With the
+    // multiplication the other way round (newWorld * inverse(parentWorld)) a rotated
+    // parent sends the child somewhere else, and with an identity parent (the
+    // easy test case) both forms give the same result and the error does not show.
     return glm::inverse(parentWorld) * newWorld;
 }
 
@@ -252,8 +252,8 @@ void applyLocalTransform(Scene& scene, uint64_t id, const glm::mat4& t)
         return;
     obj->localTransform = t;
     obj->updateWorldTransforms(obj->parent ? obj->parent->worldTransform : glm::mat4(1.0f));
-    // Mover el transform NO mueve el actor de PhysX: sin el teleport el objeto
-    // se ve donde toca y colisiona donde estaba, y falla en silencio.
+    // Moving the transform does NOT move the PhysX actor: without the teleport the
+    // object is seen where it should be and collides where it was, and fails silently.
     if (auto col = obj->anyCollider())
         col->teleport(obj->worldTransform);
 }
@@ -271,21 +271,21 @@ const char* gizmoChannelLabel(GizmoMode mode)
 glm::vec3 gizmoLoggedValue(GizmoMode mode, const glm::mat4& localTransform)
 {
     if (mode == GizmoMode::Translate)
-        return glm::vec3(localTransform[3]);   // la cuarta columna, sin descomponer
+        return glm::vec3(localTransform[3]);   // the fourth column, without decomposing
 
-    // decomposeTransform (el wrapper del repo), NO glm::decompose a pelo. El de
-    // glm devuelve false ante una matriz singular —una escala a 0, que es donde
-    // ImGuizmo deja llegar el modo Scale— y NO escribe ninguna de sus salidas,
-    // así que al log irían los bytes de relleno del stack (0xCDCDCDCD =
-    // -1.07e8 en Debug; en Release, lo que hubiera). El wrapper escribe siempre
-    // las tres: posición de la cuarta columna, escala de las longitudes de
-    // columna, y rotación IDENTIDAD cuando no hay ninguna que sacar.
+    // decomposeTransform (the repo wrapper), NOT bare glm::decompose. The glm one
+    // returns false for a singular matrix (a scale of 0, which is where ImGuizmo lets
+    // Scale mode get to) and does NOT write any of its outputs, so the stack padding
+    // bytes would go to the log (0xCDCDCDCD = -1.07e8 in Debug; in Release, whatever
+    // was there). The wrapper always writes the three: position from the fourth
+    // column, scale from the column lengths, and an IDENTITY rotation when there is
+    // none to extract.
     glm::vec3 pos, escala;
     glm::quat rot;
     decomposeTransform(localTransform, &pos, &rot, &escala);
 
-    // Grados, no radianes: el inspector enseña grados y las dos líneas del log
-    // —la del gizmo y la de Properties— tienen que poder compararse.
+    // Degrees, not radians: the inspector shows degrees and the two log lines
+    // (the gizmo one and the Properties one) have to be comparable.
     return mode == GizmoMode::Rotate ? glm::degrees(glm::eulerAngles(rot)) : escala;
 }
 
@@ -312,28 +312,28 @@ void gizmoImGuizmoEnums(GizmoMode mode, int& outOperation, int& outSpace)
 void ViewportPanel::drawTransformGizmo(EditorContext& ctx, const glm::mat4& cameraView,
                                         const glm::vec2& imagePos, const glm::vec2& imageSize)
 {
-    // Mismas puertas que el resto de la edición: sin selección no hay nada que
-    // mover, y con el modal de carga en vuelo la escena no se toca.
+    // Same gates as the rest of the editing: without a selection there is nothing to
+    // move, and with the loading modal in flight the scene is not touched.
     if (!ctx.selected || ctx.editingLocked || !ctx.renderer)
         return;
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    // La cámara del frame, la misma receta que pickObject y worldCanvasMvp: en
-    // edición 45° fijos, en Play manda el CameraComponent de la escena.
+    // The frame camera, the same recipe as pickObject and worldCanvasMvp: in
+    // edit mode a fixed 45 degrees, in Play the scene's CameraComponent rules.
     //
-    // PERO SIN el `proj[1][1] *= -1` de Vulkan. No es una excepción arbitraria:
-    // el Renderer flipea la proyección porque la NDC de Vulkan tiene la Y hacia
-    // abajo (y D3D12 llega a la misma imagen por otro camino, con un viewport
-    // de altura NEGATIVA). ImGuizmo no dibuja con ninguna de las dos: proyecta
-    // en CPU y mapea a píxel con `y = 1 - y`, o sea la convención de OpenGL,
-    // con la Y hacia arriba. Pasarle la matriz flipeada le da el gizmo
-    // espejado en vertical: separado del objeto salvo en el centro exacto de
-    // la pantalla, y arrastrando en Y al revés.
+    // BUT WITHOUT the Vulkan `proj[1][1] *= -1`. It is not an arbitrary exception:
+    // the Renderer flips the projection because Vulkan NDC has Y pointing down
+    // (and D3D12 reaches the same image by another route, with a NEGATIVE-height
+    // viewport). ImGuizmo draws with neither: it projects on the CPU and maps to
+    // pixels with `y = 1 - y`, that is the OpenGL convention, with Y pointing up.
+    // Passing it the flipped matrix gives a vertically mirrored gizmo: detached from
+    // the object except at the exact center of the screen, and dragging in Y
+    // backwards.
     //
-    // Los gizmos de canvas de al lado sí usan la flipeada porque su mapeo a
-    // píxel NO lleva el `1 - y`: allí las dos negaciones se cancelan. Aquí solo
-    // hay una.
+    // The canvas gizmos next to this one do use the flipped one because their mapping
+    // to pixels does NOT have the `1 - y`: there the two negations cancel out. Here
+    // there is only one.
     const float aspect = ctx.renderer->viewportAspect();
     glm::mat4 view = cameraView;
     glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 1000.0f);
@@ -345,42 +345,41 @@ void ViewportPanel::drawTransformGizmo(EditorContext& ctx, const glm::mat4& came
             const CameraComponent& cc = *cam->getCameraComponent();
             view = CameraComponent::viewFromWorld(cam->worldTransform);
             proj = cc.projectionMatrix(aspect);
-            proj[1][1] *= -1.0f;   // deshace el flip que acaba de meter projectionMatrix
+            proj[1][1] *= -1.0f;   // undoes the flip that projectionMatrix has just put in
             ortho = cc.getMode() == CameraComponent::ProjectionMode::Orthographic;
         }
     }
 
-    // El manipulador dibuja en el draw list de ESTA ventana (y no en el suyo,
-    // que BeginFrame deja apuntando a una ventana a pantalla completa): sin
-    // esto el gizmo se pintaría por encima de los paneles acoplados encima del
-    // viewport.
+    // The manipulator draws into the draw list of THIS window (and not its own,
+    // which BeginFrame leaves pointing to a full-screen window): without this the
+    // gizmo would be painted over the panels docked on top of the viewport.
     ImGuizmo::SetOrthographic(ortho);
     ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
     ImGuizmo::SetRect(imagePos.x, imagePos.y, imageSize.x, imageSize.y);
 
-    // Qué operación y en qué espacio, decidido en gizmoImGuizmoEnums (ahí está
-    // el porqué de que el espacio no sea el mismo en los tres modos).
+    // Which operation and in which space, decided in gizmoImGuizmoEnums (that is where
+    // the reason for the space not being the same in the three modes is).
     int op = 0, espacio = 0;
     gizmoImGuizmoEnums(m_gizmoMode, op, espacio);
 
-    // ImGuizmo manipula MUNDO. El local se recompone después.
+    // ImGuizmo manipulates WORLD. The local is recomposed afterwards.
     glm::mat4 world = ctx.selected->worldTransform;
     const bool moved = ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj),
                                             (ImGuizmo::OPERATION)op, (ImGuizmo::MODE)espacio,
                                             glm::value_ptr(world));
     const bool usando = ImGuizmo::IsUsing();
 
-    // Flanco de ENTRADA: se guarda el estado previo del arrastre entero. Si se
-    // capturara en cada frame en que hay movimiento, el `before` sería el del
-    // frame anterior y deshacer retrocedería un pixel.
+    // ENTRY edge: the previous state of the whole drag is stored. If it were
+    // captured on every frame with movement, the `before` would be that of the
+    // previous frame and undoing would go back one pixel.
     if (usando && !m_gizmoUsing)
     {
         m_gizmoBefore = ctx.selected->localTransform;
         m_gizmoId     = ctx.selected->id;
         m_gizmoName   = ctx.selected->name;
-        // El modo también, y no se lee al soltar: los atajos W/E/R siguen vivos
-        // durante el arrastre, así que pulsar E a media rotación dejaría el log
-        // hablando del canal equivocado.
+        // The mode too, and it is not read on release: the W/E/R shortcuts stay alive
+        // during the drag, so pressing E in the middle of a rotation would leave the log
+        // talking about the wrong channel.
         m_gizmoModeAtGrab = m_gizmoMode;
     }
 
@@ -389,28 +388,28 @@ void ViewportPanel::drawTransformGizmo(EditorContext& ctx, const glm::mat4& came
         const glm::mat4 parentWorld = ctx.selected->parent ? ctx.selected->parent->worldTransform
                                                            : glm::mat4(1.0f);
         ctx.selected->localTransform = localFromWorld(parentWorld, world);
-        // El world se recalcula aquí y no se espera al traverse del bucle
-        // principal: ese ya pasó este frame, y el manipulador del frame
-        // siguiente vuelve a leer worldTransform. Sin esto el gizmo se
-        // arrastraría a sí mismo un frame por detrás del ratón.
+        // The world is recomputed here and we do not wait for the main loop traverse:
+        // that one has already run this frame, and the next frame's manipulator reads
+        // worldTransform again. Without this the gizmo would drag itself one frame
+        // behind the mouse.
         ctx.selected->updateWorldTransforms(parentWorld);
-        // Y el collider por separado: mover el transform NO mueve el actor de
-        // PhysX, y la colisión falla en silencio. teleport (setGlobalPose) y no
-        // syncTransform (setKinematicTarget, sólo válido en kinematic), igual
-        // que en PropertiesPanel.
+        // And the collider separately: moving the transform does NOT move the PhysX
+        // actor, and the collision fails silently. teleport (setGlobalPose) and not
+        // syncTransform (setKinematicTarget, only valid on kinematic), same as in
+        // PropertiesPanel.
         if (auto col = ctx.selected->anyCollider())
             col->teleport(ctx.selected->worldTransform);
     }
 
-    // Flanco de SALIDA: un arrastre, un comando. El objeto se resuelve por id
-    // —pudo desaparecer entre el clic y el soltar— y no por el ctx.selected de
-    // ahora, que pudo cambiar.
+    // EXIT edge: one drag, one command. The object is resolved by id (it may have
+    // disappeared between the click and the release) and not by the current
+    // ctx.selected, which may have changed.
     if (!usando && m_gizmoUsing)
     {
         const bool tieneUndo = ctx.scene && ctx.undo;
         GameObject* go = tieneUndo ? ctx.scene->findById(m_gizmoId) : nullptr;
-        // Un arrastre que acaba donde empezó (un clic sin mover) no es una
-        // edición: apilarlo dejaría un Ctrl+Z que no hace nada visible.
+        // A drag that ends where it started (a click without moving) is not an
+        // edit: stacking it would leave a Ctrl+Z that does nothing visible.
         if (go && go->localTransform != m_gizmoBefore)
         {
             Scene* scene       = ctx.scene;
@@ -421,8 +420,8 @@ void ViewportPanel::drawTransformGizmo(EditorContext& ctx, const glm::mat4& came
                 "Transform of '" + m_gizmoName + "'", before, after,
                 [scene, id](const glm::mat4& t) { applyLocalTransform(*scene, id, t); }));
 
-            // Misma forma exacta que la línea que emite PropertiesPanel al
-            // editar el mismo valor a mano, canal incluido: "Rotation de 'X'
+            // Exact same form as the line PropertiesPanel emits when editing the same value
+            // by hand, channel included: "Rotation de 'X'
             // cambiado a (0.00, 90.00, 0.00)".
             char buf[64];
             const glm::vec3 v = gizmoLoggedValue(m_gizmoModeAtGrab, after);
@@ -467,20 +466,19 @@ void ViewportPanel::drawSelectionGizmo(EditorContext& ctx)
         Gizmos::drawWirePlane(ctx.selected->worldTransform, pc->getCenter(), kColliderColor);
     }
 
-    // Atenuación del AudioClip 3D: esfera interior (min, volumen pleno) y
-    // exterior (max, silencio). Solo del objeto seleccionado y solo si el clip
-    // es 3D — en 2D FMOD no atenúa por distancia y las esferas mentirían.
+    // Attenuation of the 3D AudioClip: inner sphere (min, full volume) and
+    // outer sphere (max, silence). Only for the selected object and only if the clip
+    // is 3D: in 2D FMOD does not attenuate by distance and the spheres would lie.
     if (ctx.selected->hasAudioClip() && ctx.selected->getAudioClip()->getIs3D())
     {
-        // Magenta: ni el amarillo de los colliders, ni el cian de la cámara, ni
-        // el naranja de las luces.
+        // Magenta: neither the yellow of the colliders, nor the cyan of the camera, nor
+        // the orange of the lights.
         const glm::vec3 kAudioColor(1.0f, 0.2f, 0.8f);
 
-        // Base con los ejes NORMALIZADOS: las distancias de FMOD son unidades de
-        // mundo, así que la escala del GameObject no puede estirar las esferas
-        // (al revés que los colliders, que sí escalan con el objeto). Base
-        // degenerada (una escala a 0 desde Properties) -> identidad, pa no
-        // meter NaN en el vertex buffer del gizmo.
+        // Basis with NORMALIZED axes: FMOD distances are world units, so the GameObject
+        // scale cannot stretch the spheres (unlike the colliders, which do scale with
+        // the object). Degenerate basis (a scale of 0 from Properties) -> identity, so as
+        // not to put NaN in the gizmo vertex buffer.
         glm::mat4 basis(1.0f);
         const glm::vec3 axes[3] = { glm::vec3(ctx.selected->worldTransform[0]),
                                     glm::vec3(ctx.selected->worldTransform[1]),
@@ -499,9 +497,9 @@ void ViewportPanel::drawSelectionGizmo(EditorContext& ctx)
         Gizmos::drawWireSphere(basis, glm::vec3(0.0f), clip.getMaxDistance(), kAudioColor);
     }
 
-    // Zona de reverb: mismas dos esferas (dentro de min va a tope, entre min y
-    // max se desvanece) en otro color para no confundirla con la atenuacion de
-    // un AudioClip, que se dibuja igual.
+    // Reverb zone: the same two spheres (inside min it is at full, between min and
+    // max it fades) in another color so it is not confused with the attenuation of
+    // an AudioClip, which is drawn the same way.
     if (ctx.selected->hasReverbZone())
     {
         const glm::vec3 kReverbColor(0.2f, 0.9f, 0.9f);
@@ -515,53 +513,53 @@ void ViewportPanel::drawSelectionGizmo(EditorContext& ctx)
 
 void ViewportPanel::drawCameraGizmo(EditorContext& ctx)
 {
-    // Solo en edición: en Play ya se está mirando POR esa cámara, dibujar su
-    // propio frustum no aporta nada (y taparía la vista desde dentro).
+    // Only in edit mode: in Play we are already looking THROUGH that camera, drawing its
+    // own frustum adds nothing (and would block the view from inside).
     if (ctx.isPlaying || !ctx.scene || !ctx.renderer)
         return;
 
     GameObject* cam = ctx.scene->findCamera();
     if (!cam) return;
 
-    // El aspect sale del Renderer (el del render target), no del tamaño de esta
-    // ventana ImGui: tiene que ser EXACTAMENTE el que usará la proyección al
-    // dar a Play, o el wireframe dibujaría un encuadre que luego no se cumple.
+    // The aspect comes from the Renderer (the render target one), not from the size of
+    // this ImGui window: it has to be EXACTLY the one the projection will use when
+    // Play is pressed, or the wireframe would draw a framing that is later not met.
     const glm::mat4 viewProj =
         cam->getCameraComponent()->projectionMatrix(ctx.renderer->viewportAspect()) *
         CameraComponent::viewFromWorld(cam->worldTransform);
 
-    // Cian: distinto del amarillo de los colliders, pa no confundirlos.
+    // Cyan: different from the yellow of the colliders, so they are not confused.
     const glm::vec3 kCameraGizmoColor(0.0f, 1.0f, 1.0f);
-    // true: esta viewProj sale de CameraComponent::projectionMatrix, que usa
-    // *_ZO (near->z_ndc=0) pa Vulkan, no la convención NO por defecto de glm.
+    // true: this viewProj comes from CameraComponent::projectionMatrix, which uses
+    // *_ZO (near->z_ndc=0) for Vulkan, not glm's default NO convention.
     Gizmos::drawFrustum(viewProj, kCameraGizmoColor, /*depthZeroToOne=*/true);
 }
 
 void ViewportPanel::drawLightGizmos(EditorContext& ctx)
 {
-    // El flag del menú View manda: cada Gizmos::drawX ya lo mira por dentro,
-    // pero comprobarlo aquí se ahorra el recorrido entero de la escena.
+    // The View menu flag rules: each Gizmos::drawX already checks it inside,
+    // but checking it here saves walking the whole scene.
     if (!ctx.scene || !Gizmos::isEnabled())
         return;
 
-    // Naranja: ni el amarillo de los colliders ni el cian de la cámara.
+    // Orange: neither the yellow of the colliders nor the cyan of the camera.
     const glm::vec3 kLightColor(1.0f, 0.8f, 0.2f);
 
     ctx.scene->traverse([&](GameObject* go) {
         if (!go->hasLight()) return;
         const LightComponent& lc = *go->getLight();
 
-        // Misma base que usa Scene::collectLights pa mandar la luz al shader:
-        // posición en la columna 3 y -Z local como dirección. Los ejes van
-        // NORMALIZADOS — el gizmo mide en unidades de mundo, así que la escala
-        // del GameObject no debe estirarlo (al revés que los colliders, que sí
-        // escalan con el objeto).
+        // Same basis that Scene::collectLights uses to send the light to the shader:
+        // position in column 3 and local -Z as direction. The axes go
+        // NORMALIZED: the gizmo measures in world units, so the GameObject scale
+        // must not stretch it (unlike the colliders, which do scale with
+        // the object).
         const glm::vec3 pos   = glm::vec3(go->worldTransform[3]);
         glm::vec3 right = glm::vec3(go->worldTransform[0]);
         glm::vec3 up    = glm::vec3(go->worldTransform[1]);
         glm::vec3 fwd   = -glm::vec3(go->worldTransform[2]);
-        // Base degenerada (una escala a 0 desde Properties): normalize daría
-        // NaN y el vertex buffer del gizmo se llenaría de basura.
+        // Degenerate basis (a scale of 0 from Properties): normalize would give
+        // NaN and the gizmo vertex buffer would fill with garbage.
         if (glm::length(right) < 1e-6f || glm::length(up) < 1e-6f || glm::length(fwd) < 1e-6f)
         {
             right = glm::vec3(1.0f, 0.0f, 0.0f);
@@ -587,9 +585,9 @@ void ViewportPanel::drawLightGizmos(EditorContext& ctx)
             case LightType::Spot:
             {
                 Gizmos::drawWireSphere(basis, glm::vec3(0.0f), lc.getRange(), kLightColor);
-                // Cuatro generatrices del cono exterior (arriba/abajo/izquierda/
-                // derecha): con el ángulo del borde, que es donde el spot se
-                // apaga del todo.
+                // Four generatrices of the outer cone (top/bottom/left/
+                // right): with the edge angle, which is where the spot
+                // fades out completely.
                 const float a = glm::radians(lc.getOuterAngle());
                 const float c = std::cos(a);
                 const float s = std::sin(a);
@@ -603,17 +601,16 @@ void ViewportPanel::drawLightGizmos(EditorContext& ctx)
             }
 
             case LightType::Directional:
-                // No tiene alcance: la longitud es solo pa verla, no significa
-                // hasta dónde llega (llega a todas partes).
+                // It has no range: the length is only for seeing it, it does not mean
+                // how far it reaches (it reaches everywhere).
                 Gizmos::drawRay(pos, fwd, 500.0f, kLightColor);
                 break;
 
             case LightType::Area:
             {
-                // drawWirePlane dibuja una rejilla de 10x10 unidades en el plano
-                // XZ de la matriz que se le pase, así que la base va montada pa
-                // que ese plano sea el del rectángulo (su normal es fwd) y
-                // escalada a ancho x alto.
+                // drawWirePlane draws a 10x10 unit grid on the XZ plane of the matrix passed to
+                // it, so the basis is assembled so that that plane is the rectangle's (its normal
+                // is fwd) and scaled to width x height.
                 glm::mat4 rect(1.0f);
                 rect[0] = glm::vec4(right * (lc.getAreaWidth()  / 10.0f), 0.0f);
                 rect[1] = glm::vec4(fwd,                                  0.0f);
@@ -627,19 +624,19 @@ void ViewportPanel::drawLightGizmos(EditorContext& ctx)
     });
 }
 
-// El GameObject cuyo Canvas manda sobre `go`: el ancestro MÁS CERCANO que tenga
-// uno, y el propio `go` cuenta. Es EXACTAMENTE la regla de
-// Scene::collectCanvases (un canvas anidado abre binding propio y CORTA la
-// cadena de anclaje), así que el gizmo mira el mismo canvas al que el sync manda
-// el widget. nullptr si no cuelga de ninguno: el editor lo impide
-// (uiComponentsAvailable), pero una escena hecha a mano puede traerlo.
+// The GameObject whose Canvas rules over `go`: the NEAREST ancestor that has
+// one, and `go` itself counts. It is EXACTLY the rule of
+// Scene::collectCanvases (a nested canvas opens its own binding and CUTS the
+// anchoring chain), so the gizmo looks at the same canvas the sync sends the
+// widget to. nullptr if it hangs from none: the editor prevents that
+// (uiComponentsAvailable), but a hand-made scene can bring it.
 //
-// Devuelve el GameObject y no el componente porque hacen falta LOS DOS: el
-// componente para worldScale/billboard y su worldTransform para colocar el
-// canvas en el mundo.
+// It returns the GameObject and not the component because BOTH are needed: the
+// component for worldScale/billboard and its worldTransform to place the
+// canvas in the world.
 //
-// No es static a propósito, por lo mismo que projectWorldCanvasCorners:
-// dt_camera_tests la declara a mano para poder probar la regla sin GUI.
+// It is not static on purpose, for the same reason as projectWorldCanvasCorners:
+// dt_camera_tests declares it by hand to be able to test the rule without a GUI.
 const GameObject* owningCanvasObject(const GameObject* go)
 {
     for (const GameObject* n = go; n != nullptr; n = n->parent)
@@ -648,33 +645,34 @@ const GameObject* owningCanvasObject(const GameObject* go)
     return nullptr;
 }
 
-// Proyecta las cuatro esquinas de un RECT dentro de un canvas de MUNDO a píxeles
-// de la imagen del viewport. `mvp` es proj·view·model —la misma cadena que graba
-// el backend— y el rect va en píxeles de CANVAS, que es el espacio del que parte
-// uiWorldCanvasMatrix. Salen en el orden min, (max.x,min.y), max, (min.x,max.y);
-// el mínimo es la esquina SUPERIOR izquierda, porque la Y del canvas crece hacia
-// abajo y uiWorldCanvasMatrix la niega.
+// Projects the four corners of a RECT inside a WORLD canvas to pixels of the
+// viewport image. `mvp` is proj*view*model (the same chain the backend
+// records) and the rect is in CANVAS pixels, which is the space uiWorldCanvasMatrix
+// starts from. They come out in the order min, (max.x,min.y), max, (min.x,max.y);
+// the minimum is the TOP-left corner, because the canvas Y grows downwards and
+// uiWorldCanvasMatrix negates it.
 //
-// El canvas entero NO es un caso aparte: es esta misma función con
-// (0,0)-(referenceResolution). Los widgets de dentro pasan su propio rect. Un
-// rect degenerado (min == max) da cuatro veces el mismo punto, que es como el
-// gizmo de widget saca su pivot proyectado.
+// The whole canvas is NOT a separate case: it is this same function with
+// (0,0)-(referenceResolution). The widgets inside pass their own rect. A
+// degenerate rect (min == max) gives the same point four times, which is how the
+// widget gizmo gets its projected pivot.
 //
-// Devuelve false —y deja `outCorners` SIN TOCAR— si alguna esquina tiene w <= 0:
-// está detrás del plano de la cámara, y dividir por ese w la espeja al otro
-// lado. El cuadrilátero saldría cruzado o disparado al infinito y nada lo
-// diría, porque aquí no hay clipping de GPU que valga: es ImGui pintando las
-// líneas que le den. Por eso el rechazo es EXPLÍCITO. La comparación va como
-// !(w > 0) para que un NaN —matriz degenerada— caiga también del lado del
-// rechazo.
+// It returns false (and leaves `outCorners` UNTOUCHED) if any corner has w <= 0:
+// it is behind the camera plane, and dividing by that w mirrors it to the other
+// side. The quadrilateral would come out crossed or shot off to infinity and
+// nothing would say so, because here there is no GPU clipping to rely on: it is
+// ImGui painting the lines it is given. That is why the rejection is EXPLICIT. The
+// comparison is written as !(w > 0) so that a NaN (degenerate matrix) also falls
+// on the rejection side.
 //
-// Fuera del encuadre pero DELANTE sí se acepta: el criterio es el signo de w, no
-// que el rect quepa en la imagen. Recortar aquí dejaría sin gizmo justo al
-// canvas que asoma medio por el borde, que es cuando más se busca.
+// Outside the frame but IN FRONT is accepted: the criterion is the sign of w, not
+// whether the rect fits in the image. Clipping here would leave without a gizmo
+// exactly the canvas that peeks half over the edge, which is when it is
+// looked for the most.
 //
-// No es static a propósito: es la única parte del gizmo que se puede probar sin
-// ventana, y dt_camera_tests la declara a mano para enlazarla (el editor no
-// tiene header público donde ponerla).
+// It is not static on purpose: it is the only part of the gizmo that can be tested
+// without a window, and dt_camera_tests declares it by hand to link it (the editor
+// has no public header to put it in).
 bool projectWorldCanvasCorners(const glm::mat4& mvp,
                                const glm::vec2& rectMin, const glm::vec2& rectMax,
                                const glm::vec2& imagePos, const glm::vec2& imageSize,
@@ -687,11 +685,11 @@ bool projectWorldCanvasCorners(const glm::mat4& mvp,
         glm::vec2(rectMin.x, rectMax.y),
     };
 
-    // A un intermedio y no directo a outCorners: si una esquina rechaza cuando
-    // ya se han calculado otras, el caller no puede quedarse con una mezcla de
-    // esquinas nuevas y viejas. Lo prueba
-    // test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara, cuyo fixture
-    // está montado a propósito para que la que rechace NO sea la primera.
+    // Into an intermediate and not directly into outCorners: if a corner rejects when
+    // others have already been computed, the caller cannot be left with a mix of new
+    // and old corners. It is tested by
+    // test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara, whose fixture
+    // is deliberately built so that the one that rejects is NOT the first.
     glm::vec2 px[4];
     for (int i = 0; i < 4; ++i)
     {
@@ -699,12 +697,12 @@ bool projectWorldCanvasCorners(const glm::mat4& mvp,
         if (!(clip.w > 0.0f))
             return false;
 
-        // NDC -> píxel de la imagen. La Y va SIN invertir porque la proyección
-        // que se le pasa trae el Y-flip de Vulkan cocinado (ndc.y = -1 arriba),
-        // el mismo criterio que pickObject. En D3D12 la proyección del backend
-        // NO lleva ese flip y su NDC tiene +1 arriba: las dos inversiones se
-        // cancelan y el píxel sale idéntico. Es exactamente por lo que
-        // pickObject acierta en los dos backends con una sola fórmula.
+        // NDC -> image pixel. The Y goes WITHOUT inverting because the projection
+        // passed in has the Vulkan Y-flip baked in (ndc.y = -1 at the top),
+        // the same criterion as pickObject. In D3D12 the backend projection
+        // does NOT carry that flip and its NDC has +1 at the top: the two inversions
+        // cancel out and the pixel comes out identical. It is exactly why
+        // pickObject gets it right in both backends with a single formula.
         const glm::vec2 ndc = glm::vec2(clip) / clip.w;
         px[i] = imagePos + glm::vec2((ndc.x * 0.5f + 0.5f) * imageSize.x,
                                      (ndc.y * 0.5f + 0.5f) * imageSize.y);
@@ -715,13 +713,13 @@ bool projectWorldCanvasCorners(const glm::mat4& mvp,
     return true;
 }
 
-// MVP de un canvas de MUNDO: proj·view·model, la misma cadena que graba el
-// backend. `canvasObj` es el GameObject que lleva el Canvas. false si ese canvas
-// no es de mundo o si su resolución es degenerada.
+// MVP of a WORLD canvas: proj*view*model, the same chain the backend
+// records. `canvasObj` is the GameObject that carries the Canvas. false if that
+// canvas is not a world one or if its resolution is degenerate.
 //
-// La usan los DOS gizmos —el del canvas y el de cada widget de dentro— para que
-// no puedan discrepar: el widget tiene que caer sobre el mismo cuadrilátero que
-// se le pinta a su canvas.
+// BOTH gizmos use it (the canvas one and the one of each widget inside) so that
+// they cannot disagree: the widget has to land on the same quadrilateral that is
+// painted for its canvas.
 static bool worldCanvasMvp(EditorContext& ctx, const GameObject* canvasObj,
                            const glm::mat4& cameraView, glm::mat4& outMvp, glm::vec2& outTam)
 {
@@ -732,29 +730,29 @@ static bool worldCanvasMvp(EditorContext& ctx, const GameObject* canvasObj,
     if (c.renderMode != UiCanvasRenderMode::World)
         return false;
 
-    // En modo World el área útil es EXACTAMENTE referenceResolution: applyTo no
-    // deja que scaleMode, el safe area ni el aspect ratio la toquen, y
-    // buildDrawData se llama justo con eso (Renderer.cpp:1654,
+    // In World mode the usable area is EXACTLY referenceResolution: applyTo does not
+    // let scaleMode, the safe area or the aspect ratio touch it, and
+    // buildDrawData is called with exactly that (Renderer.cpp:1654,
     // D3D12Renderer.cpp:6261).
     outTam = c.referenceResolution;
     if (outTam.x <= 0.0f || outTam.y <= 0.0f)
         return false;
 
-    // Cámara del frame, la misma receta que pickObject: en edición 45° fijos +
-    // el Y-flip de Vulkan; en Play manda el CameraComponent de la escena. El
-    // near/far NO entra en la cuenta —en una perspectiva solo toca la Z, x/y/w
-    // salen de fov y aspect—, así que los genéricos de aquí valen aunque el
-    // Renderer use m_cameraDistance.
+    // Frame camera, the same recipe as pickObject: in edit mode a fixed 45 degrees +
+    // the Vulkan Y-flip; in Play the scene's CameraComponent rules. The
+    // near/far does NOT enter the computation (in a perspective it only affects Z, x/y/w
+    // come from fov and aspect), so the generic ones here are valid even if the
+    // Renderer uses m_cameraDistance.
     //
-    // LIMITACIÓN CONOCIDA: el grabado usa la proyección JITTEREADA
-    // (taaJitteredProj en los dos backends) y aquí no hay forma de pedirla sin
-    // una virtual nueva en EditorRenderer. Con TAA encendido el gizmo puede
-    // quedar hasta medio píxel del cartel; sin TAA, taaJitteredProj es la
-    // proyección a secas y coinciden.
+    // KNOWN LIMITATION: the recording uses the JITTERED projection
+    // (taaJitteredProj in both backends) and there is no way to ask for it here
+    // without a new virtual in EditorRenderer. With TAA on the gizmo can
+    // end up up to half a pixel from the billboard; without TAA, taaJitteredProj is
+    // the plain projection and they match.
     const float aspect = ctx.renderer->viewportAspect();
     glm::mat4 view = cameraView;
     glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 1000.0f);
-    proj[1][1] *= -1.0f; // Vulkan Y flip, igual que el Renderer
+    proj[1][1] *= -1.0f; // Vulkan Y flip, same as the Renderer
     if (ctx.isPlaying && ctx.scene)
     {
         if (GameObject* cam = ctx.scene->findCamera())
@@ -764,15 +762,15 @@ static bool worldCanvasMvp(EditorContext& ctx, const GameObject* canvasObj,
         }
     }
 
-    // La MISMA matriz de modelo que el grabado, y con la MISMA `view`: el
-    // billboard sale de ella, así que darle otra separaría el gizmo del cartel en
-    // cuanto girase la cámara.
+    // The SAME model matrix as the recording, and with the SAME `view`: the
+    // billboard comes from it, so giving it another would separate the gizmo from the
+    // billboard as soon as the camera turned.
     outMvp = proj * view * uiWorldCanvasMatrix(c, outTam, canvasObj->worldTransform, view);
     return true;
 }
 
-// Pinta el cuadrilátero de un rect ya proyectado. Compartido por el gizmo del
-// canvas y el del widget: lo único que cambia entre los dos es el color.
+// Paints the quadrilateral of an already projected rect. Shared by the canvas
+// gizmo and the widget one: the only thing that changes between the two is the color.
 static void strokeProjectedQuad(ImDrawList* dl, const glm::vec2 esq[4], ImU32 color)
 {
     for (int i = 0; i < 4; ++i)
@@ -783,12 +781,12 @@ static void strokeProjectedQuad(ImDrawList* dl, const glm::vec2 esq[4], ImU32 co
     }
 }
 
-// Gizmo del canvas en modo MUNDO: el cuadrilátero de su plano, proyectado, que
-// es lo único que enseña dónde está y con qué inclinación. El rect 2D del área
-// útil que pinta drawCanvasGizmo no significa nada aquí.
+// Canvas gizmo in WORLD mode: the quadrilateral of its plane, projected, which
+// is the only thing that shows where it is and with what tilt. The 2D usable-area
+// rect that drawCanvasGizmo paints means nothing here.
 //
-// Función libre y no método porque necesita la `view` de la cámara y quien la
-// tiene es draw().
+// Free function and not a method because it needs the camera `view` and the one
+// that has it is draw().
 static void drawWorldCanvasGizmo(EditorContext& ctx, const glm::mat4& cameraView,
                                  const glm::vec2& imagePos, const glm::vec2& imageSize)
 {
@@ -802,18 +800,18 @@ static void drawWorldCanvasGizmo(EditorContext& ctx, const glm::mat4& cameraView
     if (!worldCanvasMvp(ctx, ctx.selected, cameraView, mvp, tam))
         return;
 
-    // El canvas entero es el rect (0,0)-(referenceResolution) de la misma
-    // función que usan los widgets.
+    // The whole canvas is the rect (0,0)-(referenceResolution) of the same
+    // function that the widgets use.
     glm::vec2 esq[4];
     if (!projectWorldCanvasCorners(mvp, glm::vec2(0.0f), tam, imagePos, imageSize, esq))
         return;
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImU32 color = IM_COL32(80, 200, 255, 220);   // el mismo azul del gizmo 2D
+    const ImU32 color = IM_COL32(80, 200, 255, 220);   // the same blue as the 2D gizmo
     strokeProjectedQuad(dl, esq, color);
-    // Marca en la esquina (0,0) del canvas. Sin ella, un canvas visto POR
-    // DETRÁS pinta el mismo cuadrilátero y no hay manera de saber que está del
-    // revés.
+    // Mark at the (0,0) corner of the canvas. Without it, a canvas seen FROM
+    // BEHIND paints the same quadrilateral and there is no way to know that it is
+    // backwards.
     dl->AddCircleFilled(ImVec2(esq[0].x, esq[0].y), 4.0f, color);
 }
 
@@ -825,21 +823,21 @@ void ViewportPanel::drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePo
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    // Un canvas de MUNDO no tiene área útil en píxeles de pantalla que enseñar:
-    // de él se encarga drawWorldCanvasGizmo, que lo proyecta. Dibujar además el
-    // rect 2D pintaría un recuadro en un sitio que no tiene nada que ver.
+    // A WORLD canvas has no usable area in screen pixels to show:
+    // drawWorldCanvasGizmo takes care of it, projecting it. Also drawing the 2D
+    // rect would paint a box in a place that has nothing to do with it.
     if (ctx.selected->getCanvas()->renderMode == UiCanvasRenderMode::World)
         return;
 
-    // Lo que dejó el último buildDrawData del canvas vivo: origen en píxeles
-    // del render y tamaño del área útil = referencia * escala. Aquí no se
-    // vuelve a resolver nada.
-    // El canvas DEL OBJETO SELECCIONADO, no uiCanvas() —que es el PRIMERO de
-    // pantalla—: con aquel, seleccionar un SEGUNDO canvas de pantalla pintaba el
-    // rect del primero, o sea un gizmo que miente sobre dónde está lo que se ha
-    // seleccionado. Con un solo canvas coinciden, que es lo que lo hacía mudo.
-    // Sin canvas vivo (el sync todavía no ha corrido) no se dibuja nada, que es
-    // mejor que dibujar el de otro.
+    // What the last buildDrawData of the live canvas left: origin in render
+    // pixels and usable-area size = reference * scale. Nothing is
+    // resolved again here.
+    // The canvas OF THE SELECTED OBJECT, not uiCanvas() (which is the FIRST
+    // screen one): with that one, selecting a SECOND screen canvas painted the
+    // rect of the first, that is a gizmo that lies about where what has been
+    // selected is. With a single canvas they coincide, which is what made it silent.
+    // Without a live canvas (the sync has not run yet) nothing is drawn, which is
+    // better than drawing another one's.
     const UiCanvas* canvas = ctx.renderer->uiCanvasOf(ctx.selected->id);
     if (!canvas)
         return;
@@ -848,32 +846,32 @@ void ViewportPanel::drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePo
     if (size.x <= 0.0f || size.y <= 0.0f)
         return;
 
-    // El canvas se resuelve en píxeles de SALIDA, y la salida es exactamente
-    // esta imagen (el panel dicta su tamaño), así que van 1:1. Antes se dividía
-    // por renderWidth/renderHeight —el render INTERNO—, y con SSAA eso movía el
-    // recuadro a la mitad o al doble del área real.
+    // The canvas is resolved in OUTPUT pixels, and the output is exactly
+    // this image (the panel dictates its size), so they go 1:1. It used to divide
+    // by renderWidth/renderHeight (the INTERNAL render), and with SSAA that moved the
+    // box to half or double the real area.
     const ImVec2 p0{ imagePos.x + origin.x, imagePos.y + origin.y };
     const ImVec2 p1{ p0.x + size.x, p0.y + size.y };
     ImGui::GetWindowDrawList()->AddRect(p0, p1, IM_COL32(80, 200, 255, 220), 0.0f, 0, 2.0f);
 }
 
-// SIN USO desde que los trece gizmos de widget de abajo pasaron por
-// EditorRenderer::findUiNode, que recorre TODOS los canvas y no solo el de
-// pantalla (este envoltorio solo miraba el que le dieran, así que un widget
-// dentro de un canvas de MUNDO se quedaba sin gizmo en silencio). Se deja
-// porque borrar símbolos no es de esta tarea; findUiNodeIn, lo que envuelve,
-// sigue vivo en UiCanvas.h y lo usa el Renderer.
+// UNUSED since the thirteen widget gizmos below went through
+// EditorRenderer::findUiNode, which walks ALL the canvases and not only the
+// screen one (this wrapper only looked at the one it was given, so a widget
+// inside a WORLD canvas was left without a gizmo silently). It is kept
+// because deleting symbols is not part of this task; findUiNodeIn, which it wraps,
+// is still alive in UiCanvas.h and the Renderer uses it.
 static const UiElement* findUiNodeNamed(const UiCanvas& canvas, const std::string& wanted)
 {
     return findUiNodeIn(canvas.root(), wanted);
 }
 
-// Rect + ejes del nodo vivo que se le pase. Compartido por los trece gizmos de
-// widget: lo único que cambia entre ellos es de qué nodo salen.
+// Rect + axes of the live node passed to it. Shared by the thirteen widget
+// gizmos: the only thing that changes between them is which node they come from.
 //
-// Dos caminos, y el que se toma lo decide el canvas DUEÑO del widget:
-//   - canvas de PANTALLA: el rect va 1:1 sobre la imagen, como siempre.
-//   - canvas de MUNDO: hay que proyectarlo, y por eso hace falta `cameraView`.
+// Two paths, and which one is taken is decided by the canvas that OWNS the widget:
+//   - SCREEN canvas: the rect goes 1:1 over the image, as always.
+//   - WORLD canvas: it has to be projected, and that is why `cameraView` is needed.
 static void drawUiNodeGizmo(EditorContext& ctx, const UiElement* node,
                             const glm::mat4& cameraView,
                             const glm::vec2& imagePos, const glm::vec2& imageSize)
@@ -887,17 +885,17 @@ static void drawUiNodeGizmo(EditorContext& ctx, const UiElement* node,
     const ImU32 kYColor     = IM_COL32( 70, 200,  70, 255);
     const float len = 34.0f;
 
-    // ── Canvas de MUNDO ─────────────────────────────────────────────────────
-    // El rect de este nodo NO está en píxeles de pantalla: en un canvas de mundo
-    // buildDrawData se llama con la referenceResolution (Renderer.cpp:1654,
-    // D3D12Renderer.cpp:6261) y applyTo fuerza ConstantPixelSize/scaleFactor 1,
-    // así que la escala del canvas queda a 1 y su origen a (0,0). Con eso,
-    // `screenPos = origen + worldPos * escala` (UiSpriteBatch.cpp:1328) devuelve
-    // worldPos BIT A BIT, o sea píxeles LOCALES del canvas — justo el espacio del
-    // que parte uiWorldCanvasMatrix. Entra tal cual, sin conversión.
+    // -- WORLD canvas -------------------------------------------------------
+    // The rect of this node is NOT in screen pixels: in a world canvas
+    // buildDrawData is called with the referenceResolution (Renderer.cpp:1654,
+    // D3D12Renderer.cpp:6261) and applyTo forces ConstantPixelSize/scaleFactor 1,
+    // so the canvas scale stays at 1 and its origin at (0,0). With that,
+    // `screenPos = origin + worldPos * scale` (UiSpriteBatch.cpp:1328) returns
+    // worldPos BIT FOR BIT, that is the canvas LOCAL pixels: exactly the space
+    // uiWorldCanvasMatrix starts from. It goes in as is, without conversion.
     //
-    // Sumarlo a imagePos como hace el camino de pantalla pintaría el rect pegado
-    // a la esquina del viewport y quieto mientras la cámara vuela.
+    // Adding it to imagePos as the screen path does would paint the rect stuck
+    // to the corner of the viewport and still while the camera flies.
     if (const GameObject* canvasObj = owningCanvasObject(ctx.selected))
     {
         glm::mat4 mvp;
@@ -908,18 +906,18 @@ static void drawUiNodeGizmo(EditorContext& ctx, const UiElement* node,
             const glm::vec2 rectMax = node->screenPos + node->screenSize;
 
             glm::vec2 esq[4];
-            // Alguna esquina detrás de la cámara: no se dibuja NADA, igual que en
-            // el gizmo del canvas. Media figura del revés es peor que ninguna.
+            // Some corner behind the camera: NOTHING is drawn, same as in
+            // the canvas gizmo. Half a figure backwards is worse than none.
             if (!projectWorldCanvasCorners(mvp, rectMin, rectMax, imagePos, imageSize, esq))
                 return;
             strokeProjectedQuad(dl, esq, kRectColor);
 
-            // Pivot y ejes, proyectados igual que el rect. El truco es pedir un
-            // rect minúsculo que ARRANQUE en el pivot: la esquina 0 es el pivot
-            // proyectado y las esquinas 1 y 3 dan las direcciones de +X y +Y ahí
-            // mismo, ya con la perspectiva aplicada. Interpolar las cuatro
-            // esquinas del rect grande daría otra cosa: bajo perspectiva la
-            // interpolación en pantalla no es la del canvas.
+            // Pivot and axes, projected the same way as the rect. The trick is to ask for a
+            // tiny rect that STARTS at the pivot: corner 0 is the projected pivot
+            // and corners 1 and 3 give the directions of +X and +Y right there,
+            // with the perspective already applied. Interpolating the four
+            // corners of the big rect would give something else: under perspective the
+            // on-screen interpolation is not the canvas one.
             const glm::vec2 pivotCanvas = rectMin + node->pivot * node->screenSize;
             const glm::vec2 paso        = glm::max(node->screenSize * 0.01f, glm::vec2(1.0f));
 
@@ -928,10 +926,10 @@ static void drawUiNodeGizmo(EditorContext& ctx, const UiElement* node,
                                           imagePos, imageSize, base))
             {
                 const ImVec2 pivot{ base[0].x, base[0].y };
-                // Ejes de LONGITUD FIJA en pantalla, como en el camino 2D: lo que
-                // el gizmo enseña es la ORIENTACIÓN, no el tamaño. Un eje visto
-                // de canto se anula al proyectarse y normalizar un cero daría
-                // NaN: en ese caso ese eje no se pinta.
+                // Axes of FIXED LENGTH on screen, as in the 2D path: what
+                // the gizmo shows is the ORIENTATION, not the size. An axis seen
+                // edge-on vanishes when projected and normalizing a zero would give
+                // NaN: in that case that axis is not painted.
                 const glm::vec2 ejes[2] = { base[1] - base[0], base[3] - base[0] };
                 const ImU32     cols[2] = { kXColor, kYColor };
                 const char*     nombre[2] = { "X", "Y" };
@@ -949,22 +947,22 @@ static void drawUiNodeGizmo(EditorContext& ctx, const UiElement* node,
             return;
         }
 
-        // worldCanvasMvp ha dicho que no y el canvas ES de mundo: la única vía
-        // que queda es una referenceResolution degenerada (alguna componente
-        // <= 0, y el dragVec2 de PropertiesPanel deja bajar a 0). En ese estado
-        // el canvas no dibuja nada y su propio gizmo tampoco. Caer a la rama de
-        // pantalla pintaría el rect pegado a la esquina del viewport y quieto
-        // mientras la cámara vuela, que es EXACTAMENTE el fallo que este camino
-        // existe para evitar. Sin gizmo es lo coherente.
+        // worldCanvasMvp has said no and the canvas IS a world one: the only way
+        // left is a degenerate referenceResolution (some component
+        // <= 0, and the dragVec2 of PropertiesPanel lets it go down to 0). In that state
+        // the canvas draws nothing and neither does its own gizmo. Falling into the
+        // screen branch would paint the rect stuck to the corner of the viewport and still
+        // while the camera flies, which is EXACTLY the failure this path
+        // exists to avoid. No gizmo is the coherent thing.
         if (canvasObj->getCanvas()->renderMode == UiCanvasRenderMode::World)
             return;
     }
 
-    // screenPos/screenSize los deja buildDrawData en píxeles de SALIDA, y la
-    // salida es esta misma imagen: van 1:1. Antes se escalaba por
-    // imagen/renderWidth (el render INTERNO) y con SSAA el recuadro salía a
-    // mitad de tamaño y en mitad de posición. Mismo criterio que
-    // drawCanvasAreaGizmo y que pickUiObject.
+    // screenPos/screenSize are left by buildDrawData in OUTPUT pixels, and the
+    // output is this same image: they go 1:1. It used to be scaled by
+    // image/renderWidth (the INTERNAL render) and with SSAA the box came out at
+    // half size and at half position. Same criterion as
+    // drawCanvasAreaGizmo and as pickUiObject.
     const ImVec2 p0{ imagePos.x + node->screenPos.x,
                      imagePos.y + node->screenPos.y };
     const ImVec2 p1{ p0.x + node->screenSize.x,
@@ -972,9 +970,9 @@ static void drawUiNodeGizmo(EditorContext& ctx, const UiElement* node,
 
     dl->AddRect(p0, p1, kRectColor, 0.0f, 0, 2.0f);
 
-    // Ejes desde el PIVOT, que es el punto respecto al que ancla y rota: X a la
-    // derecha y Y hacia ABAJO, que es el sentido de +Y en la UI (no el del
-    // mundo 3D). Solo dos ejes: un rect no tiene Z.
+    // Axes from the PIVOT, which is the point it anchors and rotates around: X to the
+    // right and Y DOWNWARDS, which is the direction of +Y in the UI (not the one of the
+    // 3D world). Only two axes: a rect has no Z.
     const ImVec2 pivot{ p0.x + node->pivot.x * (p1.x - p0.x),
                         p0.y + node->pivot.y * (p1.y - p0.y) };
     dl->AddLine(pivot, ImVec2(pivot.x + len, pivot.y), kXColor, 2.0f);
@@ -992,9 +990,9 @@ void ViewportPanel::drawButtonGizmo(EditorContext& ctx, const glm::vec2& imagePo
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    // El rect sale del nodo VIVO (lo que dejó el último buildDrawData), no de
-    // los campos del componente: así el gizmo ya trae aplicadas las anclas, la
-    // escala del canvas y el layout, sin recalcular nada aquí.
+    // The rect comes from the LIVE node (what the last buildDrawData left), not from
+    // the component fields: this way the gizmo already has the anchors, the canvas
+    // scale and the layout applied, without recomputing anything here.
     drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiButtonNodeName(ctx.selected->id)), m_cameraView,
                     imagePos, imageSize);
 }
@@ -1139,9 +1137,9 @@ void ViewportPanel::drawLayoutGizmo(EditorContext& ctx, const glm::vec2& imagePo
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    // Con otro componente de UI en el mismo GameObject, el layout NO tiene nodo
-    // propio: escribe en el de aquel, que ya pinta su gizmo. Dibujar otro encima
-    // solo duplicaría las líneas.
+    // With another UI component on the same GameObject, the layout has NO node of
+    // its own: it writes into that one's, which already paints its gizmo. Drawing
+    // another one on top would only duplicate the lines.
     drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiLayoutNodeName(ctx.selected->id)), m_cameraView,
                     imagePos, imageSize);
 }
@@ -1152,17 +1150,17 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
     if (!ctx.renderer || !ctx.scene || imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return nullptr;
 
-    // El hit test trabaja en píxeles de SALIDA, y la salida es esta misma
-    // imagen: el ratón ya llega en ese espacio. Antes se multiplicaba por
-    // render/imagen (el render INTERNO), y con SSAA el clic caía al doble de
-    // lejos del cursor. Es el mismo espacio en el que el bucle del editor le
-    // pasa el ratón a UiCanvas::updateInput.
-    // TODOS los canvas de pantalla y en el MISMO orden de prioridad que el
-    // input (el de más arriba primero, ver dispatchUiInput): si aquí se probara
-    // otro orden, clicar en el viewport seleccionaría un objeto distinto del que
-    // el usuario ve encima, y el que sí responde al ratón en Play sería el otro.
-    // Con uiCanvas() —el PRIMER canvas de pantalla— un widget de un segundo
-    // canvas no se podía seleccionar clicando, sin un solo aviso.
+    // The hit test works in OUTPUT pixels, and the output is this same
+    // image: the mouse already arrives in that space. It used to be multiplied by
+    // render/image (the INTERNAL render), and with SSAA the click landed twice as
+    // far from the cursor. It is the same space in which the editor loop passes
+    // the mouse to UiCanvas::updateInput.
+    // ALL the screen canvases and in the SAME priority order as the
+    // input (topmost first, see dispatchUiInput): if a different order were tried
+    // here, clicking in the viewport would select an object different from the one
+    // the user sees on top, and the one that does respond to the mouse in Play would be the other.
+    // With uiCanvas() (the FIRST screen canvas) a widget of a second
+    // canvas could not be selected by clicking, without a single warning.
     std::vector<UiCanvas*> canvases;
     ctx.renderer->screenUiCanvases(canvases);
 
@@ -1174,22 +1172,22 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
     }
     if (!hit) return nullptr;
 
-    // El hit test devuelve el nodo más profundo, que puede ser la etiqueta: se
-    // sube hasta el primero que sea de un GameObject.
+    // The hit test returns the deepest node, which may be the label: we
+    // climb up to the first one that belongs to a GameObject.
     for (const UiElement* n = hit; n != nullptr; n = n->parent())
     {
         if (const uint64_t owner = uiButtonOwnerId(n->name))
             return ctx.scene->findById(owner);
         if (const uint64_t owner = uiTextOwnerId(n->name))
             return ctx.scene->findById(owner);
-        // El nodo del relleno ("bar:7/Fill") también devuelve su dueño, así que
-        // clicar dentro de la parte llena selecciona la barra igual.
+        // The fill node ("bar:7/Fill") also returns its owner, so
+        // clicking inside the filled part selects the bar all the same.
         if (const uint64_t owner = uiProgressBarOwnerId(n->name))
             return ctx.scene->findById(owner);
         if (const uint64_t owner = uiInputFieldOwnerId(n->name))
             return ctx.scene->findById(owner);
-        // El Dropdown ANTES que el resto: sus filas son nodos profundos que
-        // solo el prefijo "drp:" sabe devolver a su dueno.
+        // The Dropdown BEFORE the rest: its rows are deep nodes that
+        // only the "drp:" prefix knows how to return to their owner.
         if (const uint64_t owner = uiDropdownOwnerId(n->name))
             return ctx.scene->findById(owner);
         if (const uint64_t owner = uiSliderOwnerId(n->name))
@@ -1202,16 +1200,16 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
             return ctx.scene->findById(owner);
         if (const uint64_t owner = uiImageOwnerId(n->name))
             return ctx.scene->findById(owner);
-        // El Panel el ÚLTIMO de los cinco: es el fondo, así que un widget encima
-        // suyo tiene que ganar el clic. Como el hit test devuelve el nodo más
-        // profundo y esto sube por los padres, el orden de aquí solo desempata
-        // entre nodos del MISMO GameObject.
+        // The Panel the LAST of the five: it is the background, so a widget on top of
+        // it has to win the click. Since the hit test returns the deepest node and this
+        // climbs through the parents, the order here only breaks ties
+        // between nodes of the SAME GameObject.
         if (const uint64_t owner = uiPanelOwnerId(n->name))
             return ctx.scene->findById(owner);
-        // El ScrollView el ULTIMO: es un contenedor, y cualquier widget que
-        // lleve dentro tiene que ganarle el clic. Como el hit test devuelve el
-        // nodo mas profundo y esto sube por los padres, llegar aqui significa
-        // que no habia nada mas.
+        // The ScrollView the LAST: it is a container, and any widget
+        // it carries inside has to win the click over it. Since the hit test returns the
+        // deepest node and this climbs through the parents, getting here means
+        // there was nothing else.
         if (const uint64_t owner = uiScrollViewOwnerId(n->name))
             return ctx.scene->findById(owner);
     }
@@ -1224,21 +1222,21 @@ GameObject* ViewportPanel::pickObject(EditorContext& ctx, const glm::mat4& camer
     if (!ctx.scene || imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return nullptr;
 
-    // Aspect del render target, el mismo que usa el Renderer para armar la
-    // proyección del frame (y que ya usa drawCameraGizmo); si el panel es lo
-    // que dicta ese tamaño, coincide con imageSize.
+    // Aspect of the render target, the same one the Renderer uses to build the
+    // frame projection (and that drawCameraGizmo already uses); if the panel is
+    // what dictates that size, it matches imageSize.
     const float aspect = ctx.renderer ? ctx.renderer->viewportAspect()
                                       : imageSize.x / imageSize.y;
 
-    // Cámara del frame, igual que Renderer::currentFrameCamera: en Play manda
-    // el CameraComponent de la escena (su projectionMatrix ya trae el Y-flip de
-    // Vulkan y z=[0,1]); en edición, la de vuelo del editor, cuya proyección es
-    // 45° fijos + Y-flip. El near/far del editor sale de un estado privado del
-    // Renderer, pero la DIRECCIÓN del rayo que pasa por un píxel no depende de
-    // los planos, solo de fov/aspect/Y-flip: por eso aquí valen unos genéricos.
+    // Frame camera, same as Renderer::currentFrameCamera: in Play the scene's
+    // CameraComponent rules (its projectionMatrix already has the Vulkan Y-flip and
+    // z=[0,1]); in edit mode, the editor fly camera, whose projection is a fixed
+    // 45 degrees + Y-flip. The editor near/far comes from a private state of the
+    // Renderer, but the DIRECTION of the ray through a pixel does not depend on
+    // the planes, only on fov/aspect/Y-flip: that is why generic ones are valid here.
     glm::mat4 view = cameraView;
     glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 1000.0f);
-    proj[1][1] *= -1.0f; // Vulkan Y flip, igual que el Renderer
+    proj[1][1] *= -1.0f; // Vulkan Y flip, same as the Renderer
     if (ctx.isPlaying)
     {
         if (GameObject* cam = ctx.scene->findCamera())
@@ -1248,23 +1246,23 @@ GameObject* ViewportPanel::pickObject(EditorContext& ctx, const glm::mat4& camer
         }
     }
 
-    // NDC del ratón dentro de la IMAGEN. Con el Y-flip dentro de la proyección,
-    // y = -1 es el borde SUPERIOR de la imagen, que es justo el sentido en el
-    // que crece el píxel del ratón: nada que invertir aquí.
+    // Mouse NDC inside the IMAGE. With the Y-flip inside the projection,
+    // y = -1 is the TOP edge of the image, which is exactly the direction in
+    // which the mouse pixel grows: nothing to invert here.
     const float ndcX = (mousePx.x / imageSize.x) * 2.0f - 1.0f;
     const float ndcY = (mousePx.y / imageSize.y) * 2.0f - 1.0f;
 
     const glm::mat4 invViewProj = glm::inverse(proj * view);
-    // z=1 es el plano lejano en las dos convenciones de profundidad (ZO de
-    // CameraComponent y [-1,1] de la proyección del editor), así que este punto
-    // vale para ambas sin reconstruir nada a mano.
+    // z=1 is the far plane in both depth conventions (ZO of
+    // CameraComponent and [-1,1] of the editor projection), so this point
+    // is valid for both without rebuilding anything by hand.
     const glm::vec4 farH = invViewProj * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
     if (std::fabs(farH.w) < 1e-9f)
         return nullptr;
 
-    // El origen es la posición real de la cámara (inversa de la view), no el
-    // punto del plano cercano: así t es distancia a la cámara y comparar t
-    // entre objetos ordena de verdad por cercanía.
+    // The origin is the real camera position (inverse of the view), not the
+    // point on the near plane: this way t is distance to the camera and comparing t
+    // between objects really orders by closeness.
     const glm::mat4 invView = glm::inverse(view);
     const glm::vec3 origin  = glm::vec3(invView[3]);
     const glm::vec3 target  = glm::vec3(farH) / farH.w;
@@ -1275,15 +1273,15 @@ GameObject* ViewportPanel::pickObject(EditorContext& ctx, const glm::mat4& camer
 
     GameObject* best     = nullptr;
     float       bestDist = 0.0f;
-    // Pre-orden: GameObject::traverse visita el nodo y luego sus hijos. Entre
-    // dos impactos gana el más cercano a la cámara; el empate lo rompe el
-    // primero visitado.
+    // Pre-order: GameObject::traverse visits the node and then its children. Between
+    // two hits the one closest to the camera wins; the tie is broken by the
+    // first one visited.
     ctx.scene->traverse([&](GameObject* go) {
         glm::vec3 bMin, bMax;
         if (!localBounds(go, bMin, bMax))
             return;
 
-        // Descarte rápido por esfera; el impacto de verdad lo da la caja.
+        // Quick rejection by sphere; the real hit is given by the box.
         glm::vec3 center;
         float     radius = 0.0f;
         float     tSphere = 0.0f;
@@ -1308,23 +1306,23 @@ GameObject* ViewportPanel::pickObject(EditorContext& ctx, const glm::mat4& camer
 
 void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm::mat4& cameraView)
 {
-    // Arranque de frame de ImGuizmo. Va lo PRIMERO y sin condiciones —incluso
-    // con el panel cerrado— porque es lo que rota el flag de hover del frame
-    // anterior; saltárselo un frame dejaría IsOver() devolviendo el valor del
-    // último frame en que sí se llamó.
+    // ImGuizmo frame start. It goes FIRST and unconditionally (even
+    // with the panel closed) because it is what rotates the hover flag of the
+    // previous frame; skipping it for a frame would leave IsOver() returning the value of the
+    // last frame in which it was called.
     //
-    // Hasta que existió este manipulador no había ninguna llamada a BeginFrame
-    // en todo el repo, y el `ImGuizmo::IsOver() || ImGuizmo::IsUsing()` que
-    // guarda el picking de más abajo era SIEMPRE false: IsOver() se apoya en un
-    // flag que sólo escriben BeginFrame y Manipulate, e IsUsing() en un estado
-    // que sólo enciende Manipulate. Era una puerta que no cerraba nada.
+    // Until this manipulator existed there was no call to BeginFrame
+    // in the whole repo, and the `ImGuizmo::IsOver() || ImGuizmo::IsUsing()` that
+    // guards the picking below was ALWAYS false: IsOver() relies on a
+    // flag that only BeginFrame and Manipulate write, and IsUsing() on a state
+    // that only Manipulate turns on. It was a door that closed nothing.
     ImGuizmo::BeginFrame();
 
-    // Contorno del objeto seleccionado. Se fija SIEMPRE y sin condiciones, aquí
-    // arriba: si se hiciera solo cuando hay selección, el Renderer se quedaría
-    // con el índice del objeto anterior al deseleccionar y lo seguiría
-    // resaltando. Un objeto sin malla no tiene índice de render (-1 en los dos
-    // campos), así que tampoco dibuja nada.
+    // Outline of the selected object. It is ALWAYS set and unconditionally, up
+    // here: if it were done only when there is a selection, the Renderer would keep
+    // the index of the previous object when deselecting and would keep
+    // highlighting it. An object without a mesh has no render index (-1 in both
+    // fields), so it draws nothing either.
     if (ctx.renderer)
     {
         ctx.renderer->setOutlineTarget(
@@ -1332,44 +1330,44 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
             ctx.selected ? ctx.selected->skinnedRenderIndex : -1);
     }
 
-    // Veto de edición mientras el modal de carga está activo: el gizmo de
-    // manipulación (ImGuizmo) mueve/rota/escala el objeto seleccionado, así que
-    // se salta. drawCameraGizmo es solo debug-draw (no edita), se deja siempre.
+    // Editing veto while the loading modal is active: the manipulation gizmo
+    // (ImGuizmo) moves/rotates/scales the selected object, so it is
+    // skipped. drawCameraGizmo is only debug-draw (it does not edit), it is always kept.
     if (!ctx.editingLocked)
         drawSelectionGizmo(ctx);
     drawCameraGizmo(ctx);
-    // También en Play: la luz sigue siendo un objeto de escena que hay que
-    // poder situar mientras corre el juego.
+    // Also in Play: the light is still a scene object that has to be
+    // placeable while the game runs.
     drawLightGizmos(ctx);
 
     if (!m_open)
     {
-        // Sin esto, cerrar Viewport dejaría m_hovered en su último
-        // valor (posiblemente true) y el mouse-look de la cámara en
-        // sandbox/src/main.cpp seguiría respondiendo con el panel oculto.
+        // Without this, closing Viewport would leave m_hovered at its last
+        // value (possibly true) and the camera mouse-look in
+        // sandbox/src/main.cpp would keep responding with the panel hidden.
         m_hovered = false;
         return;
     }
-    // La vista del frame, para los gizmos de widget de un canvas de MUNDO: la
-    // necesitan para proyectar y no la reciben por parámetro. Se publica aquí,
-    // igual que m_imagePos y m_contentWidth más abajo.
+    // The frame view, for the widget gizmos of a WORLD canvas: they
+    // need it to project and do not receive it as a parameter. It is published here,
+    // like m_imagePos and m_contentWidth further below.
     m_cameraView = cameraView;
 
     ImGui::Begin("Viewport", &m_open);
     m_hovered = ImGui::IsWindowHovered();
     ImVec2 vpPos  = ImGui::GetCursorScreenPos();
     ImVec2 vpSize = ImGui::GetContentRegionAvail();
-    // Se publica para que el Renderer renderice a ESTE tamaño exacto: así la
-    // imagen se dibuja 1:1 y no pasa por el reescalado de ImGui.
+    // It is published so that the Renderer renders at EXACTLY this size: this way the
+    // image is drawn 1:1 and does not go through ImGui rescaling.
     m_contentWidth  = (uint32_t)(vpSize.x > 0.0f ? vpSize.x : 0.0f);
     m_contentHeight = (uint32_t)(vpSize.y > 0.0f ? vpSize.y : 0.0f);
     ImGui::Image((ImTextureID)(intptr_t)viewportTexture, vpSize);
-    // Área útil del Canvas seleccionado, justo sobre la imagen: es 2D, así que
-    // va con el draw list de ImGui y no con Gizmos (que dibuja en el mundo).
+    // Usable area of the selected Canvas, right over the image: it is 2D, so
+    // it goes with the ImGui draw list and not with Gizmos (which draws in the world).
     drawCanvasGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
-    // Y el del canvas de MUNDO, que es el mismo gizmo pero proyectado. Va por
-    // fuera de la clase porque necesita cameraView, que solo tiene draw():
-    // drawCanvasGizmo se aparta en cuanto ve renderMode == World.
+    // And the one of the WORLD canvas, which is the same gizmo but projected. It goes
+    // outside the class because it needs cameraView, which only draw() has:
+    // drawCanvasGizmo steps aside as soon as it sees renderMode == World.
     drawWorldCanvasGizmo(ctx, cameraView, glm::vec2(vpPos.x, vpPos.y),
                          glm::vec2(vpSize.x, vpSize.y));
     drawButtonGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
@@ -1385,24 +1383,24 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
     drawScrollbarGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawPanelGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawImageGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
-    // El manipulador, el último de los que pintan sobre la imagen para que sus
-    // flechas queden por encima de todo lo demás. Es también el único que edita.
+    // The manipulator, the last of those that paint over the image so that its
+    // arrows end up above everything else. It is also the only one that edits.
     //
-    // No mete items de ImGui (sólo dibuja y pide la captura del ratón), así que
-    // el IsItemHovered de la línea siguiente sigue refiriéndose a la Image.
+    // It adds no ImGui items (it only draws and asks for the mouse capture), so
+    // the IsItemHovered on the next line still refers to the Image.
     drawTransformGizmo(ctx, cameraView, glm::vec2(vpPos.x, vpPos.y),
                         glm::vec2(vpSize.x, vpSize.y));
-    // Hover de la IMAGEN, no de la ventana: con esto un popup o cualquier otra
-    // ventana por encima ya no cuenta como clic en la escena.
+    // Hover of the IMAGE, not of the window: with this a popup or any other
+    // window on top no longer counts as a click on the scene.
     const bool imageHovered = ImGui::IsItemHovered();
-    // Se publica para el input de la UI de juego (sandbox/src/main.cpp).
+    // It is published for the game UI input (sandbox/src/main.cpp).
     m_imagePos     = glm::vec2(vpPos.x, vpPos.y);
     m_imageHovered = imageHovered;
 
-    // Axis gizmo estilo Unity/Godot (esquina superior derecha): ejes mundo
-    // proyectados por la rotación real de la cámara (parte 3x3 de la view
-    // matrix), así que gira con ella. Clicar una bola reorienta la cámara
-    // pa mirar a lo largo de ese eje (via ctx.onAxisSelected).
+    // Unity/Godot style axis gizmo (top-right corner): world axes
+    // projected by the real camera rotation (3x3 part of the view
+    // matrix), so it rotates with it. Clicking a ball reorients the camera
+    // to look along that axis (via ctx.onAxisSelected).
     const glm::mat3 camRot(cameraView);
 
     struct Axis { glm::vec3 world; glm::vec3 screenDir; ImU32 color; const char* label; };
@@ -1417,7 +1415,7 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
     const float ballRadius = 7.0f;
     ImVec2 center(vpPos.x + vpSize.x - radius - margin, vpPos.y + radius + margin);
 
-    // Pinta primero el eje más lejano de cámara pa que el más cercano quede encima.
+    // Paints the axis farthest from the camera first so that the nearest one ends up on top.
     int order[3] = { 0, 1, 2 };
     std::sort(order, order + 3, [&](int a, int b) { return axes[a].screenDir.z < axes[b].screenDir.z; });
 
@@ -1442,8 +1440,8 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
             float dx = mouse.x - tip.x, dy = mouse.y - tip.y;
             if (dx * dx + dy * dy <= ballRadius * ballRadius)
             {
-                // Marca el clic como consumido por el gizmo de ejes: reorientar
-                // la cámara no debe además cambiar la selección.
+                // Marks the click as consumed by the axis gizmo: reorienting
+                // the camera must not also change the selection.
                 axisBallClicked = true;
                 if (ctx.onAxisSelected)
                     ctx.onAxisSelected(axes[i].world);
@@ -1452,21 +1450,21 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
     }
     drawList->AddCircleFilled(center, 3.0f, IM_COL32(200, 200, 200, 255));
 
-    // Selección por clic en la escena. Puertas, en este orden: el clic cae
-    // sobre la imagen (no sobre otra ventana ni sobre el gizmo de ejes), ningún
-    // widget de ImGui está activo (arrastre de slider, drag&drop...), el gizmo
-    // de manipulación no está encima ni en uso, y no hay modal de carga. Sin
-    // impacto, la selección se va a nullptr, igual que el clic en zona vacía
-    // del panel Scene.
+    // Click selection in the scene. Gates, in this order: the click lands
+    // on the image (not on another window nor on the axis gizmo), no
+    // ImGui widget is active (slider drag, drag&drop...), the manipulation
+    // gizmo is neither hovered nor in use, and there is no loading modal. With no
+    // hit, the selection goes to nullptr, same as a click on an empty area
+    // of the Scene panel.
     const bool gizmoBusy = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
     if (clicked && imageHovered && !axisBallClicked && !gizmoBusy &&
         !ImGui::IsAnyItemActive() && !ctx.editingLocked)
     {
         const glm::vec2 mousePx(mouse.x - vpPos.x, mouse.y - vpPos.y);
-        // La UI se dibuja ENCIMA de la escena, así que un clic sobre un widget
-        // es del widget y no de lo que haya detrás. Solo en edición: en Play el
-        // clic es del juego (lo consume el updateInput del canvas) y cambiar la
-        // selección desde el viewport sería pelearse con él.
+        // The UI is drawn ON TOP of the scene, so a click on a widget
+        // belongs to the widget and not to whatever is behind it. Only in edit mode: in Play the
+        // click belongs to the game (the canvas updateInput consumes it) and changing the
+        // selection from the viewport would be fighting with it.
         GameObject* uiHit = ctx.isPlaying
                             ? nullptr
                             : pickUiObject(ctx, mousePx, glm::vec2(vpSize.x, vpSize.y));
