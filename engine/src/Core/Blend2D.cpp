@@ -28,8 +28,8 @@ namespace DonTopo
             return u;
         }
 
-        // d estrictamente dentro del círculo de (a, b, c), CCW. Tolerancia
-        // relativa a la escala: los concíclicos (det ~ 0) cuentan como fuera.
+        // d strictly inside the circle of (a, b, c), CCW. Tolerance
+        // relative to scale: concyclic points (det ~ 0) count as outside.
         bool dentroCirculo(glm::dvec2 a, glm::dvec2 b, glm::dvec2 c, glm::dvec2 d, double escala4)
         {
             const double adx = a.x - d.x, ady = a.y - d.y;
@@ -41,8 +41,8 @@ namespace DonTopo
             return det > 1e-9 * escala4;
         }
 
-        // Interiores disjuntos por ejes separadores (las 6 aristas). Tocarse en
-        // una arista o un vértice NO es solaparse.
+        // Disjoint interiors by separating axes (the 6 edges). Touching at
+        // an edge or a vertex is NOT overlapping.
         bool solapan(const glm::dvec2 t[3], const glm::dvec2 u[3], double eps)
         {
             auto separa = [&](const glm::dvec2 a[3], const glm::dvec2 b[3]) {
@@ -59,7 +59,7 @@ namespace DonTopo
             return !separa(t, u) && !separa(u, t);
         }
 
-        // Punto más cercano a p en el segmento ab: parámetro en [0, 1].
+        // Closest point to p on segment ab: parameter in [0, 1].
         float paramSegmento(glm::vec2 a, glm::vec2 b, glm::vec2 p)
         {
             const glm::vec2 ab = b - a;
@@ -131,7 +131,7 @@ namespace DonTopo
         const std::vector<Blend2DTriangle> tris = triangulate2D(pts);
         if (!tris.empty())
         {
-            // Dentro (o en el borde) de un triángulo: baricéntricas.
+            // Inside (or on the border of) a triangle: barycentric.
             for (const auto& t : tris)
             {
                 const glm::dvec2 a(pts[t.a]), b(pts[t.b]), c(pts[t.c]), q(p);
@@ -145,7 +145,7 @@ namespace DonTopo
                     return emitir(out, idx, w, 3);
                 }
             }
-            // Fuera: el punto más cercano de las aristas (el primero en empate).
+            // Outside: the closest point of the edges (the first one on a tie).
             float mejorD = INFINITY; int ia = 0, ib = 0; float mejorT = 0.0f;
             for (const auto& t : tris)
             {
@@ -163,8 +163,8 @@ namespace DonTopo
             return emitir(out, idx, w, 2);
         }
 
-        // Sin triángulos: todos alineados (o 2 puntos). Orden a lo largo de la
-        // recta de los dos más alejados, y el segmento consecutivo más cercano.
+        // No triangles: all collinear (or 2 points). Order along the
+        // line of the two farthest apart, and the closest consecutive segment.
         int ea = u[0], eb = u[1]; float lejos = -1.0f;
         for (size_t i = 0; i < u.size(); i++)
             for (size_t j = i + 1; j < u.size(); j++)

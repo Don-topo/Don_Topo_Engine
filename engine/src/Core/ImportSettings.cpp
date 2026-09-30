@@ -13,8 +13,8 @@ namespace DonTopo {
 
 namespace {
 
-// Un sidecar legitimo son ~100 bytes. El tope existe para que un fichero de
-// megas, o un JSON anidado a 100000 niveles, no llegue nunca al parser.
+// A legitimate sidecar is ~100 bytes. The cap exists so that a file of
+// megabytes, or a JSON nested 100000 levels deep, never reaches the parser.
 constexpr std::uintmax_t kMaxSidecarBytes = 64 * 1024;
 
 const char* normalsModeName(NormalsMode m)
@@ -39,9 +39,9 @@ const char* colorSpaceName(ColorSpaceOverride c)
     return "auto";
 }
 
-// Lee y valida el ENVOLTORIO comun de un sidecar (existencia, tamano, JSON,
-// version y tipo). nullopt = usar el defecto: `warning` explica por que salvo si
-// el fichero simplemente no existe o esta vacio (lo normal, sin aviso).
+// Reads and validates the common ENVELOPE of a sidecar (existence, size, JSON,
+// version and type). nullopt = use the default: `warning` explains why unless
+// the file simply does not exist or is empty (the normal case, no warning).
 std::optional<nlohmann::json> readSidecar(const std::filesystem::path& asset,
                                           const char* expectedType, std::string* warning)
 {
@@ -92,7 +92,7 @@ std::optional<nlohmann::json> readSidecar(const std::filesystem::path& asset,
     return j;
 }
 
-// Escritura por fichero temporal + rename: un corte a mitad no deja un sidecar a medias.
+// Write through a temporary file + rename: a cut halfway leaves no half-written sidecar.
 bool writeSidecar(const std::filesystem::path& asset, const nlohmann::json& j, std::string* error)
 {
     const std::filesystem::path sidecar = importSidecarPath(asset);
@@ -126,7 +126,7 @@ bool writeSidecar(const std::filesystem::path& asset, const nlohmann::json& j, s
     return true;
 }
 
-// Guardar el defecto = quitar el sidecar; ausente tampoco es error.
+// Saving the default = removing the sidecar; absent is not an error either.
 bool removeSidecar(const std::filesystem::path& asset, std::string* error)
 {
     std::error_code ec;
@@ -212,7 +212,7 @@ float clampAudioGainDb(float gainDb)
 float audioGainLinear(float gainDb)
 {
     const float db = clampAudioGainDb(gainDb);
-    if (db == 0.0f) return 1.0f;                       // exacto: sin ajuste no se toca el volumen
+    if (db == 0.0f) return 1.0f;                       // exact: without adjustment the volume is not touched
     return std::pow(10.0f, db / 20.0f);
 }
 
@@ -281,8 +281,8 @@ ModelImportSettings loadModelImportSettings(const std::filesystem::path& asset, 
     {
         if (it->is_number())
         {
-            // En double y con literales: kModelScaleMin (float) como double no es
-            // 0.001 exacto, y un 0.001 escrito a mano saldria "fuera de rango".
+            // In double and with literals: kModelScaleMin (float) as double is not
+            // exactly 0.001, and a hand-written 0.001 would come out "out of range".
             const double v = it->get<double>();
             if (std::isnan(v) || v <= 0.0)
                 problems += "scale is not positive (using 1). ";
@@ -368,7 +368,7 @@ bool moveImportSidecar(const std::filesystem::path& oldAsset, const std::filesys
 {
     const std::filesystem::path from = importSidecarPath(oldAsset);
     std::error_code ec;
-    if (!std::filesystem::exists(from, ec) || ec) return true;        // nada que mover
+    if (!std::filesystem::exists(from, ec) || ec) return true;        // nothing to move
     std::filesystem::rename(from, importSidecarPath(newAsset), ec);
     if (ec) { if (error) *error = ec.message(); return false; }
     return true;

@@ -96,24 +96,24 @@ namespace
     using DonTopo::DropdownComponent;
     using DonTopo::ScrollViewComponent;
 
-    // Forward declarations: animatorFromJson (más abajo) necesita estos
-    // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
-    // jsonToVec3, después en el fichero) para el threshold de las
-    // condiciones numéricas y el editorPos de los estados.
+    // Forward declarations: animatorFromJson (below) needs these readers
+    // tolerant of corrupt JSON (defined next to jsonToMat4/
+    // jsonToVec3, later in the file) for the threshold of the
+    // numeric conditions and the editorPos of the states.
     //
-    // required (default false, back-compat de toda la vida): la clave/índice
-    // AUSENTE también avisa cuando required == true. Es para los campos que
-    // nodeToJson escribe SIEMPRE (nunca son opcionales de verdad) — ver el
-    // comentario grande de abajo, hallazgo 1 del review de este fix.
+    // required (default false, long-standing back-compat): the ABSENT key/index
+    // also warns when required == true. It is for the fields that
+    // nodeToJson ALWAYS writes (they are never really optional) — see the
+    // big comment below, finding 1 of the review of this fix.
     float readFloat(const nlohmann::json& j, const char* key, float def,
                      std::vector<std::string>* warnings, const std::string& contexto,
                      bool required = false);
     float readArrayFloat(const nlohmann::json& arr, size_t idx, float def,
                           std::vector<std::string>* warnings, const std::string& contexto,
                           bool required = false);
-    // Mismos criterios que readFloat, para los campos que nodeToJson escribe
-    // SIEMPRE y que hasta ahora se leían con .at() (una excepción ahí tumba la
-    // carga de la escena ENTERA por un solo campo).
+    // Same criteria as readFloat, for the fields that nodeToJson ALWAYS writes
+    // and that until now were read with .at() (an exception there takes down
+    // the load of the WHOLE scene over a single field).
     bool readBool(const nlohmann::json& j, const char* key, bool def,
                    std::vector<std::string>* warnings, const std::string& contexto,
                    bool required = false);
@@ -151,7 +151,7 @@ namespace
         if (s == "spot")        return LightType::Spot;
         if (s == "directional") return LightType::Directional;
         if (s == "area")        return LightType::Area;
-        return LightType::Point;    // valor desconocido -> point
+        return LightType::Point;    // unknown value -> point
     }
 
     const char* uiScaleModeToStr(UiScaleMode m)
@@ -168,7 +168,7 @@ namespace
     {
         if (s == "scaleWithScreenSize")  return UiScaleMode::ScaleWithScreenSize;
         if (s == "constantPhysicalSize") return UiScaleMode::ConstantPhysicalSize;
-        return UiScaleMode::ConstantPixelSize;  // valor desconocido -> el default
+        return UiScaleMode::ConstantPixelSize;  // unknown value -> the default
     }
 
     const char* uiScreenMatchToStr(UiScreenMatch m)
@@ -185,7 +185,7 @@ namespace
     {
         if (s == "expand") return UiScreenMatch::Expand;
         if (s == "shrink") return UiScreenMatch::Shrink;
-        return UiScreenMatch::MatchWidthOrHeight;   // valor desconocido -> el default
+        return UiScreenMatch::MatchWidthOrHeight;   // unknown value -> the default
     }
 
     const char* uiCanvasRenderModeToStr(UiCanvasRenderMode m)
@@ -212,7 +212,7 @@ namespace
     {
         if (s == "yawOnly") return UiBillboard::YawOnly;
         if (s == "full")    return UiBillboard::Full;
-        return UiBillboard::None;   // valor desconocido -> el default
+        return UiBillboard::None;   // unknown value -> the default
     }
 
     const char* uiButtonTransitionToStr(UiButtonTransition t)
@@ -229,7 +229,7 @@ namespace
     {
         if (s == "spriteSwap") return UiButtonTransition::SpriteSwap;
         if (s == "animation")  return UiButtonTransition::Animation;
-        return UiButtonTransition::ColorTint;   // valor desconocido -> el default
+        return UiButtonTransition::ColorTint;   // unknown value -> the default
     }
 
     const char* uiTextAlignToStr(UiTextAlign a)
@@ -248,7 +248,7 @@ namespace
         if (s == "center")  return UiTextAlign::Center;
         if (s == "right")   return UiTextAlign::Right;
         if (s == "justify") return UiTextAlign::Justify;
-        return UiTextAlign::Left;   // valor desconocido -> el default
+        return UiTextAlign::Left;   // unknown value -> the default
     }
 
     const char* uiTextVAlignToStr(UiTextVAlign a)
@@ -261,10 +261,10 @@ namespace
         }
     }
 
-    // El default NO es el mismo para los dos que la usan: un Text suelto es
-    // "top" y la etiqueta de un botón "middle", así que se pasa por parámetro
-    // en vez de clavarlo aquí. Un fichero viejo no trae la clave y tiene que
-    // cargar exactamente como se veía.
+    // The default is NOT the same for the two that use it: a loose Text is
+    // "top" and a button label is "middle", so it is passed as a parameter
+    // instead of being nailed down here. An old file does not bring the key and has to
+    // load exactly as it looked.
     UiTextVAlign uiTextVAlignFromStr(const std::string& s, UiTextVAlign porDefecto)
     {
         if (s == "top")    return UiTextVAlign::Top;
@@ -287,7 +287,7 @@ namespace
     {
         if (s == "clip")     return UiTextOverflow::Clip;
         if (s == "ellipsis") return UiTextOverflow::Ellipsis;
-        return UiTextOverflow::Overflow;   // valor desconocido -> el default
+        return UiTextOverflow::Overflow;   // unknown value -> the default
     }
 
     const char* uiProgressFillDirectionToStr(UiProgressFillDirection d)
@@ -306,7 +306,7 @@ namespace
         if (s == "rightToLeft") return UiProgressFillDirection::RightToLeft;
         if (s == "bottomToTop") return UiProgressFillDirection::BottomToTop;
         if (s == "topToBottom") return UiProgressFillDirection::TopToBottom;
-        return UiProgressFillDirection::LeftToRight;   // valor desconocido -> el default
+        return UiProgressFillDirection::LeftToRight;   // unknown value -> the default
     }
 
     const char* uiInputContentTypeToStr(UiInputContentType t)
@@ -327,7 +327,7 @@ namespace
         if (s == "decimalNumber") return UiInputContentType::DecimalNumber;
         if (s == "alphanumeric")  return UiInputContentType::Alphanumeric;
         if (s == "password")      return UiInputContentType::Password;
-        return UiInputContentType::Standard;   // valor desconocido -> el default
+        return UiInputContentType::Standard;   // unknown value -> the default
     }
 
     const char* uiScrollbarDirectionToStr(UiScrollbarDirection d)
@@ -346,7 +346,7 @@ namespace
         if (s == "leftToRight") return UiScrollbarDirection::LeftToRight;
         if (s == "rightToLeft") return UiScrollbarDirection::RightToLeft;
         if (s == "bottomToTop") return UiScrollbarDirection::BottomToTop;
-        return UiScrollbarDirection::TopToBottom;   // valor desconocido -> el default
+        return UiScrollbarDirection::TopToBottom;   // unknown value -> the default
     }
 
     const char* uiSliderDirectionToStr(UiSliderDirection d)
@@ -365,7 +365,7 @@ namespace
         if (s == "rightToLeft") return UiSliderDirection::RightToLeft;
         if (s == "bottomToTop") return UiSliderDirection::BottomToTop;
         if (s == "topToBottom") return UiSliderDirection::TopToBottom;
-        return UiSliderDirection::LeftToRight;   // valor desconocido -> el default
+        return UiSliderDirection::LeftToRight;   // unknown value -> the default
     }
 
     const char* uiImageModeToStr(UiImageMode m)
@@ -384,7 +384,7 @@ namespace
         if (s == "tiled")  return UiImageMode::Tiled;
         if (s == "sliced") return UiImageMode::Sliced;
         if (s == "filled") return UiImageMode::Filled;
-        return UiImageMode::Normal;   // valor desconocido -> el default
+        return UiImageMode::Normal;   // unknown value -> the default
     }
 
     const char* uiFillDirectionToStr(UiFillDirection d)
@@ -423,7 +423,7 @@ namespace
         if (s == "horizontal") return UiLayoutMode::Horizontal;
         if (s == "grid")       return UiLayoutMode::Grid;
         if (s == "none")       return UiLayoutMode::None;
-        return UiLayoutMode::Vertical;   // valor desconocido -> el default
+        return UiLayoutMode::Vertical;   // unknown value -> the default
     }
 
     const char* uiCrossAlignToStr(UiCrossAlign a)
@@ -440,13 +440,13 @@ namespace
     {
         if (s == "center") return UiCrossAlign::Center;
         if (s == "end")    return UiCrossAlign::End;
-        return UiCrossAlign::Start;   // valor desconocido -> el default
+        return UiCrossAlign::Start;   // unknown value -> the default
     }
 
-    // Los vectores del Button van como objeto con componentes nombradas, igual
-    // que referenceResolution y safeArea del canvas (y no como el array de
-    // vec3ToJson): un .scene editado a mano se lee mejor, y readFloat ya tolera
-    // un null por campo sin tumbar la carga entera.
+    // The Button vectors go as an object with named components, just like
+    // referenceResolution and safeArea of the canvas (and not like the vec3ToJson
+    // array): a hand-edited .scene reads better, and readFloat already tolerates
+    // a null per field without taking down the whole load.
     nlohmann::json vec2ToJsonXY(const glm::vec2& v)
     {
         return { {"x", v.x}, {"y", v.y} };
@@ -457,9 +457,9 @@ namespace
         return { {"x", v.x}, {"y", v.y}, {"z", v.z}, {"w", v.w} };
     }
 
-    // Los enums van como string y no como int: legible en un .scene editado a
-    // mano y estable si el enum crece por el medio. Mismo criterio que el "mode"
-    // de la cámara.
+    // The enums go as strings and not as ints: readable in a hand-edited
+    // .scene and stable if the enum grows in the middle. Same criterion as the "mode"
+    // of the camera.
     const char* paramTypeToStr(AnimatorComponent::ParamType t)
     {
         switch (t)
@@ -519,46 +519,46 @@ namespace
         return AnimatorComponent::Compare::Greater;
     }
 
-}   // namespace (anónimo)
+}   // namespace (anonymous)
 
-// Fuera del namespace anónimo porque el undo del editor la usa (ver
-// AnimatorSerialization.h). Sigue en este fichero porque el formato es de la
-// escena, y sus helpers (paramTypeToStr, condTypeToStr, compareToStr) se quedan
-// dentro del anónimo: desde aquí se ven igual.
+// Outside the anonymous namespace because the editor undo uses it (see
+// AnimatorSerialization.h). It stays in this file because the format belongs to the
+// scene, and its helpers (paramTypeToStr, condTypeToStr, compareToStr) stay
+// inside the anonymous one: from here they are seen all the same.
 //
-// Cada campo que se vuelca aquí es lo que el undo del editor compara
-// (animatorGraphKey, ver AnimatorSerialization.h): un campo nuevo que no pase
-// por esta función es invisible para el undo aunque se edite desde el panel.
-// Un campo nuevo necesita también su mutación en graphMutations()
-// (engine/tests/animator_tests.cpp) o nada se entera de que no es undoable.
+// Each field dumped here is what the editor undo compares
+// (animatorGraphKey, see AnimatorSerialization.h): a new field that does not go
+// through this function is invisible to the undo even if it is edited from the panel.
+// A new field also needs its mutation in graphMutations()
+// (engine/tests/animator_tests.cpp) or nothing notices it is not undoable.
 namespace DonTopo
 {
     nlohmann::json animatorToJson(const AnimatorComponent& a)
     {
-        // Estados y transiciones de UNA capa: la 0 va en las claves de siempre
-        // y las demás, con el mismo formato, en "layers".
+        // States and transitions of ONE layer: layer 0 goes under the usual keys
+        // and the others, with the same format, under "layers".
         auto grafo = [&a](int capa) {
             auto states = nlohmann::json::array();
             for (const auto& s : a.states(capa))
             {
-                // El clip va por NOMBRE: el índice depende del orden de mAnimations
-                // en el FBX, y reexportar el modelo lo baraja en silencio.
+                // The clip goes by NAME: the index depends on the order of mAnimations
+                // in the FBX, and re-exporting the model shuffles it silently.
                 nlohmann::json sj = { {"name", s.name},
                                       {"clip", s.clipName},
                                       {"loop", s.loop},
                                       {"pos", nlohmann::json::array({ s.editorPos.x, s.editorPos.y })} };
-                // Clip de propiedades: solo si el estado lo usa, así un grafo
-                // de los de siempre se guarda exactamente igual que antes.
+                // Property clip: only if the state uses it, so a graph
+                // of the usual kind is saved exactly as before.
                 if (!s.propertyClipName.empty()) sj["propertyClip"] = s.propertyClipName;
-                // Blend por parámetro: solo si el estado lo usa. Emitirlo siempre
-                // llenaría de campos vacíos el .scene de cualquier grafo normal.
-                // clipIndex/duration de cada entrada NO se guardan: son del FBX,
-                // los rellena bindClips igual que el clipIndex del estado.
+                // Blend by parameter: only if the state uses it. Emitting it always
+                // would fill the .scene of any normal graph with empty fields.
+                // clipIndex/duration of each entry are NOT saved: they belong to the FBX,
+                // they are filled by bindClips just like the state's clipIndex.
                 if (!s.blendEntries.empty())
                 {
                     sj["blendParam"]    = s.blendParam;
                     sj["clipThreshold"] = s.clipThreshold;
-                    // Blend 2D: solo si lo usa, así un 1D se guarda como siempre.
+                    // 2D blend: only if it uses it, so a 1D one is saved as always.
                     const bool dosD = !s.blendParamY.empty();
                     if (dosD)
                     {
@@ -574,11 +574,11 @@ namespace DonTopo
                     }
                     sj["blendEntries"] = std::move(entradas);
                 }
-                // Modo de raíz: solo si no es Off, que es lo que traen todas las
-                // escenas anteriores a esta opción.
+                // Root mode: only if it is not Off, which is what all the
+                // scenes prior to this option bring.
                 if (s.rootMotion == AnimatorComponent::RootMotion::Lock)  sj["rootMotion"] = "lock";
                 if (s.rootMotion == AnimatorComponent::RootMotion::Apply) sj["rootMotion"] = "apply";
-                // Eventos: solo si hay alguno, como el blend.
+                // Events: only if there is any, like the blend.
                 if (!s.events.empty())
                 {
                     nlohmann::json eventos = nlohmann::json::array();
@@ -586,13 +586,13 @@ namespace DonTopo
                         eventos.push_back({ {"name", ev.name}, {"time", ev.time} });
                     sj["events"] = std::move(eventos);
                 }
-                // Velocidad: solo si no es la de siempre (x1, sin multiplicador).
+                // Speed: only if it is not the usual one (x1, no multiplier).
                 if (s.speed != 1.0f)
                     sj["speed"] = s.speed;
                 if (!s.speedParam.empty())
                     sj["speedParam"] = s.speedParam;
-                // Sub-máquinas: solo lo que no es el default, para que un grafo
-                // sin cajas se guarde byte a byte como antes.
+                // Sub-machines: only what is not the default, so that a graph
+                // without boxes is saved byte for byte as before.
                 if (s.parent >= 0)   sj["parent"]     = s.parent;
                 if (s.isSubMachine)  sj["subMachine"] = true;
                 if (s.subEntry >= 0) sj["subEntry"]   = s.subEntry;
@@ -611,7 +611,7 @@ namespace DonTopo
                         cj["param"] = c.paramName;
                     if (c.type == AnimatorComponent::ConditionType::Bool)
                         cj["expected"] = c.expected;
-                    // Solo las numéricas: en una Bool serían ruido en el .scene.
+                    // Only the numeric ones: in a Bool they would be noise in the .scene.
                     if (c.type == AnimatorComponent::ConditionType::Int ||
                         c.type == AnimatorComponent::ConditionType::Float)
                     {
@@ -620,15 +620,15 @@ namespace DonTopo
                     }
                     conds.push_back(cj);
                 }
-                // from/to son índices al array "states" de ESTE mismo JSON:
-                // self-contained, sin depender de ningún asset externo.
-                // "duration" es el cross-fade en segundos; 0 (corte seco) es lo que
-                // asume toda escena guardada antes de que el campo existiera.
+                // from/to are indices into the "states" array of THIS same JSON:
+                // self-contained, without depending on any external asset.
+                // "duration" is the cross-fade in seconds; 0 (hard cut) is what
+                // every scene saved before the field existed assumes.
                 nlohmann::json tj = { {"from", t.fromState}, {"to", t.toState},
                                       {"duration", t.duration}, {"conditions", conds} };
-                // Exit time y Any State: solo si se usan, igual que los campos de
-                // blend. Any State se guarda como "from": -2 (kAnyState), que sigue
-                // siendo un entero: el lector de "from" no cambia.
+                // Exit time and Any State: only if they are used, like the
+                // blend fields. Any State is saved as "from": -2 (kAnyState), which is still
+                // an integer: the "from" reader does not change.
                 if (t.hasExitTime)
                 {
                     tj["hasExitTime"] = true;
@@ -653,8 +653,8 @@ namespace DonTopo
                                {"transitions", std::move(base.second)},
                                {"anyStatePos", nlohmann::json::array({ a.anyStateEditorPos().x,
                                                                         a.anyStateEditorPos().y })} };
-        // Capas: solo si hay más de una, así una escena de una capa se guarda
-        // exactamente como antes de que existieran.
+        // Layers: only if there is more than one, so a one-layer scene is saved
+        // exactly as before they existed.
         if (a.layerCount() > 1)
         {
             auto capas = nlohmann::json::array();
@@ -674,8 +674,8 @@ namespace DonTopo
             }
             out["layers"] = std::move(capas);
         }
-        // IK: solo si hay restricciones, así un Animator sin ellas se guarda
-        // exactamente como antes de que existieran.
+        // IK: only if there are constraints, so an Animator without them is saved
+        // exactly as before they existed.
         if (!a.ikConstraints().empty())
         {
             auto ik = nlohmann::json::array();
@@ -690,7 +690,7 @@ namespace DonTopo
                                {"maxAngle", c.maxAngle} });
             out["ik"] = std::move(ik);
         }
-        // Clips de propiedades: ídem, solo si hay.
+        // Property clips: same, only if there are any.
         if (!a.propertyClips().empty())
         {
             auto clips = nlohmann::json::array();
@@ -702,9 +702,9 @@ namespace DonTopo
                     auto keys = nlohmann::json::array();
                     for (const auto& k : tr.keys)
                         keys.push_back({ {"t", k.time}, {"v", k.value} });
-                    // Una curva se distingue por "target"; una pista de
-                    // propiedad se guarda como siempre, para que un .scene de
-                    // antes y uno de ahora sean idénticos si no hay curvas.
+                    // A curve is distinguished by "target"; a property
+                    // track is saved as always, so that a .scene from
+                    // before and one from now are identical if there are no curves.
                     if (tr.target == TrackTarget::Parameter)
                         pistas.push_back({ {"target", "parameter"},
                                            {"parameter", tr.parameterName},
@@ -723,7 +723,7 @@ namespace DonTopo
     {
         nlohmann::json key = animatorToJson(a);
         for (auto& s : key["states"]) s.erase("pos");
-        // Mover el nodo Any State tampoco es una edición.
+        // Moving the Any State node is not an edit either.
         key.erase("anyStatePos");
         if (key.contains("layers"))
             for (auto& lj : key["layers"])
@@ -737,24 +737,24 @@ namespace DonTopo
 
 namespace
 {
-    // No deserializa estado runtime (estado actual, animTime, valores de
-    // parámetros, triggers pendientes) porque no se serializa: el Stop de Play
-    // reconstruye la escena desde JSON, así que el reset al estado de entrada
-    // sale gratis, y guardar en mitad de Play no hornea estado transitorio.
+    // It does not deserialize runtime state (current state, animTime, parameter
+    // values, pending triggers) because it is not serialized: the Stop of Play
+    // rebuilds the scene from JSON, so the reset to the entry state
+    // comes for free, and saving in the middle of Play does not bake transient state.
     std::shared_ptr<AnimatorComponent> animatorFromJson(const nlohmann::json& j,
                                                           std::vector<std::string>* warnings)
     {
         auto a = std::make_shared<AnimatorComponent>();
 
-        // Parámetros primero: addParameter es quien crea las entradas de bools/
-        // triggers que las condiciones consultarán.
+        // Parameters first: addParameter is what creates the bool/
+        // trigger entries that the conditions will query.
         if (j.contains("parameters"))
             for (const auto& p : j["parameters"])
                 a->addParameter(p.value("name", std::string()),
                                 paramTypeFromStr(p.value("type", std::string("bool"))));
 
-        // El grafo de UNA capa (estados, Any State, transiciones, entrada):
-        // la 0 sale de las claves de siempre y las demás de "layers".
+        // The graph of ONE layer (states, Any State, transitions, entry):
+        // layer 0 comes from the usual keys and the others from "layers".
         auto leerGrafo = [&](const nlohmann::json& g, int capa)
         {
             if (g.contains("states"))
@@ -765,13 +765,13 @@ namespace
                     st.name     = s.value("name", std::string());
                     st.clipName = s.value("clip", std::string());
                     st.loop     = s.value("loop", true);
-                    // Sub-máquinas. La coherencia (a quién apunta cada índice) se
-                    // valida abajo, cuando ya están todos los estados leídos.
+                    // Sub-machines. The coherence (what each index points to) is
+                    // validated below, once all the states have been read.
                     st.parent       = s.value("parent", -1);
                     st.isSubMachine = s.value("subMachine", false);
                     st.subEntry     = s.value("subEntry", -1);
-                    // Ausentes en escenas anteriores al blend por parámetro: sin
-                    // entradas el estado es de un solo clip, como siempre.
+                    // Absent in scenes prior to blend by parameter: without
+                    // entries the state is single-clip, as always.
                     const std::string ctxBlend = "animator.state." + st.name;
                     st.propertyClipName = s.value("propertyClip", std::string());
                 st.blendParam  = s.value("blendParam", std::string());
@@ -792,19 +792,19 @@ namespace
                     }
                     else if (!s.value("blendClip", std::string()).empty())
                     {
-                        // Formato anterior a N clips: el par (clip, blendClip) con
-                        // [blendMin, blendMax]. Como umbrales dan la MISMA pose,
-                        // incluidos span negativo (A/B salen intercambiados con el
-                        // peso complementario) y span 0 (el empate descarta la
-                        // entrada, como el peso 0 de antes).
+                        // Format prior to N clips: the (clip, blendClip) pair with
+                        // [blendMin, blendMax]. As thresholds they give the SAME pose,
+                        // including negative span (A/B come out swapped with the
+                        // complementary weight) and span 0 (the tie discards the
+                        // entry, like the weight 0 from before).
                         st.clipThreshold = readFloat(s, "blendMin", 0.0f, warnings, ctxBlend);
                         AnimatorComponent::BlendEntry e;
                         e.clipName  = s.value("blendClip", std::string());
                         e.threshold = readFloat(s, "blendMax", 1.0f, warnings, ctxBlend);
                         st.blendEntries.push_back(std::move(e));
                     }
-                    // "rootMotion" desde el root motion real; antes, un bool
-                    // lockRootMotion que equivale a Lock. Ausentes los dos: Off.
+                    // "rootMotion" from the real root motion; before, a bool
+                    // lockRootMotion that equals Lock. Both absent: Off.
                     const std::string rm = s.value("rootMotion", std::string());
                     if (rm == "lock")       st.rootMotion = AnimatorComponent::RootMotion::Lock;
                     else if (rm == "apply") st.rootMotion = AnimatorComponent::RootMotion::Apply;
@@ -816,7 +816,7 @@ namespace
                     }
                     else if (s.value("lockRootMotion", false))
                         st.rootMotion = AnimatorComponent::RootMotion::Lock;
-                    // Ausentes en escenas anteriores a los eventos: ninguno.
+                    // Absent in scenes prior to events: none.
                     if (s.contains("events") && s["events"].is_array())
                     {
                         const std::string ctxEv = "animator.state." + st.name + ".events";
@@ -834,7 +834,7 @@ namespace
                             st.events.push_back(std::move(ev));
                         }
                     }
-                    // Ausentes en escenas anteriores a la velocidad por estado: x1.
+                    // Absent in scenes prior to per-state speed: x1.
                     st.speed      = readFloat(s, "speed", 1.0f, warnings, "animator.state." + st.name + ".speed");
                     st.speedParam = s.value("speedParam", std::string());
                     if (st.speed < 0.0f)
@@ -847,24 +847,24 @@ namespace
                     if (s.contains("pos") && s["pos"].is_array() && s["pos"].size() == 2)
                         st.editorPos = glm::vec2(readArrayFloat(s["pos"], 0, 0.0f, warnings, "animator.state." + st.name + ".pos"),
                                                   readArrayFloat(s["pos"], 1, 0.0f, warnings, "animator.state." + st.name + ".pos"));
-                    // duration/ticksPerSecond/clipIndex los rellena bindClips contra
-                    // el SkinnedMesh: son del FBX, no del fichero de escena.
+                    // duration/ticksPerSecond/clipIndex are filled by bindClips against
+                    // the SkinnedMesh: they belong to the FBX, not to the scene file.
                     a->addState(st, capa);
                 }
 
-                // Todo lo que entra del fichero pasa por la misma pasada que usa el
-                // editor: indices imposibles, padres que no son cajas, entradas que no
-                // son hijas y ciclos de contencion. Antes esto estaba escrito aqui a
-                // mano y solo servia a la carga.
+                // Everything that comes in from the file goes through the same pass the
+                // editor uses: impossible indices, parents that are not boxes, entries that
+                // are not children and containment cycles. Before this was written here
+                // by hand and only served loading.
                 //
-                // Las transiciones se leen DESPUES de esto, asi que sus indices se
-                // validan en su propio bucle (ver mas abajo) y aqui no hay ninguna que
-                // mirar todavia.
+                // The transitions are read AFTER this, so their indices are
+                // validated in their own loop (see below) and there are none here to
+                // look at yet.
                 a->sanitizeGraph(capa, warnings);
             }
 
-            // Ausente en escenas anteriores a Any State: se queda la posición por
-            // defecto del componente.
+            // Absent in scenes prior to Any State: the component's default
+            // position stays.
             if (g.contains("anyStatePos") && g["anyStatePos"].is_array() && g["anyStatePos"].size() == 2)
                 a->setAnyStateEditorPos(glm::vec2(readArrayFloat(g["anyStatePos"], 0, -220.0f, warnings, "animator.anyStatePos"),
                                                   readArrayFloat(g["anyStatePos"], 1, 40.0f, warnings, "animator.anyStatePos")), capa);
@@ -876,13 +876,13 @@ namespace
                     AnimatorComponent::Transition tr;
                     tr.fromState = t.value("from", -1);
                     tr.toState   = t.value("to", -1);
-                    // Ausente en escenas anteriores al cross-fade: 0 = corte seco,
-                    // exactamente lo que hacían.
+                    // Absent in scenes prior to the cross-fade: 0 = hard cut,
+                    // exactly what they did.
                     tr.duration  = readFloat(t, "duration", 0.0f, warnings,
                                               "animator.transition[" + std::to_string(tr.fromState) +
                                               "->" + std::to_string(tr.toState) + "]");
-                    // Ausentes en escenas anteriores al exit time y a Any State:
-                    // caen en los defaults del struct.
+                    // Absent in scenes prior to exit time and Any State:
+                    // they fall to the struct defaults.
                     tr.hasExitTime = t.value("hasExitTime", false);
                     tr.exitTime    = readFloat(t, "exitTime", 1.0f, warnings,
                                                 "animator.transition[" + std::to_string(tr.fromState) +
@@ -905,8 +905,8 @@ namespace
                             cond.type      = condTypeFromStr(c.value("type", std::string("bool")));
                             cond.paramName = c.value("param", std::string());
                             cond.expected  = c.value("expected", true);
-                            // Ausentes en escenas anteriores a los parámetros
-                            // numéricos: caen en los defaults del struct.
+                            // Absent in scenes prior to numeric
+                            // parameters: they fall to the struct defaults.
                             cond.compare   = compareFromStr(c.value("compare", std::string("greater")));
                             cond.threshold = readFloat(c, "threshold", 0.0f, warnings,
                                                         "animator.transition[" + std::to_string(tr.fromState) +
@@ -914,23 +914,23 @@ namespace
                             tr.conditions.push_back(cond);
                         }
                     }
-                    // Índices contra los estados que ACABAN de cargarse. Un grafo
-                    // guardado puede traer transiciones que ya no apuntan a nada:
-                    // el FBX se reexportó con menos clips y alguien borró estados, o
-                    // el .scene se editó a mano. Sin esto entraban tal cual, y los
-                    // dos síntomas eran mudos — el AnimatorPanel las salta al
-                    // dibujar (no se ven) y update las descarta al evaluar (no se
-                    // usan), pero se volvían a serializar en cada guardado: un
-                    // pasajero invisible y permanente.
+                    // Indices against the states that have JUST been loaded. A saved
+                    // graph may bring transitions that no longer point to anything:
+                    // the FBX was re-exported with fewer clips and someone deleted states, or
+                    // the .scene was hand-edited. Without this they came in as is, and the
+                    // two symptoms were silent — the AnimatorPanel skips them when
+                    // drawing (they are not seen) and update discards them when evaluating (they are not
+                    // used), but they were serialized again on every save: an
+                    // invisible and permanent passenger.
                     //
-                    // Se DESCARTAN, no se acotan: un índice inventado no se puede
-                    // adivinar, y dejar la transición apuntando a un estado
-                    // arbitrario sería peor que no tenerla. Mismo criterio que
-                    // pruneExtraCameras y que la reasignación de ids duplicados —
-                    // el fichero vino roto, se repara y se dice.
+                    // They are DISCARDED, not clamped: an invented index cannot be
+                    // guessed, and leaving the transition pointing to an arbitrary state
+                    // would be worse than not having it. Same criterion as
+                    // pruneExtraCameras and as the reassignment of duplicate ids —
+                    // the file came broken, it is repaired and that is said.
                     const int nEstados = (int)a->states(capa).size();
-                    // Any State (kAnyState) es un origen válido; -1 u otro negativo
-                    // sigue sin serlo. El destino se exige siempre en rango.
+                    // Any State (kAnyState) is a valid origin; -1 or another negative
+                    // still is not. The destination is always required to be in range.
                     const bool origenValido = tr.fromState == AnimatorComponent::kAnyState ||
                                               (tr.fromState >= 0 && tr.fromState < nEstados);
                     if (!origenValido || tr.toState < 0 || tr.toState >= nEstados)
@@ -947,15 +947,15 @@ namespace
                 }
             }
 
-            // Después de addState: setEntryState valida contra m_states.size() y
-            // RETORNA SIN HACER NADA si el índice no vale, así que el personaje
-            // arrancaría en el estado 0 sin que nadie dijera por qué. El
-            // comportamiento se deja igual —0 es lo único seguro— pero deja de ser
-            // mudo.
+            // After addState: setEntryState validates against m_states.size() and
+            // RETURNS DOING NOTHING if the index is not valid, so the character
+            // would start at state 0 without anybody saying why. The
+            // behavior is left the same —0 is the only safe thing— but it stops being
+            // silent.
             //
-            // Solo se avisa si el grafo TIENE estados: con la lista vacía cualquier
-            // índice está fuera de rango, y un animator recién creado sin estados no
-            // es un fichero corrupto.
+            // It only warns if the graph HAS states: with an empty list any
+            // index is out of range, and a newly created animator with no states is
+            // not a corrupt file.
             const int entrada = g.value("entryState", 0);
             if (!a->states(capa).empty() && (entrada < 0 || entrada >= (int)a->states(capa).size()) && warnings)
                 warnings->push_back("animator.entryState: " + std::to_string(entrada) +
@@ -963,8 +963,8 @@ namespace
                                      " state(s) in the graph), starting in state 0");
             a->setEntryState(entrada, capa);
         };
-        // Clips de propiedades: el índice de cada estado y el `resolved` de
-        // cada pista los rehace bindProperties, que necesita el GameObject.
+        // Property clips: the index of each state and the `resolved` of
+        // each track are rebuilt by bindProperties, which needs the GameObject.
         if (j.contains("propertyClips") && j["propertyClips"].is_array())
         {
             const auto& lista = j["propertyClips"];
@@ -993,9 +993,9 @@ namespace
                         DonTopo::PropertyTrack tr;
                         if (tj.value("target", std::string("property")) == "parameter")
                         {
-                            // Curva: el destino es un parámetro del Animator. Su
-                            // `resolved` lo rehace bindProperties, como el de las
-                            // pistas de propiedad.
+                            // Curve: the destination is an Animator parameter. Its
+                            // `resolved` is rebuilt by bindProperties, like that of the
+                            // property tracks.
                             tr.target        = DonTopo::TrackTarget::Parameter;
                             tr.parameterName = tj.value("parameter", std::string());
                             if (tr.parameterName.empty())
@@ -1034,8 +1034,8 @@ namespace
 
         leerGrafo(j, 0);
 
-        // IK: el peso, el objetivo y el ángulo SÍ son edición, así que la clave
-        // del undo (animatorGraphKey) los conserva enteros.
+        // IK: the weight, the target and the angle ARE editing, so the undo
+        // key (animatorGraphKey) keeps them whole.
         if (j.contains("ik") && j["ik"].is_array())
         {
             const auto& lista = j["ik"];
@@ -1103,9 +1103,9 @@ namespace
                  {"tangent", vec3ToJson(v.tangent)} };
     }
 
-    // Ruta que va al fichero: relativa con "/" si cae bajo la raíz, y absoluta
-    // tal cual si no. Fuera de la raíz una relativa sería una ristra de ".."
-    // que no sobrevive a mover el proyecto de sitio.
+    // Path that goes to the file: relative with "/" if it falls under the root, and absolute
+    // as is if not. Outside the root a relative one would be a string of ".."
+    // that does not survive moving the project elsewhere.
     std::string toStoredPath(const std::string& path, const std::string& assetRoot)
     {
         if (path.empty() || assetRoot.empty()) return path;
@@ -1115,7 +1115,7 @@ namespace
         return rel.generic_string();
     }
 
-    // La inversa. Una ruta ya absoluta se devuelve tal cual.
+    // The inverse. An already absolute path is returned as is.
     std::string fromStoredPath(const std::string& stored, const std::string& assetRoot)
     {
         if (stored.empty() || assetRoot.empty()) return stored;
@@ -1124,9 +1124,9 @@ namespace
         return (std::filesystem::path(assetRoot) / p).string();
     }
 
-    // carryOverrideBaseline: ver el comentario grande junto a "baseAlbedo" más
-    // abajo. Default false (comportamiento de disco); los dos callers de
-    // memoria (cloneGameObject, subtreeToJson) lo fijan a true a propósito.
+    // carryOverrideBaseline: see the big comment next to "baseAlbedo" further
+    // below. Default false (disk behavior); the two in-memory callers
+    // (cloneGameObject, subtreeToJson) set it to true on purpose.
     nlohmann::json nodeToJson(const GameObject& node, const std::string& assetRoot,
                                bool carryOverrideBaseline = false)
     {
@@ -1134,33 +1134,33 @@ namespace
         j["id"] = node.id;
         j["name"] = node.name;
         j["localTransform"] = mat4ToJson(node.localTransform);
-        // SSR por objeto. Se guarda SIEMPRE (no dentro de un if) para que apagarlo
-        // sobre un objeto que lo tenía puesto quede grabado; en ficheros viejos no
-        // existe y nodeFromJson cae al default (apagado), que es como se veían.
+        // Per-object SSR. It is ALWAYS saved (not inside an if) so that turning it off
+        // on an object that had it on is recorded; in old files it does not
+        // exist and nodeFromJson falls to the default (off), which is how they looked.
         j["ssrEnabled"]   = node.ssrEnabled;
         j["ssrIntensity"] = node.ssrIntensity;
 
         if (node.hasMesh())
         {
             const auto& mesh = node.getMesh();
-            // "visible" se guarda SIEMPRE: en ficheros viejos no existe y la
-            // carga cae al default true, que es como se veían.
+            // "visible" is ALWAYS saved: in old files it does not exist and
+            // loading falls to the default true, which is how they looked.
             nlohmann::json meshJson = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name}, {"skinned", node.isSkinned()},
                                         {"visible", node.meshVisible} };
-            // La pieza 0 no escribe el campo: las escenas de antes (sin
-            // "piece") quedan idénticas byte a byte.
+            // Piece 0 does not write the field: scenes from before (without
+            // "piece") stay identical byte for byte.
             if (mesh->piece != 0) meshJson["piece"] = mesh->piece;
             if (mesh->sourcePath.empty())
             {
-                // Procedural (Cube/Sphere/Plane/Capsule): no hay fichero de
-                // origen que recargar. Regenerar vía los parámetros fijos de
-                // ScenePanel::createBasicShape asumiría que el mesh se creó con
-                // esos defaults — falso para meshes procedurales con
-                // parámetros custom (ej. el floor, Plane::create(1000.0f,
-                // floorY) en main.cpp, muy distinto del Plane 50/0 del menú
-                // Basic Shapes). Se serializa la geometría real para
-                // reconstruir el mesh exacto sin depender de qué parámetros
-                // lo generaron.
+                // Procedural (Cube/Sphere/Plane/Capsule): there is no source file
+                // to reload. Regenerating via the fixed parameters of
+                // ScenePanel::createBasicShape would assume the mesh was created with
+                // those defaults — false for procedural meshes with custom
+                // parameters (e.g. the floor, Plane::create(1000.0f,
+                // floorY) in main.cpp, very different from the Plane 50/0 of the Basic
+                // Shapes menu). The real geometry is serialized to
+                // rebuild the exact mesh without depending on which parameters
+                // generated it.
                 nlohmann::json verts = nlohmann::json::array();
                 for (const auto& v : mesh->vertices)
                     verts.push_back(vertexToJson(v));
@@ -1168,9 +1168,9 @@ namespace
                 meshJson["indices"]  = mesh->indices;
             }
 
-            // Fuentes de animación: el SkinnedMesh se reconstruye desde los FBX
-            // en cada carga, así que sin esto los clips importados de ficheros
-            // extra (y los renames) se perderían al guardar.
+            // Animation sources: the SkinnedMesh is rebuilt from the FBX files
+            // on every load, so without this the clips imported from extra
+            // files (and the renames) would be lost on saving.
             if (const DonTopo::SkinnedMesh* sm = node.getSkinnedMesh())
             {
                 nlohmann::json sources = nlohmann::json::array();
@@ -1181,33 +1181,33 @@ namespace
                 meshJson["animationSources"] = std::move(sources);
             }
 
-            // Rutas de textura puestas a mano desde Properties. Solo los
-            // materiales con algo que decir, y dentro de cada uno solo las
-            // claves no vacias: un objeto sin overrides no escribe la clave, y
-            // las escenas viejas siguen siendo validas sin tocarlas.
+            // Texture paths set by hand from Properties. Only the
+            // materials with something to say, and within each one only the
+            // non-empty keys: an object without overrides does not write the key, and
+            // old scenes remain valid without touching them.
             nlohmann::json mats = nlohmann::json::array();
             for (const MaterialOverride& ov : node.materialOverrides)
             {
-                // metallic/roughness usan el centinela -1.0f (ver
-                // MaterialOverride en GameObject.h) como equivalente de la
-                // cadena vacia de las tres texturas: por debajo de 0 no hay
-                // override activo, y no entra en la condicion de "nada que
-                // decir".
+                // metallic/roughness use the sentinel -1.0f (see
+                // MaterialOverride in GameObject.h) as the equivalent of the empty
+                // string of the three textures: below 0 there is no active
+                // override, and it does not enter the "nothing to
+                // say" condition.
                 //
-                // Este descarte corre TAMBIEN con carryOverrideBaseline, o sea
-                // en clonar y en los snapshots de Undo/Redo, asi que una
-                // entrada sin nada activo pero con base*Taken en alto (un slot
-                // que tuvo override y se limpio con Clear) NO viaja: el bloque
-                // de baseline de mas abajo solo se escribe para las entradas
-                // que sobreviven a esta linea. Es inofensivo, y por dos
-                // razones INDEPENDIENTES -- de ahi que no se toque--: en el
-                // clon, la malla se siembra ya con el material restaurado por
-                // ese mismo Clear, asi que el baseline que se recaptura vale lo
-                // mismo que el que se habria copiado; y en el Undo de un
-                // Create/Delete, insertFromJson recarga la malla del disco, que
-                // deja el material en su estado del FBX por el mismo motivo.
-                // Se deja escrito aqui porque comprobarlo cuesta las dos
-                // derivaciones enteras cada vez que alguien lee este bloque.
+                // This discard runs ALSO with carryOverrideBaseline, that is
+                // in cloning and in the Undo/Redo snapshots, so an
+                // entry with nothing active but with base*Taken raised (a slot
+                // that had an override and was cleaned with Clear) does NOT travel: the
+                // baseline block further below is only written for the entries
+                // that survive this line. It is harmless, and for two
+                // INDEPENDENT reasons -- hence it is not touched--: in the
+                // clone, the mesh is already seeded with the material restored by
+                // that same Clear, so the baseline that is recaptured is worth
+                // the same as the one that would have been copied; and in the Undo of a
+                // Create/Delete, insertFromJson reloads the mesh from disk, which
+                // leaves the material in its FBX state for the same reason.
+                // It is left written here because checking it costs both
+                // whole derivations every time someone reads this block.
                 if (ov.albedo.empty() && ov.normal.empty() && ov.orm.empty()
                     && ov.metallic < 0.0f && ov.roughness < 0.0f && ov.matAsset.empty()) continue;
                 nlohmann::json entry = { {"index", ov.index} };
@@ -1215,35 +1215,35 @@ namespace
                 if (!ov.normal.empty()) entry["normal"] = toStoredPath(ov.normal, assetRoot);
                 if (!ov.orm.empty())    entry["orm"]    = toStoredPath(ov.orm,    assetRoot);
                 if (!ov.matAsset.empty()) entry["matAsset"] = toStoredPath(ov.matAsset, assetRoot);
-                // Ausente = no tocado, y el valor efectivo sale del modelo al
-                // recargar (mismo criterio que las tres texturas de arriba).
+                // Absent = not touched, and the effective value comes from the model on
+                // reload (same criterion as the three textures above).
                 if (ov.metallic  >= 0.0f) entry["metallic"]  = ov.metallic;
                 if (ov.roughness >= 0.0f) entry["roughness"] = ov.roughness;
-                // El baseline (base*/base*Taken) SOLO viaja cuando este JSON es
-                // un salto de MEMORIA (clonar un GameObject, o el snapshot de
-                // Undo/Redo de Create/Delete) y nunca cuando es un guardado a
-                // disco de verdad — el criterio no es "assetRoot vacío": los
-                // tests de Task 6 (y cualquier caller sin proyecto abierto)
-                // llaman a Scene::toJson()/fromJson(), la API de disco, con
-                // m_assetRoot también vacío, así que esa condición sola
-                // confundiría los dos casos. carryOverrideBaseline es el
-                // parámetro explícito que sí los distingue: cloneGameObject y
-                // subtreeToJson lo fijan a true, Scene::toJson() nunca lo toca
+                // The baseline (base*/base*Taken) ONLY travels when this JSON is
+                // an in-MEMORY jump (cloning a GameObject, or the Undo/Redo
+                // snapshot of Create/Delete) and never when it is a real
+                // save to disk — the criterion is not "empty assetRoot": the
+                // Task 6 tests (and any caller without an open project)
+                // call Scene::toJson()/fromJson(), the disk API, with
+                // m_assetRoot also empty, so that condition alone
+                // would confuse the two cases. carryOverrideBaseline is the
+                // explicit parameter that does tell them apart: cloneGameObject and
+                // subtreeToJson set it to true, Scene::toJson() never touches it
                 // (default false).
                 //
-                // Por qué hace falta en memoria: al clonar, la malla del clon
-                // se siembra desde una PreloadedMeshCache con la malla VIVA del
-                // original —que ya tiene el override horneado en el material—,
-                // así que sin el baseline real viajando aquí, el clon
-                // capturaría como "original" la textura del override, y un
-                // Clear sobre el clon no devolvería la del FBX (ver
+                // Why it is needed in memory: when cloning, the clone's mesh
+                // is seeded from a PreloadedMeshCache with the LIVE mesh of
+                // the original —which already has the override baked into the material—,
+                // so without the real baseline traveling here, the clone
+                // would capture the override texture as the "original", and a
+                // Clear on the clone would not return the FBX one (see
                 // test_clone_clear_restores_fbx_texture_not_override).
                 //
-                // Por qué NO hace falta en disco: allí el material se
-                // rederiva del FBX real en cada carga, así que el baseline se
-                // recaptura solo y en el valor correcto — guardar uno viejo
-                // arriesgaría dejarlo desincronizado si el artista reexportó
-                // el modelo entre dos guardados.
+                // Why it is NOT needed on disk: there the material is
+                // rederived from the real FBX on every load, so the baseline is
+                // recaptured by itself and at the correct value — saving an old one
+                // would risk leaving it out of sync if the artist re-exported
+                // the model between two saves.
                 if (carryOverrideBaseline)
                 {
                     entry["baseAlbedo"]      = toStoredPath(ov.baseAlbedo, assetRoot);
@@ -1252,8 +1252,8 @@ namespace
                     entry["baseNormalTaken"] = ov.baseNormalTaken;
                     entry["baseOrm"]         = toStoredPath(ov.baseOrm, assetRoot);
                     entry["baseOrmTaken"]    = ov.baseOrmTaken;
-                    // Mismo camino de memoria (clonar, snapshot de Undo/Redo),
-                    // mismo motivo que los tres de arriba.
+                    // Same in-memory path (cloning, Undo/Redo snapshot),
+                    // same reason as the three above.
                     entry["baseMetallic"]       = ov.baseMetallic;
                     entry["baseMetallicTaken"]  = ov.baseMetallicTaken;
                     entry["baseRoughness"]      = ov.baseRoughness;
@@ -1321,8 +1321,8 @@ namespace
         if (node.hasCameraComponent())
         {
             const auto& c = node.getCameraComponent();
-            // "mode" como string y no como int del enum: legible en un .scene
-            // editado a mano y estable si el enum crece por el medio.
+            // "mode" as a string and not as the enum int: readable in a hand-edited
+            // .scene and stable if the enum grows in the middle.
             j["camera"] = { {"mode", c->getMode() == CameraComponent::ProjectionMode::Orthographic
                                          ? "orthographic" : "perspective"},
                             {"fov", c->getFov()},
@@ -1332,19 +1332,19 @@ namespace
         }
         if (node.hasReflectionProbe())
         {
-            // Solo los ajustes: el cubemap bakeado NO se serializa (es un
-            // recurso GPU de ~1,1 MB por sonda). Al cargar la escena, el
-            // Renderer rehornea las sondas que no tienen captura, así que
-            // DonTopoRuntime acaba viendo exactamente lo mismo que el editor.
+            // Only the settings: the baked cubemap is NOT serialized (it is a
+            // GPU resource of ~1.1 MB per probe). When loading the scene, the
+            // Renderer rebakes the probes that have no capture, so
+            // DonTopoRuntime ends up seeing exactly the same as the editor.
             const auto& p = node.getReflectionProbe();
             j["reflectionProbe"] = { {"radius", p->getRadius()},
                                      {"intensity", p->getIntensity()} };
         }
         if (node.hasLight())
         {
-            // Ni posición ni dirección: las dos salen del worldTransform, que ya
-            // se serializa como localTransform del nodo. "type" como string y no
-            // como int del enum, mismo criterio que el "mode" de la cámara.
+            // Neither position nor direction: both come from the worldTransform, which is already
+            // serialized as the node's localTransform. "type" as a string and not
+            // as the enum int, same criterion as the "mode" of the camera.
             const auto& l = node.getLight();
             j["light"] = { {"type", lightTypeToStr(l->getType())},
                            {"color", vec3ToJson(l->getColor())},
@@ -1577,8 +1577,8 @@ namespace
         if (node.hasInputField())
         {
             const auto& f = node.getInputField();
-            // caretPos NO se guarda: es donde estaba el cursor en esa sesion, no
-            // un dato de la escena.
+            // caretPos is NOT saved: it is where the cursor was in that session, not
+            // scene data.
             j["inputField"] = { {"anchorMin", vec2ToJsonXY(f->anchorMin)},
                                 {"anchorMax", vec2ToJsonXY(f->anchorMax)},
                                 {"pivot", vec2ToJsonXY(f->pivot)},
@@ -1608,8 +1608,8 @@ namespace
         if (node.hasDropdown())
         {
             const auto& d = node.getDropdown();
-            // isOpen NO se guarda: una escena que se abriera con la lista
-            // desplegada tendria un panel tapando el menu nada mas cargar.
+            // isOpen is NOT saved: a scene that opened with the list
+            // dropped down would have a panel covering the menu right after loading.
             j["dropdown"] = { {"anchorMin", vec2ToJsonXY(d->anchorMin)},
                               {"anchorMax", vec2ToJsonXY(d->anchorMax)},
                               {"pivot", vec2ToJsonXY(d->pivot)},
@@ -1682,8 +1682,8 @@ namespace
         {
             const auto& clip = node.getAudioClip();
             j["audioClip"] = { {"path", clip->getPath()},
-                                // Por nombre, no por índice del enum: reordenar
-                                // AudioBus no puede cambiar el bus guardado.
+                                // By name, not by enum index: reordering
+                                // AudioBus cannot change the saved bus.
                                 {"bus", audioBusToStr(clip->getBus())},
                                 {"loadMode", audioLoadModeToStr(clip->getLoadMode())},
                                 {"rolloff", audioRolloffToStr(clip->getRolloff())},
@@ -1702,8 +1702,8 @@ namespace
         if (node.hasReverbZone())
         {
             const auto& z = node.getReverbZone();
-            // Ni posicion ni radio-en-mundo: la posicion sale del
-            // worldTransform, como en el Audio Listener.
+            // Neither position nor radius-in-world: the position comes from the
+            // worldTransform, as in the Audio Listener.
             j["reverbZone"] = { {"preset", z->getPreset()},
                                  {"minDistance", z->getMinDistance()},
                                  {"maxDistance", z->getMaxDistance()},
@@ -1711,8 +1711,8 @@ namespace
         }
         if (node.hasAudioListener())
         {
-            // Ni posición ni orientación: salen del worldTransform, que ya se
-            // serializa como localTransform del nodo.
+            // Neither position nor orientation: they come from the worldTransform, which is already
+            // serialized as the node's localTransform.
             j["audioListener"] = { {"enabled", node.getAudioListener()->getEnabled()} };
         }
         if (node.hasScripts())
@@ -1727,7 +1727,7 @@ namespace
                         using T = std::decay_t<decltype(v)>;
                         if constexpr (std::is_same_v<T, double>)
                         {
-                            // Preserva enteros como enteros en el JSON
+                            // Preserves integers as integers in the JSON
                             if (v == std::floor(v) && std::abs(v) < 1e15)
                                 ov[key] = static_cast<int64_t>(v);
                             else
@@ -1749,47 +1749,46 @@ namespace
         return j;
     }
 
-    // --- Lectura tolerante de números desde un .scene potencialmente corrupto ---
+    // --- Tolerant reading of numbers from a potentially corrupt .scene ---
     //
-    // std::clamp(NaN, lo, hi) devuelve NaN (toda comparación con NaN es
-    // falsa, así que el clamp no lo detiene) y nlohmann serializa un NaN
-    // como JSON "null". Un valor así llegado desde un script Lua roto (un
-    // 0/0, por ejemplo — ver el guard equivalente en ScriptBindings.cpp)
-    // pasa el clamp de setVolume/setPitch/etc., se cuela en el .scene como
-    // null y, al releerlo, tanto ".at(key).get<float>()" como
-    // ".value(key, default)" lanzan json::exception (type_error.302, "type
-    // must be number, but is null"). Antes de este fix esa excepción escapaba
-    // de nodeFromJson sin que nadie la distinguiera de una escena realmente
-    // corrupta, y Scene::fromJson la capturaba devolviendo false: UN solo
-    // campo corrupto tumbaba la carga de la escena ENTERA. Los infinitos, en
-    // cambio, el clamp de rango sí los para bien (clamp(+inf,0,1) == 1.0) —
-    // el peligroso de verdad es el NaN, no el infinito; se comprueba con
-    // std::isfinite (cubre ambos) por robustez, pero es el caso NaN el que
-    // motiva este bloque entero.
+    // std::clamp(NaN, lo, hi) returns NaN (every comparison with NaN is
+    // false, so the clamp does not stop it) and nlohmann serializes a NaN
+    // as JSON "null". A value like that coming from a broken Lua script (a
+    // 0/0, for example — see the equivalent guard in ScriptBindings.cpp)
+    // passes the clamp of setVolume/setPitch/etc., sneaks into the .scene as
+    // null and, when reread, both ".at(key).get<float>()" and
+    // ".value(key, default)" throw json::exception (type_error.302, "type
+    // must be number, but is null"). Before this fix that exception escaped
+    // from nodeFromJson with nobody telling it apart from a really corrupt
+    // scene, and Scene::fromJson caught it returning false: A single
+    // corrupt field took down the load of the WHOLE scene. Infinities, on the
+    // other hand, the range clamp does stop fine (clamp(+inf,0,1) == 1.0) —
+    // the truly dangerous one is NaN, not infinity; it is checked with
+    // std::isfinite (covers both) for robustness, but it is the NaN case that
+    // motivates this whole block.
     //
-    // warnings acepta nullptr por robustez de la firma, pero en la práctica
-    // nunca lo es: los 9 call-sites de jsonToVec3 (y, en cascada, todo lo que
-    // cuelga de nodeFromJson) pasan &m_warnings — los tres callers de
-    // nodeFromJson (fromJson, insertFromJson, cloneGameObject) lo hacen
-    // siempre.
+    // warnings accepts nullptr for signature robustness, but in practice it
+    // never is: the 9 call-sites of jsonToVec3 (and, in cascade, everything that
+    // hangs from nodeFromJson) pass &m_warnings — the three callers of
+    // nodeFromJson (fromJson, insertFromJson, cloneGameObject) always do.
     //
-    // required distingue dos familias de campos:
-    //  - required == false (default): back-compat legítima. Son campos que se
-    //    añadieron a lo largo de la vida del formato (volume, pitch, fov,
-    //    near, far, mass, drag, threshold...) y una escena vieja nunca los
-    //    escribió. Ausente -> default silencioso, sin aviso.
-    //  - required == true: campos que nodeToJson escribe SIEMPRE, incondicio-
-    //    nalmente (halfExtents/center de los colliders, pos/color/uv/normal/
-    //    tangent de cada vértice...). Ahí la ausencia NUNCA es back-compat:
-    //    es la misma corrupción (merge mal resuelto, escritura truncada,
-    //    edición a mano) que un valor null o no finito, así que también avisa
-    //    nombrando el campo y el objeto en vez de fabricar en silencio un
-    //    valor plausible (una caja de 25 unidades en el origen que el usuario
-    //    ve, no cuestiona, y acaba sobrescribiendo el dato real al Guardar).
+    // required distinguishes two families of fields:
+    //  - required == false (default): legitimate back-compat. They are fields that
+    //    were added over the life of the format (volume, pitch, fov,
+    //    near, far, mass, drag, threshold...) and an old scene never
+    //    wrote them. Absent -> silent default, no warning.
+    //  - required == true: fields that nodeToJson ALWAYS writes, unconditio-
+    //    nally (halfExtents/center of the colliders, pos/color/uv/normal/
+    //    tangent of each vertex...). There absence is NEVER back-compat:
+    //    it is the same corruption (badly resolved merge, truncated write,
+    //    hand edit) as a null or non-finite value, so it also warns
+    //    naming the field and the object instead of silently fabricating a
+    //    plausible value (a 25-unit box at the origin that the user
+    //    sees, does not question, and ends up overwriting the real data on Save).
 
-    // Lee j[key] como float. Ausente: silencioso si !required, avisa si
-    // required. Valor null, tipo no numérico, o número no finito (NaN/Inf):
-    // SIEMPRE avisa (si hay canal) nombrando el campo, y cae a def.
+    // Reads j[key] as float. Absent: silent if !required, warns if
+    // required. Null value, non-numeric type, or non-finite number (NaN/Inf):
+    // ALWAYS warns (if there is a channel) naming the field, and falls to def.
     float readFloat(const nlohmann::json& j, const char* key, float def,
                      std::vector<std::string>* warnings, const std::string& contexto,
                      bool required)
@@ -1842,8 +1841,8 @@ namespace
         return v.get<bool>();
     }
 
-    // Cadena vacía como def sirve además de señal de "no hay valor usable": es
-    // lo que mira el bloque de audioClip para decidir si crear el componente.
+    // Empty string as def also serves as a "no usable value" signal: it is
+    // what the audioClip block looks at to decide whether to create the component.
     std::string readString(const nlohmann::json& j, const char* key, const std::string& def,
                             std::vector<std::string>* warnings, const std::string& contexto,
                             bool required)
@@ -1866,9 +1865,9 @@ namespace
         return v.get<std::string>();
     }
 
-    // Los dos vectores "con componentes nombradas" del Button. Cada componente
-    // pasa por readFloat, así que un null (NaN serializado) o un tipo raro cae
-    // al default y avisa en vez de tumbar la carga de la escena entera.
+    // The two "named component" vectors of the Button. Each component
+    // goes through readFloat, so a null (serialized NaN) or a weird type falls
+    // to the default and warns instead of taking down the whole scene load.
     glm::vec2 readVec2XY(const nlohmann::json& j, const char* key, const glm::vec2& def,
                           std::vector<std::string>* warnings, const std::string& contexto)
     {
@@ -1891,17 +1890,17 @@ namespace
                           readFloat(v, "w", def.w, warnings, ctx));
     }
 
-    // Variante de readFloat para un ELEMENTO de un array JSON por índice (en
-    // vez de una clave de objeto) — la usan jsonToVec3/jsonToMat4/uv.
+    // Variant of readFloat for an ELEMENT of a JSON array by index (instead
+    // of an object key) — used by jsonToVec3/jsonToMat4/uv.
     //
-    // OJO: "arr no es un array" y "arr es un array pero más corto de lo
-    // esperado" son dos anomalías DISTINTAS y se tratan distinto (hallazgo 2
-    // del review): un valor no-array (típicamente null — la forma exacta que
-    // toma un NaN serializado, ver comentario grande de arriba) es corrupción
-    // de verdad y avisa SIEMPRE, sea o no required el campo. Un array corto
-    // (índice fuera de rango) es la firma de "campo ausente" cuando el
-    // llamador lo extrajo con ".value(key, array())": ahí sí aplica la regla
-    // de required, igual que en readFloat.
+    // NOTE: "arr is not an array" and "arr is an array but shorter than
+    // expected" are two DIFFERENT anomalies and are treated differently (finding 2
+    // of the review): a non-array value (typically null — the exact form
+    // a serialized NaN takes, see the big comment above) is real
+    // corruption and ALWAYS warns, whether or not the field is required. A short array
+    // (index out of range) is the signature of "absent field" when the
+    // caller extracted it with ".value(key, array())": there the rule
+    // of required does apply, as in readFloat.
     float readArrayFloat(const nlohmann::json& arr, size_t idx, float def,
                           std::vector<std::string>* warnings, const std::string& contexto,
                           bool required)
@@ -1939,13 +1938,13 @@ namespace
         return f;
     }
 
-    // A diferencia de jsonToVec3 (que rellena componente a componente), aquí
-    // CUALQUIER float corrupto de los 16 descarta la matriz entera y cae a la
-    // identidad: una transformación "a medias" (15 valores originales + 1
-    // puesto a su valor de identidad) puede parecer plausible y en realidad
-    // tener la escala o la rotación rotas de forma silenciosa — preferible
-    // una identidad reconocible y un aviso claro a un Frankenstein de campos
-    // mezclados. Ver el bloque de comentarios de arriba para el porqué NaN.
+    // Unlike jsonToVec3 (which fills in component by component), here
+    // ANY corrupt float among the 16 discards the whole matrix and falls to the
+    // identity: a "half" transformation (15 original values + 1
+    // set to its identity value) can look plausible and actually
+    // have the scale or rotation silently broken — a recognizable
+    // identity and a clear warning are preferable to a Frankenstein of
+    // mixed fields. See the comment block above for why NaN.
     glm::mat4 jsonToMat4(const nlohmann::json& j, std::vector<std::string>* warnings,
                           const std::string& contexto)
     {
@@ -1966,11 +1965,11 @@ namespace
         return m;
     }
 
-    // required se reenvía tal cual a los 3 readArrayFloat: un vec3 required
-    // ausente o corrupto avisa 3 veces (una por componente), pero cada línea
-    // ya nombra el objeto y el campo (contexto), así que sigue siendo
-    // diagnosticable — no merece la complejidad de deduplicar en un único
-    // aviso a nivel de vec3.
+    // required is forwarded as is to the 3 readArrayFloat: a required vec3
+    // absent or corrupt warns 3 times (once per component), but each line
+    // already names the object and the field (context), so it is still
+    // diagnosable — it does not deserve the complexity of deduplicating into a single
+    // warning at vec3 level.
     glm::vec3 jsonToVec3(const nlohmann::json& j, std::vector<std::string>* warnings,
                          const std::string& contexto, const glm::vec3& def = glm::vec3(0.0f),
                          bool required = false)
@@ -1980,8 +1979,8 @@ namespace
                           readArrayFloat(j, 2, def.z, warnings, contexto, required));
     }
 
-    // Vertex: nodeToJson lo escribe SIEMPRE con sus 5 campos completos (nunca
-    // es opcional un vértice "a medias") — todos required (hallazgo 1 del
+    // Vertex: nodeToJson ALWAYS writes it with its 5 fields complete (a "half"
+    // vertex is never optional) — all required (finding 1 of the
     // review).
     DonTopo::Vertex jsonToVertex(const nlohmann::json& j, std::vector<std::string>* warnings,
                                   const std::string& contexto)
@@ -1997,9 +1996,9 @@ namespace
         return v;
     }
 
-    // Crea el Mesh procedural correspondiente a meshName (case-insensitive),
-    // con los mismos parámetros fijos que ScenePanel::createBasicShape. nullptr
-    // si meshName no matchea ninguna de las 4 formas básicas.
+    // Creates the procedural Mesh corresponding to meshName (case-insensitive),
+    // with the same fixed parameters as ScenePanel::createBasicShape. nullptr
+    // if meshName matches none of the 4 basic shapes.
     std::shared_ptr<DonTopo::Mesh> proceduralMeshByName(const std::string& meshName)
     {
         std::string lower = meshName;
@@ -2013,19 +2012,19 @@ namespace
         return nullptr;
     }
 
-    // Caches con la vida de UNA carga (fromJson, cloneGameObject,
-    // insertFromJson): dentro de ella el fichero es estable y se comparte
-    // entre los nodos que repiten sourcePath. Ver el comentario de
-    // hasBonesCache en Scene::fromJson para por que no viven mas.
-    //  - hasBones: el sondeo de huesos por sourcePath.
-    //  - staticModels: el StaticModel de la rama estatica SINCRONA (Stop de
-    //    Play recarga sin loader ni precarga). Sin ella cada nodo hacia su
-    //    propio ReadFile completo de Assimp: 60 piezas de un .glb = 60
-    //    lecturas del mismo fichero. Un loadStatic por fichero y cada nodo
-    //    toma meshes[piece]; la malla de cada pieza se comparte entre los
-    //    nodos que la piden (quien la edite la copia, editMesh).
-    //  - staticErrors: el fallo de ese loadStatic, para que los demas nodos
-    //    del mismo fichero den el mismo aviso sin volver a leerlo.
+    // Caches with the life of ONE load (fromJson, cloneGameObject,
+    // insertFromJson): within it the file is stable and is shared
+    // among the nodes that repeat sourcePath. See the comment of
+    // hasBonesCache in Scene::fromJson for why they do not live longer.
+    //  - hasBones: the bone probe by sourcePath.
+    //  - staticModels: the StaticModel of the SYNCHRONOUS static branch (Stop of
+    //    Play reloads without loader or preload). Without it each node did its
+    //    own full Assimp ReadFile: 60 pieces of a .glb = 60
+    //    reads of the same file. One loadStatic per file and each node
+    //    takes meshes[piece]; the mesh of each piece is shared among the
+    //    nodes that ask for it (whoever edits it copies it, editMesh).
+    //  - staticErrors: the failure of that loadStatic, so that the other nodes
+    //    of the same file give the same warning without rereading it.
     struct NodeLoadCache
     {
         std::unordered_map<std::string, bool> hasBones;
@@ -2038,9 +2037,9 @@ namespace
         std::unordered_map<std::string, std::string> staticErrors;
     };
 
-    // La pieza `piece` de `sourcePath` a traves de la cache: mismo resultado y
-    // mismos errores que ModelLoader::load(sourcePath, piece) -- pieza fuera
-    // de rango lanza con la ruta y el indice --, con UNA lectura por fichero.
+    // The piece `piece` of `sourcePath` through the cache: same result and
+    // same errors as ModelLoader::load(sourcePath, piece) -- out-of-range
+    // piece throws with the path and the index --, with ONE read per file.
     std::shared_ptr<const DonTopo::Mesh> staticPieceFromCache(NodeLoadCache& cache, const std::string& sourcePath,
                                                              int piece)
     {
@@ -2070,13 +2069,13 @@ namespace
         return mesh;
     }
 
-    // Reconstruye node (ya insertado en el árbol) desde j, y recursivamente
-    // sus hijos. parentWorld es el worldTransform ya resuelto del padre —
-    // necesario para pasar un worldTransform correcto a las factories de
-    // collider (que fijan la pose inicial del actor PhysX a partir de él).
-    // carryOverrideBaseline: pareja de lectura del mismo flag de nodeToJson —
-    // ver su comentario grande, junto a "baseAlbedo". Default false (disco);
-    // cloneGameObject e insertFromJson lo fijan a true.
+    // Rebuilds node (already inserted in the tree) from j, and recursively
+    // its children. parentWorld is the already resolved worldTransform of the parent —
+    // needed to pass a correct worldTransform to the collider
+    // factories (which set the initial pose of the PhysX actor from it).
+    // carryOverrideBaseline: read counterpart of the same nodeToJson flag —
+    // see its big comment, next to "baseAlbedo". Default false (disk);
+    // cloneGameObject and insertFromJson set it to true.
     void nodeFromJson(const nlohmann::json& j, GameObject* node, const glm::mat4& parentWorld,
                        DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio,
                        std::vector<std::string>* warnings,
@@ -2086,28 +2085,28 @@ namespace
                        const DonTopo::PreloadedMeshCache* preloaded = nullptr,
                        bool carryOverrideBaseline = false)
     {
-        // "id" no existe en ficheros .scene guardados antes de este campo —
-        // se deja el id que el constructor de GameObject ya asignó (contador
-        // atómico), backward-compatible. Cuando sí existe (snapshots propios
-        // de Undo/Redo o escenas re-guardadas), se reusa el mismo id: así un
-        // Undo de Delete reconstruye el GameObject con el id original y los
-        // comandos siguientes en el stack lo siguen resolviendo bien.
+        // "id" does not exist in .scene files saved before this field —
+        // the id that the GameObject constructor already assigned (atomic
+        // counter) is left, backward-compatible. When it does exist (own Undo/Redo
+        // snapshots or re-saved scenes), the same id is reused: this way an
+        // Undo of Delete rebuilds the GameObject with the original id and the following
+        // commands in the stack keep resolving it correctly.
         if (j.contains("id"))
         {
-            // Un id que no sea entero sin signo NO se acepta: antes se leía con
-            // .at().get<uint64_t>() y un null (o un string) lanzaba, la
-            // excepción subía hasta el catch de fromJson y se perdía la carga de
-            // la escena ENTERA por un campo. Se conserva el id que ya puso el
-            // constructor, que además es el único valor seguro: inventar un 0
-            // para todos los nodos rotos los haría chocar entre ellos.
+            // An id that is not an unsigned integer is NOT accepted: before it was read with
+            // .at().get<uint64_t>() and a null (or a string) threw, the
+            // exception went up to the catch of fromJson and the load of
+            // the WHOLE scene was lost over one field. The id the
+            // constructor already set is kept, which is also the only safe value: inventing a 0
+            // for all the broken nodes would make them clash with each other.
             if (j["id"].is_number_unsigned())
             {
                 node->id = j["id"].get<uint64_t>();
-                // El contador global de ids no ve esta asignación: sin
-                // adelantarlo, un fichero de otra sesión (ids más altos que los
-                // repartidos aquí) deja el contador por detrás de ids que ya
-                // están en el árbol y el siguiente GameObject nuevo repite uno.
-                // Ver reserveIdAtLeast.
+                // The global id counter does not see this assignment: without
+                // advancing it, a file from another session (ids higher than those
+                // handed out here) leaves the counter behind ids that are already
+                // in the tree and the next new GameObject repeats one.
+                // See reserveIdAtLeast.
                 GameObject::reserveIdAtLeast(node->id);
             }
             else if (warnings)
@@ -2121,9 +2120,9 @@ namespace
         node->worldTransform = parentWorld * node->localTransform;
 
         node->ssrEnabled = j.value("ssrEnabled", false);
-        // La comparación al revés cubre también un NaN, que pasaría cualquier
-        // clamp escrito como min/max y acabaría multiplicando el color del
-        // reflejo por NaN.
+        // The reversed comparison also covers a NaN, which would pass any
+        // clamp written as min/max and would end up multiplying the reflection
+        // color by NaN.
         const float ssrI   = j.value("ssrIntensity", 0.5f);
         node->ssrIntensity = (ssrI >= 0.0f && ssrI <= 1.0f) ? ssrI : 0.5f;
 
@@ -2132,24 +2131,24 @@ namespace
             std::string sourcePath = j["mesh"].value("sourcePath", "");
             std::string meshName   = j["mesh"].value("name", "");
             node->meshVisible      = j["mesh"].value("visible", true);
-            // Que pieza del fichero (Mesh::piece). Ausente o invalida = 0, que es
-            // lo que cargaban las escenas de antes.
+            // Which piece of the file (Mesh::piece). Absent or invalid = 0, which is
+            // what scenes from before loaded.
             int piece = 0;
             if (const auto it = j["mesh"].find("piece"); it != j["mesh"].end() && it->is_number_integer())
                 piece = std::max(0, it->get<int>());
-            // El flag "skinned" se sigue GUARDANDO (dato informativo, y no
-            // rompe ficheros viejos) pero ya no se lee: manda el fichero, en
-            // carga igual que en import. Si no fuera así, las escenas guardadas
-            // antes de la auto-detección — todas con el flag a false, porque el
-            // editor nunca creaba skinned — jamás podrían tener Animator sin
-            // reimportar la malla a mano.
+            // The "skinned" flag is still SAVED (informative data, and it does not
+            // break old files) but it is no longer read: the file rules, on
+            // load just as on import. If it were not so, scenes saved
+            // before auto-detection — all with the flag at false, because the
+            // editor never created skinned — could never have an Animator without
+            // reimporting the mesh by hand.
             const bool skinnedFlag = j["mesh"].value("skinned", false);
             bool skinned = false;
             if (!sourcePath.empty())
             {
-                // Cache por-carga (ver hasBonesCache más abajo): sin ella cada
-                // nodo que comparte sourcePath con otro repetiría el ReadFile
-                // completo de Assimp que hace hasBones.
+                // Per-load cache (see hasBonesCache below): without it each
+                // node that shares sourcePath with another would repeat the full
+                // Assimp ReadFile that hasBones does.
                 if (loadCache)
                 {
                     auto it = loadCache->hasBones.find(sourcePath);
@@ -2164,17 +2163,17 @@ namespace
                 }
             }
 
-            // hasBones() devuelve false tanto si el fichero no tiene huesos
-            // como si no se puede leer (movido/borrado) — hay que distinguir
-            // antes de avisar, porque decir "ya no declara huesos" de un
-            // fichero que directamente no existe es peor que no avisar: apunta
-            // al sitio equivocado y esconde que la malla no cargó en absoluto.
+            // hasBones() returns false both if the file has no bones
+            // and if it cannot be read (moved/deleted) — the two must be told apart
+            // before warning, because saying "no longer declares bones" of a
+            // file that simply does not exist is worse than not warning: it points
+            // to the wrong place and hides that the mesh did not load at all.
             if (skinnedFlag && !skinned && !sourcePath.empty() && warnings)
             {
-                // Path COMPLETO, no filename(): en el caso de fichero ausente
-                // este aviso y el del catch de abajo disparan para el mismo
-                // nodo, y con identificadores distintos el Log Console parecía
-                // estar hablando de dos assets diferentes.
+                // FULL path, not filename(): in the missing file case
+                // this warning and the one in the catch below fire for the same
+                // node, and with different identifiers the Log Console seemed
+                // to be talking about two different assets.
                 if (!std::filesystem::exists(sourcePath))
                 {
                     warnings->push_back(sourcePath + ": the scene saved it as animated, but the"
@@ -2191,31 +2190,31 @@ namespace
             {
                 if (skinned)
                 {
-                    // La carga skinned se queda SÍNCRONA a propósito, aunque
-                    // haya loader: reconstruye la config de clips del Animator
-                    // (applyClipNamesPositionally/addAnimationSource, más abajo)
-                    // a partir del JSON guardado y del SkinnedMesh ya cargado.
-                    // El pump asíncrono (Task 9, applyLoadedMesh) solo hace
-                    // addSkinnedMesh + setMesh — no reaplica esa config — así
-                    // que una carga async de escena perdería en silencio los
-                    // clips guardados. El drop en vivo (PropertiesPanel) sí es
-                    // seguro async porque un FBX recién soltado no trae clips
-                    // guardados que reconstruir.
+                    // The skinned load stays SYNCHRONOUS on purpose, even if there
+                    // is a loader: it rebuilds the Animator clip config
+                    // (applyClipNamesPositionally/addAnimationSource, below)
+                    // from the saved JSON and the already loaded SkinnedMesh.
+                    // The asynchronous pump (Task 9, applyLoadedMesh) only does
+                    // addSkinnedMesh + setMesh — it does not reapply that config — so
+                    // an async scene load would silently lose the saved
+                    // clips. The live drop (PropertiesPanel) is safe async
+                    // because a freshly dropped FBX brings no saved clips to
+                    // rebuild.
                     //
-                    // Cache de precarga: si el runtime ya cargó este FBX en
-                    // paralelo (loadAuto → SkinnedMesh para un rig), se usa una
-                    // COPIA PROFUNDA en vez del loadSkinned de disco. La config
-                    // de clips de abajo se reaplica igual sobre la copia, así que
-                    // el resultado es equivalente al camino síncrono sin repetir
-                    // el ReadFile. Miss (o entrada no-skinned inesperada) → disco.
+                    // Preload cache: if the runtime already loaded this FBX in
+                    // parallel (loadAuto → SkinnedMesh for a rig), a
+                    // DEEP COPY is used instead of the loadSkinned from disk. The clip
+                    // config below is reapplied all the same over the copy, so
+                    // the result is equivalent to the synchronous path without repeating
+                    // the ReadFile. Miss (or unexpected non-skinned entry) → disk.
                     //
-                    // Si la precargada YA tiene la misma configuración de
-                    // fuentes que pide el JSON (el caso del clon y del undo de
-                    // Delete, que siembran la caché con la malla viva), se
-                    // COMPARTE sin tocarla: ni copia de 12 MB ni re-aplicar
-                    // fuentes, que duplicaba sus clips. Si no coincide (un FBX
-                    // recién precargado con otra configuración), copia y
-                    // configura como siempre.
+                    // If the preloaded one ALREADY has the same source
+                    // configuration the JSON asks for (the case of the clone and of the undo of
+                    // Delete, which seed the cache with the live mesh), it is
+                    // SHARED without touching it: neither a 12 MB copy nor re-applying
+                    // sources, which duplicated its clips. If it does not match (a freshly
+                    // preloaded FBX with another configuration), it is copied and
+                    // configured as always.
                     std::shared_ptr<const DonTopo::Mesh> compartida;
                     std::shared_ptr<DonTopo::SkinnedMesh> mesh;
                     if (preloaded)
@@ -2224,14 +2223,14 @@ namespace
                         if (it != preloaded->end())
                             if (const auto* sk = dynamic_cast<const DonTopo::SkinnedMesh*>(it->second.get()))
                             {
-                                // Sin la clave (escena guardada antes de que
-                                // existiera) la escena pide solo las
-                                // animaciones del propio FBX, que es justo lo
-                                // que trae una precargada con una única fuente
-                                // builtin de ese fichero. Sin esta equivalencia
-                                // cada nodo se llevaba su copia (~80 MB con
-                                // modelAnimation.fbx). Si trae más fuentes, se
-                                // copia y se configura como antes.
+                                // Without the key (scene saved before it
+                                // existed) the scene asks only for the
+                                // animations of the FBX itself, which is exactly
+                                // what a preloaded one with a single builtin
+                                // source of that file brings. Without this equivalence
+                                // each node took its own copy (~80 MB with
+                                // modelAnimation.fbx). If it brings more sources, it is
+                                // copied and configured as before.
                                 const bool conClave = j["mesh"].contains("animationSources");
                                 const bool soloBuiltin = sk->animationSources.size() == 1 &&
                                                          sk->animationSources[0].builtin &&
@@ -2248,13 +2247,13 @@ namespace
                     if (!mesh && !compartida)
                         mesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(sourcePath));
 
-                    // Fuentes de animación. La builtin ya la creó loadSkinned:
-                    // de ella solo se recuperan los NOMBRES (un rename), y se
-                    // aplican POSICIONALMENTE de una sola vez (no encadenando
-                    // renameClip: eso colisiona consigo mismo ante un swap de
-                    // dos nombres y no aplica nada) hasta el menor de los dos
-                    // tamaños — un FBX reexportado con más o menos clips no
-                    // debe romper la carga. Una malla compartida ya las trae.
+                    // Animation sources. The builtin one was already created by loadSkinned:
+                    // from it only the NAMES are recovered (a rename), and they are
+                    // applied POSITIONALLY in one go (not chaining
+                    // renameClip: that collides with itself on a swap of
+                    // two names and applies nothing) up to the smaller of the two
+                    // sizes — an FBX re-exported with more or fewer clips must
+                    // not break the load. A shared mesh already brings them.
                     if (!compartida && j["mesh"].contains("animationSources"))
                     {
                         std::vector<DonTopo::AnimationSourceConfig> fuentes;
@@ -2263,13 +2262,13 @@ namespace
                             DonTopo::AnimationSourceConfig cfg;
                             cfg.path    = sj.value("path", std::string());
                             cfg.builtin = sj.value("builtin", false);
-                            // Los nombres se aplican POSICIONALMENTE, así que
-                            // una lista a medias no es "casi bien": corre todos
-                            // los nombres siguientes un puesto y renombra los
-                            // clips equivocados. O entra entera o no entra
-                            // ninguna — mismo criterio que jsonToMat4 con la
-                            // matriz. Antes, un solo elemento que no fuera
-                            // string lanzaba y se perdía la escena entera.
+                            // The names are applied POSITIONALLY, so
+                            // a half list is not "almost right": it shifts all
+                            // the following names one place and renames the wrong
+                            // clips. Either it comes in whole or none comes in
+                            // — same criterion as jsonToMat4 with the
+                            // matrix. Before, a single element that was not a
+                            // string threw and the whole scene was lost.
                             if (sj.contains("clips"))
                             {
                                 const nlohmann::json& cj = sj["clips"];
@@ -2287,13 +2286,13 @@ namespace
                             fuentes.push_back(std::move(cfg));
                         }
 
-                        // Fichero movido, borrado o de otro rig: se avisa y se
-                        // sigue (ver applyAnimationSourceConfig). Al warnings del
-                        // parámetro (Scene::lastWarnings(), lo que lee el Log
-                        // Console), no a stdout: en un build sin consola un
-                        // printf es invisible. Primero salen los avisos de
-                        // parseo y luego los de aplicar; ningún test fija el
-                        // orden.
+                        // Moved, deleted or other-rig file: it warns and
+                        // continues (see applyAnimationSourceConfig). To the warnings of the
+                        // parameter (Scene::lastWarnings(), what the Log
+                        // Console reads), not to stdout: in a build without a console a
+                        // printf is invisible. The parse warnings come out first and
+                        // then those of applying; no test fixes the
+                        // order.
                         std::vector<std::string> aplicaAvisos;
                         DonTopo::applyAnimationSourceConfig(*mesh, fuentes, aplicaAvisos);
                         if (warnings)
@@ -2306,14 +2305,14 @@ namespace
                 }
                 else if (!sourcePath.empty())
                 {
-                    // Cache de precarga primero: si el runtime ya leyó este
-                    // fichero en paralelo, se usa una COPIA PROFUNDA en vez del
-                    // disco (o de encolar una petición). Un rig cacheado como
-                    // SkinnedMesh se copia como tal por robustez, aunque en la
-                    // rama estática lo normal es un Mesh plano.
-                    // Se COMPARTE: una malla estática no tiene configuración
-                    // que aplicar, y quien la edite (material) la copia en ese
-                    // momento vía editMesh.
+                    // Preload cache first: if the runtime already read this
+                    // file in parallel, a DEEP COPY is used instead of
+                    // disk (or of enqueuing a request). A rig cached as
+                    // SkinnedMesh is copied as such for robustness, although in the
+                    // static branch the normal thing is a plain Mesh.
+                    // It is SHARED: a static mesh has no configuration
+                    // to apply, and whoever edits it (material) copies it at that
+                    // moment via editMesh.
                     std::shared_ptr<const DonTopo::Mesh> cached;
                     if (preloaded)
                     {
@@ -2328,16 +2327,16 @@ namespace
                     }
                     else if (loader)
                     {
-                        // Asíncrono: el GameObject queda sin mesh y se apunta a
-                        // la petición. El pump lo resolverá por id — nunca por
-                        // puntero, que sería dangling si el usuario lo borra
-                        // mientras carga.
+                        // Asynchronous: the GameObject is left without a mesh and the request is
+                        // noted. The pump will resolve it by id — never by
+                        // pointer, which would be dangling if the user deletes it
+                        // while it loads.
                         node->pendingMeshJob = loader->requestMesh(sourcePath, node->id, piece);
                     }
                     else if (loadCache)
                     {
-                        // Síncrono (Stop de Play): una lectura por fichero, no
-                        // por nodo. Ver NodeLoadCache.
+                        // Synchronous (Stop of Play): one read per file, not
+                        // per node. See NodeLoadCache.
                         node->setMesh(staticPieceFromCache(*loadCache, sourcePath, piece));
                     }
                     else
@@ -2348,26 +2347,26 @@ namespace
                 }
                 else if (j["mesh"].contains("vertices") && j["mesh"].contains("indices"))
                 {
-                    // Procedural con geometría serializada (ficheros
-                    // guardados con este fix o posteriores): reconstruye el
-                    // mesh exacto, sin depender de qué parámetros lo
-                    // generaron originalmente.
-                    // Los índices se validan ANTES de parsear los vértices: si
-                    // la lista está rota no hay malla que montar y parsearlos
-                    // sería trabajo tirado (y un aviso por vértice de propina).
-                    // Antes, un solo elemento no numérico lanzaba desde
-                    // get<vector<uint32_t>>; lo salvaba el catch de abajo, así
-                    // que la escena no se perdía — pero el aviso hablaba de
-                    // "no se pudo cargar la malla" sin nombrar el campo, que es
-                    // lo que manda a mirar al sitio equivocado.
+                    // Procedural with serialized geometry (files
+                    // saved with this fix or later): it rebuilds the
+                    // exact mesh, without depending on which parameters
+                    // originally generated it.
+                    // The indices are validated BEFORE parsing the vertices: if
+                    // the list is broken there is no mesh to assemble and parsing them
+                    // would be wasted work (and one warning per vertex as a bonus).
+                    // Before, a single non-numeric element threw from
+                    // get<vector<uint32_t>>; the catch below saved it, so
+                    // the scene was not lost — but the warning spoke of
+                    // "could not load the mesh" without naming the field, which is
+                    // what sends you to look in the wrong place.
                     const nlohmann::json& idx = j["mesh"]["indices"];
                     bool indicesOk = idx.is_array();
                     for (size_t ii = 0; indicesOk && ii < idx.size(); ++ii)
                         indicesOk = idx[ii].is_number_unsigned();
                     if (!indicesOk)
                     {
-                        // Media geometría es peor que ninguna: mismo criterio
-                        // que jsonToMat4 con la matriz.
+                        // Half a geometry is worse than none: same criterion
+                        // as jsonToMat4 with the matrix.
                         if (warnings)
                             warnings->push_back("mesh of '" + node->name + "'.indices: corrupt list "
                                                  "in the scene, the object loads without a mesh");
@@ -2384,24 +2383,24 @@ namespace
                 }
                 else if (auto mesh = proceduralMeshByName(meshName))
                 {
-                    // Fallback para ficheros guardados ANTES de este fix
-                    // (sin vertices/indices) — best-effort con los
-                    // parámetros fijos de Basic Shapes, mismo comportamiento
-                    // (potencialmente incorrecto para tamaños custom) que
-                    // tenían antes.
+                    // Fallback for files saved BEFORE this fix
+                    // (without vertices/indices) — best-effort with the
+                    // fixed parameters of Basic Shapes, same behavior
+                    // (potentially incorrect for custom sizes) that
+                    // they had before.
                     node->setMesh(std::move(mesh));
                 }
             }
             catch (const std::exception& e)
             {
-                // Asset roto (movido/borrado) o formato no soportado: node
-                // queda sin mesh, el resto de la escena sigue cargando. Antes
-                // la excepción se tragaba aquí sin más — si el warning de
-                // arriba ni siquiera dispara (skinnedFlag == false, o el
-                // fichero nunca tuvo huesos) el usuario se queda sin ninguna
-                // pista de por qué el mesh está vacío. Se reporta por
-                // warnings, no por stdout: en un build sin consola un printf
-                // es invisible.
+                // Broken asset (moved/deleted) or unsupported format: node
+                // is left without a mesh, the rest of the scene keeps loading. Before,
+                // the exception was swallowed here with nothing more — if the warning
+                // above does not even fire (skinnedFlag == false, or the
+                // file never had bones) the user is left without any
+                // hint of why the mesh is empty. It is reported through
+                // warnings, not stdout: in a build without a console a printf
+                // is invisible.
                 if (warnings)
                 {
                     const std::string ref = sourcePath.empty() ? meshName : sourcePath;
@@ -2409,9 +2408,9 @@ namespace
                 }
             }
 
-            // Overrides de textura. Un bloque que no sea array, o una entrada
-            // sin "index" numérico, se descarta con aviso: media configuración
-            // es peor que ninguna, mismo criterio que jsonToMat4 con la matriz.
+            // Texture overrides. A block that is not an array, or an entry
+            // without a numeric "index", is discarded with a warning: half a configuration
+            // is worse than none, same criterion as jsonToMat4 with the matrix.
             if (j["mesh"].contains("materials"))
             {
                 const nlohmann::json& mats = j["mesh"]["materials"];
@@ -2439,32 +2438,31 @@ namespace
                         ov.normal   = fromStoredPath(entry.value("normal", ""), assetRoot);
                         ov.orm      = fromStoredPath(entry.value("orm",    ""), assetRoot);
                         ov.matAsset = fromStoredPath(entry.value("matAsset", ""), assetRoot);
-                        // Ausente = -1.0f (el centinela de "sin override"; ver
-                        // MaterialOverride en GameObject.h), mismo criterio que
-                        // "ausente = string vacío" de las tres rutas de arriba.
-                        // Por readFloat y no por entry.value<float>() a pelo:
-                        // este bloque entero NO está dentro de ningún try, y un
-                        // "metallic": null o "metallic": "0.5" con .value<float>()
-                        // lanza type_error.302 — la excepción sube hasta
-                        // fromJson(), que devuelve false, y SE PIERDE LA ESCENA
-                        // ENTERA sin decir por qué. readFloat es la misma guarda
-                        // que ya usa el resto del fichero para este problema:
-                        // avisa nombrando el campo y cae al centinela.
-                        // clamp(-1..1) corta además un "metallic": 5.0 mal
-                        // escrito a mano antes de que llegue al Material y a la
-                        // clave de dedup — el centinela (negativo) no se ve
-                        // afectado, clamp(-1, -1, 1) lo deja igual.
+                        // Absent = -1.0f (the "no override" sentinel; see
+                        // MaterialOverride in GameObject.h), same criterion as
+                        // "absent = empty string" of the three paths above.
+                        // Through readFloat and not through a raw entry.value<float>():
+                        // this whole block is NOT inside any try, and a
+                        // "metallic": null or "metallic": "0.5" with .value<float>()
+                        // throws type_error.302 — the exception goes up to
+                        // fromJson(), which returns false, and THE WHOLE SCENE IS LOST
+                        // without saying why. readFloat is the same guard
+                        // the rest of the file already uses for this problem:
+                        // it warns naming the field and falls to the sentinel.
+                        // clamp(-1..1) also cuts a hand-mistyped "metallic": 5.0
+                        // before it reaches the Material and the dedup
+                        // key — the sentinel (negative) is not
+                        // affected, clamp(-1, -1, 1) leaves it the same.
                         const std::string materialesCtx = "mesh of '" + node->name + "'.materials";
                         ov.metallic  = std::clamp(readFloat(entry, "metallic",  -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
                         ov.roughness = std::clamp(readFloat(entry, "roughness", -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
-                        // El baseline SOLO se lee en el camino de MEMORIA (ver
-                        // el comentario grande de nodeToJson, junto al mismo
-                        // flag): en disco estos campos, aunque estuvieran en el
-                        // JSON, se ignoran a propósito — el baseline correcto de
-                        // una carga de disco es el que capture
-                        // applyMaterialOverrides sobre el material recién
-                        // derivado del FBX, no uno guardado que podría ser de
-                        // OTRO export del modelo.
+                        // The baseline is ONLY read on the MEMORY path (see
+                        // the big comment of nodeToJson, next to the same
+                        // flag): on disk these fields, even if they were in the
+                        // JSON, are ignored on purpose — the correct baseline of
+                        // a disk load is the one that applyMaterialOverrides
+                        // captures over the material just derived from the FBX, not a saved one
+                        // that could be from ANOTHER export of the model.
                         if (carryOverrideBaseline)
                         {
                             ov.baseAlbedo      = fromStoredPath(entry.value("baseAlbedo", ""), assetRoot);
@@ -2473,10 +2471,10 @@ namespace
                             ov.baseNormalTaken = entry.value("baseNormalTaken", false);
                             ov.baseOrm         = fromStoredPath(entry.value("baseOrm", ""), assetRoot);
                             ov.baseOrmTaken    = entry.value("baseOrmTaken", false);
-                            // Mismo motivo que metallic/roughness más arriba:
-                            // readFloat/readBool en vez de entry.value<T>() a
-                            // pelo, para que un campo corrupto avise y caiga al
-                            // default en vez de tumbar fromJson() entero.
+                            // Same reason as metallic/roughness above:
+                            // readFloat/readBool instead of a raw entry.value<T>(),
+                            // so that a corrupt field warns and falls to the
+                            // default instead of taking down the whole fromJson().
                             ov.baseMetallic       = readFloat(entry, "baseMetallic", 0.0f, warnings, materialesCtx);
                             ov.baseMetallicTaken  = readBool(entry, "baseMetallicTaken", false, warnings, materialesCtx);
                             ov.baseRoughness      = readFloat(entry, "baseRoughness", 0.0f, warnings, materialesCtx);
@@ -2487,42 +2485,42 @@ namespace
                 }
             }
 
-            // Overrides aplicados AHORA que la malla (si la hubo: cualquiera
-            // de los CINCO setMesh de las ramas de arriba — skinned; cacheada
-            // y disco, las dos de la rama estática; serializada y fallback
-            // por nombre, las dos de la procedural) ya está puesta. En el
-            // camino ASÍNCRONO (loader->requestMesh, más arriba) no hay malla
-            // todavía y esta llamada no hace nada — la aplicación la hace
-            // AsyncAssetLoader::applyLoadedMesh cuando el worker entregue.
+            // Overrides applied NOW that the mesh (if there was one: any
+            // of the FIVE setMesh of the branches above — skinned; cached
+            // and disk, the two of the static branch; serialized and fallback
+            // by name, the two of the procedural) is already set. On the
+            // ASYNCHRONOUS path (loader->requestMesh, further above) there is no mesh
+            // yet and this call does nothing — the application is done by
+            // AsyncAssetLoader::applyLoadedMesh when the worker delivers.
             //
-            // Gateado también por !materialOverrides.empty(): sin overrides,
-            // el bucle de abajo no tiene nada que recorrer, pero
-            // materialsOfMesh (aquí, Y otra vez dentro de
-            // applyMaterialOverrides) construiría igual un
-            // std::vector<Material*> en el heap por cada nodo con malla. Este
-            // camino lo pisa cloneGameObject en cada Scene.Instantiate de Lua
-            // en Play, con un presupuesto medido de 24,5 ms/clon (ver su
-            // comentario) — dos allocs de más por nodo, la mayoría sin ningún
-            // override, no son gratis ahí.
+            // Also gated by !materialOverrides.empty(): without overrides,
+            // the loop below has nothing to traverse, but
+            // materialsOfMesh (here, AND again inside
+            // applyMaterialOverrides) would build anyway a
+            // std::vector<Material*> on the heap for each node with a mesh. This
+            // path is hit by cloneGameObject on every Lua Scene.Instantiate
+            // in Play, with a measured budget of 24.5 ms/clone (see its
+            // comment) — two extra allocs per node, most with no
+            // override, are not free there.
             if (node->hasMesh() && !node->materialOverrides.empty())
             {
-                // El aviso de índice fuera de rango que promete el comentario
-                // de GameObject::applyMaterialOverrides ("lo avisa quien tenga
-                // canal para darlo"): aquí existe `warnings`, así que se da.
-                // El texto sale de collectMaterialOverrideWarnings y no de un
-                // bucle propio, porque el pump asíncrono —el camino normal de
-                // una escena grande— tiene que dar EXACTAMENTE el mismo aviso
-                // por su canal, y con dos bucles gemelos eso dura lo que tarde
-                // alguien en tocar uno solo.
+                // The out-of-range index warning that the comment
+                // of GameObject::applyMaterialOverrides promises ("it is given by whoever has a
+                // channel to give it"): here `warnings` exists, so it is given.
+                // The text comes from collectMaterialOverrideWarnings and not from its own
+                // loop, because the asynchronous pump —the normal path of
+                // a large scene— has to give EXACTLY the same warning
+                // through its channel, and with two twin loops that lasts as long as it takes
+                // someone to touch only one.
                 if (warnings)
                     collectMaterialOverrideWarnings(*node, *warnings);
                 applyMaterialOverrides(*node);
             }
         }
 
-        // Los colliders se cargan siempre como static (dynamic=false); si el
-        // nodo trae un Rigidbody (o useGravity legacy), el bloque de abajo lo
-        // promociona a dynamic vía physics.attachRigidbody.
+        // The colliders are always loaded as static (dynamic=false); if the
+        // node brings a Rigidbody (or legacy useGravity), the block below promotes it
+        // to dynamic via physics.attachRigidbody.
         if (j.contains("boxCollider"))
         {
             const auto& c = j["boxCollider"];
@@ -2533,9 +2531,9 @@ namespace
                 node->worldTransform, /*dynamic=*/false));
             node->getBoxCollider()->setOwner(node);
             physics.setTrigger(node->getBoxCollider(), c.value("isTrigger", false));
-            // Material por collider. required=false: una escena guardada antes
-            // de este campo carga sin avisos y con los defaults de siempre
-            // (0.5 / 0.5 / 0.1), o sea con el mismo comportamiento que tenía.
+            // Material per collider. required=false: a scene saved before
+            // this field loads without warnings and with the usual defaults
+            // (0.5 / 0.5 / 0.1), that is, with the same behavior it had.
             node->getBoxCollider()->setFriction(
                 readFloat(c, "staticFriction",  0.5f, warnings, ctx),
                 readFloat(c, "dynamicFriction", 0.5f, warnings, ctx));
@@ -2587,23 +2585,23 @@ namespace
             node->getPlaneCollider()->setBounciness(readFloat(c, "bounciness", 0.1f, warnings, ctx));
         }
 
-        // Rigidbody: bloque nuevo. Back-compat: escenas viejas guardaban
-        // useGravity DENTRO del collider; si no hay bloque rigidbody pero un
-        // collider trae useGravity legacy == true, sintetizamos un Rigidbody
-        // heredando ese valor (cuerpo dinámico como antes). useGravity legacy
-        // == false (kinematic sin gravedad) equivale a un collider static, que
-        // es justo el estado por defecto → no se crea Rigidbody.
+        // Rigidbody: new block. Back-compat: old scenes saved
+        // useGravity INSIDE the collider; if there is no rigidbody block but a
+        // collider brings legacy useGravity == true, we synthesize a Rigidbody
+        // inheriting that value (dynamic body as before). Legacy useGravity
+        // == false (kinematic without gravity) equals a static collider, which
+        // is exactly the default state → no Rigidbody is created.
         auto legacyGravity = [&](const char* key) -> int {
-            if (!j.contains(key) || !j[key].contains("useGravity")) return -1; // sin campo legacy
+            if (!j.contains(key) || !j[key].contains("useGravity")) return -1; // no legacy field
             const nlohmann::json& g = j[key]["useGravity"];
             if (!g.is_boolean())
             {
-                // Este es el camino de compatibilidad de las escenas ANTERIORES
-                // al Rigidbody: por definición lo que llega por aquí es un
-                // fichero viejo, o sea el peor sitio posible para ser estricto.
-                // Antes, un get<bool>() sobre un valor corrupto lanzaba y se
-                // perdía la carga entera. Se avisa y se trata como "sin campo
-                // legacy", que deja el collider static — el estado por defecto.
+                // This is the compatibility path for scenes PRIOR
+                // to the Rigidbody: by definition what arrives here is an
+                // old file, that is, the worst possible place to be strict.
+                // Before, a get<bool>() on a corrupt value threw and
+                // the whole load was lost. It warns and is treated as "no
+                // legacy field", which leaves the collider static — the default state.
                 if (warnings)
                     warnings->push_back(std::string(key) + " of '" + node->name +
                                          "'.useGravity: corrupt value in the scene, ignored");
@@ -2622,10 +2620,10 @@ namespace
             rb->setDrag(readFloat(r, "drag", 0.0f, warnings, ctx));
             rb->setAngularDrag(readFloat(r, "angularDrag", 0.05f, warnings, ctx));
             rb->setConstraints(r.value("constraints", 0u));
-            // Campos aditivos: una escena guardada antes de existir cae al
-            // default false, que es el comportamiento de siempre. Se setean
-            // ANTES de attachRigidbody porque bindActor es quien los empuja al
-            // actor y al collider.
+            // Additive fields: a scene saved before they existed falls to the
+            // default false, which is the usual behavior. They are set
+            // BEFORE attachRigidbody because bindActor is what pushes them to the
+            // actor and to the collider.
             rb->setCcd(r.value("ccd", false));
             rb->setInterpolate(r.value("interpolate", false));
             node->setRigidbody(rb);
@@ -2644,8 +2642,8 @@ namespace
                 if (auto col = node->anyCollider()) physics.attachRigidbody(col, rb);
             }
         }
-        // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
-        // y cargan igual (version sigue en 1). Valor de "mode" desconocido ->
+        // Additive block: scenes saved before this field do not bring it
+        // and load the same (version stays at 1). Unknown "mode" value ->
         // perspective.
         if (j.contains("camera"))
         {
@@ -2655,18 +2653,18 @@ namespace
             cam->setMode(c.value("mode", std::string("perspective")) == "orthographic"
                              ? CameraComponent::ProjectionMode::Orthographic
                              : CameraComponent::ProjectionMode::Perspective);
-            // far ANTES que near: setNear clampa contra el far ACTUAL, así que
-            // cargarlos al revés recortaría un near grande contra el far por
-            // defecto (2000) y lo dejaría mal.
+            // far BEFORE near: setNear clamps against the CURRENT far, so
+            // loading them the other way round would clip a large near against the default
+            // far (2000) and leave it wrong.
             cam->setFar(readFloat(c, "far", 2000.0f, warnings, ctx));
             cam->setNear(readFloat(c, "near", 1.0f, warnings, ctx));
             cam->setFov(readFloat(c, "fov", 45.0f, warnings, ctx));
             cam->setOrthographicSize(readFloat(c, "orthographicSize", 100.0f, warnings, ctx));
             node->setCameraComponent(cam);
         }
-        // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
-        // y cargan igual (version sigue en 1). Sin este bloque no hay sonda, y
-        // sin sonda el objeto se ilumina con el IBL global de siempre.
+        // Additive block: scenes saved before this field do not bring it
+        // and load the same (version stays at 1). Without this block there is no probe, and
+        // without a probe the object is lit with the usual global IBL.
         if (j.contains("reflectionProbe"))
         {
             const auto& p = j["reflectionProbe"];
@@ -2676,8 +2674,8 @@ namespace
             probe->setIntensity(readFloat(p, "intensity", 1.0f, warnings, ctx));
             node->setReflectionProbe(probe);
         }
-        // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
-        // y cargan igual (version sigue en 1). Valor de "type" desconocido ->
+        // Additive block: scenes saved before this field do not bring it
+        // and load the same (version stays at 1). Unknown "type" value ->
         // point.
         if (j.contains("light"))
         {
@@ -2689,24 +2687,24 @@ namespace
                                        warnings, ctx + ".color", glm::vec3(1.0f)));
             light->setIntensity(readFloat(l, "intensity", 1.0f, warnings, ctx));
             light->setRange(readFloat(l, "range", 300.0f, warnings, ctx));
-            // Los dos setters mantienen inner <= outer entre ellos, así que un
-            // .scene con el cono invertido acaba con un cono válido pase lo que
-            // pase (el segundo setter arrastra al primero).
+            // The two setters keep inner <= outer between them, so a
+            // .scene with an inverted cone ends up with a valid cone whatever
+            // happens (the second setter drags the first).
             light->setOuterAngle(readFloat(l, "outerAngle", 30.0f, warnings, ctx));
             light->setInnerAngle(readFloat(l, "innerAngle", 20.0f, warnings, ctx));
             light->setAreaWidth(readFloat(l, "areaWidth", 100.0f, warnings, ctx));
             light->setAreaHeight(readFloat(l, "areaHeight", 100.0f, warnings, ctx));
             node->setLight(light);
         }
-        // Bloque aditivo: una escena guardada antes del componente Canvas no
-        // trae la clave y carga igual, sin componente y sin avisos.
+        // Additive block: a scene saved before the Canvas component does not
+        // bring the key and loads the same, without component and without warnings.
         if (j.contains("canvas"))
         {
             const auto& c = j["canvas"];
             const std::string ctx = "canvas of '" + node->name + "'";
-            // Un bool o un string corrupto (null, o del tipo que no toca) cae al
-            // default en vez de lanzar: .value() sí lanza con un null, y un
-            // campo roto no puede tumbar la carga de la escena entera.
+            // A corrupt bool or string (null, or of the wrong type) falls to the
+            // default instead of throwing: .value() does throw with a null, and a
+            // broken field cannot take down the load of the whole scene.
             auto canvas = std::make_shared<CanvasComponent>();
             canvas->scaleMode = uiScaleModeFromStr(
                 c.value("scaleMode", std::string("constantPixelSize")));
@@ -2734,15 +2732,15 @@ namespace
             canvas->depthTest  = readBool(c, "depthTest", true, warnings, ctx);
             node->setCanvas(std::move(canvas));
         }
-        // Bloque aditivo, misma regla que el canvas: una escena guardada antes
-        // del componente Button no trae la clave y se carga sin él ni un aviso.
+        // Additive block, same rule as the canvas: a scene saved before
+        // the Button component does not bring the key and loads without it or a warning.
         if (j.contains("button"))
         {
             const auto& b = j["button"];
             const std::string ctx = "button of '" + node->name + "'";
-            // Un bool o un string corrupto (null, o del tipo que no toca) cae al
-            // default en vez de lanzar: .value() sí lanza con un null, y un
-            // campo roto no puede tumbar la carga de la escena entera.
+            // A corrupt bool or string (null, or of the wrong type) falls to the
+            // default instead of throwing: .value() does throw with a null, and a
+            // broken field cannot take down the load of the whole scene.
             auto btn = std::make_shared<ButtonComponent>();
             btn->anchorMin = readVec2XY(b, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             btn->anchorMax = readVec2XY(b, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2776,29 +2774,29 @@ namespace
             btn->fontPath  = readString(b, "fontPath", std::string(), warnings, ctx);
             btn->fontSize  = readFloat(b, "fontSize", 16.0f, warnings, ctx);
             btn->textColor = readVec4XYZW(b, "textColor", glm::vec4(1.0f), warnings, ctx);
-            // Sin clave el default es Center (el del componente), no Left: por
-            // eso no basta con pasarle "" a uiTextAlignFromStr.
+            // Without the key the default is Center (the component's), not Left: that is why
+            // it is not enough to pass "" to uiTextAlignFromStr.
             btn->textAlign = (b.contains("textAlign") && b["textAlign"].is_string())
                                  ? uiTextAlignFromStr(b["textAlign"].get<std::string>())
                                  : UiTextAlign::Center;
-            // Igual: sin clave, el default del componente es Middle. Una escena
-            // guardada antes de que esto existiera pasa a tener la etiqueta
-            // centrada a lo alto, que es justo el arreglo.
+            // Same: without the key, the component default is Middle. A scene
+            // saved before this existed ends up with the label
+            // vertically centered, which is exactly the fix.
             btn->textVAlign =
                 (b.contains("textVAlign") && b["textVAlign"].is_string())
                     ? uiTextVAlignFromStr(b["textVAlign"].get<std::string>(), UiTextVAlign::Middle)
                     : UiTextVAlign::Middle;
             node->setButton(std::move(btn));
         }
-        // Bloque aditivo, misma regla que el Button: una escena guardada antes
-        // del componente Text no trae la clave y se carga sin él ni un aviso.
+        // Additive block, same rule as the Button: a scene saved before
+        // the Text component does not bring the key and loads without it or a warning.
         if (j.contains("text"))
         {
             const auto& t = j["text"];
             const std::string ctx = "text of '" + node->name + "'";
-            // Mismo criterio que el Button: un bool o un string corrupto cae al
-            // default en vez de lanzar, que un campo roto no puede tumbar la
-            // carga de la escena entera.
+            // Same criterion as the Button: a corrupt bool or string falls to the
+            // default instead of throwing, since a broken field cannot take down the
+            // load of the whole scene.
             auto txt = std::make_shared<TextComponent>();
             txt->anchorMin = readVec2XY(t, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             txt->anchorMax = readVec2XY(t, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2828,9 +2826,9 @@ namespace
             txt->italicSkew   = readFloat(t, "italicSkew", 0.25f, warnings, ctx);
             node->setText(std::move(txt));
         }
-        // Bloque aditivo, misma regla que el Button y el Text: una escena
-        // guardada antes del componente ProgressBar no trae la clave y se carga
-        // sin él ni un aviso.
+        // Additive block, same rule as the Button and the Text: a scene
+        // saved before the ProgressBar component does not bring the key and loads
+        // without it or a warning.
         if (j.contains("progressBar"))
         {
             const auto& p = j["progressBar"];
@@ -2858,9 +2856,9 @@ namespace
             bar->fillPath       = readString(p, "fillPath", std::string(), warnings, ctx);
             node->setProgressBar(std::move(bar));
         }
-        // Bloque aditivo, misma regla que los demás componentes de UI: una
-        // escena guardada antes del componente Panel no trae la clave y se carga
-        // sin él ni un aviso.
+        // Additive block, same rule as the other UI components: a
+        // scene saved before the Panel component does not bring the key and loads
+        // without it or a warning.
         if (j.contains("panel"))
         {
             const auto& p = j["panel"];
@@ -2906,9 +2904,9 @@ namespace
             img->borderBottom = readFloat(im, "borderBottom", 0.0f, warnings, ctx);
             img->fillCenter   = readBool(im, "fillCenter", true, warnings, ctx);
 
-            // Sin negativos ni un tope absurdo: maxTiles acota los quads que
-            // puede emitir el batcher, y un JSON editado a mano con -1 daría una
-            // vuelta al uint32 y con ella un buffer de vértices reventado.
+            // No negatives or an absurd cap: maxTiles bounds the quads the
+            // batcher can emit, and a hand-edited JSON with -1 would wrap
+            // around the uint32 and with it a blown-up vertex buffer.
             const float tiles = readFloat(im, "maxTiles", 1024.0f, warnings, ctx);
             img->maxTiles = tiles > 0.0f ? (uint32_t)tiles : 0u;
 
@@ -2917,9 +2915,9 @@ namespace
             img->fillAmount    = readFloat(im, "fillAmount", 1.0f, warnings, ctx);
             node->setImage(std::move(img));
         }
-        // Bloque aditivo, misma regla que los demas componentes de UI: una
-        // escena guardada antes del componente Slider no trae la clave y se
-        // carga sin el ni un aviso.
+        // Additive block, same rule as the other UI components: a
+        // scene saved before the Slider component does not bring the key and
+        // loads without it or a warning.
         if (j.contains("slider"))
         {
             const auto& sl = j["slider"];
@@ -2953,7 +2951,7 @@ namespace
             slider->handleSprite     = readString(sl, "handleSprite", std::string(), warnings, ctx);
             node->setSlider(std::move(slider));
         }
-        // Bloque aditivo, misma regla que los demas componentes de UI.
+        // Additive block, same rule as the other UI components.
         if (j.contains("checkbox"))
         {
             const auto& cb = j["checkbox"];
@@ -3025,8 +3023,8 @@ namespace
             scr->handleFraction = readFloat(sb, "handleFraction", 0.25f, warnings, ctx);
             scr->direction      = uiScrollbarDirectionFromStr(readString(sb, "direction", std::string(), warnings, ctx));
 
-            // Sin negativos: numberOfSteps es un contador, y un JSON editado a
-            // mano con -1 daria una vuelta al uint32.
+            // No negatives: numberOfSteps is a counter, and a hand-edited JSON with
+            // -1 would wrap around the uint32.
             const float pasos = readFloat(sb, "numberOfSteps", 0.0f, warnings, ctx);
             scr->numberOfSteps = pasos > 0.0f ? (uint32_t)pasos : 0u;
 
@@ -3039,7 +3037,7 @@ namespace
             scr->handleSprite     = readString(sb, "handleSprite", std::string(), warnings, ctx);
             node->setScrollbar(std::move(scr));
         }
-        // Bloque aditivo, misma regla que los demas componentes de UI.
+        // Additive block, same rule as the other UI components.
         if (j.contains("inputField"))
         {
             const auto& fj = j["inputField"];
@@ -3066,13 +3064,13 @@ namespace
             f->align   = uiTextAlignFromStr(readString(fj, "align", std::string(), warnings, ctx));
             f->padding = readFloat(fj, "padding", 6.0f, warnings, ctx);
 
-            // Sin negativos: es un contador, y un JSON editado a mano con -1
-            // daria una vuelta al uint32 y con ella un limite absurdo.
+            // No negatives: it is a counter, and a hand-edited JSON with -1
+            // would wrap around the uint32 and with it an absurd limit.
             const float lim = readFloat(fj, "characterLimit", 0.0f, warnings, ctx);
             f->characterLimit = lim > 0.0f ? (uint32_t)lim : 0u;
 
             f->contentType  = uiInputContentTypeFromStr(readString(fj, "contentType", std::string(), warnings, ctx));
-            // Vacio en el JSON se respeta: displayText ya cae al asterisco.
+            // Empty in the JSON is respected: displayText already falls to the asterisk.
             f->passwordChar = (fj.contains("passwordChar") && fj["passwordChar"].is_string())
                                   ? fj["passwordChar"].get<std::string>() : std::string("*");
 
@@ -3082,8 +3080,8 @@ namespace
 
             f->atlasPath        = readString(fj, "atlasPath", std::string(), warnings, ctx);
             f->backgroundSprite = readString(fj, "backgroundSprite", std::string(), warnings, ctx);
-            // El cursor arranca al final del texto cargado, que es donde lo
-            // espera cualquiera que pinche en un campo ya relleno.
+            // The cursor starts at the end of the loaded text, which is where
+            // anyone who clicks on an already filled field expects it.
             f->caretEnd();
             node->setInputField(std::move(f));
         }
@@ -3102,9 +3100,9 @@ namespace
             d->visible      = readBool(dj, "visible", true, warnings, ctx);
             d->interactable = readBool(dj, "interactable", true, warnings, ctx);
 
-            // Las opciones que no sean cadenas se DESCARTAN una a una en vez de
-            // tirar la lista entera: perder un combo por una entrada corrupta
-            // seria peor que perder esa entrada.
+            // Options that are not strings are DISCARDED one by one instead of
+            // throwing away the whole list: losing a combo over a corrupt entry
+            // would be worse than losing that entry.
             if (dj.contains("options") && dj["options"].is_array())
                 for (const auto& o : dj["options"])
                     if (o.is_string()) d->options.push_back(o.get<std::string>());
@@ -3177,8 +3175,8 @@ namespace
 
             layout->spacing  = readVec2XY(l, "spacing", glm::vec2(0.0f), warnings, ctx);
             layout->cellSize = readVec2XY(l, "cellSize", glm::vec2(100.0f), warnings, ctx);
-            // Sin negativos: columns es el número de columnas de la rejilla, y un
-            // JSON editado a mano con -1 daría una vuelta al uint32.
+            // No negatives: columns is the number of grid columns, and a
+            // hand-edited JSON with -1 would wrap around the uint32.
             const float cols = readFloat(l, "columns", 0.0f, warnings, ctx);
             layout->columns = cols > 0.0f ? (uint32_t)cols : 0u;
 
@@ -3191,20 +3189,20 @@ namespace
             layout->clipChildren = readBool(l, "clipChildren", false, warnings, ctx);
             node->setLayout(std::move(layout));
         }
-        // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
-        // y cargan igual (version sigue en 1).
+        // Additive block: scenes saved before this field do not bring it
+        // and load the same (version stays at 1).
         if (j.contains("animator"))
         {
             auto anim = animatorFromJson(j["animator"], warnings);
-            // El bloque "mesh" se parsea ANTES que este, así que el SkinnedMesh
-            // ya está montado y bindClips puede resolver los nombres de clip
-            // aquí mismo. Sin malla skinned (grafo huérfano) los clipIndex se
-            // quedan a -1 y currentClipIndex cae a 0.
+            // The "mesh" block is parsed BEFORE this one, so the SkinnedMesh
+            // is already assembled and bindClips can resolve the clip names
+            // right here. Without a skinned mesh (orphan graph) the clipIndex
+            // stay at -1 and currentClipIndex falls to 0.
             if (auto* sm = node->getSkinnedMesh())
                 anim->bindClips(*sm, warnings);
-            // Las pistas de propiedades se resuelven contra el OBJETO (qué
-            // componentes tiene), no contra la malla: un grafo sin esqueleto
-            // también tiene que quedar resuelto.
+            // The property tracks are resolved against the OBJECT (which
+            // components it has), not against the mesh: a graph without a skeleton
+            // also has to end up resolved.
             anim->bindProperties(node, warnings);
             node->setAnimator(std::move(anim));
         }
@@ -3212,19 +3210,19 @@ namespace
         {
             const auto& c = j["audioClip"];
             const std::string ctx = "audioClip of '" + node->name + "'";
-            // path/is3D/loop los escribe nodeToJson SIEMPRE, así que required
-            // = true: si faltan no es back-compat, es corrupción y hay que
-            // nombrarla. Antes se leían con .at(): un audioClip al que le
-            // faltara cualquiera de los tres lanzaba json::exception, la
-            // excepción subía hasta el catch de fromJson y se perdía la carga
-            // de la escena ENTERA por un campo — justo lo contrario del
-            // criterio que sigue el resto de este fichero.
+            // path/is3D/loop are ALWAYS written by nodeToJson, so required
+            // = true: if they are missing it is not back-compat, it is corruption and it has to
+            // be named. Before they were read with .at(): an audioClip missing
+            // any of the three threw json::exception, the
+            // exception went up to the catch of fromJson and the load of the
+            // WHOLE scene was lost over one field — exactly the opposite of the
+            // criterion the rest of this file follows.
             std::string path = readString(c, "path", "", warnings, ctx, /*required=*/true);
-            // Misma whitelist que la ruta de UI. Un .scene editado a mano (o
-            // escrito por una herramienta) podía traer cualquier extensión, y
-            // como FMOD carga en diferido eso acababa en un clip mudo cuyo único
-            // síntoma era el silencio. Aquí se nombra el problema y se descarta
-            // el clip, dejando cargar el resto de la escena.
+            // Same whitelist as the UI path. A hand-edited .scene (or
+            // one written by a tool) could bring any extension, and
+            // since FMOD loads lazily that ended up in a muted clip whose only
+            // symptom was silence. Here the problem is named and the clip is
+            // discarded, letting the rest of the scene load.
             if (!path.empty())
             {
                 std::string ext = std::filesystem::path(path).extension().string();
@@ -3238,9 +3236,9 @@ namespace
                     path.clear();
                 }
             }
-            // Sin path no hay nada que cargar: el nodo se queda sin audio y el
-            // resto de la escena sigue. is3D/loop sí tienen default razonable
-            // (2D, sin bucle), que es además con el que crea los clips la UI.
+            // Without a path there is nothing to load: the node is left without audio and the
+            // rest of the scene goes on. is3D/loop do have a reasonable default
+            // (2D, no loop), which is also what the UI creates clips with.
             auto clip = path.empty()
                             ? nullptr
                             : audio.createAudioClipComponent(
@@ -3249,73 +3247,73 @@ namespace
                                   readBool(c, "loop", false, warnings, ctx, /*required=*/true));
             if (clip)
             {
-                // Sin required: este campo llegó después, y una escena anterior
-                // que no lo traiga es back-compat legítima, no corrupción.
+                // Without required: this field came later, and an earlier scene
+                // that does not bring it is legitimate back-compat, not corruption.
                 clip->setPlayOnAwake(readBool(c, "playOnAwake", false, warnings, ctx));
-                // El bus también llegó después: ausente = "sfx", que es por
-                // donde salía todo antes de que existieran los buses, así que
-                // una escena vieja suena igual. Un nombre que NO existe sí
-                // avisa: es corrupción o un proyecto de una versión más nueva,
-                // y caer a sfx en silencio dejaría un clip sonando por el bus
-                // equivocado sin ninguna pista.
+                // The bus also came later: absent = "sfx", which is where
+                // everything went out before the buses existed, so
+                // an old scene sounds the same. A name that does NOT exist does
+                // warn: it is corruption or a project from a newer version,
+                // and falling to sfx silently would leave a clip playing through the wrong bus
+                // with no hint at all.
                 const std::string busName = readString(c, "bus", "sfx", warnings, ctx);
                 DonTopo::AudioBus bus = DonTopo::AudioBus::Sfx;
                 if (!DonTopo::audioBusFromStr(busName, bus) && warnings)
                     warnings->push_back(ctx + ".bus: unknown value '" + busName +
                                          "', using 'sfx'");
                 clip->setBus(bus);
-                // Mismo criterio que el bus: ausente = "sample" (como se cargaba
-                // todo antes), nombre desconocido = aviso. OJO: setLoadMode
-                // RECARGA el sonido, asi que ponerlo despues de crear el clip
-                // cuesta una carga de mas; solo ocurre en escenas cuyo clip va
-                // en streaming, y evita que la factoria tenga que conocer todos
-                // los campos del componente.
+                // Same criterion as the bus: absent = "sample" (how everything was loaded
+                // before), unknown name = warning. NOTE: setLoadMode
+                // RELOADS the sound, so setting it after creating the clip
+                // costs one extra load; it only happens in scenes whose clip streams,
+                // and it avoids the factory having to know all the
+                // component fields.
                 const std::string loadModeName = readString(c, "loadMode", "sample", warnings, ctx);
                 DonTopo::AudioLoadMode loadMode = DonTopo::AudioLoadMode::Sample;
                 if (!DonTopo::audioLoadModeFromStr(loadModeName, loadMode) && warnings)
                     warnings->push_back(ctx + ".loadMode: unknown value '" + loadModeName +
                                          "', using 'sample'");
                 clip->setLoadMode(loadMode);
-                // Curva de atenuacion: mismo criterio que bus y loadMode.
+                // Attenuation curve: same criterion as bus and loadMode.
                 const std::string rolloffName = readString(c, "rolloff", "inverse", warnings, ctx);
                 DonTopo::AudioRolloff rolloff = DonTopo::AudioRolloff::Inverse;
                 if (!DonTopo::audioRolloffFromStr(rolloffName, rolloff) && warnings)
                     warnings->push_back(ctx + ".rolloff: unknown value '" + rolloffName +
                                          "', using 'inverse'");
                 clip->setRolloff(rolloff);
-                // Las tres de la voz. Defaults neutros: una escena anterior a
-                // esta feature suena exactamente igual que antes.
+                // The three voice ones. Neutral defaults: a scene prior to
+                // this feature sounds exactly the same as before.
                 clip->setSpread(readFloat(c, "spread", 0.0f, warnings, ctx));
                 clip->setStereoPan(readFloat(c, "stereoPan", 0.0f, warnings, ctx));
                 clip->setDopplerLevel(readFloat(c, "dopplerLevel", 0.0f, warnings, ctx));
                 clip->setMute(readBool(c, "mute", false, warnings, ctx));
-                // Mismo criterio. readFloat además tolera un "null" (NaN
-                // serializado, ver el bloque de comentarios junto a jsonToMat4):
-                // antes, ese null hacía fallar fromJson entero.
+                // Same criterion. readFloat also tolerates a "null" (serialized
+                // NaN, see the comment block next to jsonToMat4):
+                // before, that null made the whole fromJson fail.
                 clip->setVolume(readFloat(c, "volume", 1.0f, warnings, ctx));
                 clip->setPitch(readFloat(c, "pitch", 1.0f, warnings, ctx));
-                // Mismo criterio de compat: defaults del componente pa las
-                // escenas anteriores a estos dos campos. Max antes que min: los
-                // dos setters mantienen min <= max entre ellos, así que el
-                // segundo arrastra al primero y el par acaba siempre válido.
+                // Same compat criterion: component defaults for
+                // scenes prior to these two fields. Max before min: the
+                // two setters keep min <= max between them, so the
+                // second drags the first and the pair always ends up valid.
                 clip->setMaxDistance(readFloat(c, "maxDistance", 100.0f, warnings, ctx));
                 clip->setMinDistance(readFloat(c, "minDistance", 1.0f, warnings, ctx));
                 node->setAudioClip(std::move(clip));
             }
-            // clip nullptr (asset roto/formato no soportado): node queda sin
-            // audio, el resto de la escena sigue cargando.
+            // clip nullptr (broken asset/unsupported format): node is left without
+            // audio, the rest of the scene keeps loading.
         }
-        // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
-        // y cargan igual (version sigue en 1). El invariante de uno por escena
-        // NO se impone aquí (nodeFromJson no ve el árbol entero): lo hace
-        // pruneExtraAudioListeners al final de fromJson.
+        // Additive block: scenes saved before this field do not bring it
+        // and load the same (version stays at 1). The one-per-scene invariant
+        // is NOT enforced here (nodeFromJson does not see the whole tree): it is done by
+        // pruneExtraAudioListeners at the end of fromJson.
         if (j.contains("reverbZone"))
         {
             const auto& z = j["reverbZone"];
             const std::string zctx = "reverbZone of '" + node->name + "'";
             auto zone = std::make_shared<DonTopo::ReverbZoneComponent>();
-            // El preset se valida contra la lista real: uno desconocido avisa y
-            // cae a "room" en vez de instalar un ambiente cualquiera.
+            // The preset is validated against the real list: an unknown one warns and
+            // falls to "room" instead of installing an arbitrary ambience.
             const std::string preset = readString(z, "preset", "room", warnings, zctx);
             const auto& known = DonTopo::AudioManager::reverbPresetNames();
             if (std::find(known.begin(), known.end(), preset) == known.end())
@@ -3329,8 +3327,8 @@ namespace
             {
                 zone->setPreset(preset);
             }
-            // Max antes que min, como en el AudioClip: los dos setters mantienen
-            // el invariante entre ellos.
+            // Max before min, as in the AudioClip: the two setters keep
+            // the invariant between them.
             zone->setMaxDistance(readFloat(z, "maxDistance", 200.0f, warnings, zctx));
             zone->setMinDistance(readFloat(z, "minDistance", 50.0f, warnings, zctx));
             zone->setEnabled(readBool(z, "enabled", true, warnings, zctx));
@@ -3346,14 +3344,14 @@ namespace
         {
             for (const auto& sj : j["scripts"])
             {
-                // Sin nombre no hay fichero .lua que cargar, así que ese
-                // componente se descarta — pero el GameObject y el resto de la
-                // escena siguen. Antes era un .at() y se perdía la carga entera.
+                // Without a name there is no .lua file to load, so that
+                // component is discarded — but the GameObject and the rest of the
+                // scene go on. Before it was an .at() and the whole load was lost.
                 const std::string scriptName =
                     readString(sj, "name", std::string(), warnings,
                                 "scripts of '" + node->name + "'", /*required=*/true);
                 if (scriptName.empty())
-                    continue;   // readString ya ha avisado
+                    continue;   // readString already warned
                 auto comp = std::make_unique<DonTopo::ScriptComponent>(scriptName, node);
                 if (sj.contains("overrides"))
                 {
@@ -3362,20 +3360,20 @@ namespace
                         if (val.is_boolean())     comp->overrides[key] = val.get<bool>();
                         else if (val.is_string()) comp->overrides[key] = val.get<std::string>();
                         else if (val.is_number()) comp->overrides[key] = val.get<double>();
-                        // Otros tipos: ignorados (no son props serializables)
+                        // Other types: ignored (they are not serializable props)
                     }
                 }
-                // Nota: si el script ya no existe en Scripts/, el componente
-                // se conserva igual ("missing script", spec) — la UI lo
-                // señala; los overrides no se pierden al re-guardar.
+                // Note: if the script no longer exists in Scripts/, the component
+                // is kept all the same ("missing script", spec) — the UI
+                // flags it; the overrides are not lost on re-saving.
                 node->addScript(std::move(comp));
             }
         }
 
-        // "children" lo escribe nodeToJson SIEMPRE (ver el final de esa
-        // función), así que su ausencia nunca es back-compat: es corrupción, y
-        // hasta ahora un .at() la convertía en "se pierde la escena entera".
-        // Ahora el nodo se carga sin hijos y se nombra el problema.
+        // "children" is ALWAYS written by nodeToJson (see the end of that
+        // function), so its absence is never back-compat: it is corruption, and
+        // until now an .at() turned it into "the whole scene is lost".
+        // Now the node is loaded without children and the problem is named.
         auto childrenIt = j.find("children");
         if (childrenIt == j.end() || !childrenIt->is_array())
         {
@@ -3393,30 +3391,30 @@ namespace
                                          "an object, discarded");
                 continue;
             }
-            // El nombre también lo escribe nodeToJson siempre. Un nodo sin él se
-            // conserva igual (puede llevar medio árbol colgando) pero con el
-            // nombre vacío y su aviso, en vez de tumbar la carga.
+            // The name is also always written by nodeToJson. A node without it is
+            // kept all the same (it may have half a tree hanging from it) but with an
+            // empty name and its warning, instead of taking down the load.
             GameObject* child = node->addChild(
                 readString(childJson, "name", std::string(), warnings,
                             "node '" + node->name + "'.children", /*required=*/true));
-            // El nodo hijo se carga DENTRO de un try. Motivo: los ~52 `.value(...)`
-            // que quedan en los bloques de componente lanzan `json::type_error`
-            // si la clave EXISTE con el tipo que no toca (comprobado: string,
-            // bool, int y float lanzan; los `.value` cuyo default es un `json`
-            // NO —cualquier tipo convierte a json—, que es la mitad de la fila
-            // H2 que resultó no ser cierta). Sin esta guarda, un solo campo
-            // corrupto subía hasta el catch de fromJson y se perdía la escena
-            // ENTERA, sin decir de qué nodo venía.
+            // The child node is loaded INSIDE a try. Reason: the ~52 `.value(...)`
+            // left in the component blocks throw `json::type_error`
+            // if the key EXISTS with the wrong type (checked: string,
+            // bool, int and float throw; the `.value` whose default is a `json`
+            // DO NOT —any type converts to json—, which is the half of row
+            // H2 that turned out not to be true). Without this guard, a single corrupt
+            // field went up to the catch of fromJson and the WHOLE scene was lost,
+            // without saying which node it came from.
             //
-            // Cuesta el subárbol de ESE nodo, no la escena: el hijo se queda
-            // creado y con su nombre —ya se añadió arriba— y el recorrido sigue
-            // con sus hermanos. Y se nombra, que es lo que faltaba: el mensaje
-            // de nlohmann dice el tipo esperado y el encontrado, y este aviso
-            // pone el nodo.
+            // It costs the subtree of THAT node, not the scene: the child stays
+            // created and with its name —it was already added above— and the traversal goes on
+            // with its siblings. And it is named, which was what was missing: the nlohmann
+            // message says the expected and the found type, and this warning
+            // gives the node.
             //
-            // Se captura aquí y no dentro de cada bloque de componente porque
-            // aquí cubre los 32 que hay Y los que se añadan: envolver cada uno
-            // sería la lista escrita a mano de siempre.
+            // It is caught here and not inside each component block because
+            // here it covers the 32 there are AND those that get added: wrapping each one
+            // would be the usual hand-written list.
             try
             {
                 nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, loadCache, assetRoot, loader, preloaded, carryOverrideBaseline);
@@ -3447,10 +3445,10 @@ namespace DonTopo
     {
         if (!node || !node->parent) return;
 
-        // ANTES del erase, no después: el oyente recorre el subárbol para
-        // soltar sus ranuras de GPU, y para eso tiene que seguir existiendo.
-        // Va tras la guarda de arriba a propósito — de lo que no se borra no se
-        // avisa, o el Renderer soltaría las ranuras de una escena viva.
+        // BEFORE the erase, not after: the listener traverses the subtree to
+        // release its GPU slots, and for that it has to still exist.
+        // It goes after the guard above on purpose — what is not deleted is not
+        // announced, or the Renderer would release the slots of a live scene.
         if (m_onNodeRemoved) m_onNodeRemoved(node);
 
         auto& siblings = node->parent->children;
@@ -3462,14 +3460,14 @@ namespace DonTopo
 
     bool Scene::reparent(GameObject* node, GameObject* newParent, size_t index)
     {
-        // La raíz no cuelga de nadie: sin parent no hay lista de la que sacarlo.
+        // The root hangs from nobody: without a parent there is no list to take it out of.
         if (!node || !node->parent) return false;
 
         GameObject* target = newParent ? newParent : &m_root;
         if (target == node) return false;
 
-        // Ciclo: soltar un nodo dentro de su propio subárbol desengancharía ese
-        // subárbol del árbol, y con él el unique_ptr que lo mantiene vivo.
+        // Cycle: dropping a node inside its own subtree would detach that
+        // subtree from the tree, and with it the unique_ptr that keeps it alive.
         bool cycle = false;
         node->traverse([&](GameObject* go) { if (go == target) cycle = true; });
         if (cycle) return false;
@@ -3477,14 +3475,14 @@ namespace DonTopo
         auto& oldSiblings = node->parent->children;
         auto it = std::find_if(oldSiblings.begin(), oldSiblings.end(),
             [node](const std::unique_ptr<GameObject>& c) { return c.get() == node; });
-        // El nodo dice tener padre pero no está en su lista: árbol incoherente,
-        // mejor no tocarlo.
+        // The node says it has a parent but is not in its list: incoherent tree,
+        // better not to touch it.
         if (it == oldSiblings.end()) return false;
 
-        // El unique_ptr se saca ANTES de calcular el hueco: index se interpreta
-        // sobre la lista de destino ya sin el nodo, así el mismo índice vale
-        // esté el nodo donde esté (y el Undo del editor puede guardar el índice
-        // final tal cual).
+        // The unique_ptr is taken out BEFORE computing the gap: index is interpreted
+        // over the destination list already without the node, so the same index works
+        // wherever the node is (and the editor Undo can store the final
+        // index as is).
         std::unique_ptr<GameObject> moved = std::move(*it);
         oldSiblings.erase(it);
 
@@ -3502,33 +3500,33 @@ namespace DonTopo
         if (!src || src == &m_root) return nullptr;
 
         GameObject* target = parent ? parent : (src->parent ? src->parent : &m_root);
-        // Raíz VACÍA a propósito, no m_assetRoot: este JSON no toca disco, va
-        // directo de nodeToJson a nodeFromJson unas líneas más abajo. Con la
-        // raíz real el viaje absoluta->relativa->absoluta sería trabajo tirado
-        // (y una llamada a filesystem::relative, que SÍ toca disco, por cada
-        // override) — y este camino es el que usa Scene.Instantiate de Lua EN
-        // PLAY, ya optimizado a propósito para no ir a disco por spawn (ver el
-        // comentario de PreloadedMeshCache más abajo, 24,5 ms/clon medidos).
+        // EMPTY root on purpose, not m_assetRoot: this JSON does not touch disk, it goes
+        // straight from nodeToJson to nodeFromJson a few lines below. With the
+        // real root the absolute->relative->absolute trip would be wasted work
+        // (and a call to filesystem::relative, which DOES touch disk, per
+        // override) — and this path is the one used by Lua's Scene.Instantiate IN
+        // PLAY, already optimized on purpose not to go to disk per spawn (see the
+        // PreloadedMeshCache comment below, 24.5 ms/clone measured).
         //
-        // carryOverrideBaseline = true: la malla del clon se siembra más abajo
-        // desde `mallas`, la caché de PreloadedMeshCache con la malla VIVA de
-        // src — que si tiene overrides ya los lleva horneados en el material.
-        // Sin el baseline real viajando en este JSON, applyMaterialOverrides
-        // capturaría como "original" esa textura ya pisada, y un Clear sobre
-        // el clon no devolvería la del FBX. Ver el comentario grande de
-        // nodeToJson junto a "baseAlbedo".
+        // carryOverrideBaseline = true: the clone's mesh is seeded below
+        // from `mallas`, the PreloadedMeshCache with the LIVE mesh of
+        // src — which, if it has overrides, already carries them baked into the material.
+        // Without the real baseline traveling in this JSON, applyMaterialOverrides
+        // would capture that already overwritten texture as the "original", and a Clear on
+        // the clone would not return the FBX one. See the big comment of
+        // nodeToJson next to "baseAlbedo".
         nlohmann::json j = nodeToJson(*src, std::string(), /*carryOverrideBaseline=*/true);
 
-        // Fuera los "id" del árbol serializado, para que addChild/GameObject
-        // dejen los suyos recién generados.
+        // Remove the "id" from the serialized tree, so that addChild/GameObject
+        // keep their freshly generated ones.
         //
-        // nodeFromJson reusa el id que venga en el JSON, y hace bien: es lo que
-        // permite que el Undo de un Delete reconstruya el GameObject con su id
-        // original y los comandos que quedan en el stack lo sigan resolviendo.
-        // Pero al clonar el ORIGINAL SIGUE VIVO, así que reusarlo dejaba dos
-        // nodos con el mismo id; findById devuelve el último del recorrido —el
-        // clon—, y cualquier comando de undo resuelto por id acababa
-        // escribiendo en el objeto equivocado.
+        // nodeFromJson reuses the id that comes in the JSON, and rightly so: it is what
+        // lets the Undo of a Delete rebuild the GameObject with its original id
+        // and the commands left in the stack keep resolving it.
+        // But when cloning the ORIGINAL IS STILL ALIVE, so reusing it left two
+        // nodes with the same id; findById returns the last of the traversal —the
+        // clone—, and any undo command resolved by id ended up
+        // writing into the wrong object.
         std::function<void(nlohmann::json&)> stripIds = [&](nlohmann::json& node) {
             node.erase("id");
             if (auto it = node.find("children"); it != node.end() && it->is_array())
@@ -3538,47 +3536,47 @@ namespace DonTopo
         stripIds(j);
 
         GameObject* clone = target->addChild(src->name + " (Clone)");
-        // Antes de nodeFromJson: si se limpiara después (como estaba), los
-        // avisos que bindClips empuja a m_warnings durante la carga se
-        // perderían de inmediato.
+        // Before nodeFromJson: if it were cleared after (as it was), the
+        // warnings that bindClips pushes to m_warnings during the load would
+        // be lost immediately.
         m_warnings.clear();
-        // Cache sembrada con la respuesta AUTORITATIVA: el objeto origen ya
-        // está en memoria, así que isSkinned() es gratis y no puede mentir.
-        // Sin esto cada clon volvía a sondear el FBX con Assimp (y luego a
-        // parsearlo entero otra vez), dos lecturas síncronas de fichero por
-        // spawn dentro del bucle de Play — su único caller es Scene.Instantiate
-        // de Lua. Peor que el coste: leer el disco permite que un clon tomado
-        // mientras el artista reexporta el FBX vuelva con un tipo de malla
-        // distinto al del objeto del que se clonó. Si el clon es un subárbol,
-        // la cache además dedup entre todos sus nodos.
+        // Cache seeded with the AUTHORITATIVE answer: the source object is already
+        // in memory, so isSkinned() is free and cannot lie.
+        // Without this each clone probed the FBX again with Assimp (and then parsed
+        // it entirely again), two synchronous file reads per
+        // spawn inside the Play loop — its only caller is Lua's Scene.Instantiate.
+        // Worse than the cost: reading the disk lets a clone taken
+        // while the artist re-exports the FBX come back with a different mesh type
+        // from the object it was cloned from. If the clone is a subtree,
+        // the cache also dedups among all its nodes.
         //
-        // Las MALLAS van por el mismo razonamiento y el mismo camino: el objeto
-        // origen ya las tiene en memoria, así que nodeFromJson las copia en
-        // profundidad en vez de reparsear el fichero. Sin esto, el sondeo de
-        // huesos salía de la cache pero el parseo entero seguía yendo a disco —
-        // medido en Release, 24,5 ms por clon de un personaje rigged, o sea
-        // frame y medio a 60 fps por cada Instantiate.
+        // The MESHES go by the same reasoning and the same path: the source
+        // object already has them in memory, so nodeFromJson deep-copies them
+        // instead of reparsing the file. Without this, the bone probe
+        // came from the cache but the whole parse still went to disk —
+        // measured in Release, 24.5 ms per clone of a rigged character, that is
+        // a frame and a half at 60 fps per each Instantiate.
         //
-        // Se recorre el SUBÁRBOL, no solo la raíz: un personaje suele traer sus
-        // mallas colgando, y sembrar únicamente src dejaba a los hijos yendo a
-        // disco igual. Vale para las dos cachés, que se llenan en la misma
-        // pasada.
-        // Por el sourcePath REAL de la malla (m->sourcePath), no por la clave
-        // de mallas: desde que collectMeshes indexa por meshCacheKey (pieza
-        // incluida), la clave de una pieza != 0 lleva "#piece=N" y ya no
-        // coincide con el sourcePath a secas que busca hasBonesCache más
-        // abajo — sin esto, cada pieza != 0 de un modelo estático clonado
-        // volvía a sondear el fichero con Assimp en vez de usar la cache.
+        // The SUBTREE is traversed, not just the root: a character usually brings its
+        // meshes hanging, and seeding only src left the children going to
+        // disk all the same. It holds for both caches, which are filled in the same
+        // pass.
+        // By the REAL sourcePath of the mesh (m->sourcePath), not by the
+        // meshes key: since collectMeshes indexes by meshCacheKey (piece
+        // included), the key of a piece != 0 carries "#piece=N" and no longer
+        // matches the plain sourcePath that hasBonesCache looks up further
+        // below — without this, each piece != 0 of a cloned static model
+        // probed the file again with Assimp instead of using the cache.
         NodeLoadCache cache;
         const PreloadedMeshCache mallas = collectMeshes(src);
         for (const auto& [ruta, m] : mallas)
             cache.hasBones[m->sourcePath] = dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr;
         try
         {
-            // Raíz vacía, pareja de la de arriba: j se serializó con raíz vacía
-            // (rutas verbatim), así que se lee igual — sin fromStoredPath
-            // tocando el filesystem ni reescribiendo separadores en memoria por
-            // cada clon.
+            // Empty root, counterpart of the one above: j was serialized with an empty root
+            // (verbatim paths), so it is read the same way — without fromStoredPath
+            // touching the filesystem or rewriting separators in memory for
+            // each clone.
             nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
                          /*loader=*/nullptr, &mallas, /*carryOverrideBaseline=*/true);
         }
@@ -3591,12 +3589,12 @@ namespace DonTopo
         clone->traverse([&](GameObject* n) {
             n->staticRenderIndex  = -1;
             n->skinnedRenderIndex = -1;
-            // El clon nunca se lleva el CameraComponent: al clonar, el original
-            // sigue vivo con su cámara, así que findCamera() ya es no-nulo y el
-            // clon rompería el invariante. Determinista, no condicional. Su
-            // único caller es Instantiate de Lua (ScriptBindings.cpp), que corre
-            // en Play — ningún gate de la UI puede evitarlo, por eso la regla
-            // vive aquí.
+            // The clone never takes the CameraComponent: when cloning, the original
+            // is still alive with its camera, so findCamera() is already non-null and the
+            // clone would break the invariant. Deterministic, not conditional. Its
+            // only caller is Lua's Instantiate (ScriptBindings.cpp), which runs
+            // in Play — no UI gate can prevent it, which is why the rule
+            // lives here.
             if (n->hasCameraComponent())
             {
                 n->setCameraComponent(nullptr);
@@ -3610,30 +3608,30 @@ namespace DonTopo
 
     GameObject* Scene::findById(uint64_t id)
     {
-        // Primer match en pre-orden (gana el primero, igual que findCamera/
-        // findAudioListener/findCanvas más abajo), NO el último: antes se
-        // quedaba con el último nodo visitado, así que un id duplicado (que
-        // no debería existir — ver la guarda de insertFromJson — pero si el
-        // invariante se rompe por otra vía nadie más lo comprueba) elegía en
-        // silencio el objeto que menos tiempo llevaba en el árbol. Determinista
-        // no arregla el invariante roto, pero deja de depender del orden de
-        // inserción para decidir cuál gana.
+        // First match in pre-order (the first wins, just like findCamera/
+        // findAudioListener/findCanvas below), NOT the last: before it
+        // kept the last visited node, so a duplicate id (which
+        // should not exist — see the guard of insertFromJson — but if the
+        // invariant is broken through another path nobody else checks it) silently chose
+        // the object that had been in the tree the shortest time. Deterministic
+        // does not fix the broken invariant, but it stops depending on the
+        // insertion order to decide which one wins.
         return m_root.findFirst([id](const GameObject* n) { return n->id == id; });
     }
 
     GameObject* Scene::findCamera()
     {
-        // findFirst es pre-orden y CORTA: gana la primera, y además se deja de
-        // bajar por el resto del árbol. El `traverse` con guard de !found que
-        // había aquí visitaba los 5000 nodos de una escena grande para nada, y
-        // esto corre por frame (resolveFrameCamera).
+        // findFirst is pre-order and STOPS: the first wins, and it also stops
+        // descending through the rest of the tree. The `traverse` with a !found guard that
+        // was here visited the 5000 nodes of a large scene for nothing, and
+        // this runs per frame (resolveFrameCamera).
         return m_root.findFirst([](const GameObject* n) { return n->hasCameraComponent(); });
     }
 
     const GameObject* Scene::findCamera() const
     {
-        // traverse es non-const (template en GameObject); el const_cast se
-        // queda contenido aquí y la versión const no muta nada.
+        // traverse is non-const (template in GameObject); the const_cast stays
+        // contained here and the const version mutates nothing.
         return const_cast<Scene*>(this)->findCamera();
     }
 
@@ -3661,23 +3659,23 @@ namespace DonTopo
     {
         out.clear();
 
-        // Recursión propia y no traverse(): hace falta arrastrar hacia abajo
-        // en qué binding cae cada widget y cuál es su ancestro con UI, y el
-        // traverse solo da el nodo.
+        // Own recursion and not traverse(): it is necessary to carry downwards
+        // which binding each widget falls in and which is its ancestor with UI, and
+        // traverse only gives the node.
         struct Walker
         {
             std::vector<UiCanvasBinding>& out;
 
-            // canvasIdx: en qué binding caen los widgets de este subárbol (-1 =
-            // ninguno todavía). uiAncestor: el ancestro con UI DENTRO de ese
-            // mismo canvas, que es contra quien se anclan los hijos.
+            // canvasIdx: which binding the widgets of this subtree fall in (-1 =
+            // none yet). uiAncestor: the ancestor with UI INSIDE that
+            // same canvas, which is what the children are anchored against.
             void visit(const GameObject* node, int canvasIdx, uint64_t uiAncestor)
             {
                 if (node->hasCanvas())
                 {
-                    // Un canvas ANIDADO abre binding propio y CORTA la cadena de
-                    // anclaje: lo que cuelgue de él se ancla a su raíz, no al
-                    // widget que hubiera por encima en el canvas de fuera.
+                    // A NESTED canvas opens its own binding and CUTS the anchoring
+                    // chain: whatever hangs from it is anchored to its root, not to the
+                    // widget that might be above it in the outer canvas.
                     UiCanvasBinding b;
                     b.ownerId        = node->id;
                     b.canvas         = node->getCanvas().get();
@@ -3687,9 +3685,9 @@ namespace DonTopo
                     uiAncestor = 0;
                 }
 
-                // El contenedor de layout cuenta como UI aunque no pinte: aporta
-                // rect, y sin eso sus hijos subirian al ancestro de arriba y
-                // nadie los colocaria.
+                // The layout container counts as UI even if it draws nothing: it contributes a
+                // rect, and without that its children would go up to the ancestor above and
+                // nobody would place them.
                 const bool tieneUi = node->hasButton() || node->hasText() ||
                                      node->hasProgressBar() || node->hasLayout() ||
                                      node->hasPanel() || node->hasImage() ||
@@ -3698,16 +3696,16 @@ namespace DonTopo
                                      node->hasInputField() || node->hasDropdown() ||
                                      node->hasScrollView();
 
-                // Sin canvas por encima, un widget no va a ninguna parte. El
-                // editor ya lo impide (uiComponentsAvailable), así que esto solo
-                // pasa en escenas hechas a mano.
+                // Without a canvas above, a widget goes nowhere. The
+                // editor already prevents it (uiComponentsAvailable), so this only
+                // happens in hand-made scenes.
                 if (tieneUi && canvasIdx >= 0)
                 {
-                    // Re-indexado y no una referencia guardada: el push_back de
-                    // arriba (u otro más abajo, en un canvas hermano visitado
-                    // después) puede reasignar el vector, y una referencia a
-                    // out[i] que sobreviviera a la recursión de los hijos
-                    // quedaría apuntando a memoria liberada.
+                    // Re-indexed and not a stored reference: the push_back above
+                    // (or another further below, in a sibling canvas visited
+                    // later) may reallocate the vector, and a reference to
+                    // out[i] that survived the recursion into the children
+                    // would be left pointing at freed memory.
                     UiWidgetLists& w = out[(size_t)canvasIdx].widgets;
                     if (node->hasPanel())       w.panels.emplace_back(node->id, node->getPanel().get());
                     if (node->hasImage())       w.images.emplace_back(node->id, node->getImage().get());
@@ -3725,8 +3723,8 @@ namespace DonTopo
                     w.parents.emplace_back(node->id, uiAncestor);
                 }
 
-                // Los hijos cuelgan de ESTE si aporta rect; si no, siguen
-                // colgando de quien lo aportaba más arriba.
+                // The children hang from THIS one if it contributes a rect; if not, they keep
+                // hanging from whoever contributed it further up.
                 const uint64_t paraLosHijos = (tieneUi && canvasIdx >= 0) ? node->id : uiAncestor;
                 for (const auto& child : node->children)
                     visit(child.get(), canvasIdx, paraLosHijos);
@@ -3734,8 +3732,8 @@ namespace DonTopo
         };
 
         Walker walker{out};
-        // La raíz de la escena no es un widget: sus hijos arrancan sin canvas
-        // ni ancestro.
+        // The scene root is not a widget: its children start without a canvas
+        // or ancestor.
         for (const auto& child : m_root.children) walker.visit(child.get(), -1, 0ull);
     }
 
@@ -3743,8 +3741,8 @@ namespace DonTopo
     {
         std::vector<std::string> unicos;
         std::vector<size_t>      veces;
-        // Mapea mensaje -> posición en unicos. Con el mensaje entero como clave:
-        // dos avisos distintos del mismo objeto tienen que seguir siendo dos.
+        // Maps message -> position in unicos. With the whole message as key:
+        // two different warnings from the same object have to remain two.
         std::unordered_map<std::string, size_t> visto;
 
         for (const std::string& w : m_warnings)
@@ -3763,23 +3761,23 @@ namespace DonTopo
 
     void Scene::pruneDuplicateIds()
     {
-        // Mismo tipo de reparación que pruneExtraCameras: el FICHERO puede venir
-        // roto y la carga no puede propagarlo. nodeFromJson reusa el id que trae
-        // cada nodo —tiene que hacerlo, es lo que permite que un Undo de Delete
-        // reconstruya el objeto con su id original— pero nadie comprobaba que no
-        // se repitieran, así que una escena guardada con dos nodos del mismo id
-        // volvía a cargarse rota una y otra vez.
+        // Same kind of repair as pruneExtraCameras: the FILE may come
+        // broken and loading cannot propagate it. nodeFromJson reuses the id each
+        // node brings —it has to, it is what lets an Undo of Delete
+        // rebuild the object with its original id— but nobody checked they were not
+        // repeated, so a scene saved with two nodes of the same id
+        // loaded broken again and again.
         //
-        // Y el daño no es cosmético: TODO el editor resuelve por id (el gizmo
-        // por applyLocalTransform, los comandos de undo, el panel), y findById
-        // devuelve el primero en preorden. Con dos nodos compartiendo id,
-        // arrastrar el segundo escribía su matriz entera —posición, rotación y
-        // ESCALA— en el primero. Con un personaje de FBX, el otro objeto pegaba
-        // un salto de tamaño sin que nada lo explicara.
+        // And the damage is not cosmetic: the WHOLE editor resolves by id (the gizmo
+        // through applyLocalTransform, the undo commands, the panel), and findById
+        // returns the first in preorder. With two nodes sharing an id,
+        // dragging the second wrote its whole matrix —position, rotation and
+        // SCALE— into the first. With an FBX character, the other object jumped in size
+        // with nothing explaining it.
         //
-        // Gana el PRIMERO en preorden, por dos motivos que apuntan al mismo
-        // lado: es lo que ya devuelve findById, y es el criterio de
-        // insertFromJson (el que ya estaba se queda con el suyo).
+        // The FIRST in preorder wins, for two reasons pointing the same
+        // way: it is what findById already returns, and it is the criterion of
+        // insertFromJson (the one already there keeps its own).
         std::unordered_set<uint64_t> vistos;
         m_root.traverse([&](GameObject* n) {
             if (vistos.insert(n->id).second) return;
@@ -3829,12 +3827,12 @@ namespace DonTopo
 
             const auto& lc = *n->getLight();
 
-            // Posición y dirección salen del transform, igual que la cámara: la
-            // columna 3 es la posición de mundo y -Z local es hacia dónde mira.
-            // Una escala 0 en el eje Z (el editor deja ponerla desde Properties)
-            // dejaría la dirección en NaN, así que ahí se cae a -Y en vez de
-            // propagar el NaN hasta el shader — mismo criterio que el listener
-            // de audio del runtime.
+            // Position and direction come from the transform, like the camera: column
+            // 3 is the world position and local -Z is where it looks.
+            // A scale 0 on the Z axis (the editor lets you set it from Properties)
+            // would leave the direction as NaN, so there it falls to -Y instead of
+            // propagating the NaN up to the shader — same criterion as the runtime
+            // audio listener.
             const glm::vec3 pos     = glm::vec3(n->worldTransform[3]);
             const glm::vec3 zAxis   = glm::vec3(n->worldTransform[2]);
             const glm::vec3 forward = (glm::length(zAxis) >= 1e-6f)
@@ -3845,19 +3843,19 @@ namespace DonTopo
             l.position  = glm::vec4(pos, 1.0f);
             l.color     = glm::vec4(lc.getColor(), lc.getIntensity());
             l.direction = glm::vec4(forward, (float)(int)lc.getType());
-            // Los ángulos viajan ya en coseno: el shader compara contra el
-            // coseno del ángulo con el eje, no vuelve a llamar a cos() por
-            // fragmento.
+            // The angles already travel as cosine: the shader compares against the
+            // cosine of the angle with the axis, it does not call cos() again per
+            // fragment.
             l.params = glm::vec4(lc.getRange(),
                                  std::cos(glm::radians(lc.getInnerAngle())),
                                  std::cos(glm::radians(lc.getOuterAngle())),
                                  lc.getAreaWidth());
 
-            // El radio del binning de Forward+ tiene que ser EL MISMO alcance
-            // que usa el fragment shader, o una luz se apagaría de golpe al
-            // cruzar el borde de un tile. El area se aproxima como un point de
-            // radio ancho/2, igual que allí; la directional no se culea por
-            // radio (entra en todas las celdas), así que el suyo da igual.
+            // The Forward+ binning radius has to be THE SAME range
+            // the fragment shader uses, or a light would switch off abruptly when
+            // crossing the edge of a tile. The area is approximated as a point of
+            // radius width/2, as there; the directional is not culled by
+            // radius (it enters all cells), so its one does not matter.
             const float radius = (lc.getType() == LightType::Area)
                                      ? lc.getAreaWidth() * 0.5f
                                      : lc.getRange();
@@ -3871,16 +3869,16 @@ namespace DonTopo
 
     nlohmann::json Scene::subtreeToJson(const GameObject* node) const
     {
-        // Raíz vacía a propósito: este JSON es el snapshot en memoria que usan
-        // CreateGameObjectCommand/DeleteGameObjectCommand para Undo/Redo, nunca
-        // toca disco. Pareja con la misma raíz vacía de insertFromJson, más
-        // abajo — mismo razonamiento que cloneGameObject: sin ida y vuelta por
-        // filesystem::relative en cada ciclo de deshacer.
+        // Empty root on purpose: this JSON is the in-memory snapshot used by
+        // CreateGameObjectCommand/DeleteGameObjectCommand for Undo/Redo, it never
+        // touches disk. Paired with the same empty root of insertFromJson, further
+        // below — same reasoning as cloneGameObject: no round trip through
+        // filesystem::relative on every undo cycle.
         //
-        // carryOverrideBaseline = true: mismo camino de memoria que
-        // cloneGameObject (ver su comentario), así que el baseline viaja igual
-        // aquí — es el snapshot exacto del objeto en el momento del Delete, no
-        // una re-derivación desde el FBX.
+        // carryOverrideBaseline = true: same in-memory path as
+        // cloneGameObject (see its comment), so the baseline travels the same way
+        // here — it is the exact snapshot of the object at the moment of the Delete, not
+        // a re-derivation from the FBX.
         return nodeToJson(*node, std::string(), /*carryOverrideBaseline=*/true);
     }
 
@@ -3916,7 +3914,7 @@ namespace DonTopo
         root->traverse([&](GameObject* n) {
             if (!n->hasMesh()) return;
             const std::string& ruta = n->getMesh()->sourcePath;
-            if (ruta.empty()) return;   // procedural: no hay fichero que evitar
+            if (ruta.empty()) return;   // procedural: there is no file to avoid
             out[meshCacheKey(ruta, n->getMesh()->piece)] = n->getMesh();
         });
         return out;
@@ -3928,60 +3926,60 @@ namespace DonTopo
     {
         GameObject* target = parent ? parent : &m_root;
 
-        // Ids ya vivos en el resto de la escena, tomados ANTES de insertar
-        // nada: nodeFromJson reusa a propósito el id que traiga j (ver su
-        // comentario grande — es lo que permite que un Undo de Delete
-        // reconstruya el objeto con su id original) pero no comprueba que ese
-        // id no esté YA vivo en otro nodo. Un snapshot capturado por un
-        // comando viejo del stack de Undo/Redo puede quedar por detrás de una
-        // recarga de escena que repartió ese mismo id a otro objeto distinto;
-        // sin esta guarda el árbol se queda con dos nodos con el mismo id y
-        // findById resuelve el equivocado en silencio (bug reproducido: una
-        // textura asignada a 'Plane' acabó aplicada a un personaje skinned
-        // que compartía su id porque una reinserción vieja lo trajo de vuelta
-        // con ese id ya ocupado).
+        // Ids already alive in the rest of the scene, taken BEFORE inserting
+        // anything: nodeFromJson reuses on purpose the id that j brings (see its
+        // big comment — it is what lets an Undo of Delete
+        // rebuild the object with its original id) but does not check that that
+        // id is not ALREADY alive in another node. A snapshot captured by an old
+        // command of the Undo/Redo stack may fall behind a
+        // scene reload that handed out that same id to another, different object;
+        // without this guard the tree ends up with two nodes with the same id and
+        // findById silently resolves the wrong one (reproduced bug: a
+        // texture assigned to 'Plane' ended up applied to a skinned character
+        // that shared its id because an old reinsertion brought it back
+        // with that id already taken).
         std::unordered_set<uint64_t> idsVivos;
         m_root.traverse([&](GameObject* n) { idsVivos.insert(n->id); });
 
-        // Los dos componentes de los que la escena admite UNO, mirados ANTES de
-        // insertar por el mismo motivo que idsVivos: después ya no se distingue
-        // el que estaba vivo del que acaba de llegar en el snapshot.
+        // The two components of which the scene admits ONE, looked at BEFORE
+        // inserting for the same reason as idsVivos: afterwards the one that was alive
+        // can no longer be told apart from the one that just arrived in the snapshot.
         bool yaHayCamara  = findCamera() != nullptr;
         bool yaHayOyente  = findAudioListener() != nullptr;
 
         GameObject* node = target->addChild(j.value("name", std::string()));
-        // Igual que fromJson y cloneGameObject: los avisos son de ESTA operación.
-        // Sin este clear, cada undo de un Delete apilaba los suyos sobre los de
-        // la carga anterior y m_warnings crecía durante toda la sesión, en contra
-        // de lo que promete lastWarnings() en el header.
+        // Same as fromJson and cloneGameObject: the warnings are from THIS operation.
+        // Without this clear, each undo of a Delete piled its own on top of those of
+        // the previous load and m_warnings grew during the whole session, against
+        // what lastWarnings() promises in the header.
         m_warnings.clear();
-        // Sin objeto vivo al que preguntar (esto reconstruye un subárbol ya
-        // borrado: el undo de un Delete). Si el llamante trae las mallas vivas
-        // (preloaded), la cache de hasBones se siembra con ellas y no se toca
-        // el disco; si no, arranca vacía y sólo aporta el dedup entre los
-        // nodos de ESE subárbol.
+        // Without a live object to ask (this rebuilds an already deleted
+        // subtree: the undo of a Delete). If the caller brings the live meshes
+        // (preloaded), the hasBones cache is seeded with them and the
+        // disk is not touched; if not, it starts empty and only contributes the dedup among the
+        // nodes of THAT subtree.
         NodeLoadCache cache;
-        // Por el sourcePath REAL de la malla (m->sourcePath), no por la clave de
-        // PreloadedMeshCache: desde Task 2 esa clave es meshCacheKey(sourcePath,
-        // piece), que para una pieza != 0 lleva "#piece=N" y ya no coincide con
-        // el sourcePath a secas que busca hasBonesCache en nodeFromJson. Sin
-        // esto, cada hijo de pieza != 0 (insertModelPieces, su redo vía
-        // CreateGameObjectCommand::execute, y el undo de su Delete) fallaba la
-        // consulta a esta cache y volvía a sondear el fichero con
-        // ModelLoader::hasBones -un ReadFile síncrono de Assimp en el hilo
-        // principal-, exactamente lo que preloaded existe para evitar. Mismo
-        // patrón que Scene::cloneGameObject (ver su comentario, unas líneas más
-        // arriba en este fichero). OR en vez de asignar directo: si dos
-        // entradas comparten sourcePath (varias piezas del mismo fichero), una
-        // no-skinned posterior no debe enmascarar a una skinned ya vista.
+        // By the REAL sourcePath of the mesh (m->sourcePath), not by the key of
+        // PreloadedMeshCache: since Task 2 that key is meshCacheKey(sourcePath,
+        // piece), which for a piece != 0 carries "#piece=N" and no longer matches the
+        // plain sourcePath that hasBonesCache looks up in nodeFromJson. Without
+        // this, each child of a piece != 0 (insertModelPieces, its redo via
+        // CreateGameObjectCommand::execute, and the undo of its Delete) failed the
+        // query to this cache and probed the file again with
+        // ModelLoader::hasBones -a synchronous Assimp ReadFile on the main
+        // thread-, exactly what preloaded exists to avoid. Same
+        // pattern as Scene::cloneGameObject (see its comment, a few lines
+        // above in this file). OR instead of assigning directly: if two
+        // entries share sourcePath (several pieces of the same file), a later
+        // non-skinned one must not mask a skinned one already seen.
         if (preloaded)
             for (const auto& [ruta, m] : *preloaded)
                 if (m) cache.hasBones[m->sourcePath] = cache.hasBones[m->sourcePath] || (dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr);
         try
         {
-            // Raíz vacía, pareja de subtreeToJson: j vino de ahí con raíz
-            // vacía (rutas verbatim), así que se lee igual. carryOverrideBaseline
-            // a juego con el mismo true de subtreeToJson.
+            // Empty root, counterpart of subtreeToJson: j came from there with an empty
+            // root (verbatim paths), so it is read the same way. carryOverrideBaseline
+            // matching the same true of subtreeToJson.
             nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
                          /*loader=*/nullptr, preloaded, /*carryOverrideBaseline=*/true);
         }
@@ -3991,27 +3989,27 @@ namespace DonTopo
             return nullptr;
         }
 
-        // nodeFromJson ya reusó (o dejó, si j no traía "id") los ids de node
-        // y de todo su subárbol; ahora que está completo, cualquiera que
-        // choque con idsVivos (el resto de la escena, capturado ANTES de
-        // insertar) estrena uno nuevo del contador global. Nunca al revés: el
-        // nodo que YA estaba vivo se queda con el suyo, porque puede tener
-        // referencias más frescas apuntándole (la selección actual, un
-        // comando que se acaba de ejecutar) que el snapshot que se está
-        // reinsertando — ver el razonamiento completo arriba, junto a
-        // idsVivos. También cubre un choque DENTRO del propio subárbol
-        // reinsertado (dos nodos del snapshot con el mismo id): idsVivos se
-        // va ampliando con cada id ya aceptado en este mismo recorrido.
+        // nodeFromJson already reused (or left, if j did not bring "id") the ids of node
+        // and its whole subtree; now that it is complete, any that
+        // clashes with idsVivos (the rest of the scene, captured BEFORE
+        // inserting) gets a new one from the global counter. Never the other way round: the
+        // node that WAS already alive keeps its own, because it may have
+        // fresher references pointing at it (the current selection, a
+        // command that was just executed) than the snapshot being
+        // reinserted — see the full reasoning above, next to
+        // idsVivos. It also covers a clash INSIDE the reinserted
+        // subtree itself (two snapshot nodes with the same id): idsVivos
+        // is extended with each id already accepted in this same traversal.
         //
-        // Efecto secundario conocido, fuera de alcance de este arreglo: si el
-        // reasignado es `node` (la raíz de este subárbol), el propio comando
-        // que llamó a insertFromJson sigue guardando el id ANTIGUO en su
-        // snapshot. Su próximo execute()/undo() resolverá ese id por
-        // findById y no encontrará este objeto — no-op silencioso, no
-        // corrompe otro objeto (que es justo lo que esta guarda evita), pero
-        // el comando queda inservible. Arreglarlo del todo pide invalidar el
-        // historial de Undo/Redo al recargar escena; es una auditoría aparte
-        // del sistema de ids, no este parche puntual.
+        // Known side effect, out of scope for this fix: if the
+        // reassigned one is `node` (the root of this subtree), the very command
+        // that called insertFromJson keeps storing the OLD id in its
+        // snapshot. Its next execute()/undo() will resolve that id by
+        // findById and will not find this object — a silent no-op, it does not
+        // corrupt another object (which is exactly what this guard avoids), but
+        // the command becomes useless. Fixing it fully requires invalidating the
+        // Undo/Redo history on scene reload; it is a separate audit
+        // of the id system, not this specific patch.
         node->traverse([&](GameObject* n) {
             n->staticRenderIndex  = -1;
             n->skinnedRenderIndex = -1;
@@ -4025,22 +4023,22 @@ namespace DonTopo
             }
             idsVivos.insert(n->id);
 
-            // "Como mucho una cámara (y un AudioListener) por escena" lo imponían
-            // fromJson (pruneExtraCameras) y cloneGameObject, pero NO este
-            // camino, que es el Undo de un Delete. Escenario de uso normal:
-            // borras la cámara, pones otra, deshaces el borrado — y la escena se
-            // quedaba con dos. findCamera devuelve la primera en preorden, así
-            // que Play podía acabar mirando por la que el usuario creía haber
-            // sustituido, sin una sola línea que lo dijera.
+            // "At most one camera (and one AudioListener) per scene" was enforced by
+            // fromJson (pruneExtraCameras) and cloneGameObject, but NOT this
+            // path, which is the Undo of a Delete. Normal usage scenario:
+            // you delete the camera, set up another, undo the deletion — and the scene
+            // was left with two. findCamera returns the first in preorder, so
+            // Play could end up looking through the one the user thought they had
+            // replaced, without a single line saying so.
             //
-            // Gana la que YA estaba viva, mismo criterio que la guarda de ids de
-            // aquí arriba y que pruneExtraCameras. El GameObject vuelve entero
-            // —que es lo que el usuario pidió al deshacer—, solo se queda sin el
-            // componente, y con aviso: perder algo al deshacer no puede ser mudo.
+            // The one that was ALREADY alive wins, same criterion as the id guard
+            // above and as pruneExtraCameras. The GameObject comes back whole
+            // —which is what the user asked for when undoing—, it is only left without the
+            // component, and with a warning: losing something when undoing cannot be silent.
             //
-            // Las banderas se ACTUALIZAN al aceptar uno, así que un snapshot que
-            // traiga dos cámaras dentro de sí mismo también queda con una sola
-            // (mismo caso que dos ids iguales dentro del propio subárbol).
+            // The flags are UPDATED on accepting one, so a snapshot that
+            // brings two cameras within itself also ends up with a single one
+            // (same case as two equal ids inside the subtree itself).
             if (n->hasCameraComponent())
             {
                 if (yaHayCamara)
@@ -4069,7 +4067,7 @@ namespace DonTopo
             }
         });
 
-        // addChild() insertó al final; reposicionar a index si no es ya ahí.
+        // addChild() inserted at the end; reposition to index if it is not already there.
         auto& siblings = target->children;
         size_t insertedAt = siblings.size() - 1;
         if (index < insertedAt)
@@ -4089,27 +4087,27 @@ namespace DonTopo
 
             const bool hasRb     = go->hasRigidbody();
             const bool kinematic = hasRb && go->getRigidbody()->getIsKinematic();
-            const bool simulated = hasRb && !kinematic; // cuerpo dinámico real
+            const bool simulated = hasRb && !kinematic; // real dynamic body
 
             if (simulated)
             {
-                // PhysX manda: leer pose actor -> GameObject.
+                // PhysX rules: read actor pose -> GameObject.
                 go->worldTransform = col->getWorldTransform();
                 glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
                 go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
             }
             else if (kinematic)
             {
-                // Kinematic: empujar pose GameObject -> actor (setKinematicTarget).
+                // Kinematic: push pose GameObject -> actor (setKinematicTarget).
                 col->syncTransform(go->worldTransform);
             }
             else
             {
-                // Solo collider (static): empujar pose SÓLO si cambió. Mover un
-                // PxRigidStatic cada frame ensucia el pruner de scene-query de
-                // PhysX (y emite warnings), así que se compara la pose actual
-                // del actor (T*R, sin escala) con la del GameObject normalizada
-                // (quitando escala) y sólo se teleporta si difieren.
+                // Collider only (static): push the pose ONLY if it changed. Moving a
+                // PxRigidStatic every frame dirties PhysX's scene-query pruner
+                // (and emits warnings), so the actor's current pose (T*R, without scale)
+                // is compared with the GameObject's normalized one
+                // (removing scale) and it is only teleported if they differ.
                 glm::mat4 want = go->worldTransform;
                 glm::vec3 wantScale(1.0f);
                 for (int i = 0; i < 3; ++i)
@@ -4128,15 +4126,15 @@ namespace DonTopo
                         if (d < 0.0f) d = -d;
                         if (d > 1e-4f) { changed = true; break; }
                     }
-                // La escala se compara APARTE: `have` es la pose del actor, que
-                // nunca la lleva (PxTransform no la admite), así que un cambio
-                // de sólo-escala no movería ni un bit del bucle de arriba y la
-                // geometría se quedaría con el tamaño del frame anterior.
-                // Se contrasta contra la que el collider tiene ya horneada.
-                // En valor absoluto: la geometría usa abs(escala) —un espejo no
-                // adelgaza la forma— y glm::decompose puede repartir los signos
-                // de otra manera en una matriz especular, lo que dejaría un
-                // desajuste permanente y un teleport por frame.
+                // The scale is compared SEPARATELY: `have` is the actor pose, which
+                // never carries it (PxTransform does not support it), so a scale-only
+                // change would not move a single bit of the loop above and the
+                // geometry would keep the size of the previous frame.
+                // It is checked against the one the collider already has baked.
+                // In absolute value: the geometry uses abs(scale) —a mirror does not
+                // thin the shape— and glm::decompose may distribute the signs
+                // differently in a mirror matrix, which would leave a permanent
+                // mismatch and a teleport per frame.
                 const glm::vec3 haveScale = col->getWorldScale();
                 for (int i = 0; i < 3 && !changed; ++i)
                     if (std::fabs(std::fabs(wantScale[i]) - std::fabs(haveScale[i])) > 1e-4f)
@@ -4145,14 +4143,14 @@ namespace DonTopo
             }
         });
 
-        // Sync física-transform corre antes de propagar transforms locales:
-        // los colliders ya escriben worldTransform/localTransform directamente,
-        // así que updateWorldTransforms() solo necesita recalcular los nodos
-        // sin collider (hijos de un padre cuyo worldTransform pudo cambiar).
+        // Physics-transform sync runs before propagating local transforms:
+        // the colliders already write worldTransform/localTransform directly,
+        // so updateWorldTransforms() only needs to recompute the nodes
+        // without a collider (children of a parent whose worldTransform may have changed).
         m_root.updateWorldTransforms();
 
-        // Después de que los transforms estén al día: si se hiciera antes, cada
-        // sonido iría un frame por detrás de su objeto.
+        // After the transforms are up to date: if done before, each
+        // sound would go one frame behind its object.
         updateAudioSpatial(dt);
     }
 
@@ -4166,9 +4164,9 @@ namespace DonTopo
 
     void Scene::syncReverbZones(AudioManager& audio)
     {
-        // Los ids vistos en este barrido; lo que el manager tenga y no este aqui
-        // es de un GameObject borrado y hay que soltarlo. Sin esta parte, borrar
-        // un objeto con zona dejaria su reverb sonando para siempre.
+        // The ids seen in this sweep; what the manager has and is not here
+        // belongs to a deleted GameObject and has to be released. Without this part, deleting
+        // an object with a zone would leave its reverb playing forever.
         std::vector<uint64_t> alive;
         m_root.traverse([&](GameObject* go) {
             if (!go->hasReverbZone()) return;
@@ -4183,27 +4181,27 @@ namespace DonTopo
 
     void Scene::shutdown()
     {
-        // Suelta TODO lo que la escena tiene cogido, destruyendo el árbol. Los
-        // tres llamantes (fromJson, y la salida del sandbox y del runtime) o
-        // reemplazan la escena acto seguido o están cerrando el proceso, así
-        // que ninguno la vuelve a usar; lo que sí necesitan los dos hosts —y lo
-        // dicen en un comentario al llamar— es que los destructores de los
-        // componentes corran ANTES de destruir PhysicsManager y AudioManager.
-        // Un ~Collider contra una PxScene ya liberada es el fallo que esto
-        // existe para evitar.
+        // Releases EVERYTHING the scene holds, destroying the tree. The three
+        // callers (fromJson, and the exit of the sandbox and the runtime) either
+        // replace the scene right away or are closing the process, so
+        // none uses it again; what the two hosts do need —and they
+        // say so in a comment when calling— is that the destructors of the
+        // components run BEFORE destroying PhysicsManager and AudioManager.
+        // A ~Collider against an already released PxScene is the failure this
+        // exists to avoid.
         //
-        // Antes esto era una lista escrita a mano: los 4 colliders, el
-        // AudioClip y los scripts. Se quedaba en 6 de los 28 componentes, así
-        // que Rigidbody, Animator, ReverbZone y AudioListener sobrevivían — y
-        // el número 29 habría necesitado acordarse de una séptima línea. Es el
-        // mismo patrón que ya falló CUATRO veces en invalidateCaches del panel
-        // de Properties, y se cierra igual: en vez de enumerar lo que hay que
-        // limpiar, se tira lo que lo contiene. El destructor de GameObject no
-        // se puede quedar corto.
+        // Before this was a hand-written list: the 4 colliders, the
+        // AudioClip and the scripts. It stayed at 6 of the 28 components, so
+        // Rigidbody, Animator, ReverbZone and AudioListener survived — and
+        // number 29 would have needed remembering a seventh line. It is the
+        // same pattern that already failed FOUR times in invalidateCaches of the Properties
+        // panel, and it is closed the same way: instead of enumerating what has to be
+        // cleaned, what contains it is thrown away. The GameObject destructor cannot
+        // fall short.
         //
-        // La raíz conserva id y nombre porque es la identidad de la escena, no
-        // un objeto suyo: `fromJson` la sobrescribe una línea después, pero los
-        // dos hosts la dejan viva hasta que Scene se destruye.
+        // The root keeps id and name because it is the identity of the scene, not
+        // one of its objects: `fromJson` overwrites it a line later, but the
+        // two hosts leave it alive until Scene is destroyed.
         const uint64_t    idRaiz     = m_root.id;
         const std::string nombreRaiz = m_root.name;
         m_root        = GameObject(nombreRaiz);
@@ -4215,11 +4213,11 @@ namespace DonTopo
     {
         nlohmann::json root;
         root["version"] = 1;
-        // carryOverrideBaseline NO se pasa (default false): esta es la API de
-        // disco de verdad, aunque m_assetRoot esté vacío (proyecto sin abrir,
-        // o los tests de Task 6 que no llaman a setAssetRoot) — assetRoot
-        // vacío por sí solo NO distingue disco de memoria, ver el comentario
-        // grande de nodeToJson.
+        // carryOverrideBaseline is NOT passed (default false): this is the real
+        // disk API, even if m_assetRoot is empty (project not open,
+        // or the Task 6 tests that do not call setAssetRoot) — an empty
+        // assetRoot by itself does NOT distinguish disk from memory, see the big
+        // comment of nodeToJson.
         root["root"] = nodeToJson(m_root, m_assetRoot);
         return root;
     }
@@ -4239,32 +4237,32 @@ namespace DonTopo
 
         const nlohmann::json& rootJson = j["root"];
 
-        // Construye el árbol nuevo en un GameObject temporal, desconectado de
-        // m_root: si nodeFromJson lanza a mitad de un nodo interno malformado,
-        // el temporal se destruye solo al salir de scope (liberando los
-        // colliders/audio ya creados en él — physics/audio siguen vivos) y
-        // m_root queda intacto. Garantiza que una carga fallida nunca deja la
-        // escena a medio reconstruir, no solo en el chequeo de version/root de
-        // arriba sino también ante malformación anidada más abajo en el árbol
-        // (spec: "carga fallida no modifica la escena").
+        // Builds the new tree in a temporary GameObject, disconnected from
+        // m_root: if nodeFromJson throws in the middle of a malformed inner node,
+        // the temporary is destroyed by itself on leaving scope (releasing the
+        // colliders/audio already created in it — physics/audio are still alive) and
+        // m_root stays intact. It guarantees that a failed load never leaves the
+        // scene half rebuilt, not just in the version/root check
+        // above but also in the face of nested malformation further down the tree
+        // (spec: "failed load does not modify the scene").
         GameObject newRoot(rootJson.value("name", "root"));
-        // Cache de hasBones() con vida atada a ESTA llamada a fromJson (local,
-        // no miembro ni static): un FBX puede cambiar en disco entre dos
-        // cargas de escena dentro de la misma sesión de editor, y un cache que
-        // sobreviviera a esta función serviría un resultado stale — cargaría
-        // el tipo de malla equivocado sin que nada lo delate. Dentro de una
-        // sola carga el fichero es estable, así que compartirla entre los
-        // nodos que repiten sourcePath (varios enemigos con el mismo FBX) es
-        // seguro y evita repetir el ReadFile completo de Assimp por cada uno.
-        // Ahora es NodeLoadCache: lleva tambien el StaticModel de la rama
-        // estatica sincrona, con la misma vida y por la misma razon.
+        // hasBones() cache with life tied to THIS call to fromJson (local,
+        // not a member nor static): an FBX can change on disk between two
+        // scene loads within the same editor session, and a cache that
+        // survived this function would serve a stale result — it would load
+        // the wrong mesh type with nothing giving it away. Within a
+        // single load the file is stable, so sharing it among the
+        // nodes that repeat sourcePath (several enemies with the same FBX) is
+        // safe and avoids repeating the full Assimp ReadFile for each.
+        // It is now NodeLoadCache: it also carries the StaticModel of the
+        // synchronous static branch, with the same life and for the same reason.
         NodeLoadCache hasBonesCache;
         try
         {
-            // carryOverrideBaseline NO se pasa (default false), a propósito:
-            // esta es la carga de disco de verdad, así que el baseline de cada
-            // override se rederiva del material que acaba de salir del FBX, no
-            // de uno guardado. Ver el comentario grande de nodeToJson.
+            // carryOverrideBaseline is NOT passed (default false), on purpose:
+            // this is the real disk load, so the baseline of each
+            // override is rederived from the material that just came out of the FBX, not
+            // from a saved one. See the big comment of nodeToJson.
             nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio, &m_warnings, &hasBonesCache, m_assetRoot, loader, preloaded);
         }
         catch (const nlohmann::json::exception&)
@@ -4274,14 +4272,14 @@ namespace DonTopo
 
         shutdown();
         m_root = std::move(newRoot);
-        // addChild() (llamado dentro de nodeFromJson vía newRoot.addChild/
-        // node->addChild) apunta el parent de cada hijo directo al objeto
-        // newRoot original — que era una variable local a esta función. Tras
-        // el move-assignment, m_root vive en su propia dirección estable (es
-        // un miembro de Scene), así que hay que re-apuntar el parent de los
-        // hijos directos a &m_root. Los nietos y descendientes más profundos NO
-        // necesitan este arreglo: su parent apunta a su padre inmediato, que
-        // vive en el heap vía unique_ptr y no se mueve de dirección con este
+        // addChild() (called inside nodeFromJson via newRoot.addChild/
+        // node->addChild) points the parent of each direct child at the original
+        // newRoot object — which was a local variable of this function. After
+        // the move-assignment, m_root lives at its own stable address (it is
+        // a member of Scene), so the parent of the direct children has to be re-pointed
+        // to &m_root. Grandchildren and deeper descendants do NOT
+        // need this fix: their parent points to their immediate parent, which
+        // lives on the heap via unique_ptr and does not change address with this
         // move-assignment.
         m_root.parent = nullptr;
         for (auto& child : m_root.children)
@@ -4289,15 +4287,15 @@ namespace DonTopo
 
         m_root.updateWorldTransforms();
 
-        // Tras reconstruir, las reparaciones de lo que el FICHERO pueda traer mal.
-        // Los ids primero: los otros dos prunes avisan nombrando nodos, y con
-        // ids repetidos el editor ya estaría resolviendo al objeto equivocado.
+        // After rebuilding, the repairs of whatever the FILE may bring wrong.
+        // The ids first: the other two prunes warn naming nodes, and with
+        // repeated ids the editor would already be resolving to the wrong object.
         pruneDuplicateIds();
-        // El fichero puede traer dos cámaras (editado a mano).
+        // The file may bring two cameras (hand-edited).
         pruneExtraCameras();
-        // Igual que las cámaras: el fichero puede traer dos listeners.
+        // Same as the cameras: the file may bring two listeners.
         pruneExtraAudioListeners();
-        collapseWarnings(); // después de los prune: también empujan avisos
+        collapseWarnings(); // after the prunes: they also push warnings
         return true;
     }
 

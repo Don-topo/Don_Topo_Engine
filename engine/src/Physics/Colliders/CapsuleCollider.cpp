@@ -13,14 +13,14 @@
 using namespace physx;
 
 namespace {
-    // PxCapsuleGeometry se orienta por defecto a lo largo del eje X local del
-    // shape; esta rotación fija (90° sobre Z) mapea ese eje X a Y, dejando la
-    // cápsula "de pie" en el espacio local del actor. Constante: nunca
-    // cambia, solo se recompone con distintas traslaciones (center).
+    // PxCapsuleGeometry is oriented by default along the local X axis of the
+    // shape; this fixed rotation (90° about Z) maps that X axis to Y, leaving the
+    // capsule "upright" in the local space of the actor. Constant: it never
+    // changes, it is only recomposed with different translations (center).
     PxQuat axisCorrection() { return PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f)); }
 
-    // Mínimo positivo: PhysX rechaza una PxCapsuleGeometry degenerada, y con
-    // escala 0 el producto daría exactamente eso.
+    // Positive minimum: PhysX rejects a degenerate PxCapsuleGeometry, and with
+    // scale 0 the product would give exactly that.
     constexpr float kMinDimension = 1e-4f;
 
     float clampDimension(float v)
@@ -28,9 +28,9 @@ namespace {
         return v > kMinDimension ? v : kMinDimension;
     }
 
-    // El radio no puede volverse elíptico: manda el mayor de los dos ejes
-    // transversales (X y Z; la altura va en Y por la corrección de eje). abs()
-    // porque una escala negativa es un espejo, no encoge la cápsula.
+    // The radius cannot become elliptical: the larger of the two transverse
+    // axes wins (X and Z; the height goes in Y because of the axis correction). abs()
+    // because a negative scale is a mirror, it does not shrink the capsule.
     float scaledRadius(float radius, const glm::vec3& scale)
     {
         return clampDimension(radius * std::max(std::fabs(scale.x), std::fabs(scale.z)));
@@ -41,9 +41,9 @@ namespace {
         return clampDimension(halfHeight * std::fabs(scale.y));
     }
 
-    // Tolerancia, no igualdad: glm::decompose devuelve 1±1e-7 en matrices con
-    // rotación, y ese ruido no debe reescribir la geometría de una escena sin
-    // escalar (con escala 1 no se llama nunca a setGeometry).
+    // Tolerance, not equality: glm::decompose returns 1±1e-7 on matrices with
+    // rotation, and that noise must not rewrite the geometry of an unscaled scene
+    // (with scale 1 setGeometry is never called).
     bool sameScale(const glm::vec3& a, const glm::vec3& b)
     {
         return std::fabs(a.x - b.x) < 1e-6f
@@ -73,7 +73,7 @@ CapsuleCollider::CapsuleCollider(void* actor, void* shape, float radius, float h
 CapsuleCollider::~CapsuleCollider()
 {
 #ifdef DT_PHYSX_ENABLED
-    // release() vía base PxActor: funciona para static y dynamic.
+    // release() through the PxActor base: works for static and dynamic.
     if (m_actor) static_cast<PxActor*>(m_actor)->release();
 #endif
 }
@@ -157,7 +157,7 @@ glm::mat4 CapsuleCollider::getWorldTransform() const
     glm::quat rotation(pose.q.w, pose.q.x, pose.q.y, pose.q.z);
     glm::mat4 rotationMat = glm::mat4_cast(rotation);
 
-    // Con interpolación apagada (default) devuelve la pose cruda del actor.
+    // With interpolation off (default) it returns the raw actor pose.
     return blendWithPreviousPose(translation * rotationMat);
 #else
     return glm::mat4(1.0f);
@@ -173,8 +173,8 @@ void CapsuleCollider::syncTransform(const glm::mat4& worldTransform)
     glm::vec4 perspective;
     glm::quat rotation;
     const PxTransform pose = poseFromWorld(worldTransform, &scale);
-    // La escala no cabe en la PxTransform: se hornea en la geometría. No-op si
-    // no cambió desde la última vez (el caso normal, escala 1).
+    // The scale does not fit in the PxTransform: it is baked into the geometry. No-op if
+    // it did not change since last time (the normal case, scale 1).
     setWorldScale(scale);
     auto* dyn = static_cast<PxRigidActor*>(m_actor)->is<PxRigidDynamic>();
     if (dyn && (dyn->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC))
@@ -196,11 +196,11 @@ void CapsuleCollider::teleport(const glm::mat4& worldTransform)
     glm::quat rotation;
     const PxTransform pose = poseFromWorld(worldTransform, &scale);
 
-    setWorldScale(scale); // ver nota en syncTransform
+    setWorldScale(scale); // see note in syncTransform
 
     auto* actor = static_cast<PxRigidActor*>(m_actor);
     actor->setGlobalPose(pose);
-    // Reset de velocidad solo en cuerpo dinámico real (no static/kinematic).
+    // Velocity reset only on a real dynamic body (not static/kinematic).
     if (auto* dyn = actor->is<PxRigidDynamic>())
         if (!(dyn->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC))
         {

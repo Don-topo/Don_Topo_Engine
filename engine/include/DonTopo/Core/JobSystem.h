@@ -10,82 +10,82 @@
 
 namespace DonTopo
 {
-    // Pool de hilos genérico: no sabe nada de assets, Vulkan ni escena. Lo usa
-    // AsyncAssetLoader, pero se testea solo.
+    // Generic thread pool: it knows nothing about assets, Vulkan or the scene. It is used by
+    // AsyncAssetLoader, but it is tested on its own.
     //
-    // NO es singleton a propósito: la app crea la suya en main() y la pasa por
-    // referencia, así los tests montan una por caso sin estado global entre
-    // ellos.
+    // It is NOT a singleton on purpose: the app creates its own in main() and passes it by
+    // reference, so tests set one up per case with no global state between
+    // them.
     class JobSystem
     {
         public:
             using JobId = uint64_t;
 
-            // El destructor DRENA (llama a shutdown(), que ejecuta lo pendiente),
-            // no descarta. Cualquier cosa que un job capture por referencia tiene
-            // que vivir más que el JobSystem: si se declara después en el mismo
-            // scope, el destructor del JobSystem corre primero (orden inverso de
-            // declaración) y no hay problema; si vive en otro sitio, es cosa del
-            // llamador garantizar el orden.
+            // The destructor DRAINS (calls shutdown(), which runs what is pending),
+            // it does not discard. Anything a job captures by reference has
+            // to outlive the JobSystem: if it is declared after it in the same
+            // scope, the JobSystem destructor runs first (reverse order of
+            // declaration) and there is no problem; if it lives elsewhere, it is up to the
+            // caller to guarantee the order.
             JobSystem() = default;
             ~JobSystem() { shutdown(); }
             JobSystem(const JobSystem&)            = delete;
             JobSystem& operator=(const JobSystem&) = delete;
 
-            // threads == 0 → clamp(hardware_concurrency() - 1, 2, 8). El -1 deja
-            // un core para el hilo principal, que es quien pinta. Llamar dos
-            // veces sin shutdown() entre medias es un no-op.
+            // threads == 0 → clamp(hardware_concurrency() - 1, 2, 8). The -1 leaves
+            // one core for the main thread, which is the one that draws. Calling twice
+            // without a shutdown() in between is a no-op.
             void start(unsigned threads = 0);
 
-            // Drena la cola (ejecuta lo pendiente), para los hilos y hace
-            // join. Cuando shutdown() retorna, TODOS los workers están
-            // parados y unidos — esto vale para cualquier llamador, no solo
-            // para el que "gana" la carrera si hay dos llamadas explícitas
-            // concurrentes (p.ej. dos hilos que llaman shutdown() a mano).
-            // La que pierde la carrera por el mutex ESPERA a que la
-            // ganadora termine de drenar y hacer join antes de retornar, en
-            // vez de retornar ya con los workers de la ganadora todavía
-            // vivos. Eso importa porque el primer paso de un teardown
-            // ordenado (p.ej. antes de vkDeviceWaitIdle) es "ya no queda
-            // ningún worker vivo", y esa garantía tiene que valer para
-            // cualquiera de las llamadas, no solo para la que llegó primero
-            // al mutex.
+            // Drains the queue (runs what is pending), stops the threads and
+            // joins. When shutdown() returns, ALL the workers are
+            // stopped and joined — this holds for any caller, not only
+            // for the one that "wins" the race if there are two concurrent explicit
+            // calls (e.g. two threads calling shutdown() by hand).
+            // The one that loses the race for the mutex WAITS for the
+            // winner to finish draining and joining before returning, instead
+            // of returning right away with the winner's workers still
+            // alive. That matters because the first step of an orderly
+            // teardown (e.g. before vkDeviceWaitIdle) is "no worker is
+            // alive any more", and that guarantee has to hold for
+            // any of the calls, not only for the one that reached the
+            // mutex first.
             //
-            // Esto NO cubre destruir el JobSystem mientras otro hilo sigue
-            // llamando a uno de sus miembros: eso es undefined behavior del
-            // lenguaje (el objeto deja de existir bajo los pies de esa
-            // llamada) y ninguna sincronización interna puede defenderse de
-            // eso. shutdown() resuelve la carrera entre llamadas a MIEMBROS
-            // concurrentes, no la destrucción concurrente con una llamada.
+            // This does NOT cover destroying the JobSystem while another thread is still
+            // calling one of its members: that is undefined behavior of the
+            // language (the object ceases to exist under the feet of that
+            // call) and no internal synchronization can defend against
+            // that. shutdown() resolves the race between concurrent MEMBER calls, not
+            // destruction concurrent with a call.
             void shutdown();
 
-            // Devuelve 0 si el pool no está arrancado — el job NO se ejecuta.
+            // Returns 0 if the pool is not started — the job is NOT run.
             JobId submit(std::function<void()> fn);
 
-            // Reserva un JobId sin encolar nada, y encola con un id ya
-            // reservado. Existen para que un job pueda conocer su PROPIO id
-            // desde dentro: con submit() a secas, el id solo se conoce al
-            // retornar, y un worker rápido puede haber arrancado ya. Leerlo
-            // entonces desde el lambda es una carrera.
+            // Reserves a JobId without enqueuing anything, and enqueues with an already
+            // reserved id. They exist so that a job can know its OWN id
+            // from the inside: with plain submit(), the id is only known on
+            // return, and a fast worker may have started already. Reading it
+            // from the lambda then is a race.
             JobId reserveId();
 
-            // Devuelve false si el pool no está arrancado — el job NO se
-            // encola y fn se descarta. El llamador ya tiene el id (de
-            // reserveId()): con false sabe que ese id nunca va a completarse
-            // ni a fallar, y puede reaccionar (p.ej. no sumarlo a un contador
-            // de progreso que si no, nunca llegaría a cero).
+            // Returns false if the pool is not started — the job is NOT
+            // enqueued and fn is discarded. The caller already has the id (from
+            // reserveId()): with false it knows that id will never complete
+            // or fail, and can react (e.g. not add it to a progress counter
+            // that would otherwise never reach zero).
             bool submitWithId(JobId id, std::function<void()> fn);
 
-            // Marca id como cancelado. Un job ya arrancado NO se interrumpe (no
-            // se puede parar un Assimp::ReadFile a medias): termina y es el
-            // consumidor quien descarta su resultado.
+            // Marks id as cancelled. A job already started is NOT interrupted (an
+            // Assimp::ReadFile cannot be stopped halfway): it finishes and the
+            // consumer is the one who discards its result.
             void cancel(JobId id);
 
-            // Cuantas marcas de cancelacion siguen vivas. Diagnostico: en regimen
-            // normal baja a 0 sola -el worker retira la marca al descartar el job,
-            // y tambien al terminarlo si el cancel llego con el ya en vuelo-, asi
-            // que un numero que solo sube dice que alguien cancela ids que este
-            // pool no llego a ver.
+            // How many cancellation marks are still alive. Diagnostic: in the normal regime
+            // it drops to 0 by itself -the worker removes the mark when discarding the job,
+            // and also when finishing it if the cancel arrived with it already in flight-, so
+            // a number that only goes up says someone cancels ids that this
+            // pool never got to see.
             size_t   pendingCancellations() const;
 
             bool     idle() const;
@@ -101,14 +101,14 @@ namespace DonTopo
             void workerLoop();
 
             mutable std::mutex       m_mutex;
-            std::condition_variable  m_cv;          // señal de cola: la usan los workers.
-            // Handshake de shutdown() concurrente. Deliberadamente SEPARADA de
-            // m_cv: reutilizar m_cv arriesga un lost wakeup (un notify_all()
-            // de shutdown() podría "gastarse" en un worker que esperaba por
-            // cola, no en el llamador que espera a que termine el shutdown
-            // ganador). start() también espera aquí antes de arrancar, para
-            // no lanzar un pool nuevo mientras un shutdown() en curso todavía
-            // tiene pendiente su limpieza final (ver JobSystem.cpp).
+            std::condition_variable  m_cv;          // queue signal: used by the workers.
+            // Handshake of concurrent shutdown(). Deliberately SEPARATE from
+            // m_cv: reusing m_cv risks a lost wakeup (a notify_all()
+            // from shutdown() could be "spent" on a worker that was waiting for the
+            // queue, not on the caller waiting for the winning shutdown
+            // to finish). start() also waits here before starting, so as
+            // not to launch a new pool while a shutdown() in progress still
+            // has its final cleanup pending (see JobSystem.cpp).
             std::condition_variable  m_shutdownCv;
             std::deque<Job>          m_queue;
             std::unordered_set<JobId> m_cancelled;

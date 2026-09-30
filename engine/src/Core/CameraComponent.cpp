@@ -6,8 +6,8 @@ namespace DonTopo
 {
     namespace
     {
-        // Separación mínima entre near y far (y mínimo absoluto de near):
-        // glm::perspective diverge con near == 0 y con near == far.
+        // Minimum separation between near and far (and absolute minimum of near):
+        // glm::perspective diverges with near == 0 and with near == far.
         constexpr float kMinNear = 0.001f;
     }
 
@@ -23,9 +23,9 @@ namespace DonTopo
 
     void CameraComponent::setNear(float n)
     {
-        // Se clampa contra el far actual en vez de empujar far: un setter no
-        // debe cambiar el otro campo a espaldas del caller. Ojo al cargar de
-        // JSON: hay que llamar a setFar ANTES que a setNear (ver Scene.cpp).
+        // It is clamped against the current far instead of pushing far: a setter must
+        // not change the other field behind the caller's back. Careful when loading from
+        // JSON: setFar has to be called BEFORE setNear (see Scene.cpp).
         m_near = glm::clamp(n, kMinNear, m_far - kMinNear);
     }
 
@@ -36,17 +36,17 @@ namespace DonTopo
 
     glm::mat4 CameraComponent::projectionMatrix(float aspect) const
     {
-        // Aspect degenerado (viewport de ancho/alto 0 al minimizar la ventana)
-        // metería NaN en la matriz; 1.0 es un repliegue inocuo pa ese frame.
+        // A degenerate aspect (viewport of width/height 0 when minimizing the window)
+        // would put NaN in the matrix; 1.0 is a harmless fallback for that frame.
         if (!(aspect > 0.0f))
             aspect = 1.0f;
 
-        // *_ZO (zero-to-one) y no el *_NO (glm por defecto sin
-        // GLM_FORCE_DEPTH_ZERO_TO_ONE): Vulkan clipea 0 <= z_clip <= w_clip,
-        // pero la convención NO de glm está pensada pa OpenGL y manda near a
-        // z_ndc=-1. En ortográfica (w=1) eso recorta directamente la mitad
-        // cercana de todo el rango near/far, no solo un margen fino como en
-        // perspectiva. Mismo criterio que la shadow matrix en Renderer.cpp.
+        // *_ZO (zero-to-one) and not *_NO (glm default without
+        // GLM_FORCE_DEPTH_ZERO_TO_ONE): Vulkan clips 0 <= z_clip <= w_clip,
+        // but glm's NO convention is meant for OpenGL and sends near to
+        // z_ndc=-1. In orthographic (w=1) that directly cuts off the near half
+        // of the whole near/far range, not just a thin margin as in
+        // perspective. Same criterion as the shadow matrix in Renderer.cpp.
         glm::mat4 proj;
         if (m_mode == ProjectionMode::Orthographic)
         {
@@ -68,8 +68,8 @@ namespace DonTopo
         const glm::vec3 up      = glm::vec3(world[1]);
         const glm::vec3 forward = glm::vec3(world[2]);
 
-        // Base degenerada (algún eje con escala 0): invertir daría NaN y
-        // ensuciaría todo el frame. La identidad al menos deja ver algo.
+        // Degenerate basis (some axis with scale 0): inverting would give NaN and
+        // would dirty the whole frame. The identity at least lets you see something.
         if (glm::length(right) < 1e-6f || glm::length(up) < 1e-6f || glm::length(forward) < 1e-6f)
             return glm::mat4(1.0f);
 
@@ -77,7 +77,7 @@ namespace DonTopo
         unscaled[0] = glm::vec4(glm::normalize(right), 0.0f);
         unscaled[1] = glm::vec4(glm::normalize(up), 0.0f);
         unscaled[2] = glm::vec4(glm::normalize(forward), 0.0f);
-        unscaled[3] = world[3]; // posición intacta
+        unscaled[3] = world[3]; // position intact
         return glm::inverse(unscaled);
     }
 }

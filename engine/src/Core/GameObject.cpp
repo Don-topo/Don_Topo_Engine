@@ -1,8 +1,8 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/MaterialAsset.h"
-// Los 28 componentes se incluyen AQUÍ y no en el header (ver la nota de
-// GameObject.h): el destructor de GameObject destruye los 28 shared_ptr, así
-// que es esta unidad de traducción la que necesita los tipos completos.
+// The 28 components are included HERE and not in the header (see the note in
+// GameObject.h): the GameObject destructor destroys the 28 shared_ptr, so
+// it is this translation unit that needs the complete types.
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
@@ -43,12 +43,12 @@ namespace DonTopo
 
     void GameObject::reserveIdAtLeast(uint64_t id)
     {
-        // CAS en bucle y no un simple store: std::atomic no tiene fetch_max, y
-        // leer-comparar-escribir por separado permitiría que dos hilos pisaran
-        // el avance del otro. compare_exchange_weak reescribe `actual` cuando
-        // falla, así que la condición del while se reevalúa con el valor bueno.
-        // relaxed basta: aquí no se ordena ningún otro dato, solo se empuja un
-        // contador hacia arriba.
+        // CAS in a loop and not a simple store: std::atomic has no fetch_max, and
+        // reading-comparing-writing separately would let two threads overwrite
+        // each other's advance. compare_exchange_weak rewrites `actual` when
+        // it fails, so the while condition is re-evaluated with the good value.
+        // relaxed is enough: no other data is ordered here, a counter is just
+        // pushed upwards.
         uint64_t actual = s_nextId.load(std::memory_order_relaxed);
         while (actual <= id &&
                !s_nextId.compare_exchange_weak(actual, id + 1,
@@ -60,9 +60,9 @@ namespace DonTopo
 
     uint64_t GameObject::allocateId()
     {
-        // El mismo contador y el mismo orden de memoria que el constructor:
-        // no es una reserva (que solo empuja un suelo), es una entrega real,
-        // así que el valor devuelto no puede volver a salir de aquí.
+        // The same counter and the same memory order as the constructor:
+        // it is not a reservation (which only pushes a floor), it is a real handout,
+        // so the returned value cannot come out of here again.
         return s_nextId++;
     }
 
@@ -85,8 +85,8 @@ namespace DonTopo
         std::vector<const Material*> out;
         if (!go.hasMesh()) return out;
 
-        // Mismo criterio que materialsOf() del Content Browser: en un skinned
-        // con submallas, el Material heredado no lo mira nadie.
+        // Same criterion as materialsOf() of the Content Browser: in a skinned
+        // with submeshes, nobody looks at the inherited Material.
         if (const SkinnedMesh* sm = go.getSkinnedMesh(); sm && !sm->materials.empty())
         {
             out.reserve(sm->materials.size());
@@ -102,8 +102,8 @@ namespace DonTopo
     {
         std::vector<Material*> out;
         if (!go.hasMesh()) return out;
-        // Mismo criterio que materialsOfMesh, pero por editMesh: copia la malla
-        // si está compartida antes de dar punteros escribibles.
+        // Same criterion as materialsOfMesh, but through editMesh: it copies the mesh
+        // if it is shared before handing out writable pointers.
         if (SkinnedMesh* sm = go.editSkinnedMesh(); sm && !sm->materials.empty())
         {
             out.reserve(sm->materials.size());
@@ -119,8 +119,8 @@ namespace DonTopo
         if (!m_mesh) return nullptr;
         if (m_mesh.use_count() > 1)
         {
-            // Conserva el tipo: un skinned copiado como Mesh a secas perdería
-            // esqueleto y clips sin avisar.
+            // Keeps the type: a skinned copied as a plain Mesh would lose
+            // skeleton and clips without warning.
             if (auto* sk = dynamic_cast<const SkinnedMesh*>(m_mesh.get()))
                 m_mesh = std::make_shared<SkinnedMesh>(*sk);
             else
@@ -142,27 +142,27 @@ namespace DonTopo
         const size_t nMats = materialsOfMesh(go).size();
         for (const MaterialOverride& ov : go.materialOverrides)
         {
-            // MISMA condición que la del `continue` de applyMaterialOverrides,
-            // y por eso está pegada a ella en el fichero: si una de las dos se
-            // toca sin la otra, el aviso deja de describir lo que de verdad se
-            // ignora, que es peor que no avisar.
+            // SAME condition as the `continue` of applyMaterialOverrides,
+            // and that is why it is glued to it in the file: if one of the two is
+            // touched without the other, the warning stops describing what is really
+            // ignored, which is worse than not warning.
             if (ov.index >= 0 && static_cast<size_t>(ov.index) < nMats) continue;
             out.push_back("mesh of '" + go.name + "'.materials: index " +
                           std::to_string(ov.index) + " out of range (" +
                           std::to_string(nMats) + " material(s) in the mesh), "
                           "the override for that slot is ignored");
         }
-        // Un .mat invalido no rompe la carga (se hereda todo en silencio en
-        // applyMaterialOverrides, que no tiene canal de log y corre en cada
-        // clon), pero SI se avisa aqui: esta funcion solo la llama el lector de
-        // escena, que tiene canal para darlo.
+        // An invalid .mat does not break loading (everything is silently inherited in
+        // applyMaterialOverrides, which has no log channel and runs on every
+        // clone), but it IS warned about here: this function is only called by the scene
+        // reader, which has a channel to report it.
         for (const MaterialOverride& ov : go.materialOverrides)
         {
             if (ov.matAsset.empty()) continue;
-            // Aviso unico por ruta (spec): esta funcion se llama una vez POR
-            // OBJETO en el mismo `out` compartido de toda la escena (ver
-            // Scene::fromJson), asi que varios objetos que comparten un .mat
-            // roto repetirian la misma linea sin esto.
+            // Single warning per path (spec): this function is called once PER
+            // OBJECT on the same shared `out` of the whole scene (see
+            // Scene::fromJson), so several objects sharing a broken .mat
+            // would repeat the same line without this.
             const std::string marker = "material '" + ov.matAsset + "': ";
             bool yaAvisado = false;
             for (const std::string& w : out)
@@ -177,12 +177,12 @@ namespace DonTopo
 
     void applyMaterialOverrides(GameObject& go)
     {
-        // Se aplica sobre una COPIA de los materiales y solo se escribe en la
-        // malla si algo cambia: la malla puede estar compartida (clon, undo de
-        // Delete) y escribir obliga a copiarla entera (editMesh). Un clon con
-        // los mismos overrides que su original no cambia nada y la sigue
-        // compartiendo. Los baselines se capturan en `ov` en esta pasada, igual
-        // que antes, porque la copia tiene los mismos valores que la malla.
+        // It is applied on a COPY of the materials and only written to the
+        // mesh if something changes: the mesh may be shared (clone, undo of
+        // Delete) and writing forces copying it entirely (editMesh). A clone with
+        // the same overrides as its original changes nothing and keeps
+        // sharing it. The baselines are captured in `ov` in this pass, just
+        // as before, because the copy has the same values as the mesh.
         const std::vector<const Material*> actuales = materialsOfMesh(go);
         std::vector<Material> copia;
         copia.reserve(actuales.size());
@@ -193,21 +193,21 @@ namespace DonTopo
 
         for (MaterialOverride& ov : go.materialOverrides)
         {
-            // Índice que ya no existe: el FBX se reexportó con menos submallas.
-            // Se ignora en silencio aquí; el aviso lo da el lector de escena,
-            // que es quien tiene canal para darlo.
+            // Index that no longer exists: the FBX was re-exported with fewer submeshes.
+            // It is silently ignored here; the warning is given by the scene reader,
+            // which is the one with a channel to report it.
             if (ov.index < 0 || ov.index >= (int)mats.size()) continue;
             Material& mat = *mats[(size_t)ov.index];
 
-            // El .mat (si lo hay) resuelve lo que el objeto NO overridee: se
-            // computa un valor "efectivo" por campo y se alimenta al MISMO
-            // mecanismo de baseline de siempre, sin tocarlo. Sin matAsset,
-            // matAsset queda en su defecto (todo vacio/-1) y effective(...)
-            // devuelve el override del objeto tal cual: el resultado es
-            // identico al de antes de que este campo existiera.
+            // The .mat (if any) resolves whatever the object does NOT override: an
+            // "effective" value is computed per field and fed to the SAME
+            // baseline mechanism as always, without touching it. Without matAsset,
+            // matAsset stays at its default (all empty/-1) and effective(...)
+            // returns the object's override as is: the result is
+            // identical to what it was before this field existed.
             MaterialAsset matAsset;
             if (!ov.matAsset.empty())
-                matAsset = loadMaterialAsset(ov.matAsset);   // tolerante: invalido = heredar todo
+                matAsset = loadMaterialAsset(ov.matAsset);   // tolerant: invalid = inherit everything
 
             auto effective = [](const std::string& objOverride, const std::string& matValue)
             {
@@ -218,18 +218,18 @@ namespace DonTopo
                 return objOverride >= 0.0f ? objOverride : matValue;
             };
 
-            // El baseline se captura UNA vez por slot, la primera que se pisa:
-            // si se recapturase en cada pasada, el segundo cambio de textura
-            // guardaría como "original" el override anterior y el Clear
-            // devolvería una textura del usuario en vez de la del modelo.
+            // The baseline is captured ONCE per slot, the first time it is overridden:
+            // if it were recaptured on every pass, the second texture change
+            // would store the previous override as the "original" and Clear
+            // would return a user texture instead of the model's.
             auto aplica = [](const std::string& override_, std::string& base,
                              bool& baseTomado, std::string& destino)
             {
                 if (override_.empty())
                 {
-                    // Sin override: si alguna vez lo hubo, se vuelve al
-                    // baseline. Si nunca lo hubo, no se toca nada — escribir el
-                    // base vacío aquí borraría la ruta que trae el FBX.
+                    // No override: if there ever was one, it goes back to the
+                    // baseline. If there never was, nothing is touched — writing the
+                    // empty base here would erase the path the FBX brings.
                     if (baseTomado) destino = base;
                     return;
                 }
@@ -241,22 +241,22 @@ namespace DonTopo
                 destino = override_;
             };
 
-            // Los tres flags explícitos son necesarios porque baseTomado NO se
-            // puede deducir de que el slot tenga override o baseline no
-            // vacíos: un baseline legítimamente vacío (mesh procedural sin
-            // textura) sería indistinguible de "aún no tomado", y con la
-            // heurística "base vacío = no tomado" el Clear dejaría puesta la
-            // textura del usuario en vez de devolver el slot a su vacío
-            // original.
+            // The three explicit flags are necessary because baseTomado CANNOT be
+            // deduced from the slot having a non-empty override or baseline:
+            // a legitimately empty baseline (procedural mesh with no
+            // texture) would be indistinguishable from "not yet taken", and with the
+            // heuristic "empty base = not taken" Clear would leave the user's
+            // texture in place instead of returning the slot to its original
+            // empty state.
             aplica(effective(ov.albedo, matAsset.albedo), ov.baseAlbedo, ov.baseAlbedoTaken, mat.texturePath);
             aplica(effective(ov.normal, matAsset.normal), ov.baseNormal, ov.baseNormalTaken, mat.normalMapPath);
             aplica(effective(ov.orm,    matAsset.orm),    ov.baseOrm,    ov.baseOrmTaken,    mat.metallicRoughnessPath);
 
-            // Mismo mecanismo que `aplica`, pero con un centinela float en vez
-            // de una cadena vacía: 0.0 y 1.0 son valores válidos de slider, así
-            // que no sirven de "sin override" como sí sirve "" para una ruta.
-            // -1.0 está fuera del rango 0..1 del slider (ver la nota de
-            // MaterialOverride) y hace ese papel.
+            // Same mechanism as `aplica`, but with a float sentinel instead of
+            // an empty string: 0.0 and 1.0 are valid slider values, so
+            // they do not work as "no override" the way "" does for a path.
+            // -1.0 is outside the slider's 0..1 range (see the note in
+            // MaterialOverride) and plays that role.
             auto aplicaFactor = [](float override_, float& base, bool& baseTomado, float& destino)
             {
                 if (override_ < 0.0f)

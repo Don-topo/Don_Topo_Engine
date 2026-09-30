@@ -24,8 +24,8 @@ public:
     void init();
     void shutdown();
 
-    // dynamic=false -> PxRigidStatic (collider sin Rigidbody); dynamic=true ->
-    // PxRigidDynamic (collider con Rigidbody, la config la aplica luego
+    // dynamic=false -> PxRigidStatic (collider without Rigidbody); dynamic=true ->
+    // PxRigidDynamic (collider with Rigidbody, the config is applied afterwards by
     // attachRigidbody -> Rigidbody::bindActor).
     std::shared_ptr<BoxCollider> createBoxColliderComponent(const glm::vec3& halfExtents,
                                                               const glm::vec3& center,
@@ -43,139 +43,139 @@ public:
                                                                       const glm::mat4& worldTransform,
                                                                       bool dynamic);
 
-    // Plane: siempre static/kinematic, nunca lleva Rigidbody (firma sin dynamic).
+    // Plane: always static/kinematic, never carries a Rigidbody (signature without dynamic).
     std::shared_ptr<PlaneCollider> createPlaneColliderComponent(const glm::vec3& center,
                                                                   const glm::mat4& worldTransform);
 
-    // Asegura que el actor del collider sea PxRigidDynamic (reconstruye si era
-    // static), luego enlaza el Rigidbody (rb->bindActor). Collider WITHOUT
+    // Ensures the collider actor is a PxRigidDynamic (rebuilds it if it was
+    // static), then links the Rigidbody (rb->bindActor). Collider WITHOUT
     // Rigidbody = static; WITH = dynamic.
     void attachRigidbody(const std::shared_ptr<Collider>& collider, const std::shared_ptr<Rigidbody>& rb);
-    // Reconstruye el actor del collider como PxRigidStatic (deshace attach).
+    // Rebuilds the collider actor as a PxRigidStatic (undoes attach).
     void detachRigidbody(const std::shared_ptr<Collider>& collider);
 
     void stepSimulation(float dt);
 
-    // Paso fijo: el dt real del frame se acumula y se consume en trozos de
-    // m_fixedDeltaTime, así la simulación no depende del framerate.
-    // <= 0 se ignora (mantiene el valor anterior): un 0 colgaría el bucle
-    // que resta el paso del acumulador.
+    // Fixed step: the real frame dt is accumulated and consumed in chunks of
+    // m_fixedDeltaTime, so the simulation does not depend on the framerate.
+    // <= 0 is ignored (keeps the previous value): a 0 would hang the loop
+    // that subtracts the step from the accumulator.
     void  setFixedDeltaTime(float dt);
     float getFixedDeltaTime() const { return m_fixedDeltaTime; }
 
-    // Techo de sub-steps por llamada; se clampea a >= 1 (con 0 la física no
-    // avanzaría nunca). Lo que sobre del acumulador tras agotarlos se tira.
+    // Ceiling of sub-steps per call; clamped to >= 1 (with 0 physics would
+    // never advance). Whatever remains in the accumulator after exhausting them is thrown away.
     void setMaxSubSteps(int steps);
     int  getMaxSubSteps() const { return m_maxSubSteps; }
 
-    // Marca/desmarca un collider como trigger: flip de flags PhysX
-    // (Collider::applyTriggerFlag) + alta/baja en el registro que se recorre
-    // cada frame para sintetizar onTriggerStay. Entry point público — lo
-    // llamará Core al integrar editor/scripting.
+    // Marks/unmarks a collider as trigger: flip of PhysX flags
+    // (Collider::applyTriggerFlag) + add/remove in the registry that is traversed
+    // every frame to synthesize onTriggerStay. Public entry point — it will be
+    // called by Core when integrating editor/scripting.
     void setTrigger(const std::shared_ptr<Collider>& collider, bool enabled);
 
-    // Llamado por ~Collider: purga el collider de los sets de overlap de todos
-    // los triggers vivos, evitando punteros colgantes antes del próximo Stay.
+    // Called by ~Collider: purges the collider from the overlap sets of all
+    // live triggers, avoiding dangling pointers before the next Stay.
     void onColliderDestroyed(Collider* collider);
 
-    // --- Capas de colisión ---------------------------------------------------
+    // --- Collision layers ----------------------------------------------------
     //
-    // 32 capas fijas (índice 0-31, el ancho de PxFilterData::word0). La 0 se
-    // llama "Default"; el resto nacen sin nombre. La matriz de colisión es
-    // SIMÉTRICA y arranca entera a true: con los defaults, cada shape lleva
-    // word0 = 1<<capa y word1 = todo a unos, ningún par se suprime, y la
-    // simulación es exactamente la de antes de existir las capas (triggers
-    // incluidos).
-    // kLayerCount es el TECHO (el ancho de word0), no cuántas hay: las capas se
-    // crean y se borran desde el editor y las vivas son siempre el prefijo
-    // [0, layerCount()). La 0 existe siempre y no se puede borrar.
+    // 32 fixed layers (index 0-31, the width of PxFilterData::word0). Layer 0 is
+    // called "Default"; the rest are born unnamed. The collision matrix is
+    // SYMMETRIC and starts entirely true: with the defaults, each shape carries
+    // word0 = 1<<layer and word1 = all ones, no pair is suppressed, and the
+    // simulation is exactly the one from before layers existed (triggers
+    // included).
+    // kLayerCount is the CEILING (the width of word0), not how many there are: layers are
+    // created and deleted from the editor and the live ones are always the prefix
+    // [0, layerCount()). Layer 0 always exists and cannot be deleted.
     static constexpr int kLayerCount = 32;
     static bool isValidLayer(int layer) { return layer >= 0 && layer < kLayerCount; }
 
     int  layerCount() const { return m_layerCount; }
 
-    // Crea una capa al final. Devuelve su índice, o -1 si ya hay kLayerCount.
+    // Creates a layer at the end. Returns its index, or -1 if there are already kLayerCount.
     int  addLayer(const std::string& name);
 
-    // Borra la capa y COMPACTA: los colliders que la usaban pasan a la 0, los de
-    // capas superiores bajan un índice, y la matriz pierde su fila y su columna
-    // (la última queda liberada y vuelve a "colisiona con todo"). Devuelve false
-    // pa la capa 0 y pa un índice que no exista.
+    // Deletes the layer and COMPACTS: colliders that used it move to 0, those of
+    // higher layers go down one index, and the matrix loses its row and its column
+    // (the last one is freed and goes back to "collides with everything"). Returns false
+    // for layer 0 and for an index that does not exist.
     //
-    // OJO: renumera. Un script que guarde índices de capa a pelo apunta a otra
-    // capa después de un borrado — es el precio de que la lista no tenga huecos.
+    // NOTE: it renumbers. A script that stores raw layer indices points to another
+    // layer after a deletion — it is the price of the list having no gaps.
     bool removeLayer(int layer);
 
-    // Activa/desactiva la colisión entre dos capas. Escribe las DOS mitades de
-    // la matriz (a-b y b-a) y recalcula el word1 de todos los colliders vivos,
-    // así el cambio vale también en mitad de una partida. Índice inválido:
+    // Enables/disables collision between two layers. Writes BOTH halves of
+    // the matrix (a-b and b-a) and recomputes the word1 of all live colliders,
+    // so the change also applies in the middle of a game. Invalid index:
     // no-op.
     void setLayerCollision(int a, int b, bool enabled);
-    // false pa un índice inválido (no hay fila que consultar).
+    // false for an invalid index (there is no row to query).
     bool getLayerCollision(int a, int b) const;
 
-    // Nombre editable de la capa; puramente informativo (UI y project.json), el
-    // filtrado va siempre por índice. Índice inválido: no-op / cadena vacía.
+    // Editable name of the layer; purely informational (UI and project.json), the
+    // filtering always goes by index. Invalid index: no-op / empty string.
     void        setLayerName(int layer, const std::string& name);
     std::string getLayerName(int layer) const;
 
-    // Máscara de la capa: bit b a 1 = 'layer' colisiona con la capa b. Es
-    // literalmente el word1 que se escribe en el PxFilterData de sus shapes.
-    // Índice inválido: 0.
+    // Mask of the layer: bit b set to 1 = 'layer' collides with layer b. It is
+    // literally the word1 that gets written into the PxFilterData of its shapes.
+    // Invalid index: 0.
     uint32_t layerMask(int layer) const;
 
-    // Reescribe el PxFilterData de la shape del collider desde su capa actual.
-    // Lo llaman Collider::setLayer (guardar el número no basta: el filtro que
-    // mira PhysX vive en la shape) y las 4 factorías al crear. No-op sin PhysX,
-    // sin shape o con capa fuera de rango.
+    // Rewrites the PxFilterData of the collider shape from its current layer.
+    // Called by Collider::setLayer (storing the number is not enough: the filter that
+    // PhysX looks at lives in the shape) and by the 4 factories on creation. No-op without PhysX,
+    // without a shape or with a layer out of range.
     void refreshColliderFilter(Collider* collider);
 
 #ifdef DT_PHYSX_ENABLED
     bool raycast(const physx::PxVec3& origin, const physx::PxVec3& dir, float maxDistance, physx::PxRaycastBuffer& hit);
 
-    // Misma consulta con filtros: filterData elige qué actores se recorren
-    // (eSTATIC / eDYNAMIC) y filterCall descarta shapes una a una (triggers,
-    // actor a ignorar). Pide ePOSITION|eNORMAL, que es lo que consume el
-    // binding de Lua. Devuelve false sin tocar PhysX si aún no hay PxScene
-    // (fuera de Play).
+    // Same query with filters: filterData chooses which actors are traversed
+    // (eSTATIC / eDYNAMIC) and filterCall discards shapes one by one (triggers,
+    // actor to ignore). It requests ePOSITION|eNORMAL, which is what the Lua
+    // binding consumes. Returns false without touching PhysX if there is no PxScene yet
+    // (outside Play).
     bool raycast(const physx::PxVec3& origin, const physx::PxVec3& dir, float maxDistance,
                  physx::PxRaycastBuffer& hit, const physx::PxQueryFilterData& filterData,
                  physx::PxQueryFilterCallback* filterCall);
 
-    // Multi-hit: añade PxQueryFlag::eNO_BLOCK a filterData, así todo impacto se
-    // reporta como touch y la consulta no para en el primero. hits tiene que
-    // ser un PxRaycastBufferN<N> (el PxRaycastBuffer a secas no lleva
-    // almacenamiento de touches y solo recogería el bloqueante); los touches se
-    // devuelven ORDENADOS por distancia ascendente — PhysX los entrega sin
-    // orden. Si el buffer se llena, PhysX trunca en silencio: el caller lo
-    // detecta con getNbTouches() == getMaxNbTouches(). Mismos hit flags y misma
-    // guarda de escena ausente que raycast().
+    // Multi-hit: adds PxQueryFlag::eNO_BLOCK to filterData, so every hit is
+    // reported as a touch and the query does not stop at the first. hits has to
+    // be a PxRaycastBufferN<N> (a plain PxRaycastBuffer has no
+    // touch storage and would only collect the blocking one); touches are
+    // returned SORTED by ascending distance — PhysX delivers them
+    // unordered. If the buffer fills up, PhysX truncates silently: the caller
+    // detects it with getNbTouches() == getMaxNbTouches(). Same hit flags and same
+    // absent-scene guard as raycast().
     bool raycastAll(const physx::PxVec3& origin, const physx::PxVec3& dir, float maxDistance,
                     physx::PxRaycastBuffer& hits, const physx::PxQueryFilterData& filterData,
                     physx::PxQueryFilterCallback* filterCall);
 
-    // Barrido de una esfera de radio 'radius' desde origin a lo largo de dir:
-    // el rayo "con grosor" que hace falta para mover un personaje sin que se
-    // cuele por las esquinas. Single-hit (el primero que bloquea), mismos hit
-    // flags que raycast() para que el binding devuelva la misma tabla. Si la
-    // esfera ya solapa algo en el origen, PhysX reporta distancia 0 y el punto/
-    // normal no son fiables (no se pide eMTD). Misma guarda de escena ausente.
+    // Sweep of a sphere of radius 'radius' from origin along dir:
+    // the "thick" ray needed to move a character without it
+    // slipping through corners. Single-hit (the first that blocks), same hit
+    // flags as raycast() so the binding returns the same table. If the
+    // sphere already overlaps something at the origin, PhysX reports distance 0 and the point/
+    // normal are not reliable (eMTD is not requested). Same absent-scene guard.
     bool sphereCast(const physx::PxVec3& origin, const physx::PxVec3& dir, float radius,
                     float maxDistance, physx::PxSweepBuffer& hit,
                     const physx::PxQueryFilterData& filterData,
                     physx::PxQueryFilterCallback* filterCall);
 
-    // Qué shapes solapan una esfera estática en 'center'. Multi-hit: añade
-    // PxQueryFlag::eNO_BLOCK igual que raycastAll, si no el primer eBLOCK del
-    // prefiltro cerraría la consulta. hits tiene que ser un PxOverlapBufferN<N>;
-    // al llenarse, PhysX trunca en silencio (getNbTouches() ==
-    // getMaxNbTouches()). Sin orden: un overlap no tiene distancia.
+    // Which shapes overlap a static sphere at 'center'. Multi-hit: adds
+    // PxQueryFlag::eNO_BLOCK just like raycastAll, otherwise the first eBLOCK of the
+    // prefilter would close the query. hits has to be a PxOverlapBufferN<N>;
+    // when it fills up, PhysX truncates silently (getNbTouches() ==
+    // getMaxNbTouches()). Unordered: an overlap has no distance.
     bool overlapSphere(const physx::PxVec3& center, float radius,
                        physx::PxOverlapBuffer& hits,
                        const physx::PxQueryFilterData& filterData,
                        physx::PxQueryFilterCallback* filterCall);
 
-    // Igual pero con una caja orientada (halfExtents + rotación del mundo).
+    // Same but with an oriented box (halfExtents + world rotation).
     bool overlapBox(const physx::PxVec3& center, const physx::PxVec3& halfExtents,
                     const physx::PxQuat& rotation, physx::PxOverlapBuffer& hits,
                     const physx::PxQueryFilterData& filterData,
@@ -184,58 +184,58 @@ public:
 
 private:
 #ifdef DT_PHYSX_ENABLED
-    // Cambia el tipo de actor del collider (static<->dynamic) preservando shape,
-    // pose y estado trigger. Devuelve el nuevo PxRigidActor* como void*.
+    // Changes the actor type of the collider (static<->dynamic) preserving shape,
+    // pose and trigger state. Returns the new PxRigidActor* as void*.
     void* rebuildActor(const std::shared_ptr<Collider>& collider, bool dynamic);
 #endif
 
-    // Recorre m_triggerColliders emitiendo onTriggerStay y podando expirados.
-    // Se llama una vez por sub-step (ver stepSimulation).
+    // Traverses m_triggerColliders emitting onTriggerStay and pruning expired ones.
+    // Called once per sub-step (see stepSimulation).
     void dispatchTriggerStay();
 
-    // Alta en m_colliders + primer volcado del PxFilterData. La llaman las 4
-    // factorías justo tras setManager().
+    // Registration in m_colliders + first dump of the PxFilterData. Called by the 4
+    // factories right after setManager().
     void registerCollider(const std::shared_ptr<Collider>& collider);
 
-    // Recalcula el PxFilterData de TODOS los colliders vivos. La matriz es
-    // global pero el filtro está copiado en cada shape, así que un cambio de
-    // matriz obliga a reescribirlas todas.
+    // Recomputes the PxFilterData of ALL live colliders. The matrix is
+    // global but the filter is copied into each shape, so a matrix
+    // change forces rewriting all of them.
     void refreshAllColliderFilters();
 
-    // Todos los colliders creados por este manager (weak: los dueños son los
-    // GameObjects). Sólo sirve pa recalcular filtros; se poda en
-    // onColliderDestroyed, que corre en cada muerte de collider.
+    // All colliders created by this manager (weak: the owners are the
+    // GameObjects). Only useful to recompute filters; it is pruned in
+    // onColliderDestroyed, which runs on every collider death.
     std::vector<std::weak_ptr<Collider>> m_colliders;
 
-    // Matriz de colisión, comprimida a una máscara por capa: bit b de
-    // m_layerMasks[a] = "a colisiona con b". Arranca entera a unos.
+    // Collision matrix, compressed to one mask per layer: bit b of
+    // m_layerMasks[a] = "a collides with b". Starts entirely at ones.
     std::array<uint32_t, kLayerCount> m_layerMasks = [] {
         std::array<uint32_t, kLayerCount> m{};
         m.fill(0xFFFFFFFFu);
         return m;
     }();
 
-    // Capas vivas: siempre >= 1 (la 0 no se borra).
+    // Live layers: always >= 1 (0 is not deleted).
     int m_layerCount = 1;
 
-    // Nombres de capa. Sólo la 0 nace nombrada ("Default"), como en Unity.
+    // Layer names. Only 0 is born named ("Default"), as in Unity.
     std::array<std::string, kLayerCount> m_layerNames = [] {
         std::array<std::string, kLayerCount> n;
         n[0] = "Default";
         return n;
     }();
 
-    // Triggers registrados (weak: los GameObjects poseen los colliders vía
-    // shared_ptr). Se recorren cada frame para emitir onTriggerStay; los
-    // expirados se podan al vuelo.
+    // Registered triggers (weak: the GameObjects own the colliders via
+    // shared_ptr). They are traversed every frame to emit onTriggerStay; expired
+    // ones are pruned on the fly.
     std::vector<std::weak_ptr<Collider>> m_triggerColliders;
 
-    // Acumulador de tiempo del paso fijo. PxScene::simulate con el dt real del
-    // frame hace la física no determinista (el mismo escenario cae distinto a
-    // 60 y a 144 fps) y con un frame largo —carga de assets, breakpoint— el
-    // integrador da un salto enorme y los cuerpos se atraviesan. Guardando el
-    // sobrante y simulando siempre trozos de m_fixedDeltaTime, el resultado
-    // sólo depende del tiempo total transcurrido.
+    // Time accumulator of the fixed step. PxScene::simulate with the real frame dt
+    // makes physics non-deterministic (the same scenario falls differently at
+    // 60 and at 144 fps) and with a long frame —asset loading, breakpoint— the
+    // integrator makes a huge jump and bodies pass through each other. By storing the
+    // remainder and always simulating chunks of m_fixedDeltaTime, the result
+    // only depends on the total elapsed time.
     float m_fixedDeltaTime = 1.0f / 60.0f;
     int   m_maxSubSteps    = 8;
     float m_accumulator    = 0.0f;

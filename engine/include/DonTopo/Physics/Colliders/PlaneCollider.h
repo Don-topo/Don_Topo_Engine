@@ -4,23 +4,23 @@
 
 namespace DonTopo {
 
-// Componente único de física de tipo plano infinito. A diferencia de
-// Box/Sphere/Capsule, nunca lleva Rigidbody (un plano "cayendo" no tiene
-// sentido físico): su actor siempre es kinematic. El motor empuja la pose del
-// GameObject hacia PhysX (teleport), nunca lee de vuelta.
+// Unique physics component of infinite plane type. Unlike
+// Box/Sphere/Capsule, it never carries a Rigidbody (a "falling" plane makes no
+// physical sense): its actor is always kinematic. The engine pushes the
+// GameObject pose to PhysX (teleport) and never reads it back.
 class PlaneCollider : public Collider {
 public:
-    // actor/shape ya creados por PhysicsManager, con localPose ya puesto a
-    // partir de center + la rotación fija que mapea la normal por defecto a
-    // +Y (mismo truco de eje que CapsuleCollider).
+    // actor/shape already created by PhysicsManager, with localPose already set from
+    // center + the fixed rotation that maps the default normal to
+    // +Y (same axis trick as CapsuleCollider).
     PlaneCollider(void* actor, void* shape, const glm::vec3& center);
     ~PlaneCollider();
 
     PlaneCollider(const PlaneCollider&)            = delete;
     PlaneCollider& operator=(const PlaneCollider&) = delete;
 
-    // Offset local de la shape dentro del actor. Reaplica siempre la
-    // rotación fija de corrección de eje junto con la traslación.
+    // Local offset of the shape inside the actor. It always reapplies the
+    // fixed axis-correction rotation together with the translation.
     void setCenter(const glm::vec3& center);
 
     glm::vec3 getCenter() const { return m_center; }
@@ -33,10 +33,10 @@ public:
     void teleport(const glm::mat4& worldTransform) override;
 
 protected:
-    // Nota: PhysX puede rechazar eTRIGGER_SHAPE sobre geometría de plano
-    // infinito (los triggers suelen limitarse a box/sphere/capsule/convex).
-    // Se expone igual por uniformidad; marcar un PlaneCollider como trigger es
-    // un caso límite a validar si se usa.
+    // Note: PhysX may reject eTRIGGER_SHAPE on infinite plane geometry
+    // (triggers are usually limited to box/sphere/capsule/convex).
+    // It is exposed anyway for uniformity; marking a PlaneCollider as a trigger is
+    // an edge case to validate if it is used.
     void* triggerShape() const override;
 
 private:

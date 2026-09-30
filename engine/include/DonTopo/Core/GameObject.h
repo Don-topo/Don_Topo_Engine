@@ -5,22 +5,22 @@
 #include <string>
 #include <memory>
 
-// Los 28 componentes van DECLARADOS, no incluidos. Antes se incluían aquí sus
-// headers concretos, y como todo el editor incluye GameObject.h —directamente o
-// vía Scene.h—, tocar cualquiera de ellos reconstruía medio repo: `touch
-// UI/SliderComponent.h`, cien líneas, arrastraba 23 TUs y 266 s, MÁS que un
-// build limpio entero (223 s). Medido el 2026-09-04; ver H19 de
+// The 28 components are DECLARED, not included. Before, their concrete headers were
+// included here, and since the whole editor includes GameObject.h —directly or
+// via Scene.h—, touching any of them rebuilt half the repo: `touch
+// UI/SliderComponent.h`, a hundred lines, dragged in 23 TUs and 266 s, MORE than a
+// whole clean build (223 s). Measured on 2026-09-04; see H19 of
 // docs/core-audit.md.
 //
-// Se puede porque los miembros son `std::shared_ptr<T>`, que vale con tipo
-// incompleto, y porque el destructor de GameObject está FUERA DE LÍNEA: es en
-// el .cpp donde los tipos tienen que estar completos, y allí se incluyen los 28.
-// Los tres inline que también lo exigían —isSkinned y getSkinnedMesh por el
-// dynamic_cast, anyCollider por la conversión de shared_ptr derivado a base— se
-// mudaron al .cpp por el mismo motivo.
+// It is possible because the members are `std::shared_ptr<T>`, which works with an
+// incomplete type, and because the GameObject destructor is OUT OF LINE: it is
+// in the .cpp where the types have to be complete, and the 28 are included there.
+// The three inline functions that also required it —isSkinned and getSkinnedMesh because of
+// dynamic_cast, anyCollider because of the derived-to-base shared_ptr
+// conversion— were moved to the .cpp for the same reason.
 //
-// Quien use un componente concreto incluye SU header, que es lo que tenía que
-// haber hecho en vez de vivir del include transitivo.
+// Whoever uses a concrete component includes ITS header, which is what they should
+// have done instead of living off the transitive include.
 
 namespace DonTopo
 {
@@ -56,91 +56,91 @@ namespace DonTopo
     class ScrollViewComponent;
     class ScriptComponent;
 
-    // Rutas de textura y factores PBR que el usuario ha puesto a mano desde
-    // Properties, por encima de lo que trajera el FBX.
+    // Texture paths and PBR factors that the user has set by hand from
+    // Properties, on top of whatever the FBX brought.
     //
-    // Viven aquí y no en Material a propósito: Material es lo que leen los
-    // uploaders de los dos backends y lo que entra en la clave de dedup de
-    // SharedGpuMesh, y no sabe distinguir "esto lo puso el modelo" de "esto lo
-    // puso el usuario". Sin esa distinción no hay Clear posible.
+    // They live here and not in Material on purpose: Material is what the
+    // uploaders of both backends read and what enters the dedup key of
+    // SharedGpuMesh, and it cannot tell "the model set this" from "the
+    // user set this". Without that distinction there is no possible Clear.
     //
-    // Los base* son lo que había en el material la PRIMERA vez que se pisó ese
-    // slot: es a lo que vuelve Clear en caliente. No se serializan — al cargar
-    // la escena el material se re-deriva del FBX y el baseline se vuelve a
-    // capturar solo.
+    // The base* are what was in the material the FIRST time that slot was overridden: it is what
+    // Clear goes back to live. They are not serialized — when loading
+    // the scene the material is re-derived from the FBX and the baseline is captured
+    // again by itself.
     //
-    // metallic/roughness llevan el MISMO mecanismo que las tres texturas, pero
-    // con un centinela en vez de una cadena vacía: 0.0 y 1.0 son valores
-    // válidos de slider (no metálico / totalmente rugoso), así que no sirven
-    // de "sin override" como sí sirve "" para una ruta. -1.0 está fuera del
-    // rango 0..1 del slider y no se puede llegar a él arrastrando, así que es
-    // un centinela seguro. baseMetallicTaken/baseRoughnessTaken hacen
-    // EXACTAMENTE el mismo trabajo que baseAlbedoTaken y compañía —"ya se
-    // capturó el baseline de este slot"—, nada más: quien decide si hay
-    // override ACTIVO es el propio valor (override_ < 0.0f en
-    // applyMaterialOverrides), el centinela, igual que para una textura lo
-    // decide que la ruta esté vacía.
+    // metallic/roughness carry the SAME mechanism as the three textures, but
+    // with a sentinel instead of an empty string: 0.0 and 1.0 are valid
+    // slider values (non-metallic / fully rough), so they do not work
+    // as "no override" the way "" does for a path. -1.0 is outside the
+    // slider's 0..1 range and cannot be reached by dragging, so it is
+    // a safe sentinel. baseMetallicTaken/baseRoughnessTaken do
+    // EXACTLY the same job as baseAlbedoTaken and company —"the baseline of this slot
+    // was already captured"—, nothing more: whoever decides whether there is an ACTIVE
+    // override is the value itself (override_ < 0.0f in
+    // applyMaterialOverrides), the sentinel, just as for a texture it is
+    // decided by the path being empty.
     struct MaterialOverride
     {
-        int         index = 0;   // índice en SkinnedMesh::materials; 0 = Mesh::material
+        int         index = 0;   // index in SkinnedMesh::materials; 0 = Mesh::material
         std::string albedo, normal, orm;
         std::string baseAlbedo, baseNormal, baseOrm;
-        // "Ya se tomó el baseline de este slot". No se puede deducir de que
-        // base* esté vacío: un baseline legítimamente vacío (mesh procedural
-        // sin textura) sería indistinguible de "aún no tomado", y el Clear
-        // dejaría puesta la textura del usuario en vez de quitarla.
+        // "The baseline of this slot was already taken". It cannot be deduced from
+        // base* being empty: a legitimately empty baseline (procedural mesh
+        // without texture) would be indistinguishable from "not yet taken", and Clear
+        // would leave the user's texture in place instead of removing it.
         bool        baseAlbedoTaken = false, baseNormalTaken = false, baseOrmTaken = false;
 
-        // -1.0 = sin override activo (centinela; ver la nota de arriba).
+        // -1.0 = no active override (sentinel; see the note above).
         float       metallic  = -1.0f;
         float       roughness = -1.0f;
         float       baseMetallic  = 0.0f;
         float       baseRoughness = 0.0f;
         bool        baseMetallicTaken = false, baseRoughnessTaken = false;
 
-        // Ruta de un .mat (Core/MaterialAsset) del que este slot toma valores
-        // cuando el objeto no trae su propia override para ese campo. "" = sin
-        // material asset. Vive aqui y no en Material por el mismo motivo que
-        // las tres texturas: Material no distingue "esto lo puso el modelo" de
-        // "esto lo puso el usuario", y sin esa distincion no hay Clear posible.
+        // Path of a .mat (Core/MaterialAsset) from which this slot takes values
+        // when the object does not bring its own override for that field. "" = no
+        // material asset. It lives here and not in Material for the same reason as
+        // the three textures: Material does not tell "the model set this" from
+        // "the user set this", and without that distinction there is no possible Clear.
         std::string matAsset;
     };
 
     class GameObject
     {
         public:
-            // Único entre todos los GameObject de la sesión (contador atómico
-            // en el constructor) — usado por los comandos de Undo/Redo pa
-            // resolver el objeto en vivo vía Scene::findById tras un ciclo
-            // undo/redo que reconstruye el GameObject (Undo de Delete), donde
-            // un GameObject* crudo quedaría colgado.
+            // Unique among all GameObjects of the session (atomic counter
+            // in the constructor) — used by the Undo/Redo commands to
+            // resolve the live object via Scene::findById after an
+            // undo/redo cycle that rebuilds the GameObject (Undo of Delete), where
+            // a raw GameObject* would be left dangling.
             uint64_t id;
 
-            // Adelanta el contador global para que nunca vuelva a repartir id
-            // (ni ninguno por debajo). La necesita quien ASIGNA un id a mano en
-            // vez de dejar que lo ponga el constructor: hoy, la carga de escena
-            // (Scene.cpp, nodeFromJson), que reusa el id que trae el fichero.
+            // Advances the global counter so that it never hands out an id again
+            // (nor any below it). Needed by whoever ASSIGNS an id by hand
+            // instead of letting the constructor set it: today, scene loading
+            // (Scene.cpp, nodeFromJson), which reuses the id that the file brings.
             //
-            // Sin esto, un .scene guardado en otra sesión —con ids más altos
-            // que los que este proceso ha repartido— deja el contador POR
-            // DETRÁS de ids que ya viven en el árbol, y el siguiente
-            // GameObject que se cree estrena uno repetido. A partir de ahí
-            // findById se queda con el último del recorrido y los comandos de
-            // Undo escriben en el objeto equivocado, en silencio.
+            // Without this, a .scene saved in another session —with higher ids
+            // than the ones this process has handed out— leaves the counter BEHIND
+            // ids that already live in the tree, and the next GameObject
+            // created gets a repeated one. From then on
+            // findById keeps the last one in the traversal and the Undo commands
+            // write into the wrong object, silently.
             static void reserveIdAtLeast(uint64_t id);
 
-            // Reparte un id nuevo, único frente a TODO lo repartido o
-            // reservado hasta ahora (mismo contador que el constructor y que
-            // reserveIdAtLeast). Lo usa Scene::insertFromJson para dar de
-            // baja un id del snapshot que choca con uno ya vivo en el resto
-            // del árbol — reusar el de reserveIdAtLeast ahí no vale porque
-            // ese solo ADELANTA el contador, no entrega un valor.
+            // Hands out a new id, unique against EVERYTHING handed out or
+            // reserved so far (same counter as the constructor and as
+            // reserveIdAtLeast). Used by Scene::insertFromJson to re-id
+            // a snapshot id that clashes with one already alive in the rest
+            // of the tree — reusing reserveIdAtLeast there does not work because
+            // that one only ADVANCES the counter, it does not hand out a value.
             static uint64_t allocateId();
 
-            // JobId de la carga de mesh en vuelo, 0 = ninguna. Es un uint64_t
-            // opaco a propósito: Core no conoce AsyncAssetLoader, y el
-            // destructor NO cancela nada — el pump ya descarta los resultados
-            // cuyo targetId no existe.
+            // JobId of the in-flight mesh load, 0 = none. It is an opaque uint64_t
+            // on purpose: Core does not know AsyncAssetLoader, and the
+            // destructor does NOT cancel anything — the pump already discards the results
+            // whose targetId does not exist.
             uint64_t pendingMeshJob = 0;
 
             explicit GameObject(std::string name = "");
@@ -150,29 +150,29 @@ namespace DonTopo
 
             GameObject* addChild(std::string childName);
 
-            // El baseline de cada override (base*/base*Taken) pertenece a LA
-            // MALLA de la que salió, no al GameObject: si sobreviviera a un
-            // cambio de malla, un Clear posterior devolvería la textura de un
-            // modelo que ya no es el que está cargado. Dos callers lo rompían
-            // antes de este reset: AsyncAssetLoader::applyLoadedMesh hace
-            // setMesh(nullptr) en su catch DESPUÉS de que applyMaterialOverrides
-            // ya hubiera capturado el baseline de la malla que no llegó a
-            // cuajar, y removeMeshComponent quita la malla sin tocar
-            // materialOverrides — un Remove + Add con otro FBX heredaba el
-            // baseline del anterior. Resetear aquí, en el ÚNICO punto por el
-            // que cambia la malla, cubre los dos sin depender de que cada sitio
-            // que suelta una malla se acuerde de limpiar también los overrides.
-            // Cubre los DOS backends: D3D12Renderer::removeMeshComponent
-            // llamaba solo a releaseObjectSlot/releaseSkinnedSlot y se saltaba
-            // este reset entero; desde que llama a setMesh(nullptr) igual que
-            // el de Vulkan, un Remove + Add ya no puede heredar el baseline del
-            // FBX anterior en ninguno de los dos.
+            // The baseline of each override (base*/base*Taken) belongs to THE
+            // MESH it came from, not to the GameObject: if it survived a
+            // mesh change, a later Clear would return the texture of a
+            // model that is no longer the one loaded. Two callers broke it
+            // before this reset: AsyncAssetLoader::applyLoadedMesh does
+            // setMesh(nullptr) in its catch AFTER applyMaterialOverrides
+            // had already captured the baseline of the mesh that never
+            // came together, and removeMeshComponent removes the mesh without touching
+            // materialOverrides — a Remove + Add with another FBX inherited the
+            // baseline of the previous one. Resetting here, at the ONLY point
+            // through which the mesh changes, covers both without depending on every place
+            // that drops a mesh remembering to also clean the overrides.
+            // It covers the TWO backends: D3D12Renderer::removeMeshComponent
+            // only called releaseObjectSlot/releaseSkinnedSlot and skipped
+            // this whole reset; since it calls setMesh(nullptr) just like
+            // the Vulkan one, a Remove + Add can no longer inherit the baseline of the
+            // previous FBX in either of the two.
             //
-            // Seguro para el camino de carga de escena (Scene::nodeFromJson):
-            // este setMesh corre SIEMPRE antes de que se lean/carguen los
-            // overrides del JSON sobre `materialOverrides` (que en ese punto
-            // está vacío para un nodo recién creado), así que el reset no
-            // pisa nada — ver la nota de orden en nodeFromJson.
+            // Safe for the scene loading path (Scene::nodeFromJson):
+            // this setMesh ALWAYS runs before the JSON overrides are read/loaded
+            // into `materialOverrides` (which at that point
+            // is empty for a newly created node), so the reset does not
+            // overwrite anything — see the ordering note in nodeFromJson.
             void setMesh(std::shared_ptr<const Mesh> mesh)
             {
                 m_mesh = std::move(mesh);
@@ -181,28 +181,28 @@ namespace DonTopo
                     ov.baseAlbedo.clear(); ov.baseAlbedoTaken = false;
                     ov.baseNormal.clear(); ov.baseNormalTaken = false;
                     ov.baseOrm.clear();    ov.baseOrmTaken    = false;
-                    // Mismo motivo que los tres de arriba: el baseline de un
-                    // factor pertenece a LA MALLA de la que salió, no al
-                    // GameObject. baseMetallic/baseRoughness no llevan valor
-                    // "vacío" que limpiar (son floats, no std::string): basta
-                    // con bajar el flag, que es lo único que
-                    // applyMaterialOverrides mira para decidir si recaptura.
+                    // Same reason as the three above: the baseline of a
+                    // factor belongs to THE MESH it came from, not to the
+                    // GameObject. baseMetallic/baseRoughness have no "empty"
+                    // value to clear (they are floats, not std::string): it is enough
+                    // to lower the flag, which is the only thing
+                    // applyMaterialOverrides looks at to decide whether to recapture.
                     ov.baseMetallicTaken  = false;
                     ov.baseRoughnessTaken = false;
                 }
             }
-            // Solo lectura: la malla puede estar COMPARTIDA con otros objetos
-            // (clon, undo de Delete). Para modificarla, editMesh().
+            // Read-only: the mesh may be SHARED with other objects
+            // (clone, undo of Delete). To modify it, editMesh().
             const std::shared_ptr<const Mesh>& getMesh() const { return m_mesh; }
             bool hasMesh()   const { return m_mesh != nullptr; }
-            // Fuera de línea: el dynamic_cast necesita SkinnedMesh completo.
+            // Out of line: the dynamic_cast needs the complete SkinnedMesh.
             bool isSkinned() const;
             const SkinnedMesh* getSkinnedMesh() const;
-            // Única vía de escritura. Si la malla está compartida
-            // (use_count > 1) la copia primero —conservando su tipo— y el
-            // objeto pasa a apuntar a su copia. Las referencias que no son de
-            // otro GameObject (caché de precarga, un comando del undo) también
-            // cuentan: como mucho una copia de más, nunca un resultado mal.
+            // Only write path. If the mesh is shared
+            // (use_count > 1) it copies it first —keeping its type— and the
+            // object now points to its copy. References that are not from
+            // another GameObject (preload cache, an undo command) also
+            // count: at most one copy too many, never a wrong result.
             Mesh*        editMesh();
             SkinnedMesh* editSkinnedMesh();
 
@@ -222,24 +222,24 @@ namespace DonTopo
             const std::shared_ptr<PlaneCollider>& getPlaneCollider() const { return m_planeCollider; }
             bool hasPlaneCollider() const { return m_planeCollider != nullptr; }
 
-            // true si tiene cualquiera de los 4 tipos de collider — los 4 son
-            // mutuamente excluyentes (impuesto por EditorUI, no por esta clase),
-            // usado como guard único en el popup "Add".
+            // true if it has any of the 4 collider types — the 4 are
+            // mutually exclusive (enforced by EditorUI, not by this class),
+            // used as the single guard in the "Add" popup.
             bool hasAnyCollider() const
             {
                 return m_boxCollider || m_sphereCollider || m_capsuleCollider || m_planeCollider;
             }
 
-            // Devuelve el collider del GameObject como base Collider (hay como
-            // mucho uno por la exclusividad mutua), o nullptr si no tiene.
-            // Usado por el scripting para registrar el listener de triggers sin
-            // ramificar por tipo concreto.
-            // Fuera de línea: convertir shared_ptr<BoxCollider> a
-            // shared_ptr<Collider> exige ver la herencia.
+            // Returns the GameObject's collider as the Collider base (there is at
+            // most one because of mutual exclusivity), or nullptr if it has none.
+            // Used by scripting to register the trigger listener without
+            // branching by concrete type.
+            // Out of line: converting shared_ptr<BoxCollider> to
+            // shared_ptr<Collider> requires seeing the inheritance.
             std::shared_ptr<Collider> anyCollider() const;
 
-            // Rigidbody: dinámica del cuerpo (masa/gravedad/fuerzas/constraints).
-            // Requiere un collider que aporte la forma; uno por objeto.
+            // Rigidbody: body dynamics (mass/gravity/forces/constraints).
+            // Requires a collider that provides the shape; one per object.
             void setRigidbody(std::shared_ptr<Rigidbody> rb) { m_rigidbody = std::move(rb); }
             const std::shared_ptr<Rigidbody>& getRigidbody() const { return m_rigidbody; }
             bool hasRigidbody() const { return m_rigidbody != nullptr; }
@@ -248,160 +248,160 @@ namespace DonTopo
             const std::shared_ptr<AudioClipComponent>& getAudioClip() const { return m_audioClip; }
             bool hasAudioClip() const { return m_audioClip != nullptr; }
 
-            // Audio Listener: desde dónde se oye el audio 3D. Como mucho uno por
-            // escena, igual que la cámara — el invariante lo impone
-            // Scene::findAudioListener, no esta clase. La posición y los ejes
-            // salen del worldTransform, no del componente.
+            // Audio Listener: from where 3D audio is heard. At most one per
+            // scene, just like the camera — the invariant is enforced by
+            // Scene::findAudioListener, not by this class. The position and axes
+            // come from the worldTransform, not from the component.
             void setAudioListener(std::shared_ptr<AudioListenerComponent> l) { m_audioListener = std::move(l); }
             const std::shared_ptr<AudioListenerComponent>& getAudioListener() const { return m_audioListener; }
             bool hasAudioListener() const { return m_audioListener != nullptr; }
 
-            // Zona de reverberacion: esfera de ambiente sonoro. Varias por
-            // escena, a diferencia del listener. El recurso de FMOD no vive
-            // aqui: lo lleva AudioManager emparejado por este id.
+            // Reverb zone: sphere of sound ambience. Several per
+            // scene, unlike the listener. The FMOD resource does not live
+            // here: AudioManager holds it, paired by this id.
             void setReverbZone(std::shared_ptr<ReverbZoneComponent> z) { m_reverbZone = std::move(z); }
             const std::shared_ptr<ReverbZoneComponent>& getReverbZone() const { return m_reverbZone; }
             bool hasReverbZone() const { return m_reverbZone != nullptr; }
 
-            // Cámara de juego: al dar a Play el Renderer renderiza desde este
-            // GameObject (su worldTransform da posición y orientación). Como
-            // mucho una por escena — el invariante lo impone Scene::findCamera,
-            // no esta clase, igual que la exclusividad de colliders la impone
-            // el editor.
+            // Game camera: on Play the Renderer renders from this
+            // GameObject (its worldTransform gives position and orientation). At most
+            // one per scene — the invariant is enforced by Scene::findCamera,
+            // not by this class, just like the exclusivity of colliders is enforced
+            // by the editor.
             void setCameraComponent(std::shared_ptr<CameraComponent> camera) { m_cameraComponent = std::move(camera); }
             const std::shared_ptr<CameraComponent>& getCameraComponent() const { return m_cameraComponent; }
             bool hasCameraComponent() const { return m_cameraComponent != nullptr; }
 
-            // Animator: máquina de estados que decide qué clip del SkinnedMesh
-            // se reproduce. A diferencia de la cámara, no hay invariante de
-            // unicidad por escena: cada GameObject skinned lleva el suyo.
+            // Animator: state machine that decides which clip of the SkinnedMesh
+            // plays. Unlike the camera, there is no per-scene uniqueness
+            // invariant: each skinned GameObject carries its own.
             void setAnimator(std::shared_ptr<AnimatorComponent> a) { m_animator = std::move(a); }
             const std::shared_ptr<AnimatorComponent>& getAnimator() const { return m_animator; }
             bool hasAnimator() const { return m_animator != nullptr; }
 
-            // Reflection Probe: sonda de entorno. Sin invariante de unicidad
-            // por escena (al contrario que la cámara): caben las que quepan en
-            // memoria, y el Renderer resuelve qué sonda ilumina cada objeto por
-            // radio de influencia.
+            // Reflection Probe: environment probe. No per-scene uniqueness
+            // invariant (unlike the camera): as many as fit in
+            // memory, and the Renderer resolves which probe lights each object by
+            // radius of influence.
             void setReflectionProbe(std::shared_ptr<ReflectionProbeComponent> p) { m_reflectionProbe = std::move(p); }
             const std::shared_ptr<ReflectionProbeComponent>& getReflectionProbe() const { return m_reflectionProbe; }
             bool hasReflectionProbe() const { return m_reflectionProbe != nullptr; }
 
-            // Luz. Tampoco tiene invariante de unicidad: caben varias del mismo
-            // tipo por escena, y es Scene quien se queda con las primeras
-            // MAX_LIGHTS al recolectarlas para el Renderer. La posición y la
-            // dirección salen del worldTransform, no del componente.
+            // Light. It has no uniqueness invariant either: several of the same
+            // type fit per scene, and it is Scene that keeps the first
+            // MAX_LIGHTS when collecting them for the Renderer. The position and
+            // direction come from the worldTransform, not from the component.
             void setLight(std::shared_ptr<LightComponent> l) { m_light = std::move(l); }
             const std::shared_ptr<LightComponent>& getLight() const { return m_light; }
             bool hasLight() const { return m_light != nullptr; }
 
-            // Canvas: la raíz de la UI 2D. Sin invariante de unicidad por
-            // escena (como la luz, no como la cámara), pero el canvas VIVO es
-            // uno solo —el del Renderer—, así que quien dibuja aplica el
-            // primero en pre-orden (Scene::findCanvas). La posición no sale del
-            // worldTransform: la UI es espacio de pantalla.
+            // Canvas: the root of the 2D UI. No per-scene uniqueness invariant
+            // (like the light, unlike the camera), but the LIVE canvas is
+            // just one —the Renderer's—, so whoever draws applies the
+            // first in pre-order (Scene::findCanvas). The position does not come from the
+            // worldTransform: the UI is screen space.
             void setCanvas(std::shared_ptr<CanvasComponent> c) { m_canvas = std::move(c); }
             const std::shared_ptr<CanvasComponent>& getCanvas() const { return m_canvas; }
             bool hasCanvas() const { return m_canvas != nullptr; }
 
-            // Button: un widget de la UI 2D. Solo tiene sentido colgando de un
-            // Canvas (el gate del editor es PropertiesPanel::uiComponentsAvailable),
-            // y como el Canvas, es SOLO DATOS: el nodo vivo lo monta quien dibuja
-            // con syncUiWidgets(). Uno por GameObject, igual que la luz.
+            // Button: a 2D UI widget. It only makes sense hanging from a
+            // Canvas (the editor gate is PropertiesPanel::uiComponentsAvailable),
+            // and like the Canvas, it is DATA ONLY: the live node is built by whoever draws
+            // with syncUiWidgets(). One per GameObject, just like the light.
             void setButton(std::shared_ptr<ButtonComponent> b) { m_button = std::move(b); }
             const std::shared_ptr<ButtonComponent>& getButton() const { return m_button; }
             bool hasButton() const { return m_button != nullptr; }
 
-            // Text: una etiqueta de la UI 2D. Mismo contrato que el Button —
-            // solo tiene sentido colgando de un Canvas y es SOLO DATOS: el nodo
-            // vivo lo monta quien dibuja con syncUiWidgets(). Uno por
-            // GameObject, y compatible con el Button en el mismo objeto (son
-            // dos nodos hermanos con nombres distintos).
+            // Text: a 2D UI label. Same contract as the Button —
+            // it only makes sense hanging from a Canvas and is DATA ONLY: the live
+            // node is built by whoever draws with syncUiWidgets(). One per
+            // GameObject, and compatible with the Button on the same object (they are
+            // two sibling nodes with different names).
             void setText(std::shared_ptr<TextComponent> t) { m_text = std::move(t); }
             const std::shared_ptr<TextComponent>& getText() const { return m_text; }
             bool hasText() const { return m_text != nullptr; }
 
-            // Barra de progreso de la UI 2D. Mismo contrato que el Text: SOLO
-            // DATOS, y el nodo vivo (fondo + relleno) lo monta syncUiWidgets().
-            // Compatible con Button y Text en el mismo GameObject: son nodos
-            // hermanos con prefijos de nombre distintos.
+            // Progress bar of the 2D UI. Same contract as the Text: DATA
+            // ONLY, and the live node (background + fill) is built by syncUiWidgets().
+            // Compatible with Button and Text on the same GameObject: they are sibling
+            // nodes with different name prefixes.
             void setProgressBar(std::shared_ptr<ProgressBarComponent> p) { m_progressBar = std::move(p); }
             const std::shared_ptr<ProgressBarComponent>& getProgressBar() const { return m_progressBar; }
             bool hasProgressBar() const { return m_progressBar != nullptr; }
 
-            // Panel: el rectángulo de fondo de la UI 2D. Mismo contrato que el
-            // resto — SOLO DATOS, y el nodo vivo lo monta syncUiWidgets(). Uno
-            // por GameObject, y compatible con los demás componentes de UI en el
-            // mismo objeto: son nodos hermanos con prefijos de nombre distintos.
+            // Panel: the background rectangle of the 2D UI. Same contract as the
+            // rest — DATA ONLY, and the live node is built by syncUiWidgets(). One
+            // per GameObject, and compatible with the other UI components on the
+            // same object: they are sibling nodes with different name prefixes.
             void setPanel(std::shared_ptr<PanelComponent> p) { m_panel = std::move(p); }
             const std::shared_ptr<PanelComponent>& getPanel() const { return m_panel; }
             bool hasPanel() const { return m_panel != nullptr; }
 
-            // Image: un sprite de la UI 2D con sus cuatro modos de reparto
-            // (Normal, Tiled, Sliced, Filled). Mismo contrato que el Panel.
+            // Image: a 2D UI sprite with its four layout modes
+            // (Normal, Tiled, Sliced, Filled). Same contract as the Panel.
             void setImage(std::shared_ptr<ImageComponent> i) { m_image = std::move(i); }
             const std::shared_ptr<ImageComponent>& getImage() const { return m_image; }
             bool hasImage() const { return m_image != nullptr; }
 
-            // Slider: el widget de valor arrastrable de la UI 2D. Mismo
-            // contrato que el resto — SOLO DATOS —, con una diferencia: el nodo
-            // vivo tiene handlers de raton que ESCRIBEN `value` aqui, asi que el
-            // sync lo recibe por puntero no const.
+            // Slider: the draggable value widget of the 2D UI. Same
+            // contract as the rest — DATA ONLY —, with one difference: the live
+            // node has mouse handlers that WRITE `value` here, so the
+            // sync receives it by non-const pointer.
             void setSlider(std::shared_ptr<SliderComponent> s) { m_slider = std::move(s); }
             const std::shared_ptr<SliderComponent>& getSlider() const { return m_slider; }
             bool hasSlider() const { return m_slider != nullptr; }
 
-            // Checkbox: la casilla de verificacion. Como el Slider, su nodo
-            // vivo tiene un handler de click que escribe `isOn` AQUI, asi que el
-            // sync lo recibe por puntero no const.
+            // Checkbox: the check box. Like the Slider, its live
+            // node has a click handler that writes `isOn` HERE, so the
+            // sync receives it by non-const pointer.
             void setCheckbox(std::shared_ptr<CheckboxComponent> c) { m_checkbox = std::move(c); }
             const std::shared_ptr<CheckboxComponent>& getCheckbox() const { return m_checkbox; }
             bool hasCheckbox() const { return m_checkbox != nullptr; }
 
-            // Toggle: el interruptor deslizante. Mismo dato que el Checkbox (un
-            // bool) pero otros campos, asi que otro componente.
+            // Toggle: the sliding switch. Same data as the Checkbox (a
+            // bool) but other fields, so it is another component.
             void setToggle(std::shared_ptr<ToggleComponent> t) { m_toggle = std::move(t); }
             const std::shared_ptr<ToggleComponent>& getToggle() const { return m_toggle; }
             bool hasToggle() const { return m_toggle != nullptr; }
 
-            // Scrollbar: el canal con asa de tamano variable. Interactivo por
-            // arrastre Y por rueda, asi que tambien por puntero no const.
+            // Scrollbar: the channel with a variable-size handle. Interactive by
+            // drag AND by wheel, so also by non-const pointer.
             void setScrollbar(std::shared_ptr<ScrollbarComponent> s) { m_scrollbar = std::move(s); }
             const std::shared_ptr<ScrollbarComponent>& getScrollbar() const { return m_scrollbar; }
             bool hasScrollbar() const { return m_scrollbar != nullptr; }
 
-            // InputField: el campo de texto. Interactivo y ademas el unico que
-            // recibe TECLADO, asi que el sync lo toma por puntero no const.
+            // InputField: the text field. Interactive and also the only one that
+            // receives KEYBOARD, so the sync takes it by non-const pointer.
             void setInputField(std::shared_ptr<InputFieldComponent> f) { m_inputField = std::move(f); }
             const std::shared_ptr<InputFieldComponent>& getInputField() const { return m_inputField; }
             bool hasInputField() const { return m_inputField != nullptr; }
 
-            // Dropdown: el desplegable. Su subarbol cambia de forma con el numero
-            // de opciones, cosa que el sync tiene en cuenta al decidir si
-            // reconstruye.
+            // Dropdown: the drop-down. Its subtree changes shape with the number
+            // of options, which the sync takes into account when deciding whether to
+            // rebuild.
             void setDropdown(std::shared_ptr<DropdownComponent> d) { m_dropdown = std::move(d); }
             const std::shared_ptr<DropdownComponent>& getDropdown() const { return m_dropdown; }
             bool hasDropdown() const { return m_dropdown != nullptr; }
 
-            // ScrollView: la vista desplazable. OJO: los hijos de este GameObject
-            // cuelgan de su nodo de CONTENIDO, no del viewport — si colgaran del
-            // viewport, desplazarse no los arrastraria.
+            // ScrollView: the scrollable view. NOTE: the children of this GameObject
+            // hang from its CONTENT node, not from the viewport — if they hung from the
+            // viewport, scrolling would not drag them.
             void setScrollView(std::shared_ptr<ScrollViewComponent> s) { m_scrollView = std::move(s); }
             const std::shared_ptr<ScrollViewComponent>& getScrollView() const { return m_scrollView; }
             bool hasScrollView() const { return m_scrollView != nullptr; }
 
-            // Auto-layout: coloca a los HIJOS de este GameObject, y con
-            // ignoreLayout saca a este de la colocacion de su padre. Mismo
-            // contrato que el resto: SOLO DATOS, y el nodo lo resuelve
-            // syncUiWidgets(). Sin ningun otro componente de UI en el objeto, el
-            // sync le monta un contenedor propio (no dibujable); con el, escribe
-            // los campos de layout en el nodo de aquel.
+            // Auto-layout: places the CHILDREN of this GameObject, and with
+            // ignoreLayout takes this one out of its parent's placement. Same
+            // contract as the rest: DATA ONLY, and the node is resolved by
+            // syncUiWidgets(). With no other UI component on the object, the
+            // sync builds it its own container (not drawable); with one, it writes
+            // the layout fields into that one's node.
             void setLayout(std::shared_ptr<LayoutComponent> l) { m_layout = std::move(l); }
             const std::shared_ptr<LayoutComponent>& getLayout() const { return m_layout; }
             bool hasLayout() const { return m_layout != nullptr; }
 
-            // Scripts Lua — a diferencia del resto de slots, vector: se
-            // permiten varios scripts por GameObject (incluso repetidos).
+            // Lua scripts — unlike the rest of the slots, a vector: several
+            // scripts per GameObject are allowed (even repeated).
             void addScript(std::unique_ptr<ScriptComponent> script);
             void removeScript(ScriptComponent* script);
             std::vector<std::unique_ptr<ScriptComponent>>&       getScripts()       { return m_scripts; }
@@ -410,21 +410,21 @@ namespace DonTopo
 
             void updateWorldTransforms(const glm::mat4& parentWorld = glm::mat4(1.0f));
 
-            // Primero en preorden que cumpla `pred`, o nullptr. CORTA en cuanto
-            // aparece: `traverse` no puede: visita el árbol entero, así que los
-            // cuatro buscadores de Scene lo emulaban con un `if (!found && ...)`
-            // que seguía bajando por todo lo demás para nada.
+            // First in preorder that satisfies `pred`, or nullptr. It STOPS as soon as
+            // it finds it: `traverse` cannot: it visits the whole tree, so the four
+            // Scene finders emulated it with an `if (!found && ...)`
+            // that kept descending through everything else for nothing.
             //
-            // Lo que cuesta eso, medido en /O2 con 5000 nodos y 20.000 búsquedas:
-            // recorrido completo 175 ms pase lo que pase; cortando, 0,007 ms si
-            // el nodo está en la raíz, 50 ms si está a un tercio y 160 ms si NO
-            // está (ahí no hay nada que ahorrar, es el único caso que sigue
-            // costando lo mismo). O sea 8,8 us por búsqueda hoy — y
-            // PropertiesPanel, que se dibuja cada frame, hace varias.
+            // What that costs, measured in /O2 with 5000 nodes and 20,000 searches:
+            // full traversal 175 ms no matter what; stopping early, 0.007 ms if
+            // the node is at the root, 50 ms if it is a third of the way in and 160 ms if it is NOT
+            // there (nothing to save there, it is the only case that still
+            // costs the same). That is 8.8 us per search today — and
+            // PropertiesPanel, which is drawn every frame, does several.
             //
-            // Devuelve GameObject* y no bool para que el caller no tenga que
-            // capturar el resultado a mano, que es justo el patrón que se está
-            // quitando.
+            // Returns GameObject* and not bool so that the caller does not have to
+            // capture the result by hand, which is exactly the pattern being
+            // removed.
             template <typename Pred>
             GameObject* findFirst(Pred&& pred)
             {
@@ -434,24 +434,24 @@ namespace DonTopo
                 return nullptr;
             }
 
-            // Fn&& y no Fn: por valor se copiaba el functor por cada hijo Y por
-            // cada nivel. Con los callers de hoy eso no cuesta NADA medible —son
-            // lambdas [&] de 8 bytes; medido en /O2 con 5000 nodos x 2000
-            // recorridos: 25,3 ms por valor contra 24,3 ms por referencia, o sea
-            // ruido—. Con un functor de 264 bytes la misma medida da 62-69 ms
-            // contra 26-29: 2,4x. O sea que el coste existe y hoy nadie lo paga.
+            // Fn&& and not Fn: by value the functor was copied per child AND per
+            // level. With today's callers that costs NOTHING measurable —they are
+            // [&] lambdas of 8 bytes; measured in /O2 with 5000 nodes x 2000
+            // traversals: 25.3 ms by value against 24.3 ms by reference, that is
+            // noise—. With a 264-byte functor the same measurement gives 62-69 ms
+            // against 26-29: 2.4x. So the cost exists and today nobody pays it.
             //
-            // Se cambia por lo OTRO, que no es rendimiento: por valor, un functor
-            // MUTABLE que acumule en su propio estado pierde en silencio lo que
-            // sumen los hijos, porque cada subárbol recibe su copia. Hoy no hay
-            // ni una lambda mutable en los traverse del repo (grep), así que esto
-            // no arregla nada roto: cierra la puerta antes de que alguien la
-            // encuentre depurando por qué su contador sale a cero.
+            // It is changed for the OTHER reason, which is not performance: by value, a
+            // MUTABLE functor that accumulates in its own state silently loses what
+            // the children add up, because each subtree receives its copy. Today there is
+            // not a single mutable lambda in the repo's traverse calls (grep), so this
+            // does not fix anything broken: it closes the door before someone
+            // finds it while debugging why their counter comes out as zero.
             //
-            // Fn&& y NO Fn&: casi todos los callers pasan la lambda en la propia
-            // llamada, y un temporal no se puede enganchar a una referencia
-            // lvalue. Dentro se recursa con `fn`, que ya es un lvalue con nombre,
-            // así que el hijo deduce Fn& y no se copia nada.
+            // Fn&& and NOT Fn&: almost all callers pass the lambda in the call itself,
+            // and a temporary cannot bind to an lvalue reference. Inside it recurses
+            // with `fn`, which is already a named lvalue, so the child deduces Fn& and
+            // nothing is copied.
             template <typename Fn>
             void traverse(Fn&& fn)
             {
@@ -465,28 +465,28 @@ namespace DonTopo
             GameObject* parent = nullptr;
             std::vector<std::unique_ptr<GameObject>> children;
 
-            // El Renderer mantiene dos colecciones/pipelines separados (estático vs skinned),
-            // por eso hacen falta dos índices en vez de un único meshIndex plano.
+            // The Renderer keeps two separate collections/pipelines (static vs skinned),
+            // which is why two indices are needed instead of a single flat meshIndex.
             int staticRenderIndex  = -1;
             int skinnedRenderIndex = -1;
 
-            // Visibilidad del componente Mesh. false = la malla no se manda a la
-            // GPU: ni pass de escena, ni sombras, ni AO. Física, colisiones y
-            // selección en el viewport siguen igual. Llega al Renderer por frame
-            // vía setObjectMeshVisible/setSkinnedMeshVisible, igual que el SSR.
+            // Visibility of the Mesh component. false = the mesh is not sent to the
+            // GPU: no scene pass, no shadows, no AO. Physics, collisions and
+            // selection in the viewport stay the same. It reaches the Renderer per frame
+            // via setObjectMeshVisible/setSkinnedMeshVisible, like SSR.
             bool meshVisible = true;
 
-            // Vacío = el material es tal cual lo trajo el FBX. Ver
+            // Empty = the material is exactly as the FBX brought it. See
             // MaterialOverride.
             std::vector<MaterialOverride> materialOverrides;
 
-            // Screen Space Reflections por objeto. No es un componente: son dos
-            // campos del propio GameObject, igual que el transform, porque lo que
-            // configuran es cómo se dibuja SU malla. ssrIntensity es la
-            // reflectividad a incidencia normal (F0 en ssr.comp): 1 = espejo,
-            // valores bajos reflejan sobre todo de canto. El Renderer los recibe
-            // por frame vía setObjectSsr/setSkinnedSsr, y con ssrEnabled a false
-            // el objeto no aporta máscara ninguna.
+            // Screen Space Reflections per object. It is not a component: they are two
+            // fields of the GameObject itself, like the transform, because what they
+            // configure is how ITS mesh is drawn. ssrIntensity is the
+            // reflectivity at normal incidence (F0 in ssr.comp): 1 = mirror,
+            // low values reflect mostly at grazing angles. The Renderer receives them
+            // per frame via setObjectSsr/setSkinnedSsr, and with ssrEnabled false
+            // the object contributes no mask at all.
             bool  ssrEnabled   = false;
             float ssrIntensity = 0.5f;
 
@@ -521,29 +521,29 @@ namespace DonTopo
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 
-    // Los materiales EDITABLES de un objeto, en el orden que indexan los
-    // overrides: los de submalla si es un skinned que los trae, y si no el
-    // heredado de Mesh. Vacío si no hay mesh.
+    // The EDITABLE materials of an object, in the order the
+    // overrides index: the submesh ones if it is a skinned that brings them, and otherwise the
+    // one inherited from Mesh. Empty if there is no mesh.
     //
-    // Fuera de línea: el dynamic_cast necesita SkinnedMesh completo, mismo
-    // motivo que isSkinned().
+    // Out of line: the dynamic_cast needs the complete SkinnedMesh, same
+    // reason as isSkinned().
     std::vector<const Material*> materialsOfMesh(const GameObject& go);
-    // Igual, pero escribible: pasa por editMesh(), así que copia la malla si
-    // está compartida.
+    // Same, but writable: it goes through editMesh(), so it copies the mesh if
+    // it is shared.
     std::vector<Material*> editMaterialsOfMesh(GameObject& go);
 
-    // Escribe los overrides sobre los materiales, capturando el baseline la
-    // primera vez que pisa cada slot. Idempotente: llamarla dos veces seguidas
-    // deja lo mismo.
+    // Writes the overrides onto the materials, capturing the baseline the
+    // first time it overwrites each slot. Idempotent: calling it twice in a row
+    // leaves the same thing.
     void applyMaterialOverrides(GameObject& go);
 
-    // Los índices que applyMaterialOverrides va a ignorar en silencio (el FBX
-    // se reexportó con menos submallas), en texto y para el canal que tenga el
-    // caller. Va aparte porque applyMaterialOverrides no tiene dónde escribir
-    // un aviso y no se le va a dar uno: los dos caminos que cargan mallas
-    // —Scene::nodeFromJson con su vector de warnings, y el pump asíncrono con
-    // el Log del editor— tienen canales distintos, y este helper es lo que hace
-    // que los dos digan exactamente lo mismo. Añade a `out`, no lo limpia.
-    // Sin malla no escribe nada: no hay materiales contra los que comparar.
+    // The indices that applyMaterialOverrides is going to silently ignore (the FBX
+    // was re-exported with fewer submeshes), as text and for whatever channel the
+    // caller has. It is separate because applyMaterialOverrides has nowhere to write
+    // a warning and none is going to be given to it: the two paths that load meshes
+    // —Scene::nodeFromJson with its vector of warnings, and the asynchronous pump with
+    // the editor Log— have different channels, and this helper is what makes
+    // both say exactly the same thing. It appends to `out`, it does not clear it.
+    // Without a mesh it writes nothing: there are no materials to compare against.
     void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out);
 }

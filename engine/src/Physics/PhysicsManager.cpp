@@ -24,32 +24,32 @@ namespace {
     PxDefaultErrorCallback  g_errorCallback;
 
 
-    // Valores del PxMaterial que se crea por collider. Coinciden con los
-    // defaults de Collider (m_staticFriction/m_dynamicFriction/m_restitution) y
-    // con los del material global que compartían todos los colliders antes, así
-    // que una escena existente simula exactamente igual.
+    // Values of the PxMaterial created per collider. They match the
+    // defaults of Collider (m_staticFriction/m_dynamicFriction/m_restitution) and
+    // those of the global material that all colliders shared before, so
+    // an existing scene simulates exactly the same.
     constexpr float kDefaultStaticFriction  = 0.5f;
     constexpr float kDefaultDynamicFriction = 0.5f;
     constexpr float kDefaultRestitution     = 0.1f;
 
-    // Mismo truco usado en CapsuleCollider.cpp/PlaneCollider.cpp: PhysX
-    // orienta PxCapsuleGeometry a lo largo de X y define la normal de
-    // PxPlaneGeometry como el eje X local del shape. Esta rotación fija
-    // (90° sobre Z) mapea ese eje X a Y en ambos casos.
+    // Same trick used in CapsuleCollider.cpp/PlaneCollider.cpp: PhysX
+    // orients PxCapsuleGeometry along X and defines the normal of
+    // PxPlaneGeometry as the local X axis of the shape. This fixed rotation
+    // (90° about Z) maps that X axis to Y in both cases.
     PxQuat axisCorrection() { return PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f)); }
 
-    // Recibe los pares de trigger de PhysX y los reenvía a los callbacks del
-    // collider. cada PxShape lleva en su actor un userData = Collider* (lo pone
-    // PhysicsManager al crear el collider), así se recupera quién solapó a
-    // quién. PhysX solo emite Enter/Exit (TOUCH_FOUND/LOST); el Stay lo
-    // sintetiza PhysicsManager::stepSimulation recorriendo los overlaps.
+    // Receives the trigger pairs from PhysX and forwards them to the collider
+    // callbacks. Each PxShape carries in its actor a userData = Collider* (set by
+    // PhysicsManager when creating the collider), so who overlapped
+    // whom is recovered. PhysX only emits Enter/Exit (TOUCH_FOUND/LOST); Stay is
+    // synthesized by PhysicsManager::stepSimulation by traversing the overlaps.
     class TriggerDispatcher : public PxSimulationEventCallback {
     public:
         void onTrigger(PxTriggerPair* pairs, PxU32 count) override {
             for (PxU32 i = 0; i < count; ++i) {
                 const PxTriggerPair& p = pairs[i];
-                // shape ya liberado (actor destruido este frame): userData
-                // colgaría, se ignora.
+                // shape already released (actor destroyed this frame): userData
+                // would dangle, it is ignored.
                 if (p.flags & (PxTriggerPairFlag::eREMOVED_SHAPE_TRIGGER |
                                PxTriggerPairFlag::eREMOVED_SHAPE_OTHER))
                     continue;
@@ -69,18 +69,18 @@ namespace {
             }
         }
 
-        // Pares NO-trigger que se tocan de verdad. Gemelo de onTrigger, con dos
-        // diferencias que vienen de PhysX, no de aquí:
-        //  - El Stay SÍ es nativo (eNOTIFY_TOUCH_PERSISTS), así que no hay que
-        //    sintetizarlo por frame como en los triggers.
-        //  - Una colisión no tiene lado "dueño": se notifica a LOS DOS
-        //    colliders, cada uno con el otro como `other` (igual que Unity).
-        // Los flags de notificación solo se piden para pares no-trigger (ver
-        // dtTriggerFilterShader), así que aquí nunca llega un trigger.
+        // NON-trigger pairs that really touch. Twin of onTrigger, with two
+        // differences that come from PhysX, not from here:
+        //  - Stay IS native (eNOTIFY_TOUCH_PERSISTS), so it does not have to be
+        //    synthesized per frame as with triggers.
+        //  - A collision has no "owner" side: BOTH colliders are notified,
+        //    each with the other as `other` (just like Unity).
+        // The notification flags are only requested for non-trigger pairs (see
+        // dtTriggerFilterShader), so a trigger never arrives here.
         void onContact(const PxContactPairHeader& header,
                        const PxContactPair* pairs, PxU32 count) override
         {
-            // Actor borrado este frame: su userData ya cuelga.
+            // Actor deleted this frame: its userData is already dangling.
             if (header.flags & (PxContactPairHeaderFlag::eREMOVED_ACTOR_0 |
                                 PxContactPairHeaderFlag::eREMOVED_ACTOR_1))
                 return;
@@ -92,7 +92,7 @@ namespace {
             for (PxU32 i = 0; i < count; ++i)
             {
                 const PxContactPair& cp = pairs[i];
-                // Misma guarda que en onTrigger, a nivel de shape.
+                // Same guard as in onTrigger, at shape level.
                 if (cp.flags & (PxContactPairFlag::eREMOVED_SHAPE_0 |
                                 PxContactPairFlag::eREMOVED_SHAPE_1))
                     continue;
@@ -115,45 +115,45 @@ namespace {
             }
         }
 
-        // Resto de eventos de simulación: no usados.
+        // Remaining simulation events: not used.
         void onConstraintBreak(PxConstraintInfo*, PxU32) override {}
         void onWake(PxActor**, PxU32) override {}
         void onSleep(PxActor**, PxU32) override {}
         void onAdvance(const PxRigidBody* const*, const PxTransform*, PxU32) override {}
     };
 
-    // Filter shader: para pares que involucran un trigger, pide notificación
-    // Enter/Exit (eTRIGGER_DEFAULT) SIN suprimir por kinematic — el
-    // PxDefaultSimulationFilterShader descarta los pares kinematic-kinematic y
-    // kinematic-static, y sin esto un trigger no vería a los objetos con
-    // Rigidbody kinematic, que son la mayoría de los que se mueven por script.
-    // Los pares NO-trigger se delegan al shader por defecto para preservar
-    // exactamente el comportamiento de colisión previo.
+    // Filter shader: for pairs that involve a trigger, it requests Enter/Exit
+    // notification (eTRIGGER_DEFAULT) WITHOUT suppressing by kinematic — the
+    // PxDefaultSimulationFilterShader discards kinematic-kinematic and
+    // kinematic-static pairs, and without this a trigger would not see objects with
+    // kinematic Rigidbody, which are most of those moved by script.
+    // NON-trigger pairs are delegated to the default shader to preserve
+    // the previous collision behavior exactly.
     //
-    // OJO con lo que este shader NO puede arreglar: los pares static-static no
-    // llegan hasta aquí. PhysX no los forma siquiera —dos actores estáticos no
-    // pueden moverse el uno respecto al otro—, así que un trigger sin
-    // Rigidbody no detecta objetos que tampoco lo tengan. Es la regla de Unity
-    // ("al menos uno de los dos necesita Rigidbody"); la avisa el editor en la
-    // sección del collider y la fijan los tests de trigger de physics_tests.cpp.
-    // (Este comentario decía antes que "casi todos los colliders son
-    // kinematic": dejó de ser cierto cuando la dinámica se separó del Collider
-    // y un collider sin Rigidbody pasó a ser PxRigidStatic.)
+    // NOTE what this shader CANNOT fix: static-static pairs do not
+    // get here. PhysX does not even form them —two static actors cannot
+    // move relative to each other—, so a trigger without a
+    // Rigidbody does not detect objects that do not have one either. It is Unity's rule
+    // ("at least one of the two needs a Rigidbody"); it is warned by the editor in the
+    // collider section and fixed by the trigger tests in physics_tests.cpp.
+    // (This comment used to say that "almost all colliders are
+    // kinematic": it stopped being true when dynamics were separated from the Collider
+    // and a collider without Rigidbody became a PxRigidStatic.)
     PxFilterFlags dtTriggerFilterShader(
         PxFilterObjectAttributes attr0, PxFilterData fd0,
         PxFilterObjectAttributes attr1, PxFilterData fd1,
         PxPairFlags& pairFlags, const void* constantBlock, PxU32 constantBlockSize)
     {
-        // CAPAS, antes que nada: word0 = bit de la capa propia, word1 = máscara
-        // de capas con las que colisiona (lo escribe
-        // PhysicsManager::refreshColliderFilter). El par sólo sobrevive si CADA
-        // lado acepta al otro. Va delante de la rama de trigger a propósito: una
-        // capa filtrada tampoco debe disparar onTriggerEnter.
+        // LAYERS, before anything else: word0 = bit of its own layer, word1 = mask
+        // of layers it collides with (written by
+        // PhysicsManager::refreshColliderFilter). The pair only survives if EACH
+        // side accepts the other. It goes before the trigger branch on purpose: a
+        // filtered layer must not fire onTriggerEnter either.
         //
-        // eSUPPRESS, no eKILL: la matriz se puede reactivar en runtime y PhysX
-        // tiene que poder volver a formar el par (eKILL lo descartaría pa
-        // siempre). Con la matriz por defecto word1 es 0xFFFFFFFF y ningún par
-        // se suprime.
+        // eSUPPRESS, not eKILL: the matrix can be re-enabled at runtime and PhysX
+        // has to be able to form the pair again (eKILL would discard it
+        // forever). With the default matrix word1 is 0xFFFFFFFF and no pair
+        // is suppressed.
         if ((fd0.word1 & fd1.word0) == 0 || (fd1.word1 & fd0.word0) == 0)
             return PxFilterFlag::eSUPPRESS;
 
@@ -161,37 +161,37 @@ namespace {
             pairFlags = PxPairFlag::eTRIGGER_DEFAULT;
             return PxFilterFlag::eDEFAULT;
         }
-        // OJO: al shader por defecto se le pasa PxFilterData VACÍO a propósito,
-        // no el nuestro. PxDefaultSimulationFilterShader indexa su tabla interna
-        // de grupos con el word0 crudo (gCollisionTable[word0][word0], 32x32) y
-        // convierte word2/word3 en un PxGroupsMask; con nuestro word0 = 1<<capa
-        // (hasta 2^31) leería fuera de la tabla. Vaciándolo ve exactamente lo
-        // mismo que veía antes de existir las capas —todo a cero—, que es lo que
-        // preserva el comportamiento previo bit a bit.
+        // NOTE: the default shader is passed an EMPTY PxFilterData on purpose,
+        // not ours. PxDefaultSimulationFilterShader indexes its internal group table
+        // with the raw word0 (gCollisionTable[word0][word0], 32x32) and
+        // turns word2/word3 into a PxGroupsMask; with our word0 = 1<<layer
+        // (up to 2^31) it would read outside the table. Emptying it, it sees exactly the
+        // same thing it saw before layers existed —all zeros—, which is what
+        // preserves the previous behavior bit by bit.
         PxFilterFlags flags =
             PxDefaultSimulationFilterShader(attr0, PxFilterData(), attr1, PxFilterData(),
                                             pairFlags, constantBlock, constantBlockSize);
 
-        // Y sobre lo que decidiera el shader por defecto, se piden los avisos de
-        // contacto para OnCollisionEnter/Stay/Exit. Se hace DESPUÉS y solo si el
-        // par sobrevive: si el shader lo mató o lo suprimió, pairFlags no
-        // significa nada y añadirle bits no cambiaría el resultado, pero sí
-        // enmascararía el motivo al depurar.
+        // And on top of whatever the default shader decided, contact notifications
+        // are requested for OnCollisionEnter/Stay/Exit. It is done AFTER and only if the
+        // pair survives: if the shader killed or suppressed it, pairFlags means
+        // nothing and adding bits to it would not change the result, but it would
+        // mask the reason when debugging.
         //
-        // Solo llega aquí lo no-trigger: la rama de trigger de arriba retorna
-        // antes con eTRIGGER_DEFAULT intacto. Es a propósito — PhysX ni siquiera
-        // genera contactos para una shape marcada eTRIGGER_SHAPE, así que pedir
-        // eNOTIFY_TOUCH_* ahí sería ruido que nunca se dispara.
+        // Only non-trigger arrives here: the trigger branch above returns
+        // earlier with eTRIGGER_DEFAULT intact. It is on purpose — PhysX does not even
+        // generate contacts for a shape marked eTRIGGER_SHAPE, so requesting
+        // eNOTIFY_TOUCH_* there would be noise that never fires.
         //
-        // Coste: PERSISTS hace que PhysX llame a onContact cada sub-step por cada
-        // par en contacto, incluso si nadie escucha. A cambio, el Stay es nativo
-        // y no hay que recorrer registros por frame como en los triggers.
+        // Cost: PERSISTS makes PhysX call onContact every sub-step for each
+        // pair in contact, even if nobody listens. In exchange, Stay is native
+        // and there is no need to traverse registries per frame as with triggers.
         //
-        // eDETECT_CCD_CONTACT va en el mismo lote: sin este bit en el par, el
-        // pase continuo de la escena NO se ejecuta para él y marcar el cuerpo
-        // con eENABLE_CCD no haría nada. Pedirlo aquí no activa CCD por sí solo
-        // —PhysX salta el barrido si ningún actor del par lleva el flag de
-        // cuerpo—, así que los pares de siempre siguen resolviéndose igual.
+        // eDETECT_CCD_CONTACT goes in the same batch: without this bit on the pair, the
+        // scene's continuous pass does NOT run for it and marking the body
+        // with eENABLE_CCD would do nothing. Requesting it here does not activate CCD by itself
+        // —PhysX skips the sweep if no actor of the pair carries the body
+        // flag—, so the usual pairs keep resolving the same.
         if (!(flags & (PxFilterFlag::eKILL | PxFilterFlag::eSUPPRESS)))
             pairFlags |= PxPairFlag::eNOTIFY_TOUCH_FOUND
                        | PxPairFlag::eNOTIFY_TOUCH_LOST
@@ -219,14 +219,14 @@ void PhysicsManager::init()
     physxCheck(foundation, "PxCreateFoundation");
     m_foundation = foundation;
 
-    // El mundo usa centímetros (gravedad -981 = -9.81 m/s² * 100), no metros.
-    // PxTolerancesScale default asume 1 unidad = 1 metro; con ese default,
-    // sleepThreshold/contactOffset/bounceThresholdVelocity quedan ~100x
-    // demasiado pequeños para velocidades en cm/s, así que un actor en reposo
-    // nunca alcanza el umbral de sueño y vibra indefinidamente.
+    // The world uses centimeters (gravity -981 = -9.81 m/s² * 100), not meters.
+    // The default PxTolerancesScale assumes 1 unit = 1 meter; with that default,
+    // sleepThreshold/contactOffset/bounceThresholdVelocity end up ~100x
+    // too small for velocities in cm/s, so an actor at rest
+    // never reaches the sleep threshold and vibrates indefinitely.
     PxTolerancesScale scale;
-    scale.length = 100.0f; // 100 unidades = 1 metro
-    scale.speed  = 981.0f; // velocidad típica de caída tras 1s bajo esta gravedad
+    scale.length = 100.0f; // 100 units = 1 meter
+    scale.speed  = 981.0f; // typical fall speed after 1s under this gravity
     auto* physics = PxCreatePhysics(PX_PHYSICS_VERSION, *foundation, scale);
     physxCheck(physics, "PxCreatePhysics");
     m_physics = physics;
@@ -239,20 +239,20 @@ void PhysicsManager::init()
     sceneDesc.gravity       = PxVec3(0.0f, -981.0f, 0.0f);
     sceneDesc.cpuDispatcher = dispatcher;
     sceneDesc.filterShader  = dtTriggerFilterShader;
-    // CCD a nivel de ESCENA: requisito previo, no un interruptor global. PhysX
-    // exige el flag para reservar el pase de barrido continuo, pero ese pase
-    // sólo mira a los cuerpos que lleven además PxRigidBodyFlag::eENABLE_CCD
-    // (lo pone Rigidbody::setCcd, default OFF). Sin ningún cuerpo marcado el
-    // coste es nulo y la simulación es exactamente la de antes.
+    // CCD at SCENE level: a prerequisite, not a global switch. PhysX
+    // requires the flag to reserve the continuous sweep pass, but that pass
+    // only looks at bodies that also carry PxRigidBodyFlag::eENABLE_CCD
+    // (set by Rigidbody::setCcd, default OFF). With no body marked the
+    // cost is zero and the simulation is exactly the one from before.
     sceneDesc.flags |= PxSceneFlag::eENABLE_CCD;
     auto* scene = physics->createScene(sceneDesc);
     physxCheck(scene, "PxPhysics::createScene");
     m_scene = scene;
 
-    // Ya no hay material global: cada collider crea el suyo en su factoría
-    // (material de física por collider, ver kDefault* arriba).
+    // There is no global material any more: each collider creates its own in its factory
+    // (per-collider physics material, see kDefault* above).
 
-    // Callback que recibe los pares de trigger y los reenvía a los colliders.
+    // Callback that receives the trigger pairs and forwards them to the colliders.
     auto* triggerCallback = new TriggerDispatcher();
     scene->setSimulationEventCallback(triggerCallback);
     m_triggerCallback = triggerCallback;
@@ -263,7 +263,7 @@ void PhysicsManager::shutdown()
 {
 #ifdef DT_PHYSX_ENABLED
     if (m_scene)      { static_cast<PxScene*>(m_scene)->release();      m_scene = nullptr; }
-    // Tras liberar la escena nadie más referencia el callback: se borra aquí.
+    // After releasing the scene nobody else references the callback: it is deleted here.
     if (m_triggerCallback) { delete static_cast<TriggerDispatcher*>(m_triggerCallback); m_triggerCallback = nullptr; }
     if (m_dispatcher) { static_cast<PxDefaultCpuDispatcher*>(m_dispatcher)->release(); m_dispatcher = nullptr; }
     if (m_physics)    { static_cast<PxPhysics*>(m_physics)->release();  m_physics = nullptr; }
@@ -286,10 +286,10 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
     auto* physics = static_cast<PxPhysics*>(m_physics);
     auto* scene = static_cast<PxScene*>(m_scene);
 
-    // Material EXCLUSIVO de este collider (mismos valores que el global de
-    // antes, así ninguna escena cambia de comportamiento). Es refcounted: la
-    // shape se queda una referencia en createExclusiveShape, así que soltamos
-    // la nuestra justo después y el material muere con la shape.
+    // EXCLUSIVE material of this collider (same values as the global one from
+    // before, so no scene changes behavior). It is refcounted: the
+    // shape keeps a reference in createExclusiveShape, so we release
+    // ours right after and the material dies with the shape.
     PxMaterial* material = physics->createMaterial(kDefaultStaticFriction,
                                                    kDefaultDynamicFriction,
                                                    kDefaultRestitution);
@@ -308,24 +308,24 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
 
     if (dynamic)
     {
-        // Masa por defecto: Rigidbody la recalcula en bindActor. Sin gravedad ni
-        // kinematic aquí; los pone attachRigidbody -> Rigidbody::bindActor.
+        // Default mass: Rigidbody recomputes it in bindActor. No gravity or
+        // kinematic here; they are set by attachRigidbody -> Rigidbody::bindActor.
         PxRigidBodyExt::updateMassAndInertia(*static_cast<PxRigidDynamic*>(actor), 1.0f);
     }
 
     scene->addActor(*actor);
 
     auto collider = std::make_shared<BoxCollider>(actor, shape, halfExtents, center);
-    // La escala del Transform no cabe en la PxTransform del actor: se hornea en
-    // la geometría. La shape se creó con el tamaño configurado, así que con
-    // escala 1 esto no toca nada (setWorldScale sale antes de setGeometry).
+    // The Transform scale does not fit in the actor's PxTransform: it is baked into
+    // the geometry. The shape was created with the configured size, so with
+    // scale 1 this touches nothing (setWorldScale exits before setGeometry).
     collider->setWorldScale(scale);
     collider->setManager(this);
-    // Alta en el registro + PxFilterData inicial de su capa (la 0 por defecto).
+    // Registration + initial PxFilterData of its layer (0 by default).
     registerCollider(collider);
-    // userData del actor = Collider* base (upcast explícito para respetar
-    // cualquier offset de la base); lo lee el TriggerDispatcher para saber
-    // quién solapó a quién.
+    // userData of the actor = base Collider* (explicit upcast to respect
+    // any offset of the base); read by the TriggerDispatcher to know
+    // who overlapped whom.
     Collider* base = collider.get();
     actor->userData = base;
     return collider;
@@ -354,7 +354,7 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
     auto* physics = static_cast<PxPhysics*>(m_physics);
     auto* scene = static_cast<PxScene*>(m_scene);
 
-    // Material exclusivo del collider; ver nota en createBoxColliderComponent.
+    // Exclusive material of the collider; see note in createBoxColliderComponent.
     PxMaterial* material = physics->createMaterial(kDefaultStaticFriction,
                                                    kDefaultDynamicFriction,
                                                    kDefaultRestitution);
@@ -377,7 +377,7 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
     scene->addActor(*actor);
 
     auto collider = std::make_shared<SphereCollider>(actor, shape, radius, center);
-    collider->setWorldScale(scale); // ver nota en createBoxColliderComponent
+    collider->setWorldScale(scale); // see note in createBoxColliderComponent
     collider->setManager(this);
     registerCollider(collider);
     Collider* base = collider.get();
@@ -409,7 +409,7 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
     auto* physics = static_cast<PxPhysics*>(m_physics);
     auto* scene = static_cast<PxScene*>(m_scene);
 
-    // Material exclusivo del collider; ver nota en createBoxColliderComponent.
+    // Exclusive material of the collider; see note in createBoxColliderComponent.
     PxMaterial* material = physics->createMaterial(kDefaultStaticFriction,
                                                    kDefaultDynamicFriction,
                                                    kDefaultRestitution);
@@ -432,7 +432,7 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
     scene->addActor(*actor);
 
     auto collider = std::make_shared<CapsuleCollider>(actor, shape, radius, halfHeight, center);
-    collider->setWorldScale(scale); // ver nota en createBoxColliderComponent
+    collider->setWorldScale(scale); // see note in createBoxColliderComponent
     collider->setManager(this);
     registerCollider(collider);
     Collider* base = collider.get();
@@ -461,7 +461,7 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
     auto* physics = static_cast<PxPhysics*>(m_physics);
     auto* scene = static_cast<PxScene*>(m_scene);
 
-    // Material exclusivo del collider; ver nota en createBoxColliderComponent.
+    // Exclusive material of the collider; see note in createBoxColliderComponent.
     PxMaterial* material = physics->createMaterial(kDefaultStaticFriction,
                                                    kDefaultDynamicFriction,
                                                    kDefaultRestitution);
@@ -470,10 +470,10 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
     PxRigidDynamic* actor = physics->createRigidDynamic(pose);
     physxCheck(actor, "PxPhysics::createRigidDynamic");
 
-    // El actor debe quedar kinematic ANTES de attachear el shape de plano:
-    // PhysX rechaza (createExclusiveShape devuelve null) un shape de
-    // geometría plane/mesh como simulation shape sobre un PxRigidDynamic que
-    // todavía no es kinematic en el momento del attach.
+    // The actor must be kinematic BEFORE attaching the plane shape:
+    // PhysX rejects (createExclusiveShape returns null) a plane/mesh
+    // geometry shape as a simulation shape on a PxRigidDynamic that
+    // is not yet kinematic at the moment of the attach.
     actor->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, true);
     actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
 
@@ -483,9 +483,9 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
     material->release();
     shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z), axisCorrection()));
 
-    // Sin updateMassAndInertia: un plano no tiene volumen, PhysX no puede
-    // calcular masa/inercia sobre esa geometría. No hace falta — el actor
-    // siempre queda kinematic (nunca se simula como cuerpo dinámico).
+    // No updateMassAndInertia: a plane has no volume, PhysX cannot
+    // compute mass/inertia on that geometry. It is not needed — the actor
+    // always ends up kinematic (it is never simulated as a dynamic body).
 
     scene->addActor(*actor);
 
@@ -510,7 +510,7 @@ void PhysicsManager::attachRigidbody(const std::shared_ptr<Collider>& collider,
     if (!collider || !rb) return;
 #ifdef DT_PHYSX_ENABLED
     void* actor = collider->actorHandle();
-    // Si el actor todavía es static, reconstruirlo como dynamic antes de enlazar.
+    // If the actor is still static, rebuild it as dynamic before linking.
     if (actor && !static_cast<PxRigidActor*>(actor)->is<PxRigidDynamic>())
         rebuildActor(collider, /*dynamic=*/true);
     rb->bindActor(collider->actorHandle());
@@ -527,16 +527,16 @@ void PhysicsManager::detachRigidbody(const std::shared_ptr<Collider>& collider)
     void* actor = collider->actorHandle();
     if (actor && static_cast<PxRigidActor*>(actor)->is<PxRigidDynamic>())
         rebuildActor(collider, /*dynamic=*/false);
-    // Sin Rigidbody no hay nada que interpolar (la propiedad vive allí), y un
-    // static al que el editor mueva por el Transform no debe arrastrar la pose
-    // previa de cuando era dinámico.
+    // Without a Rigidbody there is nothing to interpolate (the property lives there), and a
+    // static that the editor moves through the Transform must not drag the previous
+    // pose from when it was dynamic.
     collider->setInterpolate(false);
-    // Nota: el Rigidbody que apuntaba a este collider conserva un m_actor que
-    // ahora cuelga (el dynamic viejo fue liberado por rebuildActor). Contrato:
-    // los callers (editor "Remove Rigidbody", Lua RemoveComponent) sueltan el
-    // shared_ptr<Rigidbody> inmediatamente después de detach, así que nadie lo
-    // desreferencia. Si aparece un caller que reutilice el Rigidbody, debe
-    // re-bindear (rb->bindActor(nullptr) o attach a otro collider) antes de usarlo.
+    // Note: the Rigidbody that pointed to this collider keeps an m_actor that
+    // now dangles (the old dynamic was released by rebuildActor). Contract:
+    // the callers (editor "Remove Rigidbody", Lua RemoveComponent) release the
+    // shared_ptr<Rigidbody> immediately after detach, so nobody
+    // dereferences it. If a caller shows up that reuses the Rigidbody, it must
+    // re-bind (rb->bindActor(nullptr) or attach to another collider) before using it.
 #else
     (void)collider;
 #endif
@@ -554,8 +554,8 @@ void* PhysicsManager::rebuildActor(const std::shared_ptr<Collider>& collider, bo
     auto* shape = static_cast<PxShape*>(collider->geometryShape());
     bool wasTrigger = collider->isTrigger();
 
-    // PxShape es refcounted: se coge una ref extra pa que sobreviva al detach
-    // del actor viejo, y se suelta tras re-adjuntarla al nuevo.
+    // PxShape is refcounted: an extra ref is taken so that it survives the detach
+    // from the old actor, and it is released after reattaching it to the new one.
     shape->acquireReference();
     oldActor->detachShape(*shape);
     scene->removeActor(*oldActor);
@@ -573,11 +573,11 @@ void* PhysicsManager::rebuildActor(const std::shared_ptr<Collider>& collider, bo
     newActor->userData = collider.get();
 
     collider->setActorHandle(newActor);
-    // Los flags de trigger viven en la shape (que sobrevivió), pero se re-asegura.
+    // The trigger flags live in the shape (which survived), but it is re-ensured.
     if (wasTrigger) collider->applyTriggerFlag(true);
-    // El PxFilterData también vive en la shape, así que el swap de actor lo
-    // conserva; se reescribe igualmente pa que la capa siga siendo la fuente de
-    // la verdad aunque alguien toque la shape por otro camino.
+    // The PxFilterData also lives in the shape, so the actor swap keeps
+    // it; it is rewritten anyway so that the layer remains the source of
+    // truth even if someone touches the shape through another path.
     refreshColliderFilter(collider.get());
     return newActor;
 }
@@ -593,8 +593,8 @@ bool PhysicsManager::raycast(const PxVec3& origin, const PxVec3& dir, float maxD
                              PxRaycastBuffer& hit, const PxQueryFilterData& filterData,
                              PxQueryFilterCallback* filterCall)
 {
-    // Sin escena (el editor fuera de Play no llama a init) no hay nada que
-    // consultar: false en vez de deref de nulo.
+    // Without a scene (the editor outside Play does not call init) there is nothing to
+    // query: false instead of a null deref.
     if (!m_scene) return false;
     return static_cast<PxScene*>(m_scene)->raycast(
         origin, dir, maxDistance, hit,
@@ -608,8 +608,8 @@ bool PhysicsManager::raycastAll(const PxVec3& origin, const PxVec3& dir, float m
 {
     if (!m_scene) return false;
 
-    // eNO_BLOCK degrada a eTOUCH todo lo que el prefiltro marque como eBLOCK,
-    // así el rayo atraviesa el primer impacto y sigue recogiendo los demás.
+    // eNO_BLOCK downgrades to eTOUCH everything the prefilter marks as eBLOCK,
+    // so the ray passes through the first hit and keeps collecting the others.
     PxQueryFilterData fd = filterData;
     fd.flags |= PxQueryFlag::eNO_BLOCK;
 
@@ -618,9 +618,9 @@ bool PhysicsManager::raycastAll(const PxVec3& origin, const PxVec3& dir, float m
         PxHitFlags(PxHitFlag::ePOSITION | PxHitFlag::eNORMAL),
         fd, filterCall);
 
-    // PhysX entrega los touches en el orden en que los encuentra el barrido
-    // espacial, no por distancia. Se ordena aquí (sobre el almacenamiento del
-    // propio buffer) para que el contrato valga para todos los callers.
+    // PhysX delivers the touches in the order the spatial sweep finds them,
+    // not by distance. It is sorted here (over the buffer's own
+    // storage) so that the contract holds for all callers.
     if (hits.nbTouches > 1 && hits.touches)
         std::sort(hits.touches, hits.touches + hits.nbTouches,
                   [](const PxRaycastHit& a, const PxRaycastHit& b) { return a.distance < b.distance; });
@@ -635,9 +635,9 @@ bool PhysicsManager::sphereCast(const PxVec3& origin, const PxVec3& dir, float r
 {
     if (!m_scene) return false;
 
-    // La geometría del barrido va en su propia pose; el origen del sweep es la
-    // posición inicial del centro de la esfera, no un punto sobre su
-    // superficie.
+    // The sweep geometry goes in its own pose; the sweep origin is the
+    // initial position of the sphere center, not a point on its
+    // surface.
     return static_cast<PxScene*>(m_scene)->sweep(
         PxSphereGeometry(radius), PxTransform(origin), dir, maxDistance, hit,
         PxHitFlags(PxHitFlag::ePOSITION | PxHitFlag::eNORMAL),
@@ -650,8 +650,8 @@ bool PhysicsManager::overlapSphere(const PxVec3& center, float radius, PxOverlap
 {
     if (!m_scene) return false;
 
-    // Sin eNO_BLOCK el prefiltro (que devuelve eBLOCK) cerraría la consulta en
-    // el primer solape y sólo se reportaría uno.
+    // Without eNO_BLOCK the prefilter (which returns eBLOCK) would close the query at
+    // the first overlap and only one would be reported.
     PxQueryFilterData fd = filterData;
     fd.flags |= PxQueryFlag::eNO_BLOCK;
 
@@ -676,41 +676,41 @@ bool PhysicsManager::overlapBox(const PxVec3& center, const PxVec3& halfExtents,
 
 void PhysicsManager::setFixedDeltaTime(float dt)
 {
-    // Un paso <= 0 dejaría el bucle de sub-steps restando 0 al acumulador, o
-    // sumándole: cuelgue seguro. Se ignora y se conserva el valor anterior.
+    // A step <= 0 would leave the sub-step loop subtracting 0 from the accumulator, or
+    // adding to it: a sure hang. It is ignored and the previous value is kept.
     if (dt <= 0.0f) return;
     m_fixedDeltaTime = dt;
 }
 
 void PhysicsManager::setMaxSubSteps(int steps)
 {
-    // Con 0 sub-steps la física no avanzaría nunca y el acumulador crecería
-    // hasta descartarse cada frame: mínimo uno.
+    // With 0 sub-steps physics would never advance and the accumulator would grow
+    // until being discarded every frame: minimum one.
     m_maxSubSteps = (steps < 1) ? 1 : steps;
 }
 
 void PhysicsManager::stepSimulation(float dt)
 {
 #ifdef DT_PHYSX_ENABLED
-    // El dt real del frame sólo alimenta el acumulador; a PxScene::simulate
-    // siempre se le pasa m_fixedDeltaTime (ver el porqué en el header). dt <= 0
-    // se ignora: el primer frame llega con 0 (last se inicializa == now) y
-    // PxScene::simulate exige > 0. En fetchResults se despachan los Enter/Exit
-    // vía TriggerDispatcher.
+    // The real frame dt only feeds the accumulator; PxScene::simulate is
+    // always passed m_fixedDeltaTime (see why in the header). dt <= 0
+    // is ignored: the first frame arrives with 0 (last is initialized == now) and
+    // PxScene::simulate requires > 0. In fetchResults the Enter/Exit are dispatched
+    // via TriggerDispatcher.
     if (dt > 0.0f) m_accumulator += dt;
 
-    // Margen para el error de coma flotante: 3 * (1.0f/60.0f) acumulado en
-    // float queda un pelo por debajo de sumar 1.0f/60.0f tres veces, y sin
-    // margen esa comparación se comería un sub-step (justo lo que rompe el
-    // determinismo que buscamos).
+    // Margin for floating-point error: 3 * (1.0f/60.0f) accumulated in
+    // float ends up a hair below adding 1.0f/60.0f three times, and without a
+    // margin that comparison would eat a sub-step (exactly what breaks the
+    // determinism we are after).
     constexpr float kEpsilon = 1e-6f;
 
     int steps = 0;
     while (m_accumulator + kEpsilon >= m_fixedDeltaTime && steps < m_maxSubSteps)
     {
-        // Pose de partida del sub-step, para los colliders que interpolan. Va
-        // ANTES de simulate: es la mitad "vieja" de la mezcla que hará
-        // getWorldTransform. No-op en los que no interpolan (el default).
+        // Starting pose of the sub-step, for the colliders that interpolate. It goes
+        // BEFORE simulate: it is the "old" half of the blend that
+        // getWorldTransform will do. No-op on those that do not interpolate (the default).
         for (auto& weak : m_colliders)
             if (auto c = weak.lock()) c->capturePreviousPose();
 
@@ -719,24 +719,24 @@ void PhysicsManager::stepSimulation(float dt)
         m_accumulator -= m_fixedDeltaTime;
         ++steps;
 
-        // Stay UNA VEZ POR SUB-STEP, dentro del bucle, para que Enter/Stay/Exit
-        // lleven la misma cadencia que la simulación (los Enter/Exit los emite
-        // fetchResults de este mismo sub-step). Consecuencia asumida: un frame
-        // lento emite varios Stay seguidos.
+        // Stay ONCE PER SUB-STEP, inside the loop, so that Enter/Stay/Exit
+        // have the same cadence as the simulation (Enter/Exit are emitted by
+        // fetchResults of this same sub-step). Accepted consequence: a slow
+        // frame emits several Stay in a row.
         dispatchTriggerStay();
     }
 
-    // Si tras agotar los sub-steps aún sobra tiempo, se TIRA en vez de quedar a
-    // deber: acarrear la deuda tras un stall hace que los frames siguientes
-    // vayan siempre al máximo de sub-steps, tarden más, y acumulen más deuda
-    // todavía (espiral de la muerte).
+    // If after exhausting the sub-steps there is still time left, it is THROWN AWAY instead of being
+    // owed: carrying the debt after a stall makes the following frames
+    // always go to the maximum sub-steps, take longer, and accumulate even more debt
+    // (death spiral).
     if (m_accumulator + kEpsilon >= m_fixedDeltaTime) m_accumulator = 0.0f;
 
-    // Cuánto del siguiente paso fijo lleva ya consumido el tiempo real: es el
-    // alpha con el que los colliders que interpolan mezclan la pose previa con
-    // la actual. Se empuja también cuando no ha habido sub-step —ahí es
-    // justamente donde el alpha crece y el cuerpo sigue avanzando en pantalla
-    // en vez de quedarse clavado hasta el siguiente paso.
+    // How much of the next fixed step real time has already consumed: it is the
+    // alpha with which the interpolating colliders blend the previous pose with
+    // the current one. It is pushed also when there has been no sub-step —that is
+    // precisely where the alpha grows and the body keeps advancing on screen
+    // instead of staying stuck until the next step.
     {
         const float alpha = (m_fixedDeltaTime > 0.0f)
             ? glm::clamp(m_accumulator / m_fixedDeltaTime, 0.0f, 1.0f)
@@ -752,10 +752,10 @@ void PhysicsManager::stepSimulation(float dt)
 
 void PhysicsManager::dispatchTriggerStay()
 {
-    // Sintetiza onTriggerStay: PhysX solo da Enter/Exit, así que se recorren los
-    // triggers vivos y se emite Stay por cada overlap actual. Los triggers
-    // expirados (GameObject destruido) se podan al vuelo. Sin PhysX el registro
-    // está siempre vacío.
+    // Synthesizes onTriggerStay: PhysX only gives Enter/Exit, so the live
+    // triggers are traversed and a Stay is emitted for each current overlap. Expired
+    // triggers (destroyed GameObject) are pruned on the fly. Without PhysX the registry
+    // is always empty.
     for (auto it = m_triggerColliders.begin(); it != m_triggerColliders.end(); )
     {
         auto collider = it->lock();
@@ -770,7 +770,7 @@ void PhysicsManager::setTrigger(const std::shared_ptr<Collider>& collider, bool 
     if (!collider) return;
     collider->applyTriggerFlag(enabled);
 
-    // Poda expirados y detecta si ya estaba registrado (una sola pasada).
+    // Prunes expired ones and detects whether it was already registered (a single pass).
     bool present = false;
     for (auto it = m_triggerColliders.begin(); it != m_triggerColliders.end(); )
     {
@@ -800,8 +800,8 @@ void PhysicsManager::registerCollider(const std::shared_ptr<Collider>& collider)
 {
     if (!collider) return;
     m_colliders.push_back(collider);
-    // Primer volcado del filtro: sin él la shape se quedaría con el
-    // PxFilterData a cero y el shader de capas suprimiría todos sus pares.
+    // First dump of the filter: without it the shape would keep the
+    // PxFilterData at zero and the layer shader would suppress all its pairs.
     refreshColliderFilter(collider.get());
 }
 
@@ -825,7 +825,7 @@ void PhysicsManager::refreshColliderFilter(Collider* collider)
     const int layer = collider->getLayer();
     if (!isValidLayer(layer)) return;
 
-    // word2/word3 quedan a cero: no los usa ni este shader ni el de queries.
+    // word2/word3 stay at zero: neither this shader nor the query one uses them.
     PxFilterData fd = shape->getSimulationFilterData();
     fd.word0 = 1u << static_cast<uint32_t>(layer);
     fd.word1 = m_layerMasks[static_cast<size_t>(layer)];
@@ -852,8 +852,8 @@ void PhysicsManager::setLayerCollision(int a, int b, bool enabled)
         m_layerMasks[static_cast<size_t>(b)] &= ~bitA;
     }
 
-    // La matriz es global pero el filtro está COPIADO en cada shape: sin este
-    // repaso el cambio no lo vería ningún collider ya creado.
+    // The matrix is global but the filter is COPIED into each shape: without this
+    // pass no already-created collider would see the change.
     refreshAllColliderFilters();
 }
 
@@ -867,22 +867,22 @@ int PhysicsManager::addLayer(const std::string& name)
 {
     if (m_layerCount >= kLayerCount) return -1;
     const int nueva = m_layerCount++;
-    // La fila estaba liberada: se deja "colisiona con todo", que es el default de
-    // una capa recién creada. Si la ocupó una capa borrada antes, removeLayer ya
-    // la dejó así.
+    // The row was released: it is left as "collides with everything", which is the default of
+    // a newly created layer. If it was occupied by a layer deleted earlier, removeLayer already
+    // left it that way.
     m_layerNames[static_cast<size_t>(nueva)] = name;
     return nueva;
 }
 
 bool PhysicsManager::removeLayer(int layer)
 {
-    // La 0 es la de respaldo: si se pudiera borrar, los colliders reasignados no
-    // tendrían adónde ir.
+    // 0 is the fallback one: if it could be deleted, the reassigned colliders would
+    // have nowhere to go.
     if (layer <= 0 || layer >= m_layerCount) return false;
 
-    // Colliders primero, con la numeración VIEJA todavía en pie: los de la capa
-    // que muere caen a la 0, los de encima bajan un puesto para que la lista no
-    // deje huecos.
+    // Colliders first, with the OLD numbering still in place: those of the layer
+    // that dies fall to 0, those above go down one place so that the list
+    // leaves no gaps.
     for (auto it = m_colliders.begin(); it != m_colliders.end(); )
     {
         auto collider = it->lock();
@@ -893,8 +893,8 @@ bool PhysicsManager::removeLayer(int layer)
         ++it;
     }
 
-    // Matriz: quitar fila y columna 'layer'. Se hace sobre una copia booleana
-    // porque desplazar bits en sitio se pisa a sí mismo.
+    // Matrix: remove row and column 'layer'. It is done on a boolean copy
+    // because shifting bits in place overwrites itself.
     const int viejo = m_layerCount;
     bool tabla[kLayerCount][kLayerCount];
     for (int a = 0; a < viejo; ++a)
@@ -904,7 +904,7 @@ bool PhysicsManager::removeLayer(int layer)
     for (int a = 0; a < viejo - 1; ++a)
     {
         const int origenA = (a >= layer) ? a + 1 : a;
-        uint32_t  fila    = 0xFFFFFFFFu; // los bits >= layerCount nuevo: sin filtrar
+        uint32_t  fila    = 0xFFFFFFFFu; // the bits >= new layerCount: unfiltered
         for (int b = 0; b < viejo - 1; ++b)
         {
             const int origenB = (b >= layer) ? b + 1 : b;
@@ -913,8 +913,8 @@ bool PhysicsManager::removeLayer(int layer)
         m_layerMasks[static_cast<size_t>(a)] = fila;
     }
 
-    // La última queda liberada: nombre vacío y sin filtros, lista pa que la
-    // reutilice el siguiente addLayer.
+    // The last one is released: empty name and no filters, ready for the
+    // next addLayer to reuse it.
     m_layerMasks[static_cast<size_t>(viejo - 1)] = 0xFFFFFFFFu;
 
     for (int i = layer; i < viejo - 1; ++i)
@@ -923,8 +923,8 @@ bool PhysicsManager::removeLayer(int layer)
 
     m_layerCount = viejo - 1;
 
-    // Los colliders ya llevan su índice nuevo, pero su word1 salió de la matriz
-    // VIEJA: hay que reescribirlo con la compactada.
+    // The colliders already carry their new index, but their word1 came from the OLD
+    // matrix: it has to be rewritten with the compacted one.
     refreshAllColliderFilters();
     return true;
 }
@@ -949,18 +949,18 @@ uint32_t PhysicsManager::layerMask(int layer) const
 
 void PhysicsManager::onColliderDestroyed(Collider* collider)
 {
-    // Poda del registro de capas: el que muere ya no bloquea su weak_ptr
-    // (refcount 0 durante ~Collider), así que sale aquí junto con cualquier otro
-    // expirado. Sin esto el vector crecería sin fin.
+    // Pruning of the layer registry: the one that dies no longer blocks its weak_ptr
+    // (refcount 0 during ~Collider), so it goes out here along with any other
+    // expired one. Without this the vector would grow endlessly.
     m_colliders.erase(
         std::remove_if(m_colliders.begin(), m_colliders.end(),
                        [](const std::weak_ptr<Collider>& w) { return w.expired(); }),
         m_colliders.end());
 
-    // El collider que muere puede estar en los overlaps de otros triggers:
-    // se purga de todos para no dejar punteros colgantes en el próximo Stay.
-    // Si el que muere era él mismo un trigger, su weak_ptr ya no bloquea
-    // (refcount 0 durante ~Collider) y se poda aquí.
+    // The collider that dies may be in the overlaps of other triggers:
+    // it is purged from all of them so as not to leave dangling pointers in the next Stay.
+    // If the one that dies was itself a trigger, its weak_ptr no longer blocks
+    // (refcount 0 during ~Collider) and it is pruned here.
     for (auto it = m_triggerColliders.begin(); it != m_triggerColliders.end(); )
     {
         auto trigger = it->lock();

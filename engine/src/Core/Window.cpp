@@ -11,43 +11,43 @@ Window::~Window() {
 }
 
 namespace {
-    // Cuántas Window tienen ventana viva. GLFW se inicializa una vez por proceso
-    // y glfwTerminate() lo apaga PARA TODO EL PROCESO —destruyendo de paso las
-    // ventanas de las demás—, así que el shutdown de UNA instancia no puede
-    // llamarlo mientras quede otra: hacerlo convertía a Window en una clase que
-    // solo puede existir una vez, cosa que ni el nombre ni el header dicen.
+    // How many Windows have a live window. GLFW is initialized once per process
+    // and glfwTerminate() shuts it down FOR THE WHOLE PROCESS —destroying along the way the
+    // windows of the others—, so the shutdown of ONE instance cannot
+    // call it while another remains: doing so turned Window into a class that
+    // can only exist once, which neither the name nor the header say.
     //
-    // int a secas y no atomic: GLFW exige que todas estas llamadas ocurran en el
-    // hilo principal, así que este contador vive donde no hay concurrencia.
+    // Plain int and not atomic: GLFW requires all these calls to happen on the
+    // main thread, so this counter lives where there is no concurrency.
     int g_ventanasVivas = 0;
 }
 
 void Window::init(int width, int height, const char* title, const char* iconPath,
                   bool showOnInit) {
-    // init() sobre una instancia que ya tiene ventana se llevaba la anterior por
-    // delante sin destruirla: el handle se perdía al sobrescribir m_window.
+    // init() on an instance that already has a window used to run over the previous one
+    // without destroying it: the handle was lost when overwriting m_window.
     if (m_window)
         shutdown();
 
-    // glfwInit() es idempotente por contrato (una segunda llamada con GLFW ya
-    // inicializado devuelve true sin hacer nada), así que llamarlo por instancia
-    // es correcto; lo que había que arreglar es el terminate, no esto.
+    // glfwInit() is idempotent by contract (a second call with GLFW already
+    // initialized returns true without doing anything), so calling it per instance
+    // is correct; what had to be fixed was the terminate, not this.
     if (!glfwInit())
         throw std::runtime_error("GLFW: failed to initialize");
 
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, sin contexto OpenGL
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, no OpenGL context
     glfwWindowHint(GLFW_RESIZABLE,  GLFW_TRUE);
-    // Oculta hasta setear el icono: Windows crea la entrada de la taskbar
-    // en cuanto la ventana se hace visible y cachea ese icono inicial —
-    // si glfwSetWindowIcon se llama después de que la ventana ya es
-    // visible, la barra de título se actualiza (responde a WM_SETICON en
-    // cualquier momento) pero la taskbar no siempre refresca.
+    // Hidden until the icon is set: Windows creates the taskbar entry
+    // as soon as the window becomes visible and caches that initial icon —
+    // if glfwSetWindowIcon is called after the window is already
+    // visible, the title bar updates (it responds to WM_SETICON at
+    // any time) but the taskbar does not always refresh.
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     m_window = glfwCreateWindow(width, height, title, nullptr, nullptr);
     if (!m_window) {
-        // Solo se apaga GLFW si esta instancia era la única interesada: con otra
-        // ventana viva, terminar aquí la mataría por un fallo que no es suyo.
+        // GLFW is only shut down if this instance was the only one interested: with another
+        // live window, terminating here would kill it over a failure that is not its own.
         if (g_ventanasVivas == 0)
             glfwTerminate();
         throw std::runtime_error("GLFW: failed to create window");
@@ -59,8 +59,8 @@ void Window::init(int width, int height, const char* title, const char* iconPath
         unsigned char* pixels = stbi_load(iconPath, &w, &h, &channels, STBI_rgb_alpha);
         if (pixels) {
             GLFWimage image{ w, h, pixels };
-            // count=1: un solo tamaño: GLFW/Windows escala esa imagen para
-            // ICON_SMALL (barra de título) e ICON_BIG (barra de tareas).
+            // count=1: a single size: GLFW/Windows scales that image for
+            // ICON_SMALL (title bar) and ICON_BIG (taskbar).
             glfwSetWindowIcon(m_window, 1, &image);
             stbi_image_free(pixels);
         } else {
@@ -68,17 +68,17 @@ void Window::init(int width, int height, const char* title, const char* iconPath
         }
     }
 
-    // Con showOnInit=false la ventana se queda oculta: la enseña el caller con
-    // show() tras presentar su primer frame, para que lo primero que se vea sea
-    // ese frame y no el fondo blanco por defecto de la ventana.
+    // With showOnInit=false the window stays hidden: the caller shows it with
+    // show() after presenting its first frame, so that the first thing seen is
+    // that frame and not the default white background of the window.
     //
-    // En Wayland se enseña YA, ignore lo que pida el caller: alli no hay flash
-    // blanco que evitar (el compositor no pinta la ventana hasta recibir su
-    // primer buffer), y mostrar una ventana a la que Vulkan ya le presento un
-    // frame es un error de protocolo ("xdg_surface must not have a buffer at
-    // creation") que deja el juego sin ventana. Lo cazo el runtime exportado en
-    // WSLg; Ubuntu de escritorio usa Wayland por defecto. El show() posterior
-    // del caller no hace nada: glfwShowWindow es idempotente.
+    // On Wayland it is shown NOW, whatever the caller asks: there is no white
+    // flash to avoid there (the compositor does not paint the window until it receives its
+    // first buffer), and showing a window to which Vulkan already presented a
+    // frame is a protocol error ("xdg_surface must not have a buffer at
+    // creation") that leaves the game without a window. The exported runtime caught it on
+    // WSLg; desktop Ubuntu uses Wayland by default. The caller's later show()
+    // does nothing: glfwShowWindow is idempotent.
     if (showOnInit || glfwGetPlatform() == GLFW_PLATFORM_WAYLAND)
         glfwShowWindow(m_window);
 }
@@ -92,29 +92,29 @@ void Window::shutdown() {
     if (m_window) {
         glfwDestroyWindow(m_window);
         m_window = nullptr;
-        // La última apaga la luz. Ver g_ventanasVivas.
+        // The last one turns off the light. See g_ventanasVivas.
         if (--g_ventanasVivas == 0)
             glfwTerminate();
     }
 }
 
 bool Window::shouldClose() const {
-    // Sin ventana, cerrar. Y no es solo por educación: los dos hosts giran en
-    // `while (!window.shouldClose())`, así que devolver false aquí sería girar
-    // para siempre sobre una ventana que no existe. Además glfwWindowShouldClose
-    // con nullptr no devuelve un error blando: ASSERTA (window.c: `window !=
-    // NULL`), o sea aborta el proceso en un build de depuración.
+    // Without a window, close. And it is not just politeness: both hosts spin on
+    // `while (!window.shouldClose())`, so returning false here would spin
+    // forever on a window that does not exist. Besides, glfwWindowShouldClose
+    // with nullptr does not return a soft error: it ASSERTS (window.c: `window !=
+    // NULL`), that is, it aborts the process in a debug build.
     return !m_window || glfwWindowShouldClose(m_window);
 }
 
 void Window::pollEvents() const {
-    // Guarda por SIMETRÍA con las de arriba, y con menos derecho que ellas:
-    // glfwPollEvents sin GLFW inicializado NO asserta como glfwWindowShouldClose
-    // —comprobado quitándola: los tests siguen pasando—, solo emite un
-    // GLFW_NOT_INITIALIZED por llamada. Se queda porque el bucle de un host que
-    // ya cerró su ventana lo llamaría por frame, que es la misma lluvia de
-    // errores que se acaba de quitar de los códigos de botón (H10); pero no se
-    // cuenta como arreglo de un fallo, porque no lo es.
+    // Guard for SYMMETRY with the ones above, and with less right than they have:
+    // glfwPollEvents without GLFW initialized does NOT assert like glfwWindowShouldClose
+    // —checked by removing it: the tests keep passing—, it only emits a
+    // GLFW_NOT_INITIALIZED per call. It stays because the loop of a host that
+    // already closed its window would call it every frame, which is the same rain of
+    // errors that was just removed from the button codes (H10); but it does not
+    // count as a fix for a failure, because it is not one.
     if (m_window)
         glfwPollEvents();
 }

@@ -6,8 +6,8 @@
 
 namespace DonTopo
 {
-    // Copia a un buffer fijo (los de ImGui::InputText) truncando y terminando
-    // siempre en '\0'. Sustituye a strncpy_s, que solo existe en MSVC.
+    // Copies to a fixed buffer (the ImGui::InputText ones) truncating and always
+    // terminating in '\0'. Replaces strncpy_s, which only exists in MSVC.
     template<std::size_t N>
     void copyToBuffer(char (&buf)[N], std::string_view s)
     {

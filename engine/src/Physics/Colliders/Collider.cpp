@@ -13,11 +13,11 @@ namespace DonTopo {
 
 Collider::~Collider()
 {
-    // Avisa al manager para que purgue este collider de los sets de overlap de
-    // todos los triggers vivos (evita punteros colgantes antes del siguiente
-    // dispatchStay). Requisito: los colliders mueren antes que el
-    // PhysicsManager (mismo contrato que el release() del actor en los dtor
-    // derivados, que asume la escena PhysX todavía viva).
+    // Warns the manager so that it purges this collider from the overlap sets of
+    // all live triggers (avoids dangling pointers before the next
+    // dispatchStay). Requirement: colliders die before the
+    // PhysicsManager (same contract as the actor's release() in the derived
+    // dtors, which assumes the PhysX scene is still alive).
     if (m_manager) m_manager->onColliderDestroyed(this);
 }
 
@@ -27,8 +27,8 @@ void Collider::applyTriggerFlag(bool enabled)
 #ifdef DT_PHYSX_ENABLED
     auto* shape = static_cast<PxShape*>(triggerShape());
     if (!shape) return;
-    // PhysX prohíbe que una shape sea simulation y trigger a la vez: hay que
-    // quitar una antes de poner la otra.
+    // PhysX forbids a shape from being simulation and trigger at the same time: one has to be
+    // removed before setting the other.
     if (enabled)
     {
         shape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, false);
@@ -44,9 +44,9 @@ void Collider::applyTriggerFlag(bool enabled)
 
 #ifdef DT_PHYSX_ENABLED
 namespace {
-// Devuelve el PxMaterial exclusivo de la shape (índice 0). PhysX admite N
-// materiales por shape (uno por triángulo en mallas), pero las 4 factorías
-// crean la shape con uno solo, así que el 0 es SIEMPRE el de este collider.
+// Returns the shape's exclusive PxMaterial (index 0). PhysX supports N
+// materials per shape (one per triangle in meshes), but the 4 factories
+// create the shape with just one, so 0 is ALWAYS this collider's.
 PxMaterial* shapeMaterial(void* shapeHandle)
 {
     auto* shape = static_cast<PxShape*>(shapeHandle);
@@ -84,16 +84,16 @@ void Collider::setLayer(int layer)
 {
     if (!PhysicsManager::isValidLayer(layer)) return;
     m_layer = layer;
-    // Guardar el número no filtra nada: quien decide es el PxFilterData de la
-    // shape, y eso lo reescribe el manager con la máscara de la capa nueva.
+    // Storing the number filters nothing: the one that decides is the shape's
+    // PxFilterData, and the manager rewrites that with the new layer's mask.
     if (m_manager) m_manager->refreshColliderFilter(this);
 }
 
 void Collider::setInterpolate(bool enabled)
 {
     m_interpolate = enabled;
-    // Al apagarla se olvida la pose previa: si se vuelve a encender más tarde,
-    // mezclar contra una pose de hace mil frames daría un salto.
+    // When turned off the previous pose is forgotten: if it is turned on again later,
+    // blending against a pose from a thousand frames ago would give a jump.
     if (!enabled) m_hasPrevPose = false;
 }
 
@@ -123,9 +123,9 @@ glm::mat4 Collider::blendWithPreviousPose(const glm::mat4& current) const
     const glm::quat currentRotation = glm::quat_cast(current);
 
     const glm::vec3 position = glm::mix(m_prevPosition, currentPosition, m_interpAlpha);
-    // slerp y no mix sobre el cuaternión: con rotaciones rápidas la mezcla
-    // lineal acorta el arco y la velocidad angular sale irregular. glm::slerp
-    // ya coge el camino corto (niega q2 si el producto escalar es negativo).
+    // slerp and not mix on the quaternion: with fast rotations the linear
+    // blend shortens the arc and the angular velocity comes out irregular. glm::slerp
+    // already takes the short way (negates q2 if the dot product is negative).
     const glm::quat rotation = glm::slerp(m_prevRotation, currentRotation, m_interpAlpha);
 
     return glm::translate(glm::mat4(1.0f), position) * glm::mat4_cast(rotation);
@@ -159,11 +159,11 @@ void Collider::removeCollisionListener(ICollisionListener* listener)
         m_collisionListeners.end());
 }
 
-// Los tres dispatch de colisión recorren por ÍNDICE releyendo size(), no con
-// range-for: un listener puede desregistrarse (o registrar otro) dentro de su
-// propio callback, y eso invalida los iteradores de un range-for. Con índice, un
-// remove durante la iteración solo se salta el elemento que ocupó el hueco, que
-// es exactamente lo que pasa en Unity, en vez de ser UB.
+// The three collision dispatches iterate by INDEX rereading size(), not with a
+// range-for: a listener can unregister itself (or register another) inside its
+// own callback, and that invalidates the iterators of a range-for. With an index, a
+// remove during iteration only skips the element that took the gap, which
+// is exactly what happens in Unity, instead of being UB.
 void Collider::dispatchCollisionEnter(Collider* other)
 {
     if (!other) return;
@@ -191,21 +191,21 @@ void Collider::dispatchCollisionExit(Collider* other)
 void Collider::beginOverlap(Collider* other)
 {
     if (!other) return;
-    if (!m_overlaps.insert(other).second) return; // ya solapaba: no re-disparar Enter
+    if (!m_overlaps.insert(other).second) return; // already overlapped: do not re-fire Enter
     TriggerEvent e{ other->getOwner(), other };
     for (auto* l : m_listeners) l->onTriggerEnter(e);
 }
 
 void Collider::endOverlap(Collider* other)
 {
-    if (m_overlaps.erase(other) == 0) return; // no estaba: nada que hacer
+    if (m_overlaps.erase(other) == 0) return; // was not there: nothing to do
     TriggerEvent e{ other->getOwner(), other };
     for (auto* l : m_listeners) l->onTriggerExit(e);
 }
 
 void Collider::removeOverlapSilent(Collider* other)
 {
-    m_overlaps.erase(other); // sin disparar Exit: el otro se está destruyendo
+    m_overlaps.erase(other); // without firing Exit: the other is being destroyed
 }
 
 void Collider::dispatchStay()

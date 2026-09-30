@@ -11,49 +11,48 @@ namespace DonTopo
 {
     struct SkinnedMesh;
 
-    // Máquina de estados de animación (equivalente al Animator de Unity). Cada
-    // estado contiene un clip; los links son transiciones dirigidas.
+    // Animation state machine (equivalent to Unity's Animator). Each
+    // state contains a clip; the links are directed transitions.
     //
-    // Data + lógica pura: sin Vulkan y sin conocer GameObject, misma regla que
-    // CameraComponent y Rigidbody (la dependencia va Core -> resto, nunca al
-    // revés). Eso es lo que deja probarlo entero sin GPU ni ventana.
+    // Pure data + logic: no Vulkan and no knowledge of GameObject, same rule as
+    // CameraComponent and Rigidbody (the dependency goes Core -> the rest, never the
+    // other way). That is what allows testing it entirely without a GPU or a window.
     //
-    // Es el ÚNICO dueño de animTime: el Renderer solo recibe (clip, tiempo) ya
-    // calculados vía Renderer::setAnimationState. Partir el tiempo entre los dos
-    // daría dos fuentes de verdad.
+    // It is the ONLY owner of animTime: the Renderer only receives (clip, time) already
+    // computed via Renderer::setAnimationState. Splitting the time between the two
+    // would give two sources of truth.
     //
-    // Cross-fade: una transición con duration > 0 mantiene vivo el estado que
-    // se apaga durante esos segundos, así que hay DOS relojes y dos clips en
-    // vuelo (currentClipIndex/animTime y previousClipIndex/previousAnimTime) más
-    // el peso de la mezcla. Con duration == 0 no hay estado previo y el
-    // comportamiento es el corte instantáneo de siempre.
+    // Cross-fade: a transition with duration > 0 keeps the state that is
+    // being turned off alive during those seconds, so there are TWO clocks and two clips
+    // in flight (currentClipIndex/animTime and previousClipIndex/previousAnimTime) plus
+    // the blend weight. With duration == 0 there is no previous state and the
+    // behavior is the usual instant cut.
     class AnimatorComponent
     {
         public:
-            // Los valores nuevos van AL FINAL: los tests usan inicialización
-            // agregada de Condition y la serialización va por string, así que
-            // añadir por el medio rompería lo primero sin ganar nada.
+            // New values go AT THE END: the tests use aggregate initialization of Condition
+            // and serialization goes by string, so adding in the middle would break the
+            // former without gaining anything.
             enum class ConditionType { Bool, Trigger, AnimationFinished, Int, Float };
             enum class ParamType     { Bool, Trigger, Int, Float };
-            // Comparadores de las condiciones numéricas: los cuatro valen tanto
-            // para Int como para Float. Sobre un float, Equals exige igualdad
-            // binaria exacta — un valor calculado casi nunca la cumple, uno
-            // asignado con setFloat sí.
+            // Comparators of the numeric conditions: all four work for both
+            // Int and Float. On a float, Equals requires exact binary equality
+            // — a computed value almost never meets it, one assigned with setFloat does.
             enum class Compare       { Greater, Less, Equals, NotEquals };
 
-            // fromState de una transición que sale de "Any State": vale desde
-            // cualquier estado. Negativo a propósito: removeState solo
-            // reindexa índices >= 0, así que el centinela sobrevive intacto.
+            // fromState of a transition that leaves "Any State": valid from
+            // any state. Negative on purpose: removeState only reindexes
+            // indices >= 0, so the sentinel survives intact.
             static constexpr int kAnyState = -2;
 
             struct Condition
             {
                 ConditionType type     = ConditionType::Bool;
-                std::string   paramName;          // vacío si AnimationFinished
+                std::string   paramName;          // empty if AnimationFinished
                 bool          expected = true;    // solo Bool
-                // Solo Int/Float. Un único umbral en float sirve a los dos: la
-                // UI de Int usa DragInt, así que siempre entra un valor íntegro,
-                // y float representa enteros exactos hasta 2^24.
+                // Int/Float only. A single float threshold serves both: the Int
+                // UI uses DragInt, so an integral value always comes in,
+                // and float represents exact integers up to 2^24.
                 Compare       compare   = Compare::Greater;
                 float         threshold = 0.0f;
             };
@@ -62,36 +61,36 @@ namespace DonTopo
             {
                 int fromState = -1;
                 int toState   = -1;
-                // AND de todas: la transición dispara cuando se cumplen todas.
+                // AND of all: the transition fires when all are met.
                 std::vector<Condition> conditions;
-                // Cross-fade, en SEGUNDOS reales (no ticks: los dos estados que
-                // se mezclan pueden tener ticksPerSecond distintos, así que un
-                // tiempo de mezcla en ticks no querría decir nada).
+                // Cross-fade, in real SECONDS (not ticks: the two states being
+                // blended may have different ticksPerSecond, so a blend
+                // time in ticks would mean nothing).
                 //
-                // 0 = corte instantáneo, que es lo que hacía el motor antes de
-                // que este campo existiera y lo que trae toda escena guardada
-                // sin él. Va AL FINAL del struct: los tests construyen
-                // Transition por miembros y las condiciones se serializan por
-                // nombre.
+                // 0 = instant cut, which is what the engine did before
+                // this field existed and what every scene saved without it
+                // brings. It goes AT THE END of the struct: the tests build
+                // Transition by members and the conditions are serialized by
+                // name.
                 float duration = 0.0f;
-                // --- Exit time (como Unity) ---
-                // Con hasExitTime la transición espera a que el estado de
-                // origen llegue a exitTime, en tiempo NORMALIZADO (1 = fin del
-                // clip). Por debajo de 1 se comprueba en cada vuelta; a partir
-                // de 1 cuenta vueltas acumuladas (2.5 = dos vueltas y media).
-                // Sin condiciones basta el tiempo; con condiciones hacen falta
-                // las dos cosas. Al final del struct y apagado por defecto: es
-                // lo que traen las escenas guardadas sin estos campos.
+                // --- Exit time (as in Unity) ---
+                // With hasExitTime the transition waits for the source
+                // state to reach exitTime, in NORMALIZED time (1 = end of the
+                // clip). Below 1 it is checked on every loop; from 1
+                // on it counts accumulated loops (2.5 = two and a half loops).
+                // Without conditions the time is enough; with conditions both
+                // things are needed. At the end of the struct and off by default: it is
+                // what scenes saved without these fields bring.
                 bool  hasExitTime = false;
                 float exitTime    = 1.0f;
-                // Solo se lee en transiciones que salen de Any State: si puede
-                // volver al estado en el que ya se está. Apagado por defecto:
-                // encendido y con un bool, reiniciaría el estado cada frame.
+                // Only read on transitions that leave Any State: whether it can
+                // return to the state it is already in. Off by default:
+                // on, and with a bool, it would restart the state every frame.
                 bool  canTransitionToSelf = false;
             };
 
-            // Un clip extra de un blend 1D. El nombre es la autoría; índice y
-            // duración los resuelve rebindClips desde la malla y no se guardan.
+            // An extra clip of a 1D blend. The name is the authoring; index and
+            // duration are resolved by rebindClips from the mesh and are not saved.
             struct BlendEntry
             {
                 std::string clipName;
@@ -101,85 +100,85 @@ namespace DonTopo
                 float       thresholdY = 0.0f;   // solo en blend 2D
             };
 
-            // Evento con nombre en un instante del ciclo del estado. time es
-            // fase normalizada [0, 1] sobre la duración del clip principal.
+            // Named event at an instant of the state's cycle. time is a
+            // normalized phase [0, 1] over the duration of the main clip.
             struct AnimationEvent
             {
                 std::string name;
                 float       time = 0.0f;
             };
 
-            // Qué hace la traslación de la raíz del clip. Off: la pose la
-            // mueve (lo de siempre). Lock: se clava a su bind y el clip se ve
-            // en el sitio. Apply: la GPU clava solo X y Z (el vaivén vertical
-            // se ve) y el desplazamiento horizontal mueve al GameObject.
+            // What the translation of the clip root does. Off: the pose
+            // moves it (as always). Lock: it is pinned to its bind and the clip is seen
+            // in place. Apply: the GPU pins only X and Z (the vertical bobbing
+            // is seen) and the horizontal displacement moves the GameObject.
             enum class RootMotion { Off, Lock, Apply };
 
             struct State
             {
                 std::string name;
-                // El clip se referencia por NOMBRE, no por índice: el índice
-                // depende del orden de mAnimations en el FBX, y reexportar el
-                // modelo lo baraja. bindClips resuelve nombre -> clipIndex.
+                // The clip is referenced by NAME, not by index: the index
+                // depends on the order of mAnimations in the FBX, and re-exporting the
+                // model shuffles it. bindClips resolves name -> clipIndex.
                 std::string clipName;
                 int         clipIndex      = -1;
-                // Cacheados por bindClips pa que el componente sea auto-contenido
-                // (y probable sin FBX ni Vulkan).
+                // Cached by bindClips so that the component is self-contained
+                // (and testable without FBX or Vulkan).
                 float       duration       = 0.0f;    // ticks
                 float       ticksPerSecond = 24.0f;
-                // Autoría del usuario (checkbox del nodo), NO cacheado del clip:
-                // el SkinnedMesh se reconstruye desde el FBX en cada carga y no
-                // se serializa, así que un loop guardado ahí se perdería.
+                // User authoring (node checkbox), NOT cached from the clip:
+                // the SkinnedMesh is rebuilt from the FBX on every load and is not
+                // serialized, so a loop saved there would be lost.
                 bool        loop           = true;
-                // --- Sub-máquinas (C10) ---
-                // El vector de la capa sigue plano: esto es contención, no un
-                // grafo anidado. Una caja NO se reproduce y nunca es el estado
-                // actual; sirve para agrupar en el canvas y para escribir una
-                // transición contra el bloque entero.
-                int         parent         = -1;      // quién lo contiene; -1 = raíz de la capa
-                bool        isSubMachine   = false;   // es una caja
-                int         subEntry       = -1;      // hijo por el que se entra (solo si isSubMachine)
-                // --- Blend 1D por parámetro ---
-                // El clip principal (clipName) es una entrada más, con
-                // clipThreshold; blendEntries son los extra. Suenan los dos
-                // vecinos del valor de blendParam (ver stateBlendPair). Sin
-                // entradas, o con un parámetro no declarado, un solo clip.
+                // --- Sub-machines (C10) ---
+                // The layer vector stays flat: this is containment, not a nested
+                // graph. A box is NOT played and is never the current
+                // state; it serves to group on the canvas and to write a
+                // transition against the whole block.
+                int         parent         = -1;      // who contains it; -1 = root of the layer
+                bool        isSubMachine   = false;   // it is a box
+                int         subEntry       = -1;      // child through which it is entered (only if isSubMachine)
+                // --- 1D blend by parameter ---
+                // The main clip (clipName) is one more entry, with
+                // clipThreshold; blendEntries are the extra ones. The two
+                // neighbors of the blendParam value play (see stateBlendPair). Without
+                // entries, or with an undeclared parameter, a single clip.
                 std::string             blendParam;
                 float                   clipThreshold = 0.0f;
                 std::vector<BlendEntry> blendEntries;
-                // --- Blend 2D ---
-                // Con blendParamY Float declarado, cada clip es un punto
-                // (umbral, umbralY) y suenan los 3 del triángulo que contiene
-                // (blendParam, blendParamY). Ver stateBlendSamples.
+                // --- 2D blend ---
+                // With blendParamY declared Float, each clip is a point
+                // (threshold, thresholdY) and the 3 of the triangle that contains
+                // (blendParam, blendParamY) play. See stateBlendSamples.
                 std::string             blendParamY;
                 float                   clipThresholdY = 0.0f;
-                // Clip de propiedades del estado, por NOMBRE (como el de
-                // malla); el índice lo resuelve bindProperties.
+                // Property clip of the state, by NAME (like the mesh one);
+                // the index is resolved by bindProperties.
                 std::string             propertyClipName;
                 int                     propertyClipIndex = -1;
-                // Eventos del estado: disparan en Play (ver collectEvents) y
-                // llegan a Lua como OnAnimationEvent(name).
+                // Events of the state: they fire in Play (see collectEvents) and
+                // reach Lua as OnAnimationEvent(name).
                 std::vector<AnimationEvent> events;
-                // Posición del nodo en el canvas del AnimatorPanel.
+                // Position of the node in the AnimatorPanel canvas.
                 glm::vec2   editorPos{0.0f};
-                // Id estable pa el nodo del canvas del editor (AnimatorPanel), NO
-                // el índice en m_states: ese índice cambia cuando removeState
-                // reindexa el vector, y si el id del canvas fuera el índice, un
-                // superviviente heredaría el slot visual (posición/selección) del
-                // nodo borrado en imgui-node-editor, que los cachea por id. NO se
-                // serializa (ver Scene.cpp): se regenera en addState al cargar.
+                // Stable id for the editor canvas node (AnimatorPanel), NOT
+                // the index in m_states: that index changes when removeState
+                // reindexes the vector, and if the canvas id were the index, a
+                // survivor would inherit the visual slot (position/selection) of the
+                // deleted node in imgui-node-editor, which caches them by id. It is NOT
+                // serialized (see Scene.cpp): it is regenerated in addState on load.
                 int         editorId = -1;
-                // Traslación de la raíz (el hueso de parentIndex < 0), ver
-                // RootMotion. La rotación y la escala de la raíz NO se tocan en
-                // ningún modo. Off es lo que traen todas las escenas guardadas
-                // sin el campo.
+                // Translation of the root (the bone with parentIndex < 0), see
+                // RootMotion. The rotation and scale of the root are NOT touched in
+                // any mode. Off is what every scene saved without the field
+                // brings.
                 RootMotion  rootMotion = RootMotion::Off;
-                // --- Velocidad (como el Speed + Multiplier de Unity) ---
-                // Ritmo = ticksPerSecond x speed x valor de speedParam (si es un
-                // float declarado; si no, x1). Negativo o NaN congela (0): ir
-                // hacia atrás exigiría redefinir loop, finished y exit time. Al
-                // final del struct y a x1 por defecto, que es lo que traen las
-                // escenas guardadas sin estos campos.
+                // --- Speed (like Unity's Speed + Multiplier) ---
+                // Rate = ticksPerSecond x speed x value of speedParam (if it is a
+                // declared float; otherwise, x1). Negative or NaN freezes (0): going
+                // backwards would require redefining loop, finished and exit time. At the
+                // end of the struct and at x1 by default, which is what scenes saved
+                // without these fields bring.
                 float       speed          = 1.0f;
                 std::string speedParam;
             };
@@ -190,62 +189,62 @@ namespace DonTopo
                 ParamType   type = ParamType::Bool;
             };
 
-            // --- Clips de propiedades ---
-            // Un estado puede reproducir, además de su clip de malla, un clip
-            // autorado que escribe propiedades del GameObject (transform, luz,
-            // material). Es lo que permite animar un objeto SIN esqueleto.
+            // --- Property clips ---
+            // A state can play, besides its mesh clip, an authored clip
+            // that writes properties of the GameObject (transform, light,
+            // material). It is what allows animating an object WITHOUT a skeleton.
             static constexpr int kMaxPropertyClips = 16;
             const std::vector<PropertyClip>& propertyClips() const { return m_propertyClips; }
             std::vector<PropertyClip>&       propertyClipsMutable() { return m_propertyClips; }
-            int  addPropertyClip(PropertyClip c);   // índice, -1 si ya hay kMaxPropertyClips
+            int  addPropertyClip(PropertyClip c);   // index, -1 if there are already kMaxPropertyClips
             void removePropertyClip(int i);
-            // Resuelve el propertyClipName de cada estado y el `resolved` de
-            // cada pista contra el objeto (qué componentes tiene). Con go nulo
-            // solo hace lo primero: el componente NO guarda el GameObject.
+            // Resolves the propertyClipName of each state and the `resolved` of
+            // each track against the object (which components it has). With a null go it
+            // only does the first: the component does NOT store the GameObject.
             void bindProperties(const GameObject* go, std::vector<std::string>* warnings);
-            // Lo que suena este frame: clip, tiempo EN SEGUNDOS y peso (el del
-            // cross-fade por el de su capa). Devuelve cuántas.
+            // What plays this frame: clip, time IN SECONDS and weight (that of the
+            // cross-fade times that of its layer). Returns how many.
             struct PropertySampleRef { int clip = -1; float time = 0.0f; float weight = 0.0f; };
             int  propertySamples(PropertySampleRef* out, int max) const;
 
             // --- IK ---
-            // Restricciones que corrigen la pose YA evaluada, en la GPU, entre
-            // la jerarquía y el skinning (bone_ik.comp). Son del componente, no
-            // de una capa: se aplican sobre la pose final.
+            // Constraints that correct the ALREADY evaluated pose, on the GPU, between
+            // the hierarchy and the skinning (bone_ik.comp). They belong to the component, not
+            // to a layer: they are applied on the final pose.
             enum class IkType { LookAt, TwoBone };
             static constexpr int kMaxIkConstraints = 4;
             struct IkConstraint
             {
-                std::string name;                              // para Lua y el panel
+                std::string name;                              // for Lua and the panel
                 IkType      type     = IkType::LookAt;
-                // LookAt: el hueso que mira. TwoBone: el EXTREMO de la cadena
-                // (mano, pie); los otros dos son su padre y su abuelo.
+                // LookAt: the bone that looks. TwoBone: the END of the chain
+                // (hand, foot); the other two are its parent and its grandparent.
                 std::string boneName;
-                uint64_t    targetId = 0;                      // GameObject; 0 = sin objetivo
-                uint64_t    poleId   = 0;                      // TwoBone: hacia dónde va el codo
+                uint64_t    targetId = 0;                      // GameObject; 0 = no target
+                uint64_t    poleId   = 0;                      // TwoBone: where the elbow goes
                 float       weight   = 1.0f;                   // 0..1
-                glm::vec3   aimAxis  = { 0.0f, 0.0f, 1.0f };   // LookAt: eje local que mira
-                float       maxAngle = 80.0f;                  // LookAt: grados
-                // --- Resuelto en bindClips, no se serializa ---
+                glm::vec3   aimAxis  = { 0.0f, 0.0f, 1.0f };   // LookAt: local axis that looks
+                float       maxAngle = 80.0f;                  // LookAt: degrees
+                // --- Resolved in bindClips, not serialized ---
                 int boneIndex = -1, parentIndex = -1, grandParentIndex = -1;
             };
 
             const std::vector<IkConstraint>& ikConstraints() const { return m_ik; }
             std::vector<IkConstraint>&       ikConstraintsMutable() { return m_ik; }
-            // Devuelve el índice, -1 si ya hay kMaxIkConstraints.
+            // Returns the index, -1 if there are already kMaxIkConstraints.
             int   addIkConstraint(IkConstraint c);
             void  removeIkConstraint(int i);
-            // Por NOMBRE, como los parámetros: uno que no existe no hace nada
-            // en los setters y devuelve 0 en el getter.
-            void  setIkWeight(const std::string& nombre, float w);   // acotado a [0,1]
+            // By NAME, like the parameters: one that does not exist does nothing
+            // in the setters and returns 0 in the getter.
+            void  setIkWeight(const std::string& nombre, float w);   // clamped to [0,1]
             float ikWeight(const std::string& nombre) const;
             void  setIkTarget(const std::string& nombre, uint64_t id);
             void  setIkPole(const std::string& nombre, uint64_t id);
 
-            // --- Capas --- La 0 es la base; las
-            // demás se aplican encima, en orden, con su peso y su máscara:
-            // override sustituye la pose, additive le suma su diferencia con
-            // el primer fotograma de cada clip.
+            // --- Layers --- Layer 0 is the base; the
+            // others are applied on top, in order, with their weight and their mask:
+            // override replaces the pose, additive adds its difference from
+            // the first frame of each clip.
             enum class LayerMode { Override, Additive };
             static constexpr int kMaxLayers = 8;
             struct Layer
@@ -256,89 +255,89 @@ namespace DonTopo
                 int                      entryState = -1;
                 float                    weight     = 1.0f;
                 LayerMode                mode       = LayerMode::Override;
-                std::vector<std::string> maskBones;      // vacía = todo el cuerpo
-                // A la izquierda del primer estado que crea el panel (40, 40).
+                std::vector<std::string> maskBones;      // empty = whole body
+                // To the left of the first state the panel creates (40, 40).
                 glm::vec2                anyStatePos{ -220.0f, 40.0f };
 
-                // --- Ejecución (no se serializa) ---
+                // --- Execution (not serialized) ---
                 int    currentState   = -1;
                 float  animTime       = 0.0f;
                 bool   finished       = false;
-                // Ticks avanzados desde que se entró en el estado actual, SIN
-                // fmod: en un loop sigue creciendo, que es lo que permite contar
-                // vueltas para el exit time. double y no float: en una sesión
-                // larga un float pierde resolución para decidir un cruce.
+                // Ticks advanced since the current state was entered, WITHOUT
+                // fmod: in a loop it keeps growing, which is what allows counting
+                // loops for the exit time. double and not float: in a long
+                // session a float loses resolution to decide a crossing.
                 double stateTicks     = 0.0;
-                // Reloj acumulado (sin wrap) del estado que se apaga en un fade:
-                // lo necesita el root motion para no saltar en su wrap.
+                // Accumulated clock (without wrap) of the state being turned off in a fade:
+                // root motion needs it so as not to jump at its wrap.
                 double prevStateTicks = 0.0;
-                // Cross-fade en curso. prevState a -1 significa "sin mezcla", y
-                // es el estado en el que queda todo con transiciones de
-                // duración 0.
+                // Cross-fade in progress. prevState at -1 means "no blend", and
+                // it is the state everything is left in with transitions of
+                // duration 0.
                 int    prevState      = -1;
                 float  prevAnimTime   = 0.0f;
                 float  blendElapsed   = 0.0f;
                 float  blendDuration  = 0.0f;
-                // Fade desde una pose congelada (se interrumpió otro fade) y la
-                // petición de copiarla, pendiente hasta que el host la manda.
+                // Fade from a frozen pose (another fade was interrupted) and the
+                // request to copy it, pending until the host sends it.
                 bool   frozenFade     = false;
                 bool   freezePending  = false;
-                // maskBones resuelta contra el esqueleto (bindClips): uno por
-                // hueso; vacía = todo el cuerpo.
+                // maskBones resolved against the skeleton (bindClips): one per
+                // bone; empty = whole body.
                 std::vector<uint8_t> maskResolved;
             };
 
-            // Lo AUTORADO del grafo, sin nada de runtime: lo que guarda y
-            // restaura el undo del editor (AnimatorGraphCommand). Los estados
-            // van enteros —editorId y editorPos incluidos— porque applyGraph
-            // necesita el editorId para casar los estados vivos con los del
-            // snapshot, y la posición para colocar un nodo que vuelve de un
-            // borrado.
+            // The AUTHORED part of the graph, with nothing of runtime: what the editor
+            // undo (AnimatorGraphCommand) saves and restores. The states
+            // go whole —editorId and editorPos included— because applyGraph
+            // needs the editorId to match the live states with those of the
+            // snapshot, and the position to place a node that comes back from a
+            // deletion.
             struct Graph
             {
                 std::vector<State>      states;
                 std::vector<Transition> transitions;
                 std::vector<Parameter>  parameters;
                 int                     entryState = -1;
-                // Capas 1..N enteras (el diseño; su ejecución se ignora).
+                // Layers 1..N whole (the design; their execution is ignored).
                 std::vector<Layer>      extraLayers;
-                // Las restricciones de IK son diseño entero: no tienen
-                // ejecución que conservar. Los clips de propiedades, igual.
+                // The IK constraints are entirely design: they have no
+                // execution to preserve. The property clips, the same.
                 std::vector<IkConstraint> ik;
                 std::vector<PropertyClip> propertyClips;
             };
 
-            // --- Diseño (editor / carga de escena) ---
-            int  addState(State s, int layer = 0);                 // devuelve el índice del nuevo estado
+            // --- Design (editor / scene load) ---
+            int  addState(State s, int layer = 0);                 // returns the index of the new state
             void addTransition(Transition t, int layer = 0);
-            void removeState(int idx, int layer = 0);              // reindexa las transiciones
+            void removeState(int idx, int layer = 0);              // reindexes the transitions
             void removeTransition(int idx, int layer = 0);
             void setEntryState(int idx, int layer = 0);
             void addParameter(std::string name, ParamType type);
             void removeParameter(const std::string& name);
-            // Posición del nodo Any State en el canvas del AnimatorPanel. Va
-            // fuera de Graph a propósito: como la de los estados, mover un nodo
-            // no entra en el undo.
+            // Position of the Any State node in the AnimatorPanel canvas. It goes
+            // outside Graph on purpose: like that of the states, moving a node
+            // does not enter the undo.
             glm::vec2 anyStateEditorPos(int layer = 0) const         { return lay(layer).anyStatePos; }
             void      setAnyStateEditorPos(glm::vec2 p, int layer = 0) { lay(layer).anyStatePos = p; }
 
             Graph graph() const;
-            // Sustituye estados, transiciones, parámetros y entrada por los de
-            // g SIN pasar por reset(): corre en Play (undo a mitad de partida).
-            //  - El playhead se casa por editorId, no por índice: si el estado
-            //    actual sigue en g conserva su tiempo aunque cambie de índice;
-            //    si no, cae a la entrada con tiempo 0. El que se apaga en un
-            //    cross-fade se casa igual, y la mezcla solo se corta si falta
-            //    alguno de los dos.
-            //  - Un parámetro conserva su valor si ya existía con el mismo
-            //    nombre Y el mismo tipo; si no, arranca a su valor por defecto.
-            //  - Los estados vivos (mismo editorId) conservan su editorPos
-            //    actual: mover nodos no entra en el undo.
-            //  - m_nextEditorId nunca baja.
-            // NO resuelve clips: el caché de clipIndex lo rehace el llamante
-            // con rebindClips.
-            // Precondición: g viene de graph() (editorId únicos, índices dentro
-            // de rango); applyGraph no lo valida.
+            // Replaces states, transitions, parameters and entry with those of
+            // g WITHOUT going through reset(): it runs in Play (undo in the middle of a game).
+            //  - The playhead is matched by editorId, not by index: if the current
+            //    state is still in g it keeps its time even if its index changes;
+            //    if not, it falls to the entry with time 0. The one being turned off in a
+            //    cross-fade is matched the same way, and the blend is only cut if either
+            //    of the two is missing.
+            //  - A parameter keeps its value if it already existed with the same
+            //    name AND the same type; otherwise, it starts at its default value.
+            //  - The live states (same editorId) keep their current
+            //    editorPos: moving nodes does not enter the undo.
+            //  - m_nextEditorId never goes down.
+            // It does NOT resolve clips: the clipIndex cache is rebuilt by the caller
+            // with rebindClips.
+            // Precondition: g comes from graph() (unique editorIds, indices within
+            // range); applyGraph does not validate it.
             void applyGraph(const Graph& g);
 
             const std::vector<State>&      states(int layer = 0)      const { return lay(layer).states; }
@@ -346,82 +345,82 @@ namespace DonTopo
             const std::vector<Parameter>&  parameters()  const { return m_parameters; }
             int                            entryState(int layer = 0)  const { return lay(layer).entryState; }
 
-            // Acceso mutable pa la UI (editar nombre/loop/editorPos in situ sin
-            // reconstruir el estado entero).
+            // Mutable access for the UI (edit name/loop/editorPos in place without
+            // rebuilding the whole state).
             std::vector<State>&      statesMutable(int layer = 0)      { return lay(layer).states; }
             std::vector<Transition>& transitionsMutable(int layer = 0) { return lay(layer).transitions; }
 
-            // Resuelve clipName -> clipIndex y cachea duration/ticksPerSecond de
-            // cada estado. Un clipName que no exista en la malla deja clipIndex a
-            // -1 y empuja un aviso (falla ruidoso, no silencioso). NO toca loop.
-            // Termina en reset(): pensado pa carga de escena / entrada a Play,
-            // donde reiniciar m_currentState y los parámetros es lo correcto.
+            // Resolves clipName -> clipIndex and caches duration/ticksPerSecond of
+            // each state. A clipName that does not exist in the mesh leaves clipIndex at
+            // -1 and pushes a warning (it fails loudly, not silently). It does NOT touch loop.
+            // It ends in reset(): meant for scene load / entering Play,
+            // where restarting m_currentState and the parameters is the right thing.
             void bindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings = nullptr);
 
-            // El bucle de resolución de bindClips, SIN el reset() final. Lo usan
-            // los comandos del editor (AnimationSourceCommand) que mutan
-            // animationClips en caliente: tras añadir/quitar una fuente de
-            // animación, m_states[].clipIndex apunta a índices del array VIEJO
-            // (o a un índice que ahora es un clip distinto, ver Finding 1 de la
-            // revisión), así que hay que re-resolver por nombre. Pero es en
-            // caliente: puede correr a mitad de Play Mode, y bindClips's reset()
-            // borraría m_currentState y todos los bool/trigger/int/float del
-            // usuario, que es justo lo que NO se quiere en ese momento (a
-            // diferencia de una carga de escena, donde reset() es correcto).
+            // The resolution loop of bindClips, WITHOUT the final reset(). Used by
+            // the editor commands (AnimationSourceCommand) that mutate
+            // animationClips live: after adding/removing an animation
+            // source, m_states[].clipIndex points to indices of the OLD array
+            // (or to an index that is now a different clip, see Finding 1 of the
+            // review), so it has to be re-resolved by name. But it is live:
+            // it can run in the middle of Play Mode, and bindClips's reset()
+            // would erase m_currentState and all the user's bool/trigger/int/float,
+            // which is exactly what is NOT wanted at that moment (unlike
+            // a scene load, where reset() is correct).
             void rebindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings = nullptr);
 
-            // Reescribe clipName en los estados que usaban oldName. Devuelve
-            // cuántos cambió. Lo llama el Animator Panel tras renombrar un clip
-            // del mesh: el grafo referencia por nombre, así que sin esto el
-            // rename dejaría los estados huérfanos.
+            // Rewrites clipName in the states that used oldName. Returns
+            // how many it changed. Called by the Animator Panel after renaming a clip
+            // of the mesh: the graph references by name, so without this the
+            // rename would leave the states orphaned.
             int renameClipReferences(const std::string& oldName, const std::string& newName);
 
             // --- Runtime ---
             void setBool(const std::string& n, bool v);
             bool getBool(const std::string& n) const;
             void setTrigger(const std::string& n);
-            // Devuelven 0 si el parámetro no existe; los setters no hacen nada
-            // si el nombre no está declarado o es de otro tipo (misma guarda que
+            // They return 0 if the parameter does not exist; the setters do nothing
+            // if the name is not declared or is of another type (same guard as
             // setBool).
             void  setInt(const std::string& n, int v);
             int   getInt(const std::string& n) const;
             void  setFloat(const std::string& n, float v);
             float getFloat(const std::string& n) const;
-            // ¿Hay un parámetro DECLARADO con ese nombre y de tipo Float? Es lo
-            // que hace resoluble una curva de clip (una pista cuyo destino es
-            // un parámetro).
+            // Is there a DECLARED parameter with that name and of type Float? It is what
+            // makes a clip curve resolvable (a track whose destination is
+            // a parameter).
             bool  hasFloatParameter(const std::string& n) const;
-            // Umbrales de las condiciones Float que miran ese parámetro, en
-            // TODAS las capas y sin repetir. Es lo que el panel pinta sobre la
-            // curva: ver dónde la cruza es la única pregunta que se le hace de
-            // un vistazo. Devuelve cuántos ha escrito.
+            // Thresholds of the Float conditions that look at that parameter, in
+            // ALL the layers and without repeats. It is what the panel draws over the
+            // curve: seeing where it crosses is the only question asked of it at
+            // a glance. Returns how many it wrote.
             int   conditionThresholds(const std::string& n, float* out, int max) const;
 
-            // Desarma un trigger que nadie ha consumido todavía. Nombre no
-            // declarado o de otro tipo: no hace nada, como setTrigger.
+            // Disarms a trigger that nobody has consumed yet. Undeclared name
+            // or of another type: it does nothing, like setTrigger.
             void  resetTrigger(const std::string& n);
 
-            // --- Control desde código (Lua) ---
-            // Entran en el estado con ese NOMBRE sin esperar a ninguna
-            // transición. false si no existe (no se mueve nada). Hacia el
-            // estado actual lo reinician: una llamada explícita es intención,
-            // no el rebote que canTransitionToSelf evita en el grafo.
-            // play corta cualquier mezcla; crossFade mezcla durante seconds
-            // (<= 0 = corte, igual que play).
+            // --- Control from code (Lua) ---
+            // They enter the state with that NAME without waiting for any
+            // transition. false if it does not exist (nothing is moved). Toward the
+            // current state they restart it: an explicit call is intent,
+            // not the bounce that canTransitionToSelf avoids in the graph.
+            // play cuts any blend; crossFade blends during seconds
+            // (<= 0 = cut, same as play).
             bool  play(const std::string& stateName, int layer = 0);
             bool  crossFade(const std::string& stateName, float seconds, int layer = 0);
-            // Tiempo normalizado ACUMULADO del estado actual: 1 = una vuelta, y
-            // en un loop sigue creciendo (como normalizedTime en Unity). 0 si
-            // el clip no tiene duración.
+            // ACCUMULATED normalized time of the current state: 1 = one loop, and
+            // in a loop it keeps growing (like normalizedTime in Unity). 0 if
+            // the clip has no duration.
             float normalizedTime(int layer = 0) const;
-            // Velocidad global del Animator (animator.speed de Unity): escala el
-            // dt de todo update, cross-fade incluido. Runtime, no se guarda en
-            // la escena. Negativo o NaN se acota a 0 (congela).
+            // Global Animator speed (Unity's animator.speed): scales the
+            // dt of every update, cross-fade included. Runtime, it is not saved in
+            // the scene. Negative or NaN is clamped to 0 (freezes).
             void  setSpeed(float s);
             float speed() const { return m_speed; }
 
-            // evaluateTransitions == false (Edit Mode): avanza el tiempo del
-            // estado actual pero no mueve el grafo.
+            // evaluateTransitions == false (Edit Mode): advances the time of the
+            // current state but does not move the graph.
             void update(float dt, bool evaluateTransitions);
 
             int   currentState(int layer = 0)     const { return lay(layer).currentState; }
@@ -429,205 +428,205 @@ namespace DonTopo
             float animTime(int layer = 0)         const { return lay(layer).animTime; }   // ticks
             bool  finished(int layer = 0)         const { return lay(layer).finished; }
 
-            // --- Cross-fade en curso ---
-            // El estado que se está apagando, -1 si no hay mezcla. Su reloj
-            // sigue corriendo (con SU ticksPerSecond y SU loop) mientras dura.
+            // --- Cross-fade in progress ---
+            // The state being turned off, -1 if there is no blend. Its clock
+            // keeps running (with ITS ticksPerSecond and ITS loop) while it lasts.
             int   previousState(int layer = 0)     const { return lay(layer).prevState; }
-            // Como currentClipIndex: cae a 0 si no hay estado previo o su clip
-            // no está resuelto. 0 es un índice válido del SSBO, así que el
-            // compute nunca lee fuera aunque el grafo esté a medias.
+            // Like currentClipIndex: falls to 0 if there is no previous state or its clip
+            // is not resolved. 0 is a valid SSBO index, so the
+            // compute never reads out of bounds even if the graph is half-built.
             int   previousClipIndex(int layer = 0) const;
             float previousAnimTime(int layer = 0)  const { return lay(layer).prevAnimTime; }   // ticks
-            // 0 = solo el estado previo, 1 = solo el actual. Vale 1 cuando no
-            // hay mezcla, que es justo lo que hace que el camino sin cross-fade
-            // no necesite un caso especial en ningún consumidor.
+            // 0 = only the previous state, 1 = only the current one. It is 1 when there is no
+            // blend, which is exactly what makes the path without cross-fade
+            // need no special case in any consumer.
             float blendWeight(int layer = 0)       const;
             bool  blending(int layer = 0)          const { return lay(layer).prevState >= 0; }
-            // Fade en curso: con un estado previo vivo, o desde una pose
-            // congelada (un fade interrumpido, ver pose()). blending() sigue
-            // diciendo solo lo primero, que es lo que miran el root motion y
-            // la pareja principal.
+            // Fade in progress: with a live previous state, or from a frozen
+            // pose (an interrupted fade, see pose()). blending() still
+            // says only the first, which is what root motion and
+            // the main pair look at.
             bool  fading(int layer = 0)            const { return lay(layer).prevState >= 0 || lay(layer).frozenFade; }
-            // Lo que va a la GPU: hasta 6 muestras ponderadas (el estado que
-            // sale y el que entra, cada uno con sus muestras de blend, hasta 3
-            // en 2D) y la pose
-            // congelada si un fade se interrumpió. Los pesos suman 1.
+            // What goes to the GPU: up to 6 weighted samples (the outgoing state
+            // and the incoming one, each with its blend samples, up to 3
+            // in 2D) and the frozen
+            // pose if a fade was interrupted. The weights sum to 1.
             AnimationPose pose() const;
-            // La petición de congelar se manda UNA vez: la apaga quien acaba de
-            // enviar la pose al backend (applySkinnedFrame).
+            // The freeze request is sent ONCE: it is turned off by whoever just
+            // sent the pose to the backend (applySkinnedFrame).
             void clearFreezeRequest() { for (auto& L : m_layers) L.freezePending = false; }
 
-            // --- La pareja PRINCIPAL de la pose ---
-            // Dos clips, sus dos relojes y el peso (mix(A, B, w)):
-            //   - cross-fade en vuelo: A = estado que se apaga, B = el nuevo,
-            //     cada uno con su clip primario.
-            //   - si no, estado con blend: los dos clips vecinos del valor del
-            //     parámetro entre sus umbrales, con peso lineal.
-            //   - ninguno de los dos: A == B y peso 1.
-            // Es la vista de dos clips de siempre, para Lua y los tests. Lo que
-            // va a la GPU es pose(), que en un fade lleva las parejas enteras de
-            // los dos estados (y la pose congelada si se interrumpió).
+            // --- The MAIN pair of the pose ---
+            // Two clips, their two clocks and the weight (mix(A, B, w)):
+            //   - cross-fade in flight: A = the state being turned off, B = the new one,
+            //     each with its primary clip.
+            //   - otherwise, state with blend: the two neighboring clips of the
+            //     parameter value between their thresholds, with linear weight.
+            //   - neither: A == B and weight 1.
+            // It is the usual two-clip view, for Lua and the tests. What goes
+            // to the GPU is pose(), which in a fade carries the whole pairs of
+            // the two states (and the frozen pose if it was interrupted).
             int   poseClipA() const;
             float poseTimeA() const;   // ticks
             int   poseClipB() const;
             float poseTimeB() const;   // ticks
             float poseWeight() const;
-            // Nombres disparados en el ÚLTIMO update, en orden. Se vacía al
-            // principio de cada update: quien los lea una vez por frame los ve
-            // una sola vez.
+            // Names fired in the LAST update, in order. It is emptied at the
+            // start of each update: whoever reads them once per frame sees them
+            // only once.
             const std::vector<std::string>& firedEvents() const { return m_firedEvents; }
-            // Lo que avanzó cada clip con root motion en el ÚLTIMO update (solo
-            // Play y solo si el estado actual es Apply), con su peso en la pose.
-            // Ticks acumulados, sin wrap. Lo convierte en delta rootMotionDelta
-            // (Renderer/RootMotion.h), que es quien tiene los keyframes.
+            // What each clip with root motion advanced in the LAST update (only
+            // Play and only if the current state is Apply), with its weight in the pose.
+            // Accumulated ticks, without wrap. It is converted into the rootMotionDelta delta
+            // (Renderer/RootMotion.h), which is the one that has the keyframes.
             struct RootMotionSample { int clip; double ticks0; double ticks1; float duration; bool loop; float weight; };
             const std::vector<RootMotionSample>& rootMotionSamples() const { return m_rootMotionSamples; }
-            // Modo de raíz de la pose que sale a la GPU: 0 Off, 1 Lock, 2 Apply.
-            // Durante un cross-fade manda el estado DESTINO —el mismo que aporta
-            // poseClipB—: el push constant lleva UN solo modo para toda la
-            // mezcla, y el destino es el estado al que se está entrando, así que
-            // la pose acaba de acuerdo con él.
+            // Root mode of the pose going out to the GPU: 0 Off, 1 Lock, 2 Apply.
+            // During a cross-fade the TARGET state wins —the same one that contributes
+            // poseClipB—: the push constant carries a SINGLE mode for the whole
+            // blend, and the target is the state being entered, so
+            // the pose ends up consistent with it.
             uint32_t poseRootMotionMode() const;
-            // Nombre del estado actual, "" si el grafo está vacío. Lo consume Lua.
+            // Name of the current state, "" if the graph is empty. Consumed by Lua.
             std::string currentStateName(int layer = 0) const;
-            // Nombre del estado que se está apagando en un cross-fade, "" si no
-            // hay mezcla. Lo consume Lua, igual que currentStateName.
+            // Name of the state being turned off in a cross-fade, "" if there is
+            // no blend. Consumed by Lua, like currentStateName.
             std::string previousStateName(int layer = 0) const;
 
-            // Vuelve al estado de entrada, tiempo a 0, parámetros y triggers a
-            // false. El Stop de Play no necesita llamarlo (reconstruye la escena
-            // desde JSON), pero el editor sí al reeditar el grafo.
+            // Returns to the entry state, time to 0, parameters and triggers to
+            // false. The Stop of Play does not need to call it (it rebuilds the scene
+            // from JSON), but the editor does when re-editing the graph.
             //
-            // OJO: borra los parámetros del usuario, así que NO vale para las
-            // operaciones que pueden correr a mitad de Play — el AnimatorPanel
-            // deja editar el grafo sin gate de isPlaying. Ésas usan
-            // resetPlayback(), que mueve el playhead sin tocar los valores (la
-            // misma distinción que hay entre bindClips y rebindClips).
+            // NOTE: it erases the user's parameters, so it is NOT valid for
+            // operations that can run in the middle of Play — the AnimatorPanel
+            // allows editing the graph without an isPlaying gate. Those use
+            // resetPlayback(), which moves the playhead without touching the values (the
+            // same distinction as between bindClips and rebindClips).
             void reset();
 
-            // --- Capas ---
-            // La 0 existe siempre y es la base: peso 1, override, sin máscara
-            // (los setters la ignoran). Las demás se aplican encima en orden.
+            // --- Layers ---
+            // Layer 0 always exists and is the base: weight 1, override, no mask
+            // (the setters ignore it). The others are applied on top in order.
             int          layerCount() const { return (int)m_layers.size(); }
             const Layer& layer(int i) const { return lay(i); }
             Layer&       layerMutable(int i) { return lay(i); }
-            // Devuelve el índice de la nueva, -1 si ya hay kMaxLayers.
+            // Returns the index of the new one, -1 if there are already kMaxLayers.
             int   addLayer(const std::string& name);
-            // Índice del estado con ese editorId en la capa dada, -1 si no está
-            // (o la capa no existe). La capa es obligatoria a propósito: el
-            // editor identifica nodos por editorId, y buscar en la base por
-            // defecto hacía invisibles los nodos de las demás capas.
+            // Index of the state with that editorId in the given layer, -1 if it is not there
+            // (or the layer does not exist). The layer is mandatory on purpose: the
+            // editor identifies nodes by editorId, and searching in the base by
+            // default made the nodes of the other layers invisible.
             int   stateIndexByEditorId(int editorId, int layer) const;
-            // Deja el grafo de una capa en un estado representable: descarta las
-            // transiciones con índices imposibles y devuelve a la raíz lo que no
-            // puede estar donde dice (padre inexistente o que no es caja,
-            // entrada que no es hija suya, ciclos de contención).
+            // Leaves the graph of a layer in a representable state: it discards
+            // transitions with impossible indices and returns to the root whatever cannot
+            // be where it says (nonexistent parent or one that is not a box,
+            // entry that is not its child, containment cycles).
             //
-            // Existe porque statesMutable()/transitionsMutable() exponen los
-            // vectores enteros (A10): el panel es su único usuario legítimo,
-            // pero nadie garantiza lo que escribe. En vez de 9 setters con
-            // validación, una pasada que se llama donde SÍ se sabe que el grafo
-            // acaba de cambiar: al cargarlo y al cerrar la sesión de undo del
-            // editor. Un grafo sano no cambia nada, así que llamarla de más es
-            // gratis.
+            // It exists because statesMutable()/transitionsMutable() expose the whole
+            // vectors (A10): the panel is their only legitimate user,
+            // but nobody guarantees what it writes. Instead of 9 setters with
+            // validation, one pass that is called where it IS known that the graph
+            // has just changed: on loading it and on closing the editor's undo
+            // session. A healthy graph changes nothing, so calling it too often is
+            // free.
             void sanitizeGraph(int layer, std::vector<std::string>* warnings);
-            // ¿`state` está dentro de `maybeAncestor`, a cualquier profundidad?
-            // Uno mismo NO es descendiente de sí mismo.
+            // Is `state` inside `maybeAncestor`, at any depth?
+            // One is NOT a descendant of oneself.
             bool  isDescendantOf(int state, int maybeAncestor, int layer) const;
-            // Hoja en la que hay que entrar al ir a `state`: él mismo si no es
-            // caja, o el final de la cadena de subEntry. -1 si la cadena se
-            // rompe (caja vacía, índice malo o ciclo): entrar a medias en un
-            // estado que no existe es peor que no moverse.
+            // Leaf to enter when going to `state`: itself if it is not a
+            // box, or the end of the subEntry chain. -1 if the chain
+            // breaks (empty box, bad index or cycle): entering halfway into a
+            // state that does not exist is worse than not moving.
             int   resolveEntryLeaf(int state, int layer) const;
             void  removeLayer(int i);                 // no la 0
-            void  moveLayer(int from, int to);        // ni desde ni hacia la 0
-            void  setLayerWeight(int i, float w);     // acotado a [0, 1]
-            float layerWeight(int i) const;           // la 0 siempre 1
+            void  moveLayer(int from, int to);        // neither from nor to 0
+            void  setLayerWeight(int i, float w);     // clamped to [0, 1]
+            float layerWeight(int i) const;           // 0 is always 1
             void  setLayerMode(int i, LayerMode m);
 
-            // La restricción con ese nombre, null si no hay.
+            // The constraint with that name, null if there is none.
             IkConstraint*       ikPorNombre(const std::string& n);
             const IkConstraint* ikPorNombre(const std::string& n) const;
 
-            // Blend 2D: hay blend (stateBlends) y blendParamY es Float declarado.
+            // 2D blend: there is a blend (stateBlends) and blendParamY is a declared Float.
             bool stateBlends2D(int stateIdx, int layer = 0) const;
-            // Las muestras de un estado con SU reloj: 1 o 2 en 1D (la pareja de
-            // siempre, peso 0 incluido) y hasta 3 en 2D. Pesos que suman 1.
+            // The samples of a state with ITS clock: 1 or 2 in 1D (the usual
+            // pair, weight 0 included) and up to 3 in 2D. Weights that sum to 1.
             struct BlendSample { int clip; float time; float weight; float duration; };
             int stateBlendSamples(int stateIdx, float animTime, BlendSample out[3], int layer = 0) const;
 
         private:
-            // Deja el playhead en el estado de entrada y corta cualquier
-            // cross-fade, SIN tocar bools/triggers/ints/floats. Es la mitad de
-            // reset() que sí es segura a mitad de partida.
+            // Leaves the playhead at the entry state and cuts any
+            // cross-fade, WITHOUT touching bools/triggers/ints/floats. It is the half of
+            // reset() that is safe in the middle of a game.
             void resetPlayback();
 
             bool conditionsMet(const Transition& t, int layer = 0) const;
-            // Único punto de entrada a un estado: fija el actual y pone a 0 su
-            // reloj, su finished y el reloj normalizado acumulado. Todo camino
-            // que reinicie el playhead pasa por aquí, para que el reloj del
-            // exit time no quede colgado en el que se olvide.
+            // Single entry point into a state: sets the current one and zeroes its
+            // clock, its finished and the accumulated normalized clock. Every path that
+            // restarts the playhead goes through here, so that the exit time clock
+            // is not left dangling in the one that gets forgotten.
             void enterState(int idx, int layer = 0);
-            // Arranca el paso al estado idx: con duration > 0 el actual pasa a
-            // apagarse, si no se corta cualquier mezcla; después enterState.
-            // Lo comparten una transición del grafo, play y crossFade.
+            // Starts the move to state idx: with duration > 0 the current one starts
+            // being turned off, otherwise any blend is cut; then enterState.
+            // Shared by a graph transition, play and crossFade.
             void startTransitionTo(int idx, float duration, int layer = 0);
-            // Índice del estado con ese nombre, -1 si no hay.
+            // Index of the state with that name, -1 if there is none.
             int  stateIndexByName(const std::string& name, int layer = 0) const;
-            // Si la transición puede disparar este frame. n0/n1: tiempo
-            // normalizado acumulado del estado actual antes y después de
-            // avanzar el reloj. hasDuration false = clip de duración 0 o sin
-            // resolver, donde el exit time cuenta como alcanzado.
+            // Whether the transition can fire this frame. n0/n1: accumulated normalized
+            // time of the current state before and after advancing
+            // the clock. hasDuration false = clip of duration 0 or unresolved,
+            // where the exit time counts as reached.
             bool transitionReady(const Transition& t, double n0, double n1, bool hasDuration, int layer = 0) const;
-            // La regla del exit time, aislada para que se lea en un sitio.
+            // The exit time rule, isolated so that it is read in one place.
             static bool exitTimeCrossed(double n0, double n1, float exitTime);
-            // Avanza el reloj de un estado dt segundos, aplicando su loop. Lo
-            // usan el estado actual y el que se apaga durante un cross-fade:
-            // los dos tienen su propio ticksPerSecond y su propio loop, y
-            // duplicar el bucle dejaría que se desincronizaran. finished solo
-            // lo escribe el del estado actual (al previo ya no le importa).
+            // Advances the clock of a state dt seconds, applying its loop. Used
+            // by the current state and the one being turned off during a cross-fade:
+            // both have their own ticksPerSecond and their own loop, and
+            // duplicating the loop would let them get out of sync. finished is only
+            // written by the current state's one (the previous one no longer cares).
             static void advanceClock(const State& st, float rate, float& time, bool* finished, float dt);
-            // Empuja a m_firedEvents los eventos de st cuyo instante cae en
-            // [ticks0, ticks1), una vez por ciclo cruzado (solo el primero
-            // sin loop), con tope de kMaxEventCyclesPerUpdate por evento.
+            // Pushes to m_firedEvents the events of st whose instant falls in
+            // [ticks0, ticks1), once per crossed cycle (only the first
+            // without loop), with a cap of kMaxEventCyclesPerUpdate per event.
             void collectEvents(const State& st, double ticks0, double ticks1);
-            // Rellena m_rootMotionSamples con lo avanzado en este update por el
-            // estado actual (y el que se apaga, en un fade). ticks0 y
-            // prevTicks0: los relojes acumulados ANTES de avanzar.
+            // Fills m_rootMotionSamples with what the current state advanced in this
+            // update (and the one being turned off, in a fade). ticks0 and
+            // prevTicks0: the accumulated clocks BEFORE advancing.
             void collectRootMotion(double ticks0, double prevTicks0);
-            // El update de UNA capa. No consume triggers: apunta la transición
-            // elegida en `consumir`, y update los consume tras todas las capas,
-            // así un mismo trigger puede mover varias capas en el mismo frame.
-            // Lo de applyGraph que es de UNA capa: sustituye su grafo y recoloca
-            // su playhead por editorId (ver applyGraph).
+            // The update of ONE layer. It does not consume triggers: it records the chosen
+            // transition in `consumir`, and update consumes them after all the layers,
+            // so the same trigger can move several layers in the same frame.
+            // The part of applyGraph that belongs to ONE layer: it replaces its graph and repositions
+            // its playhead by editorId (see applyGraph).
             void applyLayerGraph(int li, const std::vector<State>& states,
                                  const std::vector<Transition>& transitions, int entryState);
             void updateLayer(int li, float dt, bool evaluateTransitions,
                              std::vector<const Transition*>& consumir);
-            // Muestras de UNA capa (su estado actual y, en un fade, el que se
-            // apaga), SIN el peso de la capa. propertySamples es la suma de
-            // todas las capas y applyCurves necesita la de una sola: el reparto
-            // vive en un único sitio para que no haya dos que mantener.
+            // Samples of ONE layer (its current state and, in a fade, the one being
+            // turned off), WITHOUT the layer weight. propertySamples is the sum of
+            // all the layers and applyCurves needs that of a single one: the split
+            // lives in a single place so that there are not two to maintain.
             int  layerPropertySamples(int li, PropertySampleRef* out, int max) const;
-            // Escribe los parámetros de las pistas con destino Parameter de esa
-            // capa. Se llama desde updateLayer ANTES de evaluar las
-            // transiciones: el valor de este frame condiciona este frame.
+            // Writes the parameters of the tracks with Parameter destination of that
+            // layer. Called from updateLayer BEFORE evaluating the
+            // transitions: this frame's value conditions this frame.
             void applyCurves(int li);
             static constexpr int kMaxEventCyclesPerUpdate = 16;
-            // Ticks por segundo efectivos del estado: ticksPerSecond x speed x
-            // parámetro multiplicador, nunca negativo.
+            // Effective ticks per second of the state: ticksPerSecond x speed x
+            // multiplier parameter, never negative.
             float stateRate(const State& st) const;
-            // true si hay al menos una entrada con clip RESUELTO y blendParam
-            // es un Float declarado: solo entonces hay mezcla que hacer.
+            // true if there is at least one entry with a RESOLVED clip and blendParam
+            // is a declared Float: only then is there a blend to do.
             bool stateBlends(int stateIdx, int layer = 0) const;
-            // Los dos clips vecinos del parámetro, sus tiempos y el peso.
+            // The two neighboring clips of the parameter, their times and the weight.
             struct BlendPair { int clipA; float timeA; int clipB; float timeB; float weight;
-                               float durA = 0.0f; float durB = 0.0f; };   // duración de cada clip, ticks
+                               float durA = 0.0f; float durB = 0.0f; };   // duration of each clip, ticks
             BlendPair stateBlendPair(int stateIdx, float animTime, int layer = 0) const;
-            // La pareja del blend 1D (los dos vecinos del parámetro).
+            // The pair of the 1D blend (the two neighbors of the parameter).
             BlendPair stateBlendPair1D(int stateIdx, float animTime, int layer = 0) const;
-            // Estático porque no toca estado: aísla los cuatro comparadores en
-            // un sitio y sirve tanto a Int como a Float.
+            // Static because it touches no state: it isolates the four comparators in
+            // one place and serves both Int and Float.
             template <typename T>
             static bool evalCompare(T value, Compare op, T threshold)
             {
@@ -644,9 +643,9 @@ namespace DonTopo
             bool isTriggerSet(const std::string& n) const;
             bool hasParam(const std::string& n, ParamType type) const;
 
-            // Capas: la 0 es la base (siempre override, peso 1, sin máscara).
-            // Cada una lleva su grafo y su estado de ejecución; parámetros,
-            // velocidad, eventos y root motion son del componente.
+            // Layers: 0 is the base (always override, weight 1, no mask).
+            // Each one carries its graph and its execution state; parameters,
+            // speed, events and root motion belong to the component.
             std::vector<Layer>      m_layers = std::vector<Layer>(1);
             std::vector<Parameter>  m_parameters;
             std::vector<IkConstraint> m_ik;
@@ -659,25 +658,25 @@ namespace DonTopo
             std::unordered_map<std::string, int>    m_ints;
             std::unordered_map<std::string, float>  m_floats;
 
-            // Siguiente editorId a repartir en addState, único en TODAS las
-            // capas. Nunca se resetea ni se reutiliza un id liberado por
-            // removeState: mientras el panel esté abierto en el mismo frame de
-            // un borrado, un id repetido volvería a liar la identidad visual
-            // que este campo existe para evitar.
+            // Next editorId to hand out in addState, unique across ALL the
+            // layers. It is never reset nor is an id freed by
+            // removeState reused: while the panel is open in the same frame as
+            // a deletion, a repeated id would bring back the visual identity mix-up
+            // that this field exists to avoid.
             int                     m_nextEditorId = 0;
 
-            // Capa i acotada a las que hay: un índice fuera de rango cae en la
-            // más cercana en vez de leer fuera (los públicos filtran antes).
+            // Layer i clamped to those that exist: an out-of-range index falls to the
+            // nearest one instead of reading out of bounds (the public ones filter first).
             Layer&       lay(int i)       { return m_layers[(size_t)std::clamp(i, 0, (int)m_layers.size() - 1)]; }
             const Layer& lay(int i) const { return m_layers[(size_t)std::clamp(i, 0, (int)m_layers.size() - 1)]; }
     };
 
-    // Etiqueta legible de un tipo de parámetro, compartida por AnimatorPanel y
-    // PropertiesPanel. Vive aquí y no en el editor porque con cuatro tipos el
-    // ternario "trigger : bool" que ambos duplicaban deja de funcionar, y dos
-    // copias de un switch se desincronizan al añadir el quinto tipo.
+    // Readable label of a parameter type, shared by AnimatorPanel and
+    // PropertiesPanel. It lives here and not in the editor because with four types the
+    // "trigger : bool" ternary that both duplicated stops working, and two
+    // copies of a switch get out of sync when the fifth type is added.
     //
-    // NO reutiliza (ni la reutiliza) paramTypeToStr de Scene.cpp: aquello es el
-    // formato del .scene y no puede cambiar al retocar un texto de la UI.
+    // It does NOT reuse (nor is it reused by) paramTypeToStr of Scene.cpp: that is the
+    // .scene format and cannot change when tweaking a UI text.
     const char* paramTypeLabel(AnimatorComponent::ParamType t);
 }

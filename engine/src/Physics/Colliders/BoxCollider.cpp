@@ -12,20 +12,20 @@
 using namespace physx;
 
 namespace {
-    // Mínimo positivo del medio-tamaño: PhysX rechaza una PxBoxGeometry
-    // degenerada, y con escala 0 en un eje el producto daría exactamente eso.
+    // Positive minimum of the half-size: PhysX rejects a degenerate PxBoxGeometry,
+    // and with scale 0 on an axis the product would give exactly that.
     constexpr float kMinHalfExtent = 1e-4f;
 
-    // abs(): una escala negativa es un espejo, no adelgaza la caja.
+    // abs(): a negative scale is a mirror, it does not thin the box.
     float scaledExtent(float halfExtent, float scale)
     {
         const float v = halfExtent * std::fabs(scale);
         return v > kMinHalfExtent ? v : kMinHalfExtent;
     }
 
-    // Tolerancia, no igualdad: glm::decompose devuelve 1±1e-7 en matrices con
-    // rotación, y ese ruido no debe reescribir la geometría de una escena sin
-    // escalar (con escala 1 no se llama nunca a setGeometry).
+    // Tolerance, not equality: glm::decompose returns 1±1e-7 on matrices with
+    // rotation, and that noise must not rewrite the geometry of an unscaled scene
+    // (with scale 1 setGeometry is never called).
     bool sameScale(const glm::vec3& a, const glm::vec3& b)
     {
         return std::fabs(a.x - b.x) < 1e-6f
@@ -54,8 +54,8 @@ BoxCollider::BoxCollider(void* actor, void* shape, const glm::vec3& halfExtents,
 BoxCollider::~BoxCollider()
 {
 #ifdef DT_PHYSX_ENABLED
-    // release() vía base PxActor: funciona tanto para PxRigidStatic como
-    // PxRigidDynamic (el tipo concreto depende de si hay Rigidbody).
+    // release() through the PxActor base: works for both PxRigidStatic and
+    // PxRigidDynamic (the concrete type depends on whether there is a Rigidbody).
     if (m_actor) static_cast<PxActor*>(m_actor)->release();
 #endif
 }
@@ -131,7 +131,7 @@ glm::mat4 BoxCollider::getWorldTransform() const
     glm::quat rotation(pose.q.w, pose.q.x, pose.q.y, pose.q.z);
     glm::mat4 rotationMat = glm::mat4_cast(rotation);
 
-    // Con interpolación apagada (default) devuelve la pose cruda del actor.
+    // With interpolation off (default) it returns the raw actor pose.
     return blendWithPreviousPose(translation * rotationMat);
 #else
     return glm::mat4(1.0f);
@@ -147,11 +147,11 @@ void BoxCollider::syncTransform(const glm::mat4& worldTransform)
     glm::vec4 perspective;
     glm::quat rotation;
     const PxTransform pose = poseFromWorld(worldTransform, &scale);
-    // La escala no cabe en la PxTransform: se hornea en la geometría. No-op si
-    // no cambió desde la última vez (el caso normal, escala 1).
+    // The scale does not fit in the PxTransform: it is baked into the geometry. No-op if
+    // it did not change since last time (the normal case, scale 1).
     setWorldScale(scale);
-    // setKinematicTarget solo existe en PxRigidDynamic kinematic; para static
-    // (o dynamic no-kinematic) cae a setGlobalPose.
+    // setKinematicTarget only exists on a kinematic PxRigidDynamic; for static
+    // (or non-kinematic dynamic) it falls back to setGlobalPose.
     auto* dyn = static_cast<PxRigidActor*>(m_actor)->is<PxRigidDynamic>();
     if (dyn && (dyn->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC))
         dyn->setKinematicTarget(pose);
@@ -172,13 +172,13 @@ void BoxCollider::teleport(const glm::mat4& worldTransform)
     glm::quat rotation;
     const PxTransform pose = poseFromWorld(worldTransform, &scale);
 
-    setWorldScale(scale); // ver nota en syncTransform
+    setWorldScale(scale); // see note in syncTransform
 
     auto* actor = static_cast<PxRigidActor*>(m_actor);
     actor->setGlobalPose(pose);
-    // Reset de velocidad solo tiene sentido en un cuerpo dinámico real
-    // (no static, no kinematic): PhysX prohíbe set{Linear,Angular}Velocity
-    // sobre kinematic y PxRigidStatic ni siquiera las expone.
+    // Velocity reset only makes sense on a real dynamic body
+    // (not static, not kinematic): PhysX forbids set{Linear,Angular}Velocity
+    // on kinematic and PxRigidStatic does not even expose them.
     if (auto* dyn = actor->is<PxRigidDynamic>())
         if (!(dyn->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC))
         {

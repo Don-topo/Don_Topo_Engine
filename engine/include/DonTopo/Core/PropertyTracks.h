@@ -6,16 +6,16 @@ namespace DonTopo
 {
     class GameObject;
 
-    // Clips de propiedades (fila 15 / C14 del audit de animación): lo que
-    // permite animar con el Animator un objeto SIN esqueleto — una puerta, una
-    // plataforma, una luz que parpadea, un material que se enciende.
+    // Property clips (row 15 / C14 of the animation audit): what
+    // makes it possible to animate with the Animator an object WITHOUT a skeleton — a door, a
+    // platform, a blinking light, a material that lights up.
     //
-    // Cada pista anima UN escalar. Un color o una posición son tres pistas: así
-    // la tabla es un float por propiedad (sin variantes de tipo) y se puede
-    // animar solo la Y de una puerta sin tocar su X y su Z.
+    // Each track animates ONE scalar. A color or a position is three tracks: this way
+    // the table is one float per property (no type variants) and one can
+    // animate only the Y of a door without touching its X and Z.
     enum class PropertyId
     {
-        PositionX, PositionY, PositionZ,       // local, unidades de escena
+        PositionX, PositionY, PositionZ,       // local, scene units
         RotationX, RotationY, RotationZ,       // local, GRADOS (euler XYZ)
         ScaleX, ScaleY, ScaleZ,                // local
         LightColorR, LightColorG, LightColorB,
@@ -24,12 +24,12 @@ namespace DonTopo
         Count
     };
 
-    struct PropertyKey { float time = 0.0f; float value = 0.0f; };   // time en SEGUNDOS
+    struct PropertyKey { float time = 0.0f; float value = 0.0f; };   // time in SECONDS
 
-    // A dónde va el valor de la pista. Property: una propiedad del GameObject
-    // (una puerta, una luz, un material). Parameter: un parámetro Float del
-    // Animator —una "curva de clip"—, que sirve para que el propio tiempo de la
-    // animación condicione la máquina de estados o alimente speedParam.
+    // Where the track value goes. Property: a GameObject property
+    // (a door, a light, a material). Parameter: a Float parameter of the
+    // Animator —a "clip curve"—, which lets the animation's own time
+    // drive the state machine or feed speedParam.
     enum class TrackTarget { Property, Parameter };
 
     struct PropertyTrack
@@ -38,69 +38,69 @@ namespace DonTopo
         PropertyId               property = PropertyId::PositionX;   // si target == Property
         std::string              parameterName;                      // si target == Parameter
         std::vector<PropertyKey> keys;
-        // Property: el objeto tiene el componente que hace falta. Parameter:
-        // hay un parámetro Float con ese nombre. Lo fija
-        // AnimatorComponent::bindProperties; sin él, la pista no se aplica.
+        // Property: the object has the component that is needed. Parameter:
+        // there is a Float parameter with that name. Set by
+        // AnimatorComponent::bindProperties; without it, the track is not applied.
         bool                     resolved = false;
     };
 
     struct PropertyClip
     {
         std::string                name;
-        float                      duration = 1.0f;   // segundos, > 0
+        float                      duration = 1.0f;   // seconds, > 0
         std::vector<PropertyTrack> tracks;
     };
 
-    // Nombre estable de la propiedad: es lo que se guarda en el .scene y lo que
-    // se ve en el panel. propertyFromName devuelve Count si no existe.
+    // Stable name of the property: it is what is saved in the .scene and what is
+    // shown in the panel. propertyFromName returns Count if it does not exist.
     const char* propertyName(PropertyId id);
     PropertyId  propertyFromName(const std::string& n);
     bool        propertyIsRotation(PropertyId id);
 
-    // Valor de la pista en `tiempo` (segundos): lineal entre las dos keys que
-    // lo rodean; fuera del rango, la key del extremo; sin keys, `actual`.
+    // Value of the track at `tiempo` (seconds): linear between the two keys that
+    // surround it; outside the range, the end key; without keys, `actual`.
     float samplePropertyTrack(const PropertyTrack& t, float tiempo, float actual);
 
-    // Rango vertical con el que dibujar una pista: cubre sus keys y los valores
-    // de `extra` (los umbrales de las condiciones), con un margen. Una pista
-    // plana —o sin keys— no puede dar un rango de altura cero, o la línea
-    // saldría pegada al borde: se abre a ±0,5.
+    // Vertical range to draw a track with: covers its keys and the values
+    // of `extra` (the condition thresholds), with a margin. A flat track
+    // —or one without keys— cannot give a zero height range, or the line
+    // would be stuck to the edge: it opens to ±0.5.
     void curveRange(const PropertyTrack& t, const float* extra, int nExtra, float& lo, float& hi);
 
-    // Conversión entre el lienzo de la curva y los datos de la pista, para poder
-    // arrastrar las keys con el ratón. Vive aquí, y no en el panel, porque es
-    // donde caben los off-by-one y es lo único de ese gesto que se puede probar
-    // sin ventana.
+    // Conversion between the curve canvas and the track data, so that keys can be
+    // dragged with the mouse. It lives here, and not in the panel, because it is
+    // where the off-by-ones fit and it is the only part of that gesture that can be tested
+    // without a window.
     //
-    // `x0`/`x1` e `y0`/`y1` son los bordes del rectángulo en pantalla (y crece
-    // hacia ABAJO, al revés que el valor). El tiempo sale acotado a
-    // [0, duracion]; el valor no se acota, porque el rango del dibujo se ajusta
-    // a lo que haya.
+    // `x0`/`x1` and `y0`/`y1` are the edges of the on-screen rectangle (y grows
+    // DOWNWARD, opposite to the value). The time comes out bounded to
+    // [0, duracion]; the value is not bounded, because the drawing range adjusts
+    // to whatever there is.
     struct CurvePoint { float time = 0.0f; float value = 0.0f; };
     CurvePoint canvasToCurve(float x, float y, float x0, float x1, float y0, float y1,
                              float duracion, float lo, float hi);
-    // La inversa: dónde cae en pantalla una key. Con el tiempo fuera del clip
-    // devuelve el borde, que es donde se dibuja.
+    // The inverse: where a key lands on screen. With a time outside the clip
+    // it returns the edge, which is where it is drawn.
     void curveToCanvas(float time, float value, float x0, float x1, float y0, float y1,
                        float duracion, float lo, float hi, float& x, float& y);
 
-    // Una aportación a una propiedad: su valor y el peso con el que entra (el
-    // del cross-fade por el de su capa).
+    // A contribution to a property: its value and the weight with which it enters (that
+    // of the cross-fade times that of its layer).
     struct PropertyContribution { float value = 0.0f; float weight = 0.0f; };
-    // Mezcla de varias aportaciones a la MISMA propiedad. Las rotaciones van
-    // por el camino corto: 350 y 10 dan 0, no 180.
+    // Blend of several contributions to the SAME property. Rotations go
+    // the short way: 350 and 10 give 0, not 180.
     float blendPropertyValues(PropertyId id, const PropertyContribution* c, int n);
-    // Media ponderada a secas. Es lo que usa una curva: un parámetro no es un
-    // ángulo, así que no hay camino corto que respetar.
+    // Plain weighted average. It is what a curve uses: a parameter is not an
+    // angle, so there is no short way to respect.
     float blendScalarValues(const PropertyContribution* c, int n);
 
-    // --- Acceso a las propiedades de un GameObject ---
-    // El objeto tiene lo que hace falta para esta propiedad (la luz, sobre
-    // todo). Una pista sin ello se avisa al resolver y no se aplica.
+    // --- Access to the properties of a GameObject ---
+    // The object has what is needed for this property (the light, above
+    // all). A track without it is warned about on resolve and not applied.
     bool  propertyAvailable(const GameObject& go, PropertyId id);
     float propertyGet(const GameObject& go, PropertyId id);
-    // Escribe SOLO las propiedades marcadas en `escritas` (un bool y un float
-    // por PropertyId): lo que nadie anima no se toca. El transform se
-    // descompone y se recompone UNA vez, no una por propiedad.
+    // Writes ONLY the properties marked in `escritas` (a bool and a float
+    // per PropertyId): what nobody animates is not touched. The transform is
+    // decomposed and recomposed ONCE, not once per property.
     void  propertyApply(GameObject& go, const bool* escritas, const float* valores);
 }

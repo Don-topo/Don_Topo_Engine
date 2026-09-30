@@ -1,6 +1,6 @@
-// Runtime del juego: carga un .scene y lo ejecuta. Es el wiring de
-// sandbox/src/main.cpp menos todo lo del editor — sin ImGui, sin gizmos de
-// depuración, sin hot reload y en Play desde el frame 0.
+// Game runtime: loads a .scene and runs it. It is the wiring of
+// sandbox/src/main.cpp minus everything from the editor — no ImGui, no debug
+// gizmos, no hot reload and in Play from frame 0.
 #include "DonTopo/Core/Window.h"
 #include "DonTopo/Core/Input.h"
 #include "DonTopo/Core/GameObject.h"
@@ -46,9 +46,9 @@
 
 namespace {
 
-// Rueda del ratón acumulada entre frames. GLFW solo la da por callback (no hay
-// "estado actual" que consultar), así que se suma aquí y el bucle la consume:
-// leerla sin vaciarla dejaría el scroll pegado para siempre.
+// Mouse wheel accumulated between frames. GLFW only gives it through a callback (there is no
+// "current state" to query), so it is summed here and the loop consumes it:
+// reading it without emptying it would leave the scroll stuck forever.
 float g_uiScroll = 0.0f;
 
 void onScroll(GLFWwindow*, double, double yoffset)
@@ -56,41 +56,41 @@ void onScroll(GLFWwindow*, double, double yoffset)
     g_uiScroll += (float)yoffset;
 }
 
-// Lo mismo con los caracteres: GLFW solo los da por callback. En el runtime no
-// hay editor con el que competir, asi que van siempre al canvas.
+// The same with characters: GLFW only gives them through a callback. In the runtime there is
+// no editor to compete with, so they always go to the canvas.
 void onChar(GLFWwindow*, unsigned int codepoint)
 {
     DonTopo::pushUiInputChar(codepoint);
 }
 
-// Directorio del ejecutable. El paquete exportado usa rutas relativas
-// (assets/, shaders/, Scripts/), así que el runtime fija su CWD aquí: sin
-// esto, lanzar el juego desde otra carpeta no encontraría nada. Ojo: esto
-// pasa ANTES de leer argv[1], así que un argv[1] relativo (p.ej.
-// "..\niveles\l2.scene") también se resuelve contra el directorio del
-// ejecutable, no contra el cwd de quien lo lanzó — deliberado, mismo motivo.
+// Executable directory. The exported package uses relative paths
+// (assets/, shaders/, Scripts/), so the runtime sets its CWD here: without
+// this, launching the game from another folder would find nothing. Note: this
+// happens BEFORE reading argv[1], so a relative argv[1] (e.g.
+// "..\niveles\l2.scene") is also resolved against the executable
+// directory, not against the cwd of whoever launched it — deliberate, same reason.
 std::filesystem::path executableDir()
 {
     return DonTopo::platform::executableDir();
 }
 
-// Manda std::cout y std::cerr a game.log, junto al ejecutable. El runtime se
-// enlaza como subsystem WINDOWS (runtime/CMakeLists.txt) para no abrir una
-// consola detras del juego, y sin consola esos flujos no van a ninguna parte:
-// los mensajes del motor y los print() de Lua se perderian en silencio.
+// Sends std::cout and std::cerr to game.log, next to the executable. The runtime is
+// linked as the WINDOWS subsystem (runtime/CMakeLists.txt) so as not to open a
+// console behind the game, and without a console those streams go nowhere:
+// the engine messages and Lua print() calls would be lost silently.
 //
-// Se cambia el rdbuf en vez de reabrir stdout con freopen: sin consola el CRT
-// de MSVC no tiene stream que reabrir (_fileno(stdout) == -2) y freopen_s falla
-// devolviendo error sin llegar a crear el fichero — probado, no es teoria.
-// Cambiar el rdbuf no toca los descriptores del sistema, asi que funciona igual
-// con consola y sin ella. Lo que escriba una libreria de terceros por printf
-// (Assimp, PhysX) sigue sin capturarse; el motor solo usa cout/cerr.
+// The rdbuf is swapped instead of reopening stdout with freopen: without a console the MSVC CRT
+// has no stream to reopen (_fileno(stdout) == -2) and freopen_s fails
+// returning an error without creating the file — tested, it is not theory.
+// Swapping the rdbuf does not touch the system descriptors, so it works the same
+// with or without a console. What a third-party library writes through printf
+// (Assimp, PhysX) is still not captured; the engine only uses cout/cerr.
 //
-// El ofstream se filtra a proposito: cout/cerr guardan su rdbuf, y destruirlo
-// al salir dejaria esos punteros colgando durante la destruccion de los objetos
-// estaticos, donde todavia puede haber logs. unitbuf hace que cada << llegue al
-// disco, asi que un crash no se lleva por delante las ultimas lineas — que son
-// justo las que interesan.
+// The ofstream is leaked on purpose: cout/cerr keep their rdbuf, and destroying it
+// on exit would leave those pointers dangling during the destruction of static
+// objects, where there may still be logs. unitbuf makes every << reach the
+// disk, so a crash does not take the last lines with it — which are
+// precisely the ones of interest.
 void redirectStdioToLogFile()
 {
     auto* logStream = new std::ofstream("game.log", std::ios::out | std::ios::trunc);
@@ -105,9 +105,9 @@ void redirectStdioToLogFile()
     std::cerr.setf(std::ios::unitbuf);
 }
 
-// Errores que impiden jugar: sin consola, un mensaje por stderr solo acaba en
-// game.log y el usuario ve la ventana cerrarse sin explicacion. Va tambien al
-// log, que es donde queda el rastro despues de cerrar el dialogo.
+// Errors that prevent playing: without a console, a message on stderr only ends up in
+// game.log and the user sees the window close without explanation. It also goes to the
+// log, which is where the trail remains after the dialog is closed.
 void reportFatal(const std::string& msg)
 {
     std::cerr << msg << std::endl;
@@ -131,19 +131,19 @@ int main(int argc, char** argv)
         const std::filesystem::path exeDir = executableDir();
         std::error_code ec;
         std::filesystem::current_path(exeDir, ec);
-        // Despues del current_path: game.log se crea junto al ejecutable, no en
-        // el directorio desde el que se lanzo el juego.
+        // After current_path: game.log is created next to the executable, not in
+        // the directory from which the game was launched.
         redirectStdioToLogFile();
 
         const std::string scenePath = (argc > 1) ? argv[1] : "game.scene";
 
-        // Backend de render elegido al exportar. Vive en game.cfg y no en
-        // game.scene: es configuracion de arranque, no parte de la escena.
-        // Un paquete sin game.cfg —exportado antes de que existiera— arranca
-        // con Vulkan, que es lo que hacia siempre.
+        // Render backend chosen at export. It lives in game.cfg and not in
+        // game.scene: it is startup configuration, not part of the scene.
+        // A package without game.cfg —exported before it existed— starts
+        // with Vulkan, which is what it always did.
         //
-        // El resultado sale del bloque: es lo que decide que backend se
-        // construye mas abajo.
+        // The result leaves the block: it is what decides which backend is
+        // built further below.
         DonTopo::RenderBackend requestedBackend = DonTopo::RenderBackend::Vulkan;
         {
             DonTopo::RenderBackend requested = DonTopo::RenderBackend::Vulkan;
@@ -177,32 +177,32 @@ int main(int argc, char** argv)
             }
 
             const DonTopo::BackendSelection sel = DonTopo::resolveRenderBackend(requested);
-            // std::cout y no printf: el runtime va sin consola y lo que
-            // redirige a game.log son los streams de C++, asi que un printf se
-            // perderia sin dejar rastro.
+            // std::cout and not printf: the runtime runs without a console and what
+            // is redirected to game.log are the C++ streams, so a printf would be
+            // lost without a trace.
             if (!sel.message.empty())
                 std::cout << sel.message << std::endl;
 
-            // Lo que de verdad se puede arrancar, no lo que se pidio:
-            // resolveRenderBackend ya cayo a Vulkan si DirectX 12 no estaba.
+            // What can really be started, not what was requested:
+            // resolveRenderBackend already fell back to Vulkan if DirectX 12 was not there.
             requestedBackend = sel.backend;
         }
 
         DonTopo::Window window;
-        // Oculta de entrada: se enseña tras presentar el primer frame (el del
-        // splash). Sin esto, la ventana se hacia visible aqui y Windows pintaba
-        // el area de cliente en BLANCO durante los ~520ms que tarda
-        // initPresentation en levantar Vulkan — un flash blanco antes del logo.
+        // Hidden from the start: it is shown after presenting the first frame (the splash's).
+        // Without this, the window became visible here and Windows painted
+        // the client area WHITE during the ~520ms that initPresentation takes
+        // to bring up Vulkan — a white flash before the logo.
         window.init(1280, 720, exeDir.stem().string().c_str(), nullptr, /*showOnInit=*/false);
         DonTopo::Input::init(window.getNativeWindow());
-        // La rueda del ratón para la UI. Se registra DESPUÉS de Input::init por
-        // si algún día este registra el suyo: el último gana, y aquí el dueño
-        // de la rueda es el canvas.
+        // The mouse wheel for the UI. Registered AFTER Input::init in
+        // case someday it registers its own: the last one wins, and here the owner
+        // of the wheel is the canvas.
         glfwSetScrollCallback(window.getNativeWindow(), onScroll);
         glfwSetCharCallback(window.getNativeWindow(), onChar);
-        // El backend, construido segun lo que pidio el proyecto. A partir de
-        // aqui todo el runtime habla con la interfaz: quien decide cual es, es
-        // esta linea y nadie mas.
+        // The backend, built according to what the project asked for. From
+        // here on the whole runtime talks to the interface: who decides which one it is
+        // is this line and nobody else.
         std::unique_ptr<DonTopo::EditorRenderer> rendererOwned;
 #ifdef DT_D3D12_ENABLED
         if (requestedBackend == DonTopo::RenderBackend::D3D12)
@@ -212,10 +212,10 @@ int main(int argc, char** argv)
             rendererOwned = std::make_unique<DonTopo::Renderer>();
         DonTopo::EditorRenderer& renderer = *rendererOwned;
 
-        // Orden de declaración calcado de sandbox/src/main.cpp:38-55, y por
-        // los mismos motivos: los ScriptComponent guardan sol::table cuyo
-        // destructor toca la VM Lua, y los colliders liberan actores sobre la
-        // PxScene. Destruir en otro orden revienta al salir.
+        // Declaration order copied from sandbox/src/main.cpp:38-55, and for
+        // the same reasons: ScriptComponents hold sol::table whose
+        // destructor touches the Lua VM, and colliders release actors on the
+        // PxScene. Destroying in another order blows up on exit.
         DonTopo::PhysicsManager physics;
         physics.init();
 
@@ -226,36 +226,36 @@ int main(int argc, char** argv)
 
         DonTopo::Scene scene;
 
-        // La spec dice "el editor la fija al abrir proyecto y el runtime a su
-        // directorio de trabajo" (ver EditorUI::setProject/setScene para el
-        // lado del editor). Hasta ahora esto último no pasaba: funcionaba de
-        // casualidad porque las rutas dentro del paquete se guardan relativas
-        // y dos relativizaciones independientes (la del editor al exportar, la
-        // de toStoredPath al cargar sin raíz) producen la misma cadena. Fijarla
-        // aquí la vuelve una garantía explícita, no una coincidencia de
-        // formato de ruta. exeDir es el directorio de trabajo real del
-        // runtime desde la línea 146 (current_path ya apunta ahí, antes
-        // incluso de leer argv[1]) y es donde exportGame coloca assets/,
-        // shaders/, Scripts/, game.scene y game.cfg — la misma raíz que
-        // resolvería toStoredPath si esto se dejara sin fijar.
+        // The spec says "the editor sets it when opening a project and the runtime to its
+        // working directory" (see EditorUI::setProject/setScene for the
+        // editor side). Until now the latter did not happen: it worked by
+        // chance because the paths inside the package are stored relative
+        // and two independent relativizations (the editor's on export, the
+        // one of toStoredPath on loading without a root) produce the same string. Setting it
+        // here turns it into an explicit guarantee, not a coincidence of
+        // path format. exeDir is the real working directory of the
+        // runtime since line 146 (current_path already points there, even
+        // before reading argv[1]) and it is where exportGame places assets/,
+        // shaders/, Scripts/, game.scene and game.cfg — the same root that
+        // toStoredPath would resolve if this were left unset.
         scene.setAssetRoot(exeDir.string());
 
-        // Antes de initPresentation(): initImGui y createOffscreenImages leen
-        // el flag durante esa inicialización. Adelantado respecto al orden
-        // original porque ahora initPresentation corre ANTES de scene.load (ver
-        // abajo), y setHeadless debe precederlo igualmente.
+        // Before initPresentation(): initImGui and createOffscreenImages read
+        // the flag during that initialization. Moved earlier relative to the original order
+        // because now initPresentation runs BEFORE scene.load (see
+        // below), and setHeadless must precede it all the same.
         renderer.setHeadless(true);
 
-        // Pool de hilos + loader asíncrono. El JobSystem se declara aquí, ANTES
-        // que nada que un job pudiera capturar por referencia, y se apaga a mano
-        // antes del teardown de la escena (ver el final): un worker vivo tocando
-        // la escena a medio destruir sería un crash al salir.
+        // Thread pool + asynchronous loader. The JobSystem is declared here, BEFORE
+        // anything a job could capture by reference, and it is shut down by hand
+        // before the scene teardown (see the end): a live worker touching
+        // a half-destroyed scene would be a crash on exit.
         DonTopo::JobSystem jobSystem;
         jobSystem.start();
         DonTopo::AsyncAssetLoader assetLoader(jobSystem);
 
-        // Resuelve el logo: en un paquete exportado esta junto al .exe como
-        // splash.png; en dev (sin exportar) se cae a assets/MainEngineLogo.png.
+        // Resolves the logo: in an exported package it is next to the .exe as
+        // splash.png; in dev (not exported) it falls back to assets/MainEngineLogo.png.
         std::string logoPath = "splash.png";
         {
             std::error_code lec;
@@ -263,11 +263,11 @@ int main(int argc, char** argv)
                 logoPath = "assets/MainEngineLogo.png";
         }
 
-        // initPresentation + splash ANTES de scene.load: ninguno depende de la
-        // escena (initPresentation es la fase 1 "poder presentar"; el auto-fit y
-        // los recursos que necesitan meshes viven en initSceneResources, fase 2,
-        // que sigue yendo DESPUÉS de la carga). Así el splash ya está en pantalla
-        // mientras se cargan los assets y puede mostrar progreso real.
+        // initPresentation + splash BEFORE scene.load: neither depends on the
+        // scene (initPresentation is phase 1 "be able to present"; the auto-fit and
+        // the resources that need meshes live in initSceneResources, phase 2,
+        // which still goes AFTER loading). This way the splash is already on screen
+        // while the assets load and can show real progress.
         renderer.initPresentation(window);
 
         const auto splashStart = std::chrono::high_resolution_clock::now();
@@ -284,16 +284,16 @@ int main(int argc, char** argv)
             renderer.drawSplashFrame(s.alpha);
         };
 
-        // Un frame de splash antes de la carga pesada (alpha del fade-in inicial).
+        // One splash frame before the heavy load (alpha of the initial fade-in).
         pumpSplash(false, 0.0f);
 
-        // La ventana se enseña AQUI, ya con el primer frame del splash
-        // presentado: lo primero que ve el usuario es el logo sobre el fondo
-        // oscuro del shader, nunca el blanco por defecto de la ventana. Este
-        // timing (show DESPUÉS del primer present del splash) es el que evita el
-        // flash blanco y se conserva intacto pese al reordenado.
-        // Sin splash (logo ausente) se queda oculta hasta justo antes del bucle
-        // de juego — ver el show() de mas abajo—, que tambien evita el blanco.
+        // The window is shown HERE, with the first splash frame already
+        // presented: the first thing the user sees is the logo over the dark
+        // shader background, never the default white of the window. This
+        // timing (show AFTER the first present of the splash) is what avoids the
+        // white flash and is kept intact despite the reordering.
+        // Without a splash (logo absent) it stays hidden until right before the game
+        // loop — see the show() further below—, which also avoids the white.
         bool windowShown = false;
         if (haveSplash)
         {
@@ -301,12 +301,12 @@ int main(int argc, char** argv)
             windowShown = true;
         }
 
-        // --- Precarga en paralelo (progreso en el splash) ---
-        // El coste pesado de scene.load es el Assimp::ReadFile de cada malla,
-        // síncrono. Se parsea el JSON de la escena a mano para recolectar los
-        // sourcePath únicos, se cargan en los workers, y luego scene.load los
-        // consume de una cache en RAM en vez de leer disco — bombeando el splash
-        // todo el rato para que la ventana responda y muestre avance.
+        // --- Parallel preload (progress on the splash) ---
+        // The heavy cost of scene.load is the Assimp::ReadFile of each mesh,
+        // synchronous. The scene JSON is parsed by hand to collect the unique
+        // sourcePaths, they are loaded in the workers, and then scene.load
+        // consumes them from an in-RAM cache instead of reading disk — pumping the splash
+        // all the time so that the window responds and shows progress.
         DonTopo::PreloadedMeshCache preloaded;
         {
             auto sceneJson = DonTopo::FileManager::readJson(scenePath);
@@ -317,11 +317,11 @@ int main(int argc, char** argv)
                 return EXIT_FAILURE;
             }
 
-            // Set de (sourcePath, piece) únicos: varios nodos que comparten
-            // fichero Y pieza generan un solo ReadFile (el loader además dedup
-            // por path internamente); dos piezas del mismo modelo estático
-            // piden la misma petición de path pero distinta pieza, así que la
-            // pieza entra en la clave del set.
+            // Set of unique (sourcePath, piece): several nodes that share
+            // file AND piece generate a single ReadFile (the loader also dedups
+            // by path internally); two pieces of the same static model
+            // request the same path request but a different piece, so the
+            // piece enters the set key.
             std::set<std::pair<std::string, int>> uniquePaths;
             std::function<void(const nlohmann::json&)> collect = [&](const nlohmann::json& node) {
                 if (node.contains("mesh") && node["mesh"].is_object())
@@ -329,7 +329,7 @@ int main(int argc, char** argv)
                     const std::string sp = node["mesh"].value("sourcePath", std::string());
                     if (!sp.empty())
                     {
-                        // Misma lectura que nodeFromJson: ausente o invalida = 0.
+                        // Same reading as nodeFromJson: absent or invalid = 0.
                         int piece = 0;
                         if (const auto it = node["mesh"].find("piece");
                             it != node["mesh"].end() && it->is_number_integer())
@@ -344,17 +344,17 @@ int main(int argc, char** argv)
             if (sceneJson->contains("root") && (*sceneJson)["root"].is_object())
                 collect((*sceneJson)["root"]);
 
-            // Encola una petición por (path, piece). targetId no se usa aquí (la
-            // cache se indexa por meshCacheKey, no por GameObject: aún no hay
-            // escena), así que va un índice cualquiera distinto de 0.
+            // Enqueues a request per (path, piece). targetId is not used here (the
+            // cache is indexed by meshCacheKey, not by GameObject: there is no
+            // scene yet), so any index other than 0 goes in.
             uint64_t reqId = 1;
             for (const auto& p : uniquePaths)
                 assetLoader.requestMesh(p.first, reqId++, p.second);
 
-            // Bombea el splash mientras cargan los workers, guardando cada
-            // resultado en la cache por path. Un error (fichero movido/roto)
-            // deja el path fuera de la cache: scene.load caerá a un ReadFile de
-            // disco para ese, exactamente como el camino de siempre.
+            // Pumps the splash while the workers load, storing each
+            // result in the cache by path. An error (moved/broken file)
+            // leaves the path out of the cache: scene.load will fall back to a disk ReadFile
+            // for that one, exactly like the usual path.
             while (assetLoader.pending() > 0)
             {
                 for (auto& r : assetLoader.pumpCompleted(1000.0f))
@@ -372,12 +372,12 @@ int main(int argc, char** argv)
             }
         }
 
-        // Carga de la escena desde la cache. loader == nullptr: NO se usa la ruta
-        // async por-GameObject de la Task 8 (que perdería la config de clips del
-        // Animator y no haría auto-fit a tiempo). En su lugar, preloaded aporta
-        // las mallas ya en RAM y la carga corre por el camino síncrono de
-        // siempre, solo que sin ReadFile — mismo modelo de registro, misma
-        // config de animación.
+        // Scene load from the cache. loader == nullptr: the per-GameObject
+        // async path of Task 8 is NOT used (it would lose the Animator clip config
+        // and would not auto-fit in time). Instead, preloaded provides
+        // the meshes already in RAM and loading runs through the usual synchronous
+        // path, only without ReadFile — same registration model, same
+        // animation config.
         if (!scene.load(scenePath, physics, audio, /*loader=*/nullptr, /*preloaded=*/&preloaded))
         {
             reportFatal("Error: could not load the scene '" + scenePath + "'");
@@ -386,12 +386,12 @@ int main(int argc, char** argv)
         }
         logSceneWarnings(scene, scenePath);
 
-        // Sin CameraComponent, Renderer::currentFrameCamera() cae al repliegue
-        // del editor (m_camera/m_viewMatrix), y si además la escena no tiene
-        // meshes estáticos el auto-fit de Renderer::init deja m_cameraDistance en
-        // -inf: proyección con NaN y ventana negra sin ninguna pista. El editor
-        // avisa al dar a Play (EditorUI.cpp); aquí no hay Play que pulsar, así
-        // que el aviso va nada más cargar la escena.
+        // Without a CameraComponent, Renderer::currentFrameCamera() falls back to the
+        // editor fallback (m_camera/m_viewMatrix), and if in addition the scene has no
+        // static meshes the auto-fit of Renderer::init leaves m_cameraDistance at
+        // -inf: a projection with NaN and a black window with no hint. The editor
+        // warns on pressing Play (EditorUI.cpp); here there is no Play to press, so
+        // the warning goes right after loading the scene.
         if (!scene.findCamera())
             std::cerr << "Warning: the scene has no camera (CameraComponent); "
                           "the game will not be able to render correctly." << std::endl;
@@ -399,9 +399,9 @@ int main(int argc, char** argv)
         std::vector<DonTopo::GameObject*> allNodes;
         scene.traverse([&](DonTopo::GameObject* go) { allNodes.push_back(go); });
 
-        // Pasada 1: meshes estáticos -> Renderer::init(meshes). Las mallas ya
-        // están en los GameObject (vinieron de la cache), así que el auto-fit de
-        // initSceneResources funciona igual que con la carga síncrona.
+        // Pass 1: static meshes -> Renderer::init(meshes). The meshes are already
+        // in the GameObjects (they came from the cache), so the auto-fit of
+        // initSceneResources works the same as with synchronous loading.
         std::vector<DonTopo::Mesh> meshes;
         for (auto* go : allNodes)
         {
@@ -414,10 +414,10 @@ int main(int argc, char** argv)
 
         renderer.initSceneResources(meshes);
         pumpSplash(false, 0.0f);
-        // Solo lo que el Renderer usa de verdad: setSceneRoot (el árbol que
-        // recorre para dibujar) y setScene (currentFrameCamera() llama a
-        // findCamera() en Play). Los passthroughs de physics/audio/scripts que
-        // había aquí eran del editor, que en runtime no existe.
+        // Only what the Renderer really uses: setSceneRoot (the tree it
+        // traverses to draw) and setScene (currentFrameCamera() calls
+        // findCamera() in Play). The physics/audio/scripts passthroughs that
+        // were here belonged to the editor, which does not exist at runtime.
         renderer.setSceneRoot(&scene.getRoot());
         renderer.setScene(&scene);
 
@@ -431,7 +431,7 @@ int main(int argc, char** argv)
         });
         pumpSplash(false, 0.0f);
 
-        // Pasada 2: meshes animados, después de init como exige el Renderer.
+        // Pass 2: animated meshes, after init as the Renderer requires.
         for (auto* go : allNodes)
         {
             if (go->hasMesh() && go->isSkinned())
@@ -439,25 +439,25 @@ int main(int argc, char** argv)
             pumpSplash(false, 0.0f);
         }
 
-        // --- Espera de uploads antes del primer frame de juego (correctness) ---
-        // addSkinnedMesh NO sube al instante: mete el upload en m_pendingBatch y
-        // marca el objeto con un uploadTicket > 0, así que el mesh queda
-        // INVISIBLE hasta que el batch se envía (flushPendingUploads) y su fence
-        // señala (lo detecta tickDeferredDeletes, que avanza m_lastCompletedTicket).
-        // Sin esto el .exe exportado enseñaba los personajes rigged a medio subir
-        // —o sea, invisibles— en el primer frame. Se fuerza el envío y se espera
-        // a que TODOS los tickets señalen, con el splash todavía en pantalla para
-        // que la ventana siga respondiendo y no haya pop-in. Los meshes estáticos
-        // no pasan por el batch (uploadTicket == 0), así que ya eran visibles;
-        // esto solo hace falta por los skinned.
+        // --- Wait for uploads before the first game frame (correctness) ---
+        // addSkinnedMesh does NOT upload instantly: it puts the upload in m_pendingBatch and
+        // marks the object with an uploadTicket > 0, so the mesh stays
+        // INVISIBLE until the batch is sent (flushPendingUploads) and its fence
+        // signals (detected by tickDeferredDeletes, which advances m_lastCompletedTicket).
+        // Without this the exported .exe showed rigged characters half uploaded
+        // —that is, invisible— on the first frame. The send is forced and it waits
+        // for ALL the tickets to signal, with the splash still on screen so
+        // that the window keeps responding and there is no pop-in. Static meshes
+        // do not go through the batch (uploadTicket == 0), so they were already visible;
+        // this is only needed for the skinned ones.
         renderer.flushPendingUploads();
         while (renderer.hasPendingUploads())
         {
-            renderer.tickDeferredDeletes();   // recupera batches completados, avanza m_lastCompletedTicket
-            pumpSplash(false, 0.0f);          // splash arriba / ventana viva
+            renderer.tickDeferredDeletes();   // recovers completed batches, advances m_lastCompletedTicket
+            pumpSplash(false, 0.0f);          // splash up / window alive
         }
 
-        // Mismas luces que el editor: la escena no las serializa.
+        // Same lights as the editor: the scene does not serialize them.
         renderer.setLights({
             { glm::vec4(0.0f, 500.0f, 300.0f, 1.0f),     glm::vec4(1.0f, 0.95f, 0.8f, 1.0f) },
             { glm::vec4(-300.0f, 200.0f, -200.0f, 1.0f), glm::vec4(0.4f, 0.5f, 1.0f, 0.8f) },
@@ -476,13 +476,13 @@ int main(int argc, char** argv)
                 else                n->staticRenderIndex  = renderer.addStaticMesh(*n->getMesh());
             });
         });
-        // Lo avisa Scene y no el ScriptManager: en el runtime solo borra Lua,
-        // pero el contrato es el mismo que en el editor y vive en un sitio.
+        // It is announced by Scene and not by the ScriptManager: at runtime it only deletes Lua,
+        // but the contract is the same as in the editor and lives in one place.
         scene.setOnNodeRemoved([&renderer](DonTopo::GameObject* go) {
             renderer.removeGameObject(go);
         });
-        // Scripts/ va dentro del paquete, junto al ejecutable — a diferencia
-        // del editor, que la busca subiendo directorios hacia el repo.
+        // Scripts/ goes inside the package, next to the executable — unlike
+        // the editor, which looks for it by going up directories toward the repo.
         scriptManager.init("Scripts");
         pumpSplash(false, 0.0f);
 
@@ -495,10 +495,10 @@ int main(int argc, char** argv)
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
         });
 
-        // La carga termino: marcar el instante y drenar el resto del splash
-        // (hold hasta minTotal + fade-out). Fallback simple (sin crossfade
-        // con la escena): el logo funde a su color de fondo y se corta al
-        // primer frame de juego. El crossfade real es una mejora posterior.
+        // Loading finished: mark the instant and drain the rest of the splash
+        // (hold until minTotal + fade-out). Simple fallback (no crossfade
+        // with the scene): the logo fades to its background color and is cut at the
+        // first game frame. The real crossfade is a later improvement.
         if (haveSplash)
         {
             const float loadingDoneAt = sinceSplash();
@@ -507,18 +507,18 @@ int main(int argc, char** argv)
                 window.pollEvents();
                 if (window.shouldClose()) break;
                 SplashState s = splashStateAt(splashT, sinceSplash(), true, loadingDoneAt);
-                // s.crossfading se ignora a proposito: este fallback solo
-                // dibuja el splash (fundido a su color de fondo), nunca la
-                // escena debajo. El crossfade con la escena queda fuera de
-                // alcance, no es un olvido.
+                // s.crossfading is ignored on purpose: this fallback only
+                // draws the splash (faded to its background color), never the
+                // scene underneath. The crossfade with the scene is out of
+                // scope, it is not an oversight.
                 renderer.drawSplashFrame(s.alpha);
                 if (s.done) break;
             }
         }
 
-        // Sin splash la ventana sigue oculta: se enseña aqui, con todo cargado,
-        // para que el primer frame que se vea sea el de la escena. Asi el camino
-        // "logo ausente" tampoco muestra el blanco de la ventana vacia.
+        // Without a splash the window is still hidden: it is shown here, with everything loaded,
+        // so that the first frame seen is the scene's. This way the "logo absent"
+        // path does not show the white of the empty window either.
         if (!windowShown)
         {
             window.show();
@@ -527,19 +527,19 @@ int main(int argc, char** argv)
 
         scriptManager.onPlayStart();
 
-        // Réplica exacta del botón Play del editor (EditorUI.cpp:167-170): sin
-        // esto, un AudioClipComponent con playOnAwake activado suena al pulsar
-        // Play en el editor pero sale mudo en el .exe exportado — el diseñador
-        // lo activó confiando en lo que oyó, y aquí no hay ningún log que avise.
+        // Exact replica of the editor's Play button (EditorUI.cpp:167-170): without
+        // this, an AudioClipComponent with playOnAwake enabled plays on pressing
+        // Play in the editor but goes silent in the exported .exe — the designer
+        // enabled it trusting what they heard, and here there is no log to warn.
         //
-        // Una escena sin Audio Listener (o con el suyo deshabilitado) reproduce
-        // sus clips IGUAL: el audio 3D se oye desde la cámara, el fallback que
-        // resuelve el bucle de abajo cada frame. Aquí había un gate que se
-        // saltaba este barrido, y se ha quitado porque solo cubría playOnAwake
-        // —AudioClip:Play de Lua se lo saltaba— y no puede vivir dentro de
-        // AudioManager ni de AudioClipComponent: esas dos clases se prueban
-        // directamente y tienen que seguir sonando sin escena. El aviso se
-        // queda, ahora informativo y cierto. Uno pa toda la escena, no uno por
+        // A scene without an Audio Listener (or with its own disabled) plays
+        // its clips ALL THE SAME: 3D audio is heard from the camera, the fallback
+        // resolved by the loop below every frame. There used to be a gate here that
+        // skipped this sweep, and it was removed because it only covered playOnAwake
+        // —Lua's AudioClip:Play skipped it— and it cannot live inside
+        // AudioManager or AudioClipComponent: those two classes are tested
+        // directly and have to keep sounding without a scene. The warning
+        // stays, now informative and true. One for the whole scene, not one per
         // clip.
         {
             DonTopo::GameObject* listenerGo = scene.findAudioListener();
@@ -553,28 +553,28 @@ int main(int argc, char** argv)
             });
         }
 
-        // Empareja los canvas de la escena con sus slots del Renderer por
-        // ownerId (Renderer::syncUiCanvases), fuera del bucle para no
-        // reasignar cada frame. La caché de sync de cada canvas vive DENTRO
-        // de su slot, en el Renderer: aquí ya no hace falta ninguna.
+        // Pairs the scene canvases with their Renderer slots by
+        // ownerId (Renderer::syncUiCanvases), outside the loop so as not to
+        // reassign every frame. The sync cache of each canvas lives INSIDE
+        // its slot, in the Renderer: none is needed here any more.
         std::vector<DonTopo::UiCanvasBinding> uiBindings;
-        // Y los canvas de PANTALLA en orden de prioridad de input, tambien
-        // fuera del bucle por lo mismo: se rellena entero cada frame.
+        // And the SCREEN canvases in input priority order, also
+        // outside the loop for the same reason: it is refilled entirely every frame.
         std::vector<DonTopo::UiCanvas*> uiCanvases;
-        // Buffer del pump de fallos de carga de audio, fuera del bucle por lo
-        // mismo que los dos de arriba.
+        // Buffer of the audio load failure pump, outside the loop for the same
+        // reason as the two above.
         std::vector<std::string> audioFailures;
 
         while (!window.shouldClose())
         {
             DonTopo::Input::update();
 
-            // Drenaje del buzón de DonTopo.loadScene, al principio del frame:
-            // los scripts del frame anterior ya terminaron su tick, así que
-            // destruir la escena aquí no mata al GameObject que pidió la carga.
-            // Mismo saneamiento que EditorUI::reloadSceneFromJson: soltar los
-            // recursos GPU del árbol viejo, resetear índices, cargar, y volver a
-            // registrar el árbol entero en el Renderer.
+            // Draining the DonTopo.loadScene mailbox, at the start of the frame:
+            // the scripts of the previous frame have already finished their tick, so
+            // destroying the scene here does not kill the GameObject that requested the load.
+            // Same sanitation as EditorUI::reloadSceneFromJson: release the GPU
+            // resources of the old tree, reset indices, load, and register the
+            // whole tree again in the Renderer.
             if (std::string luaScenePath; DonTopo::ScriptBindings::takePendingSceneLoad(luaScenePath))
             {
                 for (auto& child : scene.getRoot().children)
@@ -587,18 +587,18 @@ int main(int argc, char** argv)
                 }
                 bool luaLoaded = scene.load(luaScenePath, physics, audio);
                 renderer.registerGameObject(&scene.getRoot());
-                // Síncrono como el restore del editor: sin flush, los meshes del
-                // batch diferido no se verían hasta ~2 frames después y el
-                // árbol viejo ya no está (parpadeo).
+                // Synchronous like the editor restore: without a flush, the meshes of the
+                // deferred batch would not be seen until ~2 frames later and the
+                // old tree is gone (flicker).
                 renderer.flushUploadsAndWait();
                 renderer.setSceneRoot(&scene.getRoot());
-                // El near/far salio de las mallas de la escena de arranque
-                // (initSceneResources): sin recalcularlo, una escena cargada por
-                // script mas grande se ve recortada — el skybox el primero.
-                // Mismo motivo por el que EditorUI lo llama al recargar.
+                // The near/far came from the meshes of the startup scene
+                // (initSceneResources): without recomputing it, a larger scene loaded by
+                // script looks clipped — the skybox first.
+                // Same reason EditorUI calls it on reload.
                 renderer.refitCameraRange();
-                // El alive set de Lua guardaba punteros de la escena vieja y los
-                // GameObject nuevos pueden reusar esas direcciones.
+                // The Lua alive set stored pointers of the old scene and the new
+                // GameObjects may reuse those addresses.
                 scriptManager.rebuildAliveSet();
                 std::cout << (luaLoaded ? "Scene loaded: " : "Error loading scene: ")
                           << luaScenePath << std::endl;
@@ -610,38 +610,38 @@ int main(int argc, char** argv)
             float dt = std::chrono::duration<float>(now - last).count();
             last = now;
 
-            // Listener 3D: FMOD se inicializa con FMOD_INIT_3D_RIGHTHANDED
-            // (AudioManager::init), así que la atenuación y el paneo dependen
-            // de a dónde apunte el listener, no solo de dónde esté. Se
-            // resuelve por findCamera() en cada iteración -no una vez antes
-            // del bucle- porque un script Lua puede destruir GameObjects en
-            // cualquier frame; cachear el puntero lo dejaría colgante. Sin
-            // cámara en la escena se cae al origen mirando a -Z (mismos
-            // valores que traía este código antes del fix), no a un deref de
+            // 3D listener: FMOD is initialized with FMOD_INIT_3D_RIGHTHANDED
+            // (AudioManager::init), so attenuation and panning depend
+            // on where the listener points, not just where it is. It is
+            // resolved by findCamera() on each iteration -not once before
+            // the loop- because a Lua script can destroy GameObjects on
+            // any frame; caching the pointer would leave it dangling. Without a
+            // camera in the scene it falls back to the origin looking at -Z (same
+            // values this code had before the fix), not to a deref of
             // nullptr.
             glm::vec3 listenerPos(0.0f);
             glm::vec3 listenerFwd(0.0f, 0.0f, -1.0f);
             glm::vec3 listenerUp(0.0f, 1.0f, 0.0f);
             if (DonTopo::GameObject* cam = scene.findCamera())
             {
-                // Misma convención de ejes que usa el Renderer para construir
-                // la imagen que se ve en pantalla (Renderer.cpp:296-304,
-                // Renderer::currentFrameCamera en Play) y que confirma
-                // camera_tests.cpp: la cámara mira a -Z LOCAL (world[2] es el
-                // eje +Z local llevado a mundo, así que el "adelante" real es
-                // su negado) y +Y local es "arriba". Si aquí se usara +Z en
-                // vez de -Z, el audio 3D quedaría reflejado respecto a lo que
-                // se ve por pantalla: los sonidos de la izquierda sonarían a
-                // la derecha y viceversa.
-                // Base degenerada (algún eje del Transform con escala 0, algo
-                // que el editor deja poner desde los campos de Scale): aquí
-                // glm::normalize daría NaN y ese NaN llegaría a
-                // set3DListenerAttributes, donde FMOD ya no tiene forma de
-                // recuperarse — el audio 3D queda roto el resto de la partida.
-                // Mismo criterio de epsilon que CameraComponent::viewFromWorld
-                // (CameraComponent.cpp:71-74), que resuelve el caso espejo para
-                // la matriz de vista; si la base no sirve, se cae a los valores
-                // por defecto de arriba (origen, -Z, +Y) en vez de propagar NaN.
+                // Same axis convention the Renderer uses to build
+                // the image seen on screen (Renderer.cpp:296-304,
+                // Renderer::currentFrameCamera in Play) and which camera_tests.cpp
+                // confirms: the camera looks at LOCAL -Z (world[2] is the
+                // local +Z axis taken to world, so the real "forward" is
+                // its negation) and local +Y is "up". If +Z were used here instead
+                // of -Z, 3D audio would be mirrored relative to what
+                // is seen on screen: sounds on the left would play on
+                // the right and vice versa.
+                // Degenerate basis (some Transform axis with scale 0, something
+                // the editor lets you set from the Scale fields): here
+                // glm::normalize would give NaN and that NaN would reach
+                // set3DListenerAttributes, where FMOD has no way to
+                // recover — 3D audio stays broken for the rest of the game.
+                // Same epsilon criterion as CameraComponent::viewFromWorld
+                // (CameraComponent.cpp:71-74), which resolves the mirror case for
+                // the view matrix; if the basis is no good, it falls back to the default values
+                // above (origin, -Z, +Y) instead of propagating NaN.
                 const glm::vec3 camFwdAxis = glm::vec3(cam->worldTransform[2]);
                 const glm::vec3 camUpAxis  = glm::vec3(cam->worldTransform[1]);
                 if (glm::length(camFwdAxis) >= 1e-6f && glm::length(camUpAxis) >= 1e-6f)
@@ -651,10 +651,10 @@ int main(int argc, char** argv)
                     listenerUp  = glm::normalize(camUpAxis);
                 }
             }
-            // Audio Listener: si la escena tiene uno (y está habilitado), manda
-            // él y no la cámara — misma convención de ejes y mismo guard de base
-            // degenerada que el bloque de arriba. Sin listener se queda lo que
-            // resolvió la cámara, que es el fallback.
+            // Audio Listener: if the scene has one (and it is enabled), it rules
+            // and not the camera — same axis convention and same degenerate-basis guard
+            // as the block above. Without a listener, what the camera
+            // resolved stays, which is the fallback.
             if (DonTopo::GameObject* lis = scene.findAudioListener())
             {
                 const glm::vec3 lisFwdAxis = glm::vec3(lis->worldTransform[2]);
@@ -668,11 +668,11 @@ int main(int argc, char** argv)
                 }
             }
             audio.update(listenerPos, listenerFwd, listenerUp, dt);
-            // Fallos de carga que FMOD ha detectado desde el frame anterior.
-            // Con FMOD_NONBLOCKING el error no existe cuando createSound
-            // retorna, así que sin este pump un asset que no viajó en el bundle
-            // es silencio absoluto: ni el .exe ni el game.log dicen nada. Cada
-            // sonido se reporta una vez.
+            // Load failures that FMOD has detected since the previous frame.
+            // With FMOD_NONBLOCKING the error does not exist when createSound
+            // returns, so without this pump an asset that did not travel in the bundle
+            // is absolute silence: neither the .exe nor game.log say anything. Each
+            // sound is reported once.
             audioFailures.clear();
             audio.pollLoadFailures(audioFailures);
             for (const auto& failed : audioFailures)
@@ -688,51 +688,51 @@ int main(int argc, char** argv)
                 if (go->staticRenderIndex >= 0)
                 {
                     renderer.setTransform(go->staticRenderIndex, go->worldTransform);
-                    // El runtime tiene que renderizar igual que el editor: mismo
-                    // sink, mismo sitio.
+                    // The runtime has to render the same as the editor: same
+                    // sink, same place.
                     renderer.setObjectSsr(go->staticRenderIndex,
                                           go->ssrEnabled ? go->ssrIntensity : 0.0f);
                     renderer.setObjectMeshVisible(go->staticRenderIndex, go->meshVisible);
                 }
 
-                // El runtime siempre juega: el grafo evalúa transiciones.
+                // The runtime always plays: the graph evaluates transitions.
                 applySkinnedFrame(*go, renderer, dt, /*evaluateTransitions=*/true);
             });
 
-            // Antes de drawFrame: los scripts Lua pueden instanciar/borrar
-            // GameObjects en cualquier frame. tickDeferredDeletes reclama los
-            // batches ya señalados (avanza la visibilidad) y drena los borrados
-            // diferidos; flushPendingUploads envía el batch de lo instanciado
-            // ESTE frame (addStaticMesh/addSkinnedMesh vía setOnInstantiated lo
-            // dejan en m_pendingBatch: sin flush no se sube nunca y el objeto
-            // queda invisible). Mismo par que el bucle del editor
-            // (sandbox/src/main.cpp: tickDeferredDeletes + onAssetsLoaded, que
-            // acaba en flushPendingUploads). En régimen estable, sin instanciar
-            // nada, el flush es un no-op barato.
+            // Before drawFrame: Lua scripts can instantiate/delete
+            // GameObjects on any frame. tickDeferredDeletes reclaims the
+            // batches already signaled (advances visibility) and drains the deferred
+            // deletes; flushPendingUploads sends the batch of what was instantiated
+            // THIS frame (addStaticMesh/addSkinnedMesh via setOnInstantiated leave it
+            // in m_pendingBatch: without a flush it is never uploaded and the object
+            // stays invisible). Same pair as the editor loop
+            // (sandbox/src/main.cpp: tickDeferredDeletes + onAssetsLoaded, which
+            // ends in flushPendingUploads). In steady state, without instantiating
+            // anything, the flush is a cheap no-op.
             renderer.tickDeferredDeletes();
             renderer.flushPendingUploads();
 
-            // Canvas de UI: resolución, widgets y jerarquía de CADA canvas de
-            // la escena, por frame — misma regla que en el editor. Sin ningún
-            // Canvas, collectCanvases devuelve la lista vacía y syncUiCanvases
-            // deja limpio lo que hubiera.
+            // UI canvas: resolution, widgets and hierarchy of EACH canvas of
+            // the scene, per frame — same rule as in the editor. Without any
+            // Canvas, collectCanvases returns the empty list and syncUiCanvases
+            // leaves clean whatever there was.
             uiBindings.clear();
             scene.collectCanvases(uiBindings);
             renderer.syncUiCanvases(uiBindings);
 
-            // Input de la UI: sin esto el árbol no resuelve estados y los cinco
-            // colores del botón, el fundido y el Click no existen. El ratón está
-            // en píxeles de VENTANA y el canvas trabaja en píxeles de SALIDA,
-            // que no tienen por qué coincidir (escalado de la ventana).
+            // UI input: without this the tree does not resolve states and the five
+            // button colors, the fade and the Click do not exist. The mouse is
+            // in WINDOW pixels and the canvas works in OUTPUT pixels,
+            // which need not match (window scaling).
             {
                 DonTopo::UiInputState uiInput;
                 double mx = 0.0, my = 0.0;
                 glfwGetCursorPos(window.getNativeWindow(), &mx, &my);
                 int ww = 0, wh = 0;
                 glfwGetWindowSize(window.getNativeWindow(), &ww, &wh);
-                // uiWidth/uiHeight y NO renderWidth/renderHeight: el canvas se
-                // resuelve en píxeles de SALIDA, que con SSAA no son los del
-                // render (el ratón caía al doble de lejos del cursor).
+                // uiWidth/uiHeight and NOT renderWidth/renderHeight: the canvas is
+                // resolved in OUTPUT pixels, which with SSAA are not those of the
+                // render (the mouse landed twice as far from the cursor).
                 const float sx = (ww > 0) ? (float)renderer.uiWidth()  / (float)ww : 1.0f;
                 const float sy = (wh > 0) ? (float)renderer.uiHeight() / (float)wh : 1.0f;
                 uiInput.mousePos = glm::vec2((float)mx * sx, (float)my * sy);
@@ -742,21 +742,21 @@ int main(int argc, char** argv)
                     glfwGetMouseButton(window.getNativeWindow(), GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
                 uiInput.mouseDown[2] =
                     glfwGetMouseButton(window.getNativeWindow(), GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
-                // Teclado y mando: el Tab, las flechas, el aceptar y el cancelar.
-                // Sin esto el foco y la navegación existían pero no había forma
-                // de moverlos, así que un juego de mando no podía usar un menú.
+                // Keyboard and gamepad: Tab, the arrows, accept and cancel.
+                // Without this focus and navigation existed but there was no way
+                // to move them, so a gamepad game could not use a menu.
                 DonTopo::fillUiInputKeys(uiInput);
-                // La rueda la acumula el callback y se consume aquí: si se
-                // leyera sin vaciar, un solo golpe de rueda scrollearía para
-                // siempre.
+                // The wheel is accumulated by the callback and consumed here: if it
+                // were read without emptying, a single wheel tick would scroll
+                // forever.
                 uiInput.scrollDelta = g_uiScroll;
                 g_uiScroll = 0.0f;
                 uiInput.timeSeconds = (float)glfwGetTime();
-                // A TODOS los canvas de pantalla, no solo al primero: con
-                // uiCanvas() los botones de un segundo canvas (un menu de pausa
-                // encima del HUD) se dibujaban pero no tenian ni hover, ni
-                // colores de estado, ni Click. dispatchUiInput reparte: el raton
-                // al de mas arriba que lo tenga debajo y los demas limpios.
+                // To ALL the screen canvases, not just the first: with
+                // uiCanvas() the buttons of a second canvas (a pause menu
+                // on top of the HUD) were drawn but had neither hover, nor
+                // state colors, nor Click. dispatchUiInput distributes: the mouse
+                // goes to the topmost one that has it underneath and the others are cleared.
                 renderer.screenUiCanvases(uiCanvases);
                 DonTopo::dispatchUiInput(uiCanvases, uiInput);
             }
@@ -766,10 +766,10 @@ int main(int argc, char** argv)
         }
 
         scriptManager.onPlayStop();
-        // jobSystem.shutdown() ANTES del teardown de la escena: para y une todos
-        // los workers, así ninguno puede tocar la escena mientras se destruye.
-        // (En este punto ya no debería quedar nada pendiente —la precarga se
-        // drenó entera antes del bucle— pero el orden se respeta igualmente.)
+        // jobSystem.shutdown() BEFORE the scene teardown: it stops and joins all
+        // the workers, so none can touch the scene while it is destroyed.
+        // (At this point nothing should be pending —the preload was
+        // drained entirely before the loop— but the order is respected anyway.)
         jobSystem.shutdown();
         scene.shutdown();
         audio.shutdown();

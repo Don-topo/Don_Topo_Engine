@@ -21,104 +21,104 @@ public:
     AudioManager(const AudioManager&)            = delete;
     AudioManager& operator=(const AudioManager&) = delete;
 
-    // true si el audio quedó operativo. NO lanza: una máquina sin dispositivo
-    // de salida (o sin FMOD compilado) devuelve false, escribe una línea en
-    // cerr y deja el motor funcionando mudo — antes la excepción subía hasta el
-    // main del editor y el editor no arrancaba. Llamarlo dos veces es no-op.
+    // true if audio is operational. It does NOT throw: a machine with no output
+    // device (or without FMOD compiled) returns false, writes a line to
+    // cerr and leaves the engine running muted — before, the exception went up to the
+    // editor main and the editor did not start. Calling it twice is a no-op.
     bool init();
-    // ¿Hay sistema FMOD vivo? Es lo que distingue "sin audio en esta máquina"
-    // de cualquier otro fallo; los tests lo usan para saltarse de verdad los
-    // casos que necesitan FMOD.
+    // Is there a live FMOD system? It is what tells "no audio on this machine"
+    // apart from any other failure; the tests use it to truly skip the
+    // cases that need FMOD.
     bool available() const;
 
-    // FMOD arranco pero SIN dispositivo de salida (FMOD_OUTPUTTYPE_NOSOUND): el
-    // motor funciona y no suena nada, sin ningun error. Pasa en Linux sin
-    // libpulse ni libasound (la imagen minima de WSL). Vacio si hay salida o si
-    // no hay FMOD. El host lo enseña (Log Console); init() ya lo escribe en
-    // stderr, que en el runtime acaba en game.log.
+    // FMOD started but WITHOUT an output device (FMOD_OUTPUTTYPE_NOSOUND): the
+    // engine works and nothing sounds, without any error. It happens on Linux without
+    // libpulse or libasound (the minimal WSL image). Empty if there is output or if
+    // there is no FMOD. The host shows it (Log Console); init() already writes it to
+    // stderr, which in the runtime ends up in game.log.
     const std::string& outputWarning() const { return m_outputWarning; }
 
-    // El texto de ese aviso para un tipo de salida de FMOD (FMOD_OUTPUTTYPE como
-    // int, para no arrastrar fmod.hpp a este header). Aparte para poder probarlo
-    // sin quitarle a la maquina su tarjeta de sonido.
+    // The text of that warning for an FMOD output type (FMOD_OUTPUTTYPE as
+    // int, so as not to drag fmod.hpp into this header). Separate so it can be tested
+    // without taking the machine's sound card away.
     static std::string outputWarningFor(int fmodOutputType);
-    // dt en segundos. Se usa SOLO para derivar la velocidad del listener, que es
-    // lo que da el efecto doppler; con dt <= 0 la velocidad queda a cero y el
-    // doppler no actúa (que es como se comportaba esto antes de tenerlo). Un
-    // salto grande de posición —un teleport, o cargar otra escena— produciría
-    // una velocidad absurda y un chirrido: por eso se descarta lo que supere
-    // kMaxListenerSpeed en vez de creérselo.
+    // dt in seconds. It is used ONLY to derive the listener velocity, which is
+    // what gives the doppler effect; with dt <= 0 the velocity stays at zero and the
+    // doppler does not act (which is how this behaved before having it). A large
+    // position jump —a teleport, or loading another scene— would produce
+    // an absurd velocity and a screech: that is why anything exceeding
+    // kMaxListenerSpeed is discarded instead of believed.
     void update(const glm::vec3& listenerPos,
                 const glm::vec3& listenerForward,
                 const glm::vec3& listenerUp,
                 float dt = 0.0f);
     void shutdown();
 
-    // Estado de carga de un sonido. Con FMOD_NONBLOCKING, createSound retorna
-    // FMOD_OK aunque el fichero no exista o esté corrupto: el fallo real solo
-    // aparece DESPUÉS, aquí. Sin consultarlo, un asset roto era silencio total
-    // — ni error en la UI al soltarlo, ni warning al cargar la escena, ni una
-    // línea en el Log al darle a Play.
+    // Load state of a sound. With FMOD_NONBLOCKING, createSound returns
+    // FMOD_OK even if the file does not exist or is corrupt: the real failure only
+    // shows up AFTER, here. Without querying it, a broken asset was total silence
+    // — no error in the UI when dropping it, no warning when loading the scene, not a
+    // line in the Log when pressing Play.
     enum class SoundLoadState {
-        Missing,  // id fuera de rango, slot liberado, o sin sistema FMOD
-        Loading,  // el hilo interno de FMOD sigue leyendo
+        Missing,  // id out of range, slot released, or no FMOD system
+        Loading,  // the internal FMOD thread is still reading
         Ready,    // utilizable
-        Failed    // fichero ausente, formato no soportado, datos corruptos
+        Failed    // file absent, unsupported format, corrupt data
     };
     SoundLoadState getSoundState(int soundId) const;
 
-    // Vacía en out los paths de los sonidos que han pasado a Failed y aún no se
-    // habían reportado. Pensado para llamarse una vez por frame desde el host,
-    // que es quien tiene canal al usuario (Log Console en el editor, cerr en el
-    // runtime): AudioManager no lo tiene. Cada sonido se reporta UNA vez, no
-    // uno por frame.
+    // Empties into out the paths of the sounds that have moved to Failed and had not yet been
+    // reported. Meant to be called once per frame from the host,
+    // which is the one with a channel to the user (Log Console in the editor, cerr in the
+    // runtime): AudioManager does not have one. Each sound is reported ONCE, not
+    // once per frame.
     void pollLoadFailures(std::vector<std::string>& out);
 
-    // Retorna al instante: FMOD carga en su hilo interno (FMOD_NONBLOCKING). El
-    // id es válido desde ya, pero un playSound antes de que termine la carga no
-    // reproduce nada — no es un error, solo aún no está listo. Que devuelva un
-    // id >= 0 NO significa que el fichero sea válido: eso lo dice getSoundState.
+    // Returns immediately: FMOD loads on its internal thread (FMOD_NONBLOCKING). The
+    // id is valid from now on, but a playSound before the load finishes does not
+    // play anything — it is not an error, it is just not ready yet. Returning an
+    // id >= 0 does NOT mean the file is valid: getSoundState says that.
     int  loadSound(const std::string& path, bool is3D = true, bool loop = false,
                    AudioLoadMode loadMode = AudioLoadMode::Sample,
                    AudioRolloff rolloff = AudioRolloff::Inverse);
     void unloadSound(int soundId);
 
-    // Sonidos FMOD vivos ahora mismo (slots ocupados, no ids repartidos).
-    // Diagnóstico: es la única forma de ver desde fuera que la caché comparte
-    // de verdad — dos clips del mismo fichero con el mismo modo tienen que
-    // dejar esto en 1, no en 2.
+    // FMOD sounds alive right now (occupied slots, not handed-out ids).
+    // Diagnostic: it is the only way to see from outside that the cache really shares
+    // — two clips of the same file with the same mode have to
+    // leave this at 1, not 2.
     size_t loadedSoundCount() const;
 
-    // Slots reservados, ocupados o no. Junto con loadedSoundCount es lo que
-    // hace observable el reciclado: crear y soltar mil sonidos tiene que dejar
-    // esto plano, no en mil. Sin este getter, "no se reciclan los ids" no se
-    // puede distinguir de "sí se reciclan" desde fuera — los dos dejan el mismo
-    // número de sonidos vivos.
+    // Reserved slots, occupied or not. Together with loadedSoundCount it is what
+    // makes recycling observable: creating and releasing a thousand sounds has to leave
+    // this flat, not at a thousand. Without this getter, "ids are not recycled" cannot
+    // be told apart from "they are recycled" from outside — both leave the same
+    // number of live sounds.
     size_t soundSlotCount() const;
 
-    // ¿El sonido está en streaming de verdad? Lee el FMOD_MODE real, no lo que
-    // el componente cree. Existe porque sin esto la línea que aplica
-    // FMOD_CREATESTREAM no tiene ninguna cobertura: quitarla dejaba todo
-    // "funcionando" —el modo se guarda, se serializa y se lee de vuelta— con la
-    // feature entera sin efecto (sabotaje verificado). false si el id no existe.
+    // Is the sound really streaming? It reads the real FMOD_MODE, not what the
+    // component believes. It exists because without this the line that applies
+    // FMOD_CREATESTREAM has no coverage at all: removing it left everything
+    // "working" —the mode is stored, serialized and read back— with the
+    // whole feature without effect (sabotage verified). false if the id does not exist.
     bool isSoundStreaming(int soundId) const;
 
-    // Curva de atenuacion REAL del sonido, leida de su FMOD_MODE. Existe por lo
-    // mismo que isSoundStreaming: sin ella, la linea que aplica el flag de
-    // rolloff no tiene ninguna cobertura — quitarla dejaba el enum viajando por
-    // la escena, la UI y Lua sin que la curva cambiara nunca (sabotaje
-    // verificado). Ojo: como el streaming, el modo no es fiable hasta que la
-    // carga termina (getSoundState == Ready).
+    // REAL attenuation curve of the sound, read from its FMOD_MODE. It exists for the
+    // same reason as isSoundStreaming: without it, the line that applies the rolloff
+    // flag has no coverage at all — removing it left the enum traveling through
+    // the scene, the UI and Lua without the curve ever changing (sabotage
+    // verified). Note: like streaming, the mode is not reliable until
+    // loading finishes (getSoundState == Ready).
     AudioRolloff getSoundRolloff(int soundId) const;
 
-    // minDistance/maxDistance se aplican a la voz recien arrancada. Van aqui y
-    // no en el FMOD::Sound porque el sonido se COMPARTE entre clips (cache por
-    // path+modo): escribirlas en el sonido le cambiaria el radio de atenuacion
-    // a todos los objetos que usen el mismo fichero.
-    // spread: ensanchado estereo de la fuente 3D en grados [0, 360]. 0 = un
-    // punto (lo de siempre); 360 = envolvente. pan: paneo manual [-1, 1], solo
-    // con efecto en clips 2D — en 3D lo decide la posicion. doppler: cuanto
-    // afecta la velocidad relativa al tono, [0, 5]; 0 lo apaga.
+    // minDistance/maxDistance are applied to the newly started voice. They go here and
+    // not in the FMOD::Sound because the sound is SHARED between clips (cache by
+    // path+mode): writing them into the sound would change the attenuation radius of
+    // all the objects that use the same file.
+    // spread: stereo widening of the 3D source in degrees [0, 360]. 0 = a
+    // point (as it always was); 360 = enveloping. pan: manual pan [-1, 1], only
+    // effective on 2D clips — in 3D the position decides. doppler: how much the
+    // relative velocity affects the pitch, [0, 5]; 0 turns it off.
     void playSound(int soundId, const glm::vec3& worldPos = {},
                    float volume = 1.0f, float pitch = 1.0f,
                    AudioBus bus = AudioBus::Sfx,
@@ -127,16 +127,16 @@ public:
                    float dopplerLevel = 0.0f);
     void stopSound(int soundId);
 
-    // Dispara una voz SUELTA del sonido: no se guarda en m_sfxChannels, así que
-    // no corta la reproducción anterior ni se corta con la siguiente, y varios
-    // disparos se solapan. Es el PlayOneShot de Unity, y es lo que faltaba para
-    // que dos pasos seguidos, o dos balas, no se pisaran — playSound tiene la
-    // semántica contraria a propósito (un Play nuevo corta el anterior).
+    // Fires a LOOSE voice of the sound: it is not stored in m_sfxChannels, so
+    // it does not cut the previous playback nor is it cut by the next, and several
+    // shots overlap. It is Unity's PlayOneShot, and it is what was missing so
+    // that two consecutive footsteps, or two bullets, did not step on each other — playSound has the
+    // opposite semantics on purpose (a new Play cuts the previous one).
     //
-    // Consecuencia de no guardar el canal: esa voz ya no se puede alcanzar.
-    // stopSound, los setters de volumen/pitch y isSoundPlaying NO la ven; suena
-    // hasta que termina. Por eso un one-shot en bucle sería una voz inmortal:
-    // se usa con clips de disparo, no con loops.
+    // Consequence of not storing the channel: that voice can no longer be reached.
+    // stopSound, the volume/pitch setters and isSoundPlaying do NOT see it; it plays
+    // until it finishes. That is why a looping one-shot would be an immortal voice:
+    // it is used with shot clips, not with loops.
     void playSoundOneShot(int soundId, const glm::vec3& worldPos = {},
                           float volume = 1.0f, float pitch = 1.0f,
                           AudioBus bus = AudioBus::Sfx,
@@ -144,284 +144,284 @@ public:
                           float spread = 0.0f, float stereoPan = 0.0f,
                           float dopplerLevel = 0.0f);
 
-    // Dispara path en una posición del mundo, SIN GameObject de por medio: el
-    // PlayClipAtPoint de Unity. Es one-shot (se solapa con lo que suene) y 3D.
+    // Fires path at a world position, WITHOUT a GameObject in between: Unity's
+    // PlayClipAtPoint. It is one-shot (overlaps whatever is playing) and 3D.
     //
-    // El sonido queda RETENIDO en la caché para siempre — igual que en Unity,
-    // donde el AudioClip es un asset cargado. Sin eso habría que descargarlo al
-    // acabar la voz, y esa voz no se guarda en ningún sitio precisamente para
-    // que se solape. Retener no fuga: es un FMOD::Sound por ruta distinta, y la
-    // segunda llamada con la misma ruta no vuelve a contar.
+    // The sound stays RETAINED in the cache forever — just like in Unity,
+    // where the AudioClip is a loaded asset. Without that it would have to be unloaded at
+    // the end of the voice, and that voice is not stored anywhere precisely
+    // so that it overlaps. Retaining does not leak: it is one FMOD::Sound per distinct
+    // path, and the second call with the same path does not count again.
     //
-    // OJO con el primer disparo: FMOD carga en diferido (FMOD_NONBLOCKING), así
-    // que la primera llamada de una ruta nueva casi seguro no se oye — el
-    // sonido aún no está listo. Para eso está preloadClip.
+    // NOTE on the first shot: FMOD loads lazily (FMOD_NONBLOCKING), so
+    // the first call of a new path is almost certainly not heard — the
+    // sound is not ready yet. That is what preloadClip is for.
     void playClipAtPoint(const std::string& path, const glm::vec3& worldPos,
                          float volume = 1.0f, float pitch = 1.0f,
                          AudioBus bus = AudioBus::Sfx,
                          float minDistance = 1.0f, float maxDistance = 100.0f);
 
-    // Carga y retiene el sonido sin reproducirlo, para que el primer
-    // playClipAtPoint de esa ruta llegue a oírse. Idempotente.
+    // Loads and retains the sound without playing it, so that the first
+    // playClipAtPoint of that path is actually heard. Idempotent.
     void preloadClip(const std::string& path);
 
-    // Empujan el valor al canal de la última reproducción de soundId, si
-    // sigue siendo suyo. FMOD recicla los Channel*: un canal que ya terminó
-    // puede haber sido reasignado a otro sonido, y escribirle el volumen se
-    // lo cambiaría a un sonido ajeno. Por eso se comprueba isPlaying() y que
-    // getCurrentSound() sea el sonido de ese id.
+    // They push the value to the channel of the last playback of soundId, if
+    // it is still theirs. FMOD recycles the Channel*: a channel that already finished
+    // may have been reassigned to another sound, and writing the volume to it would
+    // change it on someone else's sound. That is why isPlaying() is checked and that
+    // getCurrentSound() is the sound of that id.
     //
-    // No pasa nada si no hay canal: el valor vive en AudioClipComponent y se
-    // aplicará en el siguiente playSound.
+    // Nothing happens if there is no channel: the value lives in AudioClipComponent and
+    // will be applied on the next playSound.
     void setChannelVolume(int soundId, float volume);
     void setChannelPitch (int soundId, float pitch);
 
-    // Ajustes de importacion (sidecar <clip>.import.json) del sonido: ganancia y
-    // mono. El defecto si el id no existe.
+    // Import settings (sidecar <clip>.import.json) of the sound: gain and
+    // mono. The default if the id does not exist.
     AudioImportSettings getSoundImportSettings(int soundId) const;
 
-    // Relee el sidecar de `path` y lo aplica a TODOS los sonidos vivos de esa ruta
-    // (2D y 3D, con o sin loop: son sonidos distintos del mismo fichero) y reajusta
-    // el volumen de su voz viva. Los de otras rutas no se tocan. El mono aplica
-    // desde la siguiente reproduccion.
+    // Rereads the sidecar of `path` and applies it to ALL the live sounds of that path
+    // (2D and 3D, with or without loop: they are different sounds of the same file) and readjusts
+    // the volume of its live voice. Those of other paths are not touched. Mono applies
+    // from the next playback.
     void refreshImportSettings(const std::string& path);
 
-    // Volumen REAL de la voz viva de soundId (la que siguen setChannelVolume y el
-    // seguimiento 3D), o -1 si no hay voz. Existe para que la ganancia sea
-    // observable desde un test: quitarla dejaba la feature entera sin efecto y la
-    // suite en verde.
+    // REAL volume of the live voice of soundId (the one followed by setChannelVolume and
+    // the 3D tracking), or -1 if there is no voice. It exists so that the gain is
+    // observable from a test: removing it left the whole feature without effect and the
+    // suite green.
     float getChannelVolume(int soundId) const;
 
-    // ¿La voz viva de soundId lleva la matriz de mono (cada entrada a 1/N en las
-    // dos salidas frontales)? Existe para que forzar a mono sea observable desde
-    // un test: quitar la llamada a applyForceMono dejaba la feature entera sin
-    // efecto y la suite en verde.
+    // Does the live voice of soundId carry the mono matrix (each entry at 1/N on the
+    // two front outputs)? It exists so that forcing mono is observable from
+    // a test: removing the call to applyForceMono left the whole feature without
+    // effect and the suite green.
     bool isVoiceForcedMono(int soundId) const;
 
-    // Atenuación 3D del sonido: por debajo de minDistance suena a volumen
-    // pleno, y de ahí a maxDistance va cayendo. Se escribe en el FMOD::Sound
-    // (vale pa las reproducciones futuras) Y en el canal vivo si lo hay, con la
-    // misma comprobación que los dos setters de arriba. No-op si el sonido no
-    // se cargó con FMOD_3D: en 2D no hay atenuación que ajustar.
+    // 3D attenuation of the sound: below minDistance it plays at full
+    // volume, and from there to maxDistance it falls off. It is written into the FMOD::Sound
+    // (valid for future playbacks) AND into the live channel if there is one, with the
+    // same check as the two setters above. No-op if the sound was not
+    // loaded with FMOD_3D: in 2D there is no attenuation to adjust.
     void setSound3DMinMaxDistance(int soundId, float minDistance, float maxDistance);
 
-    // Reposiciona la voz que está sonando de soundId. Es lo que hace que un
-    // sonido 3D SIGA a su GameObject: playSound solo escribe la posición una
-    // vez, al arrancar, así que sin esto un objeto en movimiento dejaba el
-    // sonido clavado donde estaba al pulsar Play (ni atenuación ni paneo
-    // cambiaban). No-op si el sonido no es 3D o si no hay voz viva, con la
-    // misma comprobación de liveChannel que los setters de volumen/pitch.
-    // dt sirve para derivar la velocidad de la fuente (doppler), igual que en
-    // update() para el listener: con dt <= 0 la velocidad va a cero.
+    // Repositions the playing voice of soundId. It is what makes a 3D
+    // sound FOLLOW its GameObject: playSound only writes the position once,
+    // on start, so without this a moving object left the sound nailed where it
+    // was when Play was pressed (neither attenuation nor panning
+    // changed). No-op if the sound is not 3D or if there is no live voice, with the
+    // same liveChannel check as the volume/pitch setters.
+    // dt serves to derive the source velocity (doppler), as in
+    // update() for the listener: with dt <= 0 the velocity goes to zero.
     void setSoundPosition(int soundId, const glm::vec3& worldPos, float dt = 0.0f);
 
-    // ¿Hay una voz viva de este sonido? La lógica ya existía dentro del .cpp
-    // (liveChannel, el guard contra el reciclado de voces de FMOD) pero no
-    // estaba expuesta, así que un script no podía esperar a que un sonido
-    // terminara. OJO: una voz PAUSADA sigue contando como "playing" para FMOD,
-    // igual que en Unity; para distinguirla está isSoundPaused.
+    // Is there a live voice of this sound? The logic already existed inside the .cpp
+    // (liveChannel, the guard against FMOD voice recycling) but it
+    // was not exposed, so a script could not wait for a sound to
+    // finish. NOTE: a PAUSED voice still counts as "playing" for FMOD,
+    // just like in Unity; isSoundPaused is there to tell it apart.
     bool isSoundPlaying(int soundId) const;
     bool isSoundPaused (int soundId) const;
 
-    // Pausa/reanuda la voz viva del sonido, conservando la posición de
-    // reproducción — a diferencia de stopSound, que la tira. No-op si no hay
-    // voz: no es estado persistente del componente, es de la voz.
+    // Pauses/resumes the live voice of the sound, keeping the playback
+    // position — unlike stopSound, which throws it away. No-op if there is no
+    // voice: it is not persistent component state, it is voice state.
     void setSoundPaused(int soundId, bool paused);
 
-    // Silencia la voz sin tocar su volumen: al quitar el mute vuelve el valor
-    // que tenia, sin que el script tenga que acordarse de cual era. Es la
-    // diferencia con poner el volumen a 0, que es como se hacia hasta ahora.
+    // Silences the voice without touching its volume: on unmuting the value it
+    // had comes back, without the script having to remember what it was. It is the
+    // difference from setting the volume to 0, which is how it was done until now.
     void setSoundMute(int soundId, bool mute);
 
-    // Posicion de reproduccion en SEGUNDOS. Permite arrancar un clip por la
-    // mitad y saber por donde va. -1 si no hay voz viva: 0 seria mentira (ese
-    // es el principio del clip, no "no suena nada").
+    // Playback position in SECONDS. It allows starting a clip halfway
+    // and knowing where it is. -1 if there is no live voice: 0 would be a lie (that
+    // is the start of the clip, not "nothing is playing").
     float getSoundTime(int soundId) const;
     void  setSoundTime(int soundId, float seconds);
 
-    // --- Pausa global ------------------------------------------------------
+    // --- Global pause ------------------------------------------------------
     //
-    // Congela TODO lo que suena, conservando la posicion: es el
-    // AudioListener.pause de Unity, lo que quiere un menu de pausa. Actua sobre
-    // el grupo master, del que cuelgan los otros dos buses.
+    // Freezes EVERYTHING that plays, keeping the position: it is Unity's
+    // AudioListener.pause, what a pause menu wants. It acts on
+    // the master group, from which the other two buses hang.
     //
-    // No lo confundas con un timeScale: el motor no tiene pausa de simulacion,
-    // asi que esto calla el audio pero la escena sigue corriendo si nadie mas
-    // la para.
+    // Do not confuse it with a timeScale: the engine has no simulation pause,
+    // so this silences the audio but the scene keeps running if nobody else
+    // stops it.
     void setAudioPaused(bool paused);
     bool isAudioPaused() const;
 
-    // Volumen por bus, [0, 1]. Es el mando que el jugador espera encontrar en
-    // las opciones: Master escala a los otros dos porque Music y Sfx cuelgan de
-    // él en FMOD. El getter existe para que la UI dibuje el valor real y no una
-    // copia suya que pueda desincronizarse.
+    // Volume per bus, [0, 1]. It is the knob the player expects to find in
+    // the options: Master scales the other two because Music and Sfx hang from
+    // it in FMOD. The getter exists so that the UI draws the real value and not
+    // its own copy that could get out of sync.
     void  setBusVolume(AudioBus bus, float v);
     float getBusVolume(AudioBus bus) const;
 
-    // --- Zonas de reverberacion --------------------------------------------
+    // --- Reverb zones ------------------------------------------------------
     //
-    // Una zona es un FMOD::Reverb3D: una esfera con preset dentro de la cual
-    // todo lo que suene coge esa reverb. La mezcla entre zonas solapadas y el
-    // desvanecido entre min y max los hace FMOD, no nosotros.
+    // A zone is an FMOD::Reverb3D: a sphere with a preset inside which
+    // everything that plays gets that reverb. The mixing between overlapping zones and the
+    // fade between min and max are done by FMOD, not by us.
     //
-    // Se identifican por el id del GameObject dueno, no por indice: asi el
-    // componente se mantiene como datos puros y el recurso nativo tiene un solo
-    // dueno. syncReverbZone crea la zona la primera vez y la actualiza despues,
-    // asi que se puede llamar por frame sin miedo.
+    // They are identified by the id of the owner GameObject, not by index: this way the
+    // component stays pure data and the native resource has a single
+    // owner. syncReverbZone creates the zone the first time and updates it afterwards,
+    // so it can be called per frame without fear.
     //
-    // preset: nombre de un FMOD_PRESET_* en minusculas (ver reverbPresetNames).
-    // Uno desconocido deja la zona con el preset anterior y devuelve false.
+    // preset: name of an FMOD_PRESET_* in lowercase (see reverbPresetNames).
+    // An unknown one leaves the zone with the previous preset and returns false.
     bool syncReverbZone(uint64_t ownerId, const glm::vec3& worldPos,
                         float minDistance, float maxDistance,
                         const std::string& preset, bool enabled);
 
-    // Destruye la zona de ese GameObject. No-op si no tenia.
+    // Destroys the zone of that GameObject. No-op if it had none.
     void removeReverbZone(uint64_t ownerId);
 
-    // Destruye toda zona cuyo id NO este en la lista. Es como se recogen las
-    // zonas de GameObjects borrados: el manager no ve la escena, asi que es la
-    // escena la que le dice quien sigue vivo.
+    // Destroys every zone whose id is NOT in the list. It is how the
+    // zones of deleted GameObjects are collected: the manager does not see the scene, so it is the
+    // scene that tells it who is still alive.
     void retainReverbZones(const std::vector<uint64_t>& aliveOwnerIds);
 
-    // Destruye TODAS. La llama la carga de escena: las zonas de la escena
-    // anterior no pueden sobrevivir a la nueva.
+    // Destroys ALL of them. Called by scene loading: the zones of the
+    // previous scene cannot survive into the new one.
     void clearReverbZones();
 
-    // Zonas vivas. Diagnostico y tests: sin esto, "la zona se creo" y "la zona
-    // se creo y se perdio" son lo mismo desde fuera.
+    // Live zones. Diagnostics and tests: without this, "the zone was created" and "the zone
+    // was created and lost" are the same thing from outside.
     size_t reverbZoneCount() const;
 
-    // Presets disponibles, en el orden en que los ensena la UI. Estatico: la
-    // lista es la misma con o sin FMOD compilado, para que el editor pueda
-    // dibujar el combo aunque no haya audio.
+    // Available presets, in the order in which the UI shows them. Static: the
+    // list is the same with or without FMOD compiled, so that the editor can
+    // draw the combo even if there is no audio.
     static const std::vector<std::string>& reverbPresetNames();
 
-    // --- Efectos por bus ---------------------------------------------------
+    // --- Per-bus effects ---------------------------------------------------
     //
-    // Cuelgan un DSP de FMOD del ChannelGroup del bus, asi que afectan a TODO lo
-    // que salga por el. Idempotente: pedir dos veces el mismo efecto en el mismo
-    // bus no encadena dos copias.
+    // They hang an FMOD DSP from the bus ChannelGroup, so they affect EVERYTHING
+    // that goes out through it. Idempotent: requesting the same effect twice on the same
+    // bus does not chain two copies.
     //
-    // El parametro es el unico mando de cada efecto, normalizado a [0, 1] para
-    // que la UI y Lua no tengan que conocer las unidades de FMOD:
-    //   LowPass / HighPass -> frecuencia de corte (0 = mas cerrado, 1 = abierto)
-    //   Echo               -> retardo entre repeticiones
-    //   Reverb             -> tamano de la cola
-    // El mapeo exacto a las unidades de FMOD vive en el .cpp, en un solo sitio.
+    // The parameter is the single knob of each effect, normalized to [0, 1] so
+    // that the UI and Lua do not have to know the FMOD units:
+    //   LowPass / HighPass -> cutoff frequency (0 = more closed, 1 = open)
+    //   Echo               -> delay between repetitions
+    //   Reverb             -> size of the tail
+    // The exact mapping to FMOD units lives in the .cpp, in a single place.
     void setBusEffect(AudioBus bus, AudioEffect effect, float amount);
 
-    // Quita el efecto del bus y libera su DSP. No-op si no estaba puesto.
+    // Removes the effect from the bus and releases its DSP. No-op if it was not set.
     void clearBusEffect(AudioBus bus, AudioEffect effect);
 
-    // Quita TODOS los efectos de un bus. Lo usa el editor al cambiar de escena.
+    // Removes ALL the effects of a bus. Used by the editor when changing scene.
     void clearBusEffects(AudioBus bus);
 
-    // Diagnostico y tests: cuantos DSP hay colgados ahora mismo. Sin esto, "el
-    // efecto se aplico" y "el efecto se creo y se perdio" son indistinguibles
-    // desde fuera, y una fuga de DSP no se ve hasta que el mezclador se ahoga.
+    // Diagnostics and tests: how many DSPs are hanging right now. Without this, "the
+    // effect was applied" and "the effect was created and lost" are indistinguishable
+    // from outside, and a DSP leak is not seen until the mixer chokes.
     size_t activeEffectCount() const;
 
-    // DSP realmente conectados al grupo de un bus, preguntandoselo a FMOD. NO es
-    // lo mismo que activeEffectCount, y la diferencia es justo donde vive la
-    // fuga: si setBusEffect encadenara un DSP nuevo en cada llamada en vez de
-    // reajustar el existente, el mapa seguiria teniendo UNA entrada (la nueva
-    // pisa a la vieja) mientras el grupo acumula cien DSP perdidos. Lo descubri
-    // saboteando la idempotencia y viendo que activeEffectCount no se enteraba.
+    // DSPs really connected to a bus group, asking FMOD. It is NOT
+    // the same as activeEffectCount, and the difference is exactly where the
+    // leak lives: if setBusEffect chained a new DSP on every call instead of
+    // readjusting the existing one, the map would still have ONE entry (the new one
+    // overwrites the old one) while the group accumulates a hundred lost DSPs. I found out
+    // by sabotaging idempotence and seeing that activeEffectCount did not notice.
     //
-    // Incluye el DSP que FMOD pone de serie en cada grupo (el fader), asi que el
-    // valor absoluto no significa nada: se usa por diferencia.
+    // It includes the DSP that FMOD puts by default in each group (the fader), so the
+    // absolute value means nothing: it is used by difference.
     size_t busDspCount(AudioBus bus) const;
     bool   hasBusEffect(AudioBus bus, AudioEffect effect) const;
 
-    // Carga path con el modo dado (is3D/loop horneados en el FMOD_MODE) y
-    // envuelve el soundId resultante en un AudioClipComponent listo para
-    // colgar de un GameObject (GameObject::setAudioClip). nullptr si
-    // loadSound falla (fichero inválido/no soportado por FMOD).
+    // Loads path with the given mode (is3D/loop baked into the FMOD_MODE) and
+    // wraps the resulting soundId in an AudioClipComponent ready to
+    // hang from a GameObject (GameObject::setAudioClip). nullptr if
+    // loadSound fails (invalid file / not supported by FMOD).
     std::shared_ptr<AudioClipComponent> createAudioClipComponent(
         const std::string& path, bool is3D, bool loop,
         AudioLoadMode loadMode = AudioLoadMode::Sample);
 
 private:
-    // FUERA del #ifdef a propósito: outputWarning() es público y NO está
-    // guardado, así que el miembro tiene que existir también en el build sin
-    // FMOD (el CI de Linux compila sin audio). Sin FMOD nadie lo escribe y
-    // queda vacío, que es justo lo que documenta el getter.
+    // OUTSIDE the #ifdef on purpose: outputWarning() is public and is NOT
+    // guarded, so the member has to exist in the build without
+    // FMOD too (the Linux CI compiles without audio). Without FMOD nobody writes it and it
+    // stays empty, which is exactly what the getter documents.
     std::string m_outputWarning;
 
 #ifdef DT_FMOD_ENABLED
-    // FMOD::ChannelGroup* del bus, o el master del sistema. nullptr sin sistema.
+    // FMOD::ChannelGroup* of the bus, or the system master. nullptr without a system.
     void* groupForBus(AudioBus bus) const;
 
-    // Clave de la caché de sonidos. NO es solo el path: is3D y loop van
-    // horneados en el FMOD_MODE, así que el mismo fichero cargado como 3D y como
-    // 2D son dos FMOD::Sound distintos y no se pueden compartir. Meter solo el
-    // path aquí haría que marcar "Is 3D?" en un clip cambiara en silencio el de
-    // otro GameObject.
+    // Key of the sound cache. It is NOT just the path: is3D and loop are baked
+    // into the FMOD_MODE, so the same file loaded as 3D and as
+    // 2D are two different FMOD::Sound and cannot be shared. Putting only the
+    // path here would make checking "Is 3D?" on a clip silently change that of
+    // another GameObject.
     static std::string soundKey(const std::string& path, bool is3D, bool loop,
                                  AudioLoadMode loadMode, AudioRolloff rolloff);
 
-    // Carga y retiene el sonido de una ruta, devolviendo su id. Punto único de
-    // carga de playClipAtPoint y preloadClip.
+    // Loads and retains the sound of a path, returning its id. Single load
+    // point of playClipAtPoint and preloadClip.
     int acquirePinnedSound(const std::string& path);
 
     void* m_system   = nullptr;  // FMOD::System*
     void* m_sfxGroup = nullptr;  // FMOD::ChannelGroup*
-    void* m_musicGroup = nullptr; // FMOD::ChannelGroup* del bus Music
+    void* m_musicGroup = nullptr; // FMOD::ChannelGroup* of the Music bus
     std::vector<void*> m_sounds;      // FMOD::Sound* SFX clips
-    std::vector<void*> m_sfxChannels; // FMOD::Channel* de la última reproducción de cada id (paralelo a m_sounds)
-    // Paralelos a m_sounds. El path es lo único que le sirve al usuario del
-    // aviso (el id es interno), y el flag evita repetir el mismo fallo en cada
-    // frame — pollLoadFailures se llama por frame.
+    std::vector<void*> m_sfxChannels; // FMOD::Channel* of the last playback of each id (parallel to m_sounds)
+    // Parallel to m_sounds. The path is the only thing useful to the user of the
+    // warning (the id is internal), and the flag avoids repeating the same failure on every
+    // frame — pollLoadFailures is called per frame.
     std::vector<std::string> m_soundPaths;
     std::vector<char>        m_soundFailureReported;
-    // Cuántos AudioClipComponent usan cada slot. El FMOD::Sound solo se libera
-    // cuando llega a cero: antes, veinte objetos con el mismo .wav cargaban
-    // veinte copias descomprimidas en RAM, y el primero en destruirse se
-    // llevaba por delante... nada, porque cada uno tenía la suya. Compartiendo,
-    // soltar sin contar sería un use-after-free para los otros diecinueve.
+    // How many AudioClipComponents use each slot. The FMOD::Sound is only released
+    // when it reaches zero: before, twenty objects with the same .wav loaded
+    // twenty decompressed copies in RAM, and the first one to be destroyed
+    // took away... nothing, because each had its own. Sharing,
+    // releasing without counting would be a use-after-free for the other nineteen.
     std::vector<int>         m_soundRefs;
-    // Clave de cada slot, para poder borrar la entrada del mapa al liberarlo.
+    // Key of each slot, to be able to erase the map entry when releasing it.
     std::vector<std::string> m_soundKeys;
-    // Ajustes de importacion del fichero de cada sonido (sidecar), y el ULTIMO
-    // volumen que el componente pidio para su voz (playSound / setChannelVolume).
-    // Paralelos a m_sounds y reciclados con el slot. m_soundVolume existe para que
-    // refreshImportSettings reaplique voiceVolume(id, volumenDelComponente) en vez
-    // de multiplicar el volumen que ya lleve el canal (compondria la ganancia dos
-    // veces). Los one-shots NO lo tocan: su voz no se puede alcanzar.
+    // Import settings of each sound's file (sidecar), and the LAST
+    // volume the component requested for its voice (playSound / setChannelVolume).
+    // Parallel to m_sounds and recycled with the slot. m_soundVolume exists so that
+    // refreshImportSettings reapplies voiceVolume(id, componentVolume) instead of
+    // multiplying the volume the channel already carries (it would compound the gain twice).
+    // One-shots do NOT touch it: their voice cannot be reached.
     std::vector<AudioImportSettings> m_soundImport;
     std::vector<float>               m_soundVolume;
 
-    // Volumen efectivo de una voz de `id`: el pedido por el componente por la
-    // ganancia del fichero. El UNICO sitio donde se multiplica la ganancia.
+    // Effective volume of a voice of `id`: the one requested by the component times
+    // the file gain. The ONLY place where the gain is multiplied.
     float voiceVolume(int id, float volume) const;
 
-    // Slots libres, para reutilizarlos en vez de crecer sin techo: cada ciclo
-    // Play->Stop recrea la escena entera y pedía ids nuevos.
+    // Free slots, to reuse them instead of growing without a ceiling: each
+    // Play->Stop cycle recreates the whole scene and asked for new ids.
     std::vector<int>         m_freeSlots;
     std::unordered_map<std::string, int> m_soundByKey;
-    // Sonidos retenidos por playClipAtPoint/preloadClip. Sin este conjunto,
-    // cada disparo subiría otra vez el refcount del mismo sonido y el contador
-    // crecería sin techo: el sonido no se liberaría jamás ni aunque se llamara
-    // a unloadSound tantas veces como haga falta.
+    // Sounds retained by playClipAtPoint/preloadClip. Without this set,
+    // each shot would raise the refcount of the same sound again and the counter
+    // would grow without a ceiling: the sound would never be released even if
+    // unloadSound were called as many times as needed.
     std::unordered_set<int>  m_pinnedSounds;
-    // DSP vivos, indexados por (bus, efecto). El valor es un FMOD::DSP* que hay
-    // que desconectar Y liberar: son recursos nativos, no punteros sueltos, y
-    // olvidarlos es la fuga clasica de este tipo de API.
+    // Live DSPs, indexed by (bus, effect). The value is an FMOD::DSP* that has
+    // to be disconnected AND released: they are native resources, not loose pointers, and
+    // forgetting them is the classic leak of this kind of API.
     std::unordered_map<int, void*> m_busEffects;
-    // FMOD::Reverb3D* por id de GameObject. Recursos nativos: hay que
-    // liberarlos, y por eso el componente no los guarda.
+    // FMOD::Reverb3D* per GameObject id. Native resources: they have to be
+    // released, and that is why the component does not store them.
     std::unordered_map<uint64_t, void*> m_reverbZones;
-    // Clave del mapa. bus y efecto son enums pequenos, asi que caben de sobra.
+    // Map key. bus and effect are small enums, so they fit with room to spare.
     static int effectKey(AudioBus bus, AudioEffect effect)
     {
         return (int)bus * 16 + (int)effect;
     }
-    // Ultima posicion conocida del listener y de cada fuente, para derivar la
-    // velocidad que necesita el doppler. m_hasLastListenerPos evita que el
-    // primer frame invente una velocidad enorme desde el origen.
+    // Last known position of the listener and of each source, to derive the
+    // velocity the doppler needs. m_hasLastListenerPos prevents the
+    // first frame from inventing a huge velocity from the origin.
     glm::vec3                m_lastListenerPos{0.0f};
     bool                     m_hasLastListenerPos = false;
-    std::vector<glm::vec3>   m_soundLastPos;   // paralelo a m_sounds
+    std::vector<glm::vec3>   m_soundLastPos;   // parallel to m_sounds
     std::vector<char>        m_soundHasLastPos;
 #endif
 };
