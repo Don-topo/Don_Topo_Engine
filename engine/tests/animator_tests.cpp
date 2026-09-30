@@ -498,6 +498,36 @@ static void test_remove_animation_source()
     CHECK(packed.boneInfos.size() == m.animationClips.size() * m.skeleton.names.size());
 }
 
+// B6: clones share their read-only GPU buffers by skinnedGeometryKey. A copy
+// of the model must give the SAME key (or nothing is shared), and any change
+// the GPU buffers would see must give a different one (or a clone would draw
+// with another character's vertices or clips).
+static void test_skinned_geometry_key()
+{
+    const SkinnedMesh a = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    const SkinnedMesh b = a;
+    const std::string key = skinnedGeometryKey(a, packSkinnedClips(a));
+    CHECK(key == skinnedGeometryKey(b, packSkinnedClips(b)));
+
+    SkinnedMesh vtx = a;
+    vtx.skinnedVertices.back().position.x += 1.0f;
+    CHECK(key != skinnedGeometryKey(vtx, packSkinnedClips(vtx)));
+
+    SkinnedMesh idx = a;
+    std::swap(idx.indices[0], idx.indices[1]);
+    CHECK(key != skinnedGeometryKey(idx, packSkinnedClips(idx)));
+
+    SkinnedMesh clips = a;
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(clips, "assets/modelAnimation.fbx", warnings));
+    CHECK(key != skinnedGeometryKey(clips, packSkinnedClips(clips)));
+
+    // Material-only change: same buffers, so the key must NOT change.
+    SkinnedMesh mat = a;
+    if (!mat.materials.empty()) mat.materials[0].texturePath = "assets/other.png";
+    CHECK(key == skinnedGeometryKey(mat, packSkinnedClips(mat)));
+}
+
 // The builtin source is the model: removing it would leave a mesh without the
 // FBX that created it. It is rejected, touching nothing.
 static void test_remove_builtin_source_is_rejected()
@@ -9420,6 +9450,7 @@ int main()
     test_remove_current_state_falls_back_but_keeps_params();
     test_set_entry_state_keeps_params();
     test_loader_reads_all_clips();
+    test_skinned_geometry_key();
     test_loader_registers_builtin_source();
     test_unique_clip_name();
     test_load_animation_clips_matches_full_load();

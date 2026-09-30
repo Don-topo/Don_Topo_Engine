@@ -1150,6 +1150,22 @@ namespace DonTopo {
             };
             SharedTextureCache<MaterialImage> m_skinnedTextures;
 
+            // Read-only buffers of a character (B6): input vertices, indices,
+            // keyframes and bone infos. Identical across clones of the same model,
+            // so they are shared by content key (skinnedGeometryKey) with refcount,
+            // same cache as the textures. The per-character buffers (pose, output
+            // vertices) stay in SkinnedRenderObject.
+            struct SkinnedGeometry
+            {
+                VkBuffer       posBuf   = VK_NULL_HANDLE, rotBuf = VK_NULL_HANDLE, scaleBuf = VK_NULL_HANDLE,
+                               boneBuf  = VK_NULL_HANDLE, vtxBuf = VK_NULL_HANDLE, idxBuf   = VK_NULL_HANDLE;
+                VkDeviceMemory posMem   = VK_NULL_HANDLE, rotMem = VK_NULL_HANDLE, scaleMem = VK_NULL_HANDLE,
+                               boneMem  = VK_NULL_HANDLE, vtxMem = VK_NULL_HANDLE, idxMem   = VK_NULL_HANDLE;
+                bool operator==(const SkinnedGeometry& o) const { return vtxBuf == o.vtxBuf && idxBuf == o.idxBuf; }
+            };
+            SharedTextureCache<SkinnedGeometry> m_skinnedGeometry;
+            void destroySkinnedGeometry(const SkinnedGeometry& g);
+
             // Open batch where the current pump's uploads land. It is sent in
             // flushPendingUploads() and moves to m_inFlightBatches.
             std::unique_ptr<TransferBatch> m_pendingBatch;

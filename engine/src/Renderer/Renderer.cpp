@@ -730,6 +730,9 @@ namespace DonTopo {
         if (m_skinnedTextures.size() != 0)
             fprintf(stderr, "[Renderer] %zu character textures not released at shutdown\n",
                     m_skinnedTextures.size());
+        if (m_skinnedGeometry.size() != 0)
+            fprintf(stderr, "[Renderer] %zu character geometries not released at shutdown\n",
+                    m_skinnedGeometry.size());
         m_res.destroySharedPlaceholders();
         // Now yes: there is no pending destroySkinnedRenderObject left that
         // needs to free sets from the pool chain.
@@ -3729,6 +3732,14 @@ namespace DonTopo {
         }
     }
 
+    void Renderer::destroySkinnedGeometry(const SkinnedGeometry& g)
+    {
+        const VkBuffer       bufs[] = { g.posBuf, g.rotBuf, g.scaleBuf, g.boneBuf, g.vtxBuf, g.idxBuf };
+        const VkDeviceMemory mems[] = { g.posMem, g.rotMem, g.scaleMem, g.boneMem, g.vtxMem, g.idxMem };
+        for (VkBuffer b : bufs)       if (b != VK_NULL_HANDLE) vkDestroyBuffer(m_gpu.device(), b, nullptr);
+        for (VkDeviceMemory m : mems) if (m != VK_NULL_HANDLE) vkFreeMemory(m_gpu.device(), m, nullptr);
+    }
+
     void Renderer::destroySkinnedRenderObject(SkinnedRenderObject& obj)
     {
         auto destroy = [&](VkBuffer& b, VkDeviceMemory& m)
@@ -3736,11 +3747,28 @@ namespace DonTopo {
             if (b != VK_NULL_HANDLE) { vkDestroyBuffer(m_gpu.device(), b, nullptr); b = VK_NULL_HANDLE; }
             if (m != VK_NULL_HANDLE) { vkFreeMemory(m_gpu.device(), m, nullptr);    m = VK_NULL_HANDLE; }
         };
-        destroy(obj.keyframePosBuffer,    obj.keyframePosMemory);
-        destroy(obj.keyframeRotBuffer,    obj.keyframeRotMemory);
-        destroy(obj.keyframeScaleBuffer,  obj.keyframeScaleMemory);
-        destroy(obj.boneInfoBuffer,       obj.boneInfoMemory);
-        destroy(obj.inputVertexBuffer,    obj.inputVertexMemory);
+        // Shared read-only buffers (B6): the last character that uses them
+        // destroys them. One not in the cache (never happens today: acquire
+        // always caches a non-empty key) is destroyed as its own.
+        {
+            SkinnedGeometry g;
+            g.posBuf   = obj.keyframePosBuffer;   g.posMem   = obj.keyframePosMemory;
+            g.rotBuf   = obj.keyframeRotBuffer;   g.rotMem   = obj.keyframeRotMemory;
+            g.scaleBuf = obj.keyframeScaleBuffer; g.scaleMem = obj.keyframeScaleMemory;
+            g.boneBuf  = obj.boneInfoBuffer;      g.boneMem  = obj.boneInfoMemory;
+            g.vtxBuf   = obj.inputVertexBuffer;   g.vtxMem   = obj.inputVertexMemory;
+            g.idxBuf   = obj.indexBuffer;         g.idxMem   = obj.indexMemory;
+            if (m_skinnedGeometry.contains(g))
+                m_skinnedGeometry.release(g, [&](const SkinnedGeometry& h) { destroySkinnedGeometry(h); });
+            else if (!(g == SkinnedGeometry{}))
+                destroySkinnedGeometry(g);
+            obj.keyframePosBuffer   = VK_NULL_HANDLE; obj.keyframePosMemory   = VK_NULL_HANDLE;
+            obj.keyframeRotBuffer   = VK_NULL_HANDLE; obj.keyframeRotMemory   = VK_NULL_HANDLE;
+            obj.keyframeScaleBuffer = VK_NULL_HANDLE; obj.keyframeScaleMemory = VK_NULL_HANDLE;
+            obj.boneInfoBuffer      = VK_NULL_HANDLE; obj.boneInfoMemory      = VK_NULL_HANDLE;
+            obj.inputVertexBuffer   = VK_NULL_HANDLE; obj.inputVertexMemory   = VK_NULL_HANDLE;
+            obj.indexBuffer         = VK_NULL_HANDLE; obj.indexMemory         = VK_NULL_HANDLE;
+        }
         destroy(obj.localTransformBuffer, obj.localTransformMemory);
         destroy(obj.finalBoneBuffer,      obj.finalBoneMemory);
         destroy(obj.poseTrsBuffer,        obj.poseTrsMemory);
@@ -3758,7 +3786,6 @@ namespace DonTopo {
         }
         destroy(obj.ikBlockBuffer,        obj.ikBlockMemory);
         destroy(obj.outputVertexBuffer,   obj.outputVertexMemory);
-        destroy(obj.indexBuffer,          obj.indexMemory);
 
         // Shared: it is destroyed when the last character releases it. If it is not
         // from the cache (the white fill-in), releaseMaterialImage knows it is
@@ -3882,20 +3909,48 @@ namespace DonTopo {
         const PackedClips packed = packSkinnedClips(mesh);
         obj.clipCount = skinnedClipCount(mesh);
 
-        // --- Upload static SSBOs ---
-        m_res.uploadBuffer(packed.pos.data(),   packed.pos.size()   * sizeof(GpuPosKey),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframePosBuffer,   obj.keyframePosMemory,   batch);
-        m_res.uploadBuffer(packed.rot.data(),   packed.rot.size()   * sizeof(GpuRotKey),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeRotBuffer,   obj.keyframeRotMemory,   batch);
-        m_res.uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeScaleBuffer, obj.keyframeScaleMemory, batch);
-        m_res.uploadBuffer(packed.boneInfos.data(), packed.boneInfos.size() * sizeof(GpuBoneInfo),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.boneInfoBuffer,      obj.boneInfoMemory,      batch);
-        m_res.uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.inputVertexBuffer,   obj.inputVertexMemory,   batch);
-
-        // --- Index buffer ---
-        createIndexBuffer(mesh.indices, obj.indexBuffer, obj.indexMemory, batch);
+        // --- Read-only SSBOs + index buffer: shared among clones (B6) ---
+        // A later character reusing buffers of an earlier batch is safe: its
+        // uploadTicket is later, so it is not drawn before that batch lands.
+        const SkinnedGeometry geo = m_skinnedGeometry.acquire(skinnedGeometryKey(mesh, packed), [&] {
+            SkinnedGeometry g;
+            // Half-created (VRAM exhausted): nothing is in obj yet, so without
+            // this the buffers already made would leak.
+            try {
+            m_res.uploadBuffer(packed.pos.data(),   packed.pos.size()   * sizeof(GpuPosKey),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.posBuf,   g.posMem,   batch);
+            m_res.uploadBuffer(packed.rot.data(),   packed.rot.size()   * sizeof(GpuRotKey),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.rotBuf,   g.rotMem,   batch);
+            m_res.uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.scaleBuf, g.scaleMem, batch);
+            m_res.uploadBuffer(packed.boneInfos.data(), packed.boneInfos.size() * sizeof(GpuBoneInfo),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.boneBuf,  g.boneMem,  batch);
+            m_res.uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.vtxBuf,   g.vtxMem,   batch);
+            createIndexBuffer(mesh.indices, g.idxBuf, g.idxMem, batch);
+            } catch (...) {
+                // With a batch, the copies into these buffers are already
+                // recorded: the batch frees them after its fence, not now.
+                if (batch)
+                {
+                    const std::pair<VkBuffer, VkDeviceMemory> pares[] = {
+                        {g.posBuf, g.posMem}, {g.rotBuf, g.rotMem}, {g.scaleBuf, g.scaleMem},
+                        {g.boneBuf, g.boneMem}, {g.vtxBuf, g.vtxMem}, {g.idxBuf, g.idxMem} };
+                    for (const auto& [b, m] : pares)
+                        if (b != VK_NULL_HANDLE || m != VK_NULL_HANDLE) batch->addStaging(b, m);
+                }
+                else
+                    destroySkinnedGeometry(g);
+                throw;
+            }
+            return g;
+        });
+        obj.keyframePosBuffer   = geo.posBuf;   obj.keyframePosMemory   = geo.posMem;
+        obj.keyframeRotBuffer   = geo.rotBuf;   obj.keyframeRotMemory   = geo.rotMem;
+        obj.keyframeScaleBuffer = geo.scaleBuf; obj.keyframeScaleMemory = geo.scaleMem;
+        obj.boneInfoBuffer      = geo.boneBuf;  obj.boneInfoMemory      = geo.boneMem;
+        obj.inputVertexBuffer   = geo.vtxBuf;   obj.inputVertexMemory   = geo.vtxMem;
+        obj.indexBuffer         = geo.idxBuf;   obj.indexMemory         = geo.idxMem;
 
         // --- Dynamic SSBOs (device local, no initial data) ---
         m_res.createBuffer((uint32_t)boneCount * sizeof(glm::mat4),
@@ -4127,6 +4182,10 @@ namespace DonTopo {
         // Wait for the GPU to finish: an in-flight command buffer (double
         // buffering) may be reading the buffers we are about to destroy.
         // Same reason as in removeGameObject.
+        // Also the uploads not yet submitted: the rebuild runs without a batch
+        // (ticket 0, drawn at once), and on a cache hit its shared geometry may
+        // be the one an addSkinnedMesh of this frame left in m_pendingBatch (B6).
+        flushUploadsAndWait();
         vkDeviceWaitIdle(m_gpu.device());
 
         SkinnedRenderObject& obj = m_skinnedObjects[index];

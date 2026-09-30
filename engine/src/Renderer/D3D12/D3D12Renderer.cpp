@@ -1021,6 +1021,27 @@ struct D3D12Renderer::Impl {
     // from the same FBX (before, each one uploaded its own copy: ~218 MB per character with
     // modelAnimation.fbx). The views are still from each one's triplet.
     SharedTextureCache<D3D12MA::Allocation*> skinnedTextures;
+    // Read-only buffers of a character (B6): keys, bone infos, input vertices
+    // and indices, shared among clones by content key (skinnedGeometryKey).
+    // The per-character ones (pose, output vertices) stay in SkinnedObject.
+    struct SkinnedGeometry {
+        D3D12MA::Allocation* posKeys = nullptr;
+        D3D12MA::Allocation* rotKeys = nullptr;
+        D3D12MA::Allocation* scaleKeys = nullptr;
+        D3D12MA::Allocation* boneInfos = nullptr;
+        D3D12MA::Allocation* inputVerts = nullptr;
+        D3D12MA::Allocation* indices = nullptr;
+        bool operator==(const SkinnedGeometry& o) const
+        {
+            return inputVerts == o.inputVerts && indices == o.indices;
+        }
+    };
+    SharedTextureCache<SkinnedGeometry> skinnedGeometry;
+    // Everything a character holds: shared geometry and textures through their
+    // caches, its own buffers, and its SRV triplets back to the pool. The ONLY
+    // release path: three hand-written copies had drifted (the rebuild one
+    // freed shared textures behind the cache's back).
+    void releaseSkinnedResources(SkinnedObject& character);
 
     // Slots of the skinned range already handed out, in triplets. They are not reused when
     // deleting a single object because characters are loaded all at once with the
@@ -3449,15 +3470,48 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
                                        ? mesh.animationClips[0].ticksPerSecond
                                        : 24.0f);
 
-    object.posKeys   = uploadBuffer(packed.pos.data(), packed.pos.size() * sizeof(GpuPosKey),
-                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    object.rotKeys   = uploadBuffer(packed.rot.data(), packed.rot.size() * sizeof(GpuRotKey),
-                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    object.scaleKeys = uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
-                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    object.boneInfos = uploadBuffer(packed.boneInfos.data(),
-                                    packed.boneInfos.size() * sizeof(GpuBoneInfo),
-                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // Read-only buffers, shared among clones (B6).
+    const SkinnedGeometry geo = skinnedGeometry.acquire(skinnedGeometryKey(mesh, packed), [&] {
+        SkinnedGeometry g;
+        // Half-created (VRAM exhausted): the uploads are synchronous, so what
+        // was already made can be released right away.
+        try {
+        g.posKeys   = uploadBuffer(packed.pos.data(), packed.pos.size() * sizeof(GpuPosKey),
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        g.rotKeys   = uploadBuffer(packed.rot.data(), packed.rot.size() * sizeof(GpuRotKey),
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        g.scaleKeys = uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        g.boneInfos = uploadBuffer(packed.boneInfos.data(),
+                                   packed.boneInfos.size() * sizeof(GpuBoneInfo),
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        g.inputVerts =
+            uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        g.indices = uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
+                                 D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        } catch (...) {
+            for (D3D12MA::Allocation* a : {g.posKeys, g.rotKeys, g.scaleKeys, g.boneInfos, g.inputVerts, g.indices})
+                if (a)
+                    a->Release();
+            throw;
+        }
+        return g;
+    });
+    // From here on `object` holds cache references (geometry, then textures
+    // and SRV triplets): a throw before it is stored must give them back, or
+    // the shared entry stays pinned for the rest of the process.
+    bool stored = false;
+    struct Unwind {
+        Impl* self; SkinnedObject* o; const bool* done;
+        ~Unwind() { if (!*done) self->releaseSkinnedResources(*o); }
+    } unwind{ this, &object, &stored };
+    object.posKeys    = geo.posKeys;
+    object.rotKeys    = geo.rotKeys;
+    object.scaleKeys  = geo.scaleKeys;
+    object.boneInfos  = geo.boneInfos;
+    object.inputVerts = geo.inputVerts;
+    object.indices    = geo.indices;
     // Extent of the rest pose, for the outline thickness. Same
     // computation as the Vulkan path.
     object.restMaxExtent = 0.0f;
@@ -3471,10 +3525,6 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
         const glm::vec3 e    = bMax - bMin;
         object.restMaxExtent = (glm::max)(e.x, (glm::max)(e.y, e.z));
     }
-
-    object.inputVerts =
-        uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
     object.localXforms = createStorageBuffer(static_cast<UINT64>(object.boneCount) * sizeof(glm::mat4),
                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -3515,9 +3565,6 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
     object.outputVerts = createStorageBuffer(
         static_cast<UINT64>(object.vertexCount) * kSkinnedOutputStride,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-    object.indices = uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
-                                  D3D12_RESOURCE_STATE_INDEX_BUFFER);
 
     object.vertexBufferView.BufferLocation = object.outputVerts->GetResource()->GetGPUVirtualAddress();
     object.vertexBufferView.SizeInBytes    = object.vertexCount * kSkinnedOutputStride;
@@ -3640,6 +3687,7 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
 
     // Recycled slot if there is one; otherwise, the vector grows as usual.
     const int slot = skinnedSlots.acquire();
+    stored = true;
     if (slot < 0) {
         skinnedObjects.push_back(std::move(object));
         return static_cast<int>(skinnedObjects.size() - 1);
@@ -3690,29 +3738,65 @@ void D3D12Renderer::Impl::ensureSkinnedInstanceBuffer(size_t count)
     skinnedInstanceCapacity[frameIndex] = newCapacity;
 }
 
+void D3D12Renderer::Impl::releaseSkinnedResources(SkinnedObject& character)
+{
+    SkinnedGeometry geo;
+    geo.posKeys    = character.posKeys;
+    geo.rotKeys    = character.rotKeys;
+    geo.scaleKeys  = character.scaleKeys;
+    geo.boneInfos  = character.boneInfos;
+    geo.inputVerts = character.inputVerts;
+    geo.indices    = character.indices;
+    const auto releaseGeo = [](const SkinnedGeometry& g) {
+        for (D3D12MA::Allocation* a : {g.posKeys, g.rotKeys, g.scaleKeys, g.boneInfos, g.inputVerts, g.indices})
+            if (a)
+                a->Release();
+    };
+    if (skinnedGeometry.contains(geo))
+        skinnedGeometry.release(geo, releaseGeo);
+    else if (!(geo == SkinnedGeometry{}))
+        releaseGeo(geo);
+    for (D3D12MA::Allocation** allocation :
+         {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
+          &character.inputVerts, &character.indices})
+        *allocation = nullptr;
+
+    for (D3D12MA::Allocation** allocation :
+         {&character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs,
+          &character.poseBlock, &character.ikBlock, &character.outputVerts}) {
+        if (*allocation) {
+            (*allocation)->Release();
+            *allocation = nullptr;
+        }
+    }
+    for (D3D12MA::Allocation* texture : character.textures)
+        if (texture)
+            skinnedTextures.release(texture, [](D3D12MA::Allocation* const& a) { a->Release(); });
+    character.textures.clear();
+
+    // The triplets go back to the pool. A character takes one per submesh, so
+    // without this the cap of 16 ran out after two or three scene reloads
+    // even with not a single character alive.
+    for (const SkinnedSubMesh& sub : character.subMeshes)
+        if (sub.srvBase >= kSrvSkinned &&
+            sub.srvBase < kSrvSkinned + kMaxSkinnedSlots * kSrvPerObject)
+            freeSkinnedSrv.push_back(sub.srvBase);
+    character.subMeshes.clear();
+}
+
 void D3D12Renderer::Impl::releaseSkinnedObjects()
 {
-    for (SkinnedObject& character : skinnedObjects) {
-        for (D3D12MA::Allocation** allocation :
-             {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
-              &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs, &character.poseBlock, &character.ikBlock,
-              &character.outputVerts, &character.indices}) {
-            if (*allocation) {
-                (*allocation)->Release();
-                *allocation = nullptr;
-            }
-        }
-        for (D3D12MA::Allocation* texture : character.textures)
-            if (texture)
-                skinnedTextures.release(texture, [](D3D12MA::Allocation* const& a) { a->Release(); });
-        character.textures.clear();
-    }
+    for (SkinnedObject& character : skinnedObjects)
+        releaseSkinnedResources(character);
     skinnedObjects.clear();
-    // All characters were released: the cache has to be empty. If not,
+    // All characters were released: the caches have to be empty. If not,
     // someone skipped the release; a warning is given and nothing is freed blindly.
     if (skinnedTextures.size() != 0)
         diagLog("[D3D12] " + std::to_string(skinnedTextures.size()) +
                 " character textures not released at shutdown");
+    if (skinnedGeometry.size() != 0)
+        diagLog("[D3D12] " + std::to_string(skinnedGeometry.size()) +
+                " character geometries not released at shutdown");
     skinnedSlots.clear();
     freeSkinnedSrv.clear();
     nextSkinnedSlot = 0;
@@ -8614,27 +8698,7 @@ bool D3D12Renderer::Impl::releaseSkinnedSlot(size_t index)
     if (character.slotFree)
         return false;
 
-    for (D3D12MA::Allocation** allocation :
-         {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
-          &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs, &character.poseBlock, &character.ikBlock,
-          &character.outputVerts, &character.indices}) {
-        if (*allocation) {
-            (*allocation)->Release();
-            *allocation = nullptr;
-        }
-    }
-    for (D3D12MA::Allocation* texture : character.textures)
-        if (texture)
-            skinnedTextures.release(texture, [](D3D12MA::Allocation* const& a) { a->Release(); });
-    character.textures.clear();
-
-    // The triplets go back to the pool. A character takes one per submesh, so
-    // without this the cap of 16 ran out after two or three scene reloads
-    // even with not a single character alive.
-    for (const SkinnedSubMesh& sub : character.subMeshes)
-        if (sub.srvBase >= kSrvSkinned &&
-            sub.srvBase < kSrvSkinned + kMaxSkinnedSlots * kSrvPerObject)
-            freeSkinnedSrv.push_back(sub.srvBase);
+    releaseSkinnedResources(character);
 
     character          = SkinnedObject{};
     character.visible  = false;
@@ -10710,12 +10774,24 @@ void D3D12Renderer::rebuildSkinnedMesh(int index, const SkinnedMesh& mesh)
     // removing clips) does not expect the character to jump to the initial pose.
     const Impl::SkinnedObject previous = d.skinnedObjects[index];
 
+    // createSkinnedObject recycles a free slot when there is one, so the new
+    // object is at `created`, not necessarily at back(): popping back() took
+    // ANOTHER live character. The temporary slot is handed back either way.
+    const size_t sizeBefore = d.skinnedObjects.size();
     const int created = d.createSkinnedObject(mesh);
     if (created < 0)
         return;
 
-    Impl::SkinnedObject rebuilt = d.skinnedObjects.back();
-    d.skinnedObjects.pop_back();
+    Impl::SkinnedObject rebuilt = std::move(d.skinnedObjects[static_cast<size_t>(created)]);
+    if (d.skinnedObjects.size() > sizeBefore) {
+        d.skinnedObjects.pop_back();
+    } else {
+        Impl::SkinnedObject& temp = d.skinnedObjects[static_cast<size_t>(created)];
+        temp          = Impl::SkinnedObject{};
+        temp.visible  = false;
+        temp.slotFree = true;
+        d.skinnedSlots.release(created);
+    }
 
     rebuilt.transform   = previous.transform;
     rebuilt.visible     = previous.visible;
@@ -10725,20 +10801,10 @@ void D3D12Renderer::rebuildSkinnedMesh(int index, const SkinnedMesh& mesh)
 
     // The old resources may be in use by the last presented frame.
     d.waitForGpu();
+    // Through the caches: the textures and geometry are SHARED with `rebuilt`
+    // (same key), and releasing them raw freed what the new one uses.
     Impl::SkinnedObject& slot = d.skinnedObjects[index];
-    for (D3D12MA::Allocation** allocation :
-         {&slot.posKeys, &slot.rotKeys, &slot.scaleKeys, &slot.boneInfos, &slot.inputVerts,
-          &slot.localXforms, &slot.finalBones, &slot.outputVerts, &slot.indices}) {
-        if (*allocation) {
-            (*allocation)->Release();
-            *allocation = nullptr;
-        }
-    }
-    for (D3D12MA::Allocation* texture : slot.textures)
-        if (texture)
-            texture->Release();
-    slot.textures.clear();
-
+    d.releaseSkinnedResources(slot);
     slot = std::move(rebuilt);
 }
 
