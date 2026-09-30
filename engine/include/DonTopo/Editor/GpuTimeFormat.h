@@ -4,21 +4,21 @@
 
 namespace DonTopo
 {
-    // Como se escribe un tiempo de GPU por pase, en UN solo sitio.
+    // How a per-pass GPU time is written, in ONE place only.
     //
-    // La regla que importa es la del valor no medido. Un pase devuelve <= 0
-    // cuando no ha corrido este frame: o su efecto esta apagado, o la captura
-    // todavia no tiene los dos frames que necesita. El panel de Performance ya
-    // lo pintaba como "--", pero las ocho lineas del menu View hacian "%.3f" a
-    // secas y sacaban "0.000 ms" (H57).
+    // The rule that matters is the one for the unmeasured value. A pass returns <= 0
+    // when it has not run this frame: either its effect is off, or the capture does
+    // not yet have the two frames it needs. The Performance panel already drew it as
+    // "--", but the eight lines of the View menu did a plain "%.3f" and printed
+    // "0.000 ms" (H57).
     //
-    // Y eso no es un detalle de estilo: "0.000 ms" se lee como «este efecto es
-    // gratis», que es justo la conclusion contraria a «no hay medida». Peor aun,
-    // se confunde con un pase que de verdad no cuesta nada. El numero esta ahi
-    // para decidir si un efecto sale caro, asi que mentir en ese caso vacia de
-    // sentido al resto.
+    // And that is not a style detail: "0.000 ms" reads as "this effect is free", which
+    // is exactly the opposite conclusion of "there is no measurement". Worse, it is
+    // confused with a pass that really costs nothing. The number is there to decide
+    // whether an effect is expensive, so lying in that case empties the rest of
+    // meaning.
     //
-    // Devuelve `buf` para poder usarlo directamente en un ImGui::Text.
+    // Returns `buf` so it can be used directly in an ImGui::Text.
     inline const char* gpuMsText(float ms, char* buf, std::size_t n)
     {
         if (n == 0) return buf;
@@ -27,6 +27,6 @@ namespace DonTopo
         return buf;
     }
 
-    // Tamano de sobra para "%.3f" de cualquier float representable.
+    // More than enough size for "%.3f" of any representable float.
     constexpr std::size_t kGpuMsTextSize = 32;
 }

@@ -8,7 +8,7 @@ namespace DonTopo
 {
     void LoadingModal::begin(int total)
     {
-        if (total <= 0) return;   // nada que cargar: no se abre el modal
+        if (total <= 0) return;   // nothing to load: the modal is not opened
         m_active = true;
         m_total  = total;
         m_done   = 0;
@@ -38,8 +38,8 @@ namespace DonTopo
         const bool cancelled = ImGui::Button("Cancel");
         ImGui::End();
 
-        // Cancelar deja la escena con lo cargado hasta aquí. Es un estado
-        // válido y guardable, no una escena a medias que haya que tirar.
+        // Cancel leaves the scene with what has been loaded so far. It is a valid,
+        // saveable state, not a half-built scene that has to be thrown away.
         if (cancelled) m_active = false;
         return cancelled;
     }

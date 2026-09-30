@@ -25,10 +25,10 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// true si p está dentro de dir (ambos ya canonicalizados y en minúsculas, es
-// decir, salidos de exportPathKey). Único predicado de contención del módulo:
-// el editor tenía otro (isPathWithinOrEqual) con semántica distinta y sin
-// tests, y dos implementaciones del mismo predicado divergen antes o después.
+// true if p is inside dir (both already canonicalized and lowercase, that
+// is, coming out of exportPathKey). The module's only containment predicate:
+// the editor had another (isPathWithinOrEqual) with different semantics and no
+// tests, and two implementations of the same predicate diverge sooner or later.
 bool keyUnderDir(const std::string& p, const std::string& dir)
 {
     if (dir.empty() || p.size() <= dir.size()) return false;
@@ -36,18 +36,18 @@ bool keyUnderDir(const std::string& p, const std::string& dir)
     return p[dir.size()] == '/';
 }
 
-// isspace de <cctype> con un char con signo (p.ej. una tilde en Latin-1) es
-// UB; se pasa siempre por unsigned char primero.
+// isspace from <cctype> with a signed char (e.g. a Latin-1 accent) is
+// UB; it is always passed through unsigned char first.
 bool isBlankChar(char c)
 {
     return std::isspace(static_cast<unsigned char>(c)) != 0;
 }
 
-// Todos los materiales de un GameObject, sea la malla estática o skinned.
-// loadSkinned nunca puebla el Material heredado de Mesh: reparte uno por
-// submalla en SkinnedMesh::materials. Mismo criterio que materialsOf() en
-// ContentBrowserPanel.cpp — mirar solo `material` dejaría fuera las texturas
-// de cualquier personaje con rig.
+// All the materials of a GameObject, whether the mesh is static or skinned.
+// loadSkinned never populates the Material inherited from Mesh: it hands out one per
+// submesh in SkinnedMesh::materials. Same criterion as materialsOf() in
+// ContentBrowserPanel.cpp: looking only at `material` would leave out the textures
+// of any rigged character.
 std::vector<const DonTopo::Material*> materialsOf(const DonTopo::GameObject* go)
 {
     std::vector<const DonTopo::Material*> out;
@@ -66,29 +66,29 @@ namespace DonTopo {
 
 bool isValidExportGameName(const std::string& name, std::string& reason)
 {
-    // find_first_not_of(' ') solo descartaba el espacio U+0020: un nombre de
-    // puros tabuladores ("\t\t\t") lo pasaba y reventaba después al crear la
-    // carpeta. std::all_of + isBlankChar cubre cualquier espacio en blanco
-    // real (tab, CR, LF, form feed...).
+    // find_first_not_of(' ') only discarded the space U+0020: a name of
+    // pure tabs ("\t\t\t") got past it and blew up later when creating the
+    // folder. std::all_of + isBlankChar covers any real whitespace
+    // (tab, CR, LF, form feed...).
     if (name.empty() || std::all_of(name.begin(), name.end(), isBlankChar))
     {
         reason = "The name cannot be empty";
         return false;
     }
-    // Cubre "." y ".." a la vez que cualquier nombre con puntos/espacios
-    // finales (p.ej. "...", "Juego. "): Win32 los descarta al crear la
-    // carpeta, así que el destino real deja de ser el que se le mostró al
-    // usuario en el popup.
+    // Covers "." and ".." as well as any name with trailing dots/spaces
+    // (e.g. "...", "Game. "): Win32 drops them when creating the
+    // folder, so the real destination stops being the one shown to the
+    // user in the popup.
     if (name.back() == '.' || isBlankChar(name.back()))
     {
         reason = "The name cannot end in '.' or a space";
         return false;
     }
-    // Mismo conjunto de caracteres reservados de Windows que
-    // ContentBrowserPanel.cpp::isValidFileName (kReserved ahí): el comentario
-    // que decía "mismo patrón" solo cubría ':' y los separadores, así que
-    // "Mi*Juego", "a?b", "x|y" o "<z>" pasaban aquí y fallaban después con un
-    // "no se pudo crear" genérico en vez de este motivo concreto.
+    // Same set of Windows reserved characters as
+    // ContentBrowserPanel.cpp::isValidFileName (kReserved there): the comment
+    // that said "same pattern" only covered ':' and the separators, so
+    // "My*Game", "a?b", "x|y" or "<z>" got through here and failed later with a
+    // generic "could not be created" instead of this specific reason.
     static const std::string kReserved = "\\/:*?\"<>|";
     for (char c : name)
     {
@@ -98,23 +98,23 @@ bool isValidExportGameName(const std::string& name, std::string& reason)
             return false;
         }
     }
-    // filename() distinto del nombre completo == contiene separadores de
-    // ruta ('/' o '\') o es una ruta absoluta; en ambos casos destDir / name
-    // deja de apuntar dentro de la carpeta que el usuario eligió en el
-    // diálogo. Redundante con kReserved de arriba (ambos separadores ya están
-    // en el set) pero se deja como red de seguridad extra sobre operator/.
+    // filename() different from the full name == it contains path
+    // separators ('/' or '\') or is an absolute path; in both cases destDir / name
+    // stops pointing inside the folder the user chose in the
+    // dialog. Redundant with kReserved above (both separators are already
+    // in the set) but left as an extra safety net over operator/.
     if (fs::path(name).filename().string() != name)
     {
         reason = "The name cannot contain path separators";
         return false;
     }
-    // Nombres de dispositivo reservados por Windows (CON, NUL, COM1..9,
-    // LPT1..9): "<destino>\NUL" no crea una carpeta, resuelve al dispositivo
-    // NUL. exists() sobre eso da true, así que el popup de confirmación
-    // afirmaría "la carpeta ya existe y se borrará su contenido" sobre algo
-    // que no es una carpeta y no tiene contenido. La regla de Windows mira el
-    // nombre SIN extensión (todo lo anterior al primer '.'), sin distinguir
-    // mayúsculas/minúsculas, así que "NUL.txt" también está reservado.
+    // Device names reserved by Windows (CON, NUL, COM1..9,
+    // LPT1..9): "<destination>\NUL" does not create a folder, it resolves to the
+    // NUL device. exists() on that gives true, so the confirmation popup
+    // would claim "the folder already exists and its contents will be deleted" about something
+    // that is not a folder and has no contents. Windows' rule looks at the
+    // name WITHOUT extension (everything before the first '.'), case-insensitive,
+    // so "NUL.txt" is also reserved.
     static const std::array<std::string, 22> kReservedDeviceNames = {
         "CON", "PRN", "AUX", "NUL",
         "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
@@ -136,36 +136,36 @@ bool isValidExportGameName(const std::string& name, std::string& reason)
 
 ExportTargetState inspectExportTarget(const fs::path& pkg)
 {
-    // Un pkg vacío significa que destDir y gameName vinieron vacíos: no hay
-    // ninguna carpeta que inspeccionar y desde luego ninguna que borrar.
+    // An empty pkg means destDir and gameName came in empty: there is
+    // no folder to inspect and certainly none to delete.
     if (pkg.empty()) return ExportTargetState::Occupied;
 
     std::error_code ec;
     const fs::file_status st = fs::status(pkg, ec);
-    // El type() se mira ANTES que ec a propósito: la STL de MSVC deja ec
-    // puesto a ERROR_FILE_NOT_FOUND (value() == 2) para el caso "no existe",
-    // pese a que el propio type() ya vale not_found — al reves de lo que
-    // insinua cppreference ("no se trata como error"). Mirar ec primero
-    // clasificaba TODO destino ausente como Occupied y el boton Export se
-    // quedaba deshabilitado para cualquier carpeta nueva: se detecto porque
-    // test_inspect_export_target_states (exporter_tests.cpp) fallaba incluso
-    // en el caso Missing. Un error real —permisos, unidad desconectada, path
-    // malformado— no da not_found; para esos sí importa ec, y por eso la
-    // comprobación de abajo sigue ahí.
+    // The type() is looked at BEFORE ec on purpose: MSVC's STL leaves ec
+    // set to ERROR_FILE_NOT_FOUND (value() == 2) for the "does not exist" case,
+    // even though type() itself is already not_found, contrary to what
+    // cppreference suggests ("not treated as an error"). Looking at ec first
+    // classified EVERY missing destination as Occupied and the Export button
+    // stayed disabled for any new folder: it was detected because
+    // test_inspect_export_target_states (exporter_tests.cpp) failed even
+    // in the Missing case. A real error (permissions, disconnected drive, malformed
+    // path) does not give not_found; for those ec does matter, and that is why the
+    // check below is still there.
     if (st.type() == fs::file_type::not_found) return ExportTargetState::Missing;
     if (ec) return ExportTargetState::Occupied;
-    // Un fichero, un enlace o un dispositivo con ese nombre: no es un paquete
-    // nuestro y remove_all() se lo llevaría por delante igual.
+    // A file, a link or a device with that name: it is not a package of
+    // ours and remove_all() would take it away anyway.
     if (!fs::is_directory(st)) return ExportTargetState::Occupied;
 
     fs::directory_iterator it(pkg, ec), end;
     if (ec) return ExportTargetState::Occupied;
     if (it == end) return ExportTargetState::Empty;
 
-    // game.scene solo lo escribe writeExportPackage, y siempre: su presencia
-    // en la raíz es la firma de un paquete exportado. Es la única marca que
-    // distingue "carpeta que yo mismo generé y puedo regenerar" de "carpeta
-    // del usuario". Si no se puede ni consultar, se asume ocupada.
+    // game.scene is only written by writeExportPackage, and always: its presence
+    // at the root is the signature of an exported package. It is the only mark that
+    // distinguishes "a folder I generated myself and can regenerate" from "a user's
+    // folder". If it cannot even be queried, it is assumed occupied.
     std::error_code sceneEc;
     const bool hasSceneFile = fs::is_regular_file(pkg / "game.scene", sceneEc);
     if (sceneEc) return ExportTargetState::Occupied;
@@ -189,23 +189,23 @@ std::vector<ExportAsset> collectSceneAssets(
     const std::map<std::string, fs::path>& scriptPaths)
 {
     std::vector<ExportAsset> out;
-    std::map<std::string, size_t> seen;              // key -> índice en out
-    std::map<std::string, int> externalDirIndex;     // key del directorio origen -> subcarpeta
+    std::map<std::string, size_t> seen;              // key -> index in out
+    std::map<std::string, int> externalDirIndex;     // key of the source directory -> subfolder
     const std::string rootKey = exportPathKey(projectRoot.string());
 
-    // Una subcarpeta por directorio externo de origen, numerada en orden de
-    // primera aparición: assets/_external/0/prop.fbx, assets/_external/1/prop.fbx.
+    // One subfolder per external source directory, numbered in order of
+    // first appearance: assets/_external/0/prop.fbx, assets/_external/1/prop.fbx.
     //
-    // El esquema anterior aplanaba todo a assets/_external/<nombre> con sufijo
-    // numérico ante colisión, y eso rompía en silencio la relación de
-    // hermandad que ModelLoader da por supuesta: deriva la textura de un FBX
-    // como dirname(fbx)/basename (ModelLoader.cpp:156). Con dos carpetas
-    // externas que tengan prop.fbx + prop.png, el segundo par pasaba a ser
-    // prop_1.fbx + prop_1.png y ModelLoader buscaba dirname(prop_1.fbx)/prop.png
-    // — la textura del PRIMER modelo, sin error ni aviso, solo un render
-    // incorrecto. Con una subcarpeta por directorio la hermandad se preserva
-    // por construcción y las colisiones desaparecen: dos ficheros con el mismo
-    // nombre en el mismo directorio no existen.
+    // The previous scheme flattened everything to assets/_external/<name> with a numeric
+    // suffix on collision, and that silently broke the sibling relationship
+    // that ModelLoader takes for granted: it derives an FBX's texture
+    // as dirname(fbx)/basename (ModelLoader.cpp:156). With two external folders
+    // that both have prop.fbx + prop.png, the second pair became
+    // prop_1.fbx + prop_1.png and ModelLoader looked for dirname(prop_1.fbx)/prop.png
+    // (the FIRST model's texture), with no error or warning, just an incorrect
+    // render. With one subfolder per directory the sibling relationship is preserved
+    // by construction and the collisions disappear: two files with the same
+    // name in the same directory do not exist.
     auto externalPackagePath = [&](const fs::path& abs) -> std::string
     {
         const std::string dirKey = exportPathKey(abs.parent_path().string());
@@ -214,8 +214,8 @@ std::vector<ExportAsset> collectSceneAssets(
         return "assets/_external/" + std::to_string(it->second) + "/" + abs.filename().string();
     };
 
-    // forcedPackagePath: la ruta del paquete ya decidida (un fichero asociado de
-    // un modelo, ver addModel). Vacia = la regla de siempre.
+    // forcedPackagePath: the package path already decided (an associated file of
+    // a model, see addModel). Empty = the usual rule.
     auto add = [&](const std::string& raw, const std::string& forcedPackagePath = {})
     {
         if (raw.empty()) return;
@@ -229,13 +229,13 @@ std::vector<ExportAsset> collectSceneAssets(
         std::string packagePath = forcedPackagePath;
         if (!packagePath.empty())
         {
-            // Asociado de un modelo: su sitio lo fija el modelo.
+            // Associated file of a model: its place is fixed by the model.
         }
         else if (keyUnderDir(key, rootKey))
         {
-            // Dentro del proyecto: se conserva la jerarquía tal cual. Es lo
-            // que hace que las texturas se reencuentren solas en el runtime:
-            // ModelLoader las deriva como dirname(fbx)/filename.
+            // Inside the project: the hierarchy is kept as is. It is what
+            // makes the textures find each other again in the runtime:
+            // ModelLoader derives them as dirname(fbx)/filename.
             packagePath = fs::relative(abs, projectRoot, ec).generic_string();
             if (ec || packagePath.empty()) packagePath = externalPackagePath(abs);
         }
@@ -252,12 +252,12 @@ std::vector<ExportAsset> collectSceneAssets(
         out.push_back(std::move(a));
     };
 
-    // Un asset con ajustes de importacion (textura de material, clip de audio,
-    // modelo) lleva su sidecar: el runtime lo busca junto al asset. Es un ExportAsset mas:
-    // comparte la carpeta de origen, asi que la numeracion de assets/_external/N y
-    // la jerarquia dentro del proyecto salen iguales que las del asset.
-    // El sidecar va JUNTO al sitio real del asset en el paquete (que puede venir
-    // forzado, ver addModel), no donde lo pondria la regla general.
+    // An asset with import settings (material texture, audio clip,
+    // model) carries its sidecar: the runtime looks for it next to the asset. It is one more ExportAsset:
+    // it shares the source folder, so the assets/_external/N numbering and
+    // the hierarchy inside the project come out the same as the asset's.
+    // The sidecar goes NEXT TO the asset's real place in the package (which may be
+    // forced, see addModel), not where the general rule would put it.
     auto addWithSidecar = [&](const std::string& raw, const std::string& forcedPackagePath = {})
     {
         if (raw.empty()) return;
@@ -270,15 +270,15 @@ std::vector<ExportAsset> collectSceneAssets(
         add(sidecar.string(), importSidecarPath(fs::path(out[it->second].packagePath)).generic_string());
     };
 
-    // Un modelo lleva su sidecar y los ficheros que lee ademas de si mismo (.mtl
-    // y sus texturas, .bin e imagenes de un .gltf), colocados RESPECTO a la
-    // carpeta del modelo en el paquete: el runtime los busca en la misma ruta
-    // relativa, y fuera del proyecto otra assets/_external/N romperia esa
-    // relacion. Todos los modelos se recorren en una primera pasada, antes que
-    // cualquier material, para que la dedup conserve esta colocacion.
+    // A model carries its sidecar and the files it reads besides itself (.mtl
+    // and its textures, .bin and images of a .gltf), placed RELATIVE to the
+    // model's folder in the package: the runtime looks for them at the same relative
+    // path, and outside the project another assets/_external/N would break that
+    // relationship. All the models are walked in a first pass, before
+    // any material, so that the dedup keeps this placement.
     auto addModel = [&](const std::string& raw)
     {
-        if (raw.empty() || seen.count(exportPathKey(raw))) return;   // ya estaba, con sus asociados
+        if (raw.empty() || seen.count(exportPathKey(raw))) return;   // already there, with its associated files
         addWithSidecar(raw);
         const auto it = seen.find(exportPathKey(raw));
         if (it == seen.end()) return;
@@ -288,9 +288,9 @@ std::vector<ExportAsset> collectSceneAssets(
             addWithSidecar((modelDir / fs::path(rel)).string(), (modelPkgDir / fs::path(rel)).generic_string());
     };
 
-    // Textura de material: si cuelga de la carpeta de su modelo, el runtime la
-    // deriva de ahi (el game.scene no guarda la textura base), asi que se coloca
-    // respecto al modelo en el paquete, como un asociado.
+    // Material texture: if it hangs from its model's folder, the runtime
+    // derives it from there (game.scene does not store the base texture), so it is placed
+    // relative to the model in the package, like an associated file.
     auto addMaterialTexture = [&](const std::string& modelPath, const std::string& tex)
     {
         if (tex.empty()) return;
@@ -310,27 +310,27 @@ std::vector<ExportAsset> collectSceneAssets(
         addWithSidecar(tex);
     };
 
-    // Primera pasada: los modelos y lo que leen.
+    // First pass: the models and what they read.
     scene.traverse([&](GameObject* go)
     {
         if (!go->hasMesh()) return;
         addModel(go->getMesh()->sourcePath);
         if (const SkinnedMesh* sm = go->getSkinnedMesh())
             for (const AnimationSource& src : sm->animationSources)
-                addModel(src.path);             // la builtin repite sourcePath; addModel deduplica
+                addModel(src.path);             // the builtin repeats sourcePath; addModel deduplicates
     });
 
     scene.traverse([&](GameObject* go)
     {
         if (go->hasMesh())
         {
-            // sourcePath vacío = mesh procedural: su geometría ya viaja
-            // dentro del .scene, no hay fichero que copiar. Los modelos ya
-            // entraron en la primera pasada, con su sidecar y sus asociados.
+            // empty sourcePath = procedural mesh: its geometry already travels
+            // inside the .scene, there is no file to copy. The models already
+            // went in during the first pass, with their sidecar and their associated files.
             const std::string& modelPath = go->getMesh()->sourcePath;
             for (const Material* m : materialsOf(go))
             {
-                // Los embedded* no aportan path: viajan dentro del FBX.
+                // The embedded* contribute no path: they travel inside the FBX.
                 addMaterialTexture(modelPath, m->texturePath);
                 addMaterialTexture(modelPath, m->normalMapPath);
                 addMaterialTexture(modelPath, m->metallicRoughnessPath);
@@ -338,7 +338,7 @@ std::vector<ExportAsset> collectSceneAssets(
             for (const MaterialOverride& ov : go->materialOverrides)
             {
                 if (ov.matAsset.empty()) continue;
-                add(ov.matAsset);   // el .mat no lleva sidecar propio
+                add(ov.matAsset);   // the .mat carries no sidecar of its own
                 // Its own textures too: the in-memory material only carries the
                 // ones that won (a per-slot override hides the .mat's), and the
                 // packaged .mat is repointed at them (writeExportPackage).
@@ -355,11 +355,11 @@ std::vector<ExportAsset> collectSceneAssets(
         if (go->hasButton())
         {
             const auto& b = go->getButton();
-            // Las rutas de la UI son las únicas que pueden venir RELATIVAS (se
-            // escriben a mano en el panel, y la de por defecto lo es siempre):
-            // resolverlas contra la raíz del proyecto es lo que las deja dentro
-            // del paquete en vez de en assets/_external, o directamente
-            // marcadas como inexistentes según desde dónde se lance el editor.
+            // The UI paths are the only ones that can come RELATIVE (they are
+            // typed by hand in the panel, and the default one always is):
+            // resolving them against the project root is what keeps them inside
+            // the package instead of in assets/_external, or outright
+            // marked as nonexistent depending on where the editor is launched from.
             auto addUiPath = [&](const std::string& raw)
             {
                 if (raw.empty()) return;
@@ -367,10 +367,10 @@ std::vector<ExportAsset> collectSceneAssets(
                 add(p.is_absolute() ? raw : (projectRoot / p).string());
             };
             addUiPath(b->atlasPath);
-            // Un botón sin fuente propia dibuja su texto con la de por defecto,
-            // así que ESA es un asset del juego igual que cualquier otro: sin
-            // esto el paquete sale sin ella y el texto no aparece en ningún
-            // sitio salvo en la máquina que exportó.
+            // A button without its own font draws its text with the default one,
+            // so THAT one is a game asset just like any other: without
+            // this the package comes out without it and the text does not appear anywhere
+            // except on the machine that exported.
             if (!b->fontPath.empty())  addUiPath(b->fontPath);
             else if (!b->text.empty()) addUiPath(kDefaultUiFontPath);
         }
@@ -378,10 +378,10 @@ std::vector<ExportAsset> collectSceneAssets(
         if (go->hasProgressBar())
         {
             const auto& p = go->getProgressBar();
-            // Misma resolución de rutas relativas que el Button, y las TRES: el
-            // fondo y el relleno pueden traer su propia imagen y solo caen en el
-            // atlas si no la traen. Sin fallback a ningún asset por defecto: una
-            // barra sin imágenes se dibuja con quads de color plano.
+            // Same relative path resolution as the Button, and ALL THREE: the
+            // background and the fill can carry their own image and only fall back to the
+            // atlas if they do not. No fallback to any default asset: a
+            // bar without images is drawn with flat color quads.
             auto addUiPath = [&](const std::string& raw)
             {
                 if (raw.empty()) return;
@@ -396,10 +396,10 @@ std::vector<ExportAsset> collectSceneAssets(
         if (go->hasText())
         {
             const auto& t = go->getText();
-            // Misma resolución de rutas relativas y mismo fallback que el
-            // Button: un Text sin fuente propia dibuja con la de por defecto, y
-            // sin empaquetarla el texto no aparece fuera de la máquina que
-            // exportó.
+            // Same relative path resolution and same fallback as the
+            // Button: a Text without its own font draws with the default one, and
+            // without packaging it the text does not appear outside the machine that
+            // exported.
             auto addUiPath = [&](const std::string& raw)
             {
                 if (raw.empty()) return;
@@ -425,7 +425,7 @@ std::vector<ExportAsset> collectSceneAssets(
 
 namespace {
 
-// Reescribe un campo de path si el mapa lo conoce. Devuelve 1 si tocó algo.
+// Rewrites a path field if the map knows it. Returns 1 if it touched anything.
 // storedBase: the folder a relative stored value is relative to (the Scene's
 // assetRoot for what toStoredPath wrote). Empty = look the value up as is.
 int rewriteField(nlohmann::json& holder, const char* field,
@@ -455,15 +455,15 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
         if (mesh.contains("animationSources") && mesh["animationSources"].is_array())
             for (nlohmann::json& src : mesh["animationSources"])
                 n += rewriteField(src, "path", sourceToPackage);
-        // Overrides de textura puestos a mano (Scene::nodeToJson, bloque
-        // "materials"). Sin esto el fichero SÍ se empaqueta (collectSceneAssets
-        // ya conoce estas rutas) pero la que queda escrita en el game.scene del
-        // paquete sigue siendo la de disco del editor: un override que apunte
-        // fuera de la raíz del proyecto viaja absoluto y el juego exportado
-        // busca la textura en la máquina que lo generó. baseAlbedo/baseNormal/
-        // baseOrm no se tocan: nodeToJson solo los escribe con
-        // carryOverrideBaseline=true (clonar, undo/redo en memoria), y
-        // exportGame llama a scene.toJson() con el default false.
+        // Texture overrides set by hand (Scene::nodeToJson, "materials"
+        // block). Without this the file IS packaged (collectSceneAssets
+        // already knows these paths) but the one left written in the package's game.scene
+        // is still the editor's disk one: an override that points
+        // outside the project root travels absolute and the exported game
+        // looks for the texture on the machine that generated it. baseAlbedo/baseNormal/
+        // baseOrm are not touched: nodeToJson only writes them with
+        // carryOverrideBaseline=true (cloning, in-memory undo/redo), and
+        // exportGame calls scene.toJson() with the default false.
         // These four are the only fields toStoredPath writes relative to the
         // scene's assetRoot (the project), which is not the export root.
         if (mesh.contains("materials") && mesh["materials"].is_array())
@@ -482,24 +482,24 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
     {
         nlohmann::json& button = node["button"];
         n += rewriteField(button, "atlasPath", sourceToPackage);
-        // fontPath vacía se queda vacía (rewriteField no toca una cadena
-        // vacía): el runtime volverá a caer en kDefaultUiFontPath, que dentro
-        // del paquete tiene la MISMA ruta relativa que en el proyecto.
+        // An empty fontPath stays empty (rewriteField does not touch an empty
+        // string): the runtime will fall back to kDefaultUiFontPath again, which inside
+        // the package has the SAME relative path as in the project.
         n += rewriteField(button, "fontPath", sourceToPackage);
     }
 
     if (node.contains("text") && node["text"].is_object())
     {
-        // Misma regla que la del Button: una fontPath vacía se queda vacía y el
-        // runtime vuelve a caer en kDefaultUiFontPath.
+        // Same rule as the Button's: an empty fontPath stays empty and the
+        // runtime falls back to kDefaultUiFontPath again.
         n += rewriteField(node["text"], "fontPath", sourceToPackage);
     }
 
     if (node.contains("progressBar") && node["progressBar"].is_object())
     {
-        // Las tres rutas de imagen. Una vacía se queda vacía (rewriteField no
-        // toca una cadena vacía): el runtime vuelve a caer en el atlas o en el
-        // quad de color, igual que en el editor.
+        // The three image paths. An empty one stays empty (rewriteField does not
+        // touch an empty string): the runtime falls back to the atlas or to the
+        // color quad again, just like in the editor.
         nlohmann::json& bar = node["progressBar"];
         n += rewriteField(bar, "atlasPath", sourceToPackage);
         n += rewriteField(bar, "backgroundPath", sourceToPackage);
@@ -518,8 +518,8 @@ int rewriteScenePaths(nlohmann::json& sceneJson,
                       const std::map<std::string, std::string>& sourceToPackage,
                       const std::string& assetRoot)
 {
-    // Acepta tanto el documento completo de Scene::toJson() ({version, root})
-    // como un nodo suelto, para que los tests puedan armar el JSON a mano.
+    // Accepts both the complete Scene::toJson() document ({version, root})
+    // and a loose node, so that the tests can assemble the JSON by hand.
     if (sceneJson.contains("root") && sceneJson["root"].is_object())
         return rewriteNode(sceneJson["root"], sourceToPackage, assetRoot);
     return rewriteNode(sceneJson, sourceToPackage, assetRoot);
@@ -572,12 +572,12 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
 
     const fs::path pkg = destDir / gameName;
 
-    // El estado del destino se consulta AQUÍ, no solo en la UI: esta función
-    // es la que borra, así que es la que tiene que responder por el borrado.
-    // Antes confiaba en que el editor hubiera validado, y la lista de sitios
-    // prohibidos que el editor enumeraba dejó fuera <repo>/assets — remove_all
-    // se llevó el árbol de assets fuente y el export reportó éxito, porque los
-    // que copia los lee del directorio del ejecutable.
+    // The destination's state is queried HERE, not only in the UI: this function
+    // is the one that deletes, so it is the one that has to answer for the deletion.
+    // Before, it trusted that the editor had validated, and the list of forbidden
+    // places that the editor enumerated left out <repo>/assets: remove_all
+    // took the source assets tree away and the export reported success, because the
+    // ones it copies are read from the executable's directory.
     const ExportTargetState targetState = inspectExportTarget(pkg);
     if (targetState == ExportTargetState::Occupied)
     {
@@ -588,20 +588,20 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         return r;
     }
 
-    // Borrado + recreado: si se copiara encima, el paquete arrastraría assets
-    // huérfanos de un export anterior y dejaría de cumplir "solo los
-    // referenciados". Solo se llega aquí con el destino Missing, Empty o
-    // PriorPackage, así que lo único que puede desaparecer es un paquete que
-    // este mismo código generó. La confirmación al usuario, en el caso
-    // PriorPackage, la pide la UI antes de llamar aquí.
+    // Delete + recreate: if it were copied over, the package would carry orphan
+    // assets from a previous export and would stop fulfilling "only the
+    // referenced ones". This point is only reached with the destination Missing, Empty or
+    // PriorPackage, so the only thing that can disappear is a package that
+    // this same code generated. The confirmation to the user, in the
+    // PriorPackage case, is asked by the UI before calling here.
     //
-    // Dos error_code separados a propósito: create_directories() sobre una
-    // carpeta que ya existe NO es un error, así que si compartiera el ec del
-    // remove_all() anterior, un borrado fallido a medias (p.ej. un
-    // MiJuego.exe del export previo todavía en ejecución y bloqueado)
-    // quedaría enmascarado en cuanto create_directories "tuviera éxito" sobre
-    // esa misma carpeta a medio borrar. La función seguiría creyendo que
-    // tiene un paquete limpio y sobrevivirían ficheros huérfanos.
+    // Two separate error_codes on purpose: create_directories() on a
+    // folder that already exists is NOT an error, so if it shared the ec of the
+    // earlier remove_all(), a half-failed deletion (e.g. a
+    // MyGame.exe from the previous export still running and locked)
+    // would be masked as soon as create_directories "succeeded" on
+    // that same half-deleted folder. The function would go on believing it
+    // has a clean package and orphan files would survive.
     std::error_code removeEc;
     fs::remove_all(pkg, removeEc);
     if (removeEc)
@@ -638,8 +638,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
 
     const fs::path exeDst = pkg / (gameName + plat.executableSuffix);
     bool ok = copyOne(runtimeExe, exeDst);
-    // Linux: sin el bit de ejecucion el juego no arranca con doble clic ni desde
-    // la terminal, aunque el fichero sea el binario correcto.
+    // Linux: without the execute bit the game does not start on double click or from
+    // the terminal, even if the file is the right binary.
     if (ok && plat.setExecutableBit)
     {
         std::error_code pec;
@@ -682,17 +682,17 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         }
     }
 
-    // Skybox: el ORIGEN es la carpeta que el proyecto tenga elegida, pero el
-    // DESTINO es siempre assets/skybox, porque es donde el runtime lo busca.
-    // Así elegir otro cielo en el editor no obliga a tocar el runtime.
+    // Skybox: the SOURCE is the folder the project has chosen, but the
+    // DESTINATION is always assets/skybox, because it is where the runtime looks for it.
+    // This way choosing another sky in the editor does not force touching the runtime.
     //
-    // Va siempre aunque la escena no lo "referencie".
+    // It always goes even if the scene does not "reference" it.
     //
-    // Se cuentan las caras copiadas y faltar una es un ERROR, no un salto
-    // silencioso: Skybox.cpp:84 lanza std::runtime_error("Skybox: failed to
-    // load face") y el juego muere al arrancar. Antes el if(exists) se comía
-    // el caso, el Log decía "Export completado" y el usuario se enteraba
-    // cuando le pasaba el .exe a otro.
+    // The copied faces are counted and missing one is an ERROR, not a silent
+    // skip: Skybox.cpp:84 throws std::runtime_error("Skybox: failed to
+    // load face") and the game dies on startup. Before, the if(exists) swallowed
+    // the case, the Log said "Export completed" and the user found out
+    // when they handed the .exe to someone else.
     std::vector<std::string> missingFaces;
     for (const char* face : { "px", "nx", "py", "ny", "pz", "nz" })
     {
@@ -715,10 +715,10 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         ok = false;
     }
 
-    // Logo del splash: el runtime lo busca como splash.png junto al .exe. Va
-    // siempre (la escena no lo referencia), pero faltar es AVISO, no error: sin
-    // el, el runtime arranca directo sin splash (SplashScreen::init devuelve
-    // false y el runtime lo respeta). Mismo criterio que fmod.dll.
+    // Splash logo: the runtime looks for it as splash.png next to the .exe. It always goes
+    // (the scene does not reference it), but missing is a WARNING, not an error: without
+    // it, the runtime starts directly without a splash (SplashScreen::init returns
+    // false and the runtime respects it). Same criterion as fmod.dll.
     {
         const fs::path logo = projectRoot / "assets" / "MainEngineLogo.png";
         std::error_code lec;
@@ -729,11 +729,11 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                  "; the exported game will start without a splash screen.");
     }
 
-    // Mapa de acciones del panel Input Actions: Input lo lee como
-    // "input_actions.json" relativo al CWD, así que va junto al .exe. Se coge
-    // del CWD del editor (es donde lo escribe el panel, junto al imgui.ini) y
-    // no de projectRoot. Faltar es AVISO: sin él las acciones quedan vacías y
-    // Input.IsActionDown devuelve false, pero el juego arranca igual.
+    // Action map of the Input Actions panel: Input reads it as
+    // "input_actions.json" relative to the CWD, so it goes next to the .exe. It is taken
+    // from the editor's CWD (it is where the panel writes it, next to imgui.ini) and
+    // not from projectRoot. Missing is a WARNING: without it the actions are empty and
+    // Input.IsActionDown returns false, but the game starts anyway.
     {
         const fs::path actions = fs::current_path() / "input_actions.json";
         std::error_code aec;
@@ -744,13 +744,13 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                  "; the exported game will have no input actions defined.");
     }
 
-    // shaders/*.spv a la raíz del paquete: Renderer::createPipeline los abre
-    // como "shaders/<nombre>.spv" relativo al CWD.
+    // shaders/*.spv to the package root: Renderer::createPipeline opens them
+    // as "shaders/<name>.spv" relative to the CWD.
     //
-    // Cero shaders copiados también es error: sin ningún .spv el runtime muere
-    // en createPipeline. El error_code del iterador se dejaba caer al suelo, y
-    // una carpeta shaders/ inaccesible o vacía producía un paquete que no
-    // arranca con un Log que decía "completado".
+    // Zero shaders copied is also an error: without any .spv the runtime dies
+    // in createPipeline. The iterator's error_code used to be dropped on the floor, and
+    // an inaccessible or empty shaders/ folder produced a package that does not
+    // start with a Log that said "completed".
     {
         int spvCopied = 0;
         std::error_code dec;
@@ -770,13 +770,13 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         }
     }
 
-    // shaders/*.dxil junto a los .spv. Se copian SIEMPRE, no solo cuando el
-    // backend elegido es DirectX 12: son 35 ficheros pequenos y asi el paquete
-    // sigue arrancando si alguien cambia renderBackend en el game.cfg a mano.
+    // shaders/*.dxil next to the .spv files. They are ALWAYS copied, not only when the
+    // chosen backend is DirectX 12: there are 35 small files and this way the package
+    // still starts if someone changes renderBackend in game.cfg by hand.
     //
-    // Su ausencia NO es error, al reves que con los .spv: un build hecho con
-    // DTE_ENABLE_D3D12=OFF no los genera, y ese paquete es perfectamente valido
-    // mientras se quede en Vulkan.
+    // Their absence is NOT an error, unlike with the .spv files: a build made with
+    // DTE_ENABLE_D3D12=OFF does not generate them, and that package is perfectly valid
+    // as long as it stays on Vulkan.
     {
         int dxilCopied = 0;
         std::error_code dec;
@@ -794,9 +794,9 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         }
     }
 
-    // game.cfg: configuracion de ARRANQUE del juego, separada de game.scene a
-    // proposito. Meter el backend en la escena obligaria a tocar el formato de
-    // escena y su versionado por un dato que no describe la escena.
+    // game.cfg: STARTUP configuration of the game, separate from game.scene on
+    // purpose. Putting the backend in the scene would force touching the scene format
+    // and its versioning for a datum that does not describe the scene.
     {
         nlohmann::json cfg;
         cfg["renderBackend"] = renderBackendName(backend);
@@ -810,8 +810,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
             if (out.good())
             {
                 ++r.fileCount;
-                // Y sus bytes: el resumen del Log dice "N ficheros, K KB", y
-                // contar el fichero sin contar su tamaño descuadra el total.
+                // And its bytes: the Log summary says "N files, K KB", and
+                // counting the file without counting its size throws off the total.
                 out.close();
                 std::error_code sizeEc;
                 const auto      cfgSize = fs::file_size(cfgPath, sizeEc);
@@ -833,17 +833,17 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         }
     }
 
-    // Scripts/ entera: los .lua se referencian por nombre y pueden hacer
-    // require entre ellos, así que filtrar por referencias los rompería.
+    // The whole Scripts/: the .lua files are referenced by name and may
+    // require each other, so filtering by references would break them.
     if (fs::exists(scriptsDir, ec))
     {
-        // Clave del paquete para no recorrer la propia salida: si pkg cae
-        // dentro de scriptsDir (destino Missing bajo Scripts/, que el criterio
-        // de inspectExportTarget permite porque no borra nada), este walk
-        // recursivo iría creando ficheros dentro del árbol que está
-        // recorriendo y podría no terminar nunca. Excluirlos aquí resuelve el
-        // problema donde está —la copia no debe consumir su propia salida— en
-        // vez de prohibir carpetas destino desde fuera.
+        // Package key so as not to walk the output itself: if pkg falls
+        // inside scriptsDir (Missing destination under Scripts/, which the
+        // inspectExportTarget criterion allows because it deletes nothing), this recursive
+        // walk would keep creating files inside the tree it is
+        // walking and might never end. Excluding them here solves the
+        // problem where it is (the copy must not consume its own output) instead
+        // of forbidding destination folders from the outside.
         const std::string pkgKey = exportPathKey(pkg.string());
         std::error_code rec;
         for (fs::recursive_directory_iterator it(scriptsDir, rec), end; !rec && it != end; it.increment(rec))
@@ -862,17 +862,17 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         }
     }
 
-    // fmod.dll solo es una dependencia real si el motor se compiló con FMOD
-    // (DT_FMOD_ENABLED, engine/CMakeLists.txt:71-73); sin él el runtime ni
-    // siquiera la enlaza y su ausencia no significa nada. Con él, faltar la
-    // DLL hace que el .exe muera con STATUS_ENTRYPOINT_NOT_FOUND antes de
-    // main. Aun así es aviso y no error, a diferencia del skybox y los
-    // shaders: el resto del paquete es correcto y se arregla copiando un
-    // fichero al lado del .exe, sin re-exportar.
+    // fmod.dll is only a real dependency if the engine was built with FMOD
+    // (DT_FMOD_ENABLED, engine/CMakeLists.txt:71-73); without it the runtime does not
+    // even link it and its absence means nothing. With it, a missing
+    // DLL makes the .exe die with STATUS_ENTRYPOINT_NOT_FOUND before
+    // main. Even so it is a warning and not an error, unlike the skybox and the
+    // shaders: the rest of the package is correct and it is fixed by copying one
+    // file next to the .exe, without re-exporting.
 #ifdef DT_FMOD_ENABLED
     {
-        // fmod.dll en Windows; libfmod.so.N (el nombre de su soname, que es el
-        // que pide el binario) en Linux. La tabla dice cuales.
+        // fmod.dll on Windows; libfmod.so.N (the name of its soname, which is
+        // the one the binary asks for) on Linux. The table says which.
         int audioCopied = 0;
         std::error_code aec;
         for (fs::directory_iterator it(projectRoot, aec), end; !aec && it != end; it.increment(aec))
@@ -893,27 +893,27 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     }
 #endif
 
-    // El CRT de MSVC (VCRUNTIME140.dll, MSVCP140.dll y companeros) no esta en
-    // una maquina sin Visual Studio ni el VC++ Redistributable instalado: ahi
-    // el .exe muere antes de main con "falta VCRUNTIME140.dll". Mismo fallo
-    // invisible en local que el CRT de depuracion de abajo, y por el mismo
-    // motivo: el dev-box siempre cumple la precondicion que le falta al
-    // jugador.
+    // The MSVC CRT (VCRUNTIME140.dll, MSVCP140.dll and companions) is not on
+    // a machine without Visual Studio or the VC++ Redistributable installed: there
+    // the .exe dies before main with "VCRUNTIME140.dll is missing". Same failure
+    // that is invisible locally as the debug CRT below, and for the same
+    // reason: the dev-box always meets the precondition that the
+    // player lacks.
     //
-    // Las DLL viajan DENTRO del paquete (app-local) porque el paquete es una
-    // carpeta que se copia y ya: sin instalador no hay nadie que registre el
-    // redist en la maquina destino. Quien las deja junto al editor es el
-    // POST_BUILD de sandbox/CMakeLists.txt (via
-    // InstallRequiredSystemLibraries), asi que aqui solo hay que recogerlas de
-    // al lado, igual que fmod.dll.
+    // The DLLs travel INSIDE the package (app-local) because the package is a
+    // folder that is simply copied: without an installer there is nobody to register the
+    // redist on the destination machine. Whoever leaves them next to the editor is the
+    // POST_BUILD of sandbox/CMakeLists.txt (via
+    // InstallRequiredSystemLibraries), so here they only need to be picked up from
+    // next to it, just like fmod.dll.
     //
-    // Se filtran por prefijo y no por una lista literal de nombres: el juego de
-    // DLL depende de la version de la toolchain (VCRUNTIME140_1.dll no existia
-    // en VS2015, MSVCP140_atomic_wait.dll llego con VS2019) y una lista fija se
-    // quedaria corta en silencio con la siguiente actualizacion de MSVC.
+    // They are filtered by prefix and not by a literal list of names: the DLL set
+    // depends on the toolchain version (VCRUNTIME140_1.dll did not exist
+    // in VS2015, MSVCP140_atomic_wait.dll arrived with VS2019) and a fixed list would
+    // silently fall short with the next MSVC update.
     //
-    // Aviso y no error, mismo criterio que fmod.dll: el resto del paquete es
-    // correcto y se arregla copiando ficheros junto al .exe, sin re-exportar.
+    // Warning and not error, same criterion as fmod.dll: the rest of the package is
+    // correct and it is fixed by copying files next to the .exe, without re-exporting.
 #ifdef NDEBUG
     if (plat.copyMsvcCrt)
     {
@@ -943,20 +943,20 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     }
 #endif
 
-    // Un binario Debug de MSVC enlaza el CRT de depuracion (ucrtbased.dll,
-    // MSVCP140D.dll, VCRUNTIME140D.dll y companeros). Microsoft NO permite
-    // redistribuir esas DLL y solo estan instaladas donde hay Visual Studio:
-    // el paquete arranca en la maquina que lo exporto y muere con "falta
-    // ucrtbased.dll" en la de cualquier otro. Es justo el fallo que ninguna
-    // prueba local puede ver, porque la maquina del desarrollador siempre
-    // cumple la precondicion que le falta al jugador.
+    // A Debug MSVC binary links the debug CRT (ucrtbased.dll,
+    // MSVCP140D.dll, VCRUNTIME140D.dll and companions). Microsoft does NOT allow
+    // redistributing those DLLs and they are only installed where Visual Studio is:
+    // the package starts on the machine that exported it and dies with "ucrtbased.dll
+    // is missing" on anyone else's. It is precisely the failure that no local
+    // test can see, because the developer's machine always meets the precondition
+    // that the player lacks.
     //
-    // Basta con mirar como se compilo ESTE binario: el runtime que se copia al
-    // paquete es siempre de la misma configuracion que el editor que exporta
-    // (el POST_BUILD de runtime/CMakeLists.txt lo deja junto a Sandbox.exe).
+    // It is enough to look at how THIS binary was compiled: the runtime copied to the
+    // package is always of the same configuration as the exporting editor
+    // (runtime/CMakeLists.txt's POST_BUILD leaves it next to Sandbox.exe).
     //
-    // Aviso y no error, mismo criterio que fmod.dll: exportar en Debug para
-    // probar en local es legitimo y el resto del paquete es correcto.
+    // Warning and not error, same criterion as fmod.dll: exporting in Debug to
+    // test locally is legitimate and the rest of the package is correct.
 #ifndef NDEBUG
     if (plat.warnDebugCrt)
     r.messages.push_back("Warning: exported in the Debug configuration. This package only starts on "
@@ -966,8 +966,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                          "build-release.bat, and export from build-ninja-release.");
 #endif
 
-    // glibc no se puede empaquetar: el juego necesita la de esta maquina o una
-    // mas nueva. libstdc++ si va dentro del runtime (runtime/CMakeLists.txt).
+    // glibc cannot be packaged: the game needs the one from this machine or a
+    // newer one. libstdc++ does go inside the runtime (runtime/CMakeLists.txt).
     if (plat.warnGlibc && !platform::libcVersion().empty())
         r.messages.push_back("Warning: the game needs glibc " + platform::libcVersion() +
                              " or newer; it will not start on distros older than this one.");
@@ -980,8 +980,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     else
     {
         ++r.fileCount;
-        // Mismo patrón tolerante a error que copyOne: game.scene también
-        // pesa y el resumen ("N ficheros, M KB") lo estaba dejando fuera.
+        // Same error-tolerant pattern as copyOne: game.scene also
+        // weighs something and the summary ("N files, M KB") was leaving it out.
         std::error_code sec;
         std::uintmax_t size = fs::file_size(pkg / "game.scene", sec);
         if (!sec) r.totalBytes += size;
@@ -1007,10 +1007,10 @@ ExportResult exportGame(Scene& scene,
 {
     ExportResult r;
 
-    // runExport (el nombre original de esto en EditorUI) es la última función
-    // antes del remove_all() destructivo dentro de writeExportPackage, y no
-    // debe confiar en que la UI ya validó: el guardián de un borrado
-    // irreversible no puede depender de un flag ajeno. Se revalida aquí.
+    // runExport (the original name of this in EditorUI) is the last function
+    // before the destructive remove_all() inside writeExportPackage, and must
+    // not trust that the UI already validated: the guardian of an
+    // irreversible deletion cannot depend on someone else's flag. It is revalidated here.
     std::string nameError;
     if (!isValidExportGameName(gameName, nameError))
     {
@@ -1018,8 +1018,8 @@ ExportResult exportGame(Scene& scene,
         return r;
     }
 
-    // Sin camara el juego no podria renderizar: se falla aqui, donde el
-    // usuario puede arreglarlo, y no en un .exe que abre una ventana negra.
+    // Without a camera the game could not render: it fails here, where the
+    // user can fix it, and not in an .exe that opens a black window.
     if (!scene.findCamera())
     {
         r.messages.push_back("Export cancelled: the scene has no camera (Add > Camera in Properties)");

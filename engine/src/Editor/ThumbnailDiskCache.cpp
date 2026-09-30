@@ -30,7 +30,7 @@ fs::path fromUtf8(const std::string& s)
     return fs::path(std::u8string(reinterpret_cast<const char8_t*>(s.data()), s.size()));
 }
 
-// Absoluta y normalizada: la misma ruta pedida de dos formas da el mismo fichero.
+// Absolute and normalized: the same path requested in two ways gives the same file.
 std::string normalizedKey(const fs::path& p)
 {
     std::error_code ec;
@@ -101,7 +101,7 @@ std::optional<ThumbnailResult> ThumbnailDiskCache::load(const fs::path& asset) c
         if (!r.u32(magic) || magic != kMagic) return std::nullopt;
         if (!r.u32(version) || version != kThumbDiskVersion) return std::nullopt;
         if (!r.u32(status) || status > static_cast<uint32_t>(ThumbnailStatus::AnimationOnly)) return std::nullopt;
-        if (!r.str(key, kMaxPath) || key != normalizedKey(asset)) return std::nullopt;   // colision de hash
+        if (!r.str(key, kMaxPath) || key != normalizedKey(asset)) return std::nullopt;   // hash collision
         if (!r.u32(depCount) || depCount == 0 || depCount > kMaxDeps) return std::nullopt;
 
         ThumbnailResult out;
@@ -113,7 +113,7 @@ std::optional<ThumbnailResult> ThumbnailDiskCache::load(const fs::path& asset) c
             int64_t     mtime  = 0;
             if (!r.str(path, kMaxPath) || !r.u32(exists) || !r.i64(mtime)) return std::nullopt;
             ThumbnailDependency stored{ fromUtf8(path), exists != 0, mtime, true };
-            if (!(stampFile(stored.path) == stored)) return std::nullopt;                // cambio algo
+            if (!(stampFile(stored.path) == stored)) return std::nullopt;                // something changed
             out.dependencies.push_back(std::move(stored));
         }
         if (out.status == ThumbnailStatus::Ok)

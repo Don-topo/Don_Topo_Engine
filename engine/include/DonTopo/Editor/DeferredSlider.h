@@ -2,44 +2,44 @@
 
 namespace DonTopo
 {
-    // Un SliderFloat cuyo valor NO se escribe en el dato mientras se arrastra:
-    // se enseña, se previsualiza y se entrega entero al soltar. Es el caso de
-    // Metallic/Roughness del Material, que durante el arrastre solo empujan a la
-    // GPU y escriben el Material (con su comando de undo) una sola vez al final.
+    // A SliderFloat whose value is NOT written into the data while it is dragged:
+    // it is shown, previewed and delivered whole on release. This is the case of the
+    // Material's Metallic/Roughness, which during the drag only push to the
+    // GPU and write the Material (with its undo command) once at the end.
     //
-    // Existe porque el patron de siempre -una local inicializada desde el dato,
-    // el widget encima, y el commit en IsItemDeactivatedAfterEdit leyendo esa
-    // local- NO sirve cuando el dato no se escribe en vivo. El frame en que se
-    // suelta el raton, SliderBehaviorT solo llama a ClearActiveID() y no toca el
-    // valor, asi que la local vale lo que decia el dato ANTES del arrastre: el
-    // commit veia "no ha cambiado nada" y no pasaba nada, mientras la GPU se
-    // quedaba con lo ultimo que se le empujo. El objeto se veia bien y el
-    // slider, el undo y el .scene seguian en el valor viejo.
+    // It exists because the usual pattern (a local initialized from the data,
+    // the widget on top, and the commit in IsItemDeactivatedAfterEdit reading that
+    // local) does NOT work when the data is not written live. On the frame the
+    // mouse is released, SliderBehaviorT only calls ClearActiveID() and does not touch the
+    // value, so the local holds what the data said BEFORE the drag: the
+    // commit saw "nothing changed" and nothing happened, while the GPU
+    // kept the last thing pushed to it. The object looked right and the
+    // slider, the undo and the .scene stayed at the old value.
     //
-    // Los sliders que SI escriben en vivo (Audio Clip, los ajustes de render)
-    // no lo necesitan: para ellos el dato ya lleva el valor al soltar.
+    // Sliders that DO write live (Audio Clip, the render settings)
+    // do not need it: for them the data already carries the value on release.
     //
-    // El valor pendiente vive aqui, entre frames, igual que m_ssaaPendingFactor
-    // en RenderingPanel. Una sola instancia vale para varios sliders: solo un
-    // widget de ImGui puede estar activo a la vez, y el id dice cual.
+    // The pending value lives here, between frames, like m_ssaaPendingFactor
+    // in RenderingPanel. A single instance works for several sliders: only one
+    // ImGui widget can be active at a time, and the id says which.
     //
-    // Sin ImGui en el header, como RenderSettingControls: el cuerpo va al .cpp.
+    // No ImGui in the header, like RenderSettingControls: the body goes in the .cpp.
     class DeferredSliderFloat
     {
         public:
             struct Result
             {
-                bool  activated = false;   // se empezo a arrastrar este frame
-                bool  active    = false;   // se esta arrastrando (value = bajo el cursor)
-                bool  committed = false;   // se solto tras editar: value es el final
-                bool  cancelled = false;   // se solto sin editar
-                float begin     = 0.0f;    // el dato ANTES del clic (no el del salto)
-                float value     = 0.0f;    // lo que enseña el widget este frame
+                bool  activated = false;   // dragging started this frame
+                bool  active    = false;   // is being dragged (value = under the cursor)
+                bool  committed = false;   // released after editing: value is the final one
+                bool  cancelled = false;   // released without editing
+                float begin     = 0.0f;    // the data BEFORE the click (not the jumped one)
+                float value     = 0.0f;    // what the widget shows this frame
             };
 
-            // `current` es el valor del dato, leido antes de dibujar: SliderFloat
-            // salta al valor bajo el cursor en el mismo frame del clic, y `begin`
-            // tiene que ser el de antes de ese salto.
+            // `current` is the data's value, read before drawing: SliderFloat
+            // jumps to the value under the cursor in the same frame as the click, and `begin`
+            // has to be the one from before that jump.
             Result draw(const char* label, float current, float lo, float hi, const char* fmt);
 
         private:

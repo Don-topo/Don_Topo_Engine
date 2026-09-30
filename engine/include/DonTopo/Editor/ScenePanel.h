@@ -8,16 +8,16 @@ class GameObject;
 struct Mesh;
 struct EditorContext;
 
-// Ventana "Scene" — árbol jerárquico de GameObjects (hover/click de
-// selección, drag&drop de reorder, popup de rename, menú contextual de
-// Create/Delete/Basic Shapes).
+// "Scene" window: hierarchical tree of GameObjects (selection hover/click,
+// reorder drag&drop, rename popup, Create/Delete/Basic Shapes context
+// menu).
 class ScenePanel {
 public:
     void draw(EditorContext& ctx, GameObject* sceneRoot);
     bool* GetOpenPtr() { return &m_open; }
-    // true si el draw() más reciente borró el GameObject que estaba
-    // seleccionado (para que EditorUI invalide los caches de edición de
-    // Properties SOLO en ese caso, no en cualquier deselección).
+    // true if the most recent draw() deleted the GameObject that was
+    // selected (so EditorUI invalidates the Properties edit caches
+    // ONLY in that case, not on any deselection).
     bool selectionWasDeletedThisFrame() const { return m_selectionDeletedThisFrame; }
 
 private:
@@ -25,24 +25,24 @@ private:
     void beginRename(GameObject* node);
     void createBasicShape(EditorContext& ctx, GameObject* parent, const std::string& name,
                            std::shared_ptr<Mesh> mesh);
-    // Crea un GameObject con CameraComponent de un tirón, pasando por el stack
-    // de Undo igual que createBasicShape. El caller comprueba que no haya ya
-    // una cámara (Scene::findCamera) antes de ofrecer la acción.
+    // Creates a GameObject with a CameraComponent in one go, going through the Undo
+    // stack just like createBasicShape. The caller checks that there is no
+    // camera yet (Scene::findCamera) before offering the action.
     void createCamera(EditorContext& ctx, GameObject* parent);
 
     bool m_open = true;
 
-    // Borrado/reorder diferidos al final del frame: el árbol se recorre con
-    // recursión sobre std::vector<unique_ptr<GameObject>>, mutarlo en medio
-    // de esa recursión invalidaría los iteradores de los for-range activos.
+    // Delete/reorder deferred to the end of the frame: the tree is walked with
+    // recursion over std::vector<unique_ptr<GameObject>>, and mutating it in the middle
+    // of that recursion would invalidate the iterators of the active range-fors.
     GameObject* m_pendingDelete = nullptr;
     GameObject* m_pendingMoveSource = nullptr;
     GameObject* m_pendingMoveTarget = nullptr;
 
-    // true si el draw() más reciente borró el GameObject seleccionado.
+    // true if the most recent draw() deleted the selected GameObject.
     bool m_selectionDeletedThisFrame = false;
 
-    // Rename — popup modal disparado por "Rename" (click derecho) o F2.
+    // Rename: modal popup triggered by "Rename" (right click) or F2.
     GameObject* m_renameTarget = nullptr;
     char        m_renameBuffer[128] = {};
     bool        m_openRenamePopup = false;

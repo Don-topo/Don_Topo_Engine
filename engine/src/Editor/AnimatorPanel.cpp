@@ -28,37 +28,37 @@ namespace ed = ax::NodeEditor;
 namespace DonTopo {
 
 namespace {
-    // Dibujo de SOLO LECTURA de una pista: la forma de la curva, sus keys, los
-    // umbrales de las condiciones que leen su parámetro y el playhead del
-    // preview. Responde de un vistazo la única pregunta que se le hace a una
-    // curva —¿cruza el umbral, y cuándo?—, que con la lista de DragFloat hay
-    // que reconstruir a mano. Las keys se siguen editando en la lista: el
-    // arrastre sobre el lienzo es la fila C15 del audit.
-    // Estado del arrastre de una key, entre frames. La pista se identifica por
-    // el ID de ImGui del lienzo (único por clip y pista, ver el PushID de la
-    // llamada), no por índices: dentro del gesto nadie borra nada, pero así no
-    // hay tres índices que mantener coherentes.
+    // READ-ONLY drawing of a track: the shape of the curve, its keys, the
+    // thresholds of the conditions that read its parameter and the playhead of the
+    // preview. It answers at a glance the only question asked of a
+    // curve (does it cross the threshold, and when?), which with the DragFloat list
+    // has to be reconstructed by hand. The keys are still edited in the list: the
+    // drag on the canvas is row C15 of the audit.
+    // State of the drag of a key, between frames. The track is identified by
+    // the ImGui ID of the canvas (unique per clip and track, see the PushID of the
+    // call), not by indices: nobody deletes anything within the gesture, but this way
+    // there are not three indices to keep coherent.
     struct ArrastreKey
     {
-        ImGuiID lienzo = 0;    // 0 = no hay arrastre
+        ImGuiID lienzo = 0;    // 0 = no drag
         int     key    = -1;
-        // El rango se CONGELA mientras dura: si se recalculara, mover la key
-        // reescalaría el dibujo y la key se escaparía del cursor.
+        // The range is FROZEN while it lasts: if it were recomputed, moving the key
+        // would rescale the drawing and the key would escape from the cursor.
         float   lo = 0.0f, hi = 0.0f;
     };
     ArrastreKey g_arrastre;
 
-    // Devuelve true si tocó la pista (para que el llamante sepa que hay que
-    // re-resolver y que el undo tiene algo que registrar).
+    // Returns true if it touched the track (so the caller knows it has to
+    // re-resolve and that the undo has something to record).
     bool dibujarCurva(PropertyTrack& pista, float duracion, float tiempoActual,
                       const float* umbrales, int numUmbrales)
     {
         const float ancho = ImGui::GetContentRegionAvail().x;
         if (ancho < 40.0f || duracion <= 0.0f || pista.keys.empty()) return false;
         const float alto = 56.0f;
-        // InvisibleButton y no Dummy: es lo que captura el clic y el arrastre
-        // sin pelearse con el scroll de la columna. AllowOverlap porque el
-        // lienzo convive con los widgets de la lista de abajo.
+        // InvisibleButton and not Dummy: it is what captures the click and the drag
+        // without fighting with the column scroll. AllowOverlap because the
+        // canvas coexists with the widgets of the list below.
         ImGui::InvisibleButton("##curva", ImVec2(ancho, alto),
                                ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
         const ImGuiID idLienzo = ImGui::GetItemID();
@@ -76,16 +76,16 @@ namespace {
         auto aY = [&](float v) { return p1.y - (v - lo) / (hi - lo) * (p1.y - p0.y); };
         auto aX = [&](float t) {
             const float x = p0.x + (t / duracion) * (p1.x - p0.x);
-            return std::min(std::max(x, p0.x), p1.x);   // una key más allá del clip se queda en el borde
+            return std::min(std::max(x, p0.x), p1.x);   // a key beyond the clip stays at the edge
         };
 
-        // --- Ratón: agarrar, arrastrar, añadir y quitar keys ---
+        // --- Mouse: grab, drag, add and remove keys ---
         bool tocada = false;
         const ImVec2 raton = ImGui::GetIO().MousePos;
-        // La key más cercana al cursor dentro del radio de agarre.
+        // The key closest to the cursor within the grab radius.
         int cercana = -1;
         {
-            float mejor = 7.0f * 7.0f;   // radio de agarre al cuadrado
+            float mejor = 7.0f * 7.0f;   // grab radius squared
             for (int k = 0; k < (int)pista.keys.size(); k++)
             {
                 const float dx = aX(pista.keys[(size_t)k].time)  - raton.x;
@@ -115,7 +115,7 @@ namespace {
         {
             if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || g_arrastre.key >= (int)pista.keys.size())
             {
-                g_arrastre = {};   // soltó, o la key se fue
+                g_arrastre = {};   // it was released, or the key went away
             }
             else
             {
@@ -123,14 +123,14 @@ namespace {
                                                    duracion, g_arrastre.lo, g_arrastre.hi);
                 PropertyKey& k = pista.keys[(size_t)g_arrastre.key];
                 if (k.time != p.time || k.value != p.value) tocada = true;
-                // No hace falta reordenar: samplePropertyTrack busca el tramo
-                // COMPARANDO tiempos, no por posición en el vector.
+                // There is no need to reorder: samplePropertyTrack looks for the segment
+                // COMPARING times, not by position in the vector.
                 k.time  = p.time;
                 k.value = p.value;
             }
         }
 
-        // Los umbrales van debajo de la curva: lo que interesa es dónde la cruza.
+        // The thresholds go under the curve: what matters is where it crosses them.
         for (int i = 0; i < numUmbrales; i++)
         {
             const float y = aY(umbrales[i]);
@@ -140,8 +140,8 @@ namespace {
             dl->AddText(ImVec2(p1.x - 36.0f, y - 15.0f), IM_COL32(220, 190, 80, 200), txt);
         }
 
-        // Muestreada, no unida key con key: así el dibujo sigue siendo el valor
-        // real si algún día la interpolación deja de ser lineal.
+        // Sampled, not joined key to key: this way the drawing remains the real value
+        // if some day the interpolation stops being linear.
         constexpr int kMuestras = 64;
         ImVec2 pts[kMuestras + 1];
         for (int s = 0; s <= kMuestras; s++)
@@ -152,8 +152,8 @@ namespace {
         dl->AddPolyline(pts, kMuestras + 1, IM_COL32(120, 200, 255, 255), 0, 1.5f);
         for (int k = 0; k < (int)pista.keys.size(); k++)
         {
-            // La que se puede agarrar se ve más grande: sin esa pista, acertar
-            // con el radio de 7 px es a ciegas.
+            // The one that can be grabbed looks bigger: without that hint, hitting
+            // the 7 px radius is done blindly.
             const bool activa = (arrastrandoEsta && g_arrastre.key == k) || (hover && cercana == k);
             dl->AddCircleFilled(ImVec2(aX(pista.keys[(size_t)k].time), aY(pista.keys[(size_t)k].value)),
                                 activa ? 5.0f : 3.0f,
@@ -165,8 +165,8 @@ namespace {
             dl->AddLine(ImVec2(x, p0.y), ImVec2(x, p1.y), IM_COL32(255, 120, 120, 200));
         }
 
-        // Los extremos del rango: sin ellos la altura de la curva es una
-        // adivinanza, porque el rango se ajusta a cada pista.
+        // The ends of the range: without them the height of the curve is a
+        // guess, because the range adjusts to each track.
         char txt[32];
         std::snprintf(txt, sizeof(txt), "%.2f", hi);
         dl->AddText(ImVec2(p0.x + 3.0f, p0.y + 1.0f), IM_COL32(150, 150, 160, 200), txt);
@@ -179,9 +179,9 @@ namespace {
         return tocada;
     }
 
-    // Lienzo de solo lectura del blend 2D: los puntos con su clip, las aristas
-    // de la triangulación y el valor actual de (X, Y). Los puntos son los de
-    // stateBlendSamples: el principal y las entradas con clip resuelto.
+    // Read-only canvas of the 2D blend: the points with their clip, the edges
+    // of the triangulation and the current value of (X, Y). The points are those of
+    // stateBlendSamples: the main one and the entries with a resolved clip.
     void drawBlend2DCanvas(const AnimatorComponent& anim, const AnimatorComponent::State& st)
     {
         ImGui::PushID("lienzo2d");
@@ -197,7 +197,7 @@ namespace {
             }
         const glm::vec2 valor(anim.getFloat(st.blendParam), anim.getFloat(st.blendParamY));
 
-        // Caja de los puntos con un 10 % de margen; el valor se acota a ella.
+        // Box of the points with a 10 % margin; the value is clamped to it.
         glm::vec2 lo = pts[0], hi = pts[0];
         for (const auto& p : pts) { lo = glm::min(lo, p); hi = glm::max(hi, p); }
         glm::vec2 lado = glm::max(hi - lo, glm::vec2(1e-3f));
@@ -209,7 +209,7 @@ namespace {
         ImGui::Dummy(ImVec2(tam, tam));
         const ImVec2 r0 = ImGui::GetItemRectMin();
         ImDrawList*  dl = ImGui::GetWindowDrawList();
-        // Y hacia arriba, como en una gráfica.
+        // Y upwards, as in a graph.
         auto aPantalla = [&](glm::vec2 p) {
             const glm::vec2 n = glm::clamp((p - lo) / lado, glm::vec2(0.0f), glm::vec2(1.0f));
             return ImVec2(r0.x + n.x * tam, r0.y + (1.0f - n.y) * tam);
@@ -230,18 +230,18 @@ namespace {
 }
 
 namespace {
-    // IDs del node editor: tienen que ser != 0 y no colisionar entre nodos,
-    // pines y links. Tres slots por estado + un rango aparte pa los links.
+    // Node editor IDs: they have to be != 0 and not collide between nodes,
+    // pins and links. Three slots per state + a separate range for the links.
     //
-    // El slot se indexa por State::editorId (estable, asignado una vez en
-    // AnimatorComponent::addState), NUNCA por el índice en el vector de
-    // estados: ese índice cambia cuando removeState reindexa tras borrar un
-    // estado de en medio, y si el id del canvas fuera el índice, un
-    // superviviente heredaría el slot visual (posición/selección) del nodo
-    // borrado — imgui-node-editor cachea esas cosas por id, no por contenido.
-    // Los ids del lienzo viven en Editor/AnimatorCanvasIds.h: son la pieza
-    // con riesgo del canvas (un fallo al decodificar borra el nodo equivocado
-    // en vez de dar un error), así que están fuera para poder probarlos.
+    // The slot is indexed by State::editorId (stable, assigned once in
+    // AnimatorComponent::addState), NEVER by the index in the vector of
+    // states: that index changes when removeState reindexes after deleting a
+    // state in the middle, and if the canvas id were the index, a
+    // survivor would inherit the visual slot (position/selection) of the deleted
+    // node, since imgui-node-editor caches those things by id, not by content.
+    // The canvas ids live in Editor/AnimatorCanvasIds.h: they are the risky piece
+    // of the canvas (a decoding failure deletes the wrong node
+    // instead of giving an error), so they are kept outside to be able to test them.
     using namespace canvasIds;
     int nodeId(int eid)       { return canvasIds::node(eid); }
     int inputPinId(int eid)   { return canvasIds::inputPin(eid); }
@@ -250,20 +250,20 @@ namespace {
     int outputPinId2(int eid) { return canvasIds::outputPin2(eid); }
     int linkId(int transIdx)  { return canvasIds::link(transIdx); }
     int editorIdFromRawId(int rawId) { return canvasIds::editorIdFrom(rawId); }
-    // Curvatura de los pines secundarios. El default de la librería es 100;
-    // subirlo abre la curva, que es la otra mitad de lo que separa la de vuelta
-    // de la de ida (la primera es que arranca en otra fila).
+    // Curvature of the secondary pins. The library default is 100;
+    // raising it opens up the curve, which is the other half of what separates the
+    // return one from the outgoing one (the first is that it starts on another row).
     constexpr float kFuerzaLinkVuelta = 300.0f;
 
-    // Nodo Any State: ids FUERA del esquema de los estados (eid*5+1..5) y de
-    // los links (100000+idx). Se comprueban SIEMPRE antes de decodificar con
-    // editorIdFromRawId: pasados por esa fórmula casarían con un editorId
-    // (180000) que ningún grafo alcanza, pero isOutputPin los clasificaría
-    // mal — por eso esPinDeSalida.
-    // Límites del ancho de la columna izquierda (fuentes, capas, IK,
-    // parámetros), que el usuario arrastra por el borde. El mínimo deja ver la
-    // lista de parámetros, que es el widget más ancho; el máximo evita dejar el
-    // lienzo en nada de un tirón.
+    // Any State node: ids OUTSIDE the scheme of the states (eid*5+1..5) and of
+    // the links (100000+idx). They are ALWAYS checked before decoding with
+    // editorIdFromRawId: passed through that formula they would match an editorId
+    // (180000) that no graph reaches, but isOutputPin would classify them
+    // wrongly, that is why esPinDeSalida.
+    // Limits of the width of the left column (sources, layers, IK,
+    // parameters), which the user drags by the edge. The minimum lets the
+    // parameter list be seen, which is the widest widget; the maximum avoids leaving the
+    // canvas at nothing in one drag.
     const float kAnchoColumnaMin = 200.0f;
     const float kAnchoColumnaMax = 700.0f;
     const float kAnchoAgarre     = 6.0f;
@@ -273,13 +273,13 @@ namespace {
 
     bool esPinDeSalida(int pin) { return pin == kAnyStateOutPinId || (pin != kAnyStateNodeId && isOutputPin(pin)); }
 
-    // Un pin (o un nodo) solo trae el editorId estable, y las transiciones
-    // guardan índices del vector m_states (no editorIds) porque ese es el
-    // contrato de AnimatorComponent::Transition. Este helper hace el puente:
-    // decodifica el editorId y lo busca en los estados de la capa que se está
-    // editando. Devuelve -1 si ningún estado vivo tiene ese id (no debería
-    // pasar: los ids que llegan aquí vienen de nodos/pines dibujados este
-    // mismo frame a partir de states(capa) actual).
+    // A pin (or a node) only carries the stable editorId, and the transitions
+    // store indices of the m_states vector (not editorIds) because that is the
+    // contract of AnimatorComponent::Transition. This helper makes the bridge:
+    // it decodes the editorId and looks it up in the states of the layer being
+    // edited. It returns -1 if no live state has that id (it should not
+    // happen: the ids that arrive here come from nodes/pins drawn this
+    // same frame from the current states(layer)).
     int stateIndexFromPin(const AnimatorComponent& anim, int rawId, int capa)
     {
         return anim.stateIndexByEditorId(editorIdFromRawId(rawId), capa);
@@ -297,20 +297,20 @@ namespace {
         }
     }
 
-    // Etiquetas de Compare en el orden del enum. Los cuatro se ofrecen tanto
-    // para Int como para Float: el == sobre float solo dispara con igualdad
-    // binaria exacta (un valor calculado casi nunca la cumple, uno puesto con
-    // SetFloat sí), pero recortar el combo escondía media API sin avisar.
+    // Compare labels in enum order. All four are offered for both Int and
+    // Float: == on a float only fires with exact binary equality
+    // (a computed value almost never meets it, one set with SetFloat does), but
+    // trimming the combo hid half the API without saying so.
     const char* kCompareLabels[] = { ">", "<", "==", "!=" };
 }
 
 AnimatorPanel::AnimatorPanel()
 {
     ed::Config config;
-    // Sin fichero de settings: las posiciones de los nodos viven en el JSON de
-    // escena (AnimatorComponent::State::editorPos). Si lo dejáramos por defecto,
-    // el node editor escribiría un NodeEditor.json paralelo y habría dos fuentes
-    // de verdad peleándose.
+    // No settings file: the node positions live in the scene JSON
+    // (AnimatorComponent::State::editorPos). If we left the default,
+    // the node editor would write a parallel NodeEditor.json and there would be two
+    // sources of truth fighting each other.
     config.SettingsFile = nullptr;
     m_ctx = ed::CreateEditor(&config);
     m_animSrcDialog = std::make_unique<IGFD::FileDialog>();
@@ -326,7 +326,7 @@ void AnimatorPanel::syncPositionsFromComponent(GameObject* go)
     const auto& states = go->getAnimator()->states(m_layer);
     for (size_t i = 0; i < states.size(); i++)
         ed::SetNodePosition(nodeId(states[i].editorId), ImVec2(states[i].editorPos.x, states[i].editorPos.y));
-    // El nodo Any State existe mientras haya al menos un estado.
+    // The Any State node exists as long as there is at least one state.
     if (!states.empty())
     {
         const glm::vec2 p = go->getAnimator()->anyStateEditorPos(m_layer);
@@ -351,10 +351,10 @@ void AnimatorPanel::syncPositionsToComponent(GameObject* go)
 
 void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
 {
-    // Desplegable, como las fuentes de animación, las capas y la IK: las
-    // cuatro secciones de la columna se abren y se cierran igual, y el
-    // scroll es el de la columna. Antes esto era un hijo con alto propio y
-    // su propia barra, que ni cuadraba con el resto ni hacía falta.
+    // Collapsible, like the animation sources, the layers and the IK: the
+    // four sections of the column open and close the same way, and the
+    // scroll is the column's. This used to be a child with its own height and
+    // its own bar, which neither matched the rest nor was needed.
     ImGui::PushID("params");
     if (ImGui::CollapsingHeader("Parameters", ImGuiTreeNodeFlags_DefaultOpen))
     {
@@ -369,8 +369,8 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
             ImGui::TextDisabled("(%s)", paramTypeLabel(p.type));
             ImGui::SameLine();
 
-            // Valor editable in situ: en Play permite provocar una transición a mano
-            // sin escribir Lua, que es como se depura un grafo.
+            // Value editable in place: in Play it allows triggering a transition by hand
+            // without writing Lua, which is how a graph is debugged.
             ImGui::SetNextItemWidth(70);
             switch (p.type)
             {
@@ -381,8 +381,8 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
                     break;
                 }
                 case AnimatorComponent::ParamType::Trigger:
-                    // Un trigger no tiene valor que mostrar: se arma y lo consume la
-                    // primera transición que lo mire (ver consumeTriggers).
+                    // A trigger has no value to show: it is armed and consumed by the
+                    // first transition that looks at it (see consumeTriggers).
                     if (ImGui::SmallButton("Set")) anim->setTrigger(p.name);
                     break;
                 case AnimatorComponent::ParamType::Int:
@@ -403,7 +403,7 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
             if (ImGui::SmallButton("X")) toRemove = p.name;
             ImGui::PopID();
         }
-        // Diferido: borrar dentro del for-range invalidaría el iterador.
+        // Deferred: deleting inside the range-for would invalidate the iterator.
         if (!toRemove.empty())
         {
             m_graphUndo.setLabel("Remove parameter");
@@ -414,8 +414,8 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
         ImGui::Separator();
         ImGui::SetNextItemWidth(110);
         ImGui::InputText("##newparam", m_newParamName, sizeof(m_newParamName));
-        // El orden coincide con el del enum ParamType, así que el índice del combo
-        // castea directo: si el enum crece, esta lista crece con él.
+        // The order matches that of the ParamType enum, so the combo index
+        // casts directly: if the enum grows, this list grows with it.
         const char* types[] = { "bool", "trigger", "int", "float" };
         ImGui::SetNextItemWidth(110);
         ImGui::Combo("##newparamtype", &m_newParamType, types, IM_ARRAYSIZE(types));
@@ -435,9 +435,9 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
 {
     auto anim = go->getAnimator();
     ImGui::PushID("capas");
-    // El acotado va FUERA del desplegable: la capa seleccionada tiene que
-    // seguir siendo válida aunque la sección esté cerrada (el grafo que se
-    // dibuja es el suyo).
+    // The clamping goes OUTSIDE the collapsible: the selected layer has to
+    // remain valid even if the section is closed (the graph that is
+    // drawn is its own).
     m_layer = std::clamp(m_layer, 0, anim->layerCount() - 1);
     if (ImGui::CollapsingHeader("Layers", ImGuiTreeNodeFlags_DefaultOpen))
     {
@@ -450,7 +450,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
                 ImGui::SetNextItemWidth(200.0f);
                 ImGui::InputText("##nombre", m_layerNameBuf, sizeof(m_layerNameBuf),
                                  ImGuiInputTextFlags_AutoSelectAll);
-                // Al soltar el foco (Enter, clic fuera): se guarda si no está vacío.
+                // On losing focus (Enter, click outside): it is saved if it is not empty.
                 if (ImGui::IsItemDeactivated())
                 {
                     if (m_layerNameBuf[0] != '\0') anim->layerMutable(li).name = m_layerNameBuf;
@@ -461,7 +461,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
                                        ImGuiSelectableFlags_AllowDoubleClick, ImVec2(200.0f, 0.0f)))
             {
                 m_layer = li;
-                m_nivelId = -1;   // el nivel es de la capa que se deja atras
+                m_nivelId = -1;   // the level belongs to the layer being left behind
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                 {
                     m_renamingLayer = li;
@@ -481,7 +481,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
             if (n >= 0)
             {
                 m_layer = n;
-                m_nivelId = -1;   // el nivel es de la capa que se deja atras
+                m_nivelId = -1;   // the level belongs to the layer being left behind
                 ctx.pushLog("Animator: layer '" + anim->layer(n).name + "' added");
             }
         }
@@ -512,7 +512,7 @@ void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
         }
         ImGui::EndDisabled();
 
-        // La base no tiene peso, modo ni máscara propios.
+        // The base has no weight, mode or mask of its own.
         if (m_layer > 0)
         {
             const auto& L = anim->layer(m_layer);
@@ -547,8 +547,8 @@ void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
     ImGui::PushID("ik");
     if (ImGui::CollapsingHeader("IK"))
     {
-        // Objetivo y pole son GameObjects de la escena: se listan en preorden,
-        // como el panel de jerarquía, y el propio personaje no entra.
+        // Target and pole are scene GameObjects: they are listed in pre-order,
+        // like the hierarchy panel, and the character itself is not included.
         std::vector<const GameObject*> objetos;
         std::function<void(const GameObject&)> recorrer = [&](const GameObject& n) {
             for (const auto& h : n.children)
@@ -596,13 +596,13 @@ void AnimatorPanel::drawIkList(EditorContext& ctx, GameObject* go)
             if (ImGui::Combo("Type##tipo", &tipo, tipos, 2))
             {
                 c.type = (AnimatorComponent::IkType)tipo;
-                // La cadena (padre y abuelo) depende del tipo: hay que
-                // re-resolverla. rebindClips y no bindClips: puede estar
-                // corriendo Play Mode.
+                // The chain (parent and grandparent) depends on the type: it has to be
+                // re-resolved. rebindClips and not bindClips: Play Mode may be
+                // running.
                 if (mesh) anim->rebindClips(*mesh, nullptr);
             }
 
-            // Hueso: el que mira (look-at) o el EXTREMO de la cadena (two bone).
+            // Bone: the one that looks (look-at) or the END of the chain (two bone).
             const bool roto = c.boneIndex < 0;
             if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
             ImGui::SetNextItemWidth(160.0f);
@@ -672,17 +672,17 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
         {
             auto& clip = clips[(size_t)i];
             ImGui::PushID(i);
-            // Cabecera por clip, como las secciones de la columna. El "###" es
-            // lo que la hace utilizable: sin él el ID sale del texto ENTERO, así
-            // que al renombrar el clip —o al cambiar el glifo de un botón que
-            // dependa de su propio estado— la cabecera pasa a ser otro widget y
-            // se pierde si estaba abierta. ImGui abre y cierra por ID, así que
-            // cada clip recuerda su estado él solo.
+            // Header per clip, like the sections of the column. The "###" is
+            // what makes it usable: without it the ID comes from the ENTIRE text, so
+            // when renaming the clip (or when changing the glyph of a button that
+            // depends on its own state) the header becomes another widget and
+            // is lost if it was open. ImGui opens and closes by ID, so
+            // each clip remembers its state by itself.
             const std::string etiqueta = (clip.name.empty() ? std::string("(unnamed)") : clip.name) +
                                          "###clip";
-            // AllowOverlap: la cabecera ocupa la fila entera, así que sin el
-            // flag ImGui le da el clic a ella (el primer item enviado) y la "x"
-            // no se podía pulsar nunca. Mismo patrón que la lista de fuentes.
+            // AllowOverlap: the header takes up the whole row, so without the
+            // flag ImGui gives the click to it (the first item submitted) and the "x"
+            // could never be pressed. Same pattern as the sources list.
             const bool abierto = ImGui::CollapsingHeader(etiqueta.c_str(),
                                                          ImGuiTreeNodeFlags_AllowOverlap);
             ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f);
@@ -695,20 +695,20 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                 if (ImGui::InputText("Name###nombre", nombre, sizeof(nombre)))
                 {
                     clip.name = nombre;
-                    // El estado referencia por NOMBRE: renombrar obliga a re-resolver.
+                    // The state references by NAME: renaming forces a re-resolve.
                     anim->bindProperties(go, nullptr);
                 }
                 ImGui::SetNextItemWidth(130.0f);
                 if (ImGui::DragFloat("Duration (s)###dur", &clip.duration, 0.01f, 0.001f, 600.0f, "%.3f"))
                 {
                     if (clip.duration < 0.001f) clip.duration = 0.001f;
-                    // La duración del estado sale de aquí cuando no hay clip de malla.
+                    // The duration of the state comes from here when there is no mesh clip.
                     anim->bindProperties(go, nullptr);
                 }
 
-                // Dónde va el playhead de ESTE clip, si es que suena ahora: lo
-                // dice la misma lista de muestras que se aplica al objeto, así
-                // que el preview y el dibujo no pueden discrepar.
+                // Where the playhead of THIS clip is, if it is playing now: the
+                // same list of samples that is applied to the object says so,
+                // so the preview and the drawing cannot disagree.
                 float tiempoClip = -1.0f;
                 {
                     AnimatorComponent::PropertySampleRef ms[kMaxLayersPose * kMaxPoseSamplesPerLayer];
@@ -724,8 +724,8 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     ImGui::PushID(p);
                     const bool roto = !pista.resolved;
                     if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-                    // Destino: una propiedad del objeto o un parámetro Float del
-                    // Animator (una curva de clip).
+                    // Target: a property of the object or a Float parameter of the
+                    // Animator (a clip curve).
                     ImGui::SetNextItemWidth(90.0f);
                     if (ImGui::BeginCombo("###destino",
                                           pista.target == TrackTarget::Parameter ? "Parameter" : "Property"))
@@ -746,9 +746,9 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     ImGui::SetNextItemWidth(150.0f);
                     if (pista.target == TrackTarget::Parameter)
                     {
-                        // Solo los Float: una curva no puede escribir otra cosa.
-                        // El nombre actual se ve aunque el parámetro ya no exista
-                        // (la pista sale en rojo), para no perderlo en silencio.
+                        // Only Floats: a curve cannot write anything else.
+                        // The current name is shown even if the parameter no longer exists
+                        // (the track shows up in red), so as not to lose it silently.
                         const char* actual = pista.parameterName.empty() ? "(no parameter)"
                                                                          : pista.parameterName.c_str();
                         if (ImGui::BeginCombo("###param", actual))
@@ -788,17 +788,17 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     ImGui::SameLine();
                     if (ImGui::SmallButton("x###pista")) quitarPista = p;
 
-                    // Una curva se lee contra los umbrales de las condiciones
-                    // que miran su parámetro; una pista de propiedad no tiene
-                    // ninguno que pintar.
+                    // A curve is read against the thresholds of the conditions
+                    // that look at its parameter; a property track has none
+                    // to paint.
                     float umbrales[4];
                     const int numUmbrales = pista.target == TrackTarget::Parameter
                                                 ? anim->conditionThresholds(pista.parameterName, umbrales, 4)
                                                 : 0;
-                    // El lienzo edita las keys con el ratón. El ID sale del
-                    // PushID(p) de esta pista, dentro del PushID(i) del clip:
-                    // eso es lo que distingue un lienzo de otro cuando hay
-                    // varios abiertos a la vez.
+                    // The canvas edits the keys with the mouse. The ID comes from the
+                    // PushID(p) of this track, inside the PushID(i) of the clip:
+                    // that is what tells one canvas from another when there are
+                    // several open at the same time.
                     dibujarCurva(pista, clip.duration, tiempoClip, umbrales, numUmbrales);
 
                     int quitarKey = -1;
@@ -817,8 +817,8 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                     if (quitarKey >= 0) pista.keys.erase(pista.keys.begin() + quitarKey);
                     if (ImGui::SmallButton("+ key"))
                     {
-                        // La nueva va al final del clip con el valor que el
-                        // objeto tiene ahora: así se autora "desde aquí".
+                        // The new one goes at the end of the clip with the value the
+                        // object has now: this is how you author "from here".
                         PropertyKey nueva;
                         nueva.time  = pista.keys.empty() ? 0.0f : clip.duration;
                         nueva.value = pista.target == TrackTarget::Parameter
@@ -838,9 +838,9 @@ void AnimatorPanel::drawPropertyClips(EditorContext& ctx, GameObject* go)
                 ImGui::SameLine();
                 if (ImGui::SmallButton("+ curve"))
                 {
-                    // Una curva escribe un parámetro; se crea sobre el primer
-                    // Float que haya, y si no hay ninguno sale en rojo hasta que
-                    // se declare uno.
+                    // A curve writes a parameter; it is created on the first
+                    // Float there is, and if there is none it shows up in red until
+                    // one is declared.
                     PropertyTrack curva;
                     curva.target = TrackTarget::Parameter;
                     for (const auto& prm : anim->parameters())
@@ -904,7 +904,7 @@ void AnimatorPanel::drawLayerMaskPopup(GameObject* go)
             const int p = i < (int)padres.size() ? padres[(size_t)i] : -1;
             if (p >= 0 && p < n) hijos[(size_t)p].push_back(i); else raices.push_back(i);
         }
-        // La rama de b a v: el hueso y todos sus descendientes.
+        // The branch from b to v: the bone and all its descendants.
         auto ponerRama = [&](int b, bool v) {
             std::vector<int> pila = { b };
             while (!pila.empty())
@@ -936,9 +936,9 @@ void AnimatorPanel::drawLayerMaskPopup(GameObject* go)
             }
             ImGui::PopID();
         };
-        // Alto según la pantalla (un esqueleto de 60 huesos no cabe en 420 px)
-        // y scroll horizontal: cada nivel sangra, y en una rama profunda el
-        // nombre se salía por la derecha sin forma de verlo.
+        // Height according to the screen (a 60-bone skeleton does not fit in 420 px)
+        // and horizontal scroll: each level indents, and in a deep branch the
+        // name ran off the right with no way to see it.
         const float alto = std::clamp(ImGui::GetMainViewport()->WorkSize.y * 0.6f, 240.0f, 900.0f);
         ImGui::BeginChild("arbolMascara", ImVec2(420.0f, alto), true, ImGuiWindowFlags_HorizontalScrollbar);
         for (int r : raices) nodo(r);
@@ -950,7 +950,7 @@ void AnimatorPanel::drawLayerMaskPopup(GameObject* go)
                 if (marcado[(size_t)i]) L.maskBones.push_back(nombres[(size_t)i]);
         }
     }
-    // rebindClips y no bindClips: puede estar corriendo Play Mode.
+    // rebindClips and not bindClips: Play Mode may be running.
     if (cambio && mesh) anim->rebindClips(*mesh, nullptr);
     ImGui::EndPopup();
 }
@@ -959,7 +959,7 @@ int AnimatorPanel::nivelActual(const AnimatorComponent& anim) const
 {
     if (m_nivelId < 0) return -1;
     const int idx = anim.stateIndexByEditorId(m_nivelId, m_layer);
-    // La caja ya no está (se borró estando dentro) o dejó de serlo: raíz.
+    // The box is no longer there (it was deleted while inside) or stopped being one: root.
     if (idx < 0 || !anim.states(m_layer)[(size_t)idx].isSubMachine) return -1;
     return idx;
 }
@@ -967,14 +967,14 @@ int AnimatorPanel::nivelActual(const AnimatorComponent& anim) const
 void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
 {
     auto anim = go->getAnimator();
-    // El nivel se resuelve UNA vez por frame desde el editorId: dentro del
-    // frame los índices no se mueven, y entre frames el id sobrevive a los
-    // borrados.
+    // The level is resolved ONCE per frame from the editorId: within the
+    // frame the indices do not move, and between frames the id survives
+    // deletions.
     const int nivel = nivelActual(*anim);
-    if (nivel < 0) m_nivelId = -1;   // la caja se fue: no dejar el id colgando
+    if (nivel < 0) m_nivelId = -1;   // the box went away: do not leave the id dangling
 
-    // Breadcrumb del nivel, encima del lienzo: es la única forma de salir de una
-    // caja, y de ver dónde se está cuando el grafo visible no es el de la raíz.
+    // Breadcrumb of the level, above the canvas: it is the only way to leave a
+    // box, and to see where you are when the visible graph is not the root one.
     {
         const auto& sts = anim->states(m_layer);
         if (ImGui::SmallButton("Base###nivelRaiz")) m_nivelId = -1;
@@ -982,7 +982,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         for (int n = nivel; n >= 0 && n < (int)sts.size(); n = sts[(size_t)n].parent)
         {
             cadena.push_back(n);
-            if ((int)cadena.size() > (int)sts.size()) break;   // jerarquía rota: no colgarse
+            if ((int)cadena.size() > (int)sts.size()) break;   // broken hierarchy: do not hang
         }
         for (int k = (int)cadena.size() - 1; k >= 0; k--)
         {
@@ -997,28 +997,28 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     }
 
     ed::SetCurrentEditor(m_ctx);
-    // El tooltip de un widget de dentro de un nodo NO se puede dibujar aquí:
-    // entre ed::Begin y ed::End el ratón y las ventanas van en coordenadas del
-    // lienzo, así que saldría desplazado por el pan y el zoom, y sacarlo con
-    // ed::Suspend dentro de un nodo rompe el splitter de canales del lienzo
-    // (IM_ASSERT en imgui_canvas.cpp: la aplicación se queda clavada al
-    // arrastrar un nodo). Se anota el texto y se pinta al final, ya fuera.
+    // The tooltip of a widget inside a node can NOT be drawn here:
+    // between ed::Begin and ed::End the mouse and the windows are in canvas
+    // coordinates, so it would come out displaced by the pan and the zoom, and drawing it with
+    // ed::Suspend inside a node breaks the canvas channel splitter
+    // (IM_ASSERT in imgui_canvas.cpp: the application gets stuck
+    // when dragging a node). The text is noted down and painted at the end, already outside.
     m_tooltipNodo.clear();
     ed::Begin("AnimatorCanvas");
-    // Escribiendo en un campo de un nodo (nombre de evento), Supr borraría el
-    // nodo seleccionado: imgui-node-editor mira la tecla, no el foco de texto.
+    // When typing in a field of a node (event name), Del would delete the
+    // selected node: imgui-node-editor looks at the key, not at the text focus.
     ed::EnableShortcuts(!ImGui::GetIO().WantTextInput);
 
-    // --- Nodos ---
+    // --- Nodes ---
     const auto& states = anim->states(m_layer);
-    // El nivel puede haber quedado apuntando a un estado que ya no existe (se
-    // borró la caja que se estaba mirando por dentro): se vuelve a la raíz.
+    // The level may have been left pointing to a state that no longer exists (the
+    // box that was being looked at from the inside was deleted): we go back to the root.
 
-    // Fila de pines del nodo: la usan el estado normal y la caja, que se dibuja
-    // sin clip, loop ni eventos. Una sola copia para que las dos salgan iguales.
+    // Pin row of the node: used by the normal state and the box, which is drawn
+    // without clip, loop or events. A single copy so both come out the same.
     auto pinesDelNodo = [](int eid, float headerW) {
-        // "-> in" a la izquierda, "out ->" empujado al borde derecho del nodo
-        // (el ancho de la cabecera es el ancho real del nodo).
+        // "-> in" on the left, "out ->" pushed to the right edge of the node
+        // (the width of the header is the real width of the node).
         ed::BeginPin(inputPinId(eid), ed::PinKind::Input);
         ImGui::TextUnformatted("-> in");
         ed::EndPin();
@@ -1026,23 +1026,23 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         const float inW  = ImGui::CalcTextSize("-> in").x;
         const float outW = ImGui::CalcTextSize("out ->").x;
         const float pad  = headerW - inW - outW;
-        // Nodo muy estrecho: un hueco fijo pequeño basta para que no se solapen.
+        // Very narrow node: a small fixed gap is enough so they do not overlap.
         ImGui::Dummy(ImVec2(pad > 1.0f ? pad : 8.0f, 0.0f));
         ImGui::SameLine();
         ed::BeginPin(outputPinId(eid), ed::PinKind::Output);
         ImGui::TextUnformatted("out ->");
         ed::EndPin();
 
-        // Par SECUNDARIO, para la transición de vuelta de un par mutuo. Va en
-        // su propia fila (debajo) y con más curvatura, que son las dos cosas
-        // que separan su curva de la de ida: el arranque y la forma. La
-        // curvatura es propiedad del pin, así que se empuja AQUÍ y no al
-        // dibujar el link.
+        // SECONDARY pair, for the return transition of a mutual pair. It goes on
+        // its own row (below) and with more curvature, which are the two things
+        // that separate its curve from the outgoing one: the start and the shape. The
+        // curvature is a property of the pin, so it is pushed HERE and not when
+        // drawing the link.
         //
-        // Sin texto: son puntos de anclaje, no algo a lo que el usuario tenga
-        // que apuntar. Se dibujan siempre (no solo cuando hay par mutuo) para
-        // que el nodo no cambie de alto según sus transiciones, que haría
-        // bailar el layout al crear o borrar una.
+        // Without text: they are anchor points, not something the user has
+        // to aim at. They are always drawn (not only when there is a mutual pair) so
+        // that the node does not change height depending on its transitions, which would
+        // make the layout dance when creating or deleting one.
         ed::PushStyleVar(ed::StyleVar_LinkStrength, kFuerzaLinkVuelta);
         ed::BeginPin(inputPinId2(eid), ed::PinKind::Input);
         ImGui::Dummy(ImVec2(1.0f, 1.0f));
@@ -1057,14 +1057,14 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     };
     for (size_t i = 0; i < states.size(); i++)
     {
-        // Solo lo de ESTE nivel: los hijos de una caja se ven al entrar en ella.
+        // Only what belongs to THIS level: the children of a box are seen when entering it.
         if (states[i].parent != nivel) continue;
         const int eid = states[i].editorId;
         ed::BeginNode(nodeId(eid));
 
-        // Cabecera (nombre/entry, clip, loop) agrupada para poder medir su ancho
-        // y así saber dónde cae el borde derecho del nodo: la fila de pines de
-        // abajo lo necesita para separar "-> in" (izquierda) de "out ->" (derecha).
+        // Header (name/entry, clip, loop) grouped so its width can be measured
+        // and thus know where the right edge of the node falls: the pin row
+        // below needs it to separate "-> in" (left) from "out ->" (right).
         ImGui::BeginGroup();
 
         const bool isEntry = ((int)i == anim->entryState(m_layer));
@@ -1079,9 +1079,9 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             ImGui::TextUnformatted(states[i].name.c_str());
         }
 
-        // Una caja no reproduce nada: en vez del clip muestra por dónde se entra
-        // y avisa cuando está vacía, que es cuando las transiciones hacia ella
-        // no disparan.
+        // A box plays nothing: instead of the clip it shows where it is entered
+        // and warns when it is empty, which is when the transitions into it
+        // do not fire.
         if (states[i].isSubMachine)
         {
             ImGui::TextDisabled("sub-state machine");
@@ -1091,8 +1091,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             else
                 ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "no entry: it cannot be entered");
         }
-        // clipIndex < 0: el clip del grafo no existe en el modelo (bindClips ya
-        // avisó al cargar). Se marca aquí también o el nodo mentiría.
+        // clipIndex < 0: the graph clip does not exist in the model (bindClips already
+        // warned on load). It is marked here too or the node would lie.
         else if (states[i].clipIndex < 0)
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "clip: %s (does not exist)", states[i].clipName.c_str());
         else
@@ -1100,9 +1100,9 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
 
         ImGui::PushID((int)i);
 
-        // Jerarquía: en qué caja está, y —si él es una caja— por dónde se entra.
-        // Botones y no combos: una lista dentro del nodo se abre en espacio de
-        // canvas (ver drawBlendPickPopup).
+        // Hierarchy: which box it is in, and, if it is a box, where it is entered.
+        // Buttons and not combos: a list inside the node opens in canvas space
+        // (see drawBlendPickPopup).
         {
             const int pa = states[i].parent;
             const std::string etiqueta =
@@ -1131,8 +1131,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             }
         }
 
-        // Una caja no reproduce clip, así que loop, velocidad, root motion,
-        // blend y eventos no le aplican: se salta todo eso.
+        // A box plays no clip, so loop, speed, root motion,
+        // blend and events do not apply to it: all of that is skipped.
         if (states[i].isSubMachine)
         {
             ImGui::PopID();
@@ -1146,8 +1146,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         if (ImGui::Checkbox("loop", &loop))
             anim->statesMutable(m_layer)[i].loop = loop;
 
-        // Modo de la raíz. RadioButton y no combo: una lista dentro del nodo
-        // se abre en espacio de canvas (ver drawBlendPickPopup).
+        // Root mode. RadioButton and not combo: a list inside the node
+        // opens in canvas space (see drawBlendPickPopup).
         {
             using RM = AnimatorComponent::RootMotion;
             int modo = (int)states[i].rootMotion;
@@ -1168,8 +1168,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 anim->statesMutable(m_layer)[i].rootMotion = (RM)modo;
         }
 
-        // Velocidad del estado y parámetro float que la multiplica (opcional).
-        // DragFloat en vivo: el undo lo recoge el tracker del grafo.
+        // Speed of the state and float parameter that multiplies it (optional).
+        // Live DragFloat: the undo is picked up by the graph tracker.
         ImGui::SetNextItemWidth(60.0f);
         ImGui::DragFloat("speed", &anim->statesMutable(m_layer)[i].speed, 0.01f, 0.0f, 100.0f, "%.2f");
         if (anim->statesMutable(m_layer)[i].speed < 0.0f) anim->statesMutable(m_layer)[i].speed = 0.0f;
@@ -1189,18 +1189,18 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 m_tooltipNodo = "Float parameter that multiplies the speed (like Unity's Multiplier).";
         }
 
-        // --- Blend 1D: clips extra con su umbral ---
-        // Cada fila abre la lista de TODOS los clips de la malla con un botón y
-        // no BeginCombo: la lista se abre fuera del nodo (ver
-        // drawBlendPickPopup). Una entrada sin clip resuelto sale en rojo.
+        // --- 1D blend: extra clips with their threshold ---
+        // Each row opens the list of ALL the clips of the mesh with a button and
+        // not BeginCombo: the list opens outside the node (see
+        // drawBlendPickPopup). An entry without a resolved clip shows up in red.
         auto& stMut = anim->statesMutable(m_layer)[i];
         if (go->getSkinnedMesh())
         {
             if (!stMut.blendEntries.empty())
             {
-                // Solo parámetros float: son los únicos que dan un peso
-                // continuo. Que la lista salga vacía es la pista de que hay que
-                // declarar uno abajo, en Parameters.
+                // Only float parameters: they are the only ones that give a continuous
+                // weight. The list coming out empty is the hint that one has to be
+                // declared below, in Parameters.
                 const std::string paramLabel = stMut.blendParam.empty()
                                                ? std::string("(no parameter)") : stMut.blendParam;
                 if (ImGui::Button(("by: " + paramLabel + "##by").c_str(), ImVec2(140.0f, 0.0f)))
@@ -1214,17 +1214,17 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 if (ImGui::IsItemHovered())
                     m_tooltipNodo = "Threshold of the state's main clip.";
 
-                // --- Blend 2D ---
-                // Con un segundo parámetro cada clip es un punto (umbral, Y) y
-                // suenan los 3 del triángulo donde cae (X, Y).
+                // --- 2D blend ---
+                // With a second parameter each clip is a point (threshold, Y) and
+                // the 3 of the triangle where (X, Y) falls play.
                 bool dosD = !stMut.blendParamY.empty();
                 if (ImGui::Checkbox("2D##blend2d", &dosD))
                 {
                     if (dosD)
                     {
-                        // El primer Float que no sea el de X; si no hay otro, el
-                        // mismo (se cambia en el selector). Sin ninguno Float la
-                        // casilla no se queda marcada.
+                        // The first Float that is not the X one; if there is no other, the
+                        // same one (it is changed in the selector). Without any Float the
+                        // checkbox does not stay checked.
                         std::string elegido;
                         for (const auto& p : anim->parameters())
                         {
@@ -1288,8 +1288,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
 
             if (ImGui::Button("+ blend clip##addBlend", ImVec2(140.0f, 0.0f)))
             {
-                // Umbral por encima de todos: la entrada nueva no roba el peso
-                // a las que ya estaban hasta que el usuario la mueva.
+                // Threshold above all the others: the new entry does not steal weight
+                // from the ones already there until the user moves it.
                 float maxT = stMut.clipThreshold;
                 for (const auto& e : stMut.blendEntries) maxT = std::max(maxT, e.threshold);
                 AnimatorComponent::BlendEntry nueva;
@@ -1301,9 +1301,9 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 drawBlend2DCanvas(*anim, stMut);
         }
 
-        // --- Clip de propiedades del estado ---
-        // Lo que permite que un objeto SIN esqueleto tenga estados: aquí se
-        // elige qué clip autorado reproduce cada uno.
+        // --- Property clip of the state ---
+        // What allows an object WITHOUT a skeleton to have states: here it is
+        // chosen which authored clip each one plays.
         if (!anim->propertyClips().empty())
         {
             ImGui::PushID("propclip");
@@ -1331,9 +1331,9 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             ImGui::PopID();
         }
 
-        // --- Eventos del estado ---
-        // No dependen de la malla: son instantes del ciclo con nombre, que en
-        // Play llegan a Lua como OnAnimationEvent.
+        // --- State events ---
+        // They do not depend on the mesh: they are named instants of the cycle, which in
+        // Play reach Lua as OnAnimationEvent.
         ImGui::PushID("eventos");
         int quitarEvento = -1;
         for (int k = 0; k < (int)stMut.events.size(); k++)
@@ -1368,8 +1368,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         ed::EndNode();
     }
 
-    // --- Nodo Any State ---
-    // Solo si hay estados: sin ellos no hay adónde ir. Solo tiene salida.
+    // --- Any State node ---
+    // Only if there are states: without them there is nowhere to go. It only has an output.
     if (!states.empty())
     {
         ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.30f, 0.20f, 0.45f, 0.90f));
@@ -1388,14 +1388,14 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     {
         const int from = transitions[t].fromState;
         const int to   = transitions[t].toState;
-        // fromState/toState son índices del vector m_states (no editorIds: ese
-        // es el contrato de Transition, ver comentario en el header). Hay que
-        // convertirlos a editorId antes de construir los ids de pin del canvas.
+        // fromState/toState are indices of the m_states vector (not editorIds: that
+        // is the Transition contract, see the comment in the header). They have to be
+        // converted to editorId before building the canvas pin ids.
         const bool desdeAny = from == AnimatorComponent::kAnyState;
         if ((!desdeAny && (from < 0 || from >= (int)states.size())) ||
             to < 0 || to >= (int)states.size()) continue;
-        // Un extremo que vive dentro de otra caja se dibuja CONTRA la caja: si
-        // no, la transición desaparecería del grafo y parecería no existir.
+        // An end that lives inside another box is drawn AGAINST the box: if
+        // not, the transition would disappear from the graph and seem not to exist.
         auto visible = [&](int estado) {
             int s = estado;
             while (s >= 0 && s < (int)states.size() && states[(size_t)s].parent != nivel)
@@ -1404,20 +1404,20 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         };
         const int vFrom = desdeAny ? from : visible(from);
         const int vTo   = visible(to);
-        // Fuera de esta rama, o los dos extremos en el mismo nodo visible: no
-        // hay nada que dibujar en este nivel.
+        // Outside this branch, or both ends on the same visible node: there is
+        // nothing to draw at this level.
         if ((!desdeAny && vFrom < 0) || vTo < 0 || (!desdeAny && vFrom == vTo)) continue;
 
-        // Dos estados enlazados en los DOS sentidos: la curva de vuelta tiene
-        // que rodear ambos nodos y acaba pasando sobre la de ida. La de vuelta
-        // se cuelga del par de pines SECUNDARIO, que está en otra fila y con
-        // más curvatura, así que las dos se leen por separado.
+        // Two states linked in BOTH directions: the return curve has
+        // to go around both nodes and ends up passing over the outgoing one. The return
+        // one hangs from the SECONDARY pin pair, which is on another row and with
+        // more curvature, so the two are read separately.
         //
-        // "La de vuelta" es la que aparece DESPUÉS en el vector: se decide por
-        // orden y no por geometría, para que mover un nodo no reordene las
-        // curvas mientras se arrastra. Se comparan los extremos VISIBLES en
-        // este nivel, así que también separa dos transiciones que acaban en la
-        // misma caja.
+        // "The return one" is the one that appears LATER in the vector: it is decided by
+        // order and not by geometry, so that moving a node does not reorder the
+        // curves while dragging. The VISIBLE ends at
+        // this level are compared, so it also separates two transitions that end in the
+        // same box.
         bool esVuelta = false;
         if (!desdeAny)
         {
@@ -1438,7 +1438,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         ed::Link(linkId((int)t), pinSalida, pinEntrada);
     }
 
-    // --- Crear links arrastrando de pin a pin ---
+    // --- Create links by dragging from pin to pin ---
     if (ed::BeginCreate())
     {
         ed::PinId a, b;
@@ -1446,17 +1446,17 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         {
             const int pa = (int)a.Get();
             const int pb = (int)b.Get();
-            // El usuario puede arrastrar en cualquier dirección: se normaliza a
-            // (salida -> entrada).
+            // The user can drag in any direction: it is normalized to
+            // (output -> input).
             const int outPin = esPinDeSalida(pa) ? pa : pb;
             const int inPin  = esPinDeSalida(pa) ? pb : pa;
 
             if (esPinDeSalida(outPin) && !esPinDeSalida(inPin) && inPin != kAnyStateNodeId &&
                 ed::AcceptNewItem())
             {
-                // stateFromPin (índice) en vez de directamente el editorId: las
-                // transiciones guardan índices del vector, no editorIds. El pin
-                // de Any State no se decodifica: es el centinela.
+                // stateFromPin (index) instead of directly the editorId: the
+                // transitions store vector indices, not editorIds. The Any State
+                // pin is not decoded: it is the sentinel.
                 const int fromIdx = (outPin == kAnyStateOutPinId)
                                     ? AnimatorComponent::kAnyState
                                     : stateIndexFromPin(*anim, outPin, m_layer);
@@ -1466,8 +1466,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                     AnimatorComponent::Transition tr;
                     tr.fromState = fromIdx;
                     tr.toState   = toIdx;
-                    // Sin condiciones no dispara nunca (por diseño): el usuario las
-                    // añade con doble clic en el link.
+                    // Without conditions it never fires (by design): the user
+                    // adds them by double-clicking the link.
                     m_graphUndo.setLabel("Create transition");
                     anim->addTransition(tr, m_layer);
                     ctx.pushLog("Animator: transition created (no conditions yet)");
@@ -1477,34 +1477,34 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     }
     ed::EndCreate();
 
-    // --- Borrar nodos y links ---
+    // --- Delete nodes and links ---
     if (ed::BeginDelete())
     {
-        // Con box-select + Supr, una sola pasada de BeginDelete puede traer
-        // varios ids (varios QueryDeletedNode/QueryDeletedLink). Si se borrara
-        // cada uno según se acepta, el primer erase reindexa el vector y los
-        // ids ya encolados (calculados antes de ese erase) pasan a apuntar a
-        // otro elemento o se salen de rango — removeState/removeTransition
-        // hacen bounds-check silencioso y ese elemento sobrevive sin más aviso.
-        // Por eso se recogen todos los índices primero y se borran después, de
-        // atrás hacia adelante: así cada erase solo desplaza índices ya
-        // procesados, nunca los que quedan pendientes en esta misma pasada.
+        // With box-select + Del, a single BeginDelete pass can bring
+        // several ids (several QueryDeletedNode/QueryDeletedLink). If each one were
+        // deleted as it is accepted, the first erase reindexes the vector and the
+        // ids already queued (computed before that erase) end up pointing to
+        // another element or fall out of range: removeState/removeTransition
+        // do a silent bounds-check and that element survives with no further warning.
+        // That is why all the indices are collected first and deleted afterwards, from
+        // back to front: this way each erase only shifts indices already
+        // processed, never the ones still pending in this same pass.
         std::vector<int> transitionsToRemove;
         ed::LinkId dl;
         while (ed::QueryDeletedLink(&dl))
             if (ed::AcceptDeletedItem())
                 transitionsToRemove.push_back((int)dl.Get() - 100000);
 
-        // El id de nodo que trae QueryDeletedNode es un nodeId(editorId): se
-        // decodifica a editorId y se resuelve al índice actual del vector
-        // escaneando por editorId (stateIndexFromPin sirve igual aquí pese al
-        // nombre — decode + scan es exactamente lo mismo pa un id de nodo que
-        // pa uno de pin, la fórmula es la misma división entera).
+        // The node id that QueryDeletedNode brings is a nodeId(editorId): it is
+        // decoded to editorId and resolved to the current index of the vector by
+        // scanning by editorId (stateIndexFromPin works just as well here despite the
+        // name: decode + scan is exactly the same for a node id as
+        // for a pin one, the formula is the same integer division).
         std::vector<int> statesToRemove;
         ed::NodeId dn;
         while (ed::QueryDeletedNode(&dn))
         {
-            // El nodo Any State no se borra: existe mientras haya estados.
+            // The Any State node is not deleted: it exists as long as there are states.
             if ((int)dn.Get() == kAnyStateNodeId) { ed::RejectDeletedItem(); continue; }
             if (ed::AcceptDeletedItem())
             {
@@ -1517,30 +1517,30 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         for (int idx : transitionsToRemove)
             anim->removeTransition(idx, m_layer);
 
-        // Se borran los links explícitamente pedidos antes que los estados: un
-        // estado borrado se lleva también sus transiciones (removeState las
-        // reindexa/purga), así que procesar los links sueltos primero evita
-        // pisarse con esa purga automática. El descending-erase sigue siendo
-        // necesario con multi-delete: cada removeState desplaza los índices por
-        // encima de idx, así que hay que ir de atrás hacia adelante pa que cada
-        // erase no invalide los índices ya calculados y pendientes en este mismo
-        // vector (statesToRemove son índices tomados ANTES de borrar nada).
+        // The explicitly requested links are deleted before the states: a
+        // deleted state also takes its transitions with it (removeState
+        // reindexes/purges them), so processing the loose links first avoids
+        // stepping on that automatic purge. The descending-erase is still
+        // necessary with multi-delete: each removeState shifts the indices above
+        // idx, so we have to go from back to front so that each
+        // erase does not invalidate the indices already computed and pending in this same
+        // vector (statesToRemove are indices taken BEFORE deleting anything).
         if (!statesToRemove.empty()) m_graphUndo.setLabel("Delete state");
         std::sort(statesToRemove.rbegin(), statesToRemove.rend());
         for (int idx : statesToRemove)
-            // removeState reindexa las transiciones supervivientes.
+            // removeState reindexes the surviving transitions.
             anim->removeState(idx, m_layer);
 
-        // A diferencia de antes (Task 10), YA NO hace falta desvincular
-        // m_boundTo aquí: con ids estables por editorId, un superviviente no
-        // cambia de id al reindexarse el vector, así que su nodo en el canvas
-        // sigue siendo el mismo nodo (mismo id) con su misma posición — no hay
-        // slot visual que heredar del borrado. syncPositionsToComponent de más
-        // abajo puede leer las posiciones este mismo frame sin corromper nada.
+        // Unlike before (Task 10), it is NO LONGER necessary to unlink
+        // m_boundTo here: with stable ids by editorId, a survivor does not
+        // change id when the vector is reindexed, so its node in the canvas
+        // is still the same node (same id) with the same position: there is no
+        // visual slot to inherit from the deleted one. syncPositionsToComponent further
+        // below can read the positions this same frame without corrupting anything.
     }
     ed::EndDelete();
 
-    // --- Menús contextuales ---
+    // --- Context menus ---
     ed::Suspend();
     ed::NodeId ctxNode;
     ed::LinkId ctxLink;
@@ -1548,21 +1548,21 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     {
         ImGui::OpenPopup("node_ctx");
         m_conditionsFor = -1;
-        // Miembro plano en vez de ImGui::GetStateStorage(): un solo popup de
-        // nodo puede estar abierto a la vez, así que no hace falta la
-        // indirección de la state storage de ImGui pa smuggle-ar el índice
-        // hasta el popup diferido — un int en el panel llega igual de lejos.
-        // ctxNode.Get() decodifica a un editorId, no al índice del vector que
-        // "Set as Entry" necesita (setEntryState(idx)) — de ahí el paso por
+        // Plain member instead of ImGui::GetStateStorage(): only one node popup
+        // can be open at a time, so the indirection of the ImGui state storage is
+        // not needed to smuggle the index to the deferred popup: an int in the panel
+        // gets just as far.
+        // ctxNode.Get() decodes to an editorId, not to the vector index that
+        // "Set as Entry" needs (setEntryState(idx)), hence the step through
         // stateIndexFromPin.
         m_nodeCtxTarget = stateIndexFromPin(*anim, (int)ctxNode.Get(), m_layer);
     }
     else if (ed::ShowLinkContextMenu(&ctxLink))
     {
-        // Sin popup intermedio "Edit Conditions...": abrir "conditions" desde
-        // dentro del BeginPopup/EndPopup de otro popup (link_ctx) anidaba un
-        // OpenPopup dentro de otro, frágil y flaky. Un click derecho en el link
-        // abre el editor de condiciones directamente.
+        // No intermediate "Edit Conditions..." popup: opening "conditions" from
+        // inside the BeginPopup/EndPopup of another popup (link_ctx) nested one
+        // OpenPopup inside another, fragile and flaky. A right click on the link
+        // opens the conditions editor directly.
         m_conditionsFor = (int)ctxLink.Get() - 100000;
         ImGui::OpenPopup("conditions");
     }
@@ -1584,12 +1584,12 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     drawBlendPickPopup(go);
     ed::Resume();
 
-    // Doble clic en una caja: se entra a ver lo que tiene dentro. Se consulta
-    // ANTES de ed::End, que es donde el lienzo aún tiene el estado del frame.
+    // Double click on a box: we enter to see what it has inside. It is queried
+    // BEFORE ed::End, which is where the canvas still has the frame state.
     if (ed::NodeId doble = ed::GetDoubleClickedNode())
     {
-        // El editorId sale de deshacer la cuenta de nodeId (ver los helpers de
-        // arriba), que es la misma para nodos y pines.
+        // The editorId comes from undoing the nodeId computation (see the helpers
+        // above), which is the same for nodes and pins.
         const int eid = editorIdFromRawId((int)doble.Get());
         const int idx = anim->stateIndexByEditorId(eid, m_layer);
         if (idx >= 0 && anim->states(m_layer)[(size_t)idx].isSubMachine)
@@ -1597,8 +1597,8 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     }
 
     ed::End();
-    // Ya fuera del lienzo: aquí el ratón vuelve a estar en coordenadas de
-    // pantalla y el tooltip sale junto al cursor.
+    // Already outside the canvas: here the mouse is back in screen
+    // coordinates and the tooltip comes out next to the cursor.
     if (!m_tooltipNodo.empty()) ImGui::SetTooltip("%s", m_tooltipNodo.c_str());
     ed::SetCurrentEditor(nullptr);
 }
@@ -1617,9 +1617,9 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     int idx = -1;
     for (int i = 0; i < (int)anim->states(m_layer).size(); i++)
         if (anim->states(m_layer)[i].editorId == m_blendPickEditorId) { idx = i; break; }
-    // El estado se borró con la lista abierta. La malla solo hace falta para
-    // los kinds que listan clips: un objeto sin esqueleto también elige padre
-    // y entrada de sub-máquina.
+    // The state was deleted with the list open. The mesh is only needed for
+    // the kinds that list clips: an object without a skeleton also chooses parent
+    // and sub-machine entry.
     const bool necesitaMesh = m_blendPickKind == 0;
     if (idx < 0 || (necesitaMesh && !mesh))
     {
@@ -1631,9 +1631,9 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
 
     if (m_blendPickKind == 4)
     {
-        // Padre: la raíz o cualquier caja que no sea él mismo ni esté DENTRO de
-        // él (meter una caja dentro de sí misma haría un ciclo y dejaría a sus
-        // hijos inalcanzables).
+        // Parent: the root or any box that is neither itself nor INSIDE
+        // itself (putting a box inside itself would make a cycle and leave its
+        // children unreachable).
         if (ImGui::Selectable("(root)", st.parent < 0)) st.parent = -1;
         const auto& sts = anim->states(m_layer);
         for (int i = 0; i < (int)sts.size(); i++)
@@ -1645,8 +1645,8 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     }
     else if (m_blendPickKind == 5)
     {
-        // Entrada de la caja: cualquiera de sus hijos DIRECTOS. Si no tiene, la
-        // caja está vacía y no se puede entrar en ella.
+        // Entry of the box: any of its DIRECT children. If it has none, the
+        // box is empty and cannot be entered.
         const auto& sts = anim->states(m_layer);
         bool alguno = false;
         for (int i = 0; i < (int)sts.size(); i++)
@@ -1660,7 +1660,7 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     }
     else if (m_blendPickKind == 2)
     {
-        // Multiplicador de velocidad: "(ninguno)" o cualquier parámetro float.
+        // Speed multiplier: "(none)" or any float parameter.
         if (ImGui::Selectable("(none)", st.speedParam.empty()))
             st.speedParam.clear();
         bool alguno = false;
@@ -1676,10 +1676,10 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     }
     else if (m_blendPickKind == 0)
     {
-        // Lista TODOS los clips de la malla, no solo los que ya usa el grafo:
-        // el motor admite cualquiera de ellos, el principal incluido (en un 1D,
-        // el mismo clip con otro umbral hace de meseta). La entrada puede haber
-        // desaparecido: se quitó con la "x" con el popup abierto.
+        // It lists ALL the clips of the mesh, not only the ones the graph already uses:
+        // the engine accepts any of them, the main one included (in a 1D,
+        // the same clip with another threshold acts as a plateau). The entry may have
+        // disappeared: it was removed with the "x" with the popup open.
         if (m_blendPickEntry < 0 || m_blendPickEntry >= (int)st.blendEntries.size())
         {
             ImGui::CloseCurrentPopup();
@@ -1696,19 +1696,19 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
                     cambio = true;
                 }
             }
-            // El índice y la duración los resuelve rebindClips por nombre; sin
-            // esto la entrada quedaría a -1 hasta recargar la escena.
-            // rebindClips y no bindClips: puede estar corriendo Play Mode y
-            // bindClips reiniciaría el grafo y los parámetros del usuario.
+            // The index and the duration are resolved by rebindClips by name; without
+            // this the entry would stay at -1 until the scene is reloaded.
+            // rebindClips and not bindClips: Play Mode may be running and
+            // bindClips would restart the graph and the user's parameters.
             if (cambio)
                 anim->rebindClips(*mesh, nullptr);
         }
     }
     else
     {
-        // Parámetro X (kind 1) o Y (kind 3) del blend. Solo parámetros float:
-        // son los únicos que dan un peso continuo. Que la lista salga vacía es
-        // la pista de que hay que declarar uno en Parameters.
+        // X (kind 1) or Y (kind 3) parameter of the blend. Only float parameters:
+        // they are the only ones that give a continuous weight. The list coming out empty is
+        // the hint that one has to be declared in Parameters.
         std::string& destino = (m_blendPickKind == 3) ? st.blendParamY : st.blendParam;
         bool alguno = false;
         for (const auto& p : anim->parameters())
@@ -1733,20 +1733,20 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
 
     auto& tr = anim->transitionsMutable(m_layer)[m_conditionsFor];
 
-    // Cross-fade de ESTA transición, en segundos. 0 = corte seco, que es lo que
-    // hacía el motor antes y lo que traen las escenas viejas.
+    // Cross-fade of THIS transition, in seconds. 0 = hard cut, which is what
+    // the engine did before and what old scenes bring.
     ImGui::TextUnformatted("Transition");
     ImGui::SetNextItemWidth(80);
     ImGui::DragFloat("cross-fade (s)", &tr.duration, 0.01f, 0.0f, 10.0f, "%.2f");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Seconds of blending with the source state. 0 = instant cut.");
-    // DragFloat con min 0 ya lo impide al arrastrar, pero no al teclear un
-    // valor: un negativo dejaria blendWeight fuera de [0,1].
+    // DragFloat with min 0 already prevents it when dragging, but not when typing a
+    // value: a negative would leave blendWeight outside [0,1].
     if (tr.duration < 0.0f) tr.duration = 0.0f;
 
-    // Exit time: la transición espera a que el estado de origen llegue a
-    // exitTime (normalizado; 1 = fin del clip, >1 cuenta vueltas). Sin
-    // condiciones dispara solo por tiempo.
+    // Exit time: the transition waits for the source state to reach
+    // exitTime (normalized; 1 = end of the clip, >1 counts loops). Without
+    // conditions it fires by time alone.
     ImGui::PushID("exit_time");
     ImGui::Checkbox("Has Exit Time", &tr.hasExitTime);
     if (ImGui::IsItemHovered())
@@ -1795,9 +1795,9 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
             ImGui::SameLine();
             ImGui::SetNextItemWidth(50);
             int op = (int)cond.compare;
-            // Los cuatro comparadores para ambos tipos: el evaluador siempre
-            // los soportó (ver AnimatorComponent::conditionsMet) y recortar el
-            // combo a 2 para Float solo servía para esconderlos.
+            // The four comparators for both types: the evaluator always
+            // supported them (see AnimatorComponent::conditionsMet) and trimming the
+            // combo to 2 for Float only served to hide them.
             if (ImGui::Combo("##cmp", &op, kCompareLabels, IM_ARRAYSIZE(kCompareLabels)))
                 cond.compare = (AnimatorComponent::Compare)op;
             ImGui::SameLine();
@@ -1808,11 +1808,11 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
             }
             else
             {
-                // El umbral vive en float pa no duplicar el campo; la UI de Int
-                // pasa por un int temporal, así que por aquí nunca entra un
-                // valor con parte fraccionaria y lo que se ve es exactamente lo
-                // que evalúa conditionsMet (que redondea, no trunca, pa cubrir
-                // los que llegan de un JSON editado a mano).
+                // The threshold lives in a float so as not to duplicate the field; the Int UI
+                // goes through a temporary int, so a value with a fractional part never
+                // comes in through here and what is seen is exactly what
+                // conditionsMet evaluates (which rounds, not truncates, to cover
+                // the ones that come from a hand-edited JSON).
                 int thr = (int)cond.threshold;
                 if (ImGui::DragInt("##thr", &thr)) cond.threshold = (float)thr;
             }
@@ -1824,18 +1824,18 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
     if (toRemove >= 0) tr.conditions.erase(tr.conditions.begin() + toRemove);
 
     ImGui::Separator();
-    // Solo se ofrecen parámetros ya declarados: una condición sobre un parámetro
-    // inexistente no dispararía nunca y no habría forma de saber por qué.
+    // Only already declared parameters are offered: a condition on a nonexistent
+    // parameter would never fire and there would be no way to know why.
     for (const auto& p : anim->parameters())
     {
         ImGui::PushID(p.name.c_str());
-        // Selectable con DontClosePopups en vez de MenuItem: un MenuItem cierra
-        // el popup al primer click y el usuario solo podría añadir una condición
-        // por apertura. Con esto puede encadenar varias "Add:" seguidas.
+        // Selectable with DontClosePopups instead of MenuItem: a MenuItem closes
+        // the popup on the first click and the user could only add one condition
+        // per opening. With this they can chain several "Add:" in a row.
         if (ImGui::Selectable(("Add: " + p.name).c_str(), false, ImGuiSelectableFlags_DontClosePopups))
         {
             AnimatorComponent::Condition cond;
-            // El tipo del parámetro decide el de la condición 1:1.
+            // The parameter type decides the condition one 1:1.
             switch (p.type)
             {
                 case AnimatorComponent::ParamType::Trigger:
@@ -1853,10 +1853,10 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
         }
         ImGui::PopID();
     }
-    // "animation finished" nunca dispara saliendo de un estado en loop (un
-    // clip en loop nunca "termina", ver AnimatorComponent::update): se deja
-    // el item pero deshabilitado, con tooltip, para que el usuario no arme un
-    // link muerto sin saberlo.
+    // "animation finished" never fires when leaving a looping state (a
+    // looping clip never "finishes", see AnimatorComponent::update): the
+    // item is kept but disabled, with a tooltip, so the user does not set up a
+    // dead link without knowing it.
     const bool fromLoops = tr.fromState >= 0 && tr.fromState < (int)anim->states(m_layer).size()
                             && anim->states(m_layer)[tr.fromState].loop;
     ImGui::BeginDisabled(fromLoops);
@@ -1885,11 +1885,11 @@ void AnimatorPanel::importAnimationSource(EditorContext& ctx, GameObject* go, co
         return;
     }
 
-    // Ensayo en seco sobre una copia: el comando no puede decir "no" a medias
-    // (AnimationSourceCommand::applyAdd descarta los warnings de
-    // addAnimationSource y simplemente no hace nada si falla), y así el error
-    // del loader (rig equivocado, fichero sin animaciones) llega al usuario
-    // antes de meter nada en el stack de undo.
+    // Dry run on a copy: the command cannot say "no" halfway
+    // (AnimationSourceCommand::applyAdd discards the warnings of
+    // addAnimationSource and simply does nothing if it fails), and this way the loader
+    // error (wrong rig, file without animations) reaches the user
+    // before anything is put on the undo stack.
     SkinnedMesh probe = *mesh;
     std::vector<std::string> warnings;
     const bool ok = addAnimationSource(probe, path, warnings);
@@ -1923,17 +1923,17 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
     for (size_t s = 0; s < mesh->animationSources.size(); s++)
     {
         const AnimationSource& src = mesh->animationSources[s];
-        // El path como ID en vez del índice s: quitar una fuente reindexa el
-        // vector, y si el ID fuera el índice, cada fila posterior heredaría
-        // el estado abierto/cerrado (y el m_renamingClip en vuelo, si lo
-        // hubiera) de la fila que ocupaba su índice antes del borrado. El
-        // path es estable mientras la fuente exista.
+        // The path as ID instead of the index s: removing a source reindexes the
+        // vector, and if the ID were the index, each later row would inherit
+        // the open/closed state (and the in-flight m_renamingClip, if there
+        // were one) of the row that occupied its index before the deletion. The
+        // path is stable while the source exists.
         //
-        // El path SOLO no basta: dos fuentes pueden compartir path a
-        // propósito (reimportar el mismo fichero), y con el mismo ID las dos
-        // filas compartirían el estado del TreeNode — expandir una expandiría
-        // la otra. Se compone con cuántas fuentes anteriores repiten ese path,
-        // que distingue las copias sin depender del índice absoluto.
+        // The path ALONE is not enough: two sources can share a path on
+        // purpose (reimporting the same file), and with the same ID the two
+        // rows would share the TreeNode state: expanding one would expand
+        // the other. It is composed with how many earlier sources repeat that path,
+        // which tells the copies apart without depending on the absolute index.
         int pathOccurrence = 0;
         for (size_t k = 0; k < s; k++)
             if (mesh->animationSources[k].path == src.path) pathOccurrence++;
@@ -1944,16 +1944,16 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
         const std::string label = file + "  (" + std::to_string(src.clipNames.size()) + " clips)"
                                 + (src.builtin ? "  [model]" : "");
 
-        // AllowOverlap: el nodo ocupa la fila entera (SpanAvailWidth) y la "X"
-        // se pinta ENCIMA de él. Sin el flag, ImGui da el clic al primer item
-        // enviado, el nodo, y la X no hacía nada más que plegar la fila.
+        // AllowOverlap: the node takes up the whole row (SpanAvailWidth) and the "X"
+        // is painted ON TOP of it. Without the flag, ImGui gives the click to the first item
+        // submitted, the node, and the X did nothing but fold the row.
         const bool open = ImGui::TreeNodeEx("##src",
                                             ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowOverlap,
                                             "%s", label.c_str());
 
-        // La fuente builtin es el FBX del modelo: quitarla dejaría la malla sin
-        // el fichero que la creó, así que el botón existe pero deshabilitado
-        // (mostrarlo y explicarlo enseña la regla; ocultarlo la esconde).
+        // The builtin source is the model FBX: removing it would leave the mesh without
+        // the file that created it, so the button exists but is disabled
+        // (showing it and explaining it teaches the rule; hiding it conceals it).
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f);
         ImGui::BeginDisabled(src.builtin);
         if (ImGui::SmallButton("X")) sourceToRemove = (int)s;
@@ -1974,19 +1974,19 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
                     {
                         const std::string nuevo = m_renameBuf;
 
-                        // Validación ANTES de ejecutar nada, replicando exactamente
-                        // las reglas de rechazo de renameClip (ver
-                        // SkinnedMeshAnimations.cpp): nombre vacío, nombre ya usado
-                        // por cualquier clip, o nombre idéntico al actual. Antes se
-                        // ejecutaba el comando primero y se inferÍa el éxito
-                        // escaneando el mesh por el nombre nuevo — eso no podía
-                        // distinguir "el rename se aplicó" de "ya existía un clip
-                        // con ese nombre", que es justo el motivo por el que
-                        // renameClip lo rechaza: un duplicado (p.ej. renombrar
-                        // "Walk" a "Idle" cuando "Idle" ya existe) se colaba en el
-                        // undo stack como si hubiera funcionado, y el siguiente
-                        // Ctrl+Z del usuario no deshacía nada porque el comando no
-                        // había mutado nada.
+                        // Validation BEFORE executing anything, replicating exactly
+                        // the rejection rules of renameClip (see
+                        // SkinnedMeshAnimations.cpp): empty name, name already used
+                        // by any clip, or name identical to the current one. Before, the
+                        // command was executed first and success was inferred by
+                        // scanning the mesh for the new name; that could not
+                        // distinguish "the rename was applied" from "a clip with that name
+                        // already existed", which is precisely the reason
+                        // renameClip rejects it: a duplicate (e.g. renaming
+                        // "Walk" to "Idle" when "Idle" already exists) sneaked into the
+                        // undo stack as if it had worked, and the user's next
+                        // Ctrl+Z undid nothing because the command had
+                        // not mutated anything.
                         bool rechazado = nuevo.empty() || nuevo == clipName;
                         if (!rechazado)
                             for (const auto& c : mesh->animationClips)
@@ -1999,12 +1999,12 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
                         }
                         else
                         {
-                            // Copia del nombre viejo ANTES de execute(): clipName
-                            // es una const std::string& que apunta directo al
-                            // elemento de src.clipNames, y renameClip lo reescribe
-                            // in-place — tras execute() clipName ya vale "nuevo",
-                            // así que usarla en el log duplicaría el nombre nuevo
-                            // en vez de mostrar qué cambió.
+                            // Copy of the old name BEFORE execute(): clipName
+                            // is a const std::string& that points directly at the
+                            // element of src.clipNames, and renameClip rewrites it
+                            // in place: after execute() clipName is already "new",
+                            // so using it in the log would duplicate the new name
+                            // instead of showing what changed.
                             const std::string viejo = clipName;
                             auto cmd = std::make_unique<ClipRenameCommand>(
                                 *ctx.scene, "Rename clip", go->id, viejo, nuevo);
@@ -2015,9 +2015,9 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
                         }
                         m_renamingClip.clear();
                     }
-                    // Clic fuera sin pulsar Enter (InputTextFlags_EnterReturnsTrue
-                    // no dispara ahí): se cierra el modo edición sin tocar nada,
-                    // ni el mesh ni el undo stack — el usuario se arrepintió.
+                    // Click outside without pressing Enter (InputTextFlags_EnterReturnsTrue
+                    // does not fire there): edit mode is closed without touching anything,
+                    // neither the mesh nor the undo stack: the user changed their mind.
                     if (ImGui::IsItemDeactivated()) m_renamingClip.clear();
                 }
                 else
@@ -2039,19 +2039,19 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
 
     if (sourceToRemove >= 0)
     {
-        // Diferido fuera del for: mutar animationSources dentro del propio
-        // bucle que lo recorre invalidaría el iterador de este mismo frame.
+        // Deferred outside the for: mutating animationSources inside the very
+        // loop that walks it would invalidate the iterator of this same frame.
         const AnimationSource& src = mesh->animationSources[(size_t)sourceToRemove];
 
-        // Ordinal contado DESDE EL FINAL (0 = la última con ese path), no
-        // desde el principio: es lo que AnimationSourceCommand::applyRemove
-        // espera (ver el comentario largo ahí sobre por qué el escaneo va
-        // desde el final). Cuenta cuántas fuentes no-builtin con el mismo
-        // path hay POR DELANTE de la fila pulsada: si el usuario quita la
-        // primera de dos filas con el mismo path, esto vale 1 (la segunda
-        // fila queda por delante), y el comando la salta correctamente en
-        // vez de quitar -por backward-scan ciego- la última (el bug que
-        // corrige este fix).
+        // Ordinal counted FROM THE END (0 = the last one with that path), not
+        // from the start: it is what AnimationSourceCommand::applyRemove
+        // expects (see the long comment there about why the scan goes
+        // from the end). It counts how many non-builtin sources with the same
+        // path there are AHEAD of the clicked row: if the user removes the
+        // first of two rows with the same path, this is 1 (the second
+        // row is ahead), and the command skips it correctly instead of
+        // removing, by blind backward scan, the last one (the bug that
+        // this fix corrects).
         size_t pathOccurrence = 0;
         for (size_t k = (size_t)sourceToRemove + 1; k < mesh->animationSources.size(); k++)
         {
@@ -2064,21 +2064,21 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
             /*add=*/false, src.path, src.clipNames, pathOccurrence);
         cmd->execute();
         ctx.undo->push(std::move(cmd));
-        // Los estados que usaran esos clips quedan huérfanos a propósito: el
-        // grafo es trabajo del usuario y borrarlo por él sería peor que dejarlo
-        // avisado. AnimationSourceCommand::applyRemove ya llama a
-        // rebindClips en caliente, así que clipIndex queda en -1 en el
-        // momento del borrado (no hace falta esperar a una recarga de
-        // escena o a un ciclo de Play/Stop).
+        // The states that used those clips are left orphaned on purpose: the
+        // graph is the user's work and deleting it for them would be worse than leaving it
+        // flagged. AnimationSourceCommand::applyRemove already calls
+        // rebindClips live, so clipIndex is left at -1 at the
+        // moment of deletion (there is no need to wait for a scene reload
+        // or a Play/Stop cycle).
         ctx.pushLog("Animator: animation source removed; the states that used it are left without a clip");
     }
 
     if (ImGui::Button("Add Animation FBX..."))
     {
         IGFD::FileDialogConfig cfg;
-        // "assets", como el diálogo de malla de PropertiesPanel: los FBX de
-        // este proyecto viven ahí, y abrir en la raíz del repo obligaría a
-        // navegar cada vez.
+        // "assets", like the mesh dialog of PropertiesPanel: the FBX files of
+        // this project live there, and opening at the repo root would force
+        // navigating every time.
         cfg.path = "assets";
         cfg.flags = ImGuiFileDialogFlags_HideColumnType |
                     ImGuiFileDialogFlags_HideColumnDate |
@@ -2086,19 +2086,19 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
                     ImGuiFileDialogFlags_DisablePlaceMode;
         m_animSrcDialog->OpenDialog("AddAnimSrcDlg", "Choose Animation Source", ModelLoader::supportedModelFilter(), cfg);
         m_animSrcDlgOpen = true;
-        // Se captura el id AHORA, al abrir, no ctx.selected al drenar: el
-        // diálogo no es modal, así que el usuario puede cambiar de selección
-        // mientras elige el fichero — el FBX debe ir a "go" (a quien estaba
-        // seleccionado al pulsar el botón), no a quien sea que esté
-        // seleccionado cuando el usuario por fin cierra el diálogo.
+        // The id is captured NOW, on open, not ctx.selected when draining: the
+        // dialog is not modal, so the user can change the selection
+        // while choosing the file; the FBX must go to "go" (whoever was
+        // selected when the button was pressed), not to whoever happens to be
+        // selected when the user finally closes the dialog.
         m_animSrcDlgTarget = go->id;
     }
 
-    // Drop target: el Content Browser emite "DT_ASSET_PATH" (ver
-    // ContentBrowserPanel::BeginDragDropSource), no "CONTENT_BROWSER_ITEM" —
-    // mismo id y mismo patrón (payload->Data es char* terminado en '\0',
-    // tamaño = fullPath.size()+1) que usa PropertiesPanel::drawMeshSection
-    // para su propio drop target de modelos.
+    // Drop target: the Content Browser emits "DT_ASSET_PATH" (see
+    // ContentBrowserPanel::BeginDragDropSource), not "CONTENT_BROWSER_ITEM";
+    // same id and same pattern (payload->Data is a '\0'-terminated char*,
+    // size = fullPath.size()+1) that PropertiesPanel::drawMeshSection uses
+    // for its own model drop target.
     ImGui::SameLine();
     ImGui::TextDisabled("(or drag a model here)");
     if (ImGui::BeginDragDropTarget())
@@ -2121,13 +2121,13 @@ void AnimatorPanel::drawAnimationSourceDialog(EditorContext& ctx)
 
     if (m_animSrcDialog->IsOk())
     {
-        // Resuelve por id (capturado al abrir el diálogo, ver OpenDialog más
-        // arriba), no ctx.selected: para cuando el usuario cierra el diálogo
-        // la selección puede haber cambiado, y el objeto original puede
-        // incluso haberse borrado. Sin este resuelto explícito, un guard tipo
-        // "ctx.selected && ctx.selected->hasAnimator()" habría importado el
-        // FBX en el GameObject equivocado sin avisar, o lo habría descartado
-        // en silencio si el actualmente seleccionado no tuviera Animator.
+        // Resolves by id (captured when opening the dialog, see OpenDialog further
+        // up), not ctx.selected: by the time the user closes the dialog
+        // the selection may have changed, and the original object may
+        // even have been deleted. Without this explicit resolution, a guard like
+        // "ctx.selected && ctx.selected->hasAnimator()" would have imported the
+        // FBX into the wrong GameObject without warning, or would have silently discarded it
+        // if the currently selected one had no Animator.
         GameObject* target = ctx.scene ? ctx.scene->findById(m_animSrcDlgTarget) : nullptr;
         if (!target)
         {
@@ -2149,19 +2149,19 @@ void AnimatorPanel::drawAnimationSourceDialog(EditorContext& ctx)
 
 void AnimatorPanel::draw(EditorContext& ctx)
 {
-    // El cuerpo va en un bloque, no en early-returns: drawAnimationSourceDialog()
-    // de más abajo tiene que ejecutarse SIEMPRE, tanto si el panel está cerrado
-    // (m_open == false, p.ej. tras pulsar la X de la ventana, que Begin escribe
-    // directo en m_open) como si Begin devuelve false (ventana colapsada). Con
-    // los early-returns de antes, cerrar o colapsar el panel mientras el
-    // diálogo de fichero estaba abierto dejaba m_animSrcDlgOpen (y el estado
-    // interno de IGFD) atascados en true para siempre: el diálogo resucitaba
-    // solo, sin pedirlo, al reabrir el panel. Begin/End se llaman siempre en
-    // pareja pase lo que pase (regla de ImGui), de ahí el End() incondicional
-    // dentro del if(m_open). Mismo patrón que PropertiesPanel::draw +
+    // The body goes in a block, not in early-returns: drawAnimationSourceDialog()
+    // below has to run ALWAYS, whether the panel is closed
+    // (m_open == false, e.g. after pressing the window X, which Begin writes
+    // directly into m_open) or Begin returns false (collapsed window). With
+    // the earlier early-returns, closing or collapsing the panel while the
+    // file dialog was open left m_animSrcDlgOpen (and the internal state
+    // of IGFD) stuck at true forever: the dialog resurrected
+    // by itself, unasked, when reopening the panel. Begin/End are always called as a
+    // pair no matter what (an ImGui rule), hence the unconditional End()
+    // inside the if(m_open). Same pattern as PropertiesPanel::draw +
     // drawMeshDialog.
-    // Solo hay sesión de undo mientras se dibuja un grafo: panel cerrado,
-    // colapsado o sin Animator la descartan (ver el final de la función).
+    // There is only an undo session while a graph is being drawn: closed panel,
+    // collapsed or without an Animator discard it (see the end of the function).
     bool grafoDibujado = false;
     if (m_open)
     {
@@ -2176,30 +2176,30 @@ void AnimatorPanel::draw(EditorContext& ctx)
             }
             else
             {
-                // Cambio de objeto vinculado: se comprueba UNA vez aquí arriba
-                // (antes de dibujar nada) para poder limpiar m_renamingClip antes
-                // de que drawAnimationSources lo lea. Si no, un clip con el mismo
-                // nombre en el nuevo GameObject heredaría el modo edición y el
-                // buffer del clip del objeto anterior durante un frame.
+                // Change of linked object: it is checked ONCE here at the top
+                // (before drawing anything) to be able to clear m_renamingClip before
+                // drawAnimationSources reads it. Otherwise a clip with the same
+                // name in the new GameObject would inherit the edit mode and the
+                // buffer of the previous object's clip for one frame.
                 const bool selectionChanged = (m_boundTo != go);
                 if (selectionChanged) { m_renamingClip.clear(); m_layer = 0; m_nivelId = -1; m_renamingLayer = -1; }
 
-                // Undo del grafo: el bracket envuelve TODO lo que puede mutar el
-                // componente en este frame, desde drawAnimationSources hasta el
-                // popup de condiciones que se dibuja dentro de drawGraph.
+                // Graph undo: the bracket wraps EVERYTHING that can mutate the
+                // component in this frame, from drawAnimationSources to the
+                // conditions popup that is drawn inside drawGraph.
                 m_graphUndo.beginFrame(go->id, go->getAnimator().get(), ctx.undo->revision());
                 grafoDibujado = true;
                 const bool historialMovido = ctx.undo->revision() != m_lastUndoRevision;
 
-                // Columna izquierda en un hijo CON SCROLL: fuentes, capas, IK,
-                // "Add State" y parámetros. Antes iban sueltos en la ventana y,
-                // al crecer (varias capas, varias restricciones de IK), lo de
-                // abajo quedaba fuera sin forma de llegar, y de paso aplastaban
-                // el lienzo. El lienzo sigue aparte, a la derecha: su rueda y su
-                // pan son suyos y este scroll no los toca.
-                // El máximo se acota también a la ventana: si se encoge, la
-                // columna no puede quedarse más ancha que ella y dejar el
-                // lienzo sin sitio.
+                // Left column in a child WITH SCROLL: sources, layers, IK,
+                // "Add State" and parameters. Before, they went loose in the window and,
+                // as it grew (several layers, several IK constraints), what was
+                // below ended up out of reach with no way to get to it, and incidentally squashed
+                // the canvas. The canvas remains separate, on the right: its wheel and its
+                // pan are its own and this scroll does not touch them.
+                // The maximum is also clamped to the window: if it shrinks, the
+                // column cannot stay wider than it and leave the
+                // canvas with no room.
                 const float anchoMax = std::max(kAnchoColumnaMin,
                                                 std::min(kAnchoColumnaMax,
                                                          ImGui::GetContentRegionAvail().x - 120.0f));
@@ -2211,7 +2211,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 drawIkList(ctx, go);
                 drawPropertyClips(ctx, go);
 
-                // --- Añadir estado desde los clips del modelo ---
+                // --- Add state from the model clips ---
                 const SkinnedMesh* mesh = go->getSkinnedMesh();
                 if (!mesh || mesh->animationClips.empty())
                 {
@@ -2233,8 +2233,8 @@ void AnimatorPanel::draw(EditorContext& ctx)
                                                        40.0f + 30.0f * (float)go->getAnimator()->states(m_layer).size());
                         const int idx = go->getAnimator()->addState(st, m_layer);
                         const int eid = go->getAnimator()->states(m_layer)[idx].editorId;
-                        // El nodo es nuevo: hay que colocarlo en el canvas a mano, el
-                        // sync general solo corre al cambiar de objeto.
+                        // The node is new: it has to be placed in the canvas by hand, the
+                        // general sync only runs when the object changes.
                         ed::SetCurrentEditor(m_ctx);
                         ed::SetNodePosition(nodeId(eid), ImVec2(st.editorPos.x, st.editorPos.y));
                         ed::SetCurrentEditor(nullptr);
@@ -2245,9 +2245,9 @@ void AnimatorPanel::draw(EditorContext& ctx)
 
                 auto anim = go->getAnimator();
 
-                // --- Añadir una sub-máquina ---
-                // Se crea en el nivel que se está viendo: crear una caja dentro
-                // de otra es entrar primero y pulsar aquí.
+                // --- Add a sub-machine ---
+                // It is created at the level being viewed: creating a box inside
+                // another one means entering first and pressing here.
                 if (ImGui::Button("Add Sub-State Machine"))
                 {
                     AnimatorComponent::State caja;
@@ -2262,10 +2262,10 @@ void AnimatorPanel::draw(EditorContext& ctx)
                     ctx.pushLog("Animator: sub-state machine added");
                 }
 
-                // --- Añadir estado desde un clip de propiedades ---
-                // Sin esto, un objeto SIN esqueleto no podía tener ni un estado
-                // (la única forma de crearlos eran los clips del modelo), así
-                // que su clip de propiedades no lo reproducía nadie.
+                // --- Add state from a property clip ---
+                // Without this, an object WITHOUT a skeleton could not have a single state
+                // (the only way to create them was the model clips), so
+                // its property clip was played by nobody.
                 if (!anim->propertyClips().empty() && ImGui::BeginCombo("##addpropstate", "Add State from Property Clip"))
                 {
                     for (const auto& pc : anim->propertyClips())
@@ -2277,8 +2277,8 @@ void AnimatorPanel::draw(EditorContext& ctx)
                         st.editorPos        = glm::vec2(40.0f + 40.0f * (float)anim->states(m_layer).size(),
                                                         40.0f + 30.0f * (float)anim->states(m_layer).size());
                         const int idx = anim->addState(st, m_layer);
-                        // El índice del clip y la duración del estado (que sin
-                        // clip de malla sale del de propiedades) los resuelve
+                        // The clip index and the state duration (which without a
+                        // mesh clip comes from the property one) are resolved by
                         // bindProperties.
                         anim->bindProperties(go, nullptr);
                         const int eid = anim->states(m_layer)[idx].editorId;
@@ -2294,9 +2294,9 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 ImGui::EndChild();
                 ImGui::SameLine();
 
-                // Agarre para arrastrar el borde. Un InvisibleButton y no un
-                // Separator: hace falta que capture el arrastre (IsItemActive)
-                // para seguir moviéndolo aunque el cursor se salga del rect.
+                // Handle to drag the edge. An InvisibleButton and not a
+                // Separator: it has to capture the drag (IsItemActive)
+                // to keep moving it even if the cursor leaves the rect.
                 ImGui::InvisibleButton("##agarreColumna",
                                        ImVec2(kAnchoAgarre, ImGui::GetContentRegionAvail().y));
                 const bool agarreActivo  = ImGui::IsItemActive();
@@ -2304,7 +2304,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 if (agarreActivo || agarreEncima) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
                 if (agarreActivo) m_anchoColumna = std::clamp(m_anchoColumna + ImGui::GetIO().MouseDelta.x,
                                                               kAnchoColumnaMin, anchoMax);
-                // Sin pintarlo no se ve dónde agarrar: es invisible por diseño.
+                // Without painting it you cannot see where to grab: it is invisible by design.
                 ImGui::GetWindowDrawList()->AddRectFilled(
                     ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
                     ImGui::GetColorU32(agarreActivo ? ImGuiCol_SeparatorActive
@@ -2313,18 +2313,18 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 ImGui::SameLine();
 
                 ImGui::BeginChild("canvas", ImVec2(0, 0), false);
-                // El undo puede haber quitado la capa seleccionada.
+                // The undo may have removed the selected layer.
                 m_layer = std::clamp(m_layer, 0, go->getAnimator()->layerCount() - 1);
                 const bool capaCambiada = (m_layer != m_boundLayer);
                 if (selectionChanged || historialMovido || capaCambiada)
                 {
-                    // Cambio de selección: el canvas todavía tiene las posiciones del
-                    // objeto anterior. Se vuelca una vez, no cada frame — si no, el
-                    // usuario no podría arrastrar los nodos.
-                    // Un movimiento del historial (undo/redo, o cualquier push) puede
-                    // haber reinsertado estados cuyo editorId el canvas no conoce, así
-                    // que las posiciones se vuelcan una vez también en ese caso: no es
-                    // solo por un undo, dispara con cualquier movimiento del historial.
+                    // Selection change: the canvas still has the positions of the
+                    // previous object. They are dumped once, not every frame, otherwise the
+                    // user could not drag the nodes.
+                    // A history movement (undo/redo, or any push) may
+                    // have reinserted states whose editorId the canvas does not know, so
+                    // the positions are dumped once in that case too: it is not
+                    // only for an undo, it fires with any history movement.
                     ed::SetCurrentEditor(m_ctx);
                     syncPositionsFromComponent(go);
                     ed::SetCurrentEditor(nullptr);
@@ -2332,33 +2332,32 @@ void AnimatorPanel::draw(EditorContext& ctx)
                     m_boundLayer = m_layer;
                 }
                 drawGraph(ctx, go);
-                // Sync inverso cada frame, incondicional (ya no hace falta el guardia
-                // de Task 10 que lo saltaba tras un borrado): con editorId estable, un
-                // superviviente conserva su id de nodo pase lo que pase con el vector,
-                // así que GetNodePosition(nodeId(editorId)) siempre lee la posición
-                // del nodo correcto, incluso el mismo frame en que se borró otro nodo.
+                // Reverse sync every frame, unconditional (the Task 10 guard that skipped it
+                // after a deletion is no longer needed): with a stable editorId, a
+                // survivor keeps its node id no matter what happens to the vector,
+                // so GetNodePosition(nodeId(editorId)) always reads the position
+                // of the right node, even in the same frame in which another node was deleted.
                 ed::SetCurrentEditor(m_ctx);
                 syncPositionsToComponent(go);
                 ed::SetCurrentEditor(nullptr);
 
-                // Al terminar el gesto, el grafo pasa por la misma pasada de
-                // saneamiento que la carga (A10): este panel escribe los
-                // vectores a pelo por statesMutable/transitionsMutable, así que
-                // es aquí —donde se sabe que acaba de cambiar y antes de que el
-                // snapshot del undo lo congele— donde toca comprobar que lo
-                // escrito es representable. Un grafo sano no cambia, así que
-                // esto no ensucia el diff que decide si hay comando.
+                // When the gesture ends, the graph goes through the same sanitizing pass
+                // as loading (A10): this panel writes the vectors bare through
+                // statesMutable/transitionsMutable, so it is here (where it is known that it has just
+                // changed and before the undo snapshot freezes it) that we have to
+                // check that what was written is representable. A healthy graph does not change, so
+                // this does not dirty the diff that decides whether there is a command.
                 const bool gestoActivo = ImGui::IsAnyItemActive();
                 if (!gestoActivo)
                     if (auto& anim = go->getAnimator()) anim->sanitizeGraph(m_layer, nullptr);
 
-                // Fin del bracket del undo. IsAnyItemActive: mientras un drag
-                // siga activo, el gesto no ha terminado y no se apila nada.
+                // End of the undo bracket. IsAnyItemActive: while a drag
+                // is still active, the gesture has not finished and nothing is stacked.
                 if (auto cmd = m_graphUndo.endFrame(*ctx.scene, go->getAnimator().get(),
                                                     gestoActivo, ctx.undo->revision()))
                 {
                     ctx.pushLog("Animator: " + cmd->label());
-                    // Sin execute(): el cambio ya está aplicado (contrato de push).
+                    // Without execute(): the change is already applied (push contract).
                     ctx.undo->push(std::move(cmd));
                 }
                 m_lastUndoRevision = ctx.undo->revision();
@@ -2370,9 +2369,9 @@ void AnimatorPanel::draw(EditorContext& ctx)
 
     if (!grafoDibujado) m_graphUndo.discard();
 
-    // Incondicional y fuera de la ventana: tiene que drenarse aunque el panel
-    // esté cerrado/colapsado o la selección haya cambiado mientras el diálogo
-    // estaba abierto (ver comentario grande al principio de esta función).
+    // Unconditional and outside the window: it has to be drained even if the panel
+    // is closed/collapsed or the selection changed while the dialog
+    // was open (see the big comment at the start of this function).
     drawAnimationSourceDialog(ctx);
 }
 

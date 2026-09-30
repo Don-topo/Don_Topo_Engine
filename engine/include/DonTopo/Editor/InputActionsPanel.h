@@ -4,20 +4,20 @@
 
 namespace DonTopo {
 
-// Ventana "Input Actions" — mapa de acciones con nombre a teclas, botones de
-// ratón, botones de mando y direcciones de stick/gatillo.
+// "Input Actions" window: map of named actions to keys, mouse
+// buttons, gamepad buttons and stick/trigger directions.
 //
-// Panel propio y no un bloque de Properties porque el mapa es global al
-// proyecto, no de un GameObject: no hay selección de la que colgarlo.
+// Its own panel and not a Properties block because the map is global to the
+// project, not per GameObject: there is no selection to hang it from.
 //
-// La captura de bindings usa directamente la API de teclas de ImGui
-// (ImGuiKey_NamedKey_BEGIN..END, que ya incluye ImGuiKey_Mouse* y
-// ImGuiKey_Gamepad*) en vez de una capa de input propia: el panel solo vive
-// mientras el editor está en foco y ImGui ya tiene ahí los tres dispositivos.
+// Binding capture uses ImGui's key API directly
+// (ImGuiKey_NamedKey_BEGIN..END, which already includes ImGuiKey_Mouse* and
+// ImGuiKey_Gamepad*) instead of an input layer of its own: the panel only lives
+// while the editor has focus and ImGui already has all three devices there.
 class InputActionsPanel {
 public:
-    // Carga el JSON de persistencia si existe. Un fichero ausente o corrupto
-    // deja el panel vacío, nunca aborta el arranque del editor.
+    // Loads the persistence JSON if it exists. A missing or corrupt file
+    // leaves the panel empty, it never aborts the editor startup.
     InputActionsPanel();
 
     void draw();
@@ -26,71 +26,71 @@ public:
 
     struct Action {
         std::string name;
-        // Valores de ImGuiKey. Se guardan como int para no arrastrar <imgui.h>
-        // a todo el que incluya este header (mismo criterio que el resto de
-        // headers del editor).
+        // ImGuiKey values. They are stored as int so as not to drag <imgui.h>
+        // into everything that includes this header (same criterion as the rest of the
+        // editor headers).
         std::vector<int> bindings;
     };
 
-    // --- Traducción entre el modelo del panel (ImGuiKey) y lo que entiende
-    // Core (códigos GLFW). Públicas y estáticas para poder testearlas headless:
-    // un desajuste entre la ida y la vuelta pinta un binding con un nombre y lo
-    // dispara con otro botón, y eso no lo ve ninguna prueba de GUI.
+    // --- Translation between the panel's model (ImGuiKey) and what Core
+    // understands (GLFW codes). Public and static so they can be tested headless:
+    // a mismatch between the round trip draws a binding with one name and
+    // fires it with another button, and no GUI test sees that.
 
-    // ImGuiKey -> dispositivo ("key"/"mouse"/"pad"/"padaxis") y código GLFW.
-    // Devuelve false si no hay equivalente (ruedas del ratón, teclas exóticas):
-    // ese binding se sigue pintando en el panel pero no llega al mapa de
-    // runtime.
+    // ImGuiKey -> device ("key"/"mouse"/"pad"/"padaxis") and GLFW code.
+    // Returns false if there is no equivalent (mouse wheels, exotic keys):
+    // that binding is still drawn in the panel but does not reach the
+    // runtime map.
     static bool bindingToGlfw(int imguiKey, const char*& outDevice, int& outCode);
-    // GLFW_GAMEPAD_BUTTON_* -> ImGuiKey, o -1 si el índice no es un botón. Es
-    // la inversa de bindingToGlfw para el mando: el panel captura los botones
-    // por GLFW (ver pollFirstPressedPadButton) y los guarda como ImGuiKey.
+    // GLFW_GAMEPAD_BUTTON_* -> ImGuiKey, or -1 if the index is not a button. It is
+    // the inverse of bindingToGlfw for the gamepad: the panel captures the buttons
+    // through GLFW (see pollFirstPressedPadButton) and stores them as ImGuiKey.
     static int padButtonToBinding(int glfwButton);
-    // Código de eje (Input::padAxisCode) -> ImGuiKey, o -1 si ese código no es
-    // bindeable (gatillo en negativo). Inversa de bindingToGlfw para "padaxis".
+    // Axis code (Input::padAxisCode) -> ImGuiKey, or -1 if that code is not
+    // bindable (trigger in the negative). Inverse of bindingToGlfw for "padaxis".
     static int padAxisToBinding(int axisCode);
 
 private:
-    bool load();   // devuelve false si no había fichero o no era legible
+    bool load();   // returns false if there was no file or it was not readable
     void save() const;
-    // Índice de la acción con ese nombre, o -1. Comparación exacta: dos
-    // acciones que solo difieren en mayúsculas son dos acciones distintas.
+    // Index of the action with that name, or -1. Exact comparison: two
+    // actions that differ only in case are two distinct actions.
     int findAction(const std::string& name) const;
-    // Recorre el rango de ImGuiKey y devuelve la primera tecla/botón pulsado
-    // este frame, o -1. Esc no se devuelve nunca: lo consume la cancelación.
+    // Walks the ImGuiKey range and returns the first key/button pressed
+    // this frame, or -1. Esc is never returned: it is consumed by the cancellation.
     int pollFirstPressedKey() const;
-    // Primer botón de mando pulsado este frame, ya traducido a ImGuiKey, o -1.
-    // Va por Core (glfwGetGamepadState) y no por ImGui: el backend de GLFW solo
-    // alimenta las ImGuiKey_Gamepad* si el editor activa NavEnableGamepad, y eso
-    // pondría al mando a navegar toda la interfaz (en Play Mode, el botón de
-    // saltar activaría además el widget con foco).
+    // First gamepad button pressed this frame, already translated to ImGuiKey, or -1.
+    // It goes through Core (glfwGetGamepadState) and not ImGui: the GLFW backend only
+    // feeds the ImGuiKey_Gamepad* if the editor enables NavEnableGamepad, and that
+    // would make the gamepad navigate the whole interface (in Play Mode, the jump
+    // button would also activate the focused widget).
     int pollFirstPressedPadButton() const;
-    // Primera dirección de stick o gatillo cruzada este frame, ya traducida a
-    // ImGuiKey, o -1. Igual que la de botones: por Core, no por ImGui, que ni
-    // siquiera expone los ejes del mando como teclas.
+    // First stick or trigger direction crossed this frame, already translated to
+    // ImGuiKey, or -1. Same as the buttons one: through Core, not ImGui, which does not
+    // even expose the gamepad axes as keys.
     int pollFirstPressedPadAxis() const;
 
-    bool m_open = false;   // arranca cerrado: es un panel especializado
+    bool m_open = false;   // starts closed: it is a specialized panel
 
     std::vector<Action> m_actions;
 
-    // Buffer de la barra de creación y del rename inline. ImGui necesita
-    // almacenamiento estable entre frames, de ahí que sean miembros.
+    // Buffers of the creation bar and of the inline rename. ImGui needs
+    // stable storage between frames, hence they are members.
     char m_newNameBuf[64]  = {};
     char m_renameBuf[64]   = {};
-    // Índice de la acción en rename, o -1. Índice y no nombre porque el rename
-    // cambia justamente el nombre.
+    // Index of the action being renamed, or -1. Index and not name because the rename
+    // changes precisely the name.
     int  m_renamingIndex = -1;
 
-    // Índice de la acción a la espera de binding, o -1 si no hay escucha.
+    // Index of the action waiting for a binding, or -1 if there is no listening.
     int  m_listeningIndex = -1;
 
-    // El fichero cargado venía sin el array "glfw" (anterior a las acciones en
-    // scripting): se reescribe una vez, migrado, nada más cargarlo.
+    // The loaded file came without the "glfw" array (older than the actions in
+    // scripting): it is rewritten once, migrated, right after loading.
     bool m_needsMigrationSave = false;
 
-    // Aviso mostrado en el propio panel (nombre duplicado, nombre vacío...).
-    // Se limpia en cuanto la operación que lo provocó vuelve a intentarse.
+    // Warning shown in the panel itself (duplicate name, empty name...).
+    // It is cleared as soon as the operation that caused it is retried.
     std::string m_warning;
 };
 

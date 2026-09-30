@@ -13,8 +13,8 @@ namespace DonTopo {
 
 namespace {
 
-constexpr int kSS  = 4;                                     // supersampling por eje
-constexpr int kRes = static_cast<int>(kThumbCell) * kSS;    // 256 internos
+constexpr int kSS  = 4;                                     // supersampling per axis
+constexpr int kRes = static_cast<int>(kThumbCell) * kSS;    // 256 internal
 
 bool finite3(const glm::vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
 
@@ -52,7 +52,7 @@ ThumbnailResult rasterizeThumbnail(const std::vector<PreviewPart>& parts)
             if (finite3(p)) { lo = glm::min(lo, p); hi = glm::max(hi, p); any = true; }
     if (!any) return out;
 
-    // Vista 3/4 desde arriba, ortografica, ajustada a las 8 esquinas del bbox.
+    // 3/4 view from above, orthographic, fitted to the 8 corners of the bbox.
     const glm::vec3 center = (lo + hi) * 0.5f;
     const glm::mat4 view = glm::rotate(glm::mat4(1.0f), glm::radians(25.0f), glm::vec3(1, 0, 0)) *
                            glm::rotate(glm::mat4(1.0f), glm::radians(-35.0f), glm::vec3(0, 1, 0)) *
@@ -64,10 +64,10 @@ ThumbnailResult rasterizeThumbnail(const std::vector<PreviewPart>& parts)
         const glm::vec4 q = view * glm::vec4(corner, 1.0f);
         extent = std::max({ extent, std::abs(q.x), std::abs(q.y) });
     }
-    const float half = extent * 1.08f;                       // 8 % de margen
+    const float half = extent * 1.08f;                       // 8 % margin
 
     const glm::mat3 normalView(view);
-    const glm::vec3 key     = glm::normalize(glm::vec3(-0.5f, 0.8f, 0.6f));   // espacio de vista
+    const glm::vec3 key     = glm::normalize(glm::vec3(-0.5f, 0.8f, 0.6f));   // view space
     const glm::vec3 fill    = glm::normalize(glm::vec3(0.7f, 0.1f, 0.5f));
     const glm::vec3 halfVec = glm::normalize(key + glm::vec3(0, 0, 1));
 
@@ -134,13 +134,13 @@ ThumbnailResult rasterizeThumbnail(const std::vector<PreviewPart>& parts)
 
                     glm::vec3 nrm = w0 * normal[i0] + w1 * normal[i1] + w2 * normal[i2];
                     nrm = glm::length(nrm) > 1e-6f ? glm::normalize(nrm) : glm::vec3(0, 0, 1);
-                    if (nrm.z < 0.0f) nrm = -nrm;                // doble cara
+                    if (nrm.z < 0.0f) nrm = -nrm;                // double sided
 
                     const glm::vec3 diffuse = albedo * (1.0f - metallic);
                     const glm::vec3 f0      = glm::mix(glm::vec3(0.04f), albedo, metallic);
                     const float     spec    = std::pow(std::max(0.0f, glm::dot(nrm, halfVec)), shininess) *
                                               (shininess + 8.0f) / 25.0f;
-                    // Ambiente cielo/suelo: imita el IBL lo justo para dar volumen.
+                    // Sky/ground ambient: imitates the IBL just enough to give volume.
                     const glm::vec3 ambient = glm::mix(glm::vec3(0.18f, 0.17f, 0.16f),
                                                        glm::vec3(0.35f, 0.38f, 0.45f), nrm.y * 0.5f + 0.5f);
                     const glm::vec3 lit =
@@ -158,7 +158,7 @@ ThumbnailResult rasterizeThumbnail(const std::vector<PreviewPart>& parts)
     }
     if (!drew) return out;
 
-    // Reduccion 4x4: color medio de lo cubierto, alfa = fraccion cubierta.
+    // 4x4 reduction: average color of what is covered, alpha = covered fraction.
     std::vector<uint8_t> tile(static_cast<size_t>(kThumbCell) * kThumbCell * 4, 0);
     for (uint32_t y = 0; y < kThumbCell; ++y)
         for (uint32_t x = 0; x < kThumbCell; ++x)
@@ -180,7 +180,7 @@ ThumbnailResult rasterizeThumbnail(const std::vector<PreviewPart>& parts)
             p[3] = static_cast<uint8_t>((count * 255 + kSS * kSS / 2) / (kSS * kSS));
         }
 
-    // Borde oscuro de 1 px alrededor de la silueta: la separa del fondo del boton.
+    // 1 px dark border around the silhouette: separates it from the button background.
     out.rgba = tile;
     for (uint32_t y = 0; y < kThumbCell; ++y)
         for (uint32_t x = 0; x < kThumbCell; ++x)

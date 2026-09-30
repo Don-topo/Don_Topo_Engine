@@ -33,20 +33,20 @@ bool equalsNoCase(const std::string& a, const std::string& b)
     return a.size() == b.size() && toLowerAscii(a) == toLowerAscii(b);
 }
 
-// Directorio del ejecutable. Mismo criterio que el runtime exportado
-// (runtime/main.cpp): sin esto, el workspace dependería del cwd desde el que
-// se lance el editor.
+// Executable directory. Same criterion as the exported runtime
+// (runtime/main.cpp): without this, the workspace would depend on the cwd the
+// editor is launched from.
 fs::path executableDir()
 {
     return platform::executableDir();
 }
 
-// Claves de la visibilidad de panel, en el orden del enum Panel. Son parte del
-// formato en disco: renombrar una pierde el ajuste guardado de ese panel.
+// Panel visibility keys, in the order of the Panel enum. They are part of the
+// on-disk format: renaming one loses that panel's saved setting.
 //
-// Sin tamano explicito y con el static_assert debajo a proposito: declarado
-// como [PanelCount], un panel anadido al enum sin clave aqui dejaba un
-// **nullptr** que se acaba usando como clave de JSON. Asi no compila.
+// Without an explicit size and with the static_assert below on purpose: declared
+// as [PanelCount], a panel added to the enum without a key here left a
+// **nullptr** that ended up being used as a JSON key. This way it does not compile.
 const char* const kPanelKeys[] = {
     "scene", "viewport", "properties", "log", "contentBrowser",
     "scriptEditor", "animator", "performance", "rendering", "inputActions"};
@@ -54,8 +54,8 @@ static_assert(std::size(kPanelKeys) == ProjectContext::ViewSettings::PanelCount,
               "kPanelKeys and the Panel enum go together: every panel in the enum needs its key, "
               "in the same order");
 
-// Lectores tolerantes: la clave que falta, o que trae otro tipo, devuelve el
-// default sin lanzar. Es lo que hace que un "settings" a medias siga abriendo.
+// Tolerant readers: a missing key, or one of another type, returns the
+// default without throwing. It is what makes a half-written "settings" still open.
 bool readBoolField(const nlohmann::json& j, const char* key, bool def)
 {
     const auto it = j.find(key);
@@ -68,8 +68,8 @@ float readFloatField(const nlohmann::json& j, const char* key, float def)
     if (it == j.end() || !it->is_number())
         return def;
     const double v = it->get<double>();
-    // Un NaN/inf colado en el fichero llegaria tal cual a un uniform del
-    // Renderer: fuera antes de salir de aqui.
+    // A NaN/inf slipped into the file would reach a Renderer uniform
+    // as is: out before leaving here.
     return std::isfinite(v) ? static_cast<float>(v) : def;
 }
 
@@ -87,9 +87,9 @@ std::string readStringField(const nlohmann::json& j, const char* key, const std:
     return (it != j.end() && it->is_string()) ? it->get<std::string>() : def;
 }
 
-// Seccion "settings" de un proyecto recien creado: solo lo que la feature fija
-// (todos los efectos apagados). Los parametros se dejan FUERA a proposito, para
-// que al abrir el proyecto se queden con el default del Renderer.
+// "settings" section of a newly created project: only what the feature fixes
+// (all effects off). The parameters are left OUT on purpose, so that
+// when the project opens they keep the Renderer's default.
 nlohmann::json defaultSettingsJson()
 {
     const ProjectContext::ViewSettings def;
@@ -163,8 +163,8 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     j["shadowResolution"] = s.shadowResolution;
     j["presentMode"]      = s.presentMode;
 
-    // Un panel sin dato no se escribe: el fichero no miente sobre lo que nadie
-    // ha decidido todavia.
+    // A panel without data is not written: the file does not lie about what nobody
+    // has decided yet.
     nlohmann::json panels = nlohmann::json::object();
     for (int i = 0; i < ProjectContext::ViewSettings::PanelCount; ++i) {
         if (s.panelOpen[i].has_value())
@@ -172,10 +172,10 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     }
     j["panels"] = panels;
 
-    // Capas de física: los 32 nombres y las 32 máscaras SIEMPRE, aunque estén a
-    // su valor por defecto. La matriz es una foto completa: escribir sólo lo
-    // cambiado obligaría a adivinar al leer si un hueco es "no tocado" o
-    // "desactivado".
+    // Physics layers: the 32 names and the 32 masks ALWAYS, even if they are at
+    // their default value. The matrix is a complete snapshot: writing only what
+    // changed would force guessing on read whether a gap is "untouched" or
+    // "disabled".
     nlohmann::json names = nlohmann::json::array();
     nlohmann::json masks = nlohmann::json::array();
     for (int i = 0; i < ProjectContext::ViewSettings::LayerCount; ++i) {
@@ -192,9 +192,9 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
 
 ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projectDir, const ViewSettings& base)
 {
-    // Los PARAMETROS heredan de `base` (el estado actual del Renderer); los
-    // ENABLES y los combos NO: su default es el de ViewSettings —todo apagado—
-    // aunque el Renderer venga con otra cosa.
+    // The PARAMETERS inherit from `base` (the Renderer's current state); the
+    // ENABLES and the combos do NOT: their default is that of ViewSettings (all off)
+    // even if the Renderer comes with something else.
     const ViewSettings def;
     ViewSettings       s = base;
     s.ambient    = def.ambient;
@@ -206,37 +206,37 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.aaMode     = def.aaMode;
     s.fpMode     = def.fpMode;
     s.renderBackend = def.renderBackend;
-    // Las capas van con los ENABLES, no con los parámetros: ausentes o
-    // corruptas se caen al default (matriz sin filtros, sólo la 0 nombrada), no
-    // a lo que tenga cargado el PhysicsManager de la sesión anterior.
+    // The layers go with the ENABLES, not with the parameters: missing or
+    // corrupt they fall back to the default (matrix without filters, only 0 named), not
+    // to whatever the PhysicsManager has loaded from the previous session.
     s.layerNames  = def.layerNames;
     s.layerMasks  = def.layerMasks;
     s.layerActive = def.layerActive;
     s.loadFailed = false;
     s.unknownEnum.clear();
-    // A "sin dato", no a lo que trajera la `base`: la visibilidad de panel del
-    // proyecto anterior no debe filtrarse al que se abre ahora.
+    // To "no data", not to whatever the `base` carried: the panel visibility of the
+    // previous project must not leak into the one being opened now.
     for (int i = 0; i < ViewSettings::PanelCount; ++i)
         s.panelOpen[i].reset();
 
     std::ifstream in(projectDir / "project.json");
     if (!in.is_open())
-        return s; // proyecto sin fichero: defaults, y no es un error que reportar.
+        return s; // project without a file: defaults, and it is not an error to report.
 
     nlohmann::json j;
     try {
         in >> j;
     } catch (const std::exception&) {
-        s.loadFailed = true; // project.json roto o truncado: defaults.
+        s.loadFailed = true; // broken or truncated project.json: defaults.
         return s;
     }
 
     if (!j.is_object() || !j.contains("settings"))
-        return s; // proyecto de antes de esta feature: defaults, sin queja.
+        return s; // project from before this feature: defaults, no complaint.
 
     const nlohmann::json& v = j["settings"];
     if (!v.is_object()) {
-        s.loadFailed = true; // "settings" existe pero no es un objeto.
+        s.loadFailed = true; // "settings" exists but is not an object.
         return s;
     }
 
@@ -254,8 +254,8 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.renderBackend = readStringField(v, "renderBackend", s.renderBackend);
 
     s.ambientIntensity = readFloatField(v, "ambientIntensity", s.ambientIntensity);
-    // Los tres caen al valor de `base` si faltan, que es el neutro: un proyecto
-    // anterior a los buses abre sonando igual.
+    // All three fall back to the value of `base` if missing, which is the neutral one: a project
+    // from before the buses opens sounding the same.
     s.masterVolume = readFloatField(v, "masterVolume", s.masterVolume);
     s.musicVolume  = readFloatField(v, "musicVolume",  s.musicVolume);
     s.sfxVolume    = readFloatField(v, "sfxVolume",    s.sfxVolume);
@@ -305,9 +305,9 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.shadowResolution     = v.value("shadowResolution", s.shadowResolution);
     s.presentMode          = v.value("presentMode", s.presentMode);
 
-    // Capas de física. Tolerante ELEMENTO A ELEMENTO: un array de otro tamaño,
-    // o con un hueco de otro tipo, deja ese índice con su default en vez de
-    // tirar la lectura entera. Nunca lanza.
+    // Physics layers. Tolerant ELEMENT BY ELEMENT: an array of another size,
+    // or with a gap of another type, leaves that index with its default instead of
+    // discarding the whole read. Never throws.
     {
         const auto it = v.find("layerNames");
         if (it != v.end() && it->is_array()) {
@@ -323,9 +323,9 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
             const size_t n = std::min<size_t>(it->size(), ViewSettings::LayerCount);
             for (size_t i = 0; i < n; ++i) {
                 const nlohmann::json& m = (*it)[i];
-                // Sin signo y dentro de 32 bits: un negativo o un numerazo
-                // truncarían en silencio al convertir, y una máscara truncada
-                // apagaría colisiones que nadie pidió apagar.
+                // Unsigned and within 32 bits: a negative or a huge number
+                // would silently truncate on conversion, and a truncated mask would
+                // turn off collisions that nobody asked to turn off.
                 if (!m.is_number_unsigned()) continue;
                 const uint64_t raw = m.get<uint64_t>();
                 if (raw > 0xFFFFFFFFull) continue;
@@ -334,8 +334,8 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
         }
     }
 
-    // Cuántas capas hay creadas. Se clampea a [1, 32]: un 0 o un negativo del
-    // fichero dejaría la lista sin la capa Default, que existe siempre.
+    // How many layers are created. It is clamped to [1, 32]: a 0 or a negative from the
+    // file would leave the list without the Default layer, which always exists.
     s.layerActive = std::clamp(readIntField(v, "layerActive", s.layerActive), 1,
                                ViewSettings::LayerCount);
 
@@ -358,8 +358,8 @@ bool ProjectContext::writeSettings(const fs::path& projectDir, const ViewSetting
 
     const fs::path file = projectDir / "project.json";
 
-    // Se parte del fichero que ya hay: guardar los ajustes no puede perder el
-    // name ni la version, que son la identidad del proyecto.
+    // It starts from the file that is already there: saving the settings cannot lose the
+    // name or the version, which are the project's identity.
     nlohmann::json j = nlohmann::json::object();
     {
         std::ifstream in(file);
@@ -370,8 +370,8 @@ bool ProjectContext::writeSettings(const fs::path& projectDir, const ViewSetting
                 if (parsed.is_object())
                     j = std::move(parsed);
             } catch (const std::exception&) {
-                // Ilegible: se reconstruye lo minimo mas abajo en vez de
-                // propagar el fallo, que dejaria el proyecto sin poder guardar.
+                // Unreadable: the minimum is rebuilt below instead of
+                // propagating the failure, which would leave the project unable to save.
             }
         }
     }
@@ -382,8 +382,8 @@ bool ProjectContext::writeSettings(const fs::path& projectDir, const ViewSetting
 
     j["settings"] = settingsToJson(settings);
 
-    // Temporal en la MISMA carpeta (rename atomico solo dentro del volumen) y
-    // rename encima: un fallo a mitad no puede truncar el project.json.
+    // Temporary in the SAME folder (atomic rename only within the volume) and
+    // rename over it: a failure halfway cannot truncate project.json.
     const fs::path tmp = projectDir / "project.json.tmp";
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
@@ -417,13 +417,13 @@ fs::path ProjectContext::readLastProject()
 
     std::ifstream in(dir / "editor.json");
     if (!in.is_open())
-        return {}; // primer arranque: no es un error.
+        return {}; // first startup: not an error.
 
     nlohmann::json j;
     try {
         in >> j;
     } catch (const std::exception&) {
-        return {}; // editor.json roto: se arranca como si no hubiera.
+        return {}; // broken editor.json: start as if there were none.
     }
 
     if (!j.is_object())
@@ -436,8 +436,8 @@ fs::path ProjectContext::readLastProject()
     if (raw.empty())
         return {};
 
-    // El proyecto pudo borrarse o moverse entre dos arranques: una ruta muerta
-    // vale lo mismo que no tener dato.
+    // The project may have been deleted or moved between two startups: a dead path
+    // is worth the same as having no data.
     fs::path        p = fs::path(raw);
     std::error_code ec;
     if (!fs::is_directory(p, ec) || ec)
@@ -455,8 +455,8 @@ bool ProjectContext::writeLastProject(const fs::path& projectDir)
         return false;
     const fs::path file = dir / "editor.json";
 
-    // Igual que writeSettings: se parte de lo que ya hay, para no borrar
-    // cualquier otro estado del editor que llegue a este fichero mas adelante.
+    // Same as writeSettings: it starts from what is already there, so as not to erase
+    // any other editor state that reaches this file later on.
     nlohmann::json j = nlohmann::json::object();
     {
         std::ifstream in(file);
@@ -467,13 +467,13 @@ bool ProjectContext::writeLastProject(const fs::path& projectDir)
                 if (parsed.is_object())
                     j = std::move(parsed);
             } catch (const std::exception&) {
-                // Ilegible: se reescribe entero en vez de dejar de guardar.
+                // Unreadable: it is rewritten whole instead of giving up on saving.
             }
         }
     }
 
-    // generic_string() para que la ruta quede con '/' y sea legible a mano; el
-    // fs::path del lector acepta ambos separadores en Windows.
+    // generic_string() so the path ends up with '/' and is readable by hand; the
+    // reader's fs::path accepts both separators on Windows.
     j["lastProject"] = projectDir.generic_string();
 
     const fs::path tmp = dir / "editor.json.tmp";
@@ -521,20 +521,20 @@ bool ProjectContext::contains(const fs::path& absolute) const
     std::error_code ec;
     const fs::path  canonRoot = fs::canonical(m_root, ec);
     if (ec)
-        return false; // la raíz ya no se puede resolver: fuera.
+        return false; // the root can no longer be resolved: out.
 
     const fs::path target = absolute.is_absolute() ? absolute : (m_root / absolute);
 
     ec.clear();
-    // weakly_canonical resuelve el prefijo que existe y normaliza el resto, así
-    // que también vale para ficheros que aún no se han creado (Save Scene).
+    // weakly_canonical resolves the prefix that exists and normalizes the rest, so
+    // it also works for files that have not been created yet (Save Scene).
     const fs::path canonTarget = fs::weakly_canonical(target, ec);
     if (ec || canonTarget.empty())
         return false;
 
-    // Comparación componente a componente y sin distinguir mayúsculas: en
-    // Windows canonical no garantiza devolver el casing real del disco, y
-    // comparar la cadena entera daría falsos negativos.
+    // Component-by-component comparison, case-insensitive: on
+    // Windows canonical does not guarantee returning the real casing on disk, and
+    // comparing the whole string would give false negatives.
     auto rootIt  = canonRoot.begin();
     auto rootEnd = canonRoot.end();
     auto tgtIt   = canonTarget.begin();
@@ -542,11 +542,11 @@ bool ProjectContext::contains(const fs::path& absolute) const
 
     for (; rootIt != rootEnd; ++rootIt, ++tgtIt) {
         if (tgtIt == tgtEnd)
-            return false; // el destino es más corto: es un ancestro, no un hijo.
+            return false; // the destination is shorter: it is an ancestor, not a child.
         if (!equalsNoCase(rootIt->string(), tgtIt->string()))
             return false;
     }
-    return true; // prefijo completo => dentro (o la propia raíz).
+    return true; // full prefix => inside (or the root itself).
 }
 
 fs::path ProjectContext::workspaceDir()
@@ -604,7 +604,7 @@ std::string ProjectContext::readProjectName(const fs::path& projectDir)
                 return name;
         }
     } catch (const std::exception&) {
-        // project.json corrupto: el nombre de la carpeta sigue siendo válido.
+        // corrupt project.json: the folder name is still valid.
     }
     return fallback;
 }
@@ -640,8 +640,8 @@ bool ProjectContext::validateName(const std::string& name, std::string& error)
         return false;
     }
 
-    // Nombres de dispositivo reservados de Windows: la carpeta no se puede
-    // crear ni aunque el resto del nombre sea válido.
+    // Windows reserved device names: the folder cannot be
+    // created even if the rest of the name is valid.
     static const std::array<const char*, 22> kReserved = {
         "con", "prn", "aux", "nul",
         "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
@@ -655,8 +655,8 @@ bool ProjectContext::validateName(const std::string& name, std::string& error)
         }
     }
 
-    // Unicidad contra las carpetas YA existentes del workspace (tengan o no
-    // project.json), sin distinguir mayúsculas.
+    // Uniqueness against the workspace's ALREADY existing folders (with or without
+    // project.json), case-insensitive.
     const fs::path workspace = workspaceDir();
     if (workspace.empty()) {
         error = "Could not locate the projects folder.";
@@ -708,7 +708,7 @@ bool ProjectContext::create(const std::string& name, fs::path& outDir, std::stri
     nlohmann::json j;
     j["name"]    = name;
     j["version"] = kProjectVersion;
-    // Proyecto nuevo: todos los efectos apagados desde el primer arranque.
+    // New project: all effects off from the first startup.
     j["settings"] = defaultSettingsJson();
 
     std::ofstream out(dir / "project.json");
@@ -723,10 +723,10 @@ bool ProjectContext::create(const std::string& name, fs::path& outDir, std::stri
     }
     out.close();
 
-    // Escena de arranque: vacía a propósito —al abrir el proyecto solo se ve el
-    // skybox, que es del motor y no de la escena— pero ya creada y en el formato
-    // que espera Load Scene. La escribe la propia Scene en vez de un JSON a mano
-    // para que no pueda desincronizarse del esquema que lee Scene::fromJson.
+    // Startup scene: empty on purpose (when the project opens only the
+    // skybox is seen, which belongs to the engine and not the scene) but already created and in the format
+    // that Load Scene expects. It is written by Scene itself instead of a hand-written JSON
+    // so that it cannot get out of sync with the schema that Scene::fromJson reads.
     Scene startupScene;
     if (!startupScene.save((dir / kStartupScene).string())) {
         error = "Could not create the project's startup scene.";

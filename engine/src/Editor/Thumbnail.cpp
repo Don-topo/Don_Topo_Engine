@@ -25,7 +25,7 @@ ThumbnailResult makeThumbnail(const std::filesystem::path& path)
 
 namespace {
 
-// stb_image leyendo de un istream: la cabecera cuesta unos bytes, no el fichero.
+// stb_image reading from an istream: the header costs a few bytes, not the file.
 int streamRead(void* user, char* data, int size)
 {
     auto& in = *static_cast<std::istream*>(user);
@@ -60,9 +60,9 @@ ThumbnailResult makeThumbnailFromStream(std::istream& in)
     ThumbnailResult out;
     try
     {
-        // Callbacks en vez de leer el fichero entero: rechazar una imagen enorme
-        // por su cabecera no puede costar leerla. Ademas stbi_load recibe un char*
-        // en la codepage local y falla con rutas Unicode; el ifstream no.
+        // Callbacks instead of reading the whole file: rejecting a huge image
+        // by its header must not cost reading it. Also stbi_load takes a char*
+        // in the local codepage and fails with Unicode paths; ifstream does not.
         const stbi_io_callbacks cb{ streamRead, streamSkip, streamEof };
         int w = 0, h = 0, comp = 0;
         if (!stbi_info_from_callbacks(&cb, &in, &w, &h, &comp) || w <= 0 || h <= 0)
@@ -95,8 +95,8 @@ void stampDependencies(ThumbnailResult& r, const ThumbnailDependency& self)
         const bool seen = std::any_of(out.begin(), out.end(), [&](const ThumbnailDependency& o) {
             return o.path.lexically_normal() == p;
         });
-        // Un sello tomado ANTES de leer vale mas que uno de ahora: si la textura
-        // cambio mientras se decodificaba, el de ahora ocultaria el cambio.
+        // A stamp taken BEFORE reading is worth more than one taken now: if the texture
+        // changed while it was being decoded, the one taken now would hide the change.
         if (!seen) out.push_back(d.stamped ? d : stampFile(d.path));
     }
     r.dependencies = std::move(out);
@@ -122,7 +122,7 @@ ThumbnailResult makeModelThumbnail(const std::filesystem::path& path)
     ThumbnailResult r;
     if (preview.status == PreviewStatus::AnimationOnly) r.status = ThumbnailStatus::AnimationOnly;
     else if (preview.status == PreviewStatus::Ok)       r = rasterizeThumbnail(preview.parts);
-    r.dependencies = preview.dependencies;   // ya selladas antes de leer cada una
+    r.dependencies = preview.dependencies;   // already sealed before reading each one
     return r;
 }
 
@@ -135,12 +135,12 @@ bool isModelThumbnailPath(const std::filesystem::path& path)
 
 ThumbnailResult makeMaterialThumbnail(const std::filesystem::path& mat)
 {
-    const MaterialAsset a = loadMaterialAsset(mat);     // nunca lanza; roto -> hereda
+    const MaterialAsset a = loadMaterialAsset(mat);     // never throws; broken -> inherits
     PreviewPart sphere = makePreviewSphere();
     std::vector<ThumbnailDependency> deps;
     if (!a.albedo.empty())
     {
-        deps.push_back(stampFile(a.albedo));                  // antes de leerla
+        deps.push_back(stampFile(a.albedo));                  // before reading it
         sphere.albedo = ModelLoader::loadPreviewImage(a.albedo);
     }
     if (sphere.albedo.rgba.empty())
@@ -171,7 +171,7 @@ ThumbnailResult downscaleToCell(const unsigned char* px, int w, int h)
 {
     ThumbnailResult out;
 
-    // Tamano destino: lo que ya cabe no se amplia; lo demas, a kThumbCell en el lado largo.
+    // Target size: what already fits is not enlarged; the rest goes to kThumbCell on the long side.
     uint32_t dw = static_cast<uint32_t>(w);
     uint32_t dh = static_cast<uint32_t>(h);
     if (dw > kThumbCell || dh > kThumbCell)
@@ -196,8 +196,8 @@ ThumbnailResult downscaleToCell(const unsigned char* px, int w, int h)
             uint32_t       x1 = static_cast<uint32_t>(static_cast<uint64_t>(x + 1) * w / dw);
             if (x1 <= x0) x1 = x0 + 1;
 
-            // Promedio ponderado por alfa: sin ponderar, un pixel transparente
-            // (normalmente negro) oscurece el color de sus vecinos opacos.
+            // Alpha-weighted average: unweighted, a transparent pixel
+            // (normally black) darkens the color of its opaque neighbors.
             uint64_t sumR = 0, sumG = 0, sumB = 0, sumA = 0;
             for (uint32_t sy = y0; sy < y1; ++sy)
                 for (uint32_t sx = x0; sx < x1; ++sx)
@@ -249,7 +249,7 @@ uint32_t ThumbnailSlots::assign(uint64_t key, std::optional<uint64_t>* evicted)
 
     if (target == kNone)
     {
-        // Sin hueco libre: la menos usada recientemente que NO se uso este frame.
+        // No free slot: the least recently used one that was NOT used this frame.
         uint64_t oldest = UINT64_MAX;
         for (uint32_t i = 0; i < m_slots.size(); ++i)
             if (m_slots[i].lastFrame < m_frame && m_slots[i].lastFrame < oldest)
@@ -296,8 +296,8 @@ void ThumbnailCache::beginFrame()
 
 uint64_t ThumbnailCache::makeKey(const std::filesystem::path& path, int64_t mtime)
 {
-    // Ruta + mtime del asset. Un cambio de dependencia no necesita otra clave:
-    // refreshStamps libera la casilla antes de que la entrada se vuelva a pedir.
+    // Path + asset mtime. A dependency change does not need another key:
+    // refreshStamps frees the slot before the entry is requested again.
     const uint64_t h = std::hash<std::string>{}(path.string());
     const uint64_t t = static_cast<uint64_t>(mtime);
     return h ^ (t + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2));
@@ -311,8 +311,8 @@ std::optional<UvRect> ThumbnailCache::request(const std::filesystem::path& path)
     {
         Entry e;
         e.path = path;
-        // Sellado AQUI, antes de decodificar: si el fichero cambia mientras el
-        // worker lo lee, el siguiente refreshStamps lo ve (Review Focus 1).
+        // Sealed HERE, before decoding: if the file changes while the
+        // worker reads it, the next refreshStamps sees it (Review Focus 1).
         const ThumbnailDependency self = stampFile(path);
         e.deps             = { self };
         e.key              = makeKey(path, self.mtime);
@@ -333,7 +333,7 @@ std::optional<UvRect> ThumbnailCache::request(const std::filesystem::path& path)
         const uint32_t slot = m_slots.find(e.key);
         if (slot != ThumbnailSlots::kNone)
             return thumbnailUv(slot);
-        // Otra miniatura reutilizo su casilla: hay que decodificarla otra vez.
+        // Another thumbnail reused its slot: it has to be decoded again.
         e.state = State::Queued;
         m_queue.push_back(id);
     }
@@ -342,7 +342,7 @@ std::optional<UvRect> ThumbnailCache::request(const std::filesystem::path& path)
 
 void ThumbnailCache::pump(int maxUploads)
 {
-    // 1. Resultados de los workers.
+    // 1. Results from the workers.
     std::vector<Done> done;
     {
         std::lock_guard<std::mutex> lock(m_shared->mutex);
@@ -350,9 +350,9 @@ void ThumbnailCache::pump(int maxUploads)
     }
     for (Done& d : done)
     {
-        if (m_inFlight > 0) --m_inFlight;                    // el hueco se libera siempre
+        if (m_inFlight > 0) --m_inFlight;                    // the slot is always freed
         if (d.model && m_modelsInFlight > 0) --m_modelsInFlight;
-        if (d.generation != m_generation) continue;          // carpeta anterior: se ignora
+        if (d.generation != m_generation) continue;          // previous folder: ignored
         const auto it = m_entries.find(d.path);
         if (it == m_entries.end() || it->second.state != State::Running) continue;
         Entry& e = it->second;
@@ -367,7 +367,7 @@ void ThumbnailCache::pump(int maxUploads)
         e.state  = State::Decoded;
     }
 
-    // 2. Subida: un lote, una llamada.
+    // 2. Upload: one batch, one call.
     std::vector<ThumbnailTile> tiles;
     std::vector<Entry*>        batch;
     for (auto& kv : m_entries)
@@ -376,7 +376,7 @@ void ThumbnailCache::pump(int maxUploads)
         Entry& e = kv.second;
         if (e.state != State::Decoded) continue;
         const uint32_t slot = m_slots.assign(e.key);
-        if (slot == ThumbnailSlots::kNone) continue;         // atlas lleno este frame: mas tarde
+        if (slot == ThumbnailSlots::kNone) continue;         // atlas full this frame: later
         tiles.push_back({ slot, e.pixels.data() });
         batch.push_back(&e);
     }
@@ -400,7 +400,7 @@ void ThumbnailCache::pump(int maxUploads)
         }
     }
 
-    // 3. Nuevas decodificaciones, hasta el tope.
+    // 3. New decodes, up to the cap.
     startJobs();
 }
 
@@ -416,8 +416,8 @@ void ThumbnailCache::startJobs()
             continue;
         }
         Entry& e = it->second;
-        // Un FBX puede tardar segundos: como mucho m_maxModelsInFlight a la vez, y
-        // los que esperan no bloquean a las imagenes que vienen detras en la cola.
+        // An FBX can take seconds: at most m_maxModelsInFlight at a time, and
+        // the ones waiting do not block the images behind them in the queue.
         if (e.model && m_modelsInFlight >= m_maxModelsInFlight)
         {
             ++q;
@@ -441,8 +441,8 @@ void ThumbnailCache::startJobs()
             d.generation = gen;
             d.path       = id;
             d.model      = model;
-            // Un Done SIEMPRE llega: si algo lanza, el hueco en vuelo se
-            // recogeria nunca y tras maxInFlight fallos no habria mas miniaturas.
+            // A Done ALWAYS arrives: if something throws, the in-flight slot would
+            // never be reclaimed and after maxInFlight failures there would be no more thumbnails.
             try
             {
                 std::optional<ThumbnailResult> hit;
@@ -455,9 +455,9 @@ void ThumbnailCache::startJobs()
                 {
                     d.result = decode(path);
                     stampDependencies(d.result, self);
-                    // No poder ABRIR el asset (bloqueado por otro programa,
-                    // placeholder de OneDrive) es transitorio: guardarlo lo dejaria
-                    // Unreadable para siempre, porque su mtime no va a cambiar.
+                    // Being unable to OPEN the asset (locked by another program,
+                    // OneDrive placeholder) is transient: storing it would leave it
+                    // Unreadable forever, because its mtime is not going to change.
                     const bool transient = d.result.status == ThumbnailStatus::Unreadable &&
                                            !std::ifstream(path, std::ios::binary);
                     if (disk && !transient) disk->store(path, d.result);
@@ -469,7 +469,7 @@ void ThumbnailCache::startJobs()
         });
         if (!accepted)
         {
-            // El pool no lo ejecutara jamas (parado): sin esto el hueco no se devuelve.
+            // The pool will never run it (stopped): without this the slot is not returned.
             --m_inFlight;
             if (model) --m_modelsInFlight;
             e.state  = State::Failed;
@@ -492,7 +492,7 @@ void ThumbnailCache::refreshStamps()
     for (auto it = m_entries.begin(); it != m_entries.end();)
     {
         Entry& e = it->second;
-        // Solo lo que se ha estado viendo, y nunca lo que tiene un job en marcha.
+        // Only what has been in view, and never what has a job running.
         const bool recent  = e.lastRequestFrame + 1 >= m_frame;
         const bool pending = (e.state == State::Queued || e.state == State::Running);
         if (!recent || pending)
@@ -508,8 +508,8 @@ void ThumbnailCache::refreshStamps()
             ++it;
             continue;
         }
-        m_slots.release(e.key);      // no-op si nunca tuvo casilla
-        it = m_entries.erase(it);    // la siguiente peticion la trata como nueva
+        m_slots.release(e.key);      // no-op if it never had a slot
+        it = m_entries.erase(it);    // the next request treats it as new
     }
 }
 

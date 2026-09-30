@@ -10,38 +10,38 @@ namespace DonTopo {
 class ICommand;
 class Scene;
 
-// Convierte en comandos de undo, uno por gesto, las ediciones que el
-// AnimatorPanel hace EN VIVO sobre el grafo.
+// Turns into undo commands, one per gesture, the edits that the
+// AnimatorPanel makes LIVE on the graph.
 //
-// El panel muta el componente en ~22 sitios. Envolver cada uno con su
-// antes/después serían 22 obligaciones, y el sitio 23 se la saltaría sin
-// avisar. En su lugar, el panel llama a beginFrame al empezar a dibujar y a
-// endFrame al terminar, y esto compara el grafo entre las dos llamadas con la
-// clave del .scene (animatorGraphKey). Así, cualquier cosa que se guarde y
-// cambie entra en el undo, venga del sitio que venga.
+// The panel mutates the component in ~22 places. Wrapping each one with its
+// before/after would be 22 obligations, and the 23rd place would skip it without
+// warning. Instead, the panel calls beginFrame when it starts drawing and
+// endFrame when it finishes, and this compares the graph between the two calls with the
+// .scene key (animatorGraphKey). This way, anything that is saved and
+// changes enters the undo, whichever place it comes from.
 //
-// Sin ImGui a propósito: quién está activo y en qué revisión va el historial
-// llegan como parámetros, así que se prueba sin GUI.
+// No ImGui on purpose: who is active and at which revision the history is
+// arrive as parameters, so it is tested without a GUI.
 class AnimatorGraphUndoTracker {
 public:
-    // Abre una sesión si no hay una abierta para este mismo GameObject: un drag
-    // que sigue de un frame anterior conserva su 'before'. anim nulo descarta.
+    // Opens a session if there is none open for this same GameObject: a drag
+    // continuing from an earlier frame keeps its 'before'. A null anim discards.
     void beginFrame(uint64_t goId, const AnimatorComponent* anim, uint64_t undoRevision);
 
-    // Devuelve el comando del gesto cuando el grafo ha cambiado y ya no queda
-    // ningún widget activo, con el cambio YA aplicado: el llamante lo empuja
-    // sin execute(). Si el historial se movió durante el gesto (undoRevision
-    // distinta), no emite nada y toma una nueva línea base: la diferencia
-    // incluiría lo que hizo otro comando.
+    // Returns the gesture's command when the graph has changed and no
+    // widget is active any more, with the change ALREADY applied: the caller pushes it
+    // without execute(). If the history moved during the gesture (different
+    // undoRevision), it emits nothing and takes a new baseline: the difference
+    // would include what another command did.
     std::unique_ptr<ICommand> endFrame(Scene& scene, const AnimatorComponent* anim,
                                        bool anyItemActive, uint64_t undoRevision);
 
-    // Opcional: nombre del gesto en curso para la Log Console ("Borrar
-    // estado"). Si ningún sitio lo llama, el comando se llama "Editar Animator".
+    // Optional: name of the current gesture for the Log Console ("Delete
+    // state"). If no place calls it, the command is called "Edit Animator".
     void setLabel(std::string label) { m_label = std::move(label); }
 
-    // El panel ha dejado de dibujar el grafo (cerrado, colapsado, sin
-    // Animator): una sesión no puede sobrevivir a eso.
+    // The panel has stopped drawing the graph (closed, collapsed, no
+    // Animator): a session cannot survive that.
     void discard();
 
     bool sessionOpen() const { return m_open; }

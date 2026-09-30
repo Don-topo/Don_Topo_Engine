@@ -2,22 +2,22 @@
 
 namespace DonTopo
 {
-    // Ids del lienzo del Animator (imgui-node-editor). Viven aquí, fuera del
-    // panel, porque son la pieza con riesgo del canvas: un fallo al codificar o
-    // decodificar no da error de compilación, se manifiesta como "borrar un
-    // nodo borra otro" o "el menú contextual abre el del estado equivocado".
-    // Así se pueden probar sin ventana.
+    // Animator canvas ids (imgui-node-editor). They live here, outside the
+    // panel, because they are the risky piece of the canvas: a failure when encoding or
+    // decoding gives no compile error, it shows up as "deleting a
+    // node deletes another" or "the context menu opens the wrong state's".
+    // This way they can be tested without a window.
     //
-    // CINCO ranuras por estado: el nodo, el par de pines normal y un par
-    // SECUNDARIO que usa la transición de vuelta cuando dos estados se enlazan
-    // en los dos sentidos. Sin ese segundo par las dos curvas salen de los
-    // mismos dos puntos y se dibujan una sobre otra, porque la curvatura
-    // (StyleVar_LinkStrength) es propiedad del PIN y no del link.
+    // FIVE slots per state: the node, the normal pin pair and a
+    // SECONDARY pair used by the return transition when two states link
+    // in both directions. Without that second pair the two curves leave from the
+    // same two points and are drawn on top of each other, because the curvature
+    // (StyleVar_LinkStrength) is a property of the PIN and not of the link.
     //
-    // El id que se codifica es el **editorId** del estado, no su índice: el
-    // índice cambia cuando removeState reindexa y un superviviente heredaría el
-    // slot visual (posición, selección) del nodo borrado, que la librería
-    // cachea por id.
+    // The id that is encoded is the state's **editorId**, not its index: the
+    // index changes when removeState reindexes and a survivor would inherit the
+    // visual slot (position, selection) of the deleted node, which the library
+    // caches by id.
     namespace canvasIds
     {
         inline int node(int eid)       { return eid * 5 + 1; }
@@ -27,17 +27,17 @@ namespace DonTopo
         inline int outputPin2(int eid) { return eid * 5 + 5; }
         inline int link(int transIdx)  { return 100000 + transIdx; }
 
-        // La misma división entera sirve para las cinco variantes.
+        // The same integer division works for the five variants.
         inline int editorIdFrom(int rawId) { return (rawId - 1) / 5; }
-        // Salida: la ranura 2 (par normal) y la 4 (par secundario).
+        // Output: slot 2 (normal pair) and slot 4 (secondary pair).
         inline bool isOutputPin(int pin) { const int r = (pin - 1) % 5; return r == 2 || r == 4; }
-        // Los dos pines de entrada, para distinguir el par secundario del normal.
+        // The two input pins, to tell the secondary pair from the normal one.
         inline bool isSecondaryPin(int pin) { const int r = (pin - 1) % 5; return r == 3 || r == 4; }
 
-        // Nodo Any State: ids FUERA del esquema de los estados y de los links.
-        // Se comprueban SIEMPRE antes de decodificar: pasados por editorIdFrom
-        // casarían con un editorId (180000) que ningún grafo alcanza, pero
-        // isOutputPin los clasificaría mal.
+        // Any State node: ids OUTSIDE the scheme of the states and the links.
+        // They are ALWAYS checked before decoding: passed through editorIdFrom
+        // they would match an editorId (180000) that no graph reaches, but
+        // isOutputPin would misclassify them.
         inline constexpr int kAnyStateNode   = 900001;
         inline constexpr int kAnyStateOutPin = 900002;
     }

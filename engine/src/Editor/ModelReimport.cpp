@@ -22,17 +22,17 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
     ModelReimportResult r;
     if (!sceneRoot) return r;
 
-    // Agrupa por el sourcePath EXACTO que lleva la malla: una carga por grupo.
+    // Group by the EXACT sourcePath the mesh carries: one load per group.
     std::map<std::string, std::vector<GameObject*>> groups;
     sceneRoot->traverse([&](GameObject* go)
     {
         if (!go->hasMesh()) return;
         const std::string& sp = go->getMesh()->sourcePath;
         if (sp.empty()) return;
-        // Usuario del FBX: su malla viene de el, O es un personaje que lo usa como
-        // fuente de animacion externa (el flujo Mixamo: sus clips se releen con el
-        // sidecar de ESE fichero). En el segundo caso se recarga el personaje
-        // entero desde su propio sourcePath; las fuentes se releen en la receta.
+        // User of the FBX: its mesh comes from it, OR it is a character that uses it as
+        // an external animation source (the Mixamo flow: its clips are re-read with the
+        // sidecar of THAT file). In the second case the whole character is reloaded
+        // from its own sourcePath; the sources are re-read in the recipe.
         bool usa = sameAssetPath(sp, fbx);
         if (!usa)
             if (const SkinnedMesh* sk = go->getSkinnedMesh())
@@ -43,10 +43,10 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
 
     bool anyRegistered = false;
 
-    // Cola comun a los dos caminos (estatico por pieza y el de siempre), justo
-    // despues de applyMaterialOverrides: registro en GPU y contador de
-    // recargados. Extraida a lambda porque son mas de 3 lineas y divergir aqui
-    // ha sido la fuente de bugs sutiles del reimport en el pasado.
+    // Tail common to both paths (static per piece and the usual one), right
+    // after applyMaterialOverrides: GPU registration and the counter of
+    // reloaded ones. Extracted to a lambda because it is more than 3 lines and diverging here
+    // has been the source of subtle reimport bugs in the past.
     auto finishReload = [&](GameObject* go)
     {
         if (renderer)
@@ -66,9 +66,9 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
 
     for (auto& [sourcePath, users] : groups)
     {
-        // Estatico: una lectura con todas las piezas y cada objeto recarga la
-        // SUYA. La que ya no existe deja el objeto como estaba, con aviso (mismo
-        // contrato que una recarga fallida).
+        // Static: one read with all the pieces and each object reloads
+        // ITS OWN. The one that no longer exists leaves the object as it was, with a warning (same
+        // contract as a failed reload).
         if (!ModelLoader::hasBones(sourcePath))
         {
             StaticModel model;
@@ -80,15 +80,15 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
                 r.skipped += static_cast<int>(users.size());
                 continue;
             }
-            // Hijos de un grupo de piezas (Add Mesh de un modelo de > 1 pieza):
-            // la escala del sidecar entro en la traslacion de su localTransform
-            // (collectPieces), asi que un reimport con otra escala la corrige
-            // por nueva/vieja. Si no, cada pieza encoge sobre su propio origen
-            // y se queda en las posiciones de la escala vieja: el modelo se
-            // desmonta. Grupo = el fichero tiene > 1 pieza Y el padre del
-            // objeto tiene >= 2 hijos con ese mismo sourcePath. Un objeto
-            // suelto (pieza 0 anadida antes de esta feature, o un fichero de
-            // una pieza) lo coloco el usuario: no se mueve.
+            // Children of a piece group (Add Mesh of a model with > 1 piece):
+            // the sidecar scale entered the translation of their localTransform
+            // (collectPieces), so a reimport with another scale corrects it
+            // by new/old. Otherwise each piece shrinks around its own origin
+            // and stays at the positions of the old scale: the model
+            // falls apart. Group = the file has > 1 piece AND the object's parent
+            // has >= 2 children with that same sourcePath. A loose
+            // object (piece 0 added before this feature, or a one-piece
+            // file) was placed by the user: it does not move.
             auto inPieceGroup = [&](const GameObject* go)
             {
                 if (model.pieces.size() <= 1 || !go->parent) return false;
@@ -120,19 +120,19 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
                 if (renderer) renderer->removeMeshComponent(go);
                 else          go->setMesh(nullptr);
                 go->setMesh(next);
-                // DESPUES de setMesh, que baja los base*Taken: applyMaterialOverrides
-                // recaptura como baseline lo que trae la malla NUEVA y reaplica encima
-                // los overrides del objeto y su .mat.
+                // AFTER setMesh, which lowers the base*Taken: applyMaterialOverrides
+                // recaptures as baseline what the NEW mesh brings and reapplies on top
+                // the object's overrides and its .mat.
                 applyMaterialOverrides(*go);
                 if (rescale && inPieceGroup(go))
                 {
                     go->localTransform[3].x *= scaleRatio;
                     go->localTransform[3].y *= scaleRatio;
                     go->localTransform[3].z *= scaleRatio;
-                    // Misma receta que applyLocalTransform (ViewportPanel):
-                    // mundo recalculado y teleport, o el actor de PhysX se
-                    // queda donde estaba. Con el subarbol entero, que los
-                    // nietos tambien se han movido.
+                    // Same recipe as applyLocalTransform (ViewportPanel):
+                    // world recomputed and teleport, or the PhysX actor
+                    // stays where it was. With the whole subtree, since the
+                    // grandchildren have moved too.
                     go->updateWorldTransforms(go->parent ? go->parent->worldTransform : glm::mat4(1.0f));
                     go->traverse([](GameObject* n)
                     {
@@ -147,9 +147,9 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
         std::shared_ptr<Mesh> fresh;
         try
         {
-            // Aqui el fichero tiene huesos (la rama estatica ya salio arriba):
-            // loadSkinned directo, no loadAuto, que repetiria el hasBones --
-            // otro ReadFile completo por personaje.
+            // Here the file has bones (the static branch already exited above):
+            // loadSkinned directly, not loadAuto, which would repeat the hasBones
+            // check, another full ReadFile per character.
             fresh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(sourcePath));
         }
         catch (const std::exception& e)
@@ -162,8 +162,8 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
 
         for (GameObject* go : users)
         {
-            // Defensivo: un objeto con malla Y una carga asincrona en vuelo no se
-            // toca (mismo criterio que MeshComponentCommand::put).
+            // Defensive: an object with a mesh AND an asynchronous load in flight is not
+            // touched (same criterion as MeshComponentCommand::put).
             if (go->pendingMeshJob != 0)
             {
                 r.warnings.push_back("Reimport: '" + go->name + "' has a load in progress, skipped");
@@ -175,29 +175,29 @@ ModelReimportResult reimportModelUsers(GameObject* sceneRoot, const std::filesys
             if (const auto* sk = dynamic_cast<const SkinnedMesh*>(fresh.get()))
             {
                 auto copy = std::make_shared<SkinnedMesh>(*sk);
-                // Antes de soltar la malla vieja: de ella salen los renames y las
-                // fuentes externas que el usuario tenia.
+                // Before dropping the old mesh: the renames and external
+                // sources the user had come from it.
                 if (const SkinnedMesh* old = go->getSkinnedMesh())
                     applyAnimationSourceConfig(*copy, animationSourceConfigOf(*old), r.warnings);
                 next = std::move(copy);
             }
             else
             {
-                next = fresh;   // estatica: compartida; quien la edite la copia (editMesh)
+                next = fresh;   // static: shared; whoever edits it copies it (editMesh)
             }
 
             if (renderer) renderer->removeMeshComponent(go);
             else          go->setMesh(nullptr);
             go->setMesh(next);
-            // DESPUES de setMesh, que baja los base*Taken: applyMaterialOverrides
-            // recaptura como baseline lo que trae la malla NUEVA y reaplica encima
-            // los overrides del objeto y su .mat.
+            // AFTER setMesh, which lowers the base*Taken: applyMaterialOverrides
+            // recaptures as baseline what the NEW mesh brings and reapplies on top
+            // the object's overrides and its .mat.
             applyMaterialOverrides(*go);
             finishReload(go);
         }
     }
 
-    // Sin esperar, los objetos recargados aparecerian ~2 frames tarde.
+    // Without waiting, the reloaded objects would appear ~2 frames late.
     if (renderer && anyRegistered) renderer->flushUploadsAndWait();
     return r;
 }

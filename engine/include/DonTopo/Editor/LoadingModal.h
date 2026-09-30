@@ -2,9 +2,9 @@
 
 namespace DonTopo
 {
-    // Overlay de progreso para las cargas de escena. NO congela la ventana: la
-    // aplicación sigue pintando frames, así que Windows nunca la marca como "no
-    // responde". Lo que veta es la edición, no el render.
+    // Progress overlay for scene loads. It does NOT freeze the window: the
+    // application keeps drawing frames, so Windows never flags it as "not
+    // responding". What it vetoes is editing, not rendering.
     class LoadingModal
     {
         public:
@@ -12,7 +12,7 @@ namespace DonTopo
             void update(int pending);
             bool active() const { return m_active; }
 
-            // Dibuja el overlay. Devuelve true si el usuario pulsó Cancel.
+            // Draws the overlay. Returns true if the user pressed Cancel.
             bool draw();
 
         private:

@@ -48,10 +48,9 @@ namespace DonTopo
             m_activeId = 0;
     }
 
-    // Sin arrastre que esperar: el click ya es el cambio entero, así que el
-    // comando se empuja en ese mismo frame. Devuelve el valor vigente porque los
-    // llamantes lo usan acto seguido para el BeginDisabled de los sliders de su
-    // efecto.
+    // No drag to wait for: the click is already the whole change, so the command is
+    // pushed in that same frame. It returns the current value because callers use it
+    // right away for the BeginDisabled of their effect's sliders.
     bool RenderSettingControls::checkbox(const char* label, const std::function<bool()>& get,
                                          const std::function<void(bool)>& set)
     {

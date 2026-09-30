@@ -15,14 +15,14 @@ namespace DonTopo {
 
 namespace {
 
-// Frames de calma antes de recomprobar la sintaxis. A 60 fps son ~0,2 s: lo
-// justo para que no salte en mitad de una palabra a medio escribir y lo
-// bastante corto para que el error aparezca solo, sin tener que guardar.
+// Calm frames before rechecking the syntax. At 60 fps that is ~0.2 s: just
+// enough not to fire in the middle of a half-typed word and short
+// enough for the error to show up on its own, without having to save.
 constexpr int kSyntaxDelayFrames = 12;
 
-// Margen izquierdo del canalón de números de línea del widget vendored
-// (TextEditor.cpp, mLeftMargin del constructor). Es privado y no hay getter;
-// se replica aquí, igual que se replica su conversión columna<->índice.
+// Left margin of the line-number gutter of the vendored widget
+// (TextEditor.cpp, mLeftMargin from the constructor). It is private and there is no getter;
+// it is replicated here, just as its column<->index conversion is replicated.
 constexpr float kTextEditorLeftMargin = 10.0f;
 
 bool isFragmentChar(char c)
@@ -30,15 +30,15 @@ bool isFragmentChar(char c)
     return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == ':';
 }
 
-// GetCurrentLineText()/GetCursorPosition().mColumn viven en espacios distintos:
-// la primera devuelve los caracteres reales de la línea (un '\t' literal ocupa
-// una sola posición), mientras que mColumn es una columna *visual* (un '\t'
-// cuenta como hasta GetTabSize() celdas — ver TextEditor.h, doc de Coordinates).
-// Indexar la línea con mColumn directamente es incorrecto en líneas con tabs
-// precedentes. TextEditor::GetCharacterIndex/GetCharacterColumn hacen esta
-// conversión pero son privados en el widget vendored (TextEditor.h línea
-// 332-333), así que replicamos aquí el mismo algoritmo (TextEditor.cpp
-// líneas 492-527) sobre el std::string público que ya tenemos.
+// GetCurrentLineText()/GetCursorPosition().mColumn live in different spaces:
+// the first returns the real characters of the line (a literal '\t' takes up
+// a single position), whereas mColumn is a *visual* column (a '\t'
+// counts as up to GetTabSize() cells, see TextEditor.h, doc of Coordinates).
+// Indexing the line with mColumn directly is incorrect on lines with preceding
+// tabs. TextEditor::GetCharacterIndex/GetCharacterColumn do this
+// conversion but are private in the vendored widget (TextEditor.h line
+// 332-333), so we replicate the same algorithm here (TextEditor.cpp
+// lines 492-527) over the public std::string we already have.
 int utf8CharLength(unsigned char c)
 {
     if ((c & 0xFE) == 0xFC) return 6;
@@ -49,7 +49,7 @@ int utf8CharLength(unsigned char c)
     return 1;
 }
 
-// Columna visual -> índice de carácter real (equivalente a GetCharacterIndex).
+// Visual column -> real character index (equivalent to GetCharacterIndex).
 int characterIndexFromColumn(const TextEditor& editor, const std::string& line, int column)
 {
     int tabSize = editor.GetTabSize();
@@ -66,7 +66,7 @@ int characterIndexFromColumn(const TextEditor& editor, const std::string& line, 
     return i;
 }
 
-// Índice de carácter real -> columna visual (equivalente a GetCharacterColumn).
+// Real character index -> visual column (equivalent to GetCharacterColumn).
 int characterColumnFromIndex(const TextEditor& editor, const std::string& line, int index)
 {
     int tabSize = editor.GetTabSize();
@@ -84,29 +84,29 @@ int characterColumnFromIndex(const TextEditor& editor, const std::string& line, 
     return col;
 }
 
-// Escanea GetCurrentLineText() hacia atrás desde la columna del cursor
-// mientras los caracteres sean parte de un identificador/ruta con puntos
-// (soporta "Entity:Get...", "Log.I..."). Devuelve el fragmento y su columna
-// de inicio (índice de carácter real, no visual) en la misma línea que el
+// Scans GetCurrentLineText() backwards from the cursor column
+// while the characters are part of an identifier/dotted path
+// (supports "Entity:Get...", "Log.I..."). Returns the fragment and its start column
+// (real character index, not visual) on the same line as the
 // cursor.
 struct Fragment { std::string text; int startColumn; };
 
-// Línea donde pintar el marker de un error de sintaxis, dado el error que
-// devuelve checkLuaSyntax y cuántas líneas tiene el editor.
+// Line where to draw the marker of a syntax error, given the error
+// returned by checkLuaSyntax and how many lines the editor has.
 //
-// Hay dos trampas, las dos medidas (ver los tests de scripting_tests.cpp):
+// There are two traps, both measured (see the tests in scripting_tests.cpp):
 //
-// 1. Lua reporta los errores de "algo sin cerrar" en <eof>, que cae UNA LÍNEA
-//    MÁS ALLÁ del final del documento — y el editor solo dibuja markers de
-//    líneas que existen, así que ese marker no se pintaba nunca. Es el caso
-//    más frecuente: es lo que pasa al borrar un 'end'.
-// 2. Acotarlo sin más a la última línea tampoco sirve de mucho: el editor
-//    añade un salto final, así que esa última línea suele estar VACÍA y la
-//    banda roja queda al final del fichero, donde no dice nada.
+// 1. Lua reports the "something left unclosed" errors at <eof>, which falls ONE LINE
+//    PAST the end of the document, and the editor only draws markers for
+//    lines that exist, so that marker was never drawn. It is the most
+//    frequent case: it is what happens when deleting an 'end'.
+// 2. Simply clamping it to the last line is not much use either: the editor
+//    adds a trailing newline, so that last line is usually EMPTY and the
+//    red band ends up at the end of the file, where it says nothing.
 //
-// Por eso, cuando Lua nombra la construcción que quedó abierta ("'end'
-// expected (to close 'function' at line 12)"), se marca ESA línea: es donde
-// está el problema de verdad. Si no la nombra, se cae al clamp.
+// That is why, when Lua names the construct that was left open ("'end'
+// expected (to close 'function' at line 12)"), THAT line is marked: it is where
+// the real problem is. If it does not name it, it falls back to the clamp.
 int markerLine(const std::pair<int, std::string>& err, int totalLines)
 {
     static const std::regex openedAt(R"(to close '[^']*' at line (\d+))");
@@ -134,21 +134,21 @@ Fragment extractFragment(const TextEditor& editor)
     return Fragment{ line.substr(start, col - start), start };
 }
 
-} // namespace (anónimo)
+} // anonymous namespace
 
 void ScriptEditorPanel::openFile(const std::filesystem::path& path)
 {
     m_open = true;
-    // Abrir un fichero es una petición explícita de mirarlo: además de existir,
-    // la ventana tiene que ponerse delante. Se pide aquí y se consume en draw()
-    // porque SetNextWindowFocus solo vale justo antes del Begin de la ventana.
+    // Opening a file is an explicit request to look at it: besides existing,
+    // the window has to come to the front. It is requested here and consumed in draw()
+    // because SetNextWindowFocus only works right before the window's Begin.
     m_focusWindowRequested = true;
 
-    // Canonicalizamos el path antes de comparar/guardar: los distintos call sites
-    // (Content Browser vs Properties/Nuevo-Script) construyen el mismo fichero real
-    // desde raíces distintas, y una comparación lexical puede no coincidir (".." ,
-    // separadores, mayúsculas de unidad, etc.), llevando a tabs duplicadas que
-    // pisan silenciosamente los cambios de la otra al guardar.
+    // We canonicalize the path before comparing/storing: the different call sites
+    // (Content Browser vs Properties/New-Script) build the same real file
+    // from different roots, and a lexical comparison may not match (".." ,
+    // separators, drive letter case, etc.), leading to duplicate tabs that
+    // silently overwrite each other's changes on save.
     std::error_code ec;
     std::filesystem::path canonicalPath = std::filesystem::weakly_canonical(path, ec);
     if (ec) canonicalPath = path;
@@ -173,12 +173,12 @@ void ScriptEditorPanel::openFile(const std::filesystem::path& path)
     tab.path = canonicalPath;
     tab.editor.SetLanguageDefinition(TextEditor::LanguageDefinition::Lua());
     tab.editor.SetText(*content);
-    // Punto de partida para detectar cambios ajenos: si el mtime se mueve sin
-    // que hayamos guardado nosotros, el fichero lo ha tocado otro.
+    // Starting point to detect foreign changes: if the mtime moves without
+    // us having saved, the file was touched by someone else.
     std::error_code timeEc;
     tab.diskTime = std::filesystem::last_write_time(canonicalPath, timeEc);
-    // Diagnóstico de entrada: un fichero que ya viene roto de disco debe
-    // enseñar el error al abrirlo, no esperar al primer Ctrl+S.
+    // Entry diagnostic: a file that already comes broken from disk must
+    // show the error when opened, not wait for the first Ctrl+S.
     refreshDiagnostics(tab);
     m_tabs.push_back(std::move(tab));
     m_focusIndex = static_cast<int>(m_tabs.size()) - 1;
@@ -186,16 +186,16 @@ void ScriptEditorPanel::openFile(const std::filesystem::path& path)
 
 void ScriptEditorPanel::applyMatch(Tab& tab, const LuaApiMatch& match)
 {
-    // DeleteRange/InsertTextAt son privados en el TextEditor vendored (ver
-    // TextEditor.h línea 325) — se usa la API pública equivalente: seleccionar
-    // el rango a sustituir y Delete(). Delete() no hace no-op si start == end
-    // (a diferencia de DeleteRange), así que solo se borra cuando hay algo.
+    // DeleteRange/InsertTextAt are private in the vendored TextEditor (see
+    // TextEditor.h line 325), so the equivalent public API is used: select
+    // the range to replace and Delete(). Delete() does not no-op if start == end
+    // (unlike DeleteRange), so it only deletes when there is something.
     //
-    // El inicio de la sustitución NO es siempre el del fragmento: una
-    // sugerencia encontrada por nombre de miembro ("t:Get" -> GetTransform)
-    // conserva el "t:" que el usuario escribió. Los caracteres del fragmento
-    // son alfanuméricos, '_', '.' y ':' —nunca tabuladores—, así que el
-    // desplazamiento en caracteres y en columnas visuales coincide.
+    // The start of the substitution is NOT always that of the fragment: a
+    // suggestion found by member name ("t:Get" -> GetTransform)
+    // keeps the "t:" the user typed. The characters of the fragment
+    // are alphanumerics, '_', '.' and ':' (never tabs), so the
+    // displacement in characters and in visual columns coincides.
     const TextEditor::Coordinates start(
         tab.acFragmentStart.mLine,
         tab.acFragmentStart.mColumn + static_cast<int>(match.replaceOffset));
@@ -214,8 +214,8 @@ void ScriptEditorPanel::applyMatch(Tab& tab, const LuaApiMatch& match)
 
 void ScriptEditorPanel::refreshDiagnostics(Tab& tab)
 {
-    // El chequeo de sintaxis se muestra vía marker visual y barra de estado,
-    // nunca al Log Console — sería ruido redundante con el marker.
+    // The syntax check is shown via visual marker and status bar,
+    // never to the Log Console: it would be noise redundant with the marker.
     TextEditor::ErrorMarkers markers;
     auto err = checkLuaSyntax(tab.editor.GetText());
     if (err)
@@ -255,8 +255,8 @@ void ScriptEditorPanel::saveTab(Tab& tab)
     if (FileManager::writeText(tab.path.string(), tab.editor.GetText()))
     {
         tab.dirty = false;
-        // El mtime nuevo lo hemos causado nosotros: se anota para no
-        // confundirlo con una edición ajena en el siguiente frame.
+        // The new mtime was caused by us: it is noted so as not to
+        // confuse it with a foreign edit on the next frame.
         std::error_code ec;
         tab.diskTime = std::filesystem::last_write_time(tab.path, ec);
         tab.externalChange = false;
@@ -267,10 +267,10 @@ void ScriptEditorPanel::saveTab(Tab& tab)
     refreshDiagnostics(tab);
 }
 
-// Busca hacia delante o hacia atrás desde el cursor, envolviendo por el
-// extremo contrario. Trabaja sobre GetTextLines() en vez de sobre GetText()
-// porque el resultado hay que expresarlo en (línea, columna) y partir de
-// nuevo un texto plano por saltos de línea sería recorrerlo dos veces.
+// Searches forward or backward from the cursor, wrapping around at the
+// opposite end. It works over GetTextLines() instead of GetText()
+// because the result has to be expressed as (line, column) and splitting
+// a plain text by line breaks again would mean walking it twice.
 bool ScriptEditorPanel::findNext(Tab& tab, bool backwards)
 {
     const std::string needle(tab.findBuffer);
@@ -291,8 +291,8 @@ bool ScriptEditorPanel::findNext(Tab& tab, bool backwards)
     const int total = static_cast<int>(lines.size());
     const int startLine = std::min(std::max(cursor.mLine, 0), total - 1);
 
-    // Recorrido de 'total' líneas empezando por la del cursor: la primera
-    // vuelta arranca desde la columna del cursor y las demás desde el borde.
+    // Walk of 'total' lines starting from the cursor's: the first
+    // pass starts from the cursor column and the others from the edge.
     for (int step = 0; step <= total; ++step)
     {
         const int lineNo = backwards
@@ -303,8 +303,8 @@ bool ScriptEditorPanel::findNext(Tab& tab, bool backwards)
         std::size_t found = std::string::npos;
         if (step == 0)
         {
-            // En la línea del cursor solo vale lo que queda por delante (o por
-            // detrás): si no, cada F3 devolvería la misma coincidencia.
+            // On the cursor's line only what remains ahead (or behind) counts:
+            // otherwise, every F3 would return the same match.
             const int col = std::min(
                 characterIndexFromColumn(tab.editor, lines[lineNo], cursor.mColumn),
                 static_cast<int>(haystack.size()));
@@ -335,9 +335,9 @@ bool ScriptEditorPanel::findNext(Tab& tab, bool backwards)
     return false;
 }
 
-// Barra de buscar/reemplazar y salto a línea. Devuelve true si ha consumido
-// teclado este frame: mientras el foco está en uno de sus campos, el editor no
-// debe procesar la misma tecla.
+// Find/replace bar and go-to-line. Returns true if it has consumed the
+// keyboard this frame: while focus is on one of its fields, the editor must
+// not process the same key.
 bool ScriptEditorPanel::drawFindBar(Tab& tab)
 {
     bool consumed = false;
@@ -350,7 +350,7 @@ bool ScriptEditorPanel::drawFindBar(Tab& tab)
         {
             const int total = tab.editor.GetTotalLines();
             const int target = std::min(std::max(tab.gotoLine, 1), total);
-            // Coordinates es 0-based y lo que el usuario escribe es 1-based.
+            // Coordinates is 0-based and what the user types is 1-based.
             tab.editor.SetCursorPosition(TextEditor::Coordinates(target - 1, 0));
             tab.gotoOpen = false;
         }
@@ -393,9 +393,9 @@ bool ScriptEditorPanel::drawFindBar(Tab& tab)
     ImGui::SameLine();
     if (ImGui::Button("Replace"))
     {
-        // Solo se sustituye si lo seleccionado ES la coincidencia: pulsar
-        // Reemplazar sin haber buscado antes buscaría y sustituiría de golpe,
-        // que no es lo que nadie espera del primer clic.
+        // It only replaces if what is selected IS the match: pressing
+        // Replace without having searched before would search and replace in one go,
+        // which is not what anyone expects from the first click.
         const std::string selected = tab.editor.GetSelectedText();
         const std::string needle(tab.findBuffer);
         auto sameText = [&tab](std::string a, std::string b) {
@@ -424,9 +424,9 @@ bool ScriptEditorPanel::drawFindBar(Tab& tab)
         const std::string needle(tab.findBuffer);
         if (!needle.empty())
         {
-            // Sobre el texto entero de una vez: ir coincidencia a coincidencia
-            // con el cursor obliga a llevar la cuenta de cuánto se ha movido
-            // todo lo de detrás cada vez que la sustitución cambia de longitud.
+            // Over the whole text at once: going match by match
+            // with the cursor forces keeping count of how much everything behind has moved
+            // each time the replacement changes length.
             std::string text = tab.editor.GetText();
             const std::string replacement(tab.replaceBuffer);
             std::string result;
@@ -473,8 +473,8 @@ bool ScriptEditorPanel::drawFindBar(Tab& tab)
         ImGui::TextDisabled("%s", tab.findStatus.c_str());
     }
 
-    // Escape cierra la barra, pero solo si el foco está en ella: si no,
-    // robaría el Escape que descarta el popup de autocompletado.
+    // Escape closes the bar, but only if focus is on it: otherwise it
+    // would steal the Escape that dismisses the autocomplete popup.
     if ((findFieldActive || replaceFieldActive) && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
     {
         tab.findOpen = false;
@@ -487,8 +487,8 @@ void ScriptEditorPanel::drawStatusBar(Tab& tab)
 {
     const TextEditor::Coordinates cursor = tab.editor.GetCursorPosition();
     ImGui::Separator();
-    // Línea y columna en 1-based, como las cuenta el propio Lua al reportar un
-    // error: en 0-based el número de la barra y el del error no cuadrarían.
+    // Line and column 1-based, as Lua itself counts them when reporting an
+    // error: 0-based the bar's number and the error's would not match.
     ImGui::Text("Ln %d, Col %d  |  %d lineas", cursor.mLine + 1, cursor.mColumn + 1,
                 tab.editor.GetTotalLines());
     ImGui::SameLine();
@@ -496,8 +496,8 @@ void ScriptEditorPanel::drawStatusBar(Tab& tab)
     {
         ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "|  Linea %d: %s",
                            tab.errorLine, tab.errorMessage.c_str());
-        // Un clic lleva al error: el marcador está en el canalón y con un
-        // fichero largo puede quedar fuera de la pantalla.
+        // A click takes you to the error: the marker is in the gutter and with a
+        // long file it can be off screen.
         if (ImGui::IsItemClicked())
             tab.editor.SetCursorPosition(TextEditor::Coordinates(tab.errorLine - 1, 0));
         if (ImGui::IsItemHovered())
@@ -524,18 +524,18 @@ void ScriptEditorPanel::draw()
         for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
         {
             Tab& tab = m_tabs[i];
-            // El label del TabItem no debe cambiar de texto nunca: aunque el ID sea
-            // estable (el "##" + path de abajo), ImGui pierde el foco del child de
-            // dentro (el editor) en cuanto el TEXTO VISIBLE de un tab cambia entre
-            // frames — confirmado bisectando (append " *" al título al pasar a dirty
-            // causaba pérdida de foco del editor un frame después, con o sin ID
-            // estable). Por eso el estado "sin guardar" se indica con el flag nativo
-            // ImGuiTabItemFlags_UnsavedDocument (un punto junto al label) en vez de
-            // tocar el texto.
+            // The TabItem label must never change its text: even though the ID is
+            // stable (the "##" + path below), ImGui loses focus of the child inside
+            // (the editor) as soon as a tab's VISIBLE TEXT changes between
+            // frames, confirmed by bisecting (appending " *" to the title when going dirty
+            // caused loss of the editor's focus one frame later, with or without a stable
+            // ID). That is why the "unsaved" state is indicated with the native flag
+            // ImGuiTabItemFlags_UnsavedDocument (a dot next to the label) instead of
+            // touching the text.
             std::string title = tab.path.filename().string();
-            // "##" + path: el ID del TabItem es independiente del texto visible,
-            // así que reordenar tabs o rutas duplicadas en distintas carpetas no
-            // colisionan.
+            // "##" + path: the TabItem's ID is independent of the visible text,
+            // so reordering tabs or duplicate paths in different folders do not
+            // collide.
             std::string tabLabel = title + "##" + tab.path.string();
             ImGuiTabItemFlags flags = (m_focusIndex == i) ? ImGuiTabItemFlags_SetSelected
                                                            : ImGuiTabItemFlags_None;
@@ -574,15 +574,15 @@ void ScriptEditorPanel::draw()
                 }
                 if (panelFocused && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_G, false))
                     tab.gotoOpen = true;
-                // F3 / Shift+F3 repiten la búsqueda sin volver a la barra.
+                // F3 / Shift+F3 repeat the search without going back to the bar.
                 if (panelFocused && ImGui::IsKeyPressed(ImGuiKey_F3, false))
                     findNext(tab, ImGui::GetIO().KeyShift);
 
-                // Cambio ajeno en disco: lo detecta el mtime. Si la pestaña no
-                // tiene cambios propios se recarga sola (es lo que el usuario
-                // querría, y así el texto no miente sobre lo que hay en disco);
-                // si los tiene, se pregunta, porque cualquiera de las dos
-                // opciones pierde trabajo de alguien.
+                // Foreign change on disk: detected by the mtime. If the tab has
+                // no changes of its own it reloads by itself (it is what the user would
+                // want, and this way the text does not lie about what is on disk);
+                // if it does, the user is asked, because either of the two
+                // options loses someone's work.
                 {
                     std::error_code ec;
                     const auto now = std::filesystem::last_write_time(tab.path, ec);
@@ -630,11 +630,11 @@ void ScriptEditorPanel::draw()
                     }
                     else if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_Tab, false))
                     {
-                        // DeleteRange/InsertTextAt son privados en el TextEditor vendored
-                        // (ver TextEditor.h línea 325) — usamos la API pública equivalente:
-                        // seleccionar el rango del fragmento y Delete(). Delete() no hace
-                        // no-op si start==end (a diferencia de DeleteRange), así que solo
-                        // seleccionamos/borramos cuando hay algo real que borrar.
+                        // DeleteRange/InsertTextAt are private in the vendored TextEditor
+                        // (see TextEditor.h line 325), so we use the equivalent public API:
+                        // select the fragment's range and Delete(). Delete() does not no-op
+                        // if start==end (unlike DeleteRange), so we only
+                        // select/delete when there is something real to delete.
                         applyMatch(tab, tab.acMatches[tab.acSelected]);
                         acKeyConsumed = true;
                     }
@@ -646,43 +646,43 @@ void ScriptEditorPanel::draw()
                         acKeyConsumed = true;
                     }
                 }
-                // Ctrl+Space fuerza la apertura del popup incluso sin acVisible
-                // previo. Hay que detectarlo aquí, antes del Render(), y sumarlo
-                // a la desactivación del manejo de teclado del editor —
-                // detectarlo después de Render() (como estaba) dejaba que
-                // HandleKeyboardInputs() del editor ya hubiera procesado la
-                // tecla ese mismo frame e insertado un espacio literal.
+                // Ctrl+Space forces the popup to open even without a previous
+                // acVisible. It has to be detected here, before Render(), and added
+                // to the disabling of the editor's keyboard handling;
+                // detecting it after Render() (as it was) let the editor's
+                // HandleKeyboardInputs() already process the key in that same frame
+                // and insert a literal space.
                 bool forceOpen = !acKeyConsumed &&
                     ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
                     ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Space, false);
 
-                // Solo desactivamos el manejo de teclado del editor el frame en
-                // que de verdad consumimos una de las teclas del popup (o
-                // forzamos su apertura) — el resto de frames con el popup
-                // abierto, escribir/mover el caret con flechas sigue
-                // funcionando con normalidad.
-                // (SetHandleKeyboardInputs(false) afecta al *siguiente*
-                // Render(), por eso este bloque corre antes del Render() de
-                // abajo: así el frame en que se consume una tecla es el mismo
-                // frame en que se desactiva el manejo antes de que el editor
-                // la procese.)
+                // We only disable the editor's keyboard handling on the frame in
+                // which we really consume one of the popup's keys (or
+                // force its opening); on the rest of the frames with the popup
+                // open, typing/moving the caret with arrows keeps
+                // working normally.
+                // (SetHandleKeyboardInputs(false) affects the *next*
+                // Render(), which is why this block runs before the Render() below:
+                // this way the frame in which a key is consumed is the same
+                // frame in which handling is disabled before the editor
+                // processes it.)
                 bool suppressEditorInput = acKeyConsumed || forceOpen;
                 tab.editor.SetHandleKeyboardInputs(!suppressEditorInput);
 
-                // TextEditor::Render() solo pone io.WantCaptureKeyboard = true
-                // dentro de su propio HandleKeyboardInputs() — que nos saltamos
-                // arriba a propósito. Sin esto, el Enter/Tab/flechas que acabamos
-                // de consumir para el popup queda libre para el sistema de Nav de
-                // ImGui, que lo usa para mover el foco de teclado a otro widget
-                // (p.ej. cambia de pestaña del tab bar, o deja el editor sin foco
-                // — la línea actual se pinta en gris). Reclamamos la captura
-                // nosotros mismos para que Nav no toque esa misma tecla.
+                // TextEditor::Render() only sets io.WantCaptureKeyboard = true
+                // inside its own HandleKeyboardInputs(), which we skip
+                // above on purpose. Without this, the Enter/Tab/arrows we have just
+                // consumed for the popup are left free for ImGui's Nav system, which
+                // uses them to move keyboard focus to another widget
+                // (e.g. it switches tab on the tab bar, or leaves the editor without focus,
+                // the current line is drawn in gray). We claim the capture
+                // ourselves so that Nav does not touch that same key.
                 if (suppressEditorInput)
                     ImGui::GetIO().WantCaptureKeyboard = true;
 
-                // El editor ocupa lo que queda menos la barra de estado, que va
-                // debajo y siempre visible: sin reservarla, Render() se come
-                // todo el alto y la barra queda fuera del panel.
+                // The editor takes what remains minus the status bar, which goes
+                // below and is always visible: without reserving it, Render() eats
+                // the whole height and the bar ends up outside the panel.
                 const float statusHeight = ImGui::GetTextLineHeightWithSpacing() +
                     ImGui::GetStyle().ItemSpacing.y;
                 ImVec2 editorSize = ImGui::GetContentRegionAvail();
@@ -691,14 +691,14 @@ void ScriptEditorPanel::draw()
                 if (tab.editor.IsTextChanged())
                 {
                     tab.dirty = true;
-                    // Se rearma la cuenta atrás en cada pulsación: el análisis
-                    // corre cuando el usuario para, no mientras teclea.
+                    // The countdown is re-armed on every keypress: the analysis
+                    // runs when the user stops, not while they type.
                     tab.syntaxDelay = kSyntaxDelayFrames;
                 }
                 if (tab.syntaxDelay > 0)
                     --tab.syntaxDelay;
                 else if (tab.syntaxDelay == 0)
-                    refreshDiagnostics(tab);   // deja syntaxDelay en -1
+                    refreshDiagnostics(tab);   // leaves syntaxDelay at -1
 
                 ImVec2 editorOrigin = ImGui::GetItemRectMin();
                 ImVec2 editorEnd    = ImGui::GetItemRectMax();
@@ -714,30 +714,30 @@ void ScriptEditorPanel::draw()
                 if (tab.acDismissed && !frag.text.starts_with(tab.acDismissedFragment))
                     tab.acDismissed = false;
 
-                // Un '.' o un ':' recién escritos abren el popup aunque el
-                // fragmento no llegue al mínimo de caracteres: escribir el
-                // separador es justamente el momento en que se quiere ver qué
-                // hay dentro del receptor.
+                // A freshly typed '.' or ':' opens the popup even if the
+                // fragment does not reach the minimum number of characters: typing the
+                // separator is exactly the moment when one wants to see what is
+                // inside the receiver.
                 const bool afterSeparator = !frag.text.empty() &&
                     (frag.text.back() == '.' || frag.text.back() == ':');
                 if (!acKeyConsumed &&
                     (forceOpen || (tab.editor.IsTextChanged() && !tab.acDismissed &&
                                    (frag.text.size() >= 2 || afterSeparator))))
                 {
-                    // El filtro vive en LuaApiReference (Core): además del
-                    // prefijo del símbolo entero, casa por nombre de MIEMBRO,
-                    // que es lo que hace falta cuando el receptor es una
-                    // variable local ("t:Get") y no el nombre de un tipo.
+                    // The filter lives in LuaApiReference (Core): besides the
+                    // prefix of the whole symbol, it matches by MEMBER name,
+                    // which is what is needed when the receiver is a local
+                    // variable ("t:Get") and not the name of a type.
                     tab.acMatches = DonTopo::luaApiMatches(frag.text);
 
                     tab.acVisible = !tab.acMatches.empty();
                     if (tab.acVisible)
                     {
                         tab.acSelected = 0;
-                        // frag.startColumn es un índice de carácter real; acFragmentStart
-                        // se usa como Coordinates (columna visual) en SetSelection/Delete/
-                        // SetCursorPosition y en el posicionamiento del popup, así que hay
-                        // que reconvertir aquí, no antes.
+                        // frag.startColumn is a real character index; acFragmentStart
+                        // is used as Coordinates (visual column) in SetSelection/Delete/
+                        // SetCursorPosition and in the popup positioning, so it has
+                        // to be converted back here, not earlier.
                         int line = tab.editor.GetCursorPosition().mLine;
                         int visualColumn = characterColumnFromIndex(
                             tab.editor, tab.editor.GetCurrentLineText(), frag.startColumn);
@@ -747,18 +747,18 @@ void ScriptEditorPanel::draw()
 
                 if (tab.acVisible)
                 {
-                    // El widget mide sus columnas con el ancho de '#', no el de
-                    // 'A' (TextEditor.cpp:856): con una fuente proporcional los
-                    // dos no coinciden y el popup se separaba del caret cuanto
-                    // más a la derecha estuviera.
+                    // The widget measures its columns with the width of '#', not that of
+                    // 'A' (TextEditor.cpp:856): with a proportional font the
+                    // two do not match and the popup drifted away from the caret the
+                    // further to the right it was.
                     const float charWidth = ImGui::GetFont()->CalcTextSizeA(
                         ImGui::GetFontSize(), FLT_MAX, -1.0f, "#").x;
                     const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
-                    // Canalón de números de línea. mTextStart y mLeftMargin son
-                    // privados en el widget, así que se recalculan igual que
-                    // allí (TextEditor.cpp:889-890) — mismo apaño, y por el
-                    // mismo motivo, que characterIndexFromColumn de arriba.
-                    // Sin esto el popup salía ~35 px a la izquierda SIEMPRE.
+                    // Line-number gutter. mTextStart and mLeftMargin are
+                    // private in the widget, so they are recalculated the same way as
+                    // there (TextEditor.cpp:889-890), the same workaround, and for the
+                    // same reason, as characterIndexFromColumn above.
+                    // Without this the popup came out ~35 px to the left ALWAYS.
                     char lineNoBuf[16];
                     snprintf(lineNoBuf, sizeof(lineNoBuf), " %d ", tab.editor.GetTotalLines());
                     const float gutter = ImGui::GetFont()->CalcTextSizeA(
@@ -768,12 +768,12 @@ void ScriptEditorPanel::draw()
                         editorOrigin.x + gutter + tab.acFragmentStart.mColumn * charWidth,
                         editorOrigin.y + tab.acFragmentStart.mLine * lineHeight + lineHeight);
 
-                    // El scroll interno del editor no se puede leer desde fuera
-                    // (su child es suyo y ImGui no lo expone sin imgui_internal),
-                    // así que con el fichero desplazado la posición calculada se
-                    // va del panel. Acotarla al rectángulo visible del editor
-                    // mantiene el popup siempre a la vista y pegado al borde más
-                    // cercano al caret, en vez de dibujarlo donde nadie lo ve.
+                    // The editor's internal scroll cannot be read from outside
+                    // (its child is its own and ImGui does not expose it without imgui_internal),
+                    // so with the file scrolled the computed position
+                    // leaves the panel. Clamping it to the editor's visible rectangle
+                    // keeps the popup always in view and stuck to the edge closest
+                    // to the caret, instead of drawing it where nobody sees it.
                     const float popupWidth = 420.0f;
                     const float popupMaxHeight = 9.0f * lineHeight;
                     popupPos.x = std::min(std::max(popupPos.x, editorOrigin.x),
@@ -794,17 +794,17 @@ void ScriptEditorPanel::draw()
                     {
                         const LuaApiMatch& match = tab.acMatches[m];
                         bool selected = (m == tab.acSelected);
-                        // El ID va por índice: dos sugerencias pueden compartir
-                        // texto visible (el mismo miembro en dos tipos) y
-                        // colisionarían como un solo Selectable.
+                        // The ID goes by index: two suggestions can share visible
+                        // text (the same member in two types) and
+                        // would collide as a single Selectable.
                         ImGui::PushID(m);
                         if (ImGui::Selectable("##fila", selected))
                         {
                             applyMatch(tab, match);
                             tab.editor.SetHandleKeyboardInputs(true);
                         }
-                        // La firma va en la misma línea, en gris: el nombre
-                        // solo no dice cuántos argumentos lleva ni qué devuelve.
+                        // The signature goes on the same line, in gray: the name
+                        // alone does not say how many arguments it takes or what it returns.
                         ImGui::SameLine(0.0f, 0.0f);
                         ImGui::TextUnformatted(match.symbol.c_str());
                         if (!match.signature.empty())
@@ -816,16 +816,16 @@ void ScriptEditorPanel::draw()
                         if (selected)
                         {
                             ImGui::SetItemDefaultFocus();
-                            // Sin esto, bajar más allá de la octava fila movía
-                            // la selección fuera de la parte visible y Enter
-                            // insertaba algo que no se veía.
+                            // Without this, going down past the eighth row moved
+                            // the selection out of the visible part and Enter
+                            // inserted something that could not be seen.
                             ImGui::SetScrollHereY(0.5f);
                         }
                     }
                     ImGui::EndChild();
-                    // Documentación de la sugerencia seleccionada, debajo de la
-                    // lista: una línea, y solo la de la seleccionada — ponerla
-                    // en cada fila convertiría el popup en un muro de texto.
+                    // Documentation of the selected suggestion, below the
+                    // list: one line, and only the selected one's; putting it
+                    // on every row would turn the popup into a wall of text.
                     if (tab.acSelected >= 0 && tab.acSelected < static_cast<int>(tab.acMatches.size()))
                     {
                         const std::string& doc = tab.acMatches[tab.acSelected].doc;
