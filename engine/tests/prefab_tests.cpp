@@ -47,6 +47,19 @@ void testDiffIgnoresIdsAndRootPose()
     CHECK(d.size() == 2, "non-root: position and rotation are overrides, scale is not");
 }
 
+void testDiffSmallRotationAndQuatSign()
+{
+    auto p = lightNode(1, 1.0f, glm::mat4(1.0f));
+    glm::mat4 tiny = glm::rotate(glm::mat4(1.0f), glm::radians(0.1f), {0, 1, 0});
+    auto d = DonTopo::diffPrefabNode(1, p, lightNode(1, 1.0f, tiny), false);
+    CHECK(d.size() == 1 && d[0].path == "/transform/rotation", "0.1 degree rotation is an override");
+
+    // Same rotation through a different decomposition sign must not be an override.
+    glm::mat4 big = glm::rotate(glm::mat4(1.0f), 3.0f, {0, 1, 0});
+    CHECK(DonTopo::diffPrefabNode(1, lightNode(1, 1.0f, big), lightNode(1, 1.0f, big), false).empty(),
+          "identical rotation gives no override");
+}
+
 void testDiffComponentAddedAndRemoved()
 {
     auto p = lightNode(2, 1.0f, glm::mat4(1.0f));
@@ -95,6 +108,7 @@ int main()
 {
     testDiffDetectsLeafChange();
     testDiffIgnoresIdsAndRootPose();
+    testDiffSmallRotationAndQuatSign();
     testDiffComponentAddedAndRemoved();
     testApplyRoundTripAndOrphans();
     testOverridesJsonRoundTrip();

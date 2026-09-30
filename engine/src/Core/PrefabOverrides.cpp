@@ -74,10 +74,15 @@ namespace
     }
 
     // q and -q are the same rotation; decompose may return either sign.
-    bool nearRot(const glm::quat& a, const glm::quat& b)
+    // Signs are aligned first and then components are compared with the same
+    // 1e-5 as position/scale. A |dot| >= 1 - eps test would be ~0.5 degrees
+    // wide (1 - cos(t/2) ~ t^2/8) and silently drop small rotations.
+    bool nearRot(const glm::quat& a, glm::quat b)
     {
-        const float d = std::fabs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
-        return d >= 1.0f - kEps;
+        if (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w < 0.0f)
+            b = glm::quat(-b.w, -b.x, -b.y, -b.z);
+        return std::fabs(a.x - b.x) <= kEps && std::fabs(a.y - b.y) <= kEps &&
+               std::fabs(a.z - b.z) <= kEps && std::fabs(a.w - b.w) <= kEps;
     }
 
     bool isSkippedKey(const std::string& k)
