@@ -1,12 +1,12 @@
-// Test headless del CameraComponent y de la serialización/invariante de cámara
-// en Scene (sin GUI). Plain main + asserts, sin framework — coherente con
+// Headless test of CameraComponent and camera serialization/invariant in
+// Scene (no GUI). Plain main + asserts, no framework — consistent with
 // physics_tests.cpp.
 //
-// PhysX sólo admite UNA PxFoundation por proceso (crearla dos veces, aunque se
-// libere entremedias, crashea). Por eso se crea un único PhysicsManager en
-// main() y se pasa por referencia: aquí sólo hace falta porque Scene::fromJson/
-// insertFromJson/cloneGameObject lo exigen en su firma para recrear colliders,
-// no porque estos tests simulen física.
+// PhysX only accepts ONE PxFoundation per process (creating it twice, even
+// if freed in between, crashes). That's why a single PhysicsManager is
+// created in main() and passed by reference: here it's only needed because
+// Scene::fromJson/insertFromJson/cloneGameObject require it in their
+// signature to rebuild colliders, not because these tests simulate physics.
 #include "DonTopo/Core/Camera.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/Scene.h"
@@ -24,9 +24,9 @@
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/Editor/ViewportPanel.h"
-// ImGuizmo.h no se basta solo: usa tipos de ImGui (ImVec2, ImU32) sin
-// incluirlo. Aquí se necesita para comparar los enums de gizmoImGuizmoEnums
-// contra los de verdad, que es todo el sentido de ese test.
+// ImGuizmo.h is not self-contained: it uses ImGui types (ImVec2, ImU32)
+// without including it. Here it's needed to compare gizmoImGuizmoEnums
+// against the real ones, which is the entire point of that test.
 #include <imgui.h>
 #include <ImGuizmo.h>
 #include "DonTopo/UI/CanvasComponent.h"
@@ -62,7 +62,7 @@ static int g_failures = 0;
 
 static bool nearlyEqual(float a, float b, float eps = 0.001f) { return std::fabs(a - b) < eps; }
 
-// Defaults a la escala de este repo, no a los de Unity.
+// Defaults at this repo's scale, not Unity's.
 static void test_defaults()
 {
     CameraComponent c;
@@ -73,8 +73,8 @@ static void test_defaults()
     CHECK(nearlyEqual(c.getFar(), 2000.0f));
 }
 
-// Los clamps viven en el componente: un JSON editado a mano no puede instalar
-// una proyección degenerada.
+// The clamps live in the component: a hand-edited JSON cannot install
+// a degenerate projection.
 static void test_clamps()
 {
     CameraComponent c;
@@ -82,11 +82,11 @@ static void test_clamps()
     c.setFov(500.0f);    CHECK(c.getFov() <= 179.0f);
     c.setOrthographicSize(-5.0f); CHECK(c.getOrthographicSize() > 0.0f);
     c.setNear(-5.0f);    CHECK(c.getNear() > 0.0f);
-    // far nunca queda por debajo de near.
+    // far never drops below near.
     c.setNear(10.0f);
     c.setFar(5.0f);
     CHECK(c.getFar() > c.getNear());
-    // near nunca sobrepasa far, y hacerlo no debe mover far.
+    // near never exceeds far, and doing so must not move far.
     CameraComponent d;
     d.setFar(100.0f);
     d.setNear(500.0f);
@@ -94,8 +94,8 @@ static void test_clamps()
     CHECK(nearlyEqual(d.getFar(), 100.0f));
 }
 
-// El Y-flip de Vulkan va DENTRO de projectionMatrix: sus dos consumidores (UBO
-// del Renderer y Gizmos::drawFrustum) lo necesitan.
+// Vulkan's Y-flip goes INSIDE projectionMatrix: its two consumers (the
+// Renderer's UBO and Gizmos::drawFrustum) need it.
 static void test_projection_has_vulkan_y_flip()
 {
     CameraComponent c;
@@ -103,7 +103,7 @@ static void test_projection_has_vulkan_y_flip()
     CHECK(p[1][1] < 0.0f);
 }
 
-// Perspectiva y ortográfica no pueden dar la misma matriz.
+// Perspective and orthographic cannot give the same matrix.
 static void test_projection_modes_differ()
 {
     CameraComponent c;
@@ -111,12 +111,12 @@ static void test_projection_modes_differ()
     c.setMode(CameraComponent::ProjectionMode::Orthographic);
     glm::mat4 ortho = c.projectionMatrix(1.0f);
     CHECK(persp != ortho);
-    // En ortográfica, w del punto proyectado es 1 (sin división perspectiva).
+    // In orthographic, w of the projected point is 1 (no perspective division).
     glm::vec4 clip = ortho * glm::vec4(0.0f, 0.0f, -50.0f, 1.0f);
     CHECK(nearlyEqual(clip.w, 1.0f));
 }
 
-// Un aspect degenerado (viewport de ancho 0 al minimizar) no debe producir NaN.
+// A degenerate aspect (zero-width viewport when minimized) must not produce NaN.
 static void test_projection_degenerate_aspect()
 {
     CameraComponent c;
@@ -124,10 +124,10 @@ static void test_projection_degenerate_aspect()
     CHECK(!std::isnan(p[0][0]));
 }
 
-// Vulkan clipea 0 <= z_clip <= w_clip, así que la proyección tiene que mapear
-// near->0 y far->1. El default de glm (sin GLM_FORCE_DEPTH_ZERO_TO_ONE) mapea
-// near->-1 pensando en OpenGL: en ortográfica eso tiraba la mitad cercana del
-// rango entero (con near=1/far=2000 sólo se veía de 1000.5 en adelante).
+// Vulkan clips 0 <= z_clip <= w_clip, so the projection has to map
+// near->0 and far->1. The default glm (without GLM_FORCE_DEPTH_ZERO_TO_ONE)
+// maps near->-1 thinking of OpenGL: in orthographic that threw away half
+// the near range (with near=1/far=2000 only 1000.5 onward was visible).
 static void test_orthographic_uses_vulkan_depth_range()
 {
     CameraComponent c; // near=1, far=2000
@@ -138,18 +138,18 @@ static void test_orthographic_uses_vulkan_depth_range()
     CHECK(nearlyEqual(atNear.z / atNear.w, 0.0f));
     glm::vec4 atFar = p * glm::vec4(0.0f, 0.0f, -2000.0f, 1.0f);
     CHECK(nearlyEqual(atFar.z / atFar.w, 1.0f));
-    // Un objeto a la escala de este repo (cámara del sandbox a z=300) tiene que
-    // quedar DENTRO del rango visible, no clipeado.
+    // An object at this repo's scale (sandbox camera at z=300) must end up
+    // INSIDE the visible range, not clipped.
     glm::vec4 mid = p * glm::vec4(0.0f, 0.0f, -300.0f, 1.0f);
     CHECK(mid.z / mid.w > 0.0f);
     CHECK(mid.z / mid.w < 1.0f);
 }
 
-// Mismo contrato en perspectiva (ahí el fallo sólo recortaba los primeros ~2
-// units, por eso pasaba desapercibido).
+// Same contract in perspective (there the failure only cut the first ~2
+// units, which is why it went unnoticed).
 static void test_perspective_uses_vulkan_depth_range()
 {
-    CameraComponent c; // perspectiva por defecto, near=1, far=2000
+    CameraComponent c; // perspective by default, near=1, far=2000
     glm::mat4 p = c.projectionMatrix(16.0f / 9.0f);
 
     glm::vec4 atNear = p * glm::vec4(0.0f, 0.0f, -1.0f, 1.0f);
@@ -160,20 +160,20 @@ static void test_perspective_uses_vulkan_depth_range()
     CHECK(mid.z / mid.w > 0.0f);
 }
 
-// La cámara mira a -Z local (convención de glm/lookAt y de DonTopo::Camera,
-// cuyo yaw por defecto de -90° da front = (0,0,-1)).
+// The camera looks at local -Z (the glm/lookAt convention and DonTopo::Camera's,
+// whose default yaw of -90 degrees gives front = (0,0,-1)).
 static void test_view_from_world_translation()
 {
     glm::mat4 world = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 10.0f));
     glm::mat4 view  = CameraComponent::viewFromWorld(world);
-    // El origen del mundo queda 10 unidades delante de la cámara, o sea en -Z.
+    // The world origin is 10 units ahead of the camera, that is at -Z.
     glm::vec4 p = view * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
     CHECK(nearlyEqual(p.x, 0.0f));
     CHECK(nearlyEqual(p.y, 0.0f));
     CHECK(nearlyEqual(p.z, -10.0f));
 }
 
-// La escala del GameObject NO debe entrar en la view (deformaría la imagen).
+// The GameObject's scale must not enter the view (it would distort the image).
 static void test_view_from_world_ignores_scale()
 {
     glm::mat4 t = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 10.0f));
@@ -184,8 +184,8 @@ static void test_view_from_world_ignores_scale()
             CHECK(nearlyEqual(unscaled[col][row], scaled[col][row]));
 }
 
-// findCamera() es la ÚNICA fuente de verdad del invariante "una cámara por
-// escena": tiene que encontrarla esté donde esté, no solo colgando de la raíz.
+// findCamera() is the ONLY source of truth for the invariant "one camera per
+// scene": it has to find it no matter where it is, not only hanging from root.
 static void test_find_camera_at_any_depth()
 {
     Scene scene("Test");
@@ -199,8 +199,7 @@ static void test_find_camera_at_any_depth()
     CHECK(scene.findCamera() == nieto);
 }
 
-// La cámara puede vivir en CUALQUIER GameObject, no solo en uno llamado
-// "Camera".
+// The camera can live in ANY GameObject, not just one called "Camera".
 static void test_find_camera_ignores_name()
 {
     Scene scene("Test");
@@ -210,7 +209,7 @@ static void test_find_camera_ignores_name()
     CHECK(scene.findCamera()->hasCameraComponent());
 }
 
-// Pre-orden: gana la primera en el recorrido, no una cualquiera.
+// Pre-order: the first in the traversal wins, not just any.
 static void test_find_camera_returns_first_in_preorder()
 {
     Scene scene("Test");
@@ -221,10 +220,10 @@ static void test_find_camera_returns_first_in_preorder()
     CHECK(scene.findCamera() == a);
 }
 
-// Round-trip completo por toJson/fromJson. Los valores NO son los defaults a
-// propósito: unos defaults se "preservarían" solos aunque el bloque no se
-// serializara. near/far grandes cubren además el orden de carga (setNear clampa
-// contra el far actual, así que far tiene que cargarse antes).
+// Full round-trip through toJson/fromJson. The values are NOT defaults
+// on purpose: some defaults would "preserve" themselves even if the block
+// weren't serialized. large near/far also cover the load order (setNear
+// clamps against the current far, so far has to load first).
 static void test_serialization_round_trip(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -254,8 +253,8 @@ static void test_serialization_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(nearlyEqual(c->getFar(), 8000.0f));
 }
 
-// Camino de subtreeToJson/insertFromJson — el que usan los comandos de
-// Undo/Redo. Sin él, un Undo de Delete devolvería el GameObject sin su cámara.
+// Path of subtreeToJson/insertFromJson — what Undo/Redo commands use. Without
+// it, an Undo of Delete would return the GameObject without its camera.
 static void test_subtree_round_trip(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -275,8 +274,8 @@ static void test_subtree_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(nearlyEqual(restored->getCameraComponent()->getFov(), 33.0f));
 }
 
-// Back-compat: las escenas guardadas antes de este cambio no traen bloque
-// "camera" y tienen que cargar igual (version sigue en 1).
+// Back-compat: scenes saved before this change don't bring the "camera"
+// block and load equally (version stays at 1).
 static void test_scene_without_camera_block_still_loads(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -290,9 +289,10 @@ static void test_scene_without_camera_block_still_loads(PhysicsManager& pm, Audi
     CHECK(loaded.getRoot().children.size() == 1);
 }
 
-// Escena con DOS cámaras (JSON editado a mano): gana la primera en pre-orden,
-// la otra pierde SOLO el componente (su GameObject se conserva) y queda aviso.
-// Así un .scene recuperable se abre igual, en vez de fallar la carga.
+// Scene with TWO cameras (hand-edited JSON): the first in pre-order wins,
+// the other loses ONLY the component (its GameObject is preserved) and a
+// warning is issued. So a .scene that can be recovered opens the same way
+// instead of failing to load.
 static void test_load_with_two_cameras_keeps_first(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -300,8 +300,8 @@ static void test_load_with_two_cameras_keeps_first(PhysicsManager& pm, AudioMana
     GameObject* b = scene.addGameObject("Segunda");
     a->setCameraComponent(std::make_shared<CameraComponent>());
     b->setCameraComponent(std::make_shared<CameraComponent>());
-    // toJson serializa las dos: el invariante lo impone la carga, que es donde
-    // puede llegar un fichero editado a mano.
+    // toJson serializes both: the invariant is enforced at load, which is where
+    // a hand-edited file can arrive.
     nlohmann::json j = scene.toJson();
 
     Scene loaded("Loaded");
@@ -314,12 +314,12 @@ static void test_load_with_two_cameras_keeps_first(PhysicsManager& pm, AudioMana
     GameObject* cam = loaded.findCamera();
     CHECK(cam != nullptr);
     if (cam) CHECK(cam->name == "Primera");
-    // Los dos GameObjects siguen ahí: solo se cae el componente sobrante.
+    // Both GameObjects are still there: only the extra component drops.
     CHECK(loaded.getRoot().children.size() == 2);
     CHECK(!loaded.lastWarnings().empty());
 }
 
-// Una escena con UNA cámara no genera avisos (el prune no es un falso positivo).
+// A scene with ONE camera generates no warnings (the prune is not a false positive).
 static void test_load_with_one_camera_has_no_warnings(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -332,7 +332,7 @@ static void test_load_with_one_camera_has_no_warnings(PhysicsManager& pm, AudioM
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Cuenta cuántos avisos de loaded contienen needle.
+// Counts how many loaded warnings contain needle.
 static int countWarnings(const Scene& scene, const char* needle)
 {
     int n = 0;
@@ -341,15 +341,15 @@ static int countWarnings(const Scene& scene, const char* needle)
     return n;
 }
 
-// Un aviso que se repite se colapsa a UNA entrada con "(xN)". Sin esto, una
-// malla corrupta escribe un aviso idéntico por vértice y sepulta en el Log los
-// demás avisos de la misma carga.
+// A warning that repeats collapses to ONE entry with "(xN)". Without this,
+// a corrupt mesh writes an identical warning per vertex and buries the other
+// warnings of the same load in the Log.
 //
-// Se montan tres objetos con el MISMO nombre (el contexto del aviso es el
-// nombre, no el índice, así que los tres avisos salen byte a byte iguales) y a
-// los tres se les corrompe camera.far. Como además las tres traen cámara, el
-// prune deja dos avisos también idénticos entre sí: eso fija de paso que
-// collapseWarnings corre DESPUÉS de pruneExtraCameras, no antes.
+// Three objects with the SAME name are set up (the warning context is the
+// name, not the index, so the three warnings come out byte-for-byte identical)
+// and all three have their camera.far corrupted. Because all three carry a
+// camera, the prune leaves two warnings also identical to each other: this
+// confirms that collapseWarnings runs AFTER pruneExtraCameras, not before.
 static void test_repeated_warnings_are_collapsed(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -357,21 +357,21 @@ static void test_repeated_warnings_are_collapsed(PhysicsManager& pm, AudioManage
         scene.addGameObject("Cam")->setCameraComponent(std::make_shared<CameraComponent>());
     nlohmann::json j = scene.toJson();
     for (auto& child : j["root"]["children"])
-        child["camera"]["far"] = nullptr; // corrupto: readFloat avisa y cae al default
+        child["camera"]["far"] = nullptr; // corrupt: readFloat warns and falls to default
 
     Scene loaded("Loaded");
     CHECK(loaded.fromJson(j, pm, am));
 
-    // Una sola entrada por mensaje, no tres ni dos.
+    // One entry per message, not three or two.
     CHECK(countWarnings(loaded, "far") == 1);
     CHECK(countWarnings(loaded, "more than one camera") == 1);
     CHECK(loaded.lastWarnings().size() == 2);
-    // Y el recuento real va en el texto.
+    // And the actual count goes in the text.
     CHECK(countWarnings(loaded, "far: corrupt value in the scene, using the default value (x3)") == 1);
     CHECK(countWarnings(loaded, "(x2)") == 1);
 }
 
-// El sufijo solo aparece cuando hay repetición: un aviso único se queda tal cual.
+// The suffix only appears when there is repetition: a unique warning stays as is.
 static void test_single_warning_has_no_suffix(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -385,22 +385,22 @@ static void test_single_warning_has_no_suffix(PhysicsManager& pm, AudioManager& 
     CHECK(countWarnings(loaded, "(x") == 0);
 }
 
-// insertFromJson (el undo de un Delete) limpia los avisos de la operación
-// anterior en vez de apilar los suyos encima. Sin el clear, m_warnings crecía
-// durante toda la sesión de editor y lastWarnings() dejaba de significar "la
-// última operación", que es lo que su contrato promete.
-// --- P8 de docs/core-audit.md: el aviso de "este nodo se va" ---
+// insertFromJson (the undo of a Delete) clears the warnings of the previous
+// operation instead of stacking its own on top. Without the clear, m_warnings
+// would grow during the entire editor session and lastWarnings() would stop
+// meaning "the last operation", which is what its contract promises.
+// --- P8 of docs/core-audit.md: the warning "this node is going" ---
 //
-// `removeGameObject` llevaba una obligación del llamante que el header NO
-// documentaba: soltar antes los recursos de GPU del subárbol. No es que
-// estuviera sin cumplir — los tres llamantes la cumplían — es que estaba
-// implementada TRES veces (EditorUI::onDelete, ScriptManager::onDestroying y a
-// pelo en DeleteGameObjectCommand), y un cuarto llamante habría necesitado una
-// cuarta. Ahora avisa Scene y hay un solo sitio.
+// `removeGameObject` carried a caller obligation that the header did NOT
+// document: release GPU resources of the subtree first. Not that it was
+// without being met — the three callers met it — but it was implemented
+// THREE times (EditorUI::onDelete, ScriptManager::onDestroying and bare in
+// DeleteGameObjectCommand), and a fourth caller would have needed a fourth.
+// Now Scene warns and there is one place.
 //
-// Lo que NO se puede probar aquí es la punta del hilo (que la ranura del pool se
-// libere de verdad): haría falta un EditorRenderer, que son 58 virtuales puras.
-// Eso se verifica en GUI. Aquí se prueba el mecanismo.
+// What CANNOT be tested here is the tip of the thread (that the pool slot
+// really frees): it would take an EditorRenderer, which is 58 pure virtuals.
+// That is verified in GUI. Here the mechanism is tested.
 static void test_remove_notifies_listener()
 {
     Scene scene("Test");
@@ -417,10 +417,10 @@ static void test_remove_notifies_listener()
     CHECK(scene.findById(id) == nullptr);
 }
 
-// El aviso llega ANTES de soltarlo del árbol: quien escucha tiene que poder
-// recorrer el subárbol entero y leer sus índices de GPU, que es exactamente lo
-// que hace Renderer::removeGameObject. Avisar después dejaría al oyente con un
-// puntero a un objeto ya destruido.
+// The warning arrives BEFORE releasing it from the tree: whoever listens has
+// to be able to traverse the whole subtree and read its GPU indices, which
+// is exactly what Renderer::removeGameObject does. Warning after would leave
+// the listener with a pointer to an already-destroyed object.
 static void test_remove_notifies_before_destroying()
 {
     Scene scene("Test");
@@ -436,19 +436,19 @@ static void test_remove_notifies_before_destroying()
             ++nodosVistos;
             if (m->staticRenderIndex >= 0) indiceLeido = m->staticRenderIndex;
         });
-        // Y el nodo sigue colgando de su padre: el aviso es previo al erase.
+        // And the node still hangs from its parent: the warning is prior to erase.
         seguiaEnElArbol = (n->parent != nullptr) && !n->parent->children.empty();
     });
 
     scene.removeGameObject(padre);
-    CHECK(nodosVistos == 2);        // el subárbol entero, no solo la raíz
-    CHECK(indiceLeido == 7);        // los índices todavía se pueden leer
+    CHECK(nodosVistos == 2);        // the entire subtree, not just the root
+    CHECK(indiceLeido == 7);        // the indices can still be read
     CHECK(seguiaEnElArbol);
     CHECK(scene.getRoot().children.empty());
 }
 
-// Sin oyente no pasa nada: los tests y cualquier host que no lo cablee siguen
-// funcionando igual.
+// No listener, nothing happens: the tests and any host that doesn't wire it
+// keep working the same.
 static void test_remove_without_listener_is_fine()
 {
     Scene scene("Test");
@@ -457,9 +457,10 @@ static void test_remove_without_listener_is_fine()
     CHECK(scene.getRoot().children.empty());
 }
 
-// Y no avisa de lo que no se va: un nodo nulo o la raíz (que no cuelga de
-// nadie) salen por la guarda de arriba sin tocar el oyente. Sin esto, el
-// Renderer soltaría las ranuras de una escena que sigue viva.
+// And it doesn't warn of what isn't leaving: a null node or the root (which
+// doesn't hang from anyone) exit through the guard above without touching
+// the listener. Without this, the Renderer would release the slots of a scene
+// that is still alive.
 static void test_remove_does_not_notify_for_non_removals()
 {
     Scene scene("Test");
@@ -479,10 +480,10 @@ static void test_insert_from_json_resets_warnings(PhysicsManager& pm, AudioManag
     nlohmann::json j = scene.toJson();
 
     Scene loaded("Loaded");
-    CHECK(loaded.fromJson(j, pm, am)); // deja el aviso del prune
+    CHECK(loaded.fromJson(j, pm, am)); // leaves the prune warning
     CHECK(!loaded.lastWarnings().empty());
 
-    // Un insert limpio detrás: sus avisos son los suyos, ninguno.
+    // A clean insert after: its warnings are its own, none.
     GameObject* go = loaded.addGameObject("Otro");
     nlohmann::json snapshot = loaded.subtreeToJson(go);
     loaded.removeGameObject(go);
@@ -490,18 +491,19 @@ static void test_insert_from_json_resets_warnings(PhysicsManager& pm, AudioManag
     CHECK(loaded.lastWarnings().empty());
 }
 
-// --- P2 de docs/core-audit.md: los accesos JSON crudos de nodeFromJson ---
+// --- P2 of docs/core-audit.md: the raw JSON accesses of nodeFromJson ---
 //
-// Todos compartían forma: un campo corrupto lanzaba json::exception, la
-// excepción subía hasta el catch de Scene::fromJson y se perdía la carga de la
-// escena ENTERA — sin decir qué campo, y por un valor que el resto del fichero
-// sí sabe tolerar. El criterio de Scene.cpp está escrito en su comentario de
-// :1189 y es justo el contrario: avisar nombrando el campo y seguir cargando.
+// All shared a pattern: a corrupt field threw json::exception, the exception
+// bubbled up to the catch in Scene::fromJson and the load of the ENTIRE
+// scene was lost — without saying which field, and for a value the rest of
+// the file knows how to tolerate. The criterion in Scene.cpp is written in
+// its comment at :1189 and is exactly the opposite: warn naming the field
+// and keep loading.
 //
-// Cada test corrompe UN campo sobre una escena de dos nodos y exige las tres
-// cosas: que la carga funcione, que el nodo sano llegue entero, y que el aviso
-// nombre el campo. Sin la tercera, el arreglo sería "tragárselo en silencio",
-// que es peor que fallar.
+// Each test corrupts ONE field on a two-node scene and demands three things:
+// that the load works, that the healthy node arrives whole, and that the
+// warning names the field. Without the third, the fix would be
+// "swallow it silently", which is worse than failing.
 static nlohmann::json escenaDeDosNodos()
 {
     Scene scene("Origen");
@@ -510,7 +512,7 @@ static nlohmann::json escenaDeDosNodos()
     return scene.toJson();
 }
 
-// Comprobaciones comunes: la escena carga y el segundo nodo no se ha perdido.
+// Common checks: the scene loads and the second node has not been lost.
 static void checkEscenaSobrevive(const Scene& loaded)
 {
     CHECK(loaded.getRoot().children.size() == 2);
@@ -518,8 +520,8 @@ static void checkEscenaSobrevive(const Scene& loaded)
         CHECK(loaded.getRoot().children[1]->name == "Sano");
 }
 
-// "id" nulo. Además del aviso, el nodo tiene que quedarse con el id que le puso
-// el constructor: uno inventado podría chocar con otro del árbol.
+// null "id". Besides the warning, the node has to stay with the id the
+// constructor gave it: an invented one could crash into another in the tree.
 static void test_corrupt_id_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
 {
     nlohmann::json j = escenaDeDosNodos();
@@ -530,16 +532,16 @@ static void test_corrupt_id_does_not_lose_scene(PhysicsManager& pm, AudioManager
     checkEscenaSobrevive(loaded);
     CHECK(countWarnings(loaded, "node 'Roto'.id") == 1);
 
-    // Y ningún id repetido, que es lo que pasaría si el campo corrupto acabara
-    // en un 0 para todos los nodos rotos.
+    // And no duplicate id, which is what would happen if the corrupt field
+    // ended in 0 for all broken nodes.
     std::vector<uint64_t> ids;
     loaded.traverse([&](GameObject* n) { ids.push_back(n->id); });
     std::sort(ids.begin(), ids.end());
     CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 }
 
-// "children" ausente. nodeToJson lo escribe SIEMPRE (Scene.cpp:1182), así que
-// su ausencia nunca es back-compat: es corrupción y toca nombrarla.
+// "children" missing. nodeToJson writes it ALWAYS (Scene.cpp:1182), so its
+// absence is never back-compat: it is corruption and must be named.
 static void test_missing_children_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
 {
     nlohmann::json j = escenaDeDosNodos();
@@ -551,8 +553,8 @@ static void test_missing_children_does_not_lose_scene(PhysicsManager& pm, AudioM
     CHECK(countWarnings(loaded, "node 'Roto'.children") == 1);
 }
 
-// "name" ausente en un hijo. El nodo se conserva (sin nombre), no se descarta:
-// puede llevar colgando media escena.
+// "name" missing in a child. The node is preserved (unnamed), not discarded:
+// it can have half the scene hanging from it.
 static void test_missing_child_name_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
 {
     nlohmann::json j = escenaDeDosNodos();
@@ -564,9 +566,10 @@ static void test_missing_child_name_does_not_lose_scene(PhysicsManager& pm, Audi
     CHECK(countWarnings(loaded, ".name") == 1);
 }
 
-// "indices" con un elemento que no es número: el mesh procedural no se puede
-// reconstruir. Se avisa y el nodo se queda sin malla — media geometría sería
-// peor que ninguna, mismo criterio que jsonToMat4 con la matriz.
+// "indices" with an element that is not a number: the procedural mesh cannot
+// be rebuilt. A warning is issued and the node stays without mesh — half the
+// geometry would be worse than none, same criterion as jsonToMat4 with the
+// matrix.
 static void test_corrupt_mesh_indices_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
 {
     nlohmann::json j = escenaDeDosNodos();
@@ -585,10 +588,9 @@ static void test_corrupt_mesh_indices_does_not_lose_scene(PhysicsManager& pm, Au
         CHECK(!loaded.getRoot().children[0]->hasMesh());
 }
 
-// "useGravity" legacy con un tipo que no es bool. Es el camino de back-compat
-// de las escenas anteriores al Rigidbody, así que lo que llega por aquí es por
-// definición un fichero viejo: tumbar la carga entera era el peor sitio posible
-// para ser estricto.
+// "useGravity" legacy with a type that is not bool. It's the back-compat
+// path of scenes before Rigidbody, so what arrives here is by definition
+// an old file: failing the entire load was the worst place possible to be strict.
 static void test_corrupt_legacy_usegravity_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
 {
     nlohmann::json j = escenaDeDosNodos();
@@ -601,13 +603,13 @@ static void test_corrupt_legacy_usegravity_does_not_lose_scene(PhysicsManager& p
     CHECK(loaded.fromJson(j, pm, am));
     checkEscenaSobrevive(loaded);
     CHECK(countWarnings(loaded, "useGravity") == 1);
-    // Sin Rigidbody sintetizado: un campo corrupto no decide la dinámica.
+    // Without synthesized Rigidbody: a corrupt field does not decide the dynamics.
     if (loaded.getRoot().children.size() == 2)
         CHECK(!loaded.getRoot().children[0]->hasRigidbody());
 }
 
-// Un script sin "name". El componente se descarta (sin nombre no hay fichero
-// .lua que cargar) pero el GameObject y el resto de la escena siguen.
+// A script without "name". The component is discarded (without a name there is
+// no .lua file to load) but the GameObject and the rest of the scene continue.
 static void test_corrupt_script_name_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
 {
     nlohmann::json j = escenaDeDosNodos();
@@ -622,18 +624,18 @@ static void test_corrupt_script_name_does_not_lose_scene(PhysicsManager& pm, Aud
         CHECK(!loaded.getRoot().children[0]->hasScripts());
 }
 
-// --- P7: las 14 lambdas readStr duplicadas de nodeFromJson ---
+// --- P7: the 14 duplicate readStr lambdas from nodeFromJson ---
 //
-// Cada bloque de componente de UI llevaba su propia copia de readStr, que ante
-// un valor corrupto devolvía "" SIN AVISAR — mientras que la readString del
-// namespace, para el mismo caso, sí avisa. O sea: en el MISMO componente, un
-// float corrupto se reportaba al Log y un string corrupto se tragaba en
-// silencio, según por cuál de las dos rutas casi idénticas pasara.
-// Se tocan CUATRO componentes distintos y no solo uno: la lambda estaba copiada
-// 14 veces, así que un test sobre un único bloque dejaría los otros 13 sin red
-// — y volver a meter una copia en cualquiera de ellos pasaría desapercibido.
-// Cuatro no son catorce; lo que de verdad cierra el hueco es que ya no queda
-// ninguna lambda que copiar (grep de "auto readStr" == 0), y esto lo respalda.
+// Each UI component block carried its own copy of readStr, which on a corrupt
+// value returned "" WITHOUT WARNING — whereas the namespace's readString, for
+// the same case, does warn. That is: in the SAME component, a corrupt float
+// was reported to the Log and a corrupt string was swallowed silently,
+// depending on which of the two nearly identical paths it went through.
+// FOUR different components are touched, not just one: the lambda was copied
+// 14 times, so a test on a single block would leave the other 13 unguarded
+// — and putting a copy back in any of them would go unnoticed. Four is not
+// fourteen; what really closes the hole is that there is no lambda left to
+// copy (grep of "auto readStr" == 0), and this supports that.
 static void test_corrupt_ui_string_warns(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Origen");
@@ -645,7 +647,7 @@ static void test_corrupt_ui_string_warns(PhysicsManager& pm, AudioManager& am)
     nlohmann::json j = scene.toJson();
     nlohmann::json& hijos = j["root"]["children"];
     hijos[0]["button"]["text"]     = nullptr;
-    hijos[0]["button"]["fontSize"] = nullptr;   // el float, para el contraste
+    hijos[0]["button"]["fontSize"] = nullptr;   // the float, for contrast
     hijos[1]["panel"]["sprite"]    = nullptr;
     hijos[2]["text"]["fontPath"]   = nullptr;
     hijos[3]["image"]["atlasPath"] = nullptr;
@@ -654,10 +656,10 @@ static void test_corrupt_ui_string_warns(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.fromJson(j, pm, am));
     CHECK(loaded.getRoot().children.size() == 4);
 
-    // El float ya avisaba antes de P7; los strings son los que faltaban. En el
-    // botón los dos campos son del MISMO componente: ese contraste —un float
-    // que se reporta y un string que se tragaba en silencio, a dos líneas de
-    // distancia— es el hallazgo entero.
+    // The float already warned before P7; the strings are what was missing. In
+    // the button the two fields are from the SAME component: that contrast —a
+    // float that is reported and a string that was swallowed silently, two lines
+    // apart— is the entire finding.
     CHECK(countWarnings(loaded, "fontSize") == 1);
     CHECK(countWarnings(loaded, "button of 'Boton'.text") == 1);
     CHECK(countWarnings(loaded, "panel of 'Panel'.sprite") == 1);
@@ -665,29 +667,30 @@ static void test_corrupt_ui_string_warns(PhysicsManager& pm, AudioManager& am)
     CHECK(countWarnings(loaded, "image of 'Imagen'.atlasPath") == 1);
 }
 
-// H6 de docs/core-audit.md. Scene::shutdown existe para una cosa muy concreta,
-// y los dos hosts lo dicen en un comentario al llamarlo: soltar lo que la escena
-// tiene cogido de PhysX y de FMOD ANTES de destruir esos managers. Sin eso, un
-// ~Collider corre contra una PxScene ya liberada.
+// H6 of docs/core-audit.md. Scene::shutdown exists for one very specific
+// thing, and both hosts say so in a comment when calling it: release what
+// the scene has taken from PhysX and FMOD BEFORE destroying those managers.
+// Without it, a ~Collider runs into a PxScene already freed.
 //
-// El problema no era que fallara, es que la lista estaba escrita A MANO y se
-// quedaba en 6 de los componentes: Rigidbody, Animator, ReverbZone y
-// AudioListener sobrevivian. Es el mismo patron que ya fallo CUATRO veces en
-// invalidateCaches del panel -enumerar a mano lo que hay que limpiar-, asi que
-// no se arregla anadiendo cuatro lineas mas.
+// The problem was not that it failed, but that the list was written BY HAND
+// and was stuck at 6 of the components: Rigidbody, Animator, ReverbZone and
+// AudioListener survived. It's the same pattern that already failed FOUR
+// times in invalidateCaches of the panel —enumerate by hand what needs
+// cleaning— so it's not fixed by adding four more lines.
 //
-// weak_ptr y no has*(): lo que hay que demostrar es que el componente se ha
-// DESTRUIDO, no que el GameObject haya dejado de apuntarlo. Con un shared_ptr
-// vivo en otro sitio, has*() diria que si y el recurso nativo seguiria ahi.
+// weak_ptr and no has*(): what needs to be demonstrated is that the
+// component has been DESTROYED, not that the GameObject has stopped pointing
+// to it. With a shared_ptr alive somewhere else, has*() would say yes and
+// the native resource would still be there.
 static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Todo");
 
-    // Los cuatro que la lista escrita a mano se saltaba. Los colliders y el
-    // AudioClip -los que SI limpiaba- no entran aqui porque sus constructores
-    // piden un actor de PhysX o el AudioManager: lo que se prueba es la regla,
-    // y estos cuatro se construyen solos.
+    // The four that the hand-written list was skipping. Colliders and
+    // AudioClip —the ones it DID clean— don't enter here because their
+    // constructors ask for a PhysX actor or the AudioManager: what is tested
+    // is the rule, and these four build themselves.
     auto rb       = std::make_shared<Rigidbody>();
     auto anim     = std::make_shared<AnimatorComponent>();
     auto reverb   = std::make_shared<ReverbZoneComponent>();
@@ -698,8 +701,8 @@ static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, Aud
     go->setReverbZone(reverb);
     go->setAudioListener(listener);
 
-    // Un hijo con lo suyo: shutdown tiene que bajar por el arbol entero, no solo
-    // por los hijos directos de la raiz.
+    // A child with its own: shutdown has to descend through the entire tree, not
+    // just the direct children of the root.
     GameObject* hijo = scene.addGameObject("Hijo", go);
     auto animHijo = std::make_shared<AnimatorComponent>();
     hijo->setAnimator(animHijo);
@@ -710,8 +713,8 @@ static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, Aud
     std::weak_ptr<AudioListenerComponent> wListener(listener);
     std::weak_ptr<AnimatorComponent>      wAnimHijo(animHijo);
 
-    // Las referencias locales se sueltan: a partir de aqui el unico dueno es la
-    // escena, que es la premisa de todo lo de abajo.
+    // Local references are released: from here on the only owner is the scene,
+    // which is the premise of everything below.
     rb.reset(); anim.reset(); reverb.reset(); listener.reset(); animHijo.reset();
     CHECK(!wRb.expired());
     CHECK(!wAnim.expired());
@@ -725,36 +728,37 @@ static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, Aud
     CHECK(wAnimHijo.expired());
 }
 
-// H19 de docs/core-audit.md, la mitad que se hizo el 2026-09-04: GameObject.h
-// DECLARA los 28 componentes en vez de incluirlos. Puede, porque sus miembros
-// son shared_ptr -validos con tipo incompleto- y su destructor esta fuera de
-// linea.
+// H19 of docs/core-audit.md, the half done on 2026-09-04: GameObject.h
+// DECLARES the 28 components instead of including them. It can, because its
+// members are shared_ptr —valid with incomplete type— and its destructor is
+// out of line.
 //
-// Lo que se gano, medido entonces: tocar un componente de UI de cien lineas
-// pasaba de 34 TUs y 286 s a 25 TUs y 253 s. Y con ninja -n el 2026-09-11 sigue
-// en 26 TUs, o sea que aguanta.
+// What was gained, measured at the time: touching a 100-line UI component
+// went from 34 TUs and 286 s to 25 TUs and 253 s. And with ninja -n on
+// 2026-09-11 it's still at 26 TUs, so it holds.
 //
-// Este test existe porque ese arreglo YA SE DESHIZO UNA VEZ sin que nadie se
-// enterara: al hacerlo, meter un include en Scene.h para resolver un tipo
-// devolvio la medicion a 33 TUs, peor que el baseline. Un include transitivo no
-// rompe nada, no sale en ningun test y no da error: solo hace el build lento
-// otra vez. Asi que la guarda tiene que leer el fichero.
+// This test exists because that fix was UNDONE ONCE without anyone noticing:
+// when doing so, adding an include in Scene.h to resolve a type brought the
+// measurement back to 33 TUs, worse than baseline. A transitive include breaks
+// nothing, doesn't show up in any test, and gives no error: it just makes
+// the build slow again. So the guard has to read the file.
 //
-// Lee el header desde la raiz del repo, que es desde donde se lanzan los tests
-// (igual que los que abren assets/). Si no lo encuentra, NO pasa en silencio.
+// Reads the header from the repo root, which is where the tests are run from
+// (just like the ones that open assets/). If it doesn't find it, it does NOT
+// pass silently.
 static void test_gameobject_header_declares_components_instead_of_including()
 {
     const char* kRuta = "engine/include/DonTopo/Core/GameObject.h";
     std::ifstream in(kRuta, std::ios::binary);
-    CHECK(in.good());   // lanzado desde otro cwd: se entera, no aprueba
+    CHECK(in.good());   // launched from another cwd: it finds out, does not approve
     if (!in.good()) return;
 
     const std::string texto((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     CHECK(!texto.empty());
 
-    // Los tres prefijos de componente concreto que GameObject.h llego a incluir.
-    // Core/ NO entra: de ahi si incluye cosas legitimas (y Camera.h no es un
-    // componente).
+    // The three concrete component prefixes that GameObject.h ended up including.
+    // Core/ does NOT go in: it includes legitimate things from there (and Camera.h is
+    // not a component).
     const char* kProhibidos[] = {
         "#include \"DonTopo/UI/",
         "#include \"DonTopo/Physics/",
@@ -763,22 +767,22 @@ static void test_gameobject_header_declares_components_instead_of_including()
     for (const char* prohibido : kProhibidos)
         CHECK(texto.find(prohibido) == std::string::npos);
 
-    // Y la otra mitad: que siga declarandolos. Sin esto, alguien podria
-    // "arreglar" el test borrando las declaraciones y los includes a la vez.
+    // And the other half: that it keeps declaring them. Without this, someone could
+    // "fix" the test by deleting the declarations and the includes at the same time.
     CHECK(texto.find("class SliderComponent;")   != std::string::npos);
     CHECK(texto.find("class BoxCollider;")       != std::string::npos);
     CHECK(texto.find("class AudioClipComponent;") != std::string::npos);
 }
 
-// H2 de docs/core-audit.md. Quedan ~52 `.value("clave", default)` en los bloques
-// de componente, y `.value` LANZA json::type_error si la clave existe con el
-// tipo que no toca -comprobado aparte: string, bool, int y float lanzan; los que
-// tienen un `json` de default NO, porque cualquier tipo convierte a json, asi
-// que esa mitad de la fila no era cierta-.
+// H2 of docs/core-audit.md. There are ~52 `.value("key", default)` left in the
+// component blocks, and `.value` THROWS json::type_error if the key exists with the
+// wrong type -verified separately: string, bool, int and float throw; the ones with
+// a `json` default do NOT, because any type converts to json, so that half of the
+// row was not true-.
 //
-// Lo que costaba: la excepcion subia hasta el catch de fromJson y se perdia la
-// escena ENTERA, sin decir de que nodo venia. Un `.scene` editado a mano, o
-// escrito por una version distinta, se volvia incargable por un campo.
+// What cost: the exception went up to the catch in fromJson and the ENTIRE scene was
+// lost, without saying which node it came from. A `.scene` edited by hand, or written
+// by a different version, became unloadable by one field.
 static void test_corrupt_field_costs_its_node_not_the_scene(PhysicsManager& pm, AudioManager& am)
 {
     Scene escena("Test");
@@ -793,17 +797,17 @@ static void test_corrupt_field_costs_its_node_not_the_scene(PhysicsManager& pm, 
     CHECK(hijos.size() == 3);
     if (hijos.size() != 3) return;
 
-    // El campo corrupto tiene que ser uno de los ~52 CRUDOS, no uno ya
-    // convertido a readFloat/readBool -esos no lanzan, defaultean-. `light.type`
-    // lo es: `l.value("type", std::string("point"))`, y aqui llega un numero.
-    // Antes de la guarda, esto tumbaba la carga entera y fromJson devolvia false.
+    // The corrupted field must be one of the ~52 RAW ones, not one already converted
+    // to readFloat/readBool -those don't throw, they default-. `light.type` is one:
+    // `l.value("type", std::string("point"))`, and here a number arrives. Before the
+    // guard, this crashed the entire load and fromJson returned false.
     hijos[1]["light"]["type"] = 42;
 
     Scene cargada("Vacia");
-    CHECK(cargada.fromJson(j, pm, am));   // <- lo importante: la escena CARGA
+    CHECK(cargada.fromJson(j, pm, am));   // <- the important part: the scene LOADS
 
-    // Los tres nodos siguen ahi, el corrupto incluido: pierde sus componentes,
-    // no su sitio en el arbol.
+    // The three nodes are still there, the corrupted one included: it loses its
+    // components, not its place in the tree.
     int nodos = 0;
     GameObject* maloCargado = nullptr;
     GameObject* buenoCargado = nullptr;
@@ -812,16 +816,16 @@ static void test_corrupt_field_costs_its_node_not_the_scene(PhysicsManager& pm, 
         if (n->name == "Malo")  maloCargado  = n;
         if (n->name == "Bueno") buenoCargado = n;
     });
-    CHECK(nodos == 4);   // raiz + 3
+    CHECK(nodos == 4);   // root + 3
     CHECK(maloCargado != nullptr);
     CHECK(buenoCargado != nullptr);
 
-    // El vecino conserva SU componente: el dano no se propaga.
+    // The neighbor keeps ITS component: the damage does not spread.
     if (buenoCargado) CHECK(buenoCargado->hasCameraComponent());
-    // Y el corrupto se queda sin el suyo, que es el precio.
+    // And the corrupted one loses its component, which is the price.
     if (maloCargado)  CHECK(!maloCargado->hasLight());
 
-    // Con aviso que NOMBRA el nodo: sin eso hay que adivinar cual de los 3 era.
+    // With warning that NAMES the node: without it you have to guess which of the 3 it was.
     bool avisoConNombre = false;
     for (const auto& w : cargada.lastWarnings())
         if (w.find("Malo") != std::string::npos) avisoConNombre = true;
@@ -830,24 +834,23 @@ static void test_corrupt_field_costs_its_node_not_the_scene(PhysicsManager& pm, 
     (void)otro;
 }
 
-// H17/P11 de docs/core-audit.md. Los cuatro buscadores de Scene (findById,
-// findCamera, findAudioListener, findCanvas) emulaban "gana el primero" con un
-// traverse y un `if (!found && ...)`, pero traverse visita el arbol ENTERO: tras
-// encontrarlo seguian bajando por todo lo demas para nada.
+// H17/P11 of docs/core-audit.md. The four searchers of Scene (findById,
+// findCamera, findAudioListener, findCanvas) emulated "first one wins" with a
+// traverse and an `if (!found && ...)`, but traverse visits the ENTIRE tree:
+// after finding it they kept going down through everything else for nothing.
 //
-// Medido en /O2 con 5000 nodos y 20.000 busquedas: recorrido completo 175 ms
-// pase lo que pase; cortando, 0,007 ms si esta en la raiz y 50 ms si esta a un
-// tercio. Son 8,8 us por busqueda, y PropertiesPanel -que se dibuja cada frame-
-// hace varias.
+// Measured in /O2 with 5000 nodes and 20,000 searches: complete traversal 175 ms
+// no matter what; cutting, 0.007 ms if at root and 50 ms if at a third down. That
+// is 8.8 us per search, and PropertiesPanel -which is drawn every frame- does several.
 //
-// Se prueba el CORTE, no el tiempo: el predicado cuenta cuantas veces lo llaman,
-// asi que si el recorrido siguiera despues del acierto el numero se dispararia.
+// What is tested is the CUT, not the time: the predicate counts how many times it
+// is called, so if the traversal kept going after the hit the number would spike.
 static void test_find_first_stops_at_the_first_hit()
 {
     Scene escena("Test");
     GameObject* primero = escena.addGameObject("primero");
     for (int i = 0; i < 50; ++i)
-        escena.addGameObject("relleno", primero);   // 50 hijos DESPUES del acierto
+        escena.addGameObject("relleno", primero);   // 50 children AFTER the hit
 
     int visitas = 0;
     GameObject* hit = escena.getRoot().findFirst([&](const GameObject* n) {
@@ -856,11 +859,11 @@ static void test_find_first_stops_at_the_first_hit()
     });
 
     CHECK(hit == primero);
-    // raiz + primero = 2. Con el recorrido completo serian 52.
+    // root + first = 2. With complete traversal it would be 52.
     CHECK(visitas == 2);
 
-    // Sin acierto se recorre entero, que es el unico caso en el que cortar no
-    // ahorra nada: 1 raiz + 1 primero + 50 hijos.
+    // Without a hit the entire tree is traversed, which is the only case where cutting
+    // saves nothing: 1 root + 1 first + 50 children.
     visitas = 0;
     GameObject* nada = escena.getRoot().findFirst([&](const GameObject*) {
         ++visitas;
@@ -870,24 +873,25 @@ static void test_find_first_stops_at_the_first_hit()
     CHECK(visitas == 52);
 }
 
-// H16 de docs/core-audit.md. traverse tomaba el functor POR VALOR y recursaba
-// con una copia, asi que cada hijo -y cada nivel- recibia la suya.
+// H16 of docs/core-audit.md. traverse took the functor BY VALUE and recursed
+// with a copy, so each child -and each level- received its own.
 //
-// Lo que se fija aqui no es el rendimiento (medido en /O2 con 5000 nodos x 2000
-// recorridos: con las lambdas [&] de 8 bytes que usa todo el repo la diferencia
-// es ruido, 25,3 ms contra 24,3; solo con un functor de 264 bytes se va a 2,4x).
-// Lo que se fija es la SEMANTICA: un functor con estado propio perdia en
-// silencio todo lo que sumaran los hijos, porque quien sumaba era una copia.
+// What is fixed here is not performance (measured in /O2 with 5000 nodes x 2000
+// traversals: with the [&] lambdas of 8 bytes that the whole repo uses the
+// difference is noise, 25.3 ms vs 24.3; only with a 264-byte functor does it go
+// to 2.4x). What is fixed is the SEMANTICS: a functor with its own state lost
+// silently everything that the children would sum, because the one that summed
+// was a copy.
 //
-// El contador de abajo daba CERO con el traverse por valor -ni siquiera contaba
-// la raiz, porque tambien opera sobre una copia- y da el numero de nodos con el
-// de ahora.
+// The counter below gave ZERO with the by-value traverse -it did not even count
+// the root, because it also operates on a copy- and gives the number of nodes with
+// the current one.
 static void test_traverse_does_not_copy_stateful_functor()
 {
     Scene escena("Test");
     GameObject* a = escena.addGameObject("a");
     GameObject* b = escena.addGameObject("b", a);
-    escena.addGameObject("c", b);      // tres niveles: raiz -> a -> b -> c
+    escena.addGameObject("c", b);      // three levels: root -> a -> b -> c
     escena.addGameObject("d", a);
 
     struct Contador
@@ -899,69 +903,69 @@ static void test_traverse_does_not_copy_stateful_functor()
     Contador contador;
     escena.getRoot().traverse(contador);
 
-    // 5 = raiz + a + b + c + d. Con el functor copiado por hijo esto era 0.
+    // 5 = root + a + b + c + d. With the functor copied per child this was 0.
     CHECK(contador.vistos == 5);
 
-    // Y el caso de siempre sigue valiendo: una lambda temporal, escrita en la
-    // propia llamada, que es como la pasan casi todos los callers. Si traverse
-    // tomara Fn& en vez de Fn&&, esto ni compilaria.
+    // And the usual case keeps working: a temporary lambda, written in the call itself,
+    // which is how almost all callers pass it. If traverse took Fn& instead of Fn&&,
+    // this would not even compile.
     int porLambda = 0;
     escena.getRoot().traverse([&porLambda](GameObject*) { ++porLambda; });
     CHECK(porLambda == 5);
 }
 
-// H9 de docs/core-audit.md. shouldClose() le pasaba m_window a GLFW sin mirar si
-// era nulo, a diferencia de show(), que sí lo hace. Un Window sin init -o ya
-// cerrado- le daba nullptr a GLFW, que lo trata como error de programacion.
+// H9 of docs/core-audit.md. shouldClose() passed m_window to GLFW without checking
+// if it was null, unlike show(), which does. A Window without init -or already
+// closed- gave nullptr to GLFW, which treats it as a programming error.
 //
-// Y la respuesta correcta sin ventana no es "false": el bucle de los dos hosts
-// es `while (!window.shouldClose())`, asi que false ahi seria girar para siempre
-// sobre una ventana que no existe. Sin ventana, cerrar.
+// And the correct answer without a window is not "false": the loop of the two
+// hosts is `while (!window.shouldClose())`, so false there would spin forever
+// over a window that does not exist. Without window, close.
 //
-// Esto es lo unico de H9 que se puede afirmar sin pantalla: con m_window nulo
-// ninguna de estas llamadas toca GLFW. La otra mitad -el glfwTerminate() dentro
-// del shutdown de UNA instancia- se arregla en el mismo commit pero no se puede
-// probar aqui: haria falta crear dos ventanas de verdad, y observar el fallo
-// (usar el handle de la segunda despues de terminar GLFW) es UB.
+// This is the only thing from H9 you can assert without a screen: with m_window
+// null none of these calls touch GLFW. The other half -the glfwTerminate() inside
+// the shutdown of ONE instance- is fixed in the same commit but cannot be tested
+// here: it would need to create two real windows, and observe the failure (using
+// the handle of the second after GLFW terminates) is UB.
 static void test_window_without_init_is_inert()
 {
-    Window w;   // sin init: m_window == nullptr
+    Window w;   // without init: m_window == nullptr
 
-    // Sin ventana, el bucle principal tiene que terminar.
+    // Without window, the main loop has to end.
     CHECK(w.shouldClose());
     CHECK(w.getNativeWindow() == nullptr);
 
-    // Y todo lo demas es no-op: si alguna de estas tocara GLFW con nullptr,
-    // saltaria su callback de error.
+    // And everything else is a no-op: if any of these touched GLFW with nullptr,
+    // its error callback would fire.
     w.show();
     w.pollEvents();
     w.shutdown();
-    w.shutdown();   // dos veces seguidas tambien
+    w.shutdown();   // twice in a row too
     CHECK(w.getNativeWindow() == nullptr);
     CHECK(w.shouldClose());
 }
 
-// H7 de docs/core-audit.md. El invariante "como mucho una camara por escena" lo
-// imponen fromJson (pruneExtraCameras) y cloneGameObject (el test de arriba),
-// pero insertFromJson -el camino del Undo de un Delete- no imponia NADA.
+// H7 of docs/core-audit.md. The invariant "at most one camera per scene" is
+// enforced by fromJson (pruneExtraCameras) and cloneGameObject (the test above),
+// but insertFromJson -the path of an Undo of a Delete- enforced NOTHING.
 //
-// El escenario es de uso normal, no rebuscado: borras la camara, pones otra, y
-// deshaces el borrado. Sin guarda quedan DOS, findCamera devuelve la primera en
-// preorden y Play usa esa, en silencio. Mismo patron que los ids duplicados: la
-// regla estaba en dos de los tres caminos que insertan nodos.
+// The scenario is normal usage, not contrived: you delete the camera, put another,
+// and undo the deletion. Without the guard there are TWO, findCamera returns the
+// first in preorder and Play uses that, silently. Same pattern as duplicate ids:
+// the rule was in two of the three paths that insert nodes.
 static void test_insert_from_json_discards_second_camera(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* original = scene.addGameObject("CamaraVieja");
     original->setCameraComponent(std::make_shared<CameraComponent>());
 
-    // El snapshot que guardaria DeleteGameObjectCommand, y el borrado.
+    // The snapshot that DeleteGameObjectCommand would save, and the deletion.
     const nlohmann::json snapshot = scene.subtreeToJson(original);
     scene.removeGameObject(original);
     CHECK(scene.findCamera() == nullptr);
 
-    // Entre el borrado y el undo, el usuario pone otra camara. Esta es la que
-    // esta viva cuando llega el Ctrl+Z.
+    // Between deletion and undo, the user puts another camera. This is the one that
+    // is live when Ctrl+Z arrives.
     GameObject* nueva = scene.addGameObject("CamaraNueva");
     nueva->setCameraComponent(std::make_shared<CameraComponent>());
 
@@ -969,9 +973,9 @@ static void test_insert_from_json_discards_second_camera(PhysicsManager& pm, Aud
     CHECK(reinsertado != nullptr);
     if (!reinsertado) return;
 
-    // El GameObject vuelve -eso es lo que el usuario pidio al deshacer- pero
-    // sin la camara: gana la que YA estaba viva, mismo criterio que la guarda
-    // de ids de esta misma funcion y que pruneExtraCameras.
+    // The GameObject returns -that is what the user asked for by undoing- but without
+    // the camera: the one that WAS already live wins, same criterion as the id guard
+    // in this same function and as pruneExtraCameras.
     CHECK(!reinsertado->hasCameraComponent());
     CHECK(nueva->hasCameraComponent());
     CHECK(scene.findCamera() == nueva);
@@ -980,7 +984,7 @@ static void test_insert_from_json_discards_second_camera(PhysicsManager& pm, Aud
     scene.traverse([&](GameObject* n) { if (n->hasCameraComponent()) ++camaras; });
     CHECK(camaras == 1);
 
-    // Con aviso: perder un componente al deshacer no puede ser mudo.
+    // With warning: losing a component on undo cannot be silent.
     bool aviso = false;
     for (const auto& w : scene.lastWarnings())
         if (w.find("camera") != std::string::npos || w.find("camera") != std::string::npos)
@@ -988,9 +992,9 @@ static void test_insert_from_json_discards_second_camera(PhysicsManager& pm, Aud
     CHECK(aviso);
 }
 
-// La otra cara, y la que evita que la guarda se pase de lista: si NO hay camara
-// viva, deshacer el borrado tiene que devolver la camara intacta. Una guarda que
-// descarte siempre pasaria el test de arriba y romperia el caso normal.
+// The other side, and the one that keeps the guard from being too cautious: if
+// there IS NO live camera, undoing the deletion has to return the camera intact.
+// A guard that always discarded would pass the test above and break the normal case.
 static void test_insert_from_json_keeps_camera_when_none_alive(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1008,9 +1012,9 @@ static void test_insert_from_json_keeps_camera_when_none_alive(PhysicsManager& p
     CHECK(scene.findCamera() == reinsertado);
 }
 
-// Mismo invariante, mismo agujero, otro componente: como mucho un AudioListener
-// por escena. Lo imponen el gate del popup Add y pruneExtraAudioListeners al
-// cargar; insertFromJson tampoco lo imponia.
+// Same invariant, same hole, another component: at most one AudioListener per
+// scene. They are enforced by the gate of the Add popup and pruneExtraAudioListeners
+// on load; insertFromJson did not enforce either.
 static void test_insert_from_json_discards_second_audio_listener(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1034,9 +1038,9 @@ static void test_insert_from_json_discards_second_audio_listener(PhysicsManager&
     CHECK(oyentes == 1);
 }
 
-// Clonar un GameObject con cámara NO puede dar dos cámaras. Su único caller es
-// Instantiate de Lua, que corre en Play: ningún gate de UI puede evitarlo, así
-// que la regla vive en Scene.
+// Cloning a GameObject with camera CANNOT give two cameras. Its only caller is
+// Lua's Instantiate, which runs in Play: no UI gate can prevent it, so
+// the rule lives in Scene.
 static void test_clone_never_keeps_camera(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1048,7 +1052,7 @@ static void test_clone_never_keeps_camera(PhysicsManager& pm, AudioManager& am)
     if (!clone) return;
     CHECK(!clone->hasCameraComponent());
     CHECK(!scene.lastWarnings().empty());
-    // El original conserva la suya y sigue siendo LA cámara de la escena.
+    // The original keeps its own and remains THE camera of the scene.
     CHECK(go->hasCameraComponent());
     CHECK(scene.findCamera() == go);
 
@@ -1057,8 +1061,8 @@ static void test_clone_never_keeps_camera(PhysicsManager& pm, AudioManager& am)
     CHECK(cameraCount == 1);
 }
 
-// La cámara puede estar en un descendiente del subárbol clonado, no solo en su
-// raíz.
+// The camera can be in a descendant of the cloned subtree, not just in its
+// root.
 static void test_clone_strips_camera_from_descendant(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1074,14 +1078,14 @@ static void test_clone_strips_camera_from_descendant(PhysicsManager& pm, AudioMa
     CHECK(cameraCount == 1);
 }
 
-// Un clon necesita id PROPIO. cloneGameObject serializa el origen con
-// nodeToJson (que emite "id") y lo reconstruye con nodeFromJson, que reusa ese
-// id a propósito: es justo lo que hace falta en el Undo de un Delete, para que
-// los comandos que quedan en el stack sigan resolviendo el objeto
-// reconstruido. Pero al clonar el ORIGINAL SIGUE VIVO, así que reusarlo deja
-// dos GameObjects con el mismo id y findById devuelve el último del recorrido:
-// el clon. Cualquier comando de undo resuelto por id (Transform, Rigidbody,
-// Audio Clip, Camera...) acabaría escribiendo en el objeto equivocado.
+// A clone needs its OWN id. cloneGameObject serializes the original with
+// nodeToJson (which emits "id") and rebuilds it with nodeFromJson, which reuses
+// that id on purpose: that is exactly what is needed in an Undo of a Delete, so
+// the commands left in the stack keep resolving the rebuilt object. But when
+// cloning the ORIGINAL IS STILL ALIVE, so reusing it leaves two GameObjects with
+// the same id and findById returns the last one in the traversal: the clone. Any
+// undo command resolved by id (Transform, Rigidbody, Audio Clip, Camera...) would
+// end up writing to the wrong object.
 static void test_clone_gets_fresh_id(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1093,14 +1097,14 @@ static void test_clone_gets_fresh_id(PhysicsManager& pm, AudioManager& am)
     if (!clone) return;
 
     CHECK(clone->id != originalId);
-    // Y el id del original tiene que seguir resolviendo AL ORIGINAL, que es lo
-    // que de verdad rompía: findById devolvía el clon.
+    // And the original's id has to keep resolving TO THE ORIGINAL, which is what
+    // really broke: findById returned the clone.
     CHECK(scene.findById(originalId) == go);
     CHECK(scene.findById(clone->id) == clone);
 }
 
-// Mismo invariante en un subárbol: los descendientes del clon también tienen
-// que estrenar id, no solo su raíz.
+// Same invariant in a subtree: the clone's descendants also have to get a new id,
+// not just its root.
 static void test_clone_subtree_gets_fresh_ids(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1115,29 +1119,28 @@ static void test_clone_subtree_gets_fresh_ids(PhysicsManager& pm, AudioManager& 
     CHECK(clone->children[0]->id != childId);
     CHECK(scene.findById(childId) == child);
 
-    // Ningún id repetido en toda la escena.
+    // No repeated id in the entire scene.
     std::vector<uint64_t> ids;
     scene.traverse([&](GameObject* n) { ids.push_back(n->id); });
     std::sort(ids.begin(), ids.end());
     CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 }
 
-// La contrapartida de los dos tests de arriba, y la razón de que el strip de
-// ids viva en cloneGameObject y NO en nodeFromJson: insertFromJson (el camino
-// del Undo de un Delete) tiene que SEGUIR reusando el id del snapshot. Ahí el
-// original ya no existe, así que no hay colisión posible, y conservarlo es lo
-// que permite que los comandos que quedan en el stack sigan resolviendo el
-// objeto reconstruido.
+// The counterpart of the two tests above, and the reason the id strip lives in
+// cloneGameObject and NOT in nodeFromJson: insertFromJson (the path of an Undo
+// of a Delete) has to KEEP reusing the snapshot's id. There the original no
+// longer exists, so there is no possible collision, and keeping it is what lets
+// the commands left in the stack keep resolving the rebuilt object.
 //
-// Sin este test, mover el strip a nodeFromJson —que parece la simplificación
-// obvia— rompería el undo en silencio: ningún otro test lo notaría.
+// Without this test, moving the strip to nodeFromJson —which looks like the
+// obvious simplification— would silently break undo: no other test would notice.
 static void test_undo_delete_keeps_original_id(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Borrado");
     const uint64_t originalId = go->id;
 
-    // Snapshot + borrado, que es lo que hace DeleteGameObjectCommand.
+    // Snapshot + deletion, which is what DeleteGameObjectCommand does.
     nlohmann::json snapshot = scene.subtreeToJson(go);
     scene.removeGameObject(go);
     CHECK(scene.findById(originalId) == nullptr);
@@ -1149,24 +1152,23 @@ static void test_undo_delete_keeps_original_id(PhysicsManager& pm, AudioManager&
     CHECK(scene.findById(originalId) == restored);
 }
 
-// Bug real reproducido en sesión de usuario: un snapshot de Undo/Redo puede
-// traer un id que YA está vivo en OTRA parte de la escena — por ejemplo si el
-// snapshot es de antes de una recarga que repartió ese mismo id a un objeto
-// nuevo (aquí se fuerza a mano, sin depender de una recarga real, escribiendo
-// el id de un objeto vivo dentro del snapshot de otro). Sin la guarda de
-// insertFromJson el árbol se queda con dos nodos con el mismo id y findById
-// resuelve el que menos tiempo lleva en el árbol — así fue como una textura
-// asignada a 'Plane' acabó aplicada a un personaje skinned reinsertado con el
-// id de 'Plane'.
+// Real bug reproduced in a user session: an Undo/Redo snapshot can bring an id
+// that is ALREADY alive in ANOTHER part of the scene — for example if the
+// snapshot is from before a reload that gave that same id to a new object (here
+// it is forced by hand, without depending on a real reload, by writing the id of
+// a live object inside another's snapshot). Without the insertFromJson guard the
+// tree ends up with two nodes with the same id and findById resolves the one that
+// has been in the tree the least time — this is how a texture assigned to 'Plane'
+// ended up applied to a skinned character reinserted with 'Plane's id.
 static void test_insert_from_json_reassigns_colliding_id(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* plane = scene.addGameObject("Plane");
     const uint64_t planeId = plane->id;
 
-    // Snapshot de OTRO objeto, con el id de 'Plane' encima a mano: es el
-    // mismo estado que dejaría un snapshot viejo del stack de Undo/Redo tras
-    // una recarga de escena que le hubiera dado ese id a 'Plane'.
+    // Snapshot of ANOTHER object, with 'Plane's id added by hand: it is the same
+    // state that an old snapshot from the Undo/Redo stack would leave after a scene
+    // reload that had given that id to 'Plane'.
     GameObject* victima = scene.addGameObject("Victima");
     nlohmann::json snapshot = scene.subtreeToJson(victima);
     snapshot["id"] = planeId;
@@ -1176,47 +1178,47 @@ static void test_insert_from_json_reassigns_colliding_id(PhysicsManager& pm, Aud
     CHECK(reinsertado != nullptr);
     if (!reinsertado) return;
 
-    // El reinsertado estrena id: no puede quedarse con el de 'Plane'.
+    // The reinserted one gets a new id: it cannot keep 'Plane's.
     CHECK(reinsertado->id != planeId);
 
-    // 'Plane' — el que YA estaba vivo — se queda con el suyo. Es el objeto
-    // que puede tener referencias más frescas apuntándole (la selección
-    // actual, un comando recién ejecutado) que el snapshot reinsertado.
+    // 'Plane' —the one that WAS already live— keeps its own. It is the object that
+    // may have fresher references pointing to it (the current selection, a just-
+    // executed command) than the reinserted snapshot.
     CHECK(scene.findById(planeId) == plane);
 
-    // Y queda aviso: la invariante estuvo a punto de romperse y el Log
-    // Console (que lee lastWarnings()) tiene que enterarse.
+    // And there is a warning: the invariant was almost broken and the Log Console
+    // (which reads lastWarnings()) has to find out.
     bool avisoEncontrado = false;
     for (const auto& w : scene.lastWarnings())
         if (w.find("was already in use") != std::string::npos) avisoEncontrado = true;
     CHECK(avisoEncontrado);
 
-    // Ningún id repetido en toda la escena.
+    // No repeated id in the entire scene.
     std::vector<uint64_t> ids;
     scene.traverse([&](GameObject* n) { ids.push_back(n->id); });
     std::sort(ids.begin(), ids.end());
     CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 }
 
-// La colisión del test de arriba es contra un objeto EXTERNO al subárbol
-// reinsertado. Este cubre la otra mitad: dos nodos del MISMO snapshot con el
-// mismo id ENTRE ELLOS, sin ningún objeto vivo externo de por medio — el
-// padre y su propio hijo. idsVivos se captura antes de insertar (vacío para
-// estos dos ids, porque los originales se borran) y se AMPLÍA con cada id ya
-// aceptado dentro del mismo recorrido del subárbol reinsertado; sin esa
-// ampliación (justo la línea que se sabotea para probarlo) el hijo se cuela
-// con el mismo id que su padre y nadie se entera.
-// REPRODUCCION del bug de test7: cargar una escena cuyo fichero trae DOS nodos
-// con el mismo id. insertFromJson (Undo/Redo) ya reasigna el que choca, pero
-// Scene::fromJson -el camino por el que se abre una escena de disco- reusa el id
-// del JSON tal cual y no comprueba nada.
+// The collision of the test above is against an object EXTERNAL to the
+// reinserted subtree. This covers the other half: two nodes of the SAME snapshot with the
+// same id BETWEEN THEM, with no external live object in between — the
+// parent and its own child. idsVivos is captured before inserting (empty for
+// these two ids, because the originals are deleted) and EXPANDED with each id already
+// accepted inside the same traversal of the reinserted subtree; without that
+// expansion (exactly the line sabotaged to prove it) the child sneaks in
+// with the same id as its parent and no one finds out.
+// REPRODUCTION of the bug from test7: load a scene whose file brings TWO nodes
+// with the same id. insertFromJson (Undo/Redo) already reassigns the one that clashes, but
+// Scene::fromJson — the path by which a scene is opened from disk — reuses the id
+// from the JSON as is and checks nothing.
 //
-// El dano no es que haya dos ids iguales, es que TODO el editor resuelve por id:
-// findById devuelve el primero en preorden, asi que arrastrar el gizmo del
-// SEGUNDO objeto escribe su matriz -posicion, rotacion Y ESCALA- en el PRIMERO.
-// Con un personaje escalado como los trae un FBX, el otro objeto pega un salto
-// de tamano. Esa es la comprobacion de abajo, y es exactamente lo que se ve en
-// pantalla.
+// The damage is not that there are two equal ids, it is that EVERYTHING the editor resolves by id:
+// findById returns the first in pre-order, so dragging the gizmo of the
+// SECOND object writes its matrix — position, rotation AND SCALE — to the FIRST one.
+// With a character scaled like FBX brings them, the other object jumps a
+// size jump. That is the check below, and it is exactly what you see on
+// screen.
 static void test_scene_load_reassigns_duplicate_ids(PhysicsManager& pm, AudioManager& am)
 {
     Scene origen("Test");
@@ -1231,30 +1233,30 @@ static void test_scene_load_reassigns_duplicate_ids(PhysicsManager& pm, AudioMan
     nlohmann::json& hijos = j["root"]["children"];
     CHECK(hijos.size() == 2);
     if (hijos.size() != 2) return;
-    // La colision, escrita en el fichero: el personaje llega con el id del
-    // plano. Es lo que deja en disco cualquier bug de ids anterior al arreglo,
-    // y una vez guardado se reproduce en cada carga.
+    // The collision, written in the file: the character arrives with the id of the
+    // plane. That is what any id bug before the fix leaves on disk,
+    // and once saved it reproduces on every load.
     hijos[1]["id"] = hijos[0]["id"];
 
     Scene cargada("Vacia");
     CHECK(cargada.fromJson(j, pm, am));
 
-    // 1. La invariante: ningun id repetido tras cargar.
+    // 1. The invariant: no id repeated after loading.
     std::vector<uint64_t> ids;
     cargada.traverse([&](GameObject* n) { ids.push_back(n->id); });
     std::sort(ids.begin(), ids.end());
     CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 
-    // 2. Y con aviso: sin el, el usuario no tiene forma de saber que su fichero
-    //    venia roto (mismo criterio que insertFromJson).
+    // 2. And with warning: without it, the user has no way to know that their file
+    //    came broken (same criterion as insertFromJson).
     bool aviso = false;
     for (const auto& w : cargada.lastWarnings())
         if (w.find("was already in use") != std::string::npos) aviso = true;
     CHECK(aviso);
 
-    // 3. La consecuencia visible: mover el personaje NO puede tocar al plano.
-    //    Se resuelve por id igual que hacen el gizmo (applyLocalTransform) y el
-    //    panel, y se comprueba que la escala del plano sigue siendo la suya.
+    // 3. The visible consequence: moving the character CANNOT touch the plane.
+    //    It is resolved by id just like the gizmo (applyLocalTransform) and the
+    //    panel do, and it is checked that the plane's scale stays its own.
     GameObject* planoCargado = nullptr;
     GameObject* pjCargado    = nullptr;
     cargada.traverse([&](GameObject* n) {
@@ -1269,7 +1271,7 @@ static void test_scene_load_reassigns_duplicate_ids(PhysicsManager& pm, AudioMan
     applyLocalTransform(cargada, pjCargado->id, movido);
 
     CHECK(pjCargado->localTransform == movido);
-    // La escala del plano intacta: [0][0] valia 1 y no puede pasar a 100.
+    // The scale of the plane intact: [0][0] was 1 and cannot become 100.
     CHECK(planoCargado->localTransform[0][0] == 1.0f);
 }
 
@@ -1282,13 +1284,13 @@ static void test_insert_from_json_reassigns_id_colliding_within_same_subtree(Phy
     nlohmann::json snapshot = scene.subtreeToJson(padre);
     CHECK(snapshot.contains("children") && snapshot["children"].size() == 1);
     if (!snapshot.contains("children") || snapshot["children"].size() != 1) return;
-    // El hijo se queda con el id del padre, a mano, DENTRO del propio
-    // snapshot — nada externo participa en esta colisión.
+    // The child gets the id of the parent, by hand, INSIDE the
+    // snapshot itself — nothing external participates in this collision.
     snapshot["children"][0]["id"] = snapshot["id"];
 
-    // Los originales desaparecen: la única colisión posible tras esto es la
-    // interna que se acaba de forzar, no una contra un objeto vivo de fuera
-    // (eso ya lo prueba test_insert_from_json_reassigns_colliding_id).
+    // The originals disappear: the only collision possible after this is the
+    // internal one just forced, not one against a live object from outside
+    // (that is already tested by test_insert_from_json_reassigns_colliding_id).
     scene.removeGameObject(padre);
 
     GameObject* reinsertado = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
@@ -1305,18 +1307,18 @@ static void test_insert_from_json_reassigns_id_colliding_within_same_subtree(Phy
         if (w.find("was already in use") != std::string::npos) avisoEncontrado = true;
     CHECK(avisoEncontrado);
 
-    // Ningún id repetido en toda la escena, por si acaso: el objetivo final
-    // es exactamente esa invariante.
+    // No id repeated in the whole scene, just in case: the final goal
+    // is exactly that invariant.
     std::vector<uint64_t> ids;
     scene.traverse([&](GameObject* n) { ids.push_back(n->id); });
     std::sort(ids.begin(), ids.end());
     CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 }
 
-// findById con un id único no cambia de comportamiento tras pasar a "gana el
-// primero": sigue devolviendo ESE objeto. El cambio de determinismo solo
-// importa cuando hay más de un nodo con el mismo id (invariante ya rota),
-// que es el caso del test de arriba y del de abajo.
+// findById with a unique id does not change behavior after switching to "the first wins":
+// it still returns THAT object. The determinism change only
+// matters when there is more than one node with the same id (invariant already broken),
+// which is the case of the test above and the one below.
 static void test_find_by_id_unique_id_still_resolves()
 {
     Scene scene("Test");
@@ -1327,48 +1329,48 @@ static void test_find_by_id_unique_id_still_resolves()
     CHECK(scene.findById(a->id) == a);
     CHECK(scene.findById(b->id) == b);
     CHECK(scene.findById(c->id) == c);
-    CHECK(scene.findById(0) == nullptr); // el contador empieza en 1; 0 no se reparte nunca
+    CHECK(scene.findById(0) == nullptr); // the counter starts at 1; 0 is never distributed
 }
 
-// El caso que reprodujo el usuario, a nivel de datos: dos objetos vivos con
-// el MISMO id (el estado que insertFromJson ya no debería dejar aparecer,
-// pero se fuerza a mano para probar el efecto de raíz, con independencia de
-// cómo se llegue a él). Con findById determinista (gana el primero en
-// pre-orden) escribir "por id" —como hace PropertiesPanel al aplicar una
-// textura sobre la selección— cae SIEMPRE sobre el mismo objeto y NUNCA sobre
-// el otro. Antes (ganaba el último del recorrido) dependía del orden de
-// inserción, que es justo lo que hizo que la textura de 'Plane' acabara en
-// el personaje skinned insertado después.
+// The case the user reported, at the data level: two live objects with
+// the SAME id (the state that insertFromJson should no longer let appear,
+// but is forced by hand to test the effect of the root, regardless of
+// how you get to it). With deterministic findById (the first in
+// pre-order wins) writing "by id" — as PropertiesPanel does when applying a
+// texture on the selection — always falls on the same object and NEVER on
+// the other. Before (the last in traversal won) it depended on insertion order,
+// which is exactly what caused the 'Plane' texture to end up on
+// the skinned character inserted after.
 static void test_find_by_id_duplicate_writes_only_first_never_the_other()
 {
     Scene scene("Test");
     GameObject* plane   = scene.addGameObject("Plane");
     GameObject* skinned = scene.addGameObject("GameObject");
-    skinned->id = plane->id; // fuerza el duplicado del diagnóstico del usuario
+    skinned->id = plane->id; // forces the duplicate of the user's diagnosis
 
-    // "Asignar una textura" simplificado a nivel de datos: escribir un campo
-    // resuelto por id, como el ownerId de la selección en PropertiesPanel.
+    // "Assign a texture" simplified at the data level: write a field
+    // resolved by id, like the ownerId of the selection in PropertiesPanel.
     GameObject* resuelto = scene.findById(plane->id);
-    CHECK(resuelto == plane); // el primero en pre-orden, nunca "GameObject"
+    CHECK(resuelto == plane); // the first in pre-order, never "GameObject"
     resuelto->name = "Plane (con textura)";
 
     CHECK(plane->name == "Plane (con textura)");
-    CHECK(skinned->name == "GameObject"); // el otro NO se toca
+    CHECK(skinned->name == "GameObject"); // the other does NOT get touched
 }
 
-// ── Ctrl+D del editor: duplicar el GameObject seleccionado ──────────────────
+// ── Ctrl+D of the editor: duplicate the selected GameObject ──────────────────
 //
-// El sujeto de prueba es `duplicateAsSibling` (Command.cpp), que es el seam:
-// EditorUI solo mira el gate del atajo (nada en Play, nada con foco de texto,
-// nada sin selección), llama aquí y apila un CreateGameObjectCommand con el
-// snapshot del clon. Lo que NO se puede probar aquí es la parte de GPU
-// (registerGameObject) ni el propio comando ejecutándose: construirlo exige un
-// EditorRenderer, que son 73 virtuales puras — el mismo motivo por el que
-// test_remove_notifies_listener se queda en el mecanismo. Aquí se prueban la
-// colocación, los ids y el round-trip del snapshot del que dependen undo/redo.
+// The subject of the test is `duplicateAsSibling` (Command.cpp), which is the seam:
+// EditorUI only looks at the gate of the shortcut (nothing in Play, nothing with text focus,
+// nothing without selection), calls here and stacks a CreateGameObjectCommand with the
+// clone's snapshot. What CANNOT be tested here is the GPU part
+// (registerGameObject) nor the command itself executing: building it requires an
+// EditorRenderer, which is 73 pure virtuals — the same reason
+// test_remove_notifies_listener stays at the mechanism. Here the
+// placement, ids and the round-trip of the snapshot that undo/redo depend on are tested.
 
-// El duplicado es HERMANO del original, no hijo suyo. Si lo fuera, cada Ctrl+D
-// anidaría un nivel más y el original cambiaría de forma al duplicarlo.
+// The duplicate is a SIBLING of the original, not its child. If it were, each Ctrl+D
+// would nest one level deeper and the original would change shape when duplicated.
 static void test_duplicate_is_sibling_not_child(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1383,7 +1385,7 @@ static void test_duplicate_is_sibling_not_child(PhysicsManager& pm, AudioManager
     CHECK(clone->parent == original->parent);
     CHECK(clone->parent == padre);
     CHECK(clone != original);
-    // Y el original no ha ganado un hijo por el camino.
+    // And the original has not gained a child along the way.
     CHECK(original->children.size() == hijosAntes);
     bool cloneCuelgaDelOriginal = false;
     original->traverse([&](GameObject* n) { if (n == clone) cloneCuelgaDelOriginal = true; });
@@ -1391,8 +1393,8 @@ static void test_duplicate_is_sibling_not_child(PhysicsManager& pm, AudioManager
     CHECK(padre->children.size() == 2);
 }
 
-// Review Focus 3: los hijos se crean con las mallas dadas, sin leer disco (el
-// sourcePath no existe), cada uno con SU pieza, nombre y transformacion.
+// Review Focus 3: children are created with the given meshes, without reading disk (the
+// sourcePath does not exist), each one with ITS piece, name and transform.
 static void test_insert_model_pieces_uses_the_given_meshes(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1403,7 +1405,7 @@ static void test_insert_model_pieces_uses_the_given_meshes(PhysicsManager& pm, A
     std::vector<ModelPiece> pieces(3);
     pieces[0] = { 0, "A", glm::translate(glm::mat4(1.0f), glm::vec3(5, 0, 0)) };
     pieces[1] = { 1, "B", glm::scale(glm::mat4(1.0f), glm::vec3(2.0f)) };
-    pieces[2] = { 0, "C", glm::mat4(std::numeric_limits<float>::quiet_NaN()) };   // no finita
+    pieces[2] = { 0, "C", glm::mat4(std::numeric_limits<float>::quiet_NaN()) };   // not finite
     std::vector<std::string> warnings;
     const std::vector<GameObject*> kids =
         insertModelPieces(scene, casa, src, pieces, { m0, m1 }, pm, am, &warnings);
@@ -1414,29 +1416,29 @@ static void test_insert_model_pieces_uses_the_given_meshes(PhysicsManager& pm, A
     CHECK(kids[0]->name == "A" && kids[0]->hasMesh() && kids[0]->getMesh()->name == "triA");
     CHECK(kids[1]->name == "B" && kids[1]->hasMesh() && kids[1]->getMesh()->piece == 1);
     CHECK(kids[0]->localTransform[3].x == 5.0f);
-    CHECK(kids[2]->localTransform == glm::mat4(1.0f));   // la no finita pasa a identidad
+    CHECK(kids[2]->localTransform == glm::mat4(1.0f));   // the non-finite becomes identity
     CHECK(warnings.size() == 1);
 }
 
-// Fix de revisión (task-4): Scene::insertFromJson sembraba hasBonesCache con la
-// CLAVE de PreloadedMeshCache (meshCacheKey, que para una pieza != 0 lleva
-// "#piece=N") en vez del sourcePath REAL de la malla (mesh->sourcePath), que es
-// por lo que nodeFromJson consulta esa cache. Con la clave equivocada, cada
-// hijo de pieza != 0 fallaba la consulta y volvía a sondear el fichero con
-// ModelLoader::hasBones -un ReadFile síncrono de Assimp en el hilo principal-,
-// justo lo que preloaded existe para evitar (insertModelPieces, su redo vía
-// CreateGameObjectCommand::execute, y el undo de Delete de esos hijos).
+// Review fix (task-4): Scene::insertFromJson seeded hasBonesCache with the
+// KEY of PreloadedMeshCache (meshCacheKey, which for a piece != 0 carries
+// "#piece=N") instead of the REAL sourcePath of the mesh (mesh->sourcePath), which is
+// why nodeFromJson queries that cache. With the wrong key, each
+// child of piece != 0 failed the query and went back to probing the file with
+// ModelLoader::hasBones — a synchronous ReadFile of Assimp on the main thread —,
+// exactly what preloaded exists to avoid (insertModelPieces, its redo via
+// CreateGameObjectCommand::execute, and the undo of Delete of those children).
 //
-// Se usa un FBX RIGGED de verdad (modelAnimation.fbx, hasBones == true, mismo
-// fichero que usa animator_tests.cpp) con una malla ESTÁTICA falsa en la
-// cache: sin el fix, hasBones(sourcePath) vuelve a sondear el fichero, ve que
-// SÍ declara huesos, el nodo toma la rama skinned y jamás llega a mirar la
-// malla estática de la cache -que es lo que este test comprueba por nombre.
+// A truly RIGGED FBX is used (modelAnimation.fbx, hasBones == true, same
+// file that animator_tests.cpp uses) with a fake STATIC mesh in the
+// cache: without the fix, hasBones(sourcePath) goes back to probing the file, sees that
+// it DOES declare bones, the node takes the skinned branch and never gets to look at the
+// static mesh from the cache — which is what this test checks by name.
 static void test_insert_from_json_uses_cached_mesh_for_rigged_source_without_probing(PhysicsManager& pm,
                                                                                       AudioManager& am)
 {
     const std::string src = "assets/modelAnimation.fbx";
-    CHECK(ModelLoader::hasBones(src));   // si esto falla, el fichero cambió o no es el sitio
+    CHECK(ModelLoader::hasBones(src));   // if this fails, the file changed or it is not the right place
 
     Scene scene("Test");
     GameObject* casa = scene.addGameObject("Casa");
@@ -1455,12 +1457,12 @@ static void test_insert_from_json_uses_cached_mesh_for_rigged_source_without_pro
     if (kids.size() != 1) return;
     CHECK(kids[0]->hasMesh());
     if (!kids[0]->hasMesh()) return;
-    CHECK(kids[0]->getMesh()->name == "piezaFalsaEstatica");   // vino de la cache, no de disco
-    CHECK(!kids[0]->isSkinned());                              // no tomó la rama skinned
+    CHECK(kids[0]->getMesh()->name == "piezaFalsaEstatica");   // came from the cache, not from disk
+    CHECK(!kids[0]->isSkinned());                              // did not take the skinned branch
 }
 
-// Un objeto colgado directamente del root de la escena también sale hermano:
-// su padre es el root, no nullptr.
+// An object hung directly from the scene root also comes out as a sibling:
+// its parent is the root, not nullptr.
 static void test_duplicate_of_root_child_is_sibling(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1472,8 +1474,8 @@ static void test_duplicate_of_root_child_is_sibling(PhysicsManager& pm, AudioMan
     CHECK(clone->parent == original->parent);
 }
 
-// El root de la escena no se duplica (no tiene hermanos posibles). Es el mismo
-// gate que ScenePanel usa para Supr/F2.
+// The scene root does not duplicate (it has no possible siblings). It is the same
+// gate that ScenePanel uses for Delete/F2.
 static void test_duplicate_rejects_scene_root(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1481,9 +1483,9 @@ static void test_duplicate_rejects_scene_root(PhysicsManager& pm, AudioManager& 
     CHECK(duplicateAsSibling(scene, &scene.getRoot(), pm, am) == nullptr);
 }
 
-// Los hijos se copian recursivamente y con ids DISTINTOS de los del original.
-// Sin esto findById devuelve el último del recorrido —el clon— y los comandos
-// del stack resueltos por id escriben en el objeto equivocado.
+// Children are copied recursively and with ids DIFFERENT from the original's.
+// Without this findById returns the last in traversal — the clone — and the
+// commands on the stack resolved by id write to the wrong object.
 static void test_duplicate_subtree_has_unique_ids(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1496,7 +1498,7 @@ static void test_duplicate_subtree_has_unique_ids(PhysicsManager& pm, AudioManag
     CHECK(clone != nullptr);
     if (!clone) return;
 
-    // Jerarquía copiada entera, no solo la raíz.
+    // Hierarchy copied entirely, not just the root.
     CHECK(clone->children.size() == 1);
     if (clone->children.empty()) return;
     GameObject* hijoClon = clone->children[0].get();
@@ -1505,22 +1507,22 @@ static void test_duplicate_subtree_has_unique_ids(PhysicsManager& pm, AudioManag
     GameObject* nietoClon = hijoClon->children[0].get();
     CHECK(nietoClon->localTransform == nieto->localTransform);
 
-    // Ningún id repetido en TODA la escena, no solo entre las dos raíces.
+    // No id repeated in the ENTIRE scene, not just between the two roots.
     std::vector<uint64_t> ids;
     scene.traverse([&](GameObject* n) { ids.push_back(n->id); });
     std::sort(ids.begin(), ids.end());
     CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 
-    // Y los ids del original siguen resolviendo AL original.
+    // And the ids of the original still resolve TO the original.
     CHECK(scene.findById(hijo->id) == hijo);
     CHECK(scene.findById(nieto->id) == nieto);
 }
 
-// Undo/redo del duplicado. Se replica lo que hacen CreateGameObjectCommand::
-// undo() y ::execute() con la misma pareja (parentId, index) que calcula
-// EditorUI::duplicateSelection — el comando en sí no se puede instanciar sin
-// EditorRenderer, así que lo que se prueba es el mecanismo del que depende:
-// que el snapshot del clon baste para borrarlo y reconstruirlo entero.
+// Undo/redo of the duplicate. It replicates what CreateGameObjectCommand::
+// undo() and ::execute() do with the same pair (parentId, index) that
+// EditorUI::duplicateSelection calculates — the command itself cannot be instantiated without
+// EditorRenderer, so what is tested is the mechanism it depends on:
+// that the clone's snapshot is enough to delete it and rebuild it entirely.
 static void test_duplicate_undo_redo_restores_object_count(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1537,10 +1539,10 @@ static void test_duplicate_undo_redo_restores_object_count(PhysicsManager& pm, A
     GameObject* clone = duplicateAsSibling(scene, original, pm, am);
     CHECK(clone != nullptr);
     if (!clone) return;
-    // Original (2 nodos) + clon (2 nodos).
+    // Original (2 nodes) + clone (2 nodes).
     CHECK(contarObjetos() == antes + 2);
 
-    // Lo que apila EditorUI::duplicateSelection.
+    // What EditorUI::duplicateSelection stacks.
     GameObject* parent      = clone->parent;
     const uint64_t parentId = parent->id;
     const size_t index      = parent->children.size() - 1;
@@ -1551,7 +1553,7 @@ static void test_duplicate_undo_redo_restores_object_count(PhysicsManager& pm, A
     scene.removeGameObject(scene.findById(cloneId));
     CHECK(contarObjetos() == antes);
     CHECK(scene.findById(cloneId) == nullptr);
-    // El original sobrevive al undo del duplicado.
+    // The original survives the undo of the duplicate.
     CHECK(scene.findById(original->id) != nullptr);
 
     // Redo.
@@ -1561,37 +1563,36 @@ static void test_duplicate_undo_redo_restores_object_count(PhysicsManager& pm, A
     CHECK(contarObjetos() == antes + 2);
     CHECK(rehecho->parent == parent);
     CHECK(rehecho->children.size() == 1);
-    // El redo reusa el id del snapshot a propósito (ver
-    // test_undo_delete_keeps_original_id): sigue sin chocar con el original.
+    // Redo reuses the snapshot's id on purpose (see test_undo_delete_keeps_original_id):
+    // it still does not collide with the original.
     CHECK(rehecho->id == cloneId);
     CHECK(scene.findById(original->id) == original);
 }
 
-// La contrapartida de los tres de arriba, por el camino que NO tenían cubierto:
-// CARGAR una escena. nodeFromJson reusa el id que trae el fichero (y hace bien,
-// ver el test de arriba), pero el contador global de ids —que vive en
-// GameObject.cpp y solo lo mueve el constructor— no se entera. Un fichero
-// guardado en OTRA sesión trae ids más altos que los que este proceso ha
-// repartido, así que tras cargarlo el contador se queda POR DETRÁS de ids que
-// ya viven en el árbol, y el siguiente GameObject que cree el usuario estrena
-// uno repetido.
+// The counterpart of the three above, along the path that was NOT covered:
+// LOADING a scene. nodeFromJson reuses the id that the file brings (and does
+// right, see the test above), but the global id counter —which lives in
+// GameObject.cpp and only the constructor moves— does not find out. A file
+// saved in ANOTHER session brings ids higher than what this process has
+// distributed, so after loading it the counter stays BEHIND ids that already
+// live in the tree, and the next GameObject the user creates gets a repeated one.
 //
-// A partir de ahí es el mismo fallo que el del clon: findById se queda con el
-// ÚLTIMO del recorrido, y los 31 sitios de Command.cpp que resuelven su
-// objetivo por id acaban escribiendo en el objeto equivocado, sin decir nada.
+// From there on it is the same failure as the clone's: findById gets the LAST
+// one in the traversal, and the 31 places in Command.cpp that resolve their
+// target by id end up writing to the wrong object, without saying anything.
 //
-// La sonda de abajo es lo que hace el test determinista sin depender del orden
-// en que se ejecuten los demás: el id de un GameObject recién construido dice
-// por dónde va el contador AHORA, y el fichero se fabrica con uno bastante por
-// delante para que el bucle de altas lo alcance con margen.
+// The probe below is what makes the test deterministic without depending on the
+// order the others run in: a just-created GameObject's id says where the counter
+// is NOW, and the file is made with one ahead enough that the batch of high ids
+// reaches it with margin.
 static void test_load_advances_id_counter(PhysicsManager& pm, AudioManager& am)
 {
     GameObject sonda("sonda");
     const uint64_t idDelFichero = sonda.id + 20;
 
-    // Escena de origen serializada con la API real (no un JSON a mano): así el
-    // nodo trae localTransform, ssr y children bien formados y lo único
-    // artificial es el id, que es justo lo que se está probando.
+    // Source scene serialized with the real API (not hand-written JSON): so the node
+    // brings localTransform, ssr and children well-formed and the only artificial
+    // thing is the id, which is exactly what is being tested.
     Scene origen("Origen");
     GameObject* nodo = origen.addGameObject("Cargado");
     CHECK(nodo != nullptr);
@@ -1604,8 +1605,8 @@ static void test_load_advances_id_counter(PhysicsManager& pm, AudioManager& am)
     CHECK(cargado != nullptr);
     if (!cargado) return;
 
-    // Altas nuevas suficientes para rebasar el id del fichero. Si la carga no
-    // adelantó el contador, una de ellas lo repite.
+    // New additions enough to surpass the file's id. If the load did not advance the
+    // counter, one of them repeats it.
     for (int i = 0; i < 30; ++i)
         CHECK(scene.addGameObject("Nuevo") != nullptr);
 
@@ -1614,24 +1615,23 @@ static void test_load_advances_id_counter(PhysicsManager& pm, AudioManager& am)
     std::sort(ids.begin(), ids.end());
     CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 
-    // Y el id del fichero tiene que seguir resolviendo al nodo CARGADO, no a un
-    // objeto nuevo que se lo haya llevado por delante.
+    // And the file's id has to keep resolving to the LOADED node, not to a new
+    // object that took its place.
     CHECK(scene.findById(idDelFichero) == cargado);
 }
 
-// El Add/Remove de cámara pasa por el stack de Undo (a diferencia de los Add de
-// collider/Rigidbody): si no, un Undo de Delete podría resucitar una cámara
-// borrada estando ya otra en escena. Ver spec, "The One-Camera Invariant".
+// Camera Add/Remove goes through the Undo stack (unlike collider/Rigidbody Add):
+// if not, an Undo of a Delete could resurrect a deleted camera while another
+// is in the scene. See spec, "The One-Camera Invariant".
 static void test_camera_command_add_undo_redo()
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Objetivo");
 
-    // near > el far por defecto (2000) a propósito: apply() tiene que llamar a
-    // setFar ANTES que a setNear (setNear clampa contra el far ACTUAL). Con
-    // valores pequeños los dos órdenes dan el mismo resultado y la regresión
-    // pasaría desapercibida; con near=3000 el orden inverso lo truncaría a
-    // 1999.999 y este test cae.
+    // near > the default far (2000) on purpose: apply() has to call setFar BEFORE
+    // setNear (setNear clamps against the current far). With small values both
+    // orders give the same result and the regression would go unnoticed; with
+    // near=3000 the reverse order would truncate it to 1999.999 and this test fails.
     CameraState st{ CameraComponent::ProjectionMode::Orthographic, 60.0f, 300.0f, 3000.0f, 8000.0f };
     CameraComponentCommand cmd(scene, "Add Camera", go->id, /*add=*/true, st);
 
@@ -1643,7 +1643,7 @@ static void test_camera_command_add_undo_redo()
     CHECK(!go->hasCameraComponent());
     CHECK(scene.findCamera() == nullptr);
 
-    // Redo: los valores del state se conservan, no vuelve a los defaults.
+    // Redo: the state values are kept, it does not go back to defaults.
     cmd.execute();
     CHECK(go->hasCameraComponent());
     const auto& c = go->getCameraComponent();
@@ -1654,7 +1654,7 @@ static void test_camera_command_add_undo_redo()
     CHECK(nearlyEqual(c->getFar(), 8000.0f));
 }
 
-// add=false invierte el sentido: execute quita, undo devuelve.
+// add=false reverses the sense: execute removes, undo returns.
 static void test_camera_command_remove()
 {
     Scene scene("Test");
@@ -1670,8 +1670,8 @@ static void test_camera_command_remove()
     CHECK(go->hasCameraComponent());
 }
 
-// El comando resuelve el GameObject por id en cada execute()/undo(), nunca
-// guarda un puntero crudo: sobrevive a que el objeto se reconstruya entretanto.
+// The command resolves the GameObject by id in each execute()/undo(), never
+// stores a raw pointer: it survives the object being rebuilt in between.
 static void test_camera_command_survives_missing_target()
 {
     Scene scene("Test");
@@ -1681,13 +1681,13 @@ static void test_camera_command_survives_missing_target()
     CameraComponentCommand cmd(scene, "Add Camera", id, /*add=*/true, st);
 
     scene.removeGameObject(go);
-    cmd.execute(); // no debe crashear: findById devuelve nullptr y sale
+    cmd.execute(); // must not crash: findById returns nullptr and returns
     CHECK(scene.findCamera() == nullptr);
 }
 
 // ── Canvas ──────────────────────────────────────────────────────────────────
-// Los 10 campos con valores NO neutros y DISTINTOS entre sí: un default no
-// prueba que nadie los haya leído ni escrito.
+// The 10 fields with values NOT neutral and DISTINCT among themselves: a default
+// does not prove that anyone read or wrote them.
 static void fillCanvas(CanvasComponent& c)
 {
     c.scaleMode           = UiScaleMode::ConstantPhysicalSize;
@@ -1740,8 +1740,8 @@ static void test_canvas_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Los cuatro campos nuevos del Canvas, con valores NO neutros y distintos entre
-// sí: con los defaults, un fromJson que se saltara el campo pasaría igual.
+// The four new Canvas fields, with values NOT neutral and distinct among
+// themselves: with defaults, a fromJson that skipped the field would pass the same.
 static void test_canvas_world_fields_round_trip(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1766,8 +1766,8 @@ static void test_canvas_world_fields_round_trip(PhysicsManager& pm, AudioManager
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Una escena guardada antes de estos campos carga con los defaults y sin avisos:
-// bloque aditivo, misma regla que todos los componentes de UI.
+// A scene saved before these fields loads with defaults and no warnings:
+// additive block, same rule as all UI components.
 static void test_canvas_without_world_fields_loads_with_defaults(PhysicsManager& pm,
                                                                   AudioManager& am)
 {
@@ -1775,7 +1775,7 @@ static void test_canvas_without_world_fields_loads_with_defaults(PhysicsManager&
     GameObject* go = scene.addGameObject("Viejo");
     go->setCanvas(std::make_shared<CanvasComponent>());
     nlohmann::json j = scene.toJson();
-    // Se borran las claves nuevas para simular una escena antigua.
+    // The new keys are deleted to simulate an old scene.
     for (auto& n : j["root"]["children"])
         if (n.contains("canvas"))
             for (const char* k : { "renderMode", "worldScale", "billboard", "depthTest" })
@@ -1794,7 +1794,7 @@ static void test_canvas_without_world_fields_loads_with_defaults(PhysicsManager&
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Una escena guardada antes del componente carga igual: sin Canvas y sin avisos.
+// A scene saved before the component loads the same: no Canvas and no warnings.
 static void test_scene_without_canvas_block_still_loads(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -1807,8 +1807,8 @@ static void test_scene_without_canvas_block_still_loads(PhysicsManager& pm, Audi
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Neutralidad: sin ningún Canvas el JSON no gana ni un byte, y añadir y quitar
-// el componente devuelve el dump EXACTO de partida.
+// Neutrality: without any Canvas the JSON gains not a byte, and adding and
+// removing the component returns the exact SAME dump at the start.
 static void test_scene_without_canvas_serializes_identically()
 {
     Scene scene("Test");
@@ -1822,7 +1822,7 @@ static void test_scene_without_canvas_serializes_identically()
     CHECK(scene.toJson().dump() == antes);
 }
 
-// El gate de los componentes de UI: un GameObject solo los ofrece con Canvas.
+// The gate of UI components: a GameObject only offers them with a Canvas.
 static void test_ui_components_need_canvas()
 {
     Scene scene("Test");
@@ -1835,7 +1835,7 @@ static void test_ui_components_need_canvas()
     CHECK(!PropertiesPanel::uiComponentsAvailable(nullptr));
 }
 
-// Add reversible, y el redo NO devuelve los campos a los defaults.
+// Add reversible, and redo does NOT return fields to defaults.
 static void test_canvas_command_add_undo_redo()
 {
     Scene scene("Test");
@@ -1855,7 +1855,7 @@ static void test_canvas_command_add_undo_redo()
     checkCanvasMatchesFilled(*go->getCanvas());
 }
 
-// Remove reversible: el undo devuelve el componente CON sus valores.
+// Remove reversible: undo returns the component WITH its values.
 static void test_canvas_command_remove()
 {
     Scene scene("Test");
@@ -1872,9 +1872,9 @@ static void test_canvas_command_remove()
     checkCanvasMatchesFilled(*go->getCanvas());
 }
 
-// Editar un campo del Canvas también entra en el stack: el mismo
-// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero) va y
-// vuelve, y no revive el componente si ya no está.
+// Editing a Canvas field also goes into the stack: the same PropertyCommand<T>
+// that builds the section (resolved by id, not by pointer) goes and comes, and
+// does not resurrect the component if it no longer exists.
 static void test_canvas_property_command_undo_redo()
 {
     Scene scene("Test");
@@ -1896,16 +1896,16 @@ static void test_canvas_property_command_undo_redo()
     cmd.execute();
     CHECK(nearlyEqual(go->getCanvas()->aspectRatio, 1.6f));
 
-    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    // Without component the applier does nothing (neither crashes nor resurrects).
     go->setCanvas(nullptr);
     cmd.undo();
     CHECK(!go->hasCanvas());
 }
 
 // ── Button ──────────────────────────────────────────────────────────────────
-// TODOS los campos con valores NO neutros y DISTINTOS entre sí (colores,
-// rutas, tamaños): un default no prueba que nadie los haya leído ni escrito, y
-// dos campos con el MISMO valor no detectan que se hayan cruzado.
+// ALL fields with values NOT neutral and DISTINCT among themselves (colors,
+// paths, sizes): a default does not prove anyone read or wrote them, and two
+// fields with the SAME value do not detect that they were swapped.
 static void fillButton(ButtonComponent& b)
 {
     b.anchorMin = glm::vec2(0.125f, 0.25f);
@@ -2017,7 +2017,7 @@ static void test_button_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Una escena guardada antes del componente carga igual: sin Button y sin avisos.
+// A scene saved before the component loads the same: no Button and no warnings.
 static void test_scene_without_button_block_still_loads(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -2033,8 +2033,8 @@ static void test_scene_without_button_block_still_loads(PhysicsManager& pm, Audi
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Neutralidad: sin ningún Button el JSON no gana ni un byte, y añadir y quitar
-// el componente devuelve el dump EXACTO de partida.
+// Neutrality: without any Button the JSON gains not a byte, and adding and
+// removing the component returns the exact SAME dump at the start.
 static void test_scene_without_button_serializes_identically()
 {
     Scene scene("Test");
@@ -2048,8 +2048,8 @@ static void test_scene_without_button_serializes_identically()
     CHECK(scene.toJson().dump() == antes);
 }
 
-// El gate también vale para un DESCENDIENTE del Canvas: un botón cuelga del
-// canvas, no es el canvas.
+// The gate also works for a DESCENDANT of Canvas: a button hangs from the
+// canvas, it is not the canvas.
 static void test_ui_components_available_for_descendants()
 {
     Scene scene("Test");
@@ -2060,11 +2060,11 @@ static void test_ui_components_available_for_descendants()
     canvasGo->setCanvas(std::make_shared<CanvasComponent>());
     CHECK(PropertiesPanel::uiComponentsAvailable(hijo));
     CHECK(PropertiesPanel::uiComponentsAvailable(nieto));
-    // Un hermano del canvas (no descendiente) sigue sin verlos.
+    // A sibling of the canvas (not descendant) still does not see them.
     CHECK(!PropertiesPanel::uiComponentsAvailable(scene.addGameObject("Suelto")));
 }
 
-// Add reversible, y el redo NO devuelve los campos a los defaults.
+// Add reversible, and redo does NOT return fields to defaults.
 static void test_button_command_add_undo_redo()
 {
     Scene scene("Test");
@@ -2083,7 +2083,7 @@ static void test_button_command_add_undo_redo()
     checkButtonMatchesFilled(*go->getButton());
 }
 
-// Remove reversible: el undo devuelve el componente CON sus valores.
+// Remove reversible: undo returns the component WITH its values.
 static void test_button_command_remove()
 {
     Scene scene("Test");
@@ -2100,9 +2100,9 @@ static void test_button_command_remove()
     checkButtonMatchesFilled(*go->getButton());
 }
 
-// Editar un campo del Button también entra en el stack: el mismo
-// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero) va y
-// vuelve, y no revive el componente si ya no está.
+// Editing a Button field also goes into the stack: the same PropertyCommand<T>
+// that builds the section (resolved by id, not by pointer) goes and comes, and
+// does not resurrect the component if it no longer exists.
 static void test_button_property_command_undo_redo()
 {
     Scene scene("Test");
@@ -2124,21 +2124,20 @@ static void test_button_property_command_undo_redo()
     cmd.execute();
     CHECK(go->getButton()->text == "Aceptar");
 
-    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    // Without component the applier does nothing (neither crashes nor resurrects).
     go->setButton(nullptr);
     cmd.undo();
     CHECK(!go->hasButton());
 }
 
-// ── Sync del Button contra el canvas vivo ───────────────────────────────────
-// Sin GPU: el loader falso devuelve nullptr, que es exactamente lo que devuelve
-// el Renderer con una ruta vacía. Lo que se prueba es la COLOCACIÓN, no la
-// textura.
+// ── Sync of Button against the live canvas ───────────────────────────────────
+// No GPU: the fake loader returns nullptr, which is exactly what Renderer
+// returns with an empty path. What is tested is PLACEMENT, not texture.
 struct FakeUiLoader
 {
-    // Cuántas veces se ha pedido cada recurso. Cargar una fuente de verdad es
-    // FreeType + bake + subida a GPU: quién la pide y CUÁNDO es lo que se nota
-    // como un parón en el editor, así que se cuenta.
+    // How many times each resource has been asked for. Loading a real font is
+    // FreeType + bake + upload to GPU: who asks for it and WHEN is what feels
+    // like a freeze in the editor, so we count it.
     int atlasLoads = 0;
     int fontLoads  = 0;
 
@@ -2146,20 +2145,20 @@ struct FakeUiLoader
     UiFont*         loadUiFont(const std::string&)  { fontLoads++;  return nullptr; }
 };
 
-// Adaptador SOLO DE TESTS a la firma que syncUiWidgets tenía antes de que las
-// listas se agruparan en UiWidgetLists. Está aquí y no en el motor a propósito:
-// la API de producción es UNA (la de la struct), y esto existe para no reescribir
-// las ~65 llamadas de este fichero, que prueban el montaje del árbol y no la
-// forma de pasarle las listas. Los tests nuevos llaman a la de verdad.
+// TEST-ONLY adapter to the signature syncUiWidgets had before lists were
+// grouped in UiWidgetLists. It is here and not in the engine on purpose: the
+// production API is ONE (the struct one), and this exists to not rewrite the
+// ~65 calls in this file, which test the tree assembly not the way lists are
+// passed. New tests call the real one.
 //
-// Vive en el ámbito global y la de producción en DonTopo, así que las dos son
-// candidatas por ADL; no hay ambigüedad porque las aridades no se solapan (esta
-// pide seis argumentos como mínimo y aquella exactamente cuatro).
+// It lives in global scope and the production one in DonTopo, so both are
+// candidates by ADL; there is no ambiguity because arities do not overlap
+// (this one asks for at least six arguments and that one exactly four).
 
-// Un click completo sobre p: un frame de hover, uno con el boton abajo y otro
-// con el boton arriba. El hit test necesita rects, o sea un buildDrawData
-// previo. Los tiempos se separan entre clicks para no cruzar el umbral del
-// doble click sin querer.
+// One complete click on p: one frame of hover, one with button down and
+// another with button up. The hit test needs rects, that is a buildDrawData
+// beforehand. Times are separated between clicks to not cross the double-click
+// threshold by accident.
 static void clickEnCanvas(UiCanvas& canvas, glm::vec2 p, float t0)
 {
     UiInputState in;
@@ -2194,9 +2193,9 @@ static void syncUiWidgets(
     DonTopo::syncUiWidgets(w, canvas, cache, loader);
 }
 
-// Editar un campo del componente tiene que verse en el siguiente frame. El
-// árbol cachea los vértices por nodo, así que un sync que escribe los campos y
-// no ensucia el nodo deja el botón clavado donde estaba.
+// Editing a component field has to show in the next frame. The tree caches
+// vertices per node, so a sync that writes fields and does not mark the node
+// dirty leaves the button stuck where it was.
 static void test_button_sync_moves_the_live_node()
 {
     UiCanvas canvas;
@@ -2217,7 +2216,7 @@ static void test_button_sync_moves_the_live_node()
     CHECK(nearlyEqual(data.vertices[0].pos.x, 10.0f));
     CHECK(nearlyEqual(data.vertices[0].pos.y, 20.0f));
 
-    // Mismo botón, otra posición: el nodo vivo tiene que seguirla.
+    // Same button, another position: the live node has to follow it.
     b.position = glm::vec2(300.0f, 120.0f);
     syncUiWidgets(lista, {}, {}, canvas, cache, loader);
     data.clear();
@@ -2228,8 +2227,8 @@ static void test_button_sync_moves_the_live_node()
     CHECK(nearlyEqual(data.vertices[0].pos.y, 120.0f));
 }
 
-// Tocar la resolución del Canvas no puede hacer desaparecer el botón: el sync
-// del frame siguiente lo deja donde toca, escalado.
+// Touching Canvas resolution cannot make the button disappear: the sync in the
+// next frame leaves it where it belongs, scaled.
 static void test_button_survives_canvas_edit()
 {
     UiCanvas canvas;
@@ -2245,7 +2244,7 @@ static void test_button_survives_canvas_edit()
     canvas.buildDrawData(800, 480, data);
     CHECK(data.batches.size() == 1);
 
-    // Lo que hace CanvasComponent::applyTo cuando el usuario toca el panel.
+    // What CanvasComponent::applyTo does when the user touches the panel.
     CanvasComponent cc;
     cc.scaleFactor = 2.0f;
     cc.applyTo(canvas);
@@ -2256,10 +2255,10 @@ static void test_button_survives_canvas_edit()
     CHECK(data.batches.size() == 1);
     CHECK(data.vertices.size() == 4);
     if (data.vertices.size() != 4) return;
-    CHECK(nearlyEqual(data.vertices[0].pos.x, 20.0f));   // 10 * escala 2
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 20.0f));   // 10 * scale 2
     CHECK(nearlyEqual(data.vertices[0].pos.y, 40.0f));
 
-    // Y ningún ajuste razonable del canvas lo borra de la pantalla.
+    // And no reasonable canvas adjustment erases it from screen.
     const UiScaleMode modos[] = { UiScaleMode::ConstantPixelSize,
                                   UiScaleMode::ScaleWithScreenSize,
                                   UiScaleMode::ConstantPhysicalSize };
@@ -2276,8 +2275,8 @@ static void test_button_survives_canvas_edit()
     }
 }
 
-// Un botón con texto y SIN fuente configurada sigue mostrando su etiqueta: el
-// sync le pone una fuente por defecto en vez de dejar el texto invisible.
+// A button with text and WITHOUT a font set still shows its label: the sync
+// gives it a default font instead of leaving the text invisible.
 static void test_button_text_without_font_is_visible()
 {
     UiCanvas canvas;
@@ -2292,15 +2291,15 @@ static void test_button_text_without_font_is_visible()
     CHECK(canvas.root().children().size() == 1);
     if (canvas.root().children().empty()) return;
     const UiElement& node = *canvas.root().children()[0];
-    CHECK(node.children().size() == 1);   // la etiqueta existe aunque no haya fuente
+    CHECK(node.children().size() == 1);   // the label exists even without font
     if (node.children().empty()) return;
     const Text* label = node.children()[0]->asText();
     CHECK(label != nullptr);
     if (label) CHECK(label->text == "Aceptar");
 }
 
-// Con el input alimentado, el color que se ve es el del ESTADO, no el color
-// base: es lo que hace que editar "Normal" en el panel se note.
+// With input fed, the color you see is the STATE one, not the base color: this
+// is what makes editing "Normal" in the panel visible.
 static void test_button_state_color_is_applied()
 {
     UiCanvas canvas;
@@ -2314,10 +2313,10 @@ static void test_button_state_color_is_applied()
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
     syncUiWidgets(lista, {}, {}, canvas, cache, loader);
     UiDrawData data;
-    canvas.buildDrawData(800, 480, data);   // coloca los rects: el hit test los lee
+    canvas.buildDrawData(800, 480, data);   // places the rects: the hit test reads them
 
     UiInputState in;
-    in.mousePos    = glm::vec2(-1.0f, -1.0f);   // el ratón, lejos: estado Normal
+    in.mousePos    = glm::vec2(-1.0f, -1.0f);   // the mouse, far: Normal state
     in.timeSeconds = 1.0f;
     canvas.updateInput(in);
 
@@ -2330,12 +2329,11 @@ static void test_button_state_color_is_applied()
     CHECK(nearlyEqual(node.color.a, 0.8f));
 }
 
-// Un botón CON etiqueta sigue viendo el ratón. La etiqueta es un hijo Text
-// anclado al rect ENTERO del botón, y el hit test prueba a los hijos primero:
-// si interceptara el ratón, el hover se marcaría en ella y el botón se quedaría
-// en Normal para siempre. Es un fallo difícil de ver porque el CLICK sí
-// funciona (los eventos burbujean del hijo al padre): lo único que se rompe son
-// los cinco colores de estado.
+// A button WITH label still sees the mouse. The label is a Text child anchored
+// to the ENTIRE button rect, and the hit test tries children first: if it
+// intercepted the mouse, hover would be marked on it and the button would stay
+// in Normal forever. It is a bug hard to see because CLICK does work (events
+// bubble from child to parent): all that breaks are the five state colors.
 static void test_button_with_label_still_hovers()
 {
     UiCanvas canvas;
@@ -2343,7 +2341,7 @@ static void test_button_with_label_still_hovers()
     FakeUiLoader loader;
     ButtonComponent b;
     b.size        = glm::vec2(100.0f, 50.0f);
-    b.text        = "Jugar";            // <- con etiqueta
+    b.text        = "Jugar";            // <- with label
     b.normalColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
     b.hoverColor  = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
 
@@ -2353,7 +2351,7 @@ static void test_button_with_label_still_hovers()
     canvas.buildDrawData(800, 480, data);
 
     UiInputState in;
-    in.mousePos    = glm::vec2(20.0f, 20.0f);   // dentro del botón Y de su etiqueta
+    in.mousePos    = glm::vec2(20.0f, 20.0f);   // inside the button AND its label
     in.timeSeconds = 1.0f;
     canvas.updateInput(in);
 
@@ -2366,9 +2364,9 @@ static void test_button_with_label_still_hovers()
     CHECK(nearlyEqual(cache.buttonNodes[0]->color.g, 0.0f));
 }
 
-// Clic sobre un botón en el viewport: el hit test del canvas devuelve un nodo y
-// su nombre es lo único que ata el árbol de UI con la escena. Es la pieza pura
-// de ViewportPanel::pickUiObject (lo demás es ImGui).
+// Click on a button in the viewport: the canvas hit test returns a node and
+// its name is the only thing that ties the UI tree to the scene. It is the
+// pure piece of ViewportPanel::pickUiObject (the rest is ImGui).
 static void test_button_hit_test_maps_back_to_gameobject()
 {
     CHECK(uiButtonOwnerId(uiButtonNodeName(42ull)) == 42ull);
@@ -2391,29 +2389,29 @@ static void test_button_hit_test_maps_back_to_gameobject()
     UiDrawData data;
     canvas.buildDrawData(800, 480, data);
 
-    const UiElement* hit = canvas.hitTest(glm::vec2(360.0f, 230.0f));   // centro del 9
+    const UiElement* hit = canvas.hitTest(glm::vec2(360.0f, 230.0f));   // center of 9
     CHECK(hit != nullptr);
     if (hit) CHECK(uiButtonOwnerId(hit->name) == 9ull);
 
-    hit = canvas.hitTest(glm::vec2(50.0f, 20.0f));                      // centro del 7
+    hit = canvas.hitTest(glm::vec2(50.0f, 20.0f));                      // center of 7
     CHECK(hit != nullptr);
     if (hit) CHECK(uiButtonOwnerId(hit->name) == 7ull);
 
-    CHECK(canvas.hitTest(glm::vec2(700.0f, 400.0f)) == nullptr);        // hueco
+    CHECK(canvas.hitTest(glm::vec2(700.0f, 400.0f)) == nullptr);        // gap
 }
 
-// Las cajas de asset del Button vetan por extensión: la de fuentes NO traga una
-// imagen ni al revés. Es el mismo filtro para el drop y para el file dialog.
+// Button asset boxes veto by extension: the font box does NOT accept an image
+// and vice versa. It is the same filter for the drop and for the file dialog.
 static void test_button_asset_path_filters()
 {
     CHECK(PropertiesPanel::isUiFontPath("assets/DancingScript-VariableFont_wght.ttf"));
-    CHECK(PropertiesPanel::isUiFontPath("C:/fuentes/algo.OTF"));   // mayúsculas
+    CHECK(PropertiesPanel::isUiFontPath("C:/fuentes/algo.OTF"));   // uppercase
     CHECK(PropertiesPanel::isUiFontPath("a.ttc"));
     CHECK(!PropertiesPanel::isUiFontPath("assets/ui_atlas.png"));
     CHECK(!PropertiesPanel::isUiFontPath("assets/hero.fbx"));
     CHECK(!PropertiesPanel::isUiFontPath("sinextension"));
     CHECK(!PropertiesPanel::isUiFontPath(""));
-    // Un punto del DIRECTORIO no es una extensión.
+    // A DIRECTORY point is not an extension.
     CHECK(!PropertiesPanel::isUiFontPath("C:/mis.fuentes/archivo"));
 
     CHECK(PropertiesPanel::isUiAtlasPath("assets/ui_atlas.png"));
@@ -2421,18 +2419,18 @@ static void test_button_asset_path_filters()
     CHECK(PropertiesPanel::isUiAtlasPath("x.tga"));
     CHECK(!PropertiesPanel::isUiAtlasPath("assets/fuente.ttf"));
     CHECK(!PropertiesPanel::isUiAtlasPath("assets/audio.wav"));
-    // Desde que el Content Browser deja arrastrar imágenes y fuentes, CUALQUIER
-    // asset puede aterrizar en CUALQUIER caja: una malla sobre un atlas de UI es
-    // el caso que antes no podía darse (el .fbx era arrastrable, pero la caja de
-    // atlas no lo veía llegar porque el drag no salía del Content Browser).
+    // Since Content Browser lets you drag images and fonts, ANY asset can land in
+    // ANY box: a mesh on a UI atlas is the case that could not happen before (the
+    // .fbx was draggable, but the atlas box could not see it arrive because the
+    // drag did not leave the Content Browser).
     CHECK(!PropertiesPanel::isUiAtlasPath("assets/hero.fbx"));
     CHECK(!PropertiesPanel::isUiFontPath("assets/musica.mp3"));
 }
 
 // ── Text ────────────────────────────────────────────────────────────────────
-// TODOS los campos con valores NO neutros y DISTINTOS entre sí, mismo criterio
-// que fillButton: un default no prueba que nadie los haya leído ni escrito, y
-// dos campos con el MISMO valor no detectan que se hayan cruzado.
+// ALL fields with values NOT neutral and DISTINCT among themselves, same
+// criterion as fillButton: a default does not prove anyone read or wrote them,
+// and two fields with the SAME value do not detect that they were swapped.
 static void fillText(TextComponent& t)
 {
     t.anchorMin = glm::vec2(0.0625f, 0.1875f);
@@ -2521,7 +2519,7 @@ static void test_text_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Una escena guardada antes del componente carga igual: sin Text y sin avisos.
+// A scene saved before the component loads the same: no Text and no warnings.
 static void test_scene_without_text_block_still_loads(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -2537,8 +2535,8 @@ static void test_scene_without_text_block_still_loads(PhysicsManager& pm, AudioM
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Neutralidad: sin ningún Text el JSON no gana ni un byte, y añadir y quitar el
-// componente devuelve el dump EXACTO de partida.
+// Neutrality: without any Text the JSON gains not a byte, and adding and
+// removing the component returns the exact SAME dump at the start.
 static void test_scene_without_text_serializes_identically()
 {
     Scene scene("Test");
@@ -2552,7 +2550,7 @@ static void test_scene_without_text_serializes_identically()
     CHECK(scene.toJson().dump() == antes);
 }
 
-// Add reversible, y el redo NO devuelve los campos a los defaults.
+// Add reversible, and redo does NOT return fields to defaults.
 static void test_text_command_add_undo_redo()
 {
     Scene scene("Test");
@@ -2571,7 +2569,7 @@ static void test_text_command_add_undo_redo()
     checkTextMatchesFilled(*go->getText());
 }
 
-// Remove reversible: el undo devuelve el componente CON sus valores.
+// Remove reversible: undo returns the component WITH its values.
 static void test_text_command_remove()
 {
     Scene scene("Test");
@@ -2588,8 +2586,8 @@ static void test_text_command_remove()
     checkTextMatchesFilled(*go->getText());
 }
 
-// Editar un campo del Text también entra en el stack, con el mismo
-// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero).
+// Editing a Text field also goes into the stack, with the same PropertyCommand<T>
+// that builds the section (resolved by id, not by pointer).
 static void test_text_property_command_undo_redo()
 {
     Scene scene("Test");
@@ -2611,18 +2609,17 @@ static void test_text_property_command_undo_redo()
     cmd.execute();
     CHECK(go->getText()->text == "Titulo");
 
-    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    // Without component the applier does nothing (neither crashes nor resurrects).
     go->setText(nullptr);
     cmd.undo();
     CHECK(!go->hasText());
 }
 
-// Editar un campo del componente tiene que verse en el siguiente frame. El árbol
-// cachea los vértices por nodo, así que un sync que escribe los campos y no
-// ensucia el nodo deja el texto CLAVADO: es lo que cazan los dirty flags de
-// aquí. Con el loader falso no hay fuente, y sin fuente no se emite ni un quad
-// (drawable = false), así que el rect se comprueba por screenPos y no por
-// vértices.
+// Editing a component field must show in the next frame. The tree caches
+// vertices per node, so a sync that writes fields and does not mark dirty
+// leaves the text STUCK: this is what the dirty flags here catch. With the
+// fake loader there is no font, and without font no quad is emitted
+// (drawable = false), so the rect is checked by screenPos not vertices.
 static void test_text_sync_updates_the_live_node()
 {
     UiCanvas canvas;
@@ -2649,11 +2646,11 @@ static void test_text_sync_updates_the_live_node()
     CHECK(vivo->text == "Uno");
     CHECK(nearlyEqual(node.screenPos.x, 10.0f));
     CHECK(nearlyEqual(node.screenPos.y, 20.0f));
-    // El emisor deja el nodo limpio: es la caché que el sync tiene que invalidar.
+    // The emitter leaves the node clean: it is the cache the sync has to invalidate.
     CHECK(node.dirty == 0u);
 
-    // Mismo Text, otro contenido y otra posición: el nodo vivo tiene que
-    // seguirlos Y quedar sucio, o el canvas reusaría los vértices de antes.
+    // Same Text, different content and different position: the live node has to
+    // follow them AND be marked dirty, or the canvas would reuse the old vertices.
     t.text     = "Dos";
     t.position = glm::vec2(300.0f, 120.0f);
     syncUiWidgets({}, textos, {}, canvas, cache, loader);
@@ -2665,21 +2662,21 @@ static void test_text_sync_updates_the_live_node()
     CHECK(nearlyEqual(node.screenPos.x, 300.0f));
     CHECK(nearlyEqual(node.screenPos.y, 120.0f));
 
-    // Y un frame sin cambios NO vuelve a ensuciar: ensuciar siempre tira la
-    // caché de vértices del canvas entero cada frame.
+    // And a frame with no changes does NOT redirty: dirtying always throws away
+    // the entire canvas vertex cache every frame.
     syncUiWidgets({}, textos, {}, canvas, cache, loader);
     CHECK(node.dirty == 0u);
 }
 
-// La trampa: la raíz del canvas se reconstruye con clearChildren(), así que un
-// sync que solo conociera los botones borraría los textos (y al revés). Con los
-// dos en la escena, ninguno se lleva por delante al otro.
-// ── Jerarquía ───────────────────────────────────────────────────────────────
-// Los widgets colgaban TODOS de la raíz del canvas, así que anidar GameObjects
-// en la escena no servía de nada: el padre no colocaba, no recortaba y no
-// atenuaba a sus hijos. Con la jerarquía, el nodo de un GameObject cuelga del
-// nodo PRINCIPAL de su padre (Button > ProgressBar > Text), que es el que tiene
-// el rect contra el que anclarse.
+// The trap: the canvas root is rebuilt with clearChildren(), so a sync that
+// only knew buttons would erase texts (and vice versa). With both in the scene,
+// neither carries away the other.
+// ── Hierarchy ───────────────────────────────────────────────────────────────
+// Widgets all hung from the canvas root, so nesting GameObjects in the scene
+// was pointless: the parent did not place, did not clip and did not attenuate
+// its children. With hierarchy, a GameObject node hangs from its parent's MAIN
+// node (Button > ProgressBar > Text), which is the one that has the rect to
+// anchor against.
 static void test_jerarquia_ancla_y_hereda_del_padre()
 {
     UiCanvas canvas;
@@ -2695,14 +2692,14 @@ static void test_jerarquia_ancla_y_hereda_del_padre()
     hijo.size     = glm::vec2(60.0f, 30.0f);
 
     std::vector<std::pair<uint64_t, const ButtonComponent*>> botones{ {7ull, &padre}, {8ull, &hijo} };
-    // Pre-orden, con el hijo apuntando a su padre. 0 = cuelga de la raíz.
+    // Pre-order, with the child pointing to its parent. 0 = hangs from the root.
     std::vector<std::pair<uint64_t, uint64_t>> jerarquia{ {7ull, 0ull}, {8ull, 7ull} };
 
     UiDrawData data;
     syncUiWidgets(botones, {}, {}, canvas, cache, loader, &jerarquia);
     canvas.buildDrawData(800, 480, data);
 
-    // El hijo YA NO cuelga de la raíz.
+    // The child NO LONGER hangs from the root.
     CHECK(canvas.root().children().size() == 1);
     if (canvas.root().children().size() != 1) return;
     const UiElement* nodoPadre = canvas.root().children()[0].get();
@@ -2711,13 +2708,13 @@ static void test_jerarquia_ancla_y_hereda_del_padre()
     if (nodoPadre->children().size() != 1) return;
     CHECK(nodoPadre->children()[0]->name == uiButtonNodeName(8ull));
 
-    // Y su posición es RELATIVA al padre: 100+10, 50+20.
+    // And its position is RELATIVE to the parent: 100+10, 50+20.
     CHECK(data.vertices.size() == 8);
     if (data.vertices.size() != 8) return;
     CHECK(nearlyEqual(data.vertices[4].pos.x, 110.0f));
     CHECK(nearlyEqual(data.vertices[4].pos.y, 70.0f));
 
-    // Mover al padre mueve al hijo sin tocarlo.
+    // Moving the parent moves the child without touching it.
     padre.position = glm::vec2(200.0f, 50.0f);
     syncUiWidgets(botones, {}, {}, canvas, cache, loader, &jerarquia);
     data.clear();
@@ -2726,16 +2723,16 @@ static void test_jerarquia_ancla_y_hereda_del_padre()
     if (data.vertices.size() != 8) return;
     CHECK(nearlyEqual(data.vertices[4].pos.x, 210.0f));
 
-    // Sin jerarquía (nullptr) todo vuelve a colgar de la raíz: es EXACTAMENTE
-    // lo que hacían las llamadas de siempre.
+    // Without hierarchy (nullptr) everything hangs from the root again: it is EXACTLY
+    // what the old calls did.
     UiCanvas          plano;
     UiWidgetSyncCache cachePlano;
     syncUiWidgets(botones, {}, {}, plano, cachePlano, loader);
     CHECK(plano.root().children().size() == 2);
 }
 
-// Cambiar de padre reconstruye el árbol: si no, el nodo se quedaría colgando
-// donde estaba y la escena y lo que se ve dejarían de coincidir.
+// Changing parent rebuilds the tree: if not, the node would stay hanging
+// where it was and the scene and what you see would stop matching.
 static void test_jerarquia_cambiar_de_padre_reconstruye()
 {
     UiCanvas canvas;
@@ -2757,8 +2754,8 @@ static void test_jerarquia_cambiar_de_padre_reconstruye()
     CHECK(canvas.root().children().size() == 2);
 }
 
-// La opacidad del padre se multiplica en el hijo (la del árbol de UI, que el
-// canvas ya acumulaba y que ningún widget podía aprovechar sin jerarquía).
+// The parent's opacity multiplies into the child (the one from the UI tree, which the
+// canvas already accumulated and which no widget could exploit without hierarchy).
 static void test_jerarquia_hereda_la_opacidad()
 {
     UiCanvas canvas;
@@ -2768,8 +2765,8 @@ static void test_jerarquia_hereda_la_opacidad()
     ButtonComponent padre, hijo;
     padre.size = glm::vec2(400.0f, 300.0f);
     hijo.size  = glm::vec2(60.0f, 30.0f);
-    // Colores distintos y no neutros: con blancos, un alfa mal propagado pasa
-    // desapercibido.
+    // Different colors and not neutral: with whites, a misplaced alpha looks
+    // unnoticed.
     padre.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
     hijo.color  = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
 
@@ -2778,8 +2775,8 @@ static void test_jerarquia_hereda_la_opacidad()
 
     syncUiWidgets(botones, {}, {}, canvas, cache, loader, &jerarquia);
 
-    // La opacidad no es un campo del componente: se toca en el nodo vivo, que
-    // es lo que hace la animación del core. Lo que se prueba es que BAJE.
+    // Opacity is not a field of the component: it is touched in the live node, which
+    // is what the core animation does. What is tested is that it GOES DOWN.
     UiElement* nodoPadre = const_cast<UiElement*>(canvas.root().children()[0].get());
     nodoPadre->opacity = 0.5f;
     nodoPadre->markDirty(UiElement::DirtyTransform);
@@ -2788,15 +2785,15 @@ static void test_jerarquia_hereda_la_opacidad()
     canvas.buildDrawData(800, 480, data);
     CHECK(data.vertices.size() == 8);
     if (data.vertices.size() != 8) return;
-    CHECK(nearlyEqual(data.vertices[0].color.a, 0.5f));   // padre
-    CHECK(nearlyEqual(data.vertices[4].color.a, 0.5f));   // hijo, heredada
+    CHECK(nearlyEqual(data.vertices[0].color.a, 0.5f));   // parent
+    CHECK(nearlyEqual(data.vertices[4].color.a, 0.5f));   // child, inherited
 }
 
-// Un GameObject intermedio SIN componentes de UI no aporta rect contra el que
-// anclarse, así que no puede sostener a nadie: sus hijos tienen que colgar del
-// primer ancestro que sí tenga UI. Si se cogiera el padre inmediato, el nodo
-// quedaría bajo un id que no existe en el árbol de UI y acabaría en la raíz,
-// perdiendo el anclaje al abuelo sin que nada lo dijera.
+// A GameObject in between WITHOUT UI components does not provide a rect to
+// anchor to, so it cannot hold anyone: its children have to hang from
+// the first ancestor that does have UI. If the immediate parent were used, the node
+// would hang under an id that does not exist in the UI tree and would end up at the root,
+// losing the anchor to the grandfather without anything saying so.
 static void test_collect_ui_widgets_salta_los_intermedios_sin_ui()
 {
     Scene scene;
@@ -2806,7 +2803,7 @@ static void test_collect_ui_widgets_salta_los_intermedios_sin_ui()
     GameObject* panel = scene.addGameObject("Panel", canvasGo);
     panel->setButton(std::make_shared<ButtonComponent>());
 
-    // Intermedio SIN UI: solo agrupa.
+    // Middle level WITHOUT UI: just groups.
     GameObject* grupo = scene.addGameObject("Grupo", panel);
 
     GameObject* etiqueta = scene.addGameObject("Etiqueta", grupo);
@@ -2828,22 +2825,22 @@ static void test_collect_ui_widgets_salta_los_intermedios_sin_ui()
     CHECK(textos.size() == 1);
     CHECK(barras.empty());
 
-    // Solo los que tienen UI aparecen en la jerarquía: el Canvas y el grupo no.
+    // Only those with UI appear in the hierarchy: the Canvas and the group do not.
     CHECK(jerarquia.size() == 2);
     if (jerarquia.size() != 2) return;
     CHECK(jerarquia[0].first == panel->id);
-    CHECK(jerarquia[0].second == 0ull);              // primer nivel
+    CHECK(jerarquia[0].second == 0ull);              // first level
     CHECK(jerarquia[1].first == etiqueta->id);
-    CHECK(jerarquia[1].second == panel->id);         // el abuelo, no el grupo
+    CHECK(jerarquia[1].second == panel->id);         // the grandfather, not the group
 
-    // Y el orden es de PRE-ORDEN: el padre antes que el hijo, que es lo que
-    // permite montar el árbol en una sola pasada.
+    // And the order is PRE-ORDER: the parent before the child, which is what
+    // allows building the tree in one pass.
     CHECK(jerarquia[0].first != jerarquia[1].second || true);
 }
 
-// Cada widget va al canvas del que cuelga, no a un saco comun. Con un solo
-// canvas esto daba igual; con dos, meterlos todos en el primero pinta la UI del
-// menu de pausa encima del HUD y nada lo dice.
+// Each widget goes to the canvas it hangs from, not to a common bucket. With one
+// canvas this made no difference; with two, putting them all in the first one paints the UI of the
+// pause menu over the HUD and nothing says so.
 static void test_collect_canvases_agrupa_por_canvas()
 {
     Scene scene;
@@ -2872,7 +2869,7 @@ static void test_collect_canvases_agrupa_por_canvas()
     CHECK(bindings[1].widgets.bars.empty());
 }
 
-// Canvas dentro de canvas: gana el MAS CERCANO hacia arriba, sin reglas nuevas.
+// Canvas inside canvas: the CLOSEST one upward wins, with no new rules.
 static void test_collect_canvases_anidado_gana_el_mas_cercano()
 {
     Scene scene;
@@ -2901,10 +2898,10 @@ static void test_collect_canvases_anidado_gana_el_mas_cercano()
         CHECK(bindings[1].widgets.panels[0].first == deDentro->id);
 }
 
-// Un widget sin NINGUN canvas por encima no va a ninguna parte. Antes acababa
-// en el canvas unico aunque no colgara de el; ahora no se dibuja. Es un cambio
-// de comportamiento DELIBERADO: el editor ya lo impide (uiComponentsAvailable
-// exige un Canvas ancestro) y solo afecta a escenas hechas a mano.
+// A widget with NO canvas above it goes nowhere. Before it ended
+// in the unique canvas even if it did not hang from it; now it does not paint. This is a
+// DELIBERATE behavior change: the editor already prevents it (uiComponentsAvailable
+// requires a Canvas ancestor) and only affects manually-made scenes.
 static void test_collect_canvases_ignora_los_huerfanos()
 {
     Scene scene;
@@ -2923,8 +2920,8 @@ static void test_collect_canvases_ignora_los_huerfanos()
     CHECK(bindings[0].widgets.buttons.empty());
 }
 
-// La jerarquia de cada binding es la SUYA: los ids de padre apuntan dentro del
-// mismo canvas, y el primer nivel cuelga de 0 (la raiz de ESE canvas).
+// The hierarchy of each binding is ITS OWN: the parent ids point inside the
+// same canvas, and the first level hangs from 0 (the root of THAT canvas).
 static void test_collect_canvases_jerarquia_por_canvas()
 {
     Scene scene;
@@ -2944,7 +2941,7 @@ static void test_collect_canvases_jerarquia_por_canvas()
     CHECK(p.size() == 2);
     if (p.size() != 2) return;
     CHECK(p[0].first == marco->id);
-    CHECK(p[0].second == 0ull);          // primer nivel del canvas
+    CHECK(p[0].second == 0ull);          // first level of the canvas
     CHECK(p[1].first == icono->id);
     CHECK(p[1].second == marco->id);
 }
@@ -2973,10 +2970,10 @@ static void test_buttons_and_texts_coexist()
     if (canvas.root().children().size() != 2) return;
     CHECK(canvas.root().children()[0]->name == uiButtonNodeName(7ull));
     CHECK(canvas.root().children()[1]->name == uiTextNodeName(9ull));
-    // El botón se dibuja (quad de color, sin atlas); el texto sin fuente no.
+    // The button paints (color quad, no atlas); the text without font does not.
     CHECK(data.vertices.size() == 4);
 
-    // Tocar SOLO el texto no borra el botón ni le tira sus vértices.
+    // Touching ONLY the text does not erase the button nor throw away its vertices.
     t.text = "Otro";
     syncUiWidgets(botones, textos, {}, canvas, cache, loader);
     CHECK(canvas.root().children().size() == 2);
@@ -2986,7 +2983,7 @@ static void test_buttons_and_texts_coexist()
     CHECK(nearlyEqual(data.vertices[0].pos.x, 0.0f));
     CHECK(nearlyEqual(data.vertices[0].pos.y, 0.0f));
 
-    // Y tocar SOLO el botón no borra el texto.
+    // And touching ONLY the button does not erase the text.
     b.position = glm::vec2(50.0f, 60.0f);
     syncUiWidgets(botones, textos, {}, canvas, cache, loader);
     CHECK(canvas.root().children().size() == 2);
@@ -2995,8 +2992,8 @@ static void test_buttons_and_texts_coexist()
     CHECK(vivo != nullptr);
     if (vivo) CHECK(vivo->text == "Otro");
 
-    // Un widget de más reconstruye la raíz: los dos tipos se remontan, no solo
-    // el que cambió de cuenta.
+    // One more widget rebuilds the root: both types get rebuilt, not just
+    // the one that changed count.
     TextComponent t2;
     t2.text = "Pie";
     textos.emplace_back(11ull, &t2);
@@ -3004,32 +3001,32 @@ static void test_buttons_and_texts_coexist()
     CHECK(canvas.root().children().size() == 3);
     data.clear();
     canvas.buildDrawData(800, 480, data);
-    CHECK(data.vertices.size() == 4);   // el botón sigue ahí tras el rebuild
+    CHECK(data.vertices.size() == 4);   // the button still there after the rebuild
     CHECK(nearlyEqual(data.vertices[0].pos.x, 50.0f));
 }
 
-// Un Text recién añadido está VACÍO: no puede costar una carga de fuente, que
-// es síncrona (FreeType + bake + GPU) y se ve como un parón justo al pulsar Add.
-// La fuente se paga cuando hay texto de verdad, y una sola vez por ruta.
+// A newly added Text is EMPTY: it cannot cost a font load, which
+// is synchronous (FreeType + bake + GPU) and shows as a freeze right when Add is pressed.
+// The font is paid when there is real text, and only once per path.
 static void test_text_without_content_loads_no_font()
 {
     UiCanvas canvas;
     UiWidgetSyncCache cache;
     FakeUiLoader loader;
-    TextComponent t;   // sin texto, como lo deja "Add Component"
+    TextComponent t;   // without text, as "Add Component" leaves it
 
     std::vector<std::pair<uint64_t, const TextComponent*>> textos{ {9ull, &t} };
     syncUiWidgets({}, textos, {}, canvas, cache, loader);
     CHECK(loader.fontLoads == 0);
     CHECK(canvas.root().children().size() == 1);
 
-    // Y varios frames más sin escribir nada tampoco la piden.
+    // And several more frames without writing anything do not load it either.
     syncUiWidgets({}, textos, {}, canvas, cache, loader);
     syncUiWidgets({}, textos, {}, canvas, cache, loader);
     CHECK(loader.fontLoads == 0);
 
-    // La primera letra sí la carga, y solo esa vez: la caché por ruta es lo que
-    // impide una carga por frame (y una fuga de memoria de GPU por frame).
+    // The first letter does load it, and only that once: the cache by path is what
+    // prevents one load per frame (and one GPU memory leak per frame).
     t.text = "H";
     syncUiWidgets({}, textos, {}, canvas, cache, loader);
     CHECK(loader.fontLoads == 1);
@@ -3038,24 +3035,23 @@ static void test_text_without_content_loads_no_font()
     CHECK(loader.fontLoads == 1);
 }
 
-// Clic sobre un texto en el viewport: mismo camino que el del botón, y con los
-// dos componentes en el MISMO GameObject los dos nombres llevan a su id sin
-// pisarse.
+// Click on a text in the viewport: same path as the button, and with both
+// components in the SAME GameObject both names lead to their id without stepping on each other.
 static void test_text_hit_test_maps_back_to_gameobject()
 {
     CHECK(uiTextOwnerId(uiTextNodeName(42ull)) == 42ull);
     CHECK(uiTextOwnerId("Cubo") == 0ull);
     CHECK(uiTextOwnerId("txt:") == 0ull);
     CHECK(uiTextOwnerId("txt:12ab") == 0ull);
-    // Los dos prefijos no se confunden entre sí.
+    // The two prefixes do not confuse each other.
     CHECK(uiTextOwnerId(uiButtonNodeName(42ull)) == 0ull);
     CHECK(uiButtonOwnerId(uiTextNodeName(42ull)) == 0ull);
 }
 
 // ── ProgressBar ─────────────────────────────────────────────────────────────
-// Todos los campos a valores NO neutros y DISTINTOS entre sí: con el default (o
-// con dos campos iguales) un round-trip pasa igual aunque fromJson se salte el
-// campo o lea la clave equivocada.
+// All fields set to NOT neutral values and DIFFERENT from each other: with the default (or
+// with two fields equal) a round-trip passes even if fromJson skips the
+// field or reads the wrong key.
 static void fillBar(ProgressBarComponent& p)
 {
     p.anchorMin = glm::vec2(0.125f, 0.25f);
@@ -3134,7 +3130,7 @@ static void test_progress_bar_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Una escena guardada antes del componente carga igual: sin barra y sin avisos.
+// A scene saved before the component loads the same: without bar and without warnings.
 static void test_scene_without_progress_bar_block_still_loads(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -3150,8 +3146,8 @@ static void test_scene_without_progress_bar_block_still_loads(PhysicsManager& pm
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Neutralidad: sin ninguna barra el JSON no gana ni un byte, y añadir y quitar el
-// componente devuelve el dump EXACTO de partida.
+// Neutrality: without any progress bar the JSON gains not a byte, and adding and removing the
+// component returns the EXACT dump from the start.
 static void test_scene_without_progress_bar_serializes_identically()
 {
     Scene scene("Test");
@@ -3165,7 +3161,7 @@ static void test_scene_without_progress_bar_serializes_identically()
     CHECK(scene.toJson().dump() == antes);
 }
 
-// Add reversible, y el redo NO devuelve los campos a los defaults.
+// Add reversible, and redo does NOT return the fields to defaults.
 static void test_progress_bar_command_add_undo_redo()
 {
     Scene scene("Test");
@@ -3184,7 +3180,7 @@ static void test_progress_bar_command_add_undo_redo()
     checkBarMatchesFilled(*go->getProgressBar());
 }
 
-// Remove reversible: el undo devuelve el componente CON sus valores.
+// Remove reversible: undo returns the component WITH its values.
 static void test_progress_bar_command_remove()
 {
     Scene scene("Test");
@@ -3201,8 +3197,8 @@ static void test_progress_bar_command_remove()
     checkBarMatchesFilled(*go->getProgressBar());
 }
 
-// Editar un campo de la barra también entra en el stack, con el mismo
-// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero).
+// Editing a field of the progress bar also goes into the stack, with the same
+// PropertyCommand<T> that builds the section (resolved by id, not by pointer).
 static void test_progress_bar_property_command_undo_redo()
 {
     Scene scene("Test");
@@ -3224,15 +3220,15 @@ static void test_progress_bar_property_command_undo_redo()
     cmd.execute();
     CHECK(nearlyEqual(go->getProgressBar()->value, 0.125f));
 
-    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    // Without component the applier does nothing (neither crashes nor resurrects it).
     go->setProgressBar(nullptr);
     cmd.undo();
     CHECK(!go->hasProgressBar());
 }
 
-// Las cuatro direcciones al 25%: cada una da un rect DISTINTO y en el sitio
-// correcto (la Y del canvas crece hacia abajo). Y un valor fuera del rango no
-// puede salirse del fondo, que el componente no clampa nada por su cuenta.
+// The four directions at 25%: each one gives a DIFFERENT rect and in the right place
+// (the Y of the canvas grows downward). And a value outside the range cannot go beyond
+// the bottom, which the component does not clamp on its own.
 static void test_progress_bar_fill_directions()
 {
     ProgressBarComponent p;
@@ -3272,7 +3268,7 @@ static void test_progress_bar_fill_directions()
     CHECK(nearlyEqual(sz.x, 200.0f));
     CHECK(nearlyEqual(sz.y, 10.0f));
 
-    // Fuera de rango por arriba: lleno, pero ni un píxel fuera del fondo.
+    // Out of range on top: full, but not a pixel beyond the background.
     p.value = 999.0f;
     for (int d = 0; d < 4; d++)
     {
@@ -3282,7 +3278,7 @@ static void test_progress_bar_fill_directions()
         CHECK(pos.x + sz.x <= p.size.x + 1e-4f);
         CHECK(pos.y + sz.y <= p.size.y + 1e-4f);
     }
-    // Y por abajo: vacío, nunca negativo.
+    // And from below: empty, never negative.
     p.value = -999.0f;
     for (int d = 0; d < 4; d++)
     {
@@ -3291,15 +3287,15 @@ static void test_progress_bar_fill_directions()
         CHECK(nearlyEqual(sz.x * sz.y, 0.0f));
         CHECK(pos.x >= 0.0f && pos.y >= 0.0f);
     }
-    // Rango degenerado: no hay forma de repartir un intervalo vacío.
+    // Degenerate range: there is no way to distribute an empty interval.
     p.value = 5.0f; p.minValue = 3.0f; p.maxValue = 3.0f;
     CHECK(nearlyEqual(p.normalizedValue(), 0.0f));
 }
 
-// Editar el valor tiene que verse en el siguiente frame. El árbol cachea los
-// vértices por nodo, así que un sync que escribe los campos y no ensucia deja la
-// barra CLAVADA: es lo que cazan los dirty flags de aquí. Y ensuciar SIEMPRE
-// tiraría la caché del canvas entero cada frame, que es el otro fallo posible.
+// Editing the value has to show in the next frame. The tree caches
+// vertices by node, so a sync that writes fields without dirtying leaves the
+// bar STUCK: that is what the dirty flags here catch. And dirtying ALWAYS
+// would throw away the canvas vertex cache every frame, which is the other possible failure.
 static void test_progress_bar_sync_updates_the_live_node()
 {
     UiCanvas canvas;
@@ -3325,19 +3321,19 @@ static void test_progress_bar_sync_updates_the_live_node()
     const UiElement& relleno = *fondo.children()[0];
     CHECK(relleno.name == uiProgressBarNodeName(5ull) + "/Fill");
 
-    // Fondo entero + relleno a la mitad: dos quads.
+    // Full background + fill halfway: two quads.
     CHECK(data.vertices.size() == 8);
     CHECK(nearlyEqual(fondo.screenPos.x, 10.0f));
     CHECK(nearlyEqual(fondo.screenPos.y, 20.0f));
     CHECK(nearlyEqual(relleno.size.x, 100.0f));
     CHECK(nearlyEqual(relleno.size.y, 40.0f));
-    // El emisor deja los nodos limpios: es la caché que el sync tiene que
-    // invalidar.
+    // The emitter leaves nodes clean: it is the cache that sync has to
+    // invalidate.
     CHECK(fondo.dirty == 0u);
     CHECK(relleno.dirty == 0u);
 
-    // Otro valor: el relleno cambia de tamaño Y los dos nodos quedan sucios, o
-    // el canvas reusaría los vértices de antes.
+    // Another value: the fill changes size AND both nodes get dirty, or
+    // the canvas would reuse the vertices from before.
     p.value = 0.25f;
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     CHECK(nearlyEqual(relleno.size.x, 50.0f));
@@ -3349,23 +3345,23 @@ static void test_progress_bar_sync_updates_the_live_node()
     CHECK(nearlyEqual(relleno.screenPos.x, 10.0f));
     CHECK(nearlyEqual(relleno.screenPos.y, 20.0f));
 
-    // Con RightToLeft el relleno se pega al otro extremo, en pantalla y no solo
-    // en el rect local.
+    // With RightToLeft the fill sticks to the other end, on screen and not just
+    // in the local rect.
     p.fillDirection = UiProgressFillDirection::RightToLeft;
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     data.clear();
     canvas.buildDrawData(800, 480, data);
     CHECK(nearlyEqual(relleno.screenPos.x, 160.0f));   // 10 + 200*(1-0.25)
 
-    // Y un frame sin cambios NO vuelve a ensuciar: ensuciar siempre tira la
-    // caché de vértices del canvas entero cada frame.
+    // And a frame with no changes does NOT get dirty again: dirtying always throws away the
+    // vertex cache of the entire canvas every frame.
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     CHECK(fondo.dirty == 0u);
     CHECK(relleno.dirty == 0u);
 
-    // A valor 0 el relleno no emite quad (rect degenerado), pero el NODO sigue
-    // ahí: si apareciera y desapareciera cambiaría la forma del subárbol y
-    // obligaría a reconstruir la raíz al cruzar el cero.
+    // At value 0 the fill emits no quad (degenerate rect), but the NODE still
+    // exists: if it appeared and disappeared it would change the subtree shape and
+    // force rebuilding the root when crossing zero.
     p.value = 0.0f;
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     data.clear();
@@ -3374,9 +3370,9 @@ static void test_progress_bar_sync_updates_the_live_node()
     CHECK(data.vertices.size() == 4);
 }
 
-// La trampa: la raíz del canvas se reconstruye con clearChildren(), así que un
-// sync que solo conociera dos de los tres tipos borraría el tercero. Con los
-// TRES en la escena, ninguno se lleva por delante a los otros.
+// The trap: the canvas root is rebuilt with clearChildren(), so a
+// sync that only knew two of the three types would wipe out the third. With the
+// THREE in the scene, none of them wipes out the others.
 static void test_all_three_ui_components_coexist()
 {
     UiCanvas canvas;
@@ -3407,10 +3403,10 @@ static void test_all_three_ui_components_coexist()
     CHECK(canvas.root().children()[0]->name == uiButtonNodeName(7ull));
     CHECK(canvas.root().children()[1]->name == uiProgressBarNodeName(5ull));
     CHECK(canvas.root().children()[2]->name == uiTextNodeName(9ull));
-    // Botón (1 quad) + barra (fondo y relleno) = 3; el texto sin fuente no pinta.
+    // Button (1 quad) + bar (background and fill) = 3; text without font does not paint.
     CHECK(data.vertices.size() == 12);
 
-    // Tocar SOLO la barra no borra al botón ni al texto.
+    // Touching ONLY the bar does not wipe the button or text.
     p.value = 0.75f;
     syncUiWidgets(botones, textos, barras, canvas, cache, loader);
     CHECK(canvas.root().children().size() == 3);
@@ -3422,7 +3418,7 @@ static void test_all_three_ui_components_coexist()
     CHECK(vivo != nullptr);
     if (vivo) CHECK(vivo->text == "Titulo");
 
-    // Y tocar SOLO el texto no toca la barra.
+    // And touching ONLY the text does not touch the bar.
     t.text = "Otro";
     syncUiWidgets(botones, textos, barras, canvas, cache, loader);
     CHECK(canvas.root().children().size() == 3);
@@ -3431,7 +3427,7 @@ static void test_all_three_ui_components_coexist()
     if (!fondo.children().empty())
         CHECK(nearlyEqual(fondo.children()[0]->size.x, 150.0f));
 
-    // Una barra de más reconstruye la raíz: los tres tipos se remontan.
+    // One more bar rebuilds the root: all three types move up.
     ProgressBarComponent p2;
     p2.size  = glm::vec2(50.0f, 10.0f);
     p2.value = 1.0f;
@@ -3440,34 +3436,34 @@ static void test_all_three_ui_components_coexist()
     CHECK(canvas.root().children().size() == 4);
     data.clear();
     canvas.buildDrawData(800, 480, data);
-    CHECK(data.vertices.size() == 20);   // botón + 2 barras x 2 quads
-    CHECK(nearlyEqual(data.vertices[0].pos.x, 0.0f));   // el botón sigue ahí
+    CHECK(data.vertices.size() == 20);   // button + 2 bars x 2 quads
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 0.0f));   // the button is still there
 }
 
-// Una barra recién añadida no tiene ninguna imagen: no puede costar una carga,
-// que es síncrona (lectura + bake + subida a GPU) y se ve como un parón justo al
-// pulsar Add. Y luego, una carga por RUTA distinta y solo una: la caché por ruta
-// es lo que impide una carga (y una fuga de memoria de GPU) por frame.
+// A newly added bar has no image: it cannot cost a load,
+// which is synchronous (read + bake + upload to GPU) and looks like a stall right when
+// you press Add. And then, one load per DIFFERENT PATH and only one: the path cache
+// is what prevents one load (and a GPU memory leak) per frame.
 static void test_progress_bar_without_atlas_loads_nothing()
 {
     UiCanvas canvas;
     UiWidgetSyncCache cache;
     FakeUiLoader loader;
-    ProgressBarComponent p;   // sin imágenes, como lo deja "Add Component"
+    ProgressBarComponent p;   // without images, as "Add Component" leaves it
 
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras{ {5ull, &p} };
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     CHECK(loader.atlasLoads == 0);
     CHECK(canvas.root().children().size() == 1);
 
-    // Y varios frames más sin ruta tampoco la piden.
+    // And several more frames with no path do not ask for it either.
     p.value = 0.9f;
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     CHECK(loader.atlasLoads == 0);
 
-    // Solo el atlas: una carga, y las dos partes tiran de ella (el fondo y el
-    // relleno caen en el atlas cuando no traen ruta propia).
+    // Just the atlas: one load, and both parts pull from it (background and
+    // fill fall into the atlas when they bring no path of their own).
     p.atlasPath = "assets/ui/hud.png";
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     CHECK(loader.atlasLoads == 1);
@@ -3475,35 +3471,35 @@ static void test_progress_bar_without_atlas_loads_nothing()
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     CHECK(loader.atlasLoads == 1);
 
-    // Dos rutas propias distintas: dos cargas más, una por fichero.
+    // Two different own paths: two more loads, one per file.
     p.backgroundPath = "assets/ui/bar_bg.png";
     p.fillPath       = "assets/ui/bar_fill.png";
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     CHECK(loader.atlasLoads == 3);
 
-    // Y el mismo fichero en las dos partes NO cuenta dos veces.
+    // And the same file in both parts does NOT count twice.
     p.fillPath = "assets/ui/bar_bg.png";
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     CHECK(loader.atlasLoads == 3);
 
-    // Cambiar el valor con las tres rutas puestas tampoco recarga nada.
+    // Changing the value with all three paths set does not reload anything.
     p.value = 0.4f;
     syncUiWidgets({}, {}, barras, canvas, cache, loader);
     CHECK(loader.atlasLoads == 3);
 }
 
-// Clic sobre una barra en el viewport: mismo camino que el del botón y el del
-// texto, y con los tres componentes en el MISMO GameObject los tres nombres
-// llevan a su id sin pisarse.
+// Click on a bar in the viewport: same path as the button and the
+// text, and with all three components in the SAME GameObject the three names
+// lead to their id without stepping on each other.
 static void test_progress_bar_hit_test_maps_back_to_gameobject()
 {
     CHECK(uiProgressBarOwnerId(uiProgressBarNodeName(42ull)) == 42ull);
-    // El nodo del relleno cuelga de la barra: su nombre también lleva al dueño.
+    // The fill node hangs from the bar: its name also leads to the owner.
     CHECK(uiProgressBarOwnerId(uiProgressBarNodeName(42ull) + "/Fill") == 42ull);
     CHECK(uiProgressBarOwnerId("Cubo") == 0ull);
     CHECK(uiProgressBarOwnerId("bar:") == 0ull);
     CHECK(uiProgressBarOwnerId("bar:12ab") == 0ull);
-    // Los tres prefijos no se confunden entre sí.
+    // The three prefixes do not confuse each other.
     CHECK(uiProgressBarOwnerId(uiButtonNodeName(42ull)) == 0ull);
     CHECK(uiProgressBarOwnerId(uiTextNodeName(42ull)) == 0ull);
     CHECK(uiButtonOwnerId(uiProgressBarNodeName(42ull)) == 0ull);
@@ -3511,16 +3507,16 @@ static void test_progress_bar_hit_test_maps_back_to_gameobject()
 }
 
 // ── Layout ──────────────────────────────────────────────────────────────────
-// El solver de auto-layout ya vivía en UiElement (layoutMode, padding, spacing,
-// celda); lo que no había era forma de usarlo desde la escena. Lo que se prueba
-// aquí es justo la capa nueva: que un GameObject SIN otro componente de UI monte
-// un contenedor propio, que con otro componente NO monte uno de más, y que los
-// campos lleguen al nodo que toca. La aritmética del solver ya la cubre
+// The auto-layout solver already lived in UiElement (layoutMode, padding, spacing,
+// cell); what did not exist was a way to use it from the scene. What is tested
+// here is exactly the new layer: that a GameObject WITHOUT another UI component mounts
+// its own container, that with another component it does NOT mount one more, and that the
+// fields reach the right node. The solver arithmetic is already covered by
 // ui_batch_tests.
 
-// Un contenedor vacío coloca a sus hijos y NO se dibuja: es un rect, no un
-// widget. Las posiciones de los hijos son deliberadamente absurdas: si el layout
-// no las pisara, el test lo vería.
+// An empty container places its children and does NOT paint: it is a rect, not a
+// widget. The positions of the children are deliberately absurd: if the layout
+// did not overwrite them, the test would see them.
 static void test_layout_container_places_children()
 {
     Scene scene("Test");
@@ -3534,13 +3530,13 @@ static void test_layout_container_places_children()
     layout->size        = glm::vec2(300.0f, 200.0f);
     layout->paddingLeft = 7.0f;
     layout->paddingTop  = 5.0f;
-    layout->spacing     = glm::vec2(9.0f, 12.0f);   // .x != .y: distingue los ejes
+    layout->spacing     = glm::vec2(9.0f, 12.0f);   // .x != .y: distinguishes the axes
     menu->setLayout(layout);
 
     GameObject* uno = scene.addGameObject("Uno", menu);
     auto a = std::make_shared<ButtonComponent>();
     a->size     = glm::vec2(100.0f, 40.0f);
-    a->position = glm::vec2(999.0f, 999.0f);   // la manda el layout, no el hijo
+    a->position = glm::vec2(999.0f, 999.0f);   // the layout commands it, not the child
     uno->setButton(a);
 
     GameObject* dos = scene.addGameObject("Dos", menu);
@@ -3567,8 +3563,8 @@ static void test_layout_container_places_children()
     FakeUiLoader loader;
     syncUiWidgets(botones, textos, barras, canvas, cache, loader, &jerarquia, &layouts);
 
-    // Un contenedor por GameObject y ni uno más: el menú cuelga de la raíz y los
-    // dos botones de él.
+    // One container per GameObject and no more: the menu hangs from the root and the
+    // two buttons from it.
     CHECK(canvas.root().children().size() == 1);
     if (canvas.root().children().size() != 1) return;
     CHECK(canvas.root().children()[0]->name == uiLayoutNodeName(menu->id));
@@ -3577,21 +3573,21 @@ static void test_layout_container_places_children()
     UiDrawData data;
     canvas.buildDrawData(800, 480, data);
 
-    // El contenedor no pinta: dos botones, cuatro vértices cada uno.
+    // The container does not paint: two buttons, four vertices each.
     CHECK(data.vertices.size() == 8);
     if (data.vertices.size() != 8) return;
 
-    // origen = posición + padding = (30+7, 40+5)
+    // origin = position + padding = (30+7, 40+5)
     CHECK(nearlyEqual(data.vertices[0].pos.x, 37.0f));
     CHECK(nearlyEqual(data.vertices[0].pos.y, 45.0f));
-    // El segundo baja el alto del primero MÁS el spacing en Y (no el de X).
+    // The second lowers the height of the first PLUS the spacing in Y (not in X).
     CHECK(nearlyEqual(data.vertices[4].pos.x, 37.0f));
     CHECK(nearlyEqual(data.vertices[4].pos.y, 97.0f));
 }
 
-// Con otro componente de UI en el mismo GameObject el layout NO monta contenedor:
-// escribe sus campos en el nodo que ya hay. Un panel de más sería un rect
-// invisible entre el widget y sus hijos, y las anclas dejarían de cuadrar.
+// With another UI component in the same GameObject the layout does NOT mount a container:
+// it writes its fields in the node that is already there. One more panel would be an invisible rect
+// between the widget and its children, and the anchors would not match up.
 static void test_layout_on_widget_uses_its_node()
 {
     Scene scene("Test");
@@ -3634,7 +3630,7 @@ static void test_layout_on_widget_uses_its_node()
 
     CHECK(canvas.root().children().size() == 1);
     if (canvas.root().children().size() != 1) return;
-    // El nodo del GameObject sigue siendo el del botón, no un contenedor nuevo.
+    // The GameObject node is still the button's, not a new container.
     CHECK(canvas.root().children()[0]->name == uiButtonNodeName(barra->id));
     CHECK(canvas.root().children()[0]->children().size() == 1);
 
@@ -3644,14 +3640,14 @@ static void test_layout_on_widget_uses_its_node()
     if (data.vertices.size() != 8) return;
     CHECK(nearlyEqual(data.vertices[0].pos.x, 10.0f));
     CHECK(nearlyEqual(data.vertices[0].pos.y, 20.0f));
-    // El hijo, colocado por el layout del botón: esquina + padding.
+    // The child, placed by the button layout: corner + padding.
     CHECK(nearlyEqual(data.vertices[4].pos.x, 16.0f));
     CHECK(nearlyEqual(data.vertices[4].pos.y, 24.0f));
 }
 
-// ignoreLayout es lo que un Unity resuelve con un LayoutElement aparte: aquí va
-// en el mismo componente. El hijo que lo pone se ancla por su cuenta y NO ocupa
-// hueco, así que el siguiente arranca en el origen del contenedor.
+// ignoreLayout is what Unity solves with a separate LayoutElement: here it goes
+// in the same component. The child that sets it anchors itself and does NOT take up
+// space, so the next one starts at the container origin.
 static void test_layout_ignore_layout_child_keeps_its_anchor()
 {
     Scene scene("Test");
@@ -3664,7 +3660,7 @@ static void test_layout_ignore_layout_child_keeps_its_anchor()
     layout->size = glm::vec2(300.0f, 200.0f);
     menu->setLayout(layout);
 
-    // Suelto: botón + layout en el MISMO GameObject solo para el ignoreLayout.
+    // Loose: button + layout in the SAME GameObject only for ignoreLayout.
     GameObject* suelto = scene.addGameObject("Suelto", menu);
     auto sb = std::make_shared<ButtonComponent>();
     sb->size     = glm::vec2(100.0f, 40.0f);
@@ -3678,8 +3674,8 @@ static void test_layout_ignore_layout_child_keeps_its_anchor()
     GameObject* colocado = scene.addGameObject("Colocado", menu);
     auto cb = std::make_shared<ButtonComponent>();
     cb->size = glm::vec2(80.0f, 30.0f);
-    // No neutra: si el layout no lo colocara, el test vería esta posición en vez
-    // del origen del contenedor.
+    // Not neutral: if the layout did not place it, the test would see this position instead
+    // of the container origin.
     cb->position = glm::vec2(77.0f, 88.0f);
     colocado->setButton(cb);
 
@@ -3706,17 +3702,17 @@ static void test_layout_ignore_layout_child_keeps_its_anchor()
     CHECK(data.vertices.size() == 8);
     if (data.vertices.size() != 8) return;
 
-    // El suelto, en su propia posición dentro del contenedor.
+    // The loose one, in its own position inside the container.
     CHECK(nearlyEqual(data.vertices[0].pos.x, 250.0f));
     CHECK(nearlyEqual(data.vertices[0].pos.y, 150.0f));
-    // Y el colocado arranca arriba del todo: el suelto no le comió el hueco.
+    // And the placed one starts at the very top: the loose one did not eat its space.
     CHECK(nearlyEqual(data.vertices[4].pos.x, 0.0f));
     CHECK(nearlyEqual(data.vertices[4].pos.y, 0.0f));
 }
 
-// Un contenedor SÍ aporta rect, así que sostiene a sus hijos en la jerarquía
-// igual que un botón. Sin esto, sus hijos subirían a la raíz y el layout no
-// colocaría a nadie.
+// A container DOES provide a rect, so it holds its children in the hierarchy
+// just like a button. Without this, its children would go up to the root and the layout would not
+// place anyone.
 static void test_collect_ui_widgets_incluye_los_layouts()
 {
     Scene scene("Test");
@@ -3751,11 +3747,11 @@ static void test_collect_ui_widgets_incluye_los_layouts()
     CHECK(jerarquia[0].first == menu->id);
     CHECK(jerarquia[0].second == 0ull);
     CHECK(jerarquia[1].first == boton->id);
-    CHECK(jerarquia[1].second == menu->id);   // el contenedor, no el canvas
+    CHECK(jerarquia[1].second == menu->id);   // the container, not the canvas
 }
 
-// Sin jerarquía (el camino de las escenas viejas) el contenedor sigue montándose
-// en la raíz: perderlo dejaría la escena sin el rect que agrupa.
+// Without hierarchy (the path of old scenes) the container still mounts
+// in the root: losing it would leave the scene without the rect that groups.
 static void test_layout_sin_jerarquia_monta_en_la_raiz()
 {
     UiCanvas canvas;
@@ -3771,14 +3767,14 @@ static void test_layout_sin_jerarquia_monta_en_la_raiz()
     CHECK(canvas.root().children().size() == 1);
     if (canvas.root().children().size() != 1) return;
     CHECK(canvas.root().children()[0]->name == uiLayoutNodeName(21ull));
-    // Y no dibuja: un contenedor es un rect, no un quad de color.
+    // And it does not paint: a container is a rect, not a color quad.
     UiDrawData data;
     canvas.buildDrawData(800, 480, data);
     CHECK(data.vertices.empty());
 }
 
-// Valores no neutros y DISTINTOS entre sí: con ceros, unos o repetidos, un
-// campo que la serialización no escribe pasaría igual (el default lo taparía).
+// Non-neutral values and DIFFERENT from each other: with zeros, ones or repeated, a
+// field that serialization does not write would pass the same (the default would hide it).
 static void fillLayout(LayoutComponent& l)
 {
     l.anchorMin = glm::vec2(0.0625f, 0.1875f);
@@ -3867,7 +3863,7 @@ static void test_layout_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Una escena guardada antes del componente carga igual: sin Layout y sin avisos.
+// A scene saved before the component loads the same: no Layout and no warnings.
 static void test_scene_without_layout_block_still_loads(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -3883,8 +3879,8 @@ static void test_scene_without_layout_block_still_loads(PhysicsManager& pm, Audi
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Neutralidad: sin ningún Layout el JSON no gana ni un byte, y añadir y quitar
-// el componente devuelve el dump EXACTO de partida.
+// Neutrality: without any Layout the JSON does not gain a single byte, and adding and removing
+// the component returns the EXACT dump from the start.
 static void test_scene_without_layout_serializes_identically()
 {
     Scene scene("Test");
@@ -3918,7 +3914,7 @@ static void test_layout_command_add_undo_redo()
     checkLayoutMatchesFilled(*go->getLayout());
 }
 
-// Remove reversible: el undo devuelve el componente CON sus valores.
+// Remove reversible: undo returns the component WITH its values.
 static void test_layout_command_remove()
 {
     Scene scene("Test");
@@ -3935,8 +3931,8 @@ static void test_layout_command_remove()
     checkLayoutMatchesFilled(*go->getLayout());
 }
 
-// Editar un campo del contenedor también entra en el stack, con el mismo
-// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero).
+// Editing a container field also goes into the stack, with the same
+// PropertyCommand<T> that the section builds (resolved by id, not by pointer).
 static void test_layout_property_command_undo_redo()
 {
     Scene scene("Test");
@@ -3960,16 +3956,16 @@ static void test_layout_property_command_undo_redo()
     cmd.execute();
     CHECK(nearlyEqual(go->getLayout()->spacing.y, 6.25f));
 
-    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    // Without component the applier does nothing (neither crashes nor resurrects it).
     go->setLayout(nullptr);
     cmd.undo();
     CHECK(!go->hasLayout());
 }
 
-// Un contenedor no dibuja, así que tampoco puede COMERSE los clics: el hit test
-// lo tiene que atravesar. Si fuera raycastTarget, un grupo que solo coloca
-// dejaría muerto lo que tuviera detrás, y sin pintar nada no habría forma de ver
-// por qué.
+// A container does not paint, so it also cannot EAT clicks: the hit test
+// has to go through it. If it were raycastTarget, a group that only places
+// would leave dead what was behind it, and with nothing painted there would be no way to see
+// why.
 static void test_layout_container_no_se_come_los_clics()
 {
     UiCanvas canvas;
@@ -3977,7 +3973,7 @@ static void test_layout_container_no_se_come_los_clics()
     FakeUiLoader loader;
 
     LayoutComponent l;
-    l.mode     = UiLayoutMode::None;   // sin colocar: el hijo se queda en su sitio
+    l.mode     = UiLayoutMode::None;   // without placing: the child stays in its place
     l.position = glm::vec2(0.0f, 0.0f);
     l.size     = glm::vec2(400.0f, 300.0f);
     std::vector<std::pair<uint64_t, const LayoutComponent*>> layouts{ {31ull, &l} };
@@ -3986,24 +3982,24 @@ static void test_layout_container_no_se_come_los_clics()
     b.position = glm::vec2(10.0f, 10.0f);
     b.size     = glm::vec2(50.0f, 20.0f);
     std::vector<std::pair<uint64_t, const ButtonComponent*>> botones{ {32ull, &b} };
-    // El botón cuelga del contenedor.
+    // The button hangs from the container.
     std::vector<std::pair<uint64_t, uint64_t>> jerarquia{ {31ull, 0ull}, {32ull, 31ull} };
 
     syncUiWidgets(botones, {}, {}, canvas, cache, loader, &jerarquia, &layouts);
     UiDrawData data;
     canvas.buildDrawData(800, 480, data);
 
-    // Dentro del botón: lo coge él.
+    // Inside the button: it gets it.
     const UiElement* enBoton = canvas.hitTest(glm::vec2(20.0f, 15.0f));
     CHECK(enBoton != nullptr);
     if (enBoton) CHECK(uiButtonOwnerId(enBoton->name) == 32ull);
 
-    // Dentro del contenedor pero FUERA del botón: no lo coge nadie.
+    // Inside the container but OUTSIDE the button: no one gets it.
     CHECK(canvas.hitTest(glm::vec2(300.0f, 250.0f)) == nullptr);
 }
 
-// El nombre del nodo lleva de vuelta al GameObject (clic en el viewport), y no
-// se confunde con los otros tres prefijos.
+// The node name leads back to the GameObject (click in the viewport), and does not
+// confuse with the three other prefixes.
 static void test_layout_hit_test_maps_back_to_gameobject()
 {
     CHECK(uiLayoutOwnerId(uiLayoutNodeName(42ull)) == 42ull);
@@ -4016,16 +4012,14 @@ static void test_layout_hit_test_maps_back_to_gameobject()
     CHECK(uiProgressBarOwnerId(uiLayoutNodeName(42ull)) == 0ull);
 }
 
-// ── Panel ───────────────────────────────────────────────────────────────────
-// El Panel del núcleo (UiWidgets.h) es un UiElement sin campos propios: es el
-// rectángulo de fondo con el que se montan marcos y grupos. El componente de
-// escena expone lo mismo que el resto —el rect, el color, la visibilidad y el
-// par atlas/sprite— más raycastTarget, que el núcleo sí tiene y que en un panel
-// de fondo es justo el campo que decide si se come los clics de lo de detrás.
+// ── Panel ─────────────────────────────────────────────────────────────────── The core Panel
+// (UiWidgets.h) is a UiElement without its own fields: it is the background rectangle with which
+// frames and groups are built. The scene component exposes the same as the rest — the rect, color,
+// visibility and the atlas/sprite pair — plus raycastTarget, which the core does have and which in
+// a background panel is exactly the field that decides whether it eats clicks from behind.
 //
-// Valores NO neutros y DISTINTOS entre sí: con el default (o con dos campos
-// iguales) un round-trip pasa igual aunque fromJson se salte el campo o lea la
-// clave equivocada.
+// Non-neutral values and DIFFERENT from each other: with the default (or with two equal fields) a
+// round-trip passes the same even if fromJson skips the field or reads the wrong key.
 static void fillPanel(PanelComponent& p)
 {
     p.anchorMin = glm::vec2(0.0625f, 0.1875f);
@@ -4087,7 +4081,7 @@ static void test_panel_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Una escena guardada antes del componente carga igual: sin panel y sin avisos.
+// A scene saved before the component loads the same: no panel and no warnings.
 static void test_scene_without_panel_block_still_loads(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -4103,8 +4097,8 @@ static void test_scene_without_panel_block_still_loads(PhysicsManager& pm, Audio
     CHECK(loaded.lastWarnings().empty());
 }
 
-// Neutralidad: sin ningún panel el JSON no gana ni un byte, y añadir y quitar el
-// componente devuelve el dump EXACTO de partida.
+// Neutrality: without any panel the JSON does not gain a single byte, and adding and removing the
+// component returns the EXACT dump from the start.
 static void test_scene_without_panel_serializes_identically()
 {
     Scene scene("Test");
@@ -4118,7 +4112,7 @@ static void test_scene_without_panel_serializes_identically()
     CHECK(scene.toJson().dump() == antes);
 }
 
-// Add reversible, y el redo NO devuelve los campos a los defaults.
+// Add reversible, and redo does NOT return the fields to defaults.
 static void test_panel_command_add_undo_redo()
 {
     Scene scene("Test");
@@ -4137,7 +4131,7 @@ static void test_panel_command_add_undo_redo()
     checkPanelMatchesFilled(*go->getPanel());
 }
 
-// Remove reversible: el undo devuelve el componente CON sus valores.
+// Remove reversible: undo returns the component WITH its values.
 static void test_panel_command_remove()
 {
     Scene scene("Test");
@@ -4154,8 +4148,8 @@ static void test_panel_command_remove()
     checkPanelMatchesFilled(*go->getPanel());
 }
 
-// Editar un campo del panel también entra en el stack, con el mismo
-// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero).
+// Editing a panel field also goes into the stack, with the same
+// PropertyCommand<T> that the section builds (resolved by id, not by pointer).
 static void test_panel_property_command_undo_redo()
 {
     Scene scene("Test");
@@ -4179,15 +4173,15 @@ static void test_panel_property_command_undo_redo()
     cmd.execute();
     CHECK(nearlyEqual(go->getPanel()->size.y, 91.25f));
 
-    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    // Without component the applier does nothing (neither crashes nor resurrects it).
     go->setPanel(nullptr);
     cmd.undo();
     CHECK(!go->hasPanel());
 }
 
-// El nodo vivo: nombre propio, rect volcado y, sobre todo, que un cambio del
-// componente ENSUCIE el nodo. Un sync que escribe los campos sin ensuciar deja
-// el panel clavado, porque el canvas se copia los vértices cacheados.
+// The live node: its own name, rect dumped and, above all, that a change in the
+// component DIRTIES the node. A sync that writes fields without dirtying leaves the
+// panel stuck, because the canvas copies the cached vertices.
 static void test_panel_sync_updates_the_live_node()
 {
     UiCanvas canvas;
@@ -4217,10 +4211,10 @@ static void test_panel_sync_updates_the_live_node()
     CHECK(nearlyEqual(nodo.size.y, 80.0f));
     CHECK(nearlyEqual(nodo.color.r, 0.5f));
     CHECK(data.vertices.size() == 4);   // un quad
-    // El emisor deja el nodo limpio: es la caché que el sync tiene que invalidar.
+    // The emitter leaves the node clean: it is the cache that sync has to invalidate.
     CHECK(nodo.dirty == 0u);
 
-    // Mover el panel tiene que ensuciarlo, o el canvas reusaría los vértices.
+    // Moving the panel has to dirty it, or the canvas would reuse the vertices.
     p.position = glm::vec2(40.0f, 50.0f);
     syncUiWidgets(w, canvas, cache, loader);
     CHECK(nodo.dirty != 0u);
@@ -4228,13 +4222,13 @@ static void test_panel_sync_updates_the_live_node()
     canvas.buildDrawData(800, 480, data);
     CHECK(nearlyEqual(nodo.screenPos.x, 40.0f));
 
-    // Y sin cambios NO se vuelve a ensuciar: ensuciar siempre tiraría la caché
-    // del canvas entero cada frame.
+    // And without changes does NOT get dirty again: dirtying always would throw away the cache
+    // of the entire canvas every frame.
     syncUiWidgets(w, canvas, cache, loader);
     CHECK(nodo.dirty == 0u);
 
-    // raycastTarget viaja: sin él un panel de fondo se comería los clics de lo
-    // que tenga detrás y no habría forma de apagarlo desde la escena.
+    // raycastTarget travels: without it a background panel would eat clicks from what
+    // is behind it and there would be no way to turn it off from the scene.
     CHECK(nodo.raycastTarget == true);
     p.raycastTarget = false;
     syncUiWidgets(w, canvas, cache, loader);
@@ -4247,7 +4241,7 @@ static void test_panel_hit_test_maps_back_to_gameobject()
     CHECK(uiPanelOwnerId("Cubo") == 0ull);
     CHECK(uiPanelOwnerId("pnl:") == 0ull);
     CHECK(uiPanelOwnerId("pnl:12ab") == 0ull);
-    // Los prefijos no se confunden entre sí.
+    // The prefixes do not confuse each other.
     CHECK(uiPanelOwnerId(uiButtonNodeName(42ull)) == 0ull);
     CHECK(uiPanelOwnerId(uiTextNodeName(42ull)) == 0ull);
     CHECK(uiPanelOwnerId(uiProgressBarNodeName(42ull)) == 0ull);
@@ -4259,9 +4253,9 @@ static void test_panel_hit_test_maps_back_to_gameobject()
 }
 
 // ── Image ───────────────────────────────────────────────────────────────────
-// El Image del núcleo SÍ tiene campos propios (modo, bordes del 9-slice, tope
-// de tiles y el bloque de Filled), y todos tienen que llegar al nodo: el
-// batcher los lee para emitir N quads.
+// The core Image DOES have its own fields (mode, 9-slice borders, tile cap
+// and the Filled block), and all of them have to reach the node: the
+// batcher reads them to emit N quads.
 static void fillImage(ImageComponent& im)
 {
     im.anchorMin = glm::vec2(0.09375f, 0.15625f);
@@ -4436,10 +4430,10 @@ static void test_image_property_command_undo_redo()
     CHECK(!go->hasImage());
 }
 
-// Los campos PROPIOS del Image tienen que llegar al nodo vivo: el batcher los
-// lee de ahí para decidir cuántos quads emite. Un sync que solo volcara el rect
-// dejaría el modo, los bordes y el fillAmount en sus defaults y el Image se
-// dibujaría siempre como Normal sin que nada lo dijera.
+// The Image's OWN fields have to reach the live node: the batcher reads
+// from there to decide how many quads to emit. A sync that only dumped the rect
+// would leave the mode, borders and fillAmount in their defaults and the Image would
+// always draw as Normal with nothing saying so.
 static void test_image_sync_updates_the_live_node()
 {
     UiCanvas canvas;
@@ -4448,7 +4442,7 @@ static void test_image_sync_updates_the_live_node()
 
     ImageComponent im;
     fillImage(im);
-    im.visible = true;   // invisible no emite quads y aquí se mira el nodo
+    im.visible = true;   // invisible does not emit quads and here we look at the node
 
     UiWidgetLists w;
     w.images.emplace_back(7ull, &im);
@@ -4477,7 +4471,7 @@ static void test_image_sync_updates_the_live_node()
     CHECK(img->raycastTarget == false);
     CHECK(img->sprite == "corazon");
 
-    // Y un cambio posterior ensucia el nodo.
+    // And a later change dirties the node.
     UiDrawData data;
     canvas.buildDrawData(800, 480, data);
     CHECK(nodo.dirty == 0u);
@@ -4499,9 +4493,9 @@ static void test_image_hit_test_maps_back_to_gameobject()
     CHECK(uiTextOwnerId(uiImageNodeName(42ull)) == 0ull);
 }
 
-// collectCanvases tiene que ver los dos componentes nuevos y meterlos en la
-// jerarquía: un GameObject con Panel es un ancestro con rect válido, así que sus
-// hijos tienen que colgar de él y no subir a la raíz.
+// collectCanvases has to see the two new components and put them in the
+// hierarchy: a GameObject with Panel is an ancestor with valid rect, so its
+// children have to hang from it and not go up to the root.
 static void test_collect_ui_widgets_incluye_panels_e_images()
 {
     Scene scene;
@@ -4534,12 +4528,12 @@ static void test_collect_ui_widgets_incluye_panels_e_images()
     CHECK(w.parents[0].first == marco->id);
     CHECK(w.parents[0].second == 0ull);
     CHECK(w.parents[1].first == icono->id);
-    CHECK(w.parents[1].second == marco->id);   // el Panel sostiene al Image
+    CHECK(w.parents[1].second == marco->id);   // the Panel holds the Image
 }
 
-// Panel e Image en el MISMO GameObject: dos nodos hermanos con nombres
-// distintos, y el Image encima del Panel (el último hermano manda). Con el
-// mismo prefijo, el gizmo y el picking cogerían el que no toca.
+// Panel and Image in the SAME GameObject: two sibling nodes with different
+// names, and the Image on top of the Panel (the last sibling wins). With the
+// same prefix, the gizmo and picking would grab the wrong one.
 static void test_panel_and_image_coexist()
 {
     UiCanvas canvas;
@@ -4567,13 +4561,13 @@ static void test_panel_and_image_coexist()
 }
 
 // ── Slider ──────────────────────────────────────────────────────────────────
-// El Slider del núcleo es un stub sin campos, así que el widget se monta por
-// COMPOSICIÓN igual que la ProgressBar: la pista es el nodo raíz y de ella
-// cuelgan el relleno y el asa. La diferencia con la barra es que este SÍ recibe
-// input: arrastrar el asa escribe en el componente, que es lo que serializa el
-// editor y lo que lee un script.
+// The core Slider is a stub without fields, so the widget is built by
+// COMPOSITION just like the ProgressBar: the track is the root node and from it
+// hang the fill and the handle. The difference with the bar is that this one DOES receive
+// input: dragging the handle writes to the component, which is what the editor
+// serializes and what a script reads.
 //
-// Valores NO neutros y DISTINTOS entre sí, por lo de siempre.
+// Non-neutral values and DIFFERENT from each other, as always.
 static void fillSlider(SliderComponent& s)
 {
     s.anchorMin = glm::vec2(0.03125f, 0.21875f);
@@ -4749,10 +4743,10 @@ static void test_slider_property_command_undo_redo()
     CHECK(!go->hasSlider());
 }
 
-// El asa NO se sale de la pista por ninguno de los dos extremos: a t=0 su borde
-// pega con el principio y a t=1 con el final. Sin descontar handleSize del
-// recorrido, la mitad del asa se saldría del rect en cada punta y no habría nada
-// que lo dijera —el asa se dibuja igual—.
+// The handle does NOT come out of the track on either end: at t=0 its edge
+// sticks to the beginning and at t=1 to the end. Without subtracting handleSize from the
+// travel, half the handle would come out of the rect at each tip and nothing
+// would say so — the handle draws the same—.
 static void test_slider_handle_stays_inside_the_track()
 {
     SliderComponent s;
@@ -4777,7 +4771,7 @@ static void test_slider_handle_stays_inside_the_track()
     s.handleRect(pos, sz);
     CHECK(nearlyEqual(pos.x, 80.0f));      // (200 - 40) * 0.5
 
-    // Y con el eje invertido, el mismo recorrido del otro lado.
+    // And with the inverted axis, the same travel on the other side.
     s.direction = UiSliderDirection::RightToLeft;
     s.value     = 0.0f;
     s.handleRect(pos, sz);
@@ -4786,8 +4780,8 @@ static void test_slider_handle_stays_inside_the_track()
     s.handleRect(pos, sz);
     CHECK(nearlyEqual(pos.x, 0.0f));
 
-    // Vertical: la Y del canvas crece hacia ABAJO, así que BottomToTop a 1 pega
-    // el asa ARRIBA (y=0).
+    // Vertical: the canvas Y grows DOWN, so BottomToTop at 1 sticks
+    // the handle UP (y=0).
     s.direction  = UiSliderDirection::BottomToTop;
     s.size       = glm::vec2(20.0f, 200.0f);
     s.handleSize = 40.0f;
@@ -4800,9 +4794,9 @@ static void test_slider_handle_stays_inside_the_track()
     CHECK(nearlyEqual(pos.y, 160.0f));
 }
 
-// wholeNumbers redondea el valor QUE SE ESCRIBE, no el que se muestra: si solo
-// redondeara al dibujar, el componente guardaría 3,7 y el script leería 3,7
-// mientras el asa se enseña en 4.
+// wholeNumbers rounds the value THAT IS WRITTEN, not the one shown: if it only
+// rounded when drawing, the component would save 3.7 and the script would read 3.7
+// while the handle shows 4.
 static void test_slider_whole_numbers_snaps_the_value()
 {
     SliderComponent s;
@@ -4814,11 +4808,11 @@ static void test_slider_whole_numbers_snaps_the_value()
     s.wholeNumbers = true;
     CHECK(nearlyEqual(s.valueFromNormalized(0.37f), 4.0f));
     CHECK(nearlyEqual(s.valueFromNormalized(0.34f), 3.0f));
-    // Los extremos siguen siendo exactos.
+    // The endpoints are still exact.
     CHECK(nearlyEqual(s.valueFromNormalized(0.0f), 0.0f));
     CHECK(nearlyEqual(s.valueFromNormalized(1.0f), 10.0f));
 
-    // Un rango degenerado no puede repartir nada: devuelve el mínimo y no un NaN.
+    // A degenerate range cannot distribute anything: it returns the minimum, not a NaN.
     s.maxValue = s.minValue;
     CHECK(nearlyEqual(s.valueFromNormalized(0.5f), 0.0f));
     CHECK(nearlyEqual(s.normalizedValue(), 0.0f));
@@ -4855,19 +4849,19 @@ static void test_slider_sync_builds_track_fill_and_handle()
     CHECK(relleno.name == uiSliderNodeName(5ull) + "/Fill");
     CHECK(asa.name == uiSliderNodeName(5ull) + "/Handle");
 
-    // El relleno llega hasta el CENTRO del asa, que es donde marca el valor.
+    // The fill reaches to the CENTER of the handle, which is where it marks the value.
     CHECK(nearlyEqual(relleno.size.x, 100.0f));
     CHECK(nearlyEqual(asa.size.x, 40.0f));
     CHECK(nearlyEqual(asa.position.x, 80.0f));
 
-    // El asa NO puede comerse el clic de la pista: el hit test devuelve el nodo
-    // más profundo, y si el asa fuera raycastTarget el arrastre que empieza
-    // encima de ella no llegaría al handler de la pista.
+    // The handle cannot eat the track click: the hit test returns the deepest node,
+    // and if the handle were raycastTarget the drag that starts
+    // on top of it would not reach the track handler.
     CHECK(asa.raycastTarget == false);
     CHECK(relleno.raycastTarget == false);
 
-    // El emisor deja los nodos limpios: es la caché que el sync tiene que
-    // invalidar cuando cambia el valor.
+    // The emitter leaves the nodes clean: it is the cache that sync has to
+    // invalidate when the value changes.
     CHECK(pista.dirty == 0u);
     s.value = 0.25f;
     syncUiWidgets(w, canvas, cache, loader);
@@ -4876,9 +4870,9 @@ static void test_slider_sync_builds_track_fill_and_handle()
     CHECK(asa.dirty != 0u);
 }
 
-// La razón de ser del widget: arrastrar escribe en el COMPONENTE. Si el valor se
-// quedara en el nodo, el editor no lo vería, no se serializaría y un script
-// leería el valor de antes del arrastre.
+// The reason for being of the widget: dragging writes to the COMPONENT. If the value
+// stayed in the node, the editor would not see it, it would not serialize and a script
+// would read the value from before the drag.
 static void test_slider_drag_writes_the_component_value()
 {
     UiCanvas canvas;
@@ -4888,12 +4882,12 @@ static void test_slider_drag_writes_the_component_value()
     SliderComponent s;
     s.position   = glm::vec2(0.0f, 0.0f);
     s.size       = glm::vec2(200.0f, 20.0f);
-    s.handleSize = 0.0f;   // sin asa el recorrido es el rect entero: 1 px = 0.5%
+    s.handleSize = 0.0f;   // without handle the travel is the entire rect: 1 px = 0.5%
     s.minValue   = 0.0f;
     s.maxValue   = 100.0f;
     s.value      = 0.0f;
 
-    // El camino de vuelta a Lua: el mismo runtime que usa el Button.
+    // The path back to Lua: the same runtime as the Button uses.
     float ultimoAviso = -1.0f;
     int   avisos      = 0;
     s.callbacks.ptr->onValueChanged = [&](float v) { ultimoAviso = v; avisos++; };
@@ -4905,8 +4899,8 @@ static void test_slider_drag_writes_the_component_value()
     syncUiWidgets(w, canvas, cache, loader);
     canvas.buildDrawData(800, 480, data);
 
-    // Un Down a 3/4 de la pista pone el valor ahí mismo (como Unity: la pista
-    // entera es zona de clic, no solo el asa).
+    // A Down at 3/4 of the track puts the value right there (like Unity: the entire track
+    // is click zone, not just the handle).
     UiInputState in;
     in.mousePos    = glm::vec2(150.0f, 10.0f);
     in.timeSeconds = 0.0f;
@@ -4919,7 +4913,7 @@ static void test_slider_drag_writes_the_component_value()
     CHECK(avisos == 1);
     CHECK(nearlyEqual(ultimoAviso, 75.0f));
 
-    // Y arrastrando sigue el ratón, también fuera del rect (acotado a la pista).
+    // And dragging follows the mouse, also outside the rect (clamped to the track).
     in.mousePos    = glm::vec2(50.0f, 10.0f);
     in.timeSeconds = 0.032f;
     canvas.updateInput(in);
@@ -4936,8 +4930,8 @@ static void test_slider_drag_writes_the_component_value()
     CHECK(nearlyEqual(s.value, 100.0f));
 }
 
-// Un slider no interactable se dibuja pero NO se deja mover: es el modo "solo
-// lectura" que un HUD necesita para enseñar un valor sin que el jugador lo toque.
+// A non-interactive slider draws but cannot be moved: it is the "read-only"
+// mode that a HUD needs to show a value without the player touching it.
 static void test_slider_not_interactable_ignores_the_mouse()
 {
     UiCanvas canvas;
@@ -4972,8 +4966,8 @@ static void test_slider_not_interactable_ignores_the_mouse()
 static void test_slider_hit_test_maps_back_to_gameobject()
 {
     CHECK(uiSliderOwnerId(uiSliderNodeName(42ull)) == 42ull);
-    // Los nodos hijos también devuelven a su dueño: arrastrar el asa selecciona
-    // el slider, no nada.
+    // Child nodes also return to their owner: dragging the handle selects
+    // the slider, not anything.
     CHECK(uiSliderOwnerId(uiSliderNodeName(42ull) + "/Handle") == 42ull);
     CHECK(uiSliderOwnerId(uiSliderNodeName(42ull) + "/Fill") == 42ull);
     CHECK(uiSliderOwnerId("Cubo") == 0ull);
@@ -4986,10 +4980,10 @@ static void test_slider_hit_test_maps_back_to_gameobject()
 
 
 // ── Checkbox ────────────────────────────────────────────────────────────────
-// Stub sin campos en el núcleo, igual que el Slider: la caja es el nodo raíz y
-// la marca cuelga de ella. Es el widget más simple de los interactivos — un
-// click y un bool—, así que aquí se prueba sobre todo que el click LLEGUE al
-// componente y no se quede en el nodo.
+// Stub without fields in the core, like the Slider: the box is the root node and
+// the mark hangs from it. It is the simplest of the interactive widgets — a
+// click and a bool—, so here we test above all that the click REACHES the
+// component and does not stay in the node.
 static void fillCheckbox(CheckboxComponent& c)
 {
     c.anchorMin = glm::vec2(0.0625f, 0.3125f);
@@ -5145,9 +5139,9 @@ static void test_checkbox_property_command_undo_redo()
     CHECK(!go->hasCheckbox());
 }
 
-// La marca se mete hacia DENTRO de la caja por los cuatro lados. Un padding que
-// se pasa no puede dar un rect negativo: la marca desaparece, que es lo peor que
-// puede pasar, y no un quad del revés.
+// The mark goes INSIDE the box from all four sides. A padding that
+// goes over cannot give a negative rect: the mark disappears, which is the worst that
+// can happen, not a backwards quad.
 static void test_checkbox_check_rect_respects_padding()
 {
     CheckboxComponent c;
@@ -5197,20 +5191,20 @@ static void test_checkbox_sync_builds_box_and_check()
     const UiElement& marca = *caja.children()[0];
     CHECK(marca.name == uiCheckboxNodeName(5ull) + "/Check");
 
-    // Apagado: la marca EXISTE (la forma del subárbol no cambia) pero no se
-    // dibuja. Si el nodo apareciera y desapareciera habría que reconstruir la
-    // raíz del canvas en cada click.
+    // Off: the mark EXISTS (the subtree shape does not change) but does not
+    // paint. If the node appeared and disappeared we would have to rebuild the
+    // canvas root on every click.
     CHECK(marca.drawable == false);
-    CHECK(data.vertices.size() == 4);   // solo la caja
+    CHECK(data.vertices.size() == 4);   // just the box
 
     c.isOn = true;
     syncUiWidgets(w, canvas, cache, loader);
     CHECK(marca.drawable == true);
     data.clear();
     canvas.buildDrawData(800, 480, data);
-    CHECK(data.vertices.size() == 8);   // caja + marca
+    CHECK(data.vertices.size() == 8);   // box + mark
     CHECK(nearlyEqual(marca.size.x, 24.0f));
-    // La marca tampoco puede comerse el click de la caja.
+    // The mark also cannot eat the box click.
     CHECK(marca.raycastTarget == false);
 }
 
@@ -5241,12 +5235,12 @@ static void test_checkbox_click_toggles_the_component()
     CHECK(avisos == 1);
     CHECK(ultimoAviso == true);
 
-    // Y el segundo click lo apaga: es un interruptor, no un botón de encender.
+    // And the second click turns it off: it is a switch, not a power button.
     clickEnCanvas(canvas, glm::vec2(20.0f, 20.0f), 5.0f);
     CHECK(c.isOn == false);
     CHECK(avisos == 2);
 
-    // No interactable: se dibuja pero el click no lo mueve.
+    // Non-interactive: it draws but the click does not move it.
     c.interactable = false;
     syncUiWidgets(w, canvas, cache, loader);
     clickEnCanvas(canvas, glm::vec2(20.0f, 20.0f), 10.0f);
@@ -5266,10 +5260,10 @@ static void test_checkbox_hit_test_maps_back_to_gameobject()
 }
 
 // ── Toggle ──────────────────────────────────────────────────────────────────
-// El interruptor deslizante: mismo dato que el Checkbox (un bool) pero otra
-// forma de enseñarlo — el mando se mueve de un extremo al otro y la pista cambia
-// de color. Por eso son dos componentes y no uno con un enum de estilo: son dos
-// conjuntos de campos distintos (padding de la marca vs. tamaño del mando).
+// The sliding switch: same data as the Checkbox (a bool) but another
+// way to show it — the knob moves from one end to the other and the track changes
+// color. That is why they are two components and not one with a style enum: they are two
+// different sets of fields (mark padding vs. knob size).
 static void fillToggle(ToggleComponent& t)
 {
     t.anchorMin = glm::vec2(0.09375f, 0.34375f);
@@ -5431,8 +5425,8 @@ static void test_toggle_property_command_undo_redo()
     CHECK(!go->hasToggle());
 }
 
-// El mando va pegado a un extremo o al otro, siempre dentro del padding, y NUNCA
-// se sale de la pista aunque el tamaño pedido no quepa.
+// The handle goes flush against one end or the other, always inside padding,
+// and NEVER leaves the track even if the requested size does not fit.
 static void test_toggle_knob_rect_moves_end_to_end()
 {
     ToggleComponent t;
@@ -5447,15 +5441,15 @@ static void test_toggle_knob_rect_moves_end_to_end()
     CHECK(nearlyEqual(pos.x, 5.0f));
     CHECK(nearlyEqual(pos.y, 5.0f));
     CHECK(nearlyEqual(sz.x, 30.0f));
-    CHECK(nearlyEqual(sz.y, 30.0f));   // alto de la pista menos el padding
+    CHECK(nearlyEqual(sz.y, 30.0f));   // height of the track minus the padding
 
     t.isOn = true;
     t.knobRect(pos, sz);
     CHECK(nearlyEqual(pos.x, 45.0f));            // 80 - 5 - 30
-    CHECK(nearlyEqual(pos.x + sz.x, 75.0f));     // no se sale del padding
+    CHECK(nearlyEqual(pos.x + sz.x, 75.0f));     // does not come out of the padding
 
-    // Un mando más grande que la pista se acota a lo que queda entre paddings,
-    // en vez de asomar por el borde.
+    // A handle bigger than the track is clamped to what fits between paddings,
+    // instead of sticking out the edge.
     t.knobSize = 500.0f;
     t.isOn     = true;
     t.knobRect(pos, sz);
@@ -5496,12 +5490,12 @@ static void test_toggle_sync_builds_track_and_knob()
     CHECK(mando.name == uiToggleNodeName(5ull) + "/Knob");
     CHECK(mando.raycastTarget == false);
 
-    // Apagado: color de "off" y mando a la izquierda.
+    // Off: color of "off" and handle at the left.
     CHECK(nearlyEqual(pista.color.r, 0.1f));
     CHECK(nearlyEqual(mando.position.x, 5.0f));
 
-    // Encendido: los dos cambian, y el nodo queda sucio o el canvas reusaría los
-    // vértices de antes.
+    // On: both change, and the node is left dirty or the canvas would reuse the
+    // old vertices.
     t.isOn = true;
     syncUiWidgets(w, canvas, cache, loader);
     CHECK(nearlyEqual(pista.color.r, 0.9f));
@@ -5557,9 +5551,9 @@ static void test_toggle_hit_test_maps_back_to_gameobject()
 }
 
 // ── Scrollbar ───────────────────────────────────────────────────────────────
-// Como el Slider pero con el asa de tamaño VARIABLE (la fracción visible del
-// contenido) y con el valor siempre en 0..1: no tiene rango propio porque quien
-// lo interpreta es el ScrollView, no la barra.
+// Like the Slider but with the handle of VARIABLE size (the visible fraction
+// of the content) and with the value always in 0..1: it has no own range
+// because the ScrollView is the one that interprets it, not the bar.
 static void fillScrollbar(ScrollbarComponent& s)
 {
     s.anchorMin = glm::vec2(0.125f, 0.375f);
@@ -5720,7 +5714,8 @@ static void test_scrollbar_property_command_undo_redo()
     CHECK(!go->hasScrollbar());
 }
 
-// El asa ocupa su fracción del canal y recorre lo que le queda, sin salirse.
+// The handle occupies its fraction of the channel and travels what is left,
+// never going out.
 static void test_scrollbar_handle_rect_and_steps()
 {
     ScrollbarComponent s;
@@ -5744,8 +5739,8 @@ static void test_scrollbar_handle_rect_and_steps()
     s.handleRect(pos, sz);
     CHECK(nearlyEqual(pos.x, 75.0f));
 
-    // Vertical TopToBottom: el valor crece hacia abajo, que es lo natural de una
-    // barra lateral (0 = arriba del todo).
+    // Vertical TopToBottom: the value grows downward, which is the natural way
+    // for a scrollbar (0 = at the top).
     s.direction      = UiScrollbarDirection::TopToBottom;
     s.size           = glm::vec2(20.0f, 200.0f);
     s.handleFraction = 0.5f;
@@ -5757,14 +5752,14 @@ static void test_scrollbar_handle_rect_and_steps()
     s.handleRect(pos, sz);
     CHECK(nearlyEqual(pos.y, 100.0f));
 
-    // numberOfSteps engancha el valor a posiciones discretas. Con 5 pasos hay 5
-    // paradas (0, 0.25, 0.5, 0.75, 1), como en Unity.
+    // numberOfSteps snaps the value to discrete positions. With 5 steps there are
+    // 5 stops (0, 0.25, 0.5, 0.75, 1), like in Unity.
     ScrollbarComponent d;
     d.numberOfSteps = 5u;
     CHECK(nearlyEqual(d.snapValue(0.3f), 0.25f));
     CHECK(nearlyEqual(d.snapValue(0.6f), 0.5f));
     CHECK(nearlyEqual(d.snapValue(0.99f), 1.0f));
-    // 0 y 1 pasos = continuo: enganchar a un solo sitio dejaría la barra muerta.
+    // 0 and 1 steps = continuous: snapping to one place would leave the bar dead.
     d.numberOfSteps = 0u;
     CHECK(nearlyEqual(d.snapValue(0.3f), 0.3f));
     d.numberOfSteps = 1u;
@@ -5781,7 +5776,7 @@ static void test_scrollbar_drag_and_wheel_write_the_component()
     s.direction      = UiScrollbarDirection::LeftToRight;
     s.position       = glm::vec2(0.0f, 0.0f);
     s.size           = glm::vec2(200.0f, 20.0f);
-    s.handleFraction = 0.0f;   // sin asa el recorrido es el canal entero
+    s.handleFraction = 0.0f;   // without handle the travel is the entire channel
     s.value          = 0.0f;
 
     float ultimo = -1.0f;
@@ -5815,9 +5810,9 @@ static void test_scrollbar_drag_and_wheel_write_the_component()
     in.timeSeconds  = 0.032f;
     canvas.updateInput(in);
 
-    // La rueda también mueve la barra: sin esto, una lista con scrollbar solo se
-    // podría mover arrastrando, que no es lo que espera nadie.
-    in.scrollDelta = 1.0f;     // + hacia arriba = hacia el principio
+    // The wheel also moves the scrollbar: without this, a list with scrollbar
+    // could only be scrolled by dragging, which is not what anyone expects.
+    in.scrollDelta = 1.0f;     // + upward = toward the beginning
     in.timeSeconds = 0.048f;
     canvas.updateInput(in);
     CHECK(s.value < 0.75f);
@@ -5828,7 +5823,7 @@ static void test_scrollbar_drag_and_wheel_write_the_component()
     canvas.updateInput(in);
     CHECK(s.value > trasRueda);
 
-    // Y no se sale de [0,1] por mucho que se insista.
+    // And does not leave [0,1] no matter how much you push.
     for (int i = 0; i < 50; i++)
     {
         in.scrollDelta = -1.0f;
@@ -5851,13 +5846,13 @@ static void test_scrollbar_hit_test_maps_back_to_gameobject()
 }
 
 
-// ── Entrada de texto en el canvas ───────────────────────────────────────────
-// El canvas ya tenia foco, recorrido con Tab, navegacion direccional y
-// onKeyDown; lo unico que le faltaba para poder escribir era el canal de
-// CARACTERES. UiKey nombra teclas (Tab, Enter, flechas...), y una 'a' no es una
-// tecla nombrada: es un codepoint, y depende del layout del teclado y de las
-// muertas, cosa que el core no sabe ni tiene por que saber. Por eso lo rellena
-// el caller (GLFW, el editor, un test), igual que la posicion del raton.
+// ── Text input in the canvas ───────────────────────────────────────────────
+// The canvas already had focus, Tab traversal, directional navigation and
+// onKeyDown; the only thing missing for typing was the CHARACTER channel.
+// UiKey names keys (Tab, Enter, arrows...), and an 'a' is not a named key:
+// it is a codepoint, and depends on keyboard layout and dead keys, which the
+// core does not know about and should not care. So the caller fills it
+// (GLFW, the editor, a test), just like the mouse position.
 static void test_canvas_entrega_el_texto_al_elemento_con_foco()
 {
     UiCanvas canvas;
@@ -5871,8 +5866,8 @@ static void test_canvas_entrega_el_texto_al_elemento_con_foco()
     UiDrawData data;
     canvas.buildDrawData(800, 480, data);
 
-    // Sin foco NO se entrega nada: un caracter suelto sin destino no puede ir
-    // al primero que pase por ahi.
+    // Without focus it is NOT delivered: a lone character with no destination
+    // cannot go to whoever is near.
     UiInputState in;
     in.chars = { 'N', 'o' };
     canvas.updateInput(in);
@@ -5884,20 +5879,20 @@ static void test_canvas_entrega_el_texto_al_elemento_con_foco()
     canvas.updateInput(in);
     CHECK(escrito == "Hola");
 
-    // Y los codepoints viajan enteros, no truncados a un byte: el canal es
-    // uint32, asi que una 'n' con virgulilla llega de una pieza.
+    // And codepoints travel whole, not truncated to a byte: the channel is
+    // uint32, so an 'n' with tilde comes through in one piece.
     uint32_t ultimo = 0;
     campo.onTextInput = [&](UiEvent& e) { ultimo = e.codepoint; };
-    in.chars = { 0x00F1u };   // n con virgulilla
+    in.chars = { 0x00F1u };   // n with tilde
     in.timeSeconds = 0.032f;
     canvas.updateInput(in);
     CHECK(ultimo == 0x00F1u);
 }
 
-// Las cuatro teclas de edicion tenian que existir: sin Backspace no se puede
-// borrar, y con la navegacion comiendose las flechas no se puede mover el
-// cursor. El canvas ya cedia la tecla a quien la consumiera; esto comprueba que
-// SIGUE cediendola con las nuevas.
+// The four edit keys had to exist: without Backspace you cannot delete, and
+// with navigation eating the arrows you cannot move the cursor. The canvas
+// already yielded the key to whoever consumed it; this checks that it KEEPS
+// yielding it with the new ones.
 static void test_canvas_cede_las_teclas_de_edicion_a_quien_las_consume()
 {
     UiCanvas canvas;
@@ -5913,8 +5908,8 @@ static void test_canvas_cede_las_teclas_de_edicion_a_quien_las_consume()
     std::vector<UiKey> recibidas;
     a.onKeyDown = [&](UiEvent& e) {
         recibidas.push_back(e.key);
-        // Left y Right son del cursor; Up y Down se dejan pasar para que la
-        // navegacion siga funcionando desde dentro del campo.
+        // Left and Right are for the cursor; Up and Down are passed through so
+        // navigation keeps working from inside the field.
         if (e.key == UiKey::Left || e.key == UiKey::Right) e.consumed = true;
     };
 
@@ -5932,14 +5927,14 @@ static void test_canvas_cede_las_teclas_de_edicion_a_quien_las_consume()
     CHECK(recibidas[2] == UiKey::Home);
     CHECK(recibidas[3] == UiKey::End);
 
-    // Right consumida: el foco NO se va al de al lado.
+    // Right consumed: focus does NOT move to the next one.
     in.keys = { UiKey::Right };
     in.timeSeconds = 0.016f;
     canvas.updateInput(in);
     CHECK(canvas.focused() == &a);
 
-    // Y sin consumirla, la navegacion sigue viva: es lo que hace jugable un menu
-    // con mando, y no se puede haber roto por el camino.
+    // And without consuming it, navigation stays alive: this is what makes a menu
+    // with gamepad playable, and it cannot have broken along the way.
     a.onKeyDown = nullptr;
     in.keys = { UiKey::Right };
     in.timeSeconds = 0.032f;
@@ -5948,14 +5943,14 @@ static void test_canvas_cede_las_teclas_de_edicion_a_quien_las_consume()
 }
 
 
-// ── InputField ──────────────────────────────────────────────────────────────
-// El unico widget que necesitaba algo que el core NO tenia: un canal de
-// caracteres. UiKey nombra teclas y una 'a' no es una tecla nombrada, asi que
-// hasta ahora no habia por donde entregarla. Con UiInputState::chars y
-// onTextInput ya se puede, y este componente es el primero que los usa.
+// ── InputField ──────────────────────────────────────────────────────────────────
+// The only widget that needed something the CORE did NOT have: a character
+// channel. UiKey names keys and an 'a' is not a named key, so until now there
+// was no way to deliver it. With UiInputState::chars and onTextInput it can
+// now, and this component is the first one to use them.
 //
-// El cursor se cuenta en CODEPOINTS, no en bytes: con UTF-8, una 'n' con
-// virgulilla ocupa dos bytes y un cursor en bytes lo partiria por la mitad.
+// The cursor is counted in CODEPOINTS, not bytes: with UTF-8, an 'n' with
+// tilde takes two bytes and a cursor in bytes would split it in the middle.
 static void fillInputField(InputFieldComponent& f)
 {
     f.anchorMin = glm::vec2(0.03125f, 0.09375f);
@@ -6132,9 +6127,9 @@ static void test_input_field_property_command_undo_redo()
     CHECK(!go->hasInputField());
 }
 
-// El cursor se cuenta en CODEPOINTS y el texto se guarda en UTF-8. Un cursor en
-// bytes partiria una 'n' con virgulilla por la mitad y dejaria la cadena rota
-// sin que nada lo dijera.
+// Cursor is counted in CODEPOINTS and text is stored in UTF-8. A cursor in
+// bytes would split an 'n' with tilde in half and leave the string broken
+// without anything saying so.
 static void test_input_field_edits_by_codepoint_not_by_byte()
 {
     InputFieldComponent f;
@@ -6142,32 +6137,32 @@ static void test_input_field_edits_by_codepoint_not_by_byte()
     f.caretPos = 0;
 
     CHECK(f.insertCodepoint('a'));
-    CHECK(f.insertCodepoint(0x00F1u));   // n con virgulilla: DOS bytes en UTF-8
+    CHECK(f.insertCodepoint(0x00F1u));   // n with tilde: TWO bytes in UTF-8
     CHECK(f.insertCodepoint('o'));
     CHECK(f.text == "a\xC3\xB1o");
-    CHECK(f.caretPos == 3);              // tres CARACTERES, cuatro bytes
+    CHECK(f.caretPos == 3);              // three CHARACTERS, four bytes
     CHECK(f.codepointCount() == 3);
 
-    // Borrar hacia atras se lleva el caracter entero, no medio byte.
+    // Backspacing removes the whole character, not half a byte.
     f.caretPos = 2;
     CHECK(f.backspace());
     CHECK(f.text == "ao");
     CHECK(f.caretPos == 1);
 
-    // Y hacia delante, lo mismo.
+    // And forward, same thing.
     f.text     = "a\xC3\xB1o";
     f.caretPos = 1;
     CHECK(f.deleteForward());
     CHECK(f.text == "ao");
     CHECK(f.caretPos == 1);
 
-    // En los extremos no hay nada que borrar y no pasa nada.
+    // At the extremes there is nothing to delete and nothing happens.
     f.caretPos = 0;
     CHECK(!f.backspace());
     f.caretPos = f.codepointCount();
     CHECK(!f.deleteForward());
 
-    // El cursor se mueve por caracteres y se acota a los extremos.
+    // Cursor moves by characters and is clamped to the ends.
     f.text     = "a\xC3\xB1o";
     f.caretPos = 0;
     f.moveCaret(1);
@@ -6182,9 +6177,9 @@ static void test_input_field_edits_by_codepoint_not_by_byte()
     CHECK(f.caretPos == 3);
 }
 
-// El tipo de contenido filtra lo que se puede teclear, y el limite corta. Los
-// dos van en el sitio donde se ESCRIBE, no al dibujar: si solo filtraran la
-// pintura, el componente guardaria basura y un script la leeria.
+// Content type filters what can be typed, and the limit cuts. Both go
+// where you WRITE, not when drawing: if they only filtered the display,
+// the component would save garbage and a script would read it.
 static void test_input_field_content_type_and_limit()
 {
     InputFieldComponent f;
@@ -6193,7 +6188,7 @@ static void test_input_field_content_type_and_limit()
     CHECK(f.accepts('4'));
     CHECK(!f.accepts('a'));
     CHECK(!f.accepts('.'));
-    // El signo solo al principio: "1-2" no es un entero.
+    // Sign only at the start: "1-2" is not an integer.
     f.text = ""; f.caretPos = 0;
     CHECK(f.accepts('-'));
     f.text = "1"; f.caretPos = 1;
@@ -6203,7 +6198,7 @@ static void test_input_field_content_type_and_limit()
     f.text = ""; f.caretPos = 0;
     CHECK(f.accepts('.'));
     f.text = "1.5"; f.caretPos = 3;
-    CHECK(!f.accepts('.'));   // un solo separador decimal
+    CHECK(!f.accepts('.'));   // only one decimal separator
 
     f.contentType = UiInputContentType::Alphanumeric;
     CHECK(f.accepts('a'));
@@ -6212,29 +6207,29 @@ static void test_input_field_content_type_and_limit()
 
     f.contentType = UiInputContentType::Standard;
     CHECK(f.accepts(' '));
-    // Los de control NUNCA entran: un '\n' o un tabulador dentro de una linea
-    // no se ve y desplaza todo lo que venga detras.
+    // Control characters NEVER go in: a '\n' or tab inside a line
+    // is invisible and shifts everything that follows.
     CHECK(!f.accepts('\n'));
     CHECK(!f.accepts('\t'));
     CHECK(!f.accepts(0x7Fu));
 
-    // El limite cuenta CARACTERES, no bytes.
+    // The limit counts CHARACTERS, not bytes.
     f.text           = "";
     f.caretPos       = 0;
     f.characterLimit = 3u;
     CHECK(f.insertCodepoint('a'));
     CHECK(f.insertCodepoint(0x00F1u));
     CHECK(f.insertCodepoint('c'));
-    CHECK(!f.insertCodepoint('d'));   // lleno: tres caracteres, cuatro bytes
+    CHECK(!f.insertCodepoint('d'));   // full: three characters, four bytes
     CHECK(f.codepointCount() == 3);
 
-    // 0 = sin limite.
+    // 0 = no limit.
     f.characterLimit = 0u;
     CHECK(f.insertCodepoint('d'));
 }
 
-// El Password no cambia el texto, cambia lo que se ENSEÑA. Guardar el
-// enmascarado seria perder la contraseña.
+// Password does not change the text, it changes what is SHOWN. Saving the
+// masked version would lose the password.
 static void test_input_field_password_and_placeholder()
 {
     InputFieldComponent f;
@@ -6247,22 +6242,22 @@ static void test_input_field_password_and_placeholder()
     CHECK(f.text == "secreto");
     CHECK(!f.isShowingPlaceholder());
 
-    // Con varios bytes por caracter, la mascara sigue teniendo un simbolo por
-    // CARACTER y no uno por byte.
+    // With multiple bytes per character, the mask still has one symbol per
+    // CHARACTER and not one per byte.
     f.text = "a\xC3\xB1o";
     CHECK(f.displayText() == "***");
 
-    // Vacio: se enseña el placeholder, y con SU color (eso lo comprueba el sync).
+    // Empty: the placeholder is shown, and with ITS color (that is checked by the sync).
     f.text = "";
     CHECK(f.isShowingPlaceholder());
     CHECK(f.displayText() == "clave...");
 
-    // Sin placeholder y vacio no se dibuja nada.
+    // No placeholder and empty nothing is drawn.
     f.placeholder = "";
     CHECK(f.displayText().empty());
 
-    // Un passwordChar vacio cae al asterisco: un campo de contraseña que no
-    // enseña NADA parece roto.
+    // An empty passwordChar falls back to asterisk: a password field that shows
+    // NOTHING looks broken.
     f.text         = "abc";
     f.passwordChar = "";
     CHECK(f.displayText() == "***");
@@ -6291,7 +6286,7 @@ static void test_input_field_sync_builds_box_text_and_caret()
     const UiElement& caja = *canvas.root().children()[0];
     CHECK(caja.name == uiInputFieldNodeName(5ull));
     CHECK(caja.typeName() == std::string("InputField"));
-    // La caja TIENE que ser focusable o no hay donde escribir.
+    // The box HAS to be focusable or there is nowhere to type.
     CHECK(caja.focusable == true);
     CHECK(caja.children().size() == 2);
     if (caja.children().size() != 2) return;
@@ -6302,12 +6297,12 @@ static void test_input_field_sync_builds_box_text_and_caret()
     CHECK(texto.raycastTarget == false);
     CHECK(caret.raycastTarget == false);
 
-    // Sin foco el cursor NO se dibuja: un campo que parpadea sin estar activo
-    // es exactamente lo que hace creer que se puede escribir en el.
+    // Without focus the cursor is NOT drawn: a field that blinks without being active
+    // is exactly what makes you think you can type in it.
     CHECK(caret.drawable == false);
 }
 
-// La razon de ser del canal de texto: teclear escribe en el COMPONENTE.
+// The reason for the text channel: typing writes in the COMPONENT.
 static void test_input_field_typing_writes_the_component()
 {
     UiCanvas canvas;
@@ -6331,7 +6326,7 @@ static void test_input_field_typing_writes_the_component()
     syncUiWidgets(w, canvas, cache, loader);
     canvas.buildDrawData(800, 480, data);
 
-    // Un click enfoca el campo.
+    // A click focuses the field.
     clickEnCanvas(canvas, glm::vec2(100.0f, 15.0f), 0.0f);
     CHECK(canvas.focused() != nullptr);
 
@@ -6346,8 +6341,8 @@ static void test_input_field_typing_writes_the_component()
     CHECK(avisos == 4);
     CHECK(ultimo == "Hola");
 
-    // Backspace borra y Left mueve, sin dejar que la navegacion se coma la
-    // flecha (el campo la consume).
+    // Backspace deletes and Left moves, without letting navigation eat the
+    // arrow (the field consumes it).
     in.chars.clear();
     in.keys = { UiKey::Backspace };
     in.timeSeconds = 1.016f;
@@ -6359,7 +6354,7 @@ static void test_input_field_typing_writes_the_component()
     in.timeSeconds = 1.032f;
     canvas.updateInput(in);
     CHECK(f.caretPos == 1);
-    CHECK(canvas.focused() != nullptr);   // la flecha NO movio el foco
+    CHECK(canvas.focused() != nullptr);   // the arrow did NOT move focus
 
     in.keys = { UiKey::Home };
     in.timeSeconds = 1.048f;
@@ -6370,13 +6365,13 @@ static void test_input_field_typing_writes_the_component()
     canvas.updateInput(in);
     CHECK(f.caretPos == 3);
 
-    // Enter cierra la edicion.
+    // Enter closes the edit.
     in.keys = { UiKey::Enter };
     in.timeSeconds = 1.08f;
     canvas.updateInput(in);
     CHECK(finales == 1);
 
-    // readOnly: se puede enfocar y mover el cursor, pero no cambiar el texto.
+    // readOnly: can focus and move the cursor, but not change the text.
     f.readOnly = true;
     syncUiWidgets(w, canvas, cache, loader);
     canvas.setFocus(nullptr);
@@ -6387,7 +6382,7 @@ static void test_input_field_typing_writes_the_component()
     canvas.updateInput(in);
     CHECK(f.text == "Hol");
 
-    // Y no interactable no se enfoca siquiera.
+    // And not interactable does not even focus.
     f.readOnly     = false;
     f.interactable = false;
     syncUiWidgets(w, canvas, cache, loader);
@@ -6411,9 +6406,9 @@ static void test_input_field_hit_test_maps_back_to_gameobject()
 }
 
 // ── Dropdown ────────────────────────────────────────────────────────────────
-// El unico widget cuyo subarbol CAMBIA DE FORMA con los datos: una opcion mas es
-// un nodo mas. Abrir y cerrar NO cambia la forma (la lista existe siempre y solo
-// se apaga), pero añadir o quitar opciones si, y eso obliga a reconstruir.
+// The only widget whose subtree CHANGES SHAPE with the data: one more option is
+// one more node. Opening and closing do NOT change the shape (the list always exists and only
+// turns off), but adding or removing options does, and that forces a rebuild.
 static void fillDropdown(DropdownComponent& d)
 {
     d.anchorMin = glm::vec2(0.15625f, 0.40625f);
@@ -6503,8 +6498,8 @@ static void test_dropdown_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.lastWarnings().empty());
 }
 
-// isOpen es estado VIVO y no se guarda: una escena que se abriera con el combo
-// desplegado tendria una lista tapando el menu nada mas cargar.
+// isOpen is LIVE state and is not saved: a scene that opened with the combo
+// dropped would have a list covering the menu right after loading.
 static void test_dropdown_open_state_is_not_serialized(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -6612,9 +6607,9 @@ static void test_dropdown_property_command_undo_redo()
     CHECK(!go->hasDropdown());
 }
 
-// El valor NO se clampa al escribirlo (el componente no interpreta nada) pero
-// todo lo que lo LEE tiene que aguantar un indice fuera de rango: una escena
-// editada a mano con value 99 y dos opciones no puede reventar.
+// The value is NOT clamped when written (the component does not interpret anything) but
+// everything that READS it has to tolerate an out-of-range index: a scene
+// edited by hand with value 99 and two options cannot crash.
 static void test_dropdown_out_of_range_value_is_survivable()
 {
     DropdownComponent d;
@@ -6627,17 +6622,17 @@ static void test_dropdown_out_of_range_value_is_survivable()
     d.value = 1;
     CHECK(d.selectedLabel() == "B");
 
-    // Sin opciones tampoco.
+    // Not even without options.
     d.options.clear();
     d.value = 0;
     CHECK(d.selectedLabel().empty());
 
-    // Alto de la lista: se enseñan como mucho maxVisibleItems filas.
+    // Height of the list: at most maxVisibleItems rows are shown.
     d.options         = { "A", "B", "C", "D", "E" };
     d.itemHeight      = 20.0f;
     d.maxVisibleItems = 3u;
     CHECK(nearlyEqual(d.listHeight(), 60.0f));
-    d.maxVisibleItems = 0u;   // 0 = todas
+    d.maxVisibleItems = 0u;   // 0 = all
     CHECK(nearlyEqual(d.listHeight(), 100.0f));
 }
 
@@ -6666,15 +6661,15 @@ static void test_dropdown_sync_builds_label_arrow_and_items()
     const UiElement& caja = *canvas.root().children()[0];
     CHECK(caja.name == uiDropdownNodeName(5ull));
     CHECK(caja.typeName() == std::string("Dropdown"));
-    // Etiqueta, flecha y lista.
+    // Label, arrow and list.
     CHECK(caja.children().size() == 3);
     if (caja.children().size() != 3) return;
     const UiElement& lista = *caja.children()[2];
     CHECK(lista.name == uiDropdownNodeName(5ull) + "/List");
-    CHECK(lista.children().size() == 3);   // una fila por opcion
+    CHECK(lista.children().size() == 3);   // one row per option
 
-    // Cerrada: la lista EXISTE pero no se ve. La forma del subarbol no cambia al
-    // abrir, asi que abrir no reconstruye el canvas entero.
+    // Closed: the list EXISTS but is not seen. The shape of the subtree does not change when
+    // opening, so opening does not rebuild the entire canvas.
     CHECK(lista.visible == false);
 
     d.isOpen = true;
@@ -6682,8 +6677,8 @@ static void test_dropdown_sync_builds_label_arrow_and_items()
     CHECK(lista.visible == true);
     CHECK(canvas.root().children()[0]->children().size() == 3);
 
-    // Cambiar el NUMERO de opciones si cambia la forma: hay que reconstruir, o
-    // la opcion nueva no tendria nodo y no se veria.
+    // Changing the NUMBER of options does change the shape: you have to rebuild, or
+    // the new option would have no node and would not be seen.
     d.options.push_back("Ultra");
     syncUiWidgets(w, canvas, cache, loader);
     const UiElement& lista2 = *canvas.root().children()[0]->children()[2];
@@ -6714,25 +6709,25 @@ static void test_dropdown_click_opens_and_picks()
     syncUiWidgets(w, canvas, cache, loader);
     canvas.buildDrawData(800, 480, data);
 
-    // Click en la caja: se abre.
+    // Click on the box: it opens.
     clickEnCanvas(canvas, glm::vec2(80.0f, 15.0f), 0.0f);
     CHECK(d.isOpen == true);
 
-    // Hay que volver a sincronizar y a medir: la lista acaba de hacerse visible,
-    // asi que hasta ahora no tenia rect contra el que probar el raton.
+    // Have to sync and measure again: the list just became visible,
+    // so until now it had no rect to test the mouse against.
     syncUiWidgets(w, canvas, cache, loader);
     data.clear();
     canvas.buildDrawData(800, 480, data);
 
-    // Click en la segunda fila: la lista arranca justo debajo de la caja
-    // (y = 30) y cada fila mide 20, asi que la fila 1 va de 50 a 70.
+    // Click on the second row: the list starts right below the box
+    // (y = 30) and each row measures 20, so row 1 goes from 50 to 70.
     clickEnCanvas(canvas, glm::vec2(80.0f, 60.0f), 5.0f);
     CHECK(d.value == 1);
     CHECK(avisos == 1);
     CHECK(ultimo == 1);
-    CHECK(d.isOpen == false);   // elegir cierra
+    CHECK(d.isOpen == false);   // choosing closes
 
-    // No interactable: ni se abre.
+    // Not interactable: does not even open.
     d.interactable = false;
     syncUiWidgets(w, canvas, cache, loader);
     data.clear();
@@ -6753,9 +6748,9 @@ static void test_dropdown_hit_test_maps_back_to_gameobject()
 }
 
 // ── ScrollView ──────────────────────────────────────────────────────────────
-// El unico cuyo nodo PRINCIPAL no es el que recibe el raton: los hijos de la
-// escena cuelgan del Content, que es el que se mueve. Si colgaran del viewport,
-// el scroll no arrastraria nada.
+// The only one whose MAIN node is not the one that receives the mouse: the children of the
+// scene hang from Content, which is the one that moves. If they hung from viewport,
+// the scroll would not drag anything.
 static void fillScrollView(ScrollViewComponent& s)
 {
     s.anchorMin = glm::vec2(0.1875f, 0.4375f);
@@ -6907,10 +6902,10 @@ static void test_scroll_view_property_command_undo_redo()
     CHECK(!go->hasScrollView());
 }
 
-// El desplazamiento del contenido sale del recorrido REAL: contenido menos
-// viewport. Con el contenido mas pequeño que el viewport no hay nada que
-// desplazar, y el offset tiene que ser 0 y no negativo — un contenido empujado
-// hacia dentro deja un hueco arriba que nadie ha pedido.
+// The offset of the content comes from the REAL scroll: content minus
+// viewport. With content smaller than the viewport there is nothing to
+// scroll, and the offset has to be 0 and not negative — content pushed
+// inward leaves a gap at the top that nobody asked for.
 static void test_scroll_view_content_offset()
 {
     ScrollViewComponent s;
@@ -6928,14 +6923,14 @@ static void test_scroll_view_content_offset()
     s.normalizedPosition = glm::vec2(0.0f, 0.25f);
     CHECK(nearlyEqual(s.contentOffset().y, -100.0f));
 
-    // Eje apagado: no se mueve aunque el contenido sea mas ancho.
+    // Axis off: does not move even if the content is wider.
     s.contentSize        = glm::vec2(500.0f, 600.0f);
     s.normalizedPosition = glm::vec2(1.0f, 0.0f);
     CHECK(nearlyEqual(s.contentOffset().x, 0.0f));
     s.horizontal = true;
     CHECK(nearlyEqual(s.contentOffset().x, -400.0f));
 
-    // Contenido mas pequeño que el viewport: cero, nunca positivo.
+    // Content smaller than the viewport: zero, never positive.
     s.contentSize        = glm::vec2(50.0f, 50.0f);
     s.normalizedPosition = glm::vec2(1.0f, 1.0f);
     CHECK(nearlyEqual(s.contentOffset().x, 0.0f));
@@ -6967,7 +6962,7 @@ static void test_scroll_view_sync_builds_viewport_and_content()
     const UiElement& vista = *canvas.root().children()[0];
     CHECK(vista.name == uiScrollViewNodeName(5ull));
     CHECK(vista.typeName() == std::string("ScrollView"));
-    // Recorta a sus descendientes: es lo que hace que el contenido no se salga.
+    // Clips its descendants: that is what keeps the content from escaping.
     CHECK(vista.clipChildren == true);
     CHECK(vista.children().size() == 1);
     if (vista.children().empty()) return;
@@ -6975,12 +6970,12 @@ static void test_scroll_view_sync_builds_viewport_and_content()
     CHECK(contenido.name == uiScrollViewNodeName(5ull) + "/Content");
     CHECK(nearlyEqual(contenido.size.y, 600.0f));
     CHECK(nearlyEqual(contenido.position.y, -200.0f));   // (600-200) * 0.5
-    // El contenido NO recibe el raton: la rueda es del viewport.
+    // The content does NOT receive the mouse: the wheel is the viewport's.
     CHECK(contenido.raycastTarget == false);
 }
 
-// Los hijos de la escena cuelgan del CONTENT, no del viewport: si colgaran del
-// viewport, moverse no los arrastraria y el scroll no serviria de nada.
+// The children of the scene hang from CONTENT, not from viewport: if they hung from
+// viewport, moving would not drag them and scrolling would be useless.
 static void test_scroll_view_children_hang_from_the_content()
 {
     Scene scene;
@@ -7015,7 +7010,7 @@ static void test_scroll_view_children_hang_from_the_content()
     if (nodoVista.children().empty()) return;
     const UiElement& contenido = *nodoVista.children()[0];
     CHECK(contenido.name == uiScrollViewNodeName(vista->id) + "/Content");
-    // La fila cuelga del CONTENT.
+    // The row hangs from CONTENT.
     CHECK(contenido.children().size() == 1);
     if (contenido.children().empty()) return;
     CHECK(contenido.children()[0]->name == uiPanelNodeName(fila->id));
@@ -7030,8 +7025,8 @@ static void test_scroll_view_wheel_moves_the_component()
     ScrollViewComponent s;
     s.position          = glm::vec2(0.0f, 0.0f);
     s.size              = glm::vec2(100.0f, 200.0f);
-    s.contentSize       = glm::vec2(100.0f, 600.0f);   // recorrido: 400 px
-    s.scrollSensitivity = 40.0f;                        // 40 px por muesca = 0.1
+    s.contentSize       = glm::vec2(100.0f, 600.0f);   // scroll range: 400 px
+    s.scrollSensitivity = 40.0f;                        // 40 px per notch = 0.1
 
     float ultimoY = -1.0f;
     int   avisos  = 0;
@@ -7049,7 +7044,7 @@ static void test_scroll_view_wheel_moves_the_component()
     in.timeSeconds = 0.0f;
     canvas.updateInput(in);
 
-    // Rueda hacia abajo (delta negativo) = bajar por la lista.
+    // Wheel down (negative delta) = go down the list.
     in.scrollDelta = -1.0f;
     in.timeSeconds = 0.016f;
     canvas.updateInput(in);
@@ -7057,13 +7052,13 @@ static void test_scroll_view_wheel_moves_the_component()
     CHECK(avisos == 1);
     CHECK(nearlyEqual(ultimoY, 0.1f));
 
-    // Y hacia arriba vuelve.
+    // And up it comes back.
     in.scrollDelta = 1.0f;
     in.timeSeconds = 0.032f;
     canvas.updateInput(in);
     CHECK(nearlyEqual(s.normalizedPosition.y, 0.0f));
 
-    // No se sale de [0,1] por mucho que se insista.
+    // Does not leave [0,1] no matter how much you insist.
     for (int i = 0; i < 50; i++)
     {
         in.scrollDelta = -1.0f;
@@ -7072,9 +7067,9 @@ static void test_scroll_view_wheel_moves_the_component()
     }
     CHECK(nearlyEqual(s.normalizedPosition.y, 1.0f));
 
-    // Sin recorrido no se mueve NI avisa: un contenido que cabe entero no
-    // scrollea, y avisar de un cambio que no ha pasado haria trabajar a un
-    // script en balde en cada muesca.
+    // Without scroll range it does not move NOR warn: content that fits entirely does not
+    // scroll, and warning of a change that did not happen would make a
+    // script work for nothing on every notch.
     s.contentSize = glm::vec2(100.0f, 100.0f);
     syncUiWidgets(w, canvas, cache, loader);
     data.clear();
@@ -7093,16 +7088,16 @@ static void test_scroll_view_hit_test_maps_back_to_gameobject()
     CHECK(uiScrollViewOwnerId("Cubo") == 0ull);
     CHECK(uiScrollViewOwnerId("scv:") == 0ull);
     CHECK(uiScrollViewOwnerId("scv:12ab") == 0ull);
-    // "scv:" y "scr:" (Scrollbar) NO se confunden: comparten las tres primeras
-    // letras y son dos widgets distintos.
+    // "scv:" and "scr:" (Scrollbar) do NOT confuse each other: they share the first three
+    // letters and are two different widgets.
     CHECK(uiScrollViewOwnerId(uiScrollbarNodeName(42ull)) == 0ull);
     CHECK(uiScrollbarOwnerId(uiScrollViewNodeName(42ull)) == 0ull);
 }
 
-// Los slots se emparejan por ownerId, NO por indice. Reordenar los canvas en la
-// jerarquia (o borrar uno de en medio) no puede resetear la cache del que no se
-// ha movido: si lo hiciera, mover un enemigo reconstruiria su barra de vida
-// entera y se veria como un parpadeo.
+// The slots are paired by ownerId, NOT by index. Reordering the canvas in the
+// hierarchy (or deleting one in the middle) cannot reset the cache of one that has not
+// moved: if it did, moving an enemy would rebuild its health bar
+// entirely and it would look like a flicker.
 static void test_ui_slots_se_emparejan_por_owner_id()
 {
     std::vector<std::unique_ptr<UiCanvasSlot>> slots;
@@ -7119,7 +7114,7 @@ static void test_ui_slots_se_emparejan_por_owner_id()
     CHECK(slots[0]->ownerId == 7ull);
     CHECK(slots[1]->ownerId == 9ull);
 
-    // Se INVIERTE el orden: cada slot tiene que seguir a SU dueno, con su arbol.
+    // The order is INVERTED: each slot has to follow ITS owner, with its tree.
     std::vector<UiCanvasBinding> b2(2);
     b2[0].ownerId = 9ull; b2[0].canvas = &c;
     b2[1].ownerId = 7ull; b2[1].canvas = &c;
@@ -7131,7 +7126,7 @@ static void test_ui_slots_se_emparejan_por_owner_id()
     CHECK(&slots[0]->canvas == arbol9);
     CHECK(&slots[1]->canvas == arbol7);
 
-    // Y uno que desaparece se lleva su slot; uno nuevo estrena el suyo.
+    // And one that disappears takes its slot; a new one starts its own.
     std::vector<UiCanvasBinding> b3(1);
     b3[0].ownerId = 42ull; b3[0].canvas = &c;
     matchUiCanvasSlots(b3, slots);
@@ -7140,9 +7135,9 @@ static void test_ui_slots_se_emparejan_por_owner_id()
     CHECK(slots[0]->ownerId == 42ull);
 }
 
-// Y el orden de pintado de los canvas de MUNDO: de lejos a cerca. Van con alpha,
-// asi que pintarlos al reves mezcla mal y se ve como un halo. Contra la
-// geometria manda el depth; entre ellos, manda esto.
+// And the painting order of WORLD canvas: far to near. They have alpha,
+// so painting them backwards mixes badly and looks like a halo. Against
+// geometry the depth rules; among them, this does.
 static void test_world_canvases_se_ordenan_de_lejos_a_cerca()
 {
     std::vector<std::unique_ptr<UiCanvasSlot>> slots;
@@ -7154,12 +7149,12 @@ static void test_world_canvases_se_ordenan_de_lejos_a_cerca()
         slots.push_back(std::move(s));
     }
 
-    // Un cuarto slot de PANTALLA, con una z que caeria EN MEDIO del orden si
-    // el filtro de modo se colara: entre el de -10 y el de -2. Si alguien
-    // borra el "continue" (o invierte la condicion) del filtro de
-    // sortWorldCanvasesBackToFront, este slot no solo cambia el tamano de
-    // `orden`, tambien se cuela en medio y descuadra el orden esperado — el
-    // test falla por dos sitios a la vez, no solo por el tamano.
+    // A fourth SCREEN slot, with a z that would fall IN THE MIDDLE of the order if
+    // the mode filter slipped through: between the one at -10 and the one at -2. If someone
+    // deletes the "continue" (or inverts the condition) of the filter of
+    // sortWorldCanvasesBackToFront, this slot not only changes the size of
+    // `order`, it also sneaks in the middle and messes up the expected order — the
+    // test fails in two places at once, not just on size.
     UiCanvasSlot* pantalla = nullptr;
     {
         auto s = std::make_unique<UiCanvasSlot>();
@@ -7169,7 +7164,7 @@ static void test_world_canvases_se_ordenan_de_lejos_a_cerca()
         slots.push_back(std::move(s));
     }
 
-    // Camara en el origen mirando a -Z: el de z = -10 es el mas lejano.
+    // Camera at the origin looking at -Z: the one at z = -10 is the farthest.
     const glm::mat4 vista(1.0f);
     std::vector<UiCanvasSlot*> orden;
     sortWorldCanvasesBackToFront(slots, vista, orden);
@@ -7180,18 +7175,18 @@ static void test_world_canvases_se_ordenan_de_lejos_a_cerca()
     CHECK(nearlyEqual(orden[1]->model[3].z, -6.0f));
     CHECK(nearlyEqual(orden[2]->model[3].z, -2.0f));
 
-    // El de pantalla no debe aparecer en absoluto en la lista de mundo.
+    // The screen one must not appear at all in the world list.
     CHECK(orden[0] != pantalla);
     CHECK(orden[1] != pantalla);
     CHECK(orden[2] != pantalla);
 }
 
-// Y el orden de PRIORIDAD DE INPUT de los canvas de PANTALLA: el de mas arriba
-// primero, o sea el ULTIMO que se dibuja. El pase de UI recorre los slots en
-// orden y cada canvas pinta sobre el anterior, asi que la prioridad es el orden
-// de dibujado AL REVES. El slot de MUNDO va EN MEDIO a proposito: si alguien
-// borra el filtro de modo, no solo cambia el tamano de la lista — se cuela
-// entre los dos de pantalla y descuadra tambien la segunda posicion.
+// And the INPUT PRIORITY order of SCREEN canvas: the one on top
+// first, that is the LAST one painted. The UI pass traverses the slots in
+// order and each canvas paints over the previous one, so priority is the painting order
+// REVERSED. The WORLD slot goes IN THE MIDDLE on purpose: if someone
+// deletes the mode filter, not only does the list size change — it sneaks
+// between the two screen ones and also messes up the second position.
 static void test_canvas_de_pantalla_en_orden_de_prioridad()
 {
     std::vector<std::unique_ptr<UiCanvasSlot>> slots;
@@ -7209,25 +7204,25 @@ static void test_canvas_de_pantalla_en_orden_de_prioridad()
     screenCanvasesTopFirst(slots, orden);
 
     CHECK(orden.size() == 2);
-    // Guardas por POSICION y no un `return` al primer fallo de tamano: si el
-    // filtro de modo se cae, el de mundo se cuela EN MEDIO y lo que hay que ver
-    // es que la segunda posicion tambien se descuadra, no solo el tamano.
-    // Identidad de PUNTERO, no el ownerId: es el arbol concreto que va a
-    // recibir el raton, y comparar ids dejaria pasar un emparejado por indice.
-    if (orden.size() >= 1) CHECK(orden[0] == &slots[2]->canvas);   // el ultimo dibujado, el primero en input
+    // Guards by POSITION and not a `return` on first size failure: if the
+    // mode filter falls off, the world one sneaks IN THE MIDDLE and what you have to see
+    // is that the second position also gets messed up, not just the size.
+    // POINTER identity, not ownerId: it is the concrete tree that will
+    // receive the mouse, and comparing ids would let one paired by index slip through.
+    if (orden.size() >= 1) CHECK(orden[0] == &slots[2]->canvas);   // the last painted, the first in input
     if (orden.size() >= 2) CHECK(orden[1] == &slots[0]->canvas);
-    if (orden.size() >= 1) CHECK(orden[0] != &slots[1]->canvas);   // el de mundo no entra
+    if (orden.size() >= 1) CHECK(orden[0] != &slots[1]->canvas);   // the world one does not enter
     if (orden.size() >= 2) CHECK(orden[1] != &slots[1]->canvas);
 }
 
-// ── Reparto del input entre canvas de pantalla solapados ────────────────────
-// Dos canvas de pantalla, cada uno con SU boton, con los rects SOLAPADOS y con
-// valores distintos y no neutros entre si. Es el fixture de los cuatro tests de
-// abajo: el criterio de quien gana el puntero, la limpieza del que pierde, la
-// captura durante un arrastre y el reparto del teclado.
+// ── Input dispatch among overlapped screen canvas ─────────────────────────────
+// Two screen canvas, each with ITS button, with OVERLAPPED rects and with
+// distinct and not neutral values among themselves. It is the fixture for the four tests
+// below: the criterion of who wins the pointer, the cleanup of the loser, the
+// capture during a drag and the keyboard dispatch.
 struct DosCanvasSolapados
 {
-    UiCanvas          arriba;      // el ULTIMO que se dibuja = el de encima
+    UiCanvas          arriba;      // the LAST one painted = the one on top
     UiCanvas          abajo;
     UiWidgetSyncCache cacheArriba;
     UiWidgetSyncCache cacheAbajo;
@@ -7237,7 +7232,7 @@ struct DosCanvasSolapados
     Button*           nodoArriba = nullptr;
     Button*           nodoAbajo  = nullptr;
 
-    std::vector<UiCanvas*> orden;   // prioridad de input: arriba primero
+    std::vector<UiCanvas*> orden;   // input priority: top first
 
     int clicksArriba = 0;
     int clicksAbajo  = 0;
@@ -7247,9 +7242,9 @@ struct DosCanvasSolapados
     UiInputState in;
     float t = 0.0f;
 
-    // Dentro del boton de ARRIBA y del de ABAJO a la vez.
+    // Inside the button of TOP and BOTTOM at the same time.
     static glm::vec2 solape()    { return glm::vec2(150.0f, 150.0f); }
-    // Dentro del de ABAJO y fuera del de ARRIBA.
+    // Inside BOTTOM and outside TOP.
     static glm::vec2 soloAbajo() { return glm::vec2(400.0f, 330.0f); }
 
     DosCanvasSolapados()
@@ -7259,7 +7254,7 @@ struct DosCanvasSolapados
         compArriba.size        = glm::vec2(200.0f, 120.0f);
         compArriba.normalColor = glm::vec4(0.20f, 0.40f, 0.60f, 1.0f);
         compArriba.hoverColor  = glm::vec4(0.90f, 0.10f, 0.30f, 1.0f);
-        // x[60,460] y[60,360] — contiene entero al de arriba y sobra por abajo
+        // x[60,460] y[60,360] — contains all of top and overhangs at the bottom
         compAbajo.position     = glm::vec2(60.0f, 60.0f);
         compAbajo.size         = glm::vec2(400.0f, 300.0f);
         compAbajo.normalColor  = glm::vec4(0.05f, 0.70f, 0.25f, 1.0f);
@@ -7271,7 +7266,7 @@ struct DosCanvasSolapados
         syncUiWidgets(listaAbajo,  {}, {}, abajo,  cacheAbajo,  loader);
 
         UiDrawData data;
-        arriba.buildDrawData(800, 480, data);   // coloca los rects: el hit test los lee
+        arriba.buildDrawData(800, 480, data);   // places the rects: the hit test reads them
         abajo .buildDrawData(800, 480, data);
 
         nodoArriba = cacheArriba.buttonNodes.empty() ? nullptr : cacheArriba.buttonNodes[0];
@@ -7288,7 +7283,7 @@ struct DosCanvasSolapados
         orden = { &arriba, &abajo };
     }
 
-    // Un frame: avanza el reloj y reparte el estado actual entre los dos.
+    // One frame: advance the clock and distribute the current state between the two.
     void frame()
     {
         t += 0.016f;
@@ -7299,8 +7294,8 @@ struct DosCanvasSolapados
     }
 };
 
-// El de ENCIMA se lleva el puntero. Sin esto, dos canvas solapados dejan LOS
-// DOS un widget en hover y un clic activa dos botones a la vez.
+// The one ON TOP takes the pointer. Without this, two overlapped canvas leave BOTH
+// a widget in hover and a click activates two buttons at once.
 static void test_el_canvas_de_encima_se_lleva_el_puntero()
 {
     DosCanvasSolapados e;
@@ -7328,17 +7323,17 @@ static void test_el_canvas_de_encima_se_lleva_el_puntero()
     CHECK(e.clicksAbajo  == 0);
 }
 
-// Y el que PIERDE el puntero tiene que quedar LIMPIO. Es la mitad que no se ve:
-// un canvas que tenia un boton en hover y deja de recibir input se queda PEGADO
-// en ese hover para siempre — el boton se ve iluminado y no responde a nada.
-// Por eso los que no ganan reciben un input con el raton FUERA, no ninguno.
+// And the one that LOSES the pointer has to be CLEAN. It is the half you do not see:
+// a canvas that had a button in hover and stops receiving input stays STUCK
+// in that hover forever — the button looks lit and does not respond to anything.
+// That is why the ones that do not win receive input with the mouse OUT, not none.
 static void test_el_canvas_de_abajo_no_se_queda_pegado_en_hover()
 {
     DosCanvasSolapados e;
     CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
     if (!e.nodoArriba || !e.nodoAbajo) return;
 
-    // Primero el raton donde SOLO llega el de abajo: se pone en hover.
+    // First the mouse where ONLY the bottom one receives it: it enters hover.
     e.in.mousePos = DosCanvasSolapados::soloAbajo();
     e.frame();
     CHECK(e.abajo.hovered()  == e.nodoAbajo);
@@ -7346,8 +7341,8 @@ static void test_el_canvas_de_abajo_no_se_queda_pegado_en_hover()
     CHECK(e.nodoAbajo->state == UiButtonState::Hover);
     CHECK(e.exitsAbajo == 0);
 
-    // Y ahora a la zona solapada: gana el de arriba y el de abajo tiene que
-    // SOLTAR el hover, con su MouseExit y su color de vuelta a Normal.
+    // And now to the overlapped zone: the top one wins and the bottom one has to
+    // RELEASE hover, with its MouseExit and its color back to Normal.
     e.in.mousePos = DosCanvasSolapados::solape();
     e.frame();
     CHECK(e.arriba.hovered() == e.nodoArriba);
@@ -7357,10 +7352,10 @@ static void test_el_canvas_de_abajo_no_se_queda_pegado_en_hover()
     CHECK(e.exitsAbajo == 1);
 }
 
-// La captura del puntero sobrevive al solape: bajar el boton sobre un widget y
-// arrastrar por ENCIMA de otro canvas no corta el arrastre. Sin esto, un slider
-// que asome por debajo de otro canvas se queda a medias en cuanto el cursor
-// cruza el borde, y el gesto se pierde sin un solo aviso.
+// Pointer capture survives overlap: press the button over a widget and
+// drag OVER another canvas does not cut the drag. Without this, a slider
+// that pokes out from below another canvas gets stuck halfway when the cursor
+// crosses the edge, and the gesture is lost without any warning.
 static void test_la_captura_del_puntero_sobrevive_al_solape()
 {
     DosCanvasSolapados e;
@@ -7374,15 +7369,15 @@ static void test_la_captura_del_puntero_sobrevive_al_solape()
     CHECK(e.abajo.pointerCaptured());
     CHECK(!e.arriba.pointerCaptured());
 
-    // Arrastra hasta la zona solapada con el boton MANTENIDO.
+    // Drag to the overlapped zone with the button HELD.
     e.in.mousePos = DosCanvasSolapados::solape();
     e.frame();
-    CHECK(e.abajo.pointerCaptured());        // sigue siendo suyo
-    CHECK(e.abajo.hovered() == e.nodoAbajo); // sigue viendo el raton
-    CHECK(e.arriba.hovered() == nullptr);    // el de encima NO se lo roba
-    CHECK(e.dragsAbajo >= 1);                // y el arrastre sigue vivo
+    CHECK(e.abajo.pointerCaptured());        // still yours
+    CHECK(e.abajo.hovered() == e.nodoAbajo); // still seeing the mouse
+    CHECK(e.arriba.hovered() == nullptr);    // the top one does NOT steal it
+    CHECK(e.dragsAbajo >= 1);                // and the drag stays alive
 
-    // Al soltar, la captura se acaba y el de encima recupera el puntero.
+    // On release, capture ends and the top one recovers the pointer.
     e.in.mouseDown[0] = false;
     e.frame();
     CHECK(!e.abajo.pointerCaptured());
@@ -7391,10 +7386,10 @@ static void test_la_captura_del_puntero_sobrevive_al_solape()
     CHECK(e.abajo.hovered()  == nullptr);
 }
 
-// El teclado NO sigue al raton: sigue al FOCO. Escribir en un campo de un canvas
-// y pasar el cursor por encima de otro no tiene que desviar ni una tecla. Y el
-// foco se mueve al CLICAR, no al pasar por encima — y cuando se mueve, el canvas
-// que lo tenia lo suelta, o habria dos anillos de foco a la vez.
+// Keyboard does NOT follow the mouse: it follows FOCUS. Writing in a field of one canvas
+// and moving the cursor over another must not divert a single key. And
+// focus moves on CLICK, not on mouseover — and when it moves, the canvas
+// that had it releases it, or there would be two focus rings at once.
 static void test_el_teclado_va_al_canvas_con_foco_no_al_del_raton()
 {
     DosCanvasSolapados e;
@@ -7403,7 +7398,7 @@ static void test_el_teclado_va_al_canvas_con_foco_no_al_del_raton()
     e.nodoArriba->focusable = true;
     e.nodoAbajo->focusable  = true;
 
-    // Clic donde solo llega el de abajo: coge el foco.
+    // Click where only the bottom one receives it: it gets focus.
     e.in.mousePos = DosCanvasSolapados::soloAbajo();
     e.frame();
     e.in.mouseDown[0] = true;  e.frame();
@@ -7412,82 +7407,82 @@ static void test_el_teclado_va_al_canvas_con_foco_no_al_del_raton()
     CHECK(e.abajo.focused()  == e.nodoAbajo);
     CHECK(e.arriba.focused() == nullptr);
 
-    // El raton se va a la zona solapada — el PUNTERO cambia de canvas — y se
-    // pulsa Enter. La tecla tiene que ir al de ABAJO, que es el que tiene foco.
+    // The mouse goes to the overlapped zone — the POINTER changes canvas — and
+    // Enter is pressed. The key has to go to the BOTTOM one, the one that has focus.
     e.in.mousePos = DosCanvasSolapados::solape();
     e.in.keys.push_back(UiKey::Enter);
     e.frame();
-    CHECK(e.arriba.hovered() == e.nodoArriba);   // el puntero SI se movio
+    CHECK(e.arriba.hovered() == e.nodoArriba);   // the pointer DID move
     CHECK(e.abajo.hovered()  == nullptr);
-    CHECK(e.abajo.focused()  == e.nodoAbajo);    // el foco NO
-    CHECK(e.clicksAbajo  == 2);                  // 1 de raton + 1 de Enter
+    CHECK(e.abajo.focused()  == e.nodoAbajo);    // the focus did NOT
+    CHECK(e.clicksAbajo  == 2);                  // 1 from mouse + 1 from Enter
     CHECK(e.clicksArriba == 0);
 
-    // Un clic en la zona solapada SI mueve el foco, y el de abajo lo suelta.
+    // A click in the overlapped zone DOES move focus, and the bottom one releases it.
     e.in.mouseDown[0] = true;  e.frame();
     e.in.mouseDown[0] = false; e.frame();
     CHECK(e.clicksArriba == 1);
     CHECK(e.arriba.focused() == e.nodoArriba);
     CHECK(e.abajo.focused()  == nullptr);
 
-    // Y desde aqui el Enter va al de arriba, no al de abajo.
+    // And from here Enter goes to the top one, not the bottom one.
     e.in.keys.push_back(UiKey::Enter);
     e.frame();
     CHECK(e.clicksArriba == 2);
     CHECK(e.clicksAbajo  == 2);
 }
 
-// Clic FANTASMA: pulsar en el VACIO, arrastrar hasta encima de un boton y
-// soltar NO puede activarlo. La semantica de siempre es MouseUp SI, Click NO —
-// el Click pide que el Down y el Up caigan sobre el MISMO elemento.
+// PHANTOM click: press in EMPTY space, drag over a button and
+// release cannot activate it. The semantics are always MouseUp YES, Click NO —
+// Click requires that Down and Up fall on the SAME element.
 //
-// Y esto pasa con UN SOLO canvas, o sea en cualquier proyecto que ya exista: si
-// nadie gana el puntero (el cursor no esta sobre ningun widget) y al canvas se
-// le miente diciendo que no hay boton bajado, no ve el flanco de bajada del
-// fondo. Cuando el cursor entra luego en el boton con el boton AUN bajado, ve un
-// flanco NUEVO, registra un press sobre el, al soltar emite un Click que nadie
-// pidio y encima le roba el foco.
+// And this happens with a SINGLE canvas, that is, any existing project: if
+// no one wins the pointer (the cursor is not over any widget) and the canvas
+// is lied to saying there is no button pressed, it does not see the falling edge of the
+// background. When the cursor later enters the button with the button STILL pressed, it sees a
+// NEW edge, registers a press on it, on release emits a Click that no one
+// asked for and on top of that steals focus.
 //
-// Por eso el estado del que NO tiene el puntero miente sobre la POSICION del
-// raton (uiPointerAway) pero NO sobre los botones: con el raton fuera el hit
-// test ya da nullptr, asi que el press se registra sobre nullptr y no despacha
-// nada, y estadoDe no puede pintar Pressed sin hovered. Lo unico que hace falta
-// es que la cuenta de FLANCOS siga siendo la de verdad.
+// That is why the state of the one that does NOT have the pointer lies about the POSITION of the
+// mouse (uiPointerAway) but NOT about the buttons: with the mouse out the hit
+// test already returns nullptr, so the press is registered on nullptr and dispatch
+// nothing, and estadoDe cannot paint Pressed without hovered. The only thing needed
+// is for the count of EDGES to still be the real one.
 static void test_no_hay_clic_fantasma_al_arrastrar_desde_el_vacio()
 {
     DosCanvasSolapados e;
     CHECK(e.nodoArriba != nullptr);
     if (!e.nodoArriba) return;
-    // Focusable para que el robo de foco del clic fantasma sea observable.
+    // Focusable so that the focus theft of the phantom click is observable.
     e.nodoArriba->focusable = true;
 
     int upsArriba = 0;
     e.nodoArriba->onMouseUp = [&](UiEvent&) { upsArriba++; };
 
-    // UN SOLO canvas en la lista: el fallo no necesita un segundo canvas.
+    // A SINGLE canvas in the list: the bug does not need a second canvas.
     std::vector<UiCanvas*> soloUno{ &e.arriba };
     UiInputState in;
     float t = 0.0f;
     auto frame = [&]() { t += 0.016f; in.timeSeconds = t; dispatchUiInput(soloUno, in); };
 
-    // Pulsa en una zona del canvas SIN ningun widget...
+    // Press in a canvas area with NO widget...
     in.mousePos = glm::vec2(600.0f, 400.0f);
     frame();
     in.mouseDown[0] = true;
     frame();
-    // ...arrastra hasta encima del boton con el boton AUN bajado...
+    // ...drag over the button with the button STILL pressed...
     in.mousePos = DosCanvasSolapados::solape();
     frame();
-    // ...y suelta.
+    // ...and release.
     in.mouseDown[0] = false;
     frame();
 
-    CHECK(e.clicksArriba == 0);             // el clic fantasma
-    CHECK(e.arriba.focused() == nullptr);   // y el foco que se lleva de paso
-    CHECK(upsArriba == 1);                  // el MouseUp SI llega, como siempre
+    CHECK(e.clicksArriba == 0);             // the phantom click
+    CHECK(e.arriba.focused() == nullptr);   // and the focus it steals along the way
+    CHECK(upsArriba == 1);                  // the MouseUp DOES arrive, as always
 
-    // Control: un clic de VERDAD sobre el boton sigue contando. Sin esto, una
-    // implementacion que no emitiera ningun Click nunca pasaria igual de bien.
+    // Control: a REAL click on the button keeps counting. Without this, an
+    // implementation that emitted no Click would pass just as well.
     frame();
     in.mouseDown[0] = true;  frame();
     in.mouseDown[0] = false; frame();
@@ -7495,10 +7490,10 @@ static void test_no_hay_clic_fantasma_al_arrastrar_desde_el_vacio()
     CHECK(e.arriba.focused() == e.nodoArriba);
 }
 
-// El canvas de UN GameObject concreto, por ownerId. Lo necesita el gizmo del
-// canvas SELECCIONADO: con uiCanvas() —el PRIMER canvas de pantalla— seleccionar
-// un SEGUNDO canvas de pantalla pintaba el rect del PRIMERO, o sea un gizmo que
-// miente. Con un solo canvas coinciden y no se nota, que es lo silencioso.
+// The canvas of a SPECIFIC GameObject, by ownerId. The gizmo of the
+// SELECTED canvas needs this: with uiCanvas() — the FIRST screen canvas — selecting
+// a SECOND screen canvas painted the rect of the FIRST, that is a gizmo that
+// lies. With a single canvas they match and you do not notice, which is silent.
 static void test_canvas_por_owner_id()
 {
     std::vector<std::unique_ptr<UiCanvasSlot>> slots;
@@ -7512,25 +7507,25 @@ static void test_canvas_por_owner_id()
         slots.push_back(std::move(s));
     }
 
-    // Identidad de PUNTERO: es el arbol concreto cuyo uiOrigin/uiScale va a leer
-    // el gizmo. El 9 es el que caza el fallo — es el SEGUNDO de pantalla, o sea
-    // el que uiCanvas() nunca devolvia.
+    // POINTER identity: it is the concrete tree whose uiOrigin/uiScale the
+    // gizmo is going to read. The 9 is the one that catches the bug — it is the SECOND screen, that is
+    // the one uiCanvas() never returned.
     CHECK(findCanvasByOwner(slots, 9ull) == &slots[2]->canvas);
     CHECK(findCanvasByOwner(slots, 7ull) == &slots[0]->canvas);
-    // Los de MUNDO tambien salen: el filtro de modo es de quien pregunta.
+    // WORLD ones also come out: the mode filter is from who asks.
     CHECK(findCanvasByOwner(slots, 8ull) == &slots[1]->canvas);
-    // Y un id que no esta devuelve NADA, no "el primero": el gizmo tiene que
-    // poder no dibujar en vez de dibujar el de otro.
+    // And an id that is not there returns NOTHING, not "the first": the gizmo has to
+    // be able to not draw instead of drawing the other one.
     CHECK(findCanvasByOwner(slots, 42ull) == nullptr);
 }
 
-// Captura HUERFANA: un canvas que sale del reparto de input a media pulsacion
-// (un script que le pone renderMode = World, que es escribible desde Lua) nunca
-// ve el MouseUp y se queda con m_pressTarget. Al volver entraria con
-// pointerCaptured() en true SIN ningun boton bajado, se llevaria el raton en el
-// paso 1 de dispatchUiInput y le robaria el puntero al de encima, con un
-// MouseUp/Click que nadie pidio. Y de paso se quedaria PEGADO en su ultimo
-// hover, porque estando fuera de la lista dispatchUiInput ya no puede limpiarlo.
+// Orphaned capture: a canvas that exits input dispatch mid-press
+// (a script that sets renderMode = World, which is writable from Lua) never
+// sees the MouseUp and stays with m_pressTarget. On return it would enter with
+// pointerCaptured() true WITHOUT any button down, it would take the mouse in
+// step 1 of dispatchUiInput and steal the pointer from the one above, with a
+// MouseUp/Click that nobody asked for. And in the process it would stay STUCK in its last
+// hover, because being outside the list dispatchUiInput can no longer clean it.
 static void test_soltar_el_input_no_deja_captura_huerfana()
 {
     DosCanvasSolapados e;
@@ -7538,8 +7533,8 @@ static void test_soltar_el_input_no_deja_captura_huerfana()
     if (!e.nodoArriba || !e.nodoAbajo) return;
     e.nodoAbajo->focusable = true;
 
-    // Baja el boton sobre el de ABAJO, en su zona exclusiva: coge captura,
-    // hover y foco.
+    // Button goes down on the one BELOW, in its exclusive zone: gets capture,
+    // hover and focus.
     e.in.mousePos = DosCanvasSolapados::soloAbajo();
     e.frame();
     e.in.mouseDown[0] = true;
@@ -7549,17 +7544,17 @@ static void test_soltar_el_input_no_deja_captura_huerfana()
     CHECK(e.abajo.focused() == e.nodoAbajo);
     CHECK(e.exitsAbajo == 0);
 
-    // El script lo saca del reparto a media pulsacion.
+    // The script pulls it out of the dispatch mid-press.
     e.abajo.releaseInput();
     CHECK(!e.abajo.pointerCaptured());
     CHECK(e.abajo.hovered() == nullptr);
     CHECK(!e.nodoAbajo->hovered);
     CHECK(e.abajo.focused() == nullptr);
-    CHECK(e.exitsAbajo == 1);            // con su MouseExit, no en silencio
+    CHECK(e.exitsAbajo == 1);            // with its MouseExit, not silently
 
-    // Y cuando vuelve, con el raton ya suelto y en la zona SOLAPADA, el de
-    // ENCIMA se lleva el puntero. Sin el soltado, la captura huerfana ganaba el
-    // paso 1 y se lo robaba.
+    // And when it returns, with the mouse already released and in the OVERLAPPED zone, the one
+    // ON TOP takes the pointer. Without the released one, the orphaned capture would win
+    // step 1 and steal it.
     e.in.mouseDown[0] = false;
     e.in.mousePos     = DosCanvasSolapados::solape();
     e.frame();
@@ -7567,17 +7562,17 @@ static void test_soltar_el_input_no_deja_captura_huerfana()
     CHECK(e.abajo.hovered()  == nullptr);
 }
 
-// El buffer de la UI es UNO SOLO por frame y lo comparten los canvas de MUNDO
-// (que se graban en el pase de escena) con los de PANTALLA (que van despues, en
-// su propio pase). Dimensionarlo con el total de UNA de las dos mitades es el
-// fallo que no se ve: el que se queda fuera lo descarta la guarda uiCursorFits
-// EN SILENCIO — ni error, ni aviso de validacion, ni canvas en pantalla. Y la
-// cuenta de PANTALLA hace falta aparte porque es la que decide si el pase de UI
-// llega a abrirse.
+// The UI buffer is ONE ONLY per frame and is shared by WORLD canvas
+// (which are recorded in the scene pass) with SCREEN ones (which come after, in
+// their own pass). Sizing it with the total of ONE of the two halves is the
+// bug that doesn't show: the one left out is discarded by the uiCursorFits guard
+// IN SILENCE — no error, no validation warning, no canvas on screen. And the
+// SCREEN count is needed separately because it's the one that decides if the UI
+// pass gets to open.
 //
-// Los seis numeros son distintos entre si a proposito: con totales iguales, una
-// suma que cogiera el campo equivocado (indices por vertices, o el total por el
-// de pantalla) daria el mismo resultado igualmente.
+// The six numbers are intentionally distinct from each other: with equal totals, a
+// sum that picked the wrong field (indices by vertices, or the total by the
+// screen one) would give the same result anyway.
 static void test_ui_frame_totals_suma_mundo_y_pantalla()
 {
     std::vector<std::unique_ptr<UiCanvasSlot>> slots;
@@ -7593,29 +7588,29 @@ static void test_ui_frame_totals_suma_mundo_y_pantalla()
     conDatos(UiCanvasRenderMode::World,       5, 9);
     conDatos(UiCanvasRenderMode::ScreenSpace, 3, 6);
     conDatos(UiCanvasRenderMode::World,       11, 21);
-    // Un hueco vacio: matchUiCanvasSlots nunca los deja, pero la suma no puede
-    // depender de eso — un nullptr aqui reventaria antes de llegar a dibujar.
+    // An empty slot: matchUiCanvasSlots never leaves them, but the sum cannot
+    // depend on that — a nullptr here would crash before reaching draw.
     slots.push_back(nullptr);
 
     const UiFrameTotals t = uiFrameTotals(slots);
 
-    // TODOS los canvas del frame: 5 + 3 + 11 y 9 + 6 + 21.
+    // ALL canvas of the frame: 5 + 3 + 11 and 9 + 6 + 21.
     CHECK(t.vertices == 19u);
     CHECK(t.indices  == 36u);
-    // Y solo los de PANTALLA.
+    // And only the SCREEN ones.
     CHECK(t.screenVertices == 3u);
     CHECK(t.screenIndices  == 6u);
 }
 
-// ── Gizmo del canvas de mundo (ViewportPanel) ───────────────────────────────
+// ── Gizmo of the world canvas (ViewportPanel) ─────────────────────────────────
 //
-// La aritmética del gizmo del canvas de mundo: proyectar las cuatro esquinas y
-// pasarlas a píxeles de la imagen del viewport. Se declara aquí a mano porque
-// vive en engine/src/Editor/ViewportPanel.cpp, que es código de EDITOR y no
-// tiene header público que exportarla — este ejecutable enlaza DonTopoEditor,
-// así que el símbolo está. Lo demás del gizmo es ImGui puro (AddLine sobre un
-// draw list) y no se puede probar sin ventana; esto sí, y es donde están los
-// dos fallos que no se ven: la esquina detrás de la cámara y la Y al revés.
+// The arithmetic of the world canvas gizmo: project the four corners and
+// convert them to pixels of the viewport image. It is declared here by hand because
+// it lives in engine/src/Editor/ViewportPanel.cpp, which is EDITOR code and
+// does not have a public header to export it — this executable links DonTopoEditor,
+// so the symbol is there. The rest of the gizmo is pure ImGui (AddLine on a
+// draw list) and cannot be tested without a window; this can, and that is where the
+// two unseen bugs are: the corner behind the camera and the Y flipped.
 namespace DonTopo
 {
     bool projectWorldCanvasCorners(const glm::mat4& mvp,
@@ -7625,9 +7620,9 @@ namespace DonTopo
     const GameObject* owningCanvasObject(const GameObject* go);
 }
 
-// La misma proyección que arma ViewportPanel::pickObject para la cámara de
-// EDICIÓN: 45° fijos + el Y-flip de Vulkan. Aquí explícita pa que el test no
-// dependa de ningún estado del Renderer.
+// The same projection that ViewportPanel::pickObject builds for the
+// EDIT camera: fixed 45° + Vulkan's Y-flip. Here explicit so the test does not
+// depend on any Renderer state.
 static glm::mat4 editorProjForTest(float aspect)
 {
     glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 1000.0f);
@@ -7635,19 +7630,19 @@ static glm::mat4 editorProjForTest(float aspect)
     return proj;
 }
 
-// Un canvas de mundo INCLINADO en dos ejes, para que las cuatro esquinas caigan
-// en ocho números DISTINTOS entre sí: con el canvas de frente, izquierda y
-// derecha comparten X y arriba y abajo comparten Y, y una permutación de las
-// esquinas —o un eje espejado— pasaría igual.
+// A world canvas TILTED on two axes, so the four corners land
+// on eight DISTINCT numbers among themselves: with the canvas facing forward, left and
+// right share X and top and bottom share Y, and a permutation of the
+// corners — or a mirrored axis — would pass the same way.
 //
-// Los valores esperados están calculados fuera (proj·view·model a mano, en
-// doble precisión), no derivados de la propia función.
+// The expected values are calculated outside (proj·view·model by hand, in
+// double precision), not derived from the function itself.
 static void test_world_canvas_gizmo_proyecta_las_cuatro_esquinas()
 {
     CanvasComponent c;
     c.renderMode          = UiCanvasRenderMode::World;
     c.billboard           = UiBillboard::None;
-    c.worldScale          = 0.01f;                    // 200x100 px -> 2x1 unidades
+    c.worldScale          = 0.01f;                    // 200x100 px -> 2x1 units
     c.referenceResolution = glm::vec2(200.0f, 100.0f);
 
     const glm::vec2 tam(200.0f, 100.0f);
@@ -7655,9 +7650,9 @@ static void test_world_canvas_gizmo_proyecta_las_cuatro_esquinas()
         glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.6f, -0.3f, -5.0f)),
                     glm::radians(35.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
         glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-    const glm::mat4 vista(1.0f);                      // cámara en el origen mirando a -Z
+    const glm::mat4 vista(1.0f);                      // camera at the origin looking at -Z
 
-    const glm::vec2 imagenPos(37.0f, 91.0f);          // no (0,0): el gizmo va en coords de PANTALLA
+    const glm::vec2 imagenPos(37.0f, 91.0f);          // not (0,0): the gizmo goes in SCREEN coords
     const glm::vec2 imagenTam(800.0f, 400.0f);
 
     const glm::mat4 mvp = editorProjForTest(imagenTam.x / imagenTam.y) * vista *
@@ -7666,11 +7661,11 @@ static void test_world_canvas_gizmo_proyecta_las_cuatro_esquinas()
     glm::vec2 esq[4];
     CHECK(projectWorldCanvasCorners(mvp, glm::vec2(0.0f), tam, imagenPos, imagenTam, esq));
 
-    // Orden: (0,0), (w,0), (w,h), (0,h) en píxeles de CANVAS. El (0,0) del
-    // canvas es su esquina SUPERIOR izquierda —la Y del canvas crece hacia
-    // abajo, y uiWorldCanvasMatrix la niega—, así que tiene que salir con la Y
-    // de imagen MÁS PEQUEÑA de las cuatro. Si alguien pone la Y de la imagen al
-    // revés, el cuadrilátero sigue siendo un cuadrilátero y solo esto lo caza.
+    // Order: (0,0), (w,0), (w,h), (0,h) in CANVAS pixels. The (0,0) of the
+    // canvas is its UPPER-left corner — the canvas Y grows
+    // downward, and uiWorldCanvasMatrix negates it — so it has to come out with the Y
+    // of image SMALLEST of the four. If someone puts the image Y
+    // backwards, the quadrilateral is still a quadrilateral and only this catches it.
     CHECK(nearlyEqual(esq[0].x, 423.3624f, 0.02f));
     CHECK(nearlyEqual(esq[0].y, 271.8673f, 0.02f));
     CHECK(nearlyEqual(esq[1].x, 571.8282f, 0.02f));
@@ -7681,10 +7676,10 @@ static void test_world_canvas_gizmo_proyecta_las_cuatro_esquinas()
     CHECK(nearlyEqual(esq[3].y, 372.4002f, 0.02f));
 }
 
-// Una esquina con w <= 0 está DETRÁS del plano de la cámara: dividir por ese w
-// espeja el punto al otro lado y el cuadrilátero sale cruzado o disparado al
-// infinito, sin que nada en pantalla diga que es basura (ImGui no clipea, dibuja
-// lo que le den). El rechazo tiene que ser EXPLÍCITO.
+// A corner with w <= 0 is BEHIND the camera plane: dividing by that w
+// mirrors the point to the other side and the quadrilateral comes out crossed or shot to
+// infinity, without anything on screen saying it is garbage (ImGui does not clip, it draws
+// what it is given). The rejection has to be EXPLICIT.
 static void test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara()
 {
     CanvasComponent c;
@@ -7693,18 +7688,18 @@ static void test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara()
     c.referenceResolution = glm::vec2(200.0f, 100.0f);
 
     const glm::vec2 tam(200.0f, 100.0f);
-    // Casi de canto (-80°) y a medio metro de la cámara. Las cuatro w salen
-    // +1.4848, -0.4848, -0.4848, +1.4848: dos esquinas delante y dos detrás — el
-    // caso REAL, no "todo detrás", que lo cazaría hasta un rechazo por el centro.
+    // Almost edge-on (-80°) and half a meter from the camera. The four w come out
+    // +1.4848, -0.4848, -0.4848, +1.4848: two corners in front and two behind — the
+    // REAL case, not "all behind", which would be caught even by a reject at the center.
     //
-    // El signo importa y NO es intercambiable con +80°. Con +80° la que rechaza
-    // es la esquina 0, la función sale en la primera vuelta sin haber escrito
-    // nada, y entonces una implementación que escribiera DIRECTO en outCorners
-    // pasaría este test igual: los centinelas de abajo no probarían nada. Con
-    // -80° la esquina 0 está DELANTE y la que rechaza es la 1, así que para
-    // cuando se descubre el problema ya hay una esquina calculada. Eso es lo
-    // que prueba el array intermedio de projectWorldCanvasCorners: nadie puede
-    // quedarse con una esquina nueva y tres viejas.
+    // The sign matters and is NOT interchangeable with +80°. At +80° the corner that rejects
+    // is corner 0, the function exits on the first loop without having written
+    // anything, and then an implementation that wrote DIRECTLY to outCorners
+    // would pass this test the same way: the sentinels below would not prove anything. At
+    // -80° corner 0 is IN FRONT and the one that rejects is 1, so by the time
+    // the problem is discovered there is already a corner calculated. That is what
+    // the intermediate array of projectWorldCanvasCorners proves: nobody can
+    // keep a new corner and three old ones.
     const glm::mat4 mundo = glm::rotate(
         glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -0.5f)),
         glm::radians(-80.0f), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -7713,22 +7708,22 @@ static void test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara()
     const glm::mat4 mvp = editorProjForTest(2.0f) * vista *
                           uiWorldCanvasMatrix(c, tam, mundo, vista);
 
-    // Centinelas distintos entre sí: si la función escribiera algo antes de
-    // rechazar, se vería aquí.
+    // Sentinels distinct from each other: if the function wrote something before
+    // rejecting, it would show here.
     glm::vec2 esq[4] = { glm::vec2(-11.0f, -12.0f), glm::vec2(-13.0f, -14.0f),
                          glm::vec2(-15.0f, -16.0f), glm::vec2(-17.0f, -18.0f) };
     CHECK(!projectWorldCanvasCorners(mvp, glm::vec2(0.0f), tam, glm::vec2(37.0f, 91.0f),
                                      glm::vec2(800.0f, 400.0f), esq));
-    // El de la esquina 0 es el que muerde: es la que SÍ se llegó a calcular.
+    // The one at corner 0 is the one that bites: it is the one that DID get calculated.
     CHECK(nearlyEqual(esq[0].x, -11.0f));
     CHECK(nearlyEqual(esq[0].y, -12.0f));
     CHECK(nearlyEqual(esq[1].y, -14.0f));
     CHECK(nearlyEqual(esq[3].x, -17.0f));
 }
 
-// Y lo contrario: fuera del encuadre pero DELANTE se acepta. El criterio es el
-// signo de w, no que el rect quepa en la imagen — recortar aquí dejaría sin
-// gizmo a un canvas que asoma medio por el borde, que es cuando más se busca.
+// And the opposite: off-frame but IN FRONT is accepted. The criterion is the
+// sign of w, not whether the rect fits in the image — clipping here would leave no
+// gizmo for a canvas that sticks halfway out the edge, which is when it is most sought.
 static void test_world_canvas_gizmo_acepta_fuera_de_encuadre_si_esta_delante()
 {
     CanvasComponent c;
@@ -7745,23 +7740,23 @@ static void test_world_canvas_gizmo_acepta_fuera_de_encuadre_si_esta_delante()
     glm::vec2 esq[4];
     CHECK(projectWorldCanvasCorners(mvp, glm::vec2(0.0f), tam, glm::vec2(37.0f, 91.0f),
                                     glm::vec2(800.0f, 400.0f), esq));
-    // Muy a la derecha del borde derecho de la imagen (37 + 800 = 837).
+    // Very far to the right of the right edge of the image (37 + 800 = 837).
     CHECK(nearlyEqual(esq[0].x, 2271.8023f, 0.05f));
     CHECK(nearlyEqual(esq[1].x, 2464.9394f, 0.05f));
-    // La Y sí cae dentro: el canvas está a la altura de la cámara.
+    // The Y does fall inside: the canvas is at camera height.
     CHECK(nearlyEqual(esq[0].y, 242.7157f, 0.02f));
     CHECK(nearlyEqual(esq[2].y, 339.2843f, 0.02f));
 }
 
-// A qué Canvas pertenece un widget: el ancestro MÁS CERCANO (o él mismo) que
-// tenga uno. Es la regla exacta de Scene::collectCanvases —un canvas anidado abre
-// binding propio y CORTA la cadena—, y de ella depende que el gizmo de un widget
-// sepa si su canvas es de mundo. Si el gizmo y el sync no usan el mismo criterio,
-// el gizmo decide por el canvas equivocado.
+// Which Canvas a widget belongs to: the NEAREST ancestor (or itself) that
+// has one. This is the exact rule of Scene::collectCanvases — a nested canvas opens
+// its own binding and CUTS the chain — and on it depends whether a widget's gizmo
+// knows if its canvas is of the world. If the gizmo and the sync do not use the same criterion,
+// the gizmo decides for the wrong canvas.
 //
-// Los dos canvas del test llevan valores DISTINTOS y no neutros (resolución y
-// worldScale) para poder afirmar CUÁL de los dos ha vuelto, no solo que no es
-// nulo: devolver el de fuera en vez del de dentro es justo el fallo a cazar.
+// The two canvas of the test carry DISTINCT and not neutral values (resolution and
+// worldScale) so we can assert WHICH of the two came back, not just that it is not
+// null: returning the outer one instead of the inner one is exactly the bug to catch.
 static void test_owning_canvas_es_el_ancestro_mas_cercano()
 {
     GameObject raiz("Raiz");
@@ -7779,9 +7774,9 @@ static void test_owning_canvas_es_el_ancestro_mas_cercano()
     GameObject* boton = canvasMundo->addChild("Boton");
     boton->setButton(std::make_shared<ButtonComponent>());
 
-    // El de DENTRO, no el de fuera. Se devuelve el GameObject y no el componente
-    // porque el gizmo necesita ADEMAS su worldTransform para montar la matriz de
-    // modelo del canvas.
+    // The one INSIDE, not the outside one. The GameObject is returned and not the component
+    // because the gizmo also needs its worldTransform to build the
+    // model matrix of the canvas.
     const GameObject* objBoton = owningCanvasObject(boton);
     CHECK(objBoton == canvasMundo);
     const CanvasComponent* delBoton = objBoton ? objBoton->getCanvas().get() : nullptr;
@@ -7793,13 +7788,13 @@ static void test_owning_canvas_es_el_ancestro_mas_cercano()
         CHECK(nearlyEqual(delBoton->referenceResolution.x, 640.0f));
     }
 
-    // Un GameObject que ES el canvas se devuelve a sí mismo: el gizmo del propio
-    // Canvas se apoya en el mismo criterio.
+    // A GameObject that IS the canvas returns itself: the gizmo of the own
+    // Canvas relies on the same criterion.
     CHECK(owningCanvasObject(canvasMundo) == canvasMundo);
 
-    // Y desde la raíz manda el de PANTALLA: sin esto, una implementación que
-    // subiera hasta el canvas más externo —o que se quedara con el último que
-    // vio— pasaría la comprobación de arriba igualmente.
+    // And from the root the SCREEN one rules: without this, an implementation that
+    // climbed to the outermost canvas — or that kept the last one it
+    // saw — would pass the check above all the same.
     const GameObject* objRaiz = owningCanvasObject(&raiz);
     CHECK(objRaiz == &raiz);
     const CanvasComponent* deLaRaiz = objRaiz ? objRaiz->getCanvas().get() : nullptr;
@@ -7811,24 +7806,24 @@ static void test_owning_canvas_es_el_ancestro_mas_cercano()
         CHECK(nearlyEqual(deLaRaiz->referenceResolution.x, 1280.0f));
     }
 
-    // Sin canvas por encima no hay canvas: el editor lo impide, pero una escena
-    // hecha a mano puede traerlo y esto no puede deferenciar un nulo.
+    // No canvas on top means no canvas: the editor prevents it, but a scene
+    // made by hand can bring it and this cannot dereference a null.
     GameObject suelto("Suelto");
     suelto.setButton(std::make_shared<ButtonComponent>());
     CHECK(owningCanvasObject(&suelto) == nullptr);
 }
 
-// El rect de un WIDGET dentro de un canvas de mundo, que es lo que hace falta
-// para su gizmo. Va por la MISMA función que el canvas entero: el canvas no es
-// más que el caso (0,0)-(w,h) de esto.
+// The rect of a WIDGET inside a world canvas, which is what is needed
+// for its gizmo. It goes through the SAME function as the entire canvas: the canvas is
+// nothing more than the (0,0)-(w,h) case of this.
 //
-// La línea que este test protege es concretamente que el rect ENTRE por el
-// parámetro. El rect elegido, (40,25)-(140,60), no empieza en (0,0), no coincide
-// con el canvas y no está centrado en él ni en X ni en Y: una implementación que
-// ignorase los dos argumentos y proyectase el canvas entero daría las ocho
-// coordenadas del test de arriba, que distan más de 21 píxeles de estas — mil
-// veces la tolerancia. Con un rect que empezara en (0,0), o que fuera el canvas
-// entero, ese sabotaje pasaría de largo.
+// The line that this test protects is precisely that the rect ENTERS through the
+// parameter. The chosen rect, (40,25)-(140,60), does not start at (0,0), does not match
+// the canvas and is not centered on it neither in X nor in Y: an implementation that
+// ignored the two arguments and projected the entire canvas would give the eight
+// coordinates of the test above, which are more than 21 pixels away from these — a thousand
+// times the tolerance. With a rect that started at (0,0), or that was the entire
+// canvas, that sabotage would get through.
 static void test_world_canvas_gizmo_proyecta_el_rect_de_un_widget()
 {
     CanvasComponent c;
@@ -7837,10 +7832,10 @@ static void test_world_canvas_gizmo_proyecta_el_rect_de_un_widget()
     c.worldScale          = 0.01f;
     c.referenceResolution = glm::vec2(200.0f, 100.0f);
 
-    // Mismo canvas, misma cámara y misma imagen que
-    // test_world_canvas_gizmo_proyecta_las_cuatro_esquinas: lo ÚNICO que cambia
-    // es el rect, así que la diferencia entre los dos juegos de números no puede
-    // venir de ninguna otra cosa.
+    // Same canvas, same camera and same image as
+    // test_world_canvas_gizmo_proyecta_las_cuatro_esquinas: the ONLY thing that changes
+    // is the rect, so the difference between the two sets of numbers cannot
+    // come from anything else.
     const glm::vec2 tam(200.0f, 100.0f);
     const glm::mat4 mundo = glm::rotate(
         glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.6f, -0.3f, -5.0f)),
@@ -7853,9 +7848,9 @@ static void test_world_canvas_gizmo_proyecta_el_rect_de_un_widget()
     const glm::mat4 mvp = editorProjForTest(imagenTam.x / imagenTam.y) * vista *
                           uiWorldCanvasMatrix(c, tam, mundo, vista);
 
-    // screenPos (40,25) y screenSize (100,35): en un canvas de mundo, lo que
-    // deja buildDrawData ya viene en píxeles LOCALES del canvas (escala 1 y
-    // origen (0,0)), así que entra tal cual.
+    // screenPos (40,25) and screenSize (100,35): in a world canvas, what
+    // buildDrawData leaves already comes in LOCAL pixels of the canvas (scale 1 and
+    // origin (0,0)), so it enters as is.
     const glm::vec2 rectMin(40.0f, 25.0f);
     const glm::vec2 rectMax(140.0f, 60.0f);
 
@@ -7871,9 +7866,9 @@ static void test_world_canvas_gizmo_proyecta_el_rect_de_un_widget()
     CHECK(nearlyEqual(esq[3].x, 446.1635f, 0.02f));
     CHECK(nearlyEqual(esq[3].y, 331.6128f, 0.02f));
 
-    // Y el rect degenerado (min == max) da un punto: es como el gizmo saca el
-    // pivot proyectado, y sin esto una división por el tamaño del rect colada en
-    // la función no se vería.
+    // And the degenerate rect (min == max) gives a point: it is how the gizmo pulls the
+    // projected pivot, and without this a division by the rect size slipped into
+    // the function would not be seen.
     glm::vec2 punto[4];
     CHECK(projectWorldCanvasCorners(mvp, rectMin, rectMin, imagenPos, imagenTam, punto));
     CHECK(nearlyEqual(punto[0].x, 453.5888f, 0.02f));
@@ -7883,22 +7878,22 @@ static void test_world_canvas_gizmo_proyecta_el_rect_de_un_widget()
 }
 
 // ===========================================================================
-// DonTopo::Camera — la cámara de vuelo del EDITOR (Core/Camera.cpp)
+// DonTopo::Camera — the EDITOR flight camera (Core/Camera.cpp)
 // ===========================================================================
 //
-// §4.2 de docs/core-audit.md: 98 LOC con CERO referencias en los 25 ficheros de
-// test. No es la CameraComponent de arriba (esa sí estaba cubierta): es la que
-// mueve el punto de vista del viewport con WASD, la que reorienta el axis gizmo
-// y la que ejecuta la tecla F.
+// Section 4.2 of docs/core-audit.md: 98 LOC with ZERO references in the 25 test
+// files. It is not the CameraComponent above (that one was covered): it is the one that
+// moves the viewport point of view with WASD, the one that reorients the axis gizmo
+// and the one that executes the F key.
 //
-// update() se queda fuera a propósito: pide un GLFWwindow* y no hay ventana en
-// un test headless. Todo lo demás —la trigonometría, el clamp, el encuadre— es
-// aritmética pura y no tenía nada debajo.
+// update() is left out on purpose: it asks for a GLFWwindow* and there is no window in
+// a headless test. Everything else — the trigonometry, the clamp, the frame-fit — is
+// pure arithmetic and had nothing underneath.
 
-// El yaw por defecto es -90°, y esa elección es justo lo que hace que la cámara
-// mire a -Z como glm::lookAt y como CameraComponent::viewFromWorld. Si alguien
-// "arregla" la trigonometría de updateVectors, las dos convenciones dejan de
-// coincidir y el gizmo de frustum empieza a mentir sobre lo que se ve en Play.
+// The default yaw is -90°, and that choice is exactly what makes the camera
+// look at -Z like glm::lookAt and like CameraComponent::viewFromWorld. If someone
+// "fixes" the trigonometry of updateVectors, the two conventions stop
+// matching and the frustum gizmo starts lying about what is seen in Play.
 static void test_camera_default_front_is_minus_z()
 {
     Camera cam;
@@ -7909,16 +7904,16 @@ static void test_camera_default_front_is_minus_z()
     CHECK(nearlyEqual(glm::length(f), 1.0f, 1e-5f));
 }
 
-// El pitch se clampa a ±89°: a 90 el front se alinea con el up y el producto
-// vectorial de update() (right = cross(front, up)) degenera. Sin clamp, un
-// arrastre largo del ratón pasa de 90 y la cámara se da la vuelta.
+// The pitch is clamped to ±89°: at 90 the front aligns with the up and the
+// cross product of update() (right = cross(front, up)) degenerates. Without clamp, a
+// long mouse drag passes 90 and the camera flips.
 static void test_camera_pitch_is_clamped()
 {
     Camera arriba;
-    arriba.processMouse(0.0f, -100000.0f);   // yOffset negativo sube el pitch
+    arriba.processMouse(0.0f, -100000.0f);   // negative yOffset raises the pitch
     CHECK(arriba.getFront().y <= 1.0f);
-    // sin(89°) = 0.99985. Sin el clamp el pitch se pasa de 90 y la componente
-    // vuelve a BAJAR (sin(200°) es negativo), que es lo que caza este umbral.
+    // sin(89°) = 0.99985. Without clamp the pitch passes 90 and the component
+    // goes DOWN (sin(200°) is negative), which is what this threshold catches.
     CHECK(arriba.getFront().y > 0.999f);
     CHECK(nearlyEqual(glm::length(arriba.getFront()), 1.0f, 1e-5f));
 
@@ -7927,9 +7922,9 @@ static void test_camera_pitch_is_clamped()
     CHECK(abajo.getFront().y < -0.999f);
 }
 
-// mouseSens multiplica el offset. Es un campo público que el editor expone en
-// preferencias: si processMouse dejara de aplicarlo, el deslizador no haría
-// nada y nadie lo notaría desde el código.
+// mouseSens multiplies the offset. It is a public field that the editor exposes in
+// preferences: if processMouse stopped applying it, the slider would do
+// nothing and nobody would notice from the code.
 static void test_camera_mouse_sensitivity_scales_offset()
 {
     Camera lenta;
@@ -7938,17 +7933,17 @@ static void test_camera_mouse_sensitivity_scales_offset()
 
     lenta.processMouse(10.0f, 0.0f);
     rapida.processMouse(5.0f, 0.0f);
-    // Mismo giro efectivo: 10 * s == 5 * 2s.
+    // Same effective rotation: 10 * s == 5 * 2s.
     CHECK(nearlyEqual(lenta.getFront().x, rapida.getFront().x, 1e-5f));
     CHECK(nearlyEqual(lenta.getFront().z, rapida.getFront().z, 1e-5f));
 
-    // Y que de verdad ha girado, no que las dos se hayan quedado quietas.
+    // And that it truly rotated, not that both stayed still.
     Camera quieta;
     CHECK(!nearlyEqual(lenta.getFront().x, quieta.getFront().x, 1e-3f));
 }
 
-// lookAlongAxis SOLO rota: lo usa el axis gizmo del viewport, y mover la
-// posición al pulsarlo teletransportaría al usuario sin pedirlo.
+// lookAlongAxis ONLY rotates: the axis gizmo of the viewport uses it, and moving the
+// position when clicked would teleport the user without asking.
 static void test_camera_look_along_axis_only_rotates()
 {
     Camera cam(glm::vec3(10.0f, 20.0f, 30.0f));
@@ -7959,14 +7954,14 @@ static void test_camera_look_along_axis_only_rotates()
     CHECK(nearlyEqual(cam.getPos().x, antes.x, 1e-5f));
     CHECK(nearlyEqual(cam.getPos().y, antes.y, 1e-5f));
     CHECK(nearlyEqual(cam.getPos().z, antes.z, 1e-5f));
-    // Mirar "a lo largo del eje +Z" es mirar HACIA -Z: el eje que se pasa es
-    // desde dónde se mira, no hacia dónde.
+    // Looking "along the +Z axis" means looking TOWARD -Z: the axis passed is
+    // from where you look, not to where.
     CHECK(nearlyEqual(cam.getFront().z, -1.0f, 1e-4f));
 }
 
-// focusOn (la tecla F) retrocede por el vector cámara→objeto y encuadra. La
-// distancia sale de max(radio, 5) * 2.5: sin el mínimo, encuadrar un objeto
-// diminuto metería la cámara dentro de él.
+// focusOn (the F key) retreats along the camera-to-object vector and frames it. The
+// distance comes from max(radius, 5) * 2.5: without the minimum, framing a tiny
+// object would put the camera inside it.
 static void test_camera_focus_on_frames_the_object()
 {
     Camera cam(glm::vec3(0.0f, 0.0f, 100.0f));
@@ -7974,23 +7969,23 @@ static void test_camera_focus_on_frames_the_object()
 
     cam.focusOn(centro, 40.0f);
 
-    // Se queda en la dirección en la que ya estaba (+Z), a 40 * 2.5 = 100.
+    // It stays in the direction it was already (+Z), at 40 * 2.5 = 100.
     CHECK(nearlyEqual(glm::length(cam.getPos() - centro), 100.0f, 1e-3f));
     CHECK(cam.getPos().z > 0.0f);
-    // Y mirando al objeto.
+    // And looking at the object.
     const glm::vec3 haciaElCentro = glm::normalize(centro - cam.getPos());
     CHECK(nearlyEqual(glm::dot(cam.getFront(), haciaElCentro), 1.0f, 1e-4f));
 
-    // Un objeto diminuto no se encuadra a 0: el mínimo de radio (5) manda.
+    // A tiny object does not frame at 0: the minimum radius (5) rules.
     Camera cerca(glm::vec3(0.0f, 0.0f, 100.0f));
     cerca.focusOn(centro, 0.0f);
     CHECK(nearlyEqual(glm::length(cerca.getPos() - centro), 12.5f, 1e-3f));
 }
 
-// El caso degenerado: la cámara YA está exactamente en el centro del objeto.
-// El vector cámara→centro es cero y normalizarlo da NaN; la guarda del épsilon
-// cae al -front actual. Sin ella, la posición se va a NaN y el viewport se
-// queda en negro sin decir por qué.
+// The degenerate case: the camera is ALREADY exactly at the center of the object.
+// The camera-to-center vector is zero and normalizing it gives NaN; the epsilon guard
+// falls back to -front current. Without it, the position goes to NaN and the viewport
+// goes black without saying why.
 static void test_camera_focus_on_from_the_center_does_not_nan()
 {
     const glm::vec3 centro(7.0f, 8.0f, 9.0f);
@@ -8005,12 +8000,12 @@ static void test_camera_focus_on_from_the_center_does_not_nan()
     CHECK(nearlyEqual(glm::length(cam.getPos() - centro), 25.0f, 1e-3f));
 }
 
-// getViewMatrix tiene que ser exactamente el lookAt que el resto del motor
-// asume, o el gizmo y el render dejan de coincidir.
+// getViewMatrix has to be exactly the lookAt that the rest of the engine
+// assumes, or the gizmo and the render stop matching.
 static void test_camera_view_matrix_is_lookat()
 {
     Camera cam(glm::vec3(3.0f, 4.0f, 5.0f));
-    cam.processMouse(37.0f, -11.0f);   // una orientación cualquiera, no la de fábrica
+    cam.processMouse(37.0f, -11.0f);   // an arbitrary orientation, not the factory one
 
     const glm::mat4 esperado = glm::lookAt(cam.getPos(), cam.getPos() + cam.getFront(), cam.getUp());
     const glm::mat4 obtenido = cam.getViewMatrix();
@@ -8023,13 +8018,13 @@ static void test_camera_view_matrix_is_lookat()
 // Scene::collectLights
 // ===========================================================================
 //
-// §4.2 de docs/core-audit.md: cero tests, y es lo que alimenta el bloque de
-// iluminación ENTERO — el recorte a MAX_LIGHTS, el total que distingue "escena
-// sin luces" de "escena con más de las que caben", la conversión de ángulos a
-// coseno, el radio que tiene que coincidir con el del shader, y la guarda de
-// NaN cuando el eje Z tiene escala 0.
+// Section 4.2 of docs/core-audit.md: zero tests, and it is what feeds the entire
+// lighting block — the clipping to MAX_LIGHTS, the total that distinguishes "scene
+// without lights" from "scene with more than fit", the angle-to-cosine conversion,
+// the radius that has to match the shader's, and the NaN guard
+// when the Z axis has scale 0.
 
-// Helper: cuelga de la raíz un GameObject con luz y el transform dado.
+// Helper: hangs a GameObject with light and the given transform from the root.
 static GameObject* addLight(Scene& scene, const char* nombre, const glm::mat4& local,
                             LightType tipo = LightType::Point)
 {
@@ -8041,10 +8036,10 @@ static GameObject* addLight(Scene& scene, const char* nombre, const glm::mat4& l
     return go;
 }
 
-// El tope es del bloque UBO, no de la escena: se recortan las luces que sobran
-// pero se devuelve el TOTAL, que es lo único que permite al editor avisar "hay
-// 70 luces y solo caben 64". Devolver el tamaño recortado dejaría ese aviso
-// mudo para siempre.
+// The cap is from the UBO block, not the scene: lights that overflow are clipped
+// but the TOTAL is returned, which is the only thing that lets the editor warn "there are
+// 70 lights and only 64 fit". Returning the clipped size would leave that warning
+// silent forever.
 static void test_collect_lights_caps_but_reports_total()
 {
     Scene scene("Test");
@@ -8059,12 +8054,12 @@ static void test_collect_lights_caps_but_reports_total()
 
     CHECK(total == (size_t)(MAX_LIGHTS + extra));
     CHECK(luces.size() == (size_t)MAX_LIGHTS);
-    CHECK(radios.size() == (size_t)MAX_LIGHTS);   // los dos vectores en paralelo
+    CHECK(radios.size() == (size_t)MAX_LIGHTS);   // the two vectors in parallel
 }
 
-// Las dos salidas se vacían al entrar: se llaman UNA VEZ POR FRAME sobre los
-// mismos vectores del host, así que sin el clear crecerían sin parar hasta
-// desbordar el UBO con luces de frames viejos.
+// The two outputs are cleared on entry: they are called ONCE PER FRAME on the
+// same host vectors, so without the clear they would grow without stopping until
+// overflowing the UBO with lights from old frames.
 static void test_collect_lights_clears_previous_output()
 {
     Scene scene("Test");
@@ -8077,15 +8072,15 @@ static void test_collect_lights_clears_previous_output()
     CHECK(luces.size() == 1);
     CHECK(radios.size() == 1);
 
-    // Y una escena sin luces las deja vacías, no con lo del frame anterior.
+    // And a scene with no lights leaves them empty, not with what was in the previous frame.
     Scene vacia("Vacia");
     CHECK(vacia.collectLights(luces, radios) == 0);
     CHECK(luces.empty());
     CHECK(radios.empty());
 }
 
-// Posición y dirección salen del worldTransform, no del componente: mover o
-// rotar el GameObject tiene que mover la luz. La dirección es -Z local.
+// Position and direction come from worldTransform, not the component: moving or
+// rotating the GameObject has to move the light. The direction is -Z local.
 static void test_collect_lights_position_and_direction_from_transform()
 {
     Scene scene("Test");
@@ -8104,18 +8099,18 @@ static void test_collect_lights_position_and_direction_from_transform()
     CHECK(nearlyEqual(luces[0].position.z, 30.0f, 1e-4f));
     CHECK(nearlyEqual(luces[0].position.w, 1.0f, 1e-5f));
 
-    // Girada 90° sobre Y, la columna Z pasa a ser (1,0,0) y el "hacia dónde
-    // mira" es su NEGADO. Sin el signo, la luz alumbra al revés.
+    // Rotated 90° on Y, the Z column becomes (1,0,0) and the "which way it
+    // looks" is its NEGATED. Without the sign, the light illuminates backwards.
     CHECK(nearlyEqual(luces[0].direction.x, -1.0f, 1e-4f));
     CHECK(nearlyEqual(luces[0].direction.y, 0.0f, 1e-4f));
     CHECK(nearlyEqual(luces[0].direction.z, 0.0f, 1e-4f));
-    // El tipo viaja en la w de direction.
+    // The type travels in the w of direction.
     CHECK(nearlyEqual(luces[0].direction.w, (float)(int)LightType::Spot, 1e-5f));
 }
 
-// LA guarda. Escala 0 en Z se puede poner desde Properties: normalizar un
-// vector nulo da NaN, y ese NaN llega al shader y ensucia la iluminación de
-// TODA la escena, no solo la de esa luz. El repliegue es -Y.
+// THE guard. Scale 0 in Z can be set from Properties: normalizing a
+// null vector gives NaN, and that NaN reaches the shader and dirties the lighting of
+// the ENTIRE scene, not just that light. The fallback is -Y.
 static void test_collect_lights_zero_scale_z_does_not_nan()
 {
     Scene scene("Test");
@@ -8135,10 +8130,10 @@ static void test_collect_lights_zero_scale_z_does_not_nan()
     CHECK(nearlyEqual(luces[0].direction.z, 0.0f, 1e-5f));
 }
 
-// Los ángulos del cono viajan YA en coseno: el shader compara contra el coseno
-// del ángulo con el eje en vez de llamar a cos() por fragmento. Mandar grados
-// daría un cono absurdo (cos(20) ≈ 0.94 frente a 20.0) sin que nada fallara al
-// compilar.
+// The cone angles already travel in cosine: the shader compares against the cosine
+// of the angle with the axis instead of calling cos() per fragment. Sending degrees
+// would give an absurd cone (cos(20) ≈ 0.94 versus 20.0) without anything failing at
+// compile time.
 static void test_collect_lights_angles_travel_as_cosines()
 {
     Scene scene("Test");
@@ -8158,18 +8153,18 @@ static void test_collect_lights_angles_travel_as_cosines()
     CHECK(nearlyEqual(luces[0].params.z, std::cos(glm::radians(30.0f)), 1e-5f));
 }
 
-// El radio del binning de Forward+ tiene que ser EL MISMO alcance que usa el
-// fragment shader, o una luz se apaga de golpe al cruzar el borde de un tile.
-// El area se aproxima como un point de radio ancho/2; el resto usa su range.
+// The radius of the Forward+ binning has to be THE SAME range that the
+// fragment shader uses, or a light goes off suddenly when crossing a tile edge.
+// The area is approximated as a point of radius width/2; the rest uses its range.
 static void test_collect_lights_radius_matches_the_shader()
 {
     Scene scene("Test");
     GameObject* punto = addLight(scene, "Punto", glm::mat4(1.0f), LightType::Point);
     punto->getLight()->setRange(300.0f);
-    punto->getLight()->setAreaWidth(999.0f);   // no debe influir en un point
+    punto->getLight()->setAreaWidth(999.0f);   // must not affect a point
 
     GameObject* area = addLight(scene, "Area", glm::mat4(1.0f), LightType::Area);
-    area->getLight()->setRange(300.0f);        // no debe influir en un area
+    area->getLight()->setRange(300.0f);        // must not affect an area
     area->getLight()->setAreaWidth(80.0f);
     scene.getRoot().updateWorldTransforms();
 
@@ -8179,23 +8174,23 @@ static void test_collect_lights_radius_matches_the_shader()
     if (radios.size() != 2) return;
 
     CHECK(nearlyEqual(radios[0], 300.0f, 1e-3f));   // point: su range
-    CHECK(nearlyEqual(radios[1], 40.0f, 1e-3f));    // area: ancho/2
+    CHECK(nearlyEqual(radios[1], 40.0f, 1e-3f));    // area: width/2
 }
 
-// ── Gizmo de traslación del viewport (ImGuizmo) ─────────────────────────────
+// ── Gizmo of viewport translation (ImGuizmo) ────────────────────────────────
 //
-// El sujeto de prueba son los dos seams de ViewportPanel.h: `localFromWorld`,
-// que convierte lo que devuelve el manipulador (una matriz de MUNDO) en lo que
-// se edita y se serializa (`localTransform`), y `applyLocalTransform`, que es
-// literalmente el cuerpo de la lambda del PropertyCommand que se apila al
-// soltar. Lo que NO se puede probar aquí es la interacción de ratón: ImGuizmo
-// necesita un contexto de ImGui vivo y eventos de puntero, así que el flanco
-// de entrada/salida del arrastre —y con él "un comando por arrastre"— se
-// verifica a mano en la GUI.
+// The test subject is the two seams of ViewportPanel.h: `localFromWorld`,
+// which converts what the manipulator returns (a WORLD matrix) into what
+// is edited and serialized (`localTransform`), and `applyLocalTransform`, which is
+// literally the body of the PropertyCommand lambda that is stacked when
+// released. What CANNOT be tested here is mouse interaction: ImGuizmo
+// needs a live ImGui context and pointer events, so the drag
+// entry/exit edge — and with it "one command per drag" — is
+// verified by hand in the GUI.
 
-// El caso trivial, que es también el que ESCONDE el bug: con el padre en la
-// identidad, poner la inversa o no ponerla, y multiplicar en un orden o en el
-// otro, dan las cuatro el mismo resultado.
+// The trivial case, which also HIDES the bug: with the parent at
+// identity, putting the inverse or not putting it, and multiplying in one order or
+// another, all four give the same result.
 static void test_gizmo_local_from_world_identity_parent()
 {
     const glm::mat4 mundo = glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, -7.0f, 11.0f)) *
@@ -8207,41 +8202,41 @@ static void test_gizmo_local_from_world_identity_parent()
             CHECK(nearlyEqual(local[c][f], mundo[c][f], 1e-5f));
 }
 
-// El caso que de verdad manda: padre TRASLADADO Y ROTADO. Un hijo movido con el
-// gizmo no puede saltar, y saltaría de las dos formas equivocadas —escribir el
-// mundo tal cual en el local, o multiplicar por la inversa por el lado que no
-// es—, que aquí dan tres resultados distintos.
+// The case that truly matters: parent TRANSLATED AND ROTATED. A child moved with the
+// gizmo cannot jump, and would jump in the two wrong ways — writing the
+// world as is into the local, or multiplying by the inverse on the wrong
+// side — which here give three distinct results.
 static void test_gizmo_local_from_world_translated_rotated_parent()
 {
     const glm::mat4 padre = glm::translate(glm::mat4(1.0f), glm::vec3(5.0f, -3.0f, 2.0f)) *
                             glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 1, 0));
-    // Lo que devolvería ImGuizmo al arrastrar el hijo hasta (10, 4, -6) de mundo.
+    // What ImGuizmo would return when dragging the child to (10, 4, -6) of world.
     const glm::mat4 mundo = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 4.0f, -6.0f));
 
     const glm::mat4 local = localFromWorld(padre, mundo);
 
-    // A mano: inverse(padre) = Ry(-90)·T(-5,3,-2), así que la traslación local
-    // es Ry(-90)·(5,7,-8) = (8,7,5).
+    // By hand: inverse(parent) = Ry(-90)·T(-5,3,-2), so the local translation
+    // is Ry(-90)·(5,7,-8) = (8,7,5).
     //
-    // Escribir el mundo tal cual daría (10,4,-6), y multiplicar al revés
-    // (mundo · inverse(padre)) daría (12,7,-11). Ninguno de los dos pasa por
-    // aquí.
+    // Writing the world as is would give (10,4,-6), and multiplying backwards
+    // (world · inverse(parent)) would give (12,7,-11). Neither of the two comes through
+    // here.
     CHECK(nearlyEqual(local[3][0], 8.0f, 1e-4f));
     CHECK(nearlyEqual(local[3][1], 7.0f, 1e-4f));
     CHECK(nearlyEqual(local[3][2], 5.0f, 1e-4f));
 
-    // Y la vuelta: recomponer el mundo desde el local devuelve la matriz de
-    // partida ENTERA, no solo la posición. Es lo mismo que hace
-    // updateWorldTransforms el frame siguiente, así que si esto no cuadra el
-    // objeto se mueve solo al soltar.
+    // And the return: recomposing the world from the local returns the entire
+    // starting matrix, not just the position. It is the same as what
+    // updateWorldTransforms does the next frame, so if this does not check out the
+    // object moves on its own when released.
     const glm::mat4 rehecho = padre * local;
     for (int c = 0; c < 4; ++c)
         for (int f = 0; f < 4; ++f)
             CHECK(nearlyEqual(rehecho[c][f], mundo[c][f], 1e-4f));
 }
 
-// El PropertyCommand que se apila al soltar: deshace y rehace, y resuelve el
-// objeto por ID. El puntero se mete a propósito en el comando para NO usarlo.
+// The PropertyCommand that is stacked when released: undoes and redoes, and resolves the
+// object by ID. The pointer is put in the command on purpose to NOT use it.
 static void test_gizmo_transform_command_undo_redo()
 {
     Scene scene("Test");
@@ -8261,8 +8256,8 @@ static void test_gizmo_transform_command_undo_redo()
     CHECK(nearlyEqual(go->localTransform[3][0], 40.0f, 1e-5f));
     CHECK(nearlyEqual(go->localTransform[3][1], -5.0f, 1e-5f));
     CHECK(nearlyEqual(go->localTransform[3][2], 9.0f, 1e-5f));
-    // El mundo se propaga en el mismo golpe: sin esto el objeto se vería en su
-    // sitio viejo hasta el traverse siguiente.
+    // The world propagates in the same stroke: without this the object would be seen in its
+    // old spot until the next traverse.
     CHECK(nearlyEqual(go->worldTransform[3][0], 40.0f, 1e-5f));
 
     cmd.undo();
@@ -8274,10 +8269,10 @@ static void test_gizmo_transform_command_undo_redo()
     CHECK(nearlyEqual(go->localTransform[3][0], 40.0f, 1e-5f));
 }
 
-// Y lo que obliga a resolver por id: entre apilar el comando y deshacerlo cabe
-// un borrado + una reconstrucción (el undo de un Delete, la carga de una
-// escena). El GameObject reconstruido conserva el id pero NO la dirección: un
-// GameObject* capturado apuntaría a memoria liberada.
+// And what forces resolution by id: between stacking the command and undoing it fits
+// a deletion + a reconstruction (the undo of a Delete, the loading of a
+// scene). The reconstructed GameObject keeps the id but NOT the address: a
+// GameObject* captured would point to freed memory.
 static void test_gizmo_transform_command_survives_rebuild(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -8293,20 +8288,20 @@ static void test_gizmo_transform_command_survives_rebuild(PhysicsManager& pm, Au
         "Transform de 'Movido'", antes, despues,
         [pScene, id](const glm::mat4& t) { applyLocalTransform(*pScene, id, t); });
 
-    // Borrado y reconstrucción por el mismo camino que el undo de un Delete
-    // (ver test_undo_delete_keeps_original_id), que conserva el id.
+    // Deletion and reconstruction by the same path as the undo of a Delete
+    // (see test_undo_delete_keeps_original_id), which keeps the id.
     nlohmann::json snapshot = scene.subtreeToJson(go);
     scene.removeGameObject(go);
     CHECK(scene.findById(id) == nullptr);
-    // Un undo con el objeto AUSENTE no puede petar: es no-op y ya.
+    // An undo with the object ABSENT cannot crash: it is a no-op and that is it.
     cmd.undo();
 
     GameObject* rehecho = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
     CHECK(rehecho != nullptr);
     if (!rehecho) return;
-    // Mismo id, objeto nuevo: el viejo `go` es memoria liberada y un
-    // GameObject* capturado en el comando apuntaría ahí. (No se comparan las
-    // direcciones: el asignador puede reusar la misma y eso no probaría nada.)
+    // Same id, new object: the old `go` is freed memory and a
+    // GameObject* captured in the command would point there. (Addresses are not compared:
+    // the allocator can reuse the same one and that would not prove anything.)
     CHECK(rehecho->id == id);
 
     cmd.undo();
@@ -8315,37 +8310,37 @@ static void test_gizmo_transform_command_survives_rebuild(PhysicsManager& pm, Au
     CHECK(nearlyEqual(rehecho->localTransform[3][2], 3.0f, 1e-5f));
 }
 
-// ── Modos del gizmo: rotar y escalar ────────────────────────────────────────
+// ── Gizmo modes: rotate and scale ────────────────────────────────────────────
 //
-// Lo que se puede afirmar sin GUI es qué CANAL informa cada modo. El resto
-// —qué handles dibuja ImGuizmo, si los anillos salen alineados al objeto— es
-// de la librería y de la pantalla.
+// What can be asserted without GUI is which CHANNEL each mode reports. The rest
+// — which handles ImGuizmo draws, whether the rings come aligned to the object — is
+// from the library and the screen.
 //
-// Vale la pena probarlo porque el fallo tiene una pinta muy concreta y muy
-// silenciosa: los tres modos comparten camino, escriben la misma `mat4` y
-// apilan el mismo comando, así que un copia-pega que deje Rotate informando de
-// la posición compila, corre y solo se nota leyendo el Log Console.
+// It is worth testing because the bug has a very concrete and very
+// silent look: the three modes share a path, write the same `mat4` and
+// stack the same command, so a copy-paste that leaves Rotate reporting the
+// position compiles, runs and is only noticed reading the Log Console.
 
-// El despacho a ImGuizmo. Mandar Rotate a TRANSLATE compila y corre: el objeto
-// se movería en vez de girar y ningún otro test se enteraría (comprobado
-// saboteándolo antes de escribir este). Lo que se afirma es también la decisión
-// de espacio, que es deliberada y distinta por modo.
+// The dispatch to ImGuizmo. Sending Rotate to TRANSLATE compiles and runs: the object
+// would move instead of rotating and no other test would know (tested by
+// sabotaging it before writing this). What is also asserted is the space decision,
+// which is deliberate and different per mode.
 static void test_gizmo_imguizmo_enums_per_mode()
 {
     int op = -1, espacio = -1;
 
     gizmoImGuizmoEnums(GizmoMode::Translate, op, espacio);
     CHECK(op == ImGuizmo::TRANSLATE);
-    CHECK(espacio == ImGuizmo::WORLD);   // la X del mundo, se mida el objeto como se mida
+    CHECK(espacio == ImGuizmo::WORLD);   // the world X, however the object is measured
 
     gizmoImGuizmoEnums(GizmoMode::Rotate, op, espacio);
     CHECK(op == ImGuizmo::ROTATE);
-    CHECK(espacio == ImGuizmo::LOCAL);   // anillos pegados a los ejes del objeto
+    CHECK(espacio == ImGuizmo::LOCAL);   // rings stuck to the object's axes
 
     gizmoImGuizmoEnums(GizmoMode::Scale, op, espacio);
     CHECK(op == ImGuizmo::SCALE);
-    // LOCAL obligatorio: ImGuizmo hace (operation & SCALE) ? LOCAL : mode y
-    // descarta lo que se le pase. Pasar WORLD aquí sería una llamada que miente.
+    // LOCAL required: ImGuizmo does (operation & SCALE) ? LOCAL : mode and
+    // discards what is passed to it. Passing WORLD here would be a call that lies.
     CHECK(espacio == ImGuizmo::LOCAL);
 }
 
@@ -8356,15 +8351,15 @@ static void test_gizmo_channel_label_per_mode()
     CHECK(std::string(gizmoChannelLabel(GizmoMode::Scale))     == "Scale");
 }
 
-// Una sola matriz con las tres cosas distintas entre sí, para que ningún modo
-// pueda acertar por accidente leyendo el canal de otro.
+// A single matrix with the three things distinct from each other, so no mode
+// can get lucky by accident reading another's channel.
 static void test_gizmo_logged_value_reads_its_own_channel()
 {
-    // 35° y no 90°: a 90 la Y del euler cae justo en la singularidad del `asin`
-    // de glm::eulerAngles, donde el error de normalizar columnas en float se
-    // amplifica y salen 89.98. Eso es precisión, no canal equivocado, y un test
-    // que lo tolerase con 0.1 de margen dejaría de distinguir la posición de la
-    // rotación. Se prueba lejos del borde y se afirma fuerte.
+    // 35° and not 90°: at 90 the Y of euler lands right in the singularity of the `asin`
+    // of glm::eulerAngles, where the error of normalizing columns in float
+    // amplifies and 89.98 comes out. That is precision, not wrong channel, and a test
+    // that tolerated it with 0.1 margin would stop distinguishing position from
+    // rotation. It is tested far from the edge and asserted strongly.
     const glm::mat4 local =
         glm::translate(glm::mat4(1.0f), glm::vec3(4.0f, -2.0f, 7.0f)) *
         glm::rotate(glm::mat4(1.0f), glm::radians(35.0f), glm::vec3(0, 1, 0)) *
@@ -8375,8 +8370,8 @@ static void test_gizmo_logged_value_reads_its_own_channel()
     CHECK(nearlyEqual(pos.y, -2.0f, 1e-4f));
     CHECK(nearlyEqual(pos.z, 7.0f, 1e-4f));
 
-    // GRADOS, no radianes: 35, no 0.61. Es la diferencia entre una línea de log
-    // que se puede comparar con la de Properties y una que no.
+    // DEGREES, not radians: 35, not 0.61. It is the difference between a log line
+    // that can be compared with the one in Properties and one that cannot.
     const glm::vec3 rot = gizmoLoggedValue(GizmoMode::Rotate, local);
     CHECK(nearlyEqual(rot.x, 0.0f, 1e-3f));
     CHECK(nearlyEqual(rot.y, 35.0f, 1e-3f));
@@ -8388,54 +8383,54 @@ static void test_gizmo_logged_value_reads_its_own_channel()
     CHECK(nearlyEqual(esc.z, 5.0f, 1e-4f));
 }
 
-// Una escala a 0 hace singular la matriz —y el modo Scale del gizmo llega
-// hasta ahí—, con lo que `glm::decompose` a pelo devuelve false y NO escribe
-// sus salidas. El log tiene que pasar por decomposeTransform, el wrapper del
-// repo, que sí las escribe siempre.
+// A scale to 0 makes the matrix singular — and the Scale mode of the gizmo goes
+// all the way there — so `glm::decompose` bare returns false and does NOT write
+// its outputs. The log has to go through decomposeTransform, the repo's
+// wrapper, which does write them always.
 //
-// Se afirman los VALORES concretos y no `isfinite`: el patrón 0xCDCDCDCD de la
-// CRT de Debug es -1.07e8, que es un número perfectamente finito, así que un
-// test de isfinite pasa con la basura dentro y no protege nada.
+// The ACTUAL values are asserted and not `isfinite`: the 0xCDCDCDCD pattern of the
+// Debug CRT is -1.07e8, which is a perfectly finite number, so a
+// test of isfinite passes with garbage inside and protects nothing.
 static void test_gizmo_logged_value_survives_singular_matrix()
 {
     const glm::mat4 local = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)) *
                             glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 5.0f));
 
-    // Un eje aplastado no define ninguna orientación: identidad, o sea 0°.
+    // A flattened axis defines no orientation: identity, that is 0°.
     const glm::vec3 rot = gizmoLoggedValue(GizmoMode::Rotate, local);
     CHECK(nearlyEqual(rot.x, 0.0f, 1e-4f));
     CHECK(nearlyEqual(rot.y, 0.0f, 1e-4f));
     CHECK(nearlyEqual(rot.z, 0.0f, 1e-4f));
 
-    // La escala sale ENTERA y correcta, ceros incluidos: son las longitudes de
-    // las columnas, que no dependen de que se pudiera descomponer.
+    // The scale comes out ENTIRE and correct, zeros included: they are the lengths of
+    // the columns, which do not depend on whether decomposition was possible.
     const glm::vec3 esc = gizmoLoggedValue(GizmoMode::Scale, local);
     CHECK(nearlyEqual(esc.x, 2.0f, 1e-4f));
     CHECK(nearlyEqual(esc.y, 0.0f, 1e-4f));
     CHECK(nearlyEqual(esc.z, 5.0f, 1e-4f));
 
-    // Y la traslación igual: cuarta columna, no pasa por la descomposición.
+    // And the translation the same: fourth column, does not go through decomposition.
     const glm::vec3 pos = gizmoLoggedValue(GizmoMode::Translate, local);
     CHECK(nearlyEqual(pos.y, 2.0f, 1e-5f));
 }
 
-// La conversión mundo→local con una ROTACIÓN, que es lo que devuelve ImGuizmo
-// en modo Rotate. Es el mismo `localFromWorld` de la traslación, pero el caso
-// que importa es distinto: la local tiene que ser la rotación RELATIVA al
-// padre, no la absoluta.
+// The world-to-local conversion with a ROTATION, which is what ImGuizmo returns
+// in Rotate mode. It is the same `localFromWorld` as the translation, but the case
+// that matters is different: the local has to be the rotation RELATIVE to the
+// parent, not the absolute.
 static void test_gizmo_rotation_through_rotated_parent_is_relative()
 {
     const glm::mat4 padre = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 1, 0));
-    // El gizmo deja al hijo mirando a 145° de mundo.
+    // The gizmo leaves the child looking at 145° of world.
     const glm::mat4 mundo = glm::rotate(glm::mat4(1.0f), glm::radians(145.0f), glm::vec3(0, 1, 0));
 
     const glm::mat4 local = localFromWorld(padre, mundo);
 
-    // 145 − 90 = 55, no 145: el padre ya aporta sus 90.
+    // 145 − 90 = 55, not 145: the parent already provides its 90.
     const glm::vec3 grados = gizmoLoggedValue(GizmoMode::Rotate, local);
     CHECK(nearlyEqual(grados.y, 55.0f, 1e-3f));
-    // Y sin escala parásita: una inversa mal puesta la mete y no se ve en el
-    // ángulo.
+    // And without parasitic scale: a misplaced inverse introduces it and does not show in the
+    // angle.
     const glm::vec3 esc = gizmoLoggedValue(GizmoMode::Scale, local);
     CHECK(nearlyEqual(esc.x, 1.0f, 1e-4f));
     CHECK(nearlyEqual(esc.y, 1.0f, 1e-4f));
@@ -8449,10 +8444,10 @@ static void test_gizmo_rotation_through_rotated_parent_is_relative()
 
 int main()
 {
-    // Una sola PxFoundation por proceso: un único PhysicsManager compartido
-    // por todos los tests, nunca uno por test. Aquí physics/audio solo hacen
-    // falta porque Scene::fromJson/insertFromJson/cloneGameObject los exigen
-    // en su firma pa recrear colliders y clips — estos tests no simulan nada.
+    // One PxFoundation per process only: a single PhysicsManager shared
+    // by all tests, never one per test. Here physics/audio are only needed
+    // because Scene::fromJson/insertFromJson/cloneGameObject demand them
+    // in their signature to recreate colliders and clips — these tests do not simulate anything.
     PhysicsManager pm;
     pm.init();
     AudioManager am;
