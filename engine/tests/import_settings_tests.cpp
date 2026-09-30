@@ -1,5 +1,5 @@
-// Test headless de ImportSettings (sin GUI, sin GPU). Plain main + CHECK,
-// mismo patron que content_browser_tests.cpp. Se ejecuta desde la raiz del repo.
+// Headless test of ImportSettings (no GUI, no GPU). Plain main + CHECK,
+// same pattern as content_browser_tests.cpp. It runs from the repo root.
 #include "DonTopo/Core/ImportSettings.h"
 
 #include <cmath>
@@ -37,7 +37,7 @@ static void test_sidecar_path_and_detection()
     CHECK(isImportSidecar("FOTO.PNG.IMPORT.JSON"));
     CHECK(!isImportSidecar("scene.json"));
     CHECK(!isImportSidecar("foto.png"));
-    CHECK(!isImportSidecar(".import.json"));     // sin nombre delante: no es de nadie
+    CHECK(!isImportSidecar(".import.json"));     // no name in front: it belongs to nobody
 }
 
 static void test_missing_file_is_default_without_warning()
@@ -46,7 +46,7 @@ static void test_missing_file_is_default_without_warning()
     std::string warning = "x";
     const TextureImportSettings s = loadTextureImportSettings(d / "no_existe.png", &warning);
     CHECK(isDefault(s));
-    CHECK(warning.empty());            // ausente no es un problema, es lo normal
+    CHECK(warning.empty());            // absent is not a problem, it is the normal case
 }
 
 static void test_roundtrip_and_default_removes_sidecar()
@@ -62,10 +62,10 @@ static void test_roundtrip_and_default_removes_sidecar()
     CHECK(fs::exists(importSidecarPath(asset)));
     CHECK(loadTextureImportSettings(asset) == in);
 
-    // Guardar el defecto BORRA el fichero.
+    // Saving the default DELETES the file.
     CHECK(saveTextureImportSettings(asset, TextureImportSettings{}, &err));
     CHECK(!fs::exists(importSidecarPath(asset)));
-    // Y guardar el defecto sin fichero previo no es un error.
+    // And saving the default with no previous file is not an error.
     CHECK(saveTextureImportSettings(asset, TextureImportSettings{}, &err));
 }
 
@@ -105,8 +105,8 @@ static void test_unknown_field_values_keep_the_good_field()
               R"({"version":1,"type":"texture","colorSpace":"hdr","mipmaps":true})");
     std::string w1;
     const TextureImportSettings a = loadTextureImportSettings(d / "a.png", &w1);
-    CHECK(a.colorSpace == ColorSpaceOverride::Auto);   // desconocido -> auto
-    CHECK(a.mipmaps);                                   // el otro campo sobrevive
+    CHECK(a.colorSpace == ColorSpaceOverride::Auto);   // unknown -> auto
+    CHECK(a.mipmaps);                                   // the other field survives
     CHECK(!w1.empty());
 
     writeText(importSidecarPath(d / "b.png"),
@@ -118,28 +118,28 @@ static void test_unknown_field_values_keep_the_good_field()
     CHECK(!w2.empty());
 }
 
-// Review Focus 1: entradas hostiles.
+// Review Focus 1: hostile inputs.
 static void test_hostile_sidecars_do_not_throw_or_blow_the_stack()
 {
     const fs::path d = makeDir();
-    // 200 KB de '[': anidado a 200000 niveles. Un parseo recursivo sin tope
-    // reventaria la pila; el tope de tamano lo corta antes de parsear.
+    // 200 KB of '[': nested 200000 levels deep. A recursive parse with no cap
+    // would blow the stack; the size cap cuts it before parsing.
     writeText(importSidecarPath(d / "nested.png"), std::string(200 * 1024, '['));
     std::string warning;
     CHECK(isDefault(loadTextureImportSettings(d / "nested.png", &warning)));
     CHECK(!warning.empty());
 
-    // 5 MB de basura.
+    // 5 MB of garbage.
     writeText(importSidecarPath(d / "big.png"), std::string(5 * 1024 * 1024, 'x'));
     warning.clear();
     CHECK(isDefault(loadTextureImportSettings(d / "big.png", &warning)));
     CHECK(!warning.empty());
 
-    // Un DIRECTORIO con el nombre del sidecar: no es un fichero regular.
+    // A DIRECTORY with the name of the sidecar: it is not a regular file.
     fs::create_directories(importSidecarPath(d / "dir.png"));
     CHECK(isDefault(loadTextureImportSettings(d / "dir.png")));
 
-    // Fichero vacio.
+    // Empty file.
     writeText(importSidecarPath(d / "empty.png"), "");
     CHECK(isDefault(loadTextureImportSettings(d / "empty.png")));
 }
@@ -174,7 +174,7 @@ static void test_move_copy_remove_sidecar()
     s.mipmaps = true;
     std::string err;
 
-    // Sin sidecar: mover y copiar son un no-op que va bien.
+    // Without a sidecar: move and copy are a no-op that goes fine.
     CHECK(moveImportSidecar(d / "a.png", d / "b.png", &err));
     CHECK(copyImportSidecar(d / "a.png", d / "c.png", &err));
     CHECK(!fs::exists(importSidecarPath(d / "b.png")));
@@ -182,7 +182,7 @@ static void test_move_copy_remove_sidecar()
     CHECK(saveTextureImportSettings(d / "a.png", s, &err));
     CHECK(copyImportSidecar(d / "a.png", d / "c.png", &err));
     CHECK(loadTextureImportSettings(d / "c.png") == s);
-    CHECK(fs::exists(importSidecarPath(d / "a.png")));           // copiar no quita el original
+    CHECK(fs::exists(importSidecarPath(d / "a.png")));           // copying does not remove the original
 
     CHECK(moveImportSidecar(d / "a.png", d / "b.png", &err));
     CHECK(!fs::exists(importSidecarPath(d / "a.png")));
@@ -190,10 +190,10 @@ static void test_move_copy_remove_sidecar()
 
     removeImportSidecar(d / "b.png");
     CHECK(!fs::exists(importSidecarPath(d / "b.png")));
-    removeImportSidecar(d / "b.png");                             // ya no hay: no pasa nada
+    removeImportSidecar(d / "b.png");                             // there is none anymore: nothing happens
 }
 
-// Review Focus 4: si el destino YA tiene sidecar, hay conflicto y no se pisa.
+// Review Focus 4: if the destination ALREADY has a sidecar, there is a conflict and it is not overwritten.
 static void test_sidecar_conflict_detection()
 {
     const fs::path d = makeDir();
@@ -202,7 +202,7 @@ static void test_sidecar_conflict_detection()
     std::string err;
     CHECK(!importSidecarConflict(d / "a.png", d / "b.png"));
     CHECK(saveTextureImportSettings(d / "a.png", s, &err));
-    CHECK(!importSidecarConflict(d / "a.png", d / "b.png"));      // solo el origen
+    CHECK(!importSidecarConflict(d / "a.png", d / "b.png"));      // only the source
     CHECK(saveTextureImportSettings(d / "b.png", s, &err));
     CHECK(importSidecarConflict(d / "a.png", d / "b.png"));
 }
@@ -211,14 +211,14 @@ static bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) 
 
 static void test_audio_gain_math()
 {
-    CHECK(audioGainLinear(0.0f) == 1.0f);                    // EXACTO: sin ajuste el volumen no cambia
+    CHECK(audioGainLinear(0.0f) == 1.0f);                    // EXACT: without adjustment the volume does not change
     CHECK(near(audioGainLinear(-6.0f), 0.501187f, 1e-4f));
     CHECK(near(audioGainLinear(12.0f), 3.981072f, 1e-3f));
     CHECK(near(audioGainLinear(-30.0f), 0.031623f, 1e-4f));
-    // Fuera de rango se acota ANTES de convertir.
+    // Out of range it is clamped BEFORE converting.
     CHECK(near(audioGainLinear(1000.0f), audioGainLinear(12.0f), 1e-3f));
     CHECK(near(audioGainLinear(-1000.0f), audioGainLinear(-30.0f), 1e-5f));
-    // Review Focus 1: NaN no llega a la ganancia.
+    // Review Focus 1: NaN does not reach the gain.
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const float inf = std::numeric_limits<float>::infinity();
     CHECK(clampAudioGainDb(nan) == 0.0f);
@@ -240,11 +240,11 @@ static void test_audio_roundtrip_and_default_removes_sidecar()
     CHECK(fs::exists(importSidecarPath(clip)));
     CHECK(loadAudioImportSettings(clip) == in);
 
-    CHECK(saveAudioImportSettings(clip, AudioImportSettings{}, &err));      // el defecto BORRA
+    CHECK(saveAudioImportSettings(clip, AudioImportSettings{}, &err));      // the default DELETES
     CHECK(!fs::exists(importSidecarPath(clip)));
-    CHECK(saveAudioImportSettings(clip, AudioImportSettings{}, &err));      // y sin fichero previo no es error
+    CHECK(saveAudioImportSettings(clip, AudioImportSettings{}, &err));      // and without a previous file it is not an error
 
-    // Guardar un dB fuera de rango escribe el valor ACOTADO.
+    // Saving an out-of-range dB writes the CLAMPED value.
     AudioImportSettings hot;
     hot.gainDb = 50.0f;
     CHECK(saveAudioImportSettings(clip, hot, &err));
@@ -256,7 +256,7 @@ static void test_audio_missing_and_broken_are_default()
     const fs::path d = makeDir();
     std::string warning = "x";
     CHECK(isDefault(loadAudioImportSettings(d / "no_existe.wav", &warning)));
-    CHECK(warning.empty());                                    // ausente no es un problema
+    CHECK(warning.empty());                                    // absent is not a problem
 
     writeText(importSidecarPath(d / "roto.wav"), "{ esto no es json");
     warning.clear();
@@ -264,7 +264,7 @@ static void test_audio_missing_and_broken_are_default()
     CHECK(!warning.empty());
 }
 
-// Un sidecar de textura leido como audio (y al reves) da el defecto con aviso.
+// A texture sidecar read as audio (and vice versa) gives the default with a warning.
 static void test_audio_type_crossing()
 {
     const fs::path d = makeDir();
@@ -284,7 +284,7 @@ static void test_audio_type_crossing()
     CHECK(!warning.empty());
 }
 
-// Review Focus 1: valores hostiles en gainDb.
+// Review Focus 1: hostile values in gainDb.
 static void test_audio_hostile_gain_values()
 {
     const fs::path d = makeDir();
@@ -306,12 +306,12 @@ static void test_audio_hostile_gain_values()
         CHECK(std::isfinite(s.gainDb));
         CHECK(!warning.empty());
     }
-    // 1e999 desborda el double: el parser lo da como infinito o lo descarta; en
-    // los dos casos el resultado es finito y sin lanzar.
+    // 1e999 overflows the double: the parser gives it as infinity or discards it; in
+    // both cases the result is finite and without throwing.
     writeText(importSidecarPath(d / "inf.wav"), R"({"version":1,"type":"audio","gainDb":1e999})");
     CHECK(std::isfinite(loadAudioImportSettings(d / "inf.wav").gainDb));
 
-    // Sidecar hostil de tamano: mismo tope que las texturas.
+    // Hostile sidecar in size: same cap as the textures.
     writeText(importSidecarPath(d / "huge.wav"), std::string(5 * 1024 * 1024, 'x'));
     std::string warning;
     CHECK(isDefault(loadAudioImportSettings(d / "huge.wav", &warning)));
@@ -323,15 +323,15 @@ static void test_same_asset_path()
     const fs::path d = makeDir();
     writeText(d / "a.wav", "x");
     CHECK(sameAssetPath(d / "a.wav", d / "a.wav"));
-    CHECK(sameAssetPath(d / "sub" / ".." / "a.wav", d / "a.wav"));      // normaliza
+    CHECK(sameAssetPath(d / "sub" / ".." / "a.wav", d / "a.wav"));      // normalizes
     CHECK(!sameAssetPath(d / "a.wav", d / "b.wav"));
-    // Ninguno existe: se compara lexicamente, sin lanzar.
+    // None exists: they are compared lexically, without throwing.
     CHECK(sameAssetPath(d / "no" / "x.wav", d / "no" / "x.wav"));
     CHECK(!sameAssetPath(d / "no" / "x.wav", d / "no" / "y.wav"));
     CHECK(!sameAssetPath("", d / "a.wav"));
 }
 
-// ── Modelos ──────────────────────────────────────────────────────────────────
+// ── Models ──────────────────────────────────────────────────────────────────
 
 static void test_model_missing_is_default_without_warning()
 {
@@ -356,7 +356,7 @@ static void test_model_roundtrip_and_default_removes_sidecar()
     CHECK(fs::exists(importSidecarPath(asset)));
     CHECK(loadModelImportSettings(asset) == in);
 
-    // Guardar el defecto borra el sidecar; con el fichero ya ausente tampoco es error.
+    // Saving the default deletes the sidecar; with the file already absent it is not an error either.
     CHECK(saveModelImportSettings(asset, ModelImportSettings{}, &err));
     CHECK(!fs::exists(importSidecarPath(asset)));
     CHECK(saveModelImportSettings(asset, ModelImportSettings{}, &err));
@@ -385,14 +385,14 @@ static void test_model_scale_hostile_values()
         CHECK(warning.empty() == !c.warns);
     }
 
-    // Guardar un NaN: se acota a 1 y, al ser el defecto, no deja sidecar.
+    // Saving a NaN: it is clamped to 1 and, being the default, leaves no sidecar.
     ModelImportSettings nan;
     nan.scale = std::numeric_limits<float>::quiet_NaN();
     std::string err;
     CHECK(saveModelImportSettings(d / "nan.fbx", nan, &err));
     CHECK(!fs::exists(importSidecarPath(d / "nan.fbx")));
 
-    // Y una escala fuera de rango se guarda ya acotada.
+    // And an out-of-range scale is saved already clamped.
     ModelImportSettings big;
     big.scale = 1e9f;
     CHECK(saveModelImportSettings(d / "big.fbx", big, &err));
@@ -406,8 +406,8 @@ static void test_model_unknown_normals_keeps_the_other_fields()
               R"({"version":1,"type":"model","normals":"raro","scale":2,"flipUVs":false})");
     std::string w;
     const ModelImportSettings s = loadModelImportSettings(d / "a.fbx", &w);
-    CHECK(s.normals == NormalsMode::File);       // desconocido -> file
-    CHECK(s.scale == 2.0f);                       // los demas campos sobreviven
+    CHECK(s.normals == NormalsMode::File);       // unknown -> file
+    CHECK(s.scale == 2.0f);                       // the other fields survive
     CHECK(!s.flipUVs);
     CHECK(!w.empty());
 
@@ -415,7 +415,7 @@ static void test_model_unknown_normals_keeps_the_other_fields()
               R"({"version":1,"type":"model","calcTangents":"si","importAnimations":false})");
     w.clear();
     const ModelImportSettings t = loadModelImportSettings(d / "b.fbx", &w);
-    CHECK(t.calcTangents);                        // tipo equivocado -> su defecto (true)
+    CHECK(t.calcTangents);                        // wrong type -> its default (true)
     CHECK(!t.importAnimations);
     CHECK(!w.empty());
 }
@@ -443,17 +443,17 @@ static void test_model_type_crossing()
     std::string err;
     CHECK(saveTextureImportSettings(asset, tex, &err));
     std::string w;
-    CHECK(isDefault(loadModelImportSettings(asset, &w)));     // texture leido como model
+    CHECK(isDefault(loadModelImportSettings(asset, &w)));     // texture read as model
     CHECK(!w.empty());
 
     ModelImportSettings m;
     m.scale = 2.0f;
     CHECK(saveModelImportSettings(asset, m, &err));
     w.clear();
-    CHECK(isDefault(loadTextureImportSettings(asset, &w)));   // model leido como texture
+    CHECK(isDefault(loadTextureImportSettings(asset, &w)));   // model read as texture
     CHECK(!w.empty());
     w.clear();
-    CHECK(isDefault(loadAudioImportSettings(asset, &w)));     // ... y como audio
+    CHECK(isDefault(loadAudioImportSettings(asset, &w)));     // ... and as audio
     CHECK(!w.empty());
 }
 

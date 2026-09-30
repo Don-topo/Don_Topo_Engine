@@ -1,18 +1,18 @@
-// Test headless del batcher de la UI 2D (sin GUI, sin Vulkan).
-// UiSpriteBatch::build es estática y CPU pura justo para poder ejercitarla sin
-// un Renderer inicializado, igual que buildInstanceBatches. Plain main +
-// asserts, sin framework — coherente con instancing_tests.cpp.
+// Headless test of the 2D UI batcher (no GUI, no Vulkan).
+// UiSpriteBatch::build is static and pure CPU just to exercise it without
+// an initialized Renderer, same as buildInstanceBatches. Plain main +
+// asserts, no framework — consistent with instancing_tests.cpp.
 //
-// Lo que se prueba son las cuatro cosas que fallan EN SILENCIO en un renderer
-// de UI: que el origen esté arriba a la izquierda con +Y hacia abajo (un signo
-// mal puesto pinta la UI boca abajo sin un solo error de validación), que la
-// transformada del padre se acumule en el hijo, que el lote rompa exactamente
-// donde debe (romper de más solo cuesta draws; romper de menos pinta con la
-// textura equivocada), y que el scissor del hijo se INTERSEQUE con el del
-// padre en vez de reemplazarlo.
+// What is tested are the four things that fail SILENTLY in a UI
+// renderer: the origin at the top left with +Y downward (a wrong sign
+// paints the UI upside down without a single validation error), that the
+// parent's transform accumulates in the child, that the batch breaks exactly
+// where it should (breaking too much only costs draws; breaking too little
+// paints with the wrong texture), and that the child's scissor INTERSECTS
+// with the parent's instead of replacing it.
 //
-// Todos los valores son no neutros y distintos entre sí: con 0, 1 o valores
-// repetidos, un campo que nadie lee pasaría igual.
+// All values are non-neutral and distinct from each other: with 0, 1, or
+// repeated values, a field that nobody reads would pass the same.
 #include "DonTopo/UI/ButtonComponent.h"   // kDefaultUiFontPath
 #include "DonTopo/UI/CanvasComponent.h"   // uiWorldCanvasMatrix
 #include "DonTopo/UI/UiCanvas.h"
@@ -37,25 +37,25 @@ static int g_failures = 0;
 
 static bool nearly(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 
-// Tamaño de render deliberadamente asimétrico: con 800x600 un ancho y un alto
-// intercambiados podrían colarse.
+// Deliberately asymmetric render size: with 800x600, width and height
+// swapped could slip through.
 static constexpr uint32_t kW = 800;
 static constexpr uint32_t kH = 480;
 
-// ── Sub-asignación del buffer del frame (N canvas, un solo VkBuffer) ───────
-// Con un canvas por frame, record() podía bindear siempre en el offset 0: no
-// había nadie más con quien pisarse. Con N, cada llamada tiene que escribir a
-// partir de donde dejó la anterior — si no, la GPU (que lee el buffer al
-// EJECUTAR, no al GRABAR) dibuja los N canvas con la geometría del ÚLTIMO, sin
-// que ninguna capa de validación lo diga. bumpUiCursor es la aritmética
-// exacta que usan beginFrame()/record(); se prueba aquí sin GPU porque con dos
-// canvas en pantalla el fallo no se puede verificar de otra forma hasta que el
-// bug ya esté puesto.
+// ── Frame buffer sub-allocation (N canvas, single VkBuffer) ───────
+// With one canvas per frame, record() could always bind at offset 0: no
+// one else to collide with. With N, each call has to write from where
+// the previous one left off — if not, the GPU (which reads the buffer at
+// EXECUTE, not at RECORD) draws all N canvas with the geometry of the LAST,
+// without any validation layer catching it. bumpUiCursor is the exact
+// arithmetic that beginFrame()/record() uses; it's tested here without GPU
+// because with two canvas on screen the failure cannot be verified any other
+// way until the bug is already in place.
 static void test_ui_batch_offsets_se_acumulan_dentro_del_frame()
 {
-    // Tres tamaños de vértices y de índices bien distintos entre sí: con
-    // valores iguales, un offset calculado con el campo equivocado (vértices
-    // en vez de índices, o viceversa) daría el mismo número igualmente.
+    // Three distinct sizes of vertices and indices: with equal values,
+    // an offset calculated with the wrong field (vertices instead of
+    // indices, or vice versa) would give the same number anyway.
     uint32_t vCursor = 0, iCursor = 0;
 
     const uint32_t v0 = bumpUiCursor(vCursor, 10);
@@ -65,7 +65,7 @@ static void test_ui_batch_offsets_se_acumulan_dentro_del_frame()
 
     const uint32_t v1 = bumpUiCursor(vCursor, 25);
     const uint32_t i1 = bumpUiCursor(iCursor, 33);
-    // El segundo canvas empieza justo donde terminó el primero.
+    // The second canvas starts exactly where the first one ended.
     CHECK(v1 == 10);
     CHECK(i1 == 15);
 
@@ -74,62 +74,62 @@ static void test_ui_batch_offsets_se_acumulan_dentro_del_frame()
     CHECK(v2 == 35);   // 10 + 25
     CHECK(i2 == 48);   // 15 + 33
 
-    // El cursor final es el ACUMULADO exacto: es el total contra el que
-    // beginFrame() tiene que dimensionar el buffer del frame.
+    // The final cursor is the exact ACCUMULATED value: it's the total against
+    // which beginFrame() has to dimension the frame buffer.
     CHECK(vCursor == 39);   // 10 + 25 + 4
     CHECK(iCursor == 54);   // 15 + 33 + 6
 }
 
-// La guarda de capacidad que record() consulta antes de CADA memcpy.
-// beginFrame() dimensiona el buffer contra el total del PASE, pero esa
-// invariante — "se llamó este frame, una sola vez, con el total exacto" — no
-// la impone el tipo: hoy la sostiene que Renderer es el único llamador. En
-// cuanto exista un segundo (los canvas de mundo, que llegan en el pase de
-// escena, en otro bucle), un record() sin su beginFrame, uno llamado dos
-// veces, o un total que se quedó corto, escribiría FUERA de la memoria
-// mapeada — una escritura de HOST que ninguna capa de validación de Vulkan ni
-// de D3D12 ve: no hay device lost, no hay error, solo corrupción silenciosa.
-// uiCursorFits es la comprobación exacta que hace esa guarda posible sin GPU.
+// The capacity guard that record() checks before EVERY memcpy.
+// beginFrame() dimensions the buffer against the total of the PASS, but that
+// invariant — "called this frame, only once, with the exact total" — is not
+// enforced by the type: today it's held up by Renderer being the sole caller.
+// Once a second one exists (world canvas, arriving in the scene pass, in
+// another loop), a record() without its beginFrame, one called twice,
+// or a total that fell short, would write OUTSIDE the mapped memory
+// — a HOST write that neither Vulkan nor D3D12 validation layers see:
+// no device lost, no error, just silent corruption.
+// uiCursorFits is the exact check that makes that guard possible without GPU.
 static void test_ui_cursor_fits_guarda_la_capacidad_del_buffer()
 {
-    // El caso normal: el hueco [base, base+count) cae dentro de la capacidad
-    // que beginFrame() reservó para el pase completo.
+    // The normal case: the gap [base, base+count) falls within the capacity
+    // that beginFrame() reserved for the complete pass.
     CHECK(uiCursorFits(0, 10, 39));
     CHECK(uiCursorFits(10, 25, 39));
-    CHECK(uiCursorFits(35, 4, 39));    // termina EXACTO en el borde: cabe
+    CHECK(uiCursorFits(35, 4, 39));    // ends EXACTLY at the edge: fits
 
-    // Justo al límite: base+count == capacity es el último hueco válido.
+    // Right at the limit: base+count == capacity is the last valid gap.
     CHECK(uiCursorFits(30, 9, 39));
-    // Un elemento de más se sale por uno: no cabe.
+    // One element too many goes over by one: doesn't fit.
     CHECK(!uiCursorFits(30, 10, 39));
 
-    // El caso que dispara el hallazgo: un total corto. Con los mismos tres
-    // canvas de tamaños 10/25/4 del test de arriba (offsets 0, 10 y 35) pero
-    // una capacidad reservada de solo 30 — como si un segundo llamador
-    // (los canvas de mundo, en otro bucle) hubiera calculado el acumulado del
-    // pase sin sumar el tercer canvas y beginFrame() hubiera reservado de
-    // menos:
+    // The case that triggers the finding: a short total. With the same three
+    // canvas of sizes 10/25/4 from the test above (offsets 0, 10, and 35) but
+    // a capacity reserved of only 30 — as if a second caller
+    // (world canvas, in another loop) had calculated the accumulation of the
+    // pass without adding the third canvas and beginFrame() had reserved
+    // too little:
     const uint32_t capacidadCorta = 30;
-    CHECK(uiCursorFits(0, 10, capacidadCorta));     // el primero SÍ cabe
-    // El SEGUNDO ya no: 10+25 = 35 > 30. La guarda corta en cuanto el
-    // acumulado real se pasa de lo que reservó beginFrame(), no solo en el
-    // último canvas del pase.
+    CHECK(uiCursorFits(0, 10, capacidadCorta));     // the first DOES fit
+    // The SECOND doesn't: 10+25 = 35 > 30. The guard cuts as soon as the
+    // real accumulation exceeds what beginFrame() reserved, not just on the
+    // last canvas of the pass.
     CHECK(!uiCursorFits(10, 25, capacidadCorta));
-    CHECK(!uiCursorFits(35, 4, capacidadCorta));    // y el tercero, ni de lejos
+    CHECK(!uiCursorFits(35, 4, capacidadCorta));    // and the third, not by a long shot
 
-    // record() sin beginFrame() previo — capacidad en 0, el estado inicial de
-    // m_vertexCapacity/m_indexCapacity antes de la primera reserva: nada cabe,
-    // ni un canvas de "0 elementos" en un offset que no sea 0. Un canvas
-    // realmente vacío (0 elementos en base 0) sí cabe: no escribe nada, no
-    // hay nada que corromper, y record() ya lo descarta antes por
+    // record() without prior beginFrame() — capacity at 0, the initial state of
+    // m_vertexCapacity/m_indexCapacity before the first allocation: nothing fits,
+    // not even a canvas of "0 elements" at an offset other than 0. A truly
+    // empty canvas (0 elements at base 0) does fit: it writes nothing, there's
+    // nothing to corrupt, and record() already discards it before via
     // data.empty().
     CHECK(uiCursorFits(0, 0, 0));
     CHECK(!uiCursorFits(0, 1, 0));
     CHECK(!uiCursorFits(5, 1, 0));
 }
 
-// Un canvas sin nodos visibles no puede generar ni un lote: es la condición que
-// hace que la escena 3D salga exactamente igual que antes de esta feature.
+// A canvas with no visible nodes cannot generate a batch: it's the condition
+// that makes the 3D scene come out exactly the same as before this feature.
 static void test_canvas_vacio_no_emite_nada()
 {
     UiCanvas canvas;
@@ -141,14 +141,14 @@ static void test_canvas_vacio_no_emite_nada()
     CHECK(data.indices.empty());
 }
 
-// (0,0) es la esquina SUPERIOR izquierda y +Y va hacia abajo: el vértice de
-// abajo tiene la Y MAYOR, no menor.
+// (0,0) is the TOP LEFT corner and +Y goes downward: the vertex at the
+// bottom has the LARGER Y, not smaller.
 static void test_origen_arriba_izquierda()
 {
     UiCanvas canvas;
     UiElement& panel = canvas.root().add("Panel");
     panel.position = {0.0f, 0.0f};
-    panel.size     = {37.0f, 53.0f};   // ancho != alto: distingue X de Y
+    panel.size     = {37.0f, 53.0f};   // width != height: distinguishes X from Y
 
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
@@ -158,31 +158,31 @@ static void test_origen_arriba_izquierda()
     CHECK(data.indices.size() == 6);
     if (data.vertices.size() != 4) return;
 
-    // Esquina superior izquierda exactamente en el origen.
+    // Top left corner exactly at the origin.
     CHECK(nearly(data.vertices[0].pos.x, 0.0f));
     CHECK(nearly(data.vertices[0].pos.y, 0.0f));
-    // Superior derecha: solo se mueve en X.
+    // Top right: moves only in X.
     CHECK(nearly(data.vertices[1].pos.x, 37.0f));
     CHECK(nearly(data.vertices[1].pos.y, 0.0f));
-    // Inferior derecha e inferior izquierda: Y = alto, y MAYOR que la de arriba.
+    // Bottom right and bottom left: Y = height, and LARGER than the one above.
     CHECK(nearly(data.vertices[2].pos.y, 53.0f));
     CHECK(nearly(data.vertices[3].pos.y, 53.0f));
     CHECK(data.vertices[2].pos.y > data.vertices[1].pos.y);
     CHECK(data.vertices[3].pos.y > data.vertices[0].pos.y);
-    // Y ninguna coordenada negativa: un origen abajo-izquierda sacaría el quad
-    // fuera de la pantalla por arriba.
+    // And no negative coordinates: a bottom-left origin would push the quad
+    // off the screen at the top.
     CHECK(data.vertices[2].pos.y > 0.0f);
 }
 
-// La posición del hijo es local y la escala del padre la multiplica: posición y
-// tamaño del hijo salen del padre acumulado, no de sus propios campos a secas.
+// The child's position is local and the parent's scale multiplies it: child
+// position and size come from the accumulated parent, not just its own fields.
 static void test_transform_del_padre_se_acumula()
 {
     UiCanvas canvas;
     UiElement& parent = canvas.root().add("Panel");
     parent.position = {120.0f, 45.0f};
-    parent.scale    = {2.0f, 3.0f};    // escalas distintas por eje
-    parent.drawable = false;           // solo agrupa: el único quad es el hijo
+    parent.scale    = {2.0f, 3.0f};    // different scales per axis
+    parent.drawable = false;           // only groups: the only quad is the child
 
     UiElement& child = parent.add("Image");
     child.position = {10.0f, 20.0f};
@@ -194,16 +194,16 @@ static void test_transform_del_padre_se_acumula()
     CHECK(data.vertices.size() == 4);
     if (data.vertices.size() != 4) return;
 
-    // 120 + 10*2 = 140 ; 45 + 20*3 = 105. Sin acumular saldría (10,20), y sin
-    // aplicar la escala del padre, (130,65).
+    // 120 + 10*2 = 140 ; 45 + 20*3 = 105. Without accumulating would be (10,20),
+    // and without applying parent scale, (130,65).
     CHECK(nearly(data.vertices[0].pos.x, 140.0f));
     CHECK(nearly(data.vertices[0].pos.y, 105.0f));
-    // Tamaño escalado por el padre: 5*2 = 10 ; 7*3 = 21.
+    // Size scaled by parent: 5*2 = 10 ; 7*3 = 21.
     CHECK(nearly(data.vertices[2].pos.x, 150.0f));
     CHECK(nearly(data.vertices[2].pos.y, 126.0f));
 }
 
-// Mismo atlas y mismo scissor = UN draw. Es el caso que justifica el batcher.
+// The rect is the element's: the sprite stretches, which is what Normal does.
 static void test_mismo_atlas_y_scissor_un_solo_lote()
 {
     UiTextureAtlas atlas;
@@ -226,12 +226,12 @@ static void test_mismo_atlas_y_scissor_un_solo_lote()
     CHECK(data.batches.size() == 1);
     CHECK(data.vertices.size() == 8);
     if (data.batches.size() != 1) return;
-    // Los dos quads dentro del MISMO draw, no uno de dos.
+    // The two quads inside the SAME draw, not one of two.
     CHECK(data.batches[0].firstIndex == 0);
     CHECK(data.batches[0].indexCount == 12);
 }
 
-// Cambiar de atlas parte el lote: un draw no puede llevar dos texturas.
+// Changing atlas breaks the batch: one draw cannot carry two textures.
 static void test_cambiar_de_atlas_parte_el_lote()
 {
     UiTextureAtlas hud;
@@ -260,8 +260,8 @@ static void test_cambiar_de_atlas_parte_el_lote()
 
     CHECK(data.batches.size() == 2);
     if (data.batches.size() != 2) return;
-    // Cada lote apunta a SU atlas y a sus propios índices: un firstIndex mal
-    // puesto pintaría el quad del otro.
+    // Each batch points to ITS atlas and its own indices: a wrong firstIndex
+    // would paint the other's quad.
     CHECK(data.batches[0].atlas == &hud);
     CHECK(data.batches[1].atlas == &iconos);
     CHECK(data.batches[0].firstIndex == 0);
@@ -270,8 +270,8 @@ static void test_cambiar_de_atlas_parte_el_lote()
     CHECK(data.batches[1].indexCount == 6);
 }
 
-// Mismo atlas pero scissor distinto: también parte, porque el scissor es estado
-// del command buffer y no viaja por vértice.
+// Same atlas but different scissor: also breaks, because scissor is state
+// of the command buffer and doesn't travel per vertex.
 static void test_cambiar_de_scissor_parte_el_lote()
 {
     UiTextureAtlas atlas;
@@ -288,7 +288,7 @@ static void test_cambiar_de_scissor_parte_el_lote()
     a.clipChildren = true;
 
     UiElement& b = canvas.root().add("PanelDerecho");
-    b.position     = {300.0f, 210.0f};   // rect claramente distinto
+    b.position     = {300.0f, 210.0f};   // clearly different rect
     b.size         = {90.0f, 55.0f};
     b.atlas        = &atlas;
     b.sprite       = "botella";
@@ -299,7 +299,7 @@ static void test_cambiar_de_scissor_parte_el_lote()
 
     CHECK(data.batches.size() == 2);
     if (data.batches.size() != 2) return;
-    CHECK(data.batches[0].atlas == data.batches[1].atlas);   // el atlas NO cambió
+    CHECK(data.batches[0].atlas == data.batches[1].atlas);   // the atlas did NOT change
     CHECK(data.batches[0].scissor != data.batches[1].scissor);
     CHECK(data.batches[0].scissor.x == 30 && data.batches[0].scissor.y == 40);
     CHECK(data.batches[0].scissor.width == 120 && data.batches[0].scissor.height == 70);
@@ -307,22 +307,22 @@ static void test_cambiar_de_scissor_parte_el_lote()
     CHECK(data.batches[1].scissor.width == 90 && data.batches[1].scissor.height == 55);
 }
 
-// El scissor del hijo se INTERSECA con el del padre. Con reemplazo el hijo
-// pintaría fuera del panel que lo contiene, que es el bug clásico del scroll.
+// The child's scissor INTERSECTS with the parent's. With replacement the child
+// would paint outside the panel containing it, which is the classic scroll bug.
 static void test_scissor_del_hijo_se_interseca_con_el_del_padre()
 {
     UiCanvas canvas;
 
     UiElement& parent = canvas.root().add("Panel");
     parent.position     = {100.0f, 50.0f};
-    parent.size         = {200.0f, 80.0f};   // rect padre: x[100,300) y[50,130)
+    parent.size         = {200.0f, 80.0f};   // parent rect: x[100,300) y[50,130)
     parent.drawable     = false;
     parent.clipChildren = true;
 
-    // Hijo más ancho que el padre y desplazado a la izquierda: si el scissor se
-    // reemplazase, saldría (50,60,300,40) y se vería fuera del panel.
+    // Child wider than parent and offset to the left: if the scissor were
+    // replaced, it would be (50,60,300,40) and show outside the panel.
     UiElement& child = parent.add("Contenido");
-    child.position     = {-50.0f, 10.0f};    // mundo: x[50,350) y[60,100)
+    child.position     = {-50.0f, 10.0f};    // world: x[50,350) y[60,100)
     child.size         = {300.0f, 40.0f};
     child.clipChildren = true;
 
@@ -333,14 +333,14 @@ static void test_scissor_del_hijo_se_interseca_con_el_del_padre()
     if (data.batches.size() != 1) return;
 
     const UiScissor& s = data.batches[0].scissor;
-    CHECK(s.x == 100);          // recortado por la izquierda del padre
-    CHECK(s.y == 60);           // el del hijo, que empieza más abajo
-    CHECK(s.width == 200);      // hasta el borde derecho del padre (300)
-    CHECK(s.height == 40);      // el alto del hijo, menor que el del padre
+    CHECK(s.x == 100);          // clipped by the parent's left
+    CHECK(s.y == 60);           // the child's, which starts lower
+    CHECK(s.width == 200);      // up to the parent's right edge (300)
+    CHECK(s.height == 40);      // the child's height, smaller than the parent's
 }
 
-// Intersección vacía: ni un draw. Grabar un scissor de width/height 0 sería un
-// comando inútil (y una trampa fácil de dejar pasar).
+// Empty intersection: no draw. Recording a scissor of width/height 0 would be a
+// pointless command (and an easy trap to miss).
 static void test_interseccion_vacia_no_emite_draw()
 {
     UiCanvas canvas;
@@ -352,11 +352,13 @@ static void test_interseccion_vacia_no_emite_draw()
     parent.clipChildren = true;
 
     UiElement& child = parent.add("Fuera");
-    child.position     = {400.0f, 10.0f};    // mundo x[500,560): sin solape
+    child.position     = {400.0f, 10.0f};    // world x[500,560): no overlap
     child.size         = {60.0f, 30.0f};
     child.clipChildren = true;
 
-    // Un nieto visible: si el corte no propagase, este se colaría.
+    // Two Image of the same atlas go in ONE batch EVEN THOUGH they're in different
+    // modes and emit many quads: the mode is resolved in CPU and is not draw
+    // state. With another atlas, two batches.
     UiElement& grandchild = child.add("Nieto");
     grandchild.position = {5.0f, 5.0f};
     grandchild.size     = {20.0f, 10.0f};
@@ -369,9 +371,9 @@ static void test_interseccion_vacia_no_emite_draw()
     CHECK(data.indices.empty());
 }
 
-// Sub-rect que NO empieza en el origen del atlas y con proporciones distintas en
-// cada eje: unas UVs invertidas, transpuestas o normalizadas por el eje
-// equivocado darían números diferentes en las cuatro comprobaciones.
+// Sub-rect that does NOT start at the atlas origin and with different proportions
+// on each axis: inverted UVs, transposed, or normalized by the wrong
+// axis would give different numbers in all four checks.
 static void test_uvs_del_subrect_del_atlas()
 {
     UiTextureAtlas atlas;
@@ -392,30 +394,30 @@ static void test_uvs_del_subrect_del_atlas()
     CHECK(data.vertices.size() == 4);
     if (data.vertices.size() != 4) return;
 
-    // Cada esquina con SU par de UVs: el orden importa tanto como los valores.
-    CHECK(nearly(data.vertices[0].uv.x, 0.25f));   // sup-izq
+    // Each corner with ITS pair of UVs: order matters as much as values.
+    CHECK(nearly(data.vertices[0].uv.x, 0.25f));   // top-left
     CHECK(nearly(data.vertices[0].uv.y, 0.10f));
     CHECK(nearly(data.vertices[1].uv.x, 0.375f));  // sup-der
     CHECK(nearly(data.vertices[1].uv.y, 0.10f));
     CHECK(nearly(data.vertices[2].uv.x, 0.375f));  // inf-der
     CHECK(nearly(data.vertices[2].uv.y, 0.50f));
-    CHECK(nearly(data.vertices[3].uv.x, 0.25f));   // inf-izq
+    CHECK(nearly(data.vertices[3].uv.x, 0.25f));   // bottom-left
     CHECK(nearly(data.vertices[3].uv.y, 0.50f));
 
-    // V crece hacia abajo, igual que la pantalla.
+    // V grows downward, like the screen.
     CHECK(data.vertices[2].uv.y > data.vertices[1].uv.y);
 
-    // Y el API del atlas dice lo mismo por su cuenta.
+    // And the atlas API says the same thing on its own.
     const UiUvRect uv = atlas.uvRect("botella");
     CHECK(nearly(uv.u0, 0.25f) && nearly(uv.v0, 0.10f));
     CHECK(nearly(uv.u1, 0.375f) && nearly(uv.v1, 0.50f));
 
-    // Un sprite que no existe cae al rect completo, no a basura.
+    // A sprite that doesn't exist falls to the full rect, not garbage.
     const UiUvRect missing = atlas.uvRect("no_existe");
     CHECK(nearly(missing.u0, 0.0f) && nearly(missing.v1, 1.0f));
 }
 
-// Lo invisible no gasta ni vértices ni lote, ni arrastra a sus hijos.
+// The invisible doesn't spend vertices or batch, nor drag its children.
 static void test_nodo_invisible_no_emite()
 {
     UiCanvas canvas;
@@ -435,24 +437,24 @@ static void test_nodo_invisible_no_emite()
     CHECK(data.vertices.empty());
 }
 
-// anchor cuenta sobre el rect DEL PADRE y pivot sobre el DEL PROPIO ELEMENTO.
-// Los dos son vec2 normalizados, así que un campo leído por el otro no daría
-// ningún error: los números están elegidos para que intercambiarlos falle.
+// anchor counts on the PARENT's rect and pivot on the ELEMENT's OWN rect.
+// Both are normalized vec2, so one field read by the other wouldn't give
+// any error: the numbers are chosen so swapping them fails.
 static void test_anchor_y_pivot_colocan_el_hijo()
 {
     UiCanvas canvas;
 
     UiElement& parent = canvas.root().add("Panel");
     parent.position = {100.0f, 40.0f};
-    parent.size     = {200.0f, 120.0f};   // ancho != alto
-    parent.drawable = false;              // el único quad es el hijo
+    parent.size     = {200.0f, 120.0f};   // width != height
+    parent.drawable = false;              // the only quad is the child
 
     UiElement& child = parent.add("Image");
-    // anchorMin == anchorMax: punto de ancla, sin estirar.
-    child.anchorMin = {0.5f, 1.0f};       // centro-abajo del padre
+    // anchorMin == anchorMax: anchor point, no stretching.
+    child.anchorMin = {0.5f, 1.0f};       // center-bottom of parent
     child.anchorMax = {0.5f, 1.0f};
-    child.pivot     = {0.5f, 0.5f};       // por su propio centro
-    child.position = {7.0f, -13.0f};      // desplazamiento desde el ancla
+    child.pivot     = {0.5f, 0.5f};       // by its own center
+    child.position = {7.0f, -13.0f};      // offset from the anchor
     child.size     = {40.0f, 24.0f};
 
     UiDrawData data;
@@ -463,17 +465,17 @@ static void test_anchor_y_pivot_colocan_el_hijo()
 
     // x: 100 + 0.5*200 + 7 - 0.5*40 = 187
     // y: 40  + 1.0*120 - 13 - 0.5*24 = 135
-    // Sin anchor saldría (107,27); sin pivot, (207,147); con anchor y pivot
-    // intercambiados, y = 63.
+    // Without anchor would be (107,27); without pivot, (207,147); with anchor
+    // and pivot swapped, y = 63.
     CHECK(nearly(data.vertices[0].pos.x, 187.0f));
     CHECK(nearly(data.vertices[0].pos.y, 135.0f));
-    // El tamaño no lo tocan ni el ancla ni el pivote.
+    // Size is untouched by either anchor or pivot.
     CHECK(nearly(data.vertices[2].pos.x, 227.0f));
     CHECK(nearly(data.vertices[2].pos.y, 159.0f));
 }
 
-// La opacidad se ACUMULA por el árbol y acaba multiplicando el alfa del color
-// del vértice. Los tres factores son distintos: 0.5 * 0.25 * 0.8 = 0.1.
+// Opacity ACCUMULATES through the tree and ends up multiplying the alpha of
+// the vertex color. The three factors are distinct: 0.5 * 0.25 * 0.8 = 0.1.
 static void test_opacity_se_acumula_en_el_alfa()
 {
     UiCanvas canvas;
@@ -496,18 +498,18 @@ static void test_opacity_se_acumula_en_el_alfa()
     CHECK(data.vertices.size() == 8);
     if (data.vertices.size() != 8) return;
 
-    // El padre solo lleva la suya: 1.0 * 0.5.
+    // The parent only carries its own: 1.0 * 0.5.
     CHECK(nearly(data.vertices[0].color.a, 0.5f));
-    // El hijo, la del padre por la suya por el alfa de su color.
+    // The child, the parent's times its own times the alpha of its color.
     CHECK(nearly(data.vertices[4].color.a, 0.1f));
-    // El RGB no lo toca: solo el alfa.
+    // RGB is untouched: only alpha.
     CHECK(nearly(data.vertices[4].color.r, 1.0f));
-    // Y la opacidad NO parte el lote: no es estado del command buffer.
+    // And opacity does NOT break the batch: it's not command buffer state.
     CHECK(data.batches.size() == 1);
 }
 
-// Un derivado se dibuja exactamente igual que la base — esta fase no le añade
-// comportamiento — pero se identifica por typeName() sin RTTI.
+// A derived class draws exactly like the base — this phase doesn't add
+// behavior — but identifies itself via typeName() without RTTI.
 static void test_widget_derivado_se_dibuja_como_la_base()
 {
     UiCanvas canvas;
@@ -527,31 +529,31 @@ static void test_widget_derivado_se_dibuja_como_la_base()
     CHECK(nearly(data.vertices[2].pos.x, 48.0f));
     CHECK(nearly(data.vertices[2].pos.y, 72.0f));
 
-    // add<T> devuelve el tipo concreto, no la base, y cada tipo dice el suyo.
+    // add<T> returns the concrete type, not the base, and each type says its own.
     CHECK(std::strcmp(img.typeName(), "Image") == 0);
     CHECK(std::strcmp(canvas.root().add<Button>("Aceptar").typeName(), "Button") == 0);
     CHECK(std::strcmp(canvas.root().add<ScrollView>("Lista").typeName(), "ScrollView") == 0);
     CHECK(std::strcmp(canvas.root().add("Suelto").typeName(), "UiElement") == 0);
 
-    // Y el árbol es dueño del derivado por la base: sin destructor virtual esto
-    // sería UB al vaciarlo.
+    // And the tree owns the derived by the base: without a virtual destructor
+    // this would be UB when clearing it.
     canvas.clear();
     CHECK(canvas.root().children().empty());
 }
 
-// anchorMin != anchorMax en un eje = ESTIRADO: el rect sale de los márgenes y
-// ni size ni pivot de ese eje se leen. Los cuatro márgenes son distintos entre
-// sí, así que confundir left con right (o X con Y) cambia los números.
+// anchorMin != anchorMax on one axis = STRETCHED: the rect goes beyond the
+// margins and neither size nor pivot of that axis are read. The four margins
+// are all different, so confusing left with right (or X with Y) changes the numbers.
 static void test_stretch_por_ejes_con_margenes()
 {
     UiCanvas canvas;
 
     UiElement& parent = canvas.root().add("Panel");
     parent.position = {100.0f, 40.0f};
-    parent.size     = {200.0f, 120.0f};   // ancho != alto
+    parent.size     = {200.0f, 120.0f};   // width != height
     parent.drawable = false;
 
-    // Estirado en X, anclado a un punto en Y: marginTop/Bottom NO se leen.
+    // Stretched in X, anchored at a point in Y: marginTop/Bottom are NOT read.
     UiElement& wide = parent.add("Barra");
     wide.anchorMin    = {0.25f, 0.5f};
     wide.anchorMax    = {0.75f, 0.5f};
@@ -559,11 +561,11 @@ static void test_stretch_por_ejes_con_margenes()
     wide.marginRight  = 7.0f;
     wide.marginTop    = 3.0f;
     wide.marginBottom = 5.0f;
-    wide.position     = {7.0f, -13.0f};   // en X se ignora; en Y sí cuenta
-    wide.pivot        = {0.5f, 0.5f};     // en X se ignora
-    wide.size         = {40.0f, 24.0f};   // en X se ignora
+    wide.position     = {7.0f, -13.0f};   // in X it's ignored; in Y it counts
+    wide.pivot        = {0.5f, 0.5f};     // in X it's ignored
+    wide.size         = {40.0f, 24.0f};   // in X it's ignored
 
-    // Estirado en Y, anclado a un punto en X: marginLeft/Right NO se leen.
+    // Stretched in Y, anchored at a point in X: marginLeft/Right are NOT read.
     UiElement& tall = parent.add("Columna");
     tall.anchorMin    = {0.5f, 0.2f};
     tall.anchorMax    = {0.5f, 0.9f};
@@ -573,7 +575,7 @@ static void test_stretch_por_ejes_con_margenes()
     tall.marginBottom = 5.0f;
     tall.position     = {6.0f, 0.0f};
     tall.pivot        = {1.0f, 0.0f};
-    tall.size         = {30.0f, 50.0f};   // en Y se ignora
+    tall.size         = {30.0f, 50.0f};   // in Y it's ignored
 
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
@@ -584,23 +586,23 @@ static void test_stretch_por_ejes_con_margenes()
     // x0 = 100 + 0.25*200 + 11 = 161 ; x1 = 100 + 0.75*200 - 7 = 243
     CHECK(nearly(data.vertices[0].pos.x, 161.0f));
     CHECK(nearly(data.vertices[1].pos.x, 243.0f));
-    // Y anclada al punto medio: 40 + 0.5*120 - 13 - 0.5*24 = 75, alto el suyo.
+    // And anchored at the midpoint: 40 + 0.5*120 - 13 - 0.5*24 = 75, with its height.
     CHECK(nearly(data.vertices[0].pos.y, 75.0f));
     CHECK(nearly(data.vertices[2].pos.y, 99.0f));
 
     // y0 = 40 + 0.2*120 + 3 = 67 ; y1 = 40 + 0.9*120 - 5 = 143
     CHECK(nearly(data.vertices[4].pos.y, 67.0f));
     CHECK(nearly(data.vertices[6].pos.y, 143.0f));
-    // X anclada: 100 + 0.5*200 + 6 - 1.0*30 = 176, ancho el suyo.
+    // X anchored: 100 + 0.5*200 + 6 - 1.0*30 = 176, with its width.
     CHECK(nearly(data.vertices[4].pos.x, 176.0f));
     CHECK(nearly(data.vertices[6].pos.x, 206.0f));
 
-    // Ni el estirado ni el anclado parten el lote: mismo atlas, mismo scissor.
+    // Neither stretched nor anchored breaks the batch: same atlas, same scissor.
     CHECK(data.batches.size() == 1);
 }
 
-// Un preset solo escribe anchorMin/anchorMax/pivot: el rect que sale es el que
-// dicta la fórmula, sin ninguna rama especial en el batcher.
+// A preset only writes anchorMin/anchorMax/pivot: the rect that comes out is
+// what the formula dictates, with no special branch in the batcher.
 static void test_presets_de_ancla()
 {
     UiCanvas canvas;
@@ -620,9 +622,9 @@ static void test_presets_de_ancla()
     full.marginRight  = 7.0f;
     full.marginTop    = 3.0f;
     full.marginBottom = 5.0f;
-    full.size         = {1.0f, 1.0f};   // ignorado en los dos ejes
+    full.size         = {1.0f, 1.0f};   // ignored on both axes
 
-    // El preset NO toca position ni size.
+    // The preset does NOT touch position or size.
     CHECK(nearly(centered.position.x, 0.0f) && nearly(centered.position.y, 0.0f));
     CHECK(nearly(full.size.x, 1.0f) && nearly(full.size.y, 1.0f));
     CHECK(nearly(centered.anchorMin.x, 0.5f) && nearly(centered.anchorMax.x, 0.5f));
@@ -640,16 +642,16 @@ static void test_presets_de_ancla()
     CHECK(nearly(data.vertices[2].pos.x, 220.0f));
     CHECK(nearly(data.vertices[2].pos.y, 112.0f));
 
-    // StretchAll: el rect del padre menos los cuatro márgenes.
+    // StretchAll: the parent's rect minus the four margins.
     CHECK(nearly(data.vertices[4].pos.x, 111.0f));
     CHECK(nearly(data.vertices[4].pos.y, 43.0f));
     CHECK(nearly(data.vertices[6].pos.x, 293.0f));
     CHECK(nearly(data.vertices[6].pos.y, 155.0f));
 }
 
-// Horizontal: los hijos van uno tras otro en X respetando SU ancho, con el
-// padding del contenedor y el spacing entre ellos. spacing.x != spacing.y para
-// que usar el eje equivocado falle. Y un hijo con ignoreLayout no ocupa hueco.
+// Horizontal: children go one after another in X respecting THEIR width, with
+// the container's padding and spacing between them. spacing.x != spacing.y so
+// using the wrong axis fails. And a child with ignoreLayout takes no space.
 static void test_layout_horizontal_coloca_en_x()
 {
     UiCanvas canvas;
@@ -665,7 +667,7 @@ static void test_layout_horizontal_coloca_en_x()
     row.paddingBottom = 8.0f;
     row.spacing       = {13.0f, 21.0f};
 
-    // Va PRIMERO: si consumiese slot, correría a los tres siguientes.
+    // Goes FIRST: if it consumed a slot, it would push the next three.
     UiElement& floating = row.add("Suelto");
     floating.ignoreLayout = true;
     floating.position     = {5.0f, 5.0f};
@@ -685,11 +687,11 @@ static void test_layout_horizontal_coloca_en_x()
     CHECK(data.vertices.size() == 16);
     if (data.vertices.size() != 16) return;
 
-    // El de ignoreLayout se ancla como siempre: 50+5, 30+5.
+    // The ignoreLayout one anchors as always: 50+5, 30+5.
     CHECK(nearly(data.vertices[0].pos.x, 55.0f));
     CHECK(nearly(data.vertices[0].pos.y, 35.0f));
 
-    // x: 50+9 = 59 ; 59+20+13 = 92 ; 92+35+13 = 140. Todos con y = 30+4 = 34.
+    // x: 50+9 = 59 ; 59+20+13 = 92 ; 92+35+13 = 140. All with y = 30+4 = 34.
     CHECK(nearly(data.vertices[4].pos.x, 59.0f));
     CHECK(nearly(data.vertices[8].pos.x, 92.0f));
     CHECK(nearly(data.vertices[12].pos.x, 140.0f));
@@ -697,15 +699,15 @@ static void test_layout_horizontal_coloca_en_x()
     CHECK(nearly(data.vertices[8].pos.y, 34.0f));
     CHECK(nearly(data.vertices[12].pos.y, 34.0f));
 
-    // El layout respeta el tamaño propio de cada hijo.
+    // The layout respects each child's own size.
     CHECK(nearly(data.vertices[6].pos.x, 79.0f));
     CHECK(nearly(data.vertices[6].pos.y, 44.0f));
     CHECK(nearly(data.vertices[14].pos.x, 152.0f));
     CHECK(nearly(data.vertices[14].pos.y, 40.0f));
 }
 
-// Vertical: lo mismo en Y, y crossAlign Center centra en el eje transversal
-// (la X), que es donde se nota si el layout confunde los ejes.
+// Vertical: same in Y, and crossAlign Center centers on the cross axis
+// (the X), which is where you notice if the layout confuses the axes.
 static void test_layout_vertical_coloca_en_y()
 {
     UiCanvas canvas;
@@ -741,14 +743,14 @@ static void test_layout_vertical_coloca_en_y()
     CHECK(nearly(data.vertices[4].pos.y, 53.0f));
     CHECK(nearly(data.vertices[8].pos.y, 84.0f));
 
-    // Centrado en X sobre el ancho interior 150-7-3 = 140, desde x = 60+7 = 67.
+    // Centered in X over inner width 150-7-3 = 140, from x = 60+7 = 67.
     CHECK(nearly(data.vertices[0].pos.x, 122.0f));   // 67 + (140-30)/2
     CHECK(nearly(data.vertices[4].pos.x, 112.0f));   // 67 + (140-50)/2
     CHECK(nearly(data.vertices[8].pos.x, 127.0f));   // 67 + (140-20)/2
 }
 
-// Grid: la celda manda sobre el size del hijo, y con columns = 2 el tercero
-// baja de fila. spacing.x y spacing.y separan columnas y filas por su cuenta.
+// Grid: the cell dominates over child size, and with columns = 2 the third
+// goes to the next row. spacing.x and spacing.y separate columns and rows independently.
 static void test_layout_grid_llena_por_filas()
 {
     UiCanvas canvas;
@@ -767,7 +769,7 @@ static void test_layout_grid_llena_por_filas()
     for (int i = 0; i < 4; ++i)
     {
         UiElement& item = grid.add("Celda");
-        item.size = {77.0f + (float)i, 88.0f};   // lo pisa cellSize
+        item.size = {77.0f + (float)i, 88.0f};   // cellSize overrides it
     }
 
     UiDrawData data;
@@ -776,26 +778,26 @@ static void test_layout_grid_llena_por_filas()
     CHECK(data.vertices.size() == 16);
     if (data.vertices.size() != 16) return;
 
-    // origen = (44, 76) ; paso = (30+5, 18+9) = (35, 27).
+    // origin = (44, 76) ; step = (30+5, 18+9) = (35, 27).
     CHECK(nearly(data.vertices[0].pos.x, 44.0f)  && nearly(data.vertices[0].pos.y, 76.0f));
     CHECK(nearly(data.vertices[4].pos.x, 79.0f)  && nearly(data.vertices[4].pos.y, 76.0f));
     CHECK(nearly(data.vertices[8].pos.x, 44.0f)  && nearly(data.vertices[8].pos.y, 103.0f));
     CHECK(nearly(data.vertices[12].pos.x, 79.0f) && nearly(data.vertices[12].pos.y, 103.0f));
 
-    // Y todas miden la celda, no lo que decía su size.
+    // And all measure the cell, not what their size said.
     CHECK(nearly(data.vertices[2].pos.x, 74.0f) && nearly(data.vertices[2].pos.y, 94.0f));
     CHECK(nearly(data.vertices[14].pos.x, 109.0f) && nearly(data.vertices[14].pos.y, 121.0f));
 }
 
-// Content size fitter: el panel no declara tamaño y lo saca de sus hijos ya
-// colocados más el padding. Los cuatro paddings son distintos entre sí.
+// Content size fitter: the panel declares no size and gets it from its
+// already-placed children plus padding. The four paddings are all different.
 static void test_content_size_fitter_crece_hasta_los_hijos()
 {
     UiCanvas canvas;
 
     UiElement& panel = canvas.root().add("Panel");
     panel.position      = {200.0f, 90.0f};
-    panel.size          = {0.0f, 0.0f};   // lo resuelve el fitter
+    panel.size          = {0.0f, 0.0f};   // the fitter resolves it
     panel.layoutMode    = UiLayoutMode::Horizontal;
     panel.paddingLeft   = 11.0f;
     panel.paddingTop    = 3.0f;
@@ -819,23 +821,23 @@ static void test_content_size_fitter_crece_hasta_los_hijos()
     CHECK(data.vertices.size() == 16);
     if (data.vertices.size() != 16) return;
 
-    // ancho: 11 + (20+35+12) + 2*13 + 7 = 111 ; alto: 3 + max(10,18,6) + 5 = 26.
+    // width: 11 + (20+35+12) + 2*13 + 7 = 111 ; height: 3 + max(10,18,6) + 5 = 26.
     CHECK(nearly(data.vertices[0].pos.x, 200.0f));
     CHECK(nearly(data.vertices[0].pos.y, 90.0f));
     CHECK(nearly(data.vertices[2].pos.x, 311.0f));
     CHECK(nearly(data.vertices[2].pos.y, 116.0f));
 
-    // Y los hijos siguen donde el layout los pone: 200+11 = 211, 90+3 = 93.
+    // And children stay where the layout puts them: 200+11 = 211, 90+3 = 93.
     CHECK(nearly(data.vertices[4].pos.x, 211.0f));
     CHECK(nearly(data.vertices[4].pos.y, 93.0f));
     CHECK(nearly(data.vertices[8].pos.x, 244.0f));   // 211+20+13
     CHECK(nearly(data.vertices[12].pos.x, 292.0f));  // 244+35+13
 }
 
-// El pase de medida guarda un tamaño por nodo en pre-orden y el de colocación
-// lo indexa. Un hijo INVISIBLE con su propio subárbol no se visita: si el
-// recorrido no se saltase el subárbol ENTERO, el siguiente hijo leería la
-// medida de un nieto y saldría con otro tamaño y en otro sitio.
+// The measure pass stores one size per node in pre-order and the placement
+// pass indexes it. An INVISIBLE child with its own subtree is not visited: if
+// the traversal didn't skip the ENTIRE subtree, the next child would read the
+// measure of a grandchild and end up with a different size and position.
 static void test_hijo_invisible_no_desincroniza_la_medida()
 {
     UiCanvas canvas;
@@ -853,7 +855,7 @@ static void test_hijo_invisible_no_desincroniza_la_medida()
 
     UiElement& hidden = panel.add("Oculto");
     hidden.visible = false;
-    hidden.size    = {123.0f, 456.0f};        // nada de esto puede colarse
+    hidden.size    = {123.0f, 456.0f};        // none of this can slip through
     UiElement& deep = hidden.add("Nieto");
     deep.size = {77.0f, 88.0f};
     deep.add("Bisnieto").size = {99.0f, 111.0f};
@@ -867,26 +869,26 @@ static void test_hijo_invisible_no_desincroniza_la_medida()
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
 
-    // Panel + los dos visibles. Ni el oculto ni sus descendientes.
+    // Panel + the two visible. Not the hidden one or its descendants.
     CHECK(data.vertices.size() == 12);
     if (data.vertices.size() != 12) return;
 
-    // Panel: ancho 2 + max(40,25) + 6 = 48 ; alto 4 + (20+7+30) + 8 = 69.
+    // Panel: width 2 + max(40,25) + 6 = 48 ; height 4 + (20+7+30) + 8 = 69.
     CHECK(nearly(data.vertices[0].pos.x, 100.0f) && nearly(data.vertices[0].pos.y, 50.0f));
     CHECK(nearly(data.vertices[2].pos.x, 148.0f));
     CHECK(nearly(data.vertices[2].pos.y, 119.0f));
 
-    // Primero conserva SU tamaño (40x20) en (102, 54).
+    // First keeps ITS size (40x20) at (102, 54).
     CHECK(nearly(data.vertices[4].pos.x, 102.0f) && nearly(data.vertices[4].pos.y, 54.0f));
     CHECK(nearly(data.vertices[6].pos.x, 142.0f) && nearly(data.vertices[6].pos.y, 74.0f));
 
-    // Segundo: 54 + 20 + 7 = 81, con su 25x30.
+    // Second: 54 + 20 + 7 = 81, with its 25x30.
     CHECK(nearly(data.vertices[8].pos.x, 102.0f) && nearly(data.vertices[8].pos.y, 81.0f));
     CHECK(nearly(data.vertices[10].pos.x, 127.0f) && nearly(data.vertices[10].pos.y, 111.0f));
 }
 
-// Neutralidad: por defecto no hay ni estirado, ni layout, ni fitter, y el
-// batcher tiene que dar EXACTAMENTE lo mismo que antes de esta fase.
+// Neutrality: by default there's no stretching, layout, or fitter, and the
+// batcher has to give EXACTLY the same as before this phase.
 static void test_neutralidad_de_los_campos_nuevos()
 {
     UiElement fresh;
@@ -897,8 +899,8 @@ static void test_neutralidad_de_los_campos_nuevos()
     CHECK(fresh.layoutMode == UiLayoutMode::None);
     CHECK(!fresh.fitWidth && !fresh.fitHeight && !fresh.ignoreLayout);
 
-    // El mismo árbol de test_transform_del_padre_se_acumula, con los mismos
-    // números: escala heredada, posición local y un solo lote.
+    // The same tree as test_transform_del_padre_se_acumula, with the same
+    // numbers: inherited scale, local position, and a single batch.
     UiCanvas canvas;
     UiElement& parent = canvas.root().add("Panel");
     parent.position = {120.0f, 45.0f};
@@ -922,15 +924,15 @@ static void test_neutralidad_de_los_campos_nuevos()
     CHECK(nearly(data.vertices[2].pos.y, 126.0f));
 }
 
-// ── Texto ───────────────────────────────────────────────────────────────────
-// La fuente se rellena A MANO por la API pública de UiFont: sin TTF, sin
-// FreeType y sin Vulkan, así que el test es determinista y no depende de que
-// haya ningún fichero al lado del ejecutable.
+// ── Text ───────────────────────────────────────────────────────────────────
+// The font is filled MANUALLY via UiFont's public API: no TTF, no
+// FreeType, and no Vulkan, so the test is deterministic and doesn't depend
+// on any file next to the executable.
 //
-// Todos los números son DISTINTOS entre sí a propósito: advance != alto,
-// bearing != 0 y != entre ejes, y kerning negativo y distinto por par. Con
-// valores neutros, ignorar el kerning o intercambiar bearing X e Y pasaría
-// igual.
+// All numbers are DISTINCT on purpose: advance != height,
+// bearing != 0 and != between axes, and kerning negative and distinct per pair. With
+// neutral values, ignoring kerning or swapping bearing X and Y would
+// pass the same.
 static constexpr float kBakeSize = 32.0f;
 
 static void makeTestFont(UiFont& font)
@@ -965,7 +967,7 @@ static void makeTestFont(UiFont& font)
     font.setKerning('B', 'C', -6.0f);
 }
 
-// Cursor: X del glyph n = X del n-1 + advance + kerning(n-1, n) + bearing.
+// Cursor: X of glyph n = X of n-1 + advance + kerning(n-1, n) + bearing.
 static void test_texto_avance_y_kerning_colocan_las_x()
 {
     UiFont font;
@@ -976,7 +978,7 @@ static void test_texto_avance_y_kerning_colocan_las_x()
     label.position = {100.0f, 50.0f};
     label.font     = &font;
     label.text     = "ABC";
-    label.fontSize = kBakeSize;   // sin escala: los números son los del horneado
+    label.fontSize = kBakeSize;   // no scaling: the numbers are those of baking
 
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
@@ -985,24 +987,24 @@ static void test_texto_avance_y_kerning_colocan_las_x()
     CHECK(data.vertices.size() == 12);
     if (data.vertices.size() != 12) return;
 
-    // El lote es el de la fuente, no el nulo del color plano.
+    // The batch is the font's, not the null one of solid color.
     CHECK(data.batches[0].atlas == &font.atlas());
 
-    // pluma 100 -> 'A' en 100+3
+    // pen 100 -> 'A' at 100+3
     CHECK(nearly(data.vertices[0].pos.x, 103.0f));
-    // pluma 121, kerning A-B -4 -> 117 -> 'B' en 117-2
+    // pen 121, kerning A-B -4 -> 117 -> 'B' at 117-2
     CHECK(nearly(data.vertices[4].pos.x, 115.0f));
-    // pluma 130, kerning B-C -6 -> 124 -> 'C' en 124+5
+    // pen 130, kerning B-C -6 -> 124 -> 'C' at 124+5
     CHECK(nearly(data.vertices[8].pos.x, 129.0f));
 
-    // Y el ancho de cada quad sale de su rect, no del advance.
+    // And each quad's width comes from its rect, not from advance.
     CHECK(nearly(data.vertices[1].pos.x - data.vertices[0].pos.x, 10.0f));
     CHECK(nearly(data.vertices[5].pos.x - data.vertices[4].pos.x, 9.0f));
     CHECK(nearly(data.vertices[9].pos.x - data.vertices[8].pos.x, 12.0f));
 }
 
-// El bearing separa la pluma del quad, y los dos ejes NO valen lo mismo:
-// intercambiarlos mueve los tres glyphs.
+// The bearing separates the pen from the quad, and the two axes are NOT the
+// same: swapping them moves all three glyphs.
 static void test_texto_bearing_separa_el_quad_del_cursor()
 {
     UiFont font;
@@ -1021,20 +1023,20 @@ static void test_texto_bearing_separa_el_quad_del_cursor()
     CHECK(data.vertices.size() == 12);
     if (data.vertices.size() != 12) return;
 
-    // Línea base a un ascent del borde superior: 50 + 24 = 74. El borde
-    // superior de cada quad es baseline - bearingY (+Y va hacia ABAJO).
+    // Baseline one ascent from top edge: 50 + 24 = 74. The top edge of each
+    // quad is baseline - bearingY (+Y goes DOWNWARD).
     CHECK(nearly(data.vertices[0].pos.y, 62.0f));    // 74 - 12
     CHECK(nearly(data.vertices[4].pos.y, 57.0f));    // 74 - 17
     CHECK(nearly(data.vertices[8].pos.y, 65.0f));    // 74 -  9
 
-    // Y el alto sale del rect: 14, 18 y 11, ninguno igual a su advance.
+    // And height comes from rect: 14, 18, and 11, none equal to its advance.
     CHECK(nearly(data.vertices[3].pos.y - data.vertices[0].pos.y, 14.0f));
     CHECK(nearly(data.vertices[7].pos.y - data.vertices[4].pos.y, 18.0f));
     CHECK(nearly(data.vertices[11].pos.y - data.vertices[8].pos.y, 11.0f));
 }
 
-// De esto va el MSDF: cambiar de tamaño escala el quad y el screenPxRange, y NO
-// toca ni una UV. Si hubiera que rehornear, las UVs cambiarían.
+// That's what MSDF is about: changing size scales the quad and screenPxRange,
+// and does NOT touch a single UV. If rebaking were needed, UVs would change.
 static void test_texto_fontsize_escala_el_quad_pero_no_las_uvs()
 {
     UiFont font;
@@ -1064,18 +1066,18 @@ static void test_texto_fontsize_escala_el_quad_pero_no_las_uvs()
     CHECK(dataGrande.vertices.size() == 4);
     if (dataBase.vertices.size() != 4 || dataGrande.vertices.size() != 4) return;
 
-    // Quad 1.5x: 10x14 -> 15x21, y la esquina se recoloca por el bearing ya
-    // escalado (100 + 3*1.5, 50 + 24*1.5 - 12*1.5).
+    // Quad 1.5x: 10x14 -> 15x21, and the corner is repositioned by already-scaled
+    // bearing (100 + 3*1.5, 50 + 24*1.5 - 12*1.5).
     CHECK(nearly(dataGrande.vertices[0].pos.x, 104.5f));
     CHECK(nearly(dataGrande.vertices[0].pos.y, 68.0f));
     CHECK(nearly(dataGrande.vertices[2].pos.x - dataGrande.vertices[0].pos.x, 15.0f));
     CHECK(nearly(dataGrande.vertices[2].pos.y - dataGrande.vertices[0].pos.y, 21.0f));
 
-    // screenPxRange escalado igual: 4 -> 6.
+    // screenPxRange scaled the same: 4 -> 6.
     CHECK(nearly(dataBase.vertices[0].params.y, 4.0f));
     CHECK(nearly(dataGrande.vertices[0].params.y, 6.0f));
 
-    // Modo MSDF en los dos, y MISMAS UVs: 16/128, 8/64, 26/128, 22/64.
+    // MSDF mode in both, and SAME UVs: 16/128, 8/64, 26/128, 22/64.
     CHECK(nearly(dataBase.vertices[0].params.x, 1.0f));
     CHECK(nearly(dataGrande.vertices[0].params.x, 1.0f));
     for (size_t i = 0; i < 4; ++i)
@@ -1089,8 +1091,8 @@ static void test_texto_fontsize_escala_el_quad_pero_no_las_uvs()
     CHECK(nearly(dataBase.vertices[2].uv.y, 22.0f / 64.0f));
 }
 
-// La sombra son quads EXTRA por delante, con el mismo atlas y el mismo scissor:
-// el doble de geometría, pero UN solo lote.
+// The shadow is EXTRA quads up front, with the same atlas and same scissor:
+// twice the geometry, but ONE batch.
 static void test_texto_sombra_duplica_los_quads_en_un_solo_lote()
 {
     UiFont font;
@@ -1102,7 +1104,7 @@ static void test_texto_sombra_duplica_los_quads_en_un_solo_lote()
     label.font         = &font;
     label.text         = "AB";
     label.fontSize     = kBakeSize;
-    label.shadowOffset = {3.0f, -5.0f};   // los dos ejes distintos y de signo distinto
+    label.shadowOffset = {3.0f, -5.0f};   // two axes different and opposite signs
     label.shadowColor  = {0.0f, 0.0f, 0.0f, 0.5f};
 
     UiDrawData data;
@@ -1114,27 +1116,27 @@ static void test_texto_sombra_duplica_los_quads_en_un_solo_lote()
     CHECK(data.indices.size() == 24);
     if (data.vertices.size() != 16) return;
 
-    // La sombra va PRIMERO: los cuatro primeros quads son los desplazados.
+    // The shadow goes FIRST: the first four quads are the offset ones.
     CHECK(nearly(data.vertices[0].pos.x, 106.0f));   // 103 + 3
     CHECK(nearly(data.vertices[0].pos.y, 57.0f));    //  62 - 5
     CHECK(nearly(data.vertices[4].pos.x, 118.0f));   // 115 + 3
     CHECK(nearly(data.vertices[4].pos.y, 52.0f));    //  57 - 5
 
-    // Y el texto detrás, sin desplazar.
+    // And the text behind, unshifted.
     CHECK(nearly(data.vertices[8].pos.x, 103.0f));
     CHECK(nearly(data.vertices[8].pos.y, 62.0f));
     CHECK(nearly(data.vertices[12].pos.x, 115.0f));
     CHECK(nearly(data.vertices[12].pos.y, 57.0f));
 
-    // Color de sombra en los primeros y de relleno (blanco) en los últimos.
+    // Shadow color in the first and fill (white) in the last.
     CHECK(nearly(data.vertices[0].color.a, 0.5f));
     CHECK(nearly(data.vertices[8].color.a, 1.0f));
 
-    // La sombra usa las MISMAS UVs que su glyph: es el mismo atlas.
+    // The shadow uses the SAME UVs as its glyph: it's the same atlas.
     CHECK(nearly(data.vertices[0].uv.x, data.vertices[8].uv.x));
     CHECK(nearly(data.vertices[0].uv.y, data.vertices[8].uv.y));
 
-    // Sin offset no hay pase de sombra.
+    // No offset means no shadow pass.
     label.shadowOffset = {0.0f, 0.0f};
     label.markDirty(UiElement::DirtyAll);
     UiDrawData sinSombra;
@@ -1143,7 +1145,7 @@ static void test_texto_sombra_duplica_los_quads_en_un_solo_lote()
     CHECK(sinSombra.batches.size() == 1);
 }
 
-// El outline viaja por vértice: ni parte el lote ni necesita otra textura.
+// Outline travels per vertex: neither breaks the batch nor needs another texture.
 static void test_texto_outline_viaja_al_vertice_sin_partir_el_lote()
 {
     UiFont font;
@@ -1167,11 +1169,11 @@ static void test_texto_outline_viaja_al_vertice_sin_partir_el_lote()
     CHECK(data.vertices.size() == 24);
     if (data.vertices.size() != 24) return;
 
-    // Los 12 primeros son la sombra: sin outline.
+    // The first 12 are the shadow: no outline.
     for (size_t i = 0; i < 12; ++i)
         CHECK(nearly(data.vertices[i].params.z, 0.0f));
 
-    // Los 12 siguientes lo llevan, con su color en effect.
+    // The next 12 carry it, with its color in effect.
     for (size_t i = 12; i < 24; ++i)
     {
         CHECK(nearly(data.vertices[i].params.z, 2.5f));
@@ -1181,15 +1183,15 @@ static void test_texto_outline_viaja_al_vertice_sin_partir_el_lote()
     }
 }
 
-// Neutralidad del texto: sin Text, o con un Text sin fuente, el batcher da lo
-// mismo que antes de esta fase y params.x se queda a 0 (modo sprite).
+// Text neutrality: without Text, or with a Text with no font, the batcher
+// gives the same as before this phase and params.x stays at 0 (sprite mode).
 static void test_neutralidad_del_texto()
 {
     UiVertex fresh;
     CHECK(nearly(fresh.params.x, 0.0f) && nearly(fresh.params.y, 0.0f));
     CHECK(nearly(fresh.params.z, 0.0f) && nearly(fresh.effect.a, 0.0f));
 
-    // El mismo árbol de test_transform_del_padre_se_acumula, vértice a vértice.
+    // The same tree as test_transform_del_padre_se_acumula, vertex by vertex.
     UiCanvas canvas;
     UiElement& parent = canvas.root().add("Panel");
     parent.position = {120.0f, 45.0f};
@@ -1218,7 +1220,7 @@ static void test_neutralidad_del_texto()
         CHECK(nearly(v.effect.a, 0.0f));
     }
 
-    // Un Text sin fuente vuelve a dibujarse como su base: un quad y nada más.
+    // A Text without font draws again as its base: one quad and nothing more.
     UiCanvas conTexto;
     Text& label = conTexto.root().add<Text>("SinFuente");
     label.position = {31.0f, 43.0f};
@@ -1235,9 +1237,8 @@ static void test_neutralidad_del_texto()
     CHECK(nearly(plano.vertices[0].params.x, 0.0f));
 }
 
-// Glyphs de relleno para los tests de tags literales: lo único que importa es
-// que TODOS los caracteres de la cadena tengan uno, para poder contar un quad
-// por carácter visible.
+// Placeholder glyphs for literal tag tests: all that matters is that EVERY
+// character in the string has one, to count one quad per visible character.
 static void addAsciiGlyphs(UiFont& font, const char* chars)
 {
     UiGlyph g{};
@@ -1250,8 +1251,8 @@ static void addAsciiGlyphs(UiFont& font, const char* chars)
         font.addGlyph((uint32_t)(unsigned char)*p, g);
 }
 
-// El espacio no tiene contorno (rect a 0): solo avanza. Es el que reparte
-// Justify y el que da los puntos de corte del wrap.
+// Space has no outline (rect at 0): it only advances. It's the one that
+// distributes Justify and gives the wrap cut points.
 static void addSpaceGlyph(UiFont& font, float advance)
 {
     UiGlyph sp{};
@@ -1259,8 +1260,8 @@ static void addSpaceGlyph(UiFont& font, float advance)
     font.addGlyph(' ', sp);
 }
 
-// <color> pinta SOLO su tramo y el cierre restaura el de fuera, anidado
-// incluido. Ni la posición ni el número de quads cambian por llevar tags.
+// <color> paints ONLY its span and the close restores the outside one, nested
+// included. Neither position nor quad count changes from carrying tags.
 static void test_texto_color_por_tramos()
 {
     UiFont font;
@@ -1277,12 +1278,12 @@ static void test_texto_color_por_tramos()
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
 
-    // Tres glyphs: los tags no dejan ni un quad.
+    // Three glyphs: tags leave not a single quad.
     CHECK(data.batches.size() == 1);
     CHECK(data.vertices.size() == 12);
     if (data.vertices.size() != 12) return;
 
-    // Y las X son EXACTAMENTE las del texto plano: 103, 115 y 129.
+    // And the X's are EXACTLY those of plain text: 103, 115, and 129.
     CHECK(nearly(data.vertices[0].pos.x, 103.0f));
     CHECK(nearly(data.vertices[4].pos.x, 115.0f));
     CHECK(nearly(data.vertices[8].pos.x, 129.0f));
@@ -1291,7 +1292,7 @@ static void test_texto_color_por_tramos()
     CHECK(nearly(data.vertices[4].color.r, 1.0f) && nearly(data.vertices[4].color.g, 0.0f));
     CHECK(nearly(data.vertices[8].color.r, 0.2f) && nearly(data.vertices[8].color.b, 0.6f));
 
-    // Anidado: el cierre de dentro devuelve al rojo, no al color de fuera.
+    // Nested: the inner close returns to red, not the outer color.
     label.text = "A<color=#FF0000>B<color=#00FF80>C</color></color>";
     label.markDirty(UiElement::DirtyAll);
     UiDrawData anidado;
@@ -1303,7 +1304,7 @@ static void test_texto_color_por_tramos()
     CHECK(nearly(anidado.vertices[4].color.r, 1.0f) && nearly(anidado.vertices[4].color.g, 0.0f));
     CHECK(nearly(anidado.vertices[8].color.g, 1.0f) && nearly(anidado.vertices[8].color.b, 128.0f / 255.0f));
 
-    // Y el alfa de 8 dígitos también llega.
+    // And 8-digit alpha also arrives.
     label.text = "<color=#10203040>A</color>";
     label.markDirty(UiElement::DirtyAll);
     UiDrawData conAlfa;
@@ -1313,8 +1314,8 @@ static void test_texto_color_por_tramos()
     CHECK(nearly(conAlfa.vertices[0].color.a, 64.0f / 255.0f));
 }
 
-// <size> escala su tramo Y mueve el cursor de los siguientes: el avance y el
-// kerning también se escalan, no solo el quad.
+// <size> scales its span and moves the cursor of the following: advance and
+// kerning also scale, not just the quad.
 static void test_texto_size_escala_el_tramo_y_mueve_el_cursor()
 {
     UiFont font;
@@ -1334,31 +1335,31 @@ static void test_texto_size_escala_el_tramo_y_mueve_el_cursor()
     CHECK(data.vertices.size() == 12);
     if (data.vertices.size() != 12) return;
 
-    // A a escala 1: como siempre.
+    // A at scale 1: as always.
     CHECK(nearly(data.vertices[0].pos.x, 103.0f));
     CHECK(nearly(data.vertices[0].pos.y, 62.0f));
 
-    // B a 48/32 = 1.5: pluma 121 + kerning -4*1.5 = 115, bearing -2*1.5.
+    // B at 48/32 = 1.5: pen 121 + kerning -4*1.5 = 115, bearing -2*1.5.
     CHECK(nearly(data.vertices[4].pos.x, 112.0f));
     CHECK(nearly(data.vertices[4].pos.y, 74.0f - 17.0f * 1.5f));
     CHECK(nearly(data.vertices[6].pos.x, 112.0f + 9.0f * 1.5f));
     CHECK(nearly(data.vertices[6].pos.y, 74.0f - 17.0f * 1.5f + 18.0f * 1.5f));
 
-    // Y C vuelve a escala 1 PERO desde una pluma que arrastra el avance grande:
+    // And C back to scale 1 BUT from a pen that drags the large advance:
     // 115 + 13*1.5 = 134.5, kerning -6, bearing +5.
     CHECK(nearly(data.vertices[8].pos.x, 133.5f));
     CHECK(nearly(data.vertices[8].pos.y, 65.0f));
     CHECK(nearly(data.vertices[10].pos.x, 145.5f));
 
-    // El tamaño NO toca las UVs: es el mismo trozo de atlas.
+    // Size does NOT touch UVs: it's the same piece of atlas.
     CHECK(nearly(data.vertices[4].uv.x, 40.0f / 128.0f));
     CHECK(nearly(data.vertices[4].uv.y, 24.0f / 64.0f));
     CHECK(nearly(data.vertices[6].uv.x, 49.0f / 128.0f));
     CHECK(nearly(data.vertices[6].uv.y, 42.0f / 64.0f));
 }
 
-// <b> engorda por el canal del outline y <i> cizalla el quad: ni una UV ni un
-// quad de diferencia con el texto plano.
+// <b> fattens via the outline channel and <i> shears the quad: neither a UV
+// nor a quad different from plain text.
 static void test_texto_negrita_y_cursiva_sin_tocar_uvs()
 {
     UiFont font;
@@ -1385,14 +1386,14 @@ static void test_texto_negrita_y_cursiva_sin_tocar_uvs()
     CHECK(estilado.batches.size() == 1);
     if (estilado.vertices.size() != 12 || plano.vertices.size() != 12) return;
 
-    // Mismas UVs, vértice a vértice.
+    // Same UVs, vertex by vertex.
     for (size_t i = 0; i < 12; ++i)
     {
         CHECK(nearly(estilado.vertices[i].uv.x, plano.vertices[i].uv.x));
         CHECK(nearly(estilado.vertices[i].uv.y, plano.vertices[i].uv.y));
     }
 
-    // A en negrita: grosor 0.08 * 32 y el "outline" del color del relleno.
+    // A in bold: thickness 0.08 * 32 and the "outline" of the fill color.
     for (size_t i = 0; i < 4; ++i)
     {
         CHECK(nearly(estilado.vertices[i].params.z, 2.56f));
@@ -1401,20 +1402,20 @@ static void test_texto_negrita_y_cursiva_sin_tocar_uvs()
         CHECK(nearly(estilado.vertices[i].pos.x, plano.vertices[i].pos.x));
     }
 
-    // B en cursiva: la línea base está en 74 y el quad va de 57 a 75, así que
-    // arriba se va +4.25 y abajo -0.25. El avance NO cambia.
+    // B in italic: baseline is at 74 and quad goes from 57 to 75, so at the top
+    // it goes +4.25 and at the bottom -0.25. Advance does NOT change.
     CHECK(nearly(estilado.vertices[4].pos.x, 115.0f + 4.25f));
     CHECK(nearly(estilado.vertices[5].pos.x, 115.0f + 9.0f + 4.25f));
     CHECK(nearly(estilado.vertices[6].pos.x, 115.0f + 9.0f - 0.25f));
     CHECK(nearly(estilado.vertices[7].pos.x, 115.0f - 0.25f));
     CHECK(nearly(estilado.vertices[4].params.z, 0.0f));
 
-    // Y C, fuera de los dos tramos, exactamente donde estaba.
+    // And C, outside both spans, exactly where it was.
     CHECK(nearly(estilado.vertices[8].pos.x, plano.vertices[8].pos.x));
     CHECK(nearly(estilado.vertices[8].params.z, 0.0f));
 }
 
-// Lo que no se entiende se DIBUJA: un quad por carácter visible, ni uno menos.
+// What is not understood is DRAWN: one quad per visible character, not less.
 static void test_texto_tag_malformado_sale_literal()
 {
     UiFont font;
@@ -1429,11 +1430,11 @@ static void test_texto_tag_malformado_sale_literal()
 
     struct Caso { const char* texto; size_t visibles; };
     const Caso casos[] = {
-        {"<colorr=#fff>", 13},   // tag desconocido
-        {"<size=>",        7},   // sin número
-        {"<b",             2},   // sin cerrar el '>'
-        {"</color>",       8},   // cierre huérfano
-        {"<color=#ff>",   11},   // hex de longitud imposible
+        {"<colorr=#fff>", 13},   // unknown tag
+        {"<size=>",        7},   // no number
+        {"<b",             2},   // no closing '>'
+        {"</color>",       8},   // orphan close
+        {"<color=#ff>",   11},   // hex of impossible length
     };
 
     for (const Caso& caso : casos)
@@ -1448,7 +1449,7 @@ static void test_texto_tag_malformado_sale_literal()
                         caso.texto, data.vertices.size() / 4, caso.visibles);
     }
 
-    // Y un '<' suelto en medio de texto normal no se come nada de lo de detrás.
+    // And a lone '<' in the middle of normal text doesn't eat anything after it.
     label.text = "A<B";
     label.markDirty(UiElement::DirtyAll);
     UiDrawData suelto;
@@ -1456,7 +1457,7 @@ static void test_texto_tag_malformado_sale_literal()
     CHECK(suelto.vertices.size() == 12);
 }
 
-// La MISMA línea en tres X distintas, calculadas contra el ancho del rect.
+// The SAME line at three different X's, calculated against rect width.
 static void test_texto_alineacion_izquierda_centro_derecha()
 {
     UiFont font;
@@ -1465,12 +1466,12 @@ static void test_texto_alineacion_izquierda_centro_derecha()
     UiCanvas canvas;
     Text& label = canvas.root().add<Text>("Etiqueta");
     label.position = {100.0f, 50.0f};
-    label.size     = {200.0f, 60.0f};   // ancho != alto a propósito
+    label.size     = {200.0f, 60.0f};   // width != height on purpose
     label.font     = &font;
     label.fontSize = kBakeSize;
     label.text     = "ABC";
 
-    // Ancho de la línea: 21 + (-4+13) + (-6+27) = 51.
+    // Line width: 21 + (-4+13) + (-6+27) = 51.
     UiDrawData izquierda;
     label.align = UiTextAlign::Left;
     canvas.buildDrawData(kW, kH, izquierda);
@@ -1494,22 +1495,22 @@ static void test_texto_alineacion_izquierda_centro_derecha()
     CHECK(nearly(centro.vertices[0].pos.x,    177.5f));            // 100 + (200-51)/2 + 3
     CHECK(nearly(derecha.vertices[0].pos.x,   252.0f));            // 100 + 200-51 + 3
 
-    // La Y es la misma en los tres: alinear es SOLO en X.
+    // Y is the same in all three: alignment is ONLY in X.
     CHECK(nearly(centro.vertices[0].pos.y, izquierda.vertices[0].pos.y));
     CHECK(nearly(derecha.vertices[0].pos.y, izquierda.vertices[0].pos.y));
 
-    // Y el último glyph de la línea derecha acaba pegado al borde: 252 + ...
+    // And the last glyph of the right line ends at the edge: 252 + ...
     CHECK(nearly(derecha.vertices[8].pos.x, 278.0f));              // 249 + 21+9-6 + 5
 }
 
-// La otra mitad de la alineación: dónde cae el BLOQUE a lo alto del rect. Es lo
-// que hacía que un botón con align=Center no pareciera centrado — el texto salía
-// pegado al borde de arriba porque esto no existía.
+// The other half of alignment: where the TEXT BLOCK falls vertically on the
+// rect. This is why a button with align=Center didn't look centered — the text
+// came out at the top edge because this didn't exist.
 //
-// Se comprueba la Y de un glyph concreto y no "que cambie": un desplazamiento
-// del bloque en la dirección equivocada, o de la mitad de lo que toca, pasaría
-// igual un CHECK laxo. Y se comprueba que la X NO se mueve, que es lo que
-// separa esto de la alineación horizontal.
+// The Y of a specific glyph is checked, not "that it changes": a displacement
+// of the block in the wrong direction, or of half what it should, would pass
+// the same loose CHECK. And it's verified that X does NOT move, which is
+// what separates this from horizontal alignment.
 static void test_texto_alineacion_vertical()
 {
     UiFont font;
@@ -1521,7 +1522,7 @@ static void test_texto_alineacion_vertical()
     label.size     = {200.0f, 60.0f};
     label.font     = &font;
     label.fontSize = kBakeSize;
-    label.text     = "ABC";   // una sola línea
+    label.text     = "ABC";   // a single line
 
     UiDrawData arriba;
     label.vAlign = UiTextVAlign::Top;
@@ -1544,20 +1545,20 @@ static void test_texto_alineacion_vertical()
         abajo.vertices.size() != 12)
         return;
 
-    // El hueco es el alto del rect menos UNA línea de interlineado.
+    // The gap is the rect height minus ONE line of line height.
     const float sobra = 60.0f - font.lineHeight() * (kBakeSize / font.bakeSize());
     CHECK(sobra > 0.0f);
 
     CHECK(nearly(medio.vertices[0].pos.y, arriba.vertices[0].pos.y + sobra * 0.5f));
     CHECK(nearly(abajo.vertices[0].pos.y, arriba.vertices[0].pos.y + sobra));
 
-    // Alinear a lo alto es SOLO en Y: la X no se toca.
+    // Aligning at the top is ONLY in Y: X is untouched.
     CHECK(nearly(medio.vertices[0].pos.x, arriba.vertices[0].pos.x));
     CHECK(nearly(abajo.vertices[0].pos.x, arriba.vertices[0].pos.x));
 }
 
-// Justify reparte el sobrante entre los espacios, y NUNCA en la última línea ni
-// en una cortada por '\n'.
+// Justify distributes the leftover among spaces, and NEVER on the last line
+// or one cut by '\n'.
 static void test_texto_justify_no_toca_la_ultima_linea()
 {
     UiFont font;
@@ -1577,19 +1578,19 @@ static void test_texto_justify_no_toca_la_ultima_linea()
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
 
-    // Dos líneas: "A B" (21+7+13 = 41) y "C". El espacio no deja quad.
+    // Two lines: "A B" (21+7+13 = 41) and "C". Space leaves no quad.
     CHECK(data.vertices.size() == 12);
     if (data.vertices.size() != 12) return;
 
-    // Sobrante 45-41 = 4 para UN espacio: B se va 4 px a la derecha.
+    // Leftover 45-41 = 4 for ONE space: B goes 4 px to the right.
     CHECK(nearly(data.vertices[0].pos.x, 103.0f));
     CHECK(nearly(data.vertices[4].pos.x, 130.0f));   // 100 + 21 + (7+4) - 2
 
-    // La última línea NO se justifica: C empieza pegada a la izquierda.
+    // The last line is NOT justified: C starts at the left edge.
     CHECK(nearly(data.vertices[8].pos.x, 105.0f));   // 100 + bearing 5
     CHECK(nearly(data.vertices[8].pos.y, 105.0f));   // baseline 74 + 40 - bearingY 9
 
-    // Con Left, el mismo espacio vale 7 y B se queda en 126.
+    // With Left, the same space is worth 7 and B stays at 126.
     label.align = UiTextAlign::Left;
     label.markDirty(UiElement::DirtyAll);
     UiDrawData izquierda;
@@ -1598,7 +1599,7 @@ static void test_texto_justify_no_toca_la_ultima_linea()
     if (izquierda.vertices.size() != 12) return;
     CHECK(nearly(izquierda.vertices[4].pos.x, 126.0f));
 
-    // Una línea cortada por '\n' tampoco se justifica, aunque le sobre sitio.
+    // A line cut by '\n' is also NOT justified, even if there's room.
     label.align    = UiTextAlign::Justify;
     label.wordWrap = false;
     label.size     = {200.0f, 120.0f};
@@ -1609,23 +1610,23 @@ static void test_texto_justify_no_toca_la_ultima_linea()
     CHECK(conSalto.vertices.size() == 12);
     if (conSalto.vertices.size() != 12) return;
     CHECK(nearly(conSalto.vertices[4].pos.x, 126.0f));
-    CHECK(nearly(conSalto.vertices[8].pos.y, 105.0f));   // y C en la segunda línea
+    CHECK(nearly(conSalto.vertices[8].pos.y, 105.0f));   // and C on the second line
 
-    // Y con espacios en las DOS líneas: ni la del '\n' ni la última se estiran,
-    // aunque a las dos les sobren 159 px. Sin esta pareja, quitar la guarda de
-    // "última línea" no lo notaría nadie: la última suele no tener espacios.
+    // And with spaces on BOTH lines: neither the '\n' one nor the last stretch,
+    // even though both have 159 px left. Without this pair, removing the guard
+    // of "last line" would go unnoticed: the last usually has no spaces.
     label.text = "A B\nA B";
     label.markDirty(UiElement::DirtyAll);
     UiDrawData dosLineas;
     canvas.buildDrawData(kW, kH, dosLineas);
     CHECK(dosLineas.vertices.size() == 16);
     if (dosLineas.vertices.size() != 16) return;
-    CHECK(nearly(dosLineas.vertices[4].pos.x, 126.0f));    // B de la línea del '\n'
-    CHECK(nearly(dosLineas.vertices[12].pos.x, 126.0f));   // B de la ÚLTIMA línea
+    CHECK(nearly(dosLineas.vertices[4].pos.x, 126.0f));    // B of the '\n' line
+    CHECK(nearly(dosLineas.vertices[12].pos.x, 126.0f));   // B of the LAST line
     CHECK(nearly(dosLineas.vertices[12].pos.y, 97.0f));    // 114 - 17
 }
 
-// Wrap por palabras, y por glyph cuando una palabra no cabe ni sola.
+// Wrap by words, and by glyph when a word doesn't fit alone.
 static void test_texto_word_wrap_por_palabras_y_por_glyph()
 {
     UiFont font;
@@ -1647,23 +1648,23 @@ static void test_texto_word_wrap_por_palabras_y_por_glyph()
     CHECK(data.vertices.size() == 12);
     if (data.vertices.size() != 12) return;
 
-    // "A B" arriba (misma línea base) y "C" abajo, un lineHeight más.
+    // "A B" above (same baseline) and "C" below, one lineHeight more.
     CHECK(nearly(data.vertices[0].pos.y, 62.0f));    // 74 - 12
     CHECK(nearly(data.vertices[4].pos.y, 57.0f));    // 74 - 17
     CHECK(nearly(data.vertices[8].pos.y, 105.0f));   // 114 - 9
     CHECK(nearly(data.vertices[8].pos.x, 105.0f));
 
-    // Sin wrap, las tres van seguidas en una línea.
+    // Without wrap, all three go in a line.
     label.wordWrap = false;
     label.markDirty(UiElement::DirtyAll);
     UiDrawData seguido;
     canvas.buildDrawData(kW, kH, seguido);
     CHECK(seguido.vertices.size() == 12);
     if (seguido.vertices.size() != 12) return;
-    CHECK(nearly(seguido.vertices[8].pos.y, 65.0f));   // 74 - 9, la misma línea
+    CHECK(nearly(seguido.vertices[8].pos.y, 65.0f));   // 74 - 9, the same line
 
-    // Una palabra más ancha que el rect se parte por glyph: "ABC" son 51 contra
-    // un rect de 30, así que caben A y B (30) y C baja.
+    // A word wider than the rect breaks by glyph: "ABC" is 51 against
+    // a rect of 30, so A and B fit (30) and C goes down.
     label.wordWrap = true;
     label.size     = {30.0f, 120.0f};
     label.text     = "ABC";
@@ -1675,12 +1676,12 @@ static void test_texto_word_wrap_por_palabras_y_por_glyph()
     CHECK(nearly(partida.vertices[0].pos.x, 103.0f));
     CHECK(nearly(partida.vertices[4].pos.x, 115.0f));
     CHECK(nearly(partida.vertices[4].pos.y, 57.0f));
-    // C abre línea: sin kerning heredado y pegada a la izquierda del rect.
+    // C opens a line: no inherited kerning and at the left of the rect.
     CHECK(nearly(partida.vertices[8].pos.x, 105.0f));
     CHECK(nearly(partida.vertices[8].pos.y, 105.0f));
 }
 
-// Ellipsis recorta y remata; Clip recorta con el scissor; Overflow no hace nada.
+// Ellipsis clips and ends; Clip clips with scissor; Overflow does nothing.
 static void test_texto_overflow_ellipsis_clip_y_overflow()
 {
     UiFont font;
@@ -1701,7 +1702,7 @@ static void test_texto_overflow_ellipsis_clip_y_overflow()
     label.fontSize = kBakeSize;
     label.text     = "ABC";
 
-    // Overflow: ni recorte ni puntos, y el scissor sigue siendo el de pantalla.
+    // Overflow: no clipping or dots, and scissor is still the screen's.
     label.overflow = UiTextOverflow::Overflow;
     UiDrawData libre;
     canvas.buildDrawData(kW, kH, libre);
@@ -1710,7 +1711,7 @@ static void test_texto_overflow_ellipsis_clip_y_overflow()
     if (libre.batches.empty()) return;
     CHECK(libre.batches[0].scissor.width == kW && libre.batches[0].scissor.height == kH);
 
-    // Clip: los MISMOS quads, pero el lote sale recortado al rect.
+    // Clip: the SAME quads, but the batch comes out clipped to the rect.
     label.overflow = UiTextOverflow::Clip;
     label.markDirty(UiElement::DirtyAll);
     UiDrawData recortado;
@@ -1723,7 +1724,7 @@ static void test_texto_overflow_ellipsis_clip_y_overflow()
     for (size_t i = 0; i < recortado.vertices.size(); ++i)
         CHECK(nearly(recortado.vertices[i].pos.x, libre.vertices[i].pos.x));
 
-    // Ellipsis: 51 + 12 no cabe en 40, así que caen C y B y queda "A…".
+    // Ellipsis: 51 + 12 doesn't fit in 40, so C and B drop and "A…" remains.
     label.overflow = UiTextOverflow::Ellipsis;
     label.markDirty(UiElement::DirtyAll);
     UiDrawData cortado;
@@ -1732,12 +1733,12 @@ static void test_texto_overflow_ellipsis_clip_y_overflow()
     if (cortado.vertices.size() != 8) return;
 
     CHECK(nearly(cortado.vertices[0].pos.x, 103.0f));
-    CHECK(nearly(cortado.vertices[4].pos.x, 122.0f));           // pluma 121 + bearing 1
-    CHECK(nearly(cortado.vertices[4].uv.x, 90.0f / 128.0f));    // y son las UVs del '…'
-    // Y el bloque no se sale del rect: 122 + 10 <= 140.
+    CHECK(nearly(cortado.vertices[4].pos.x, 122.0f));           // pen 121 + bearing 1
+    CHECK(nearly(cortado.vertices[4].uv.x, 90.0f / 128.0f));    // and they're the '…' UVs
+    // And the block doesn't go outside rect: 122 + 10 <= 140.
     CHECK(cortado.vertices[5].pos.x <= 140.0f);
 
-    // Sin '…' en el atlas se cae a tres puntos.
+    // Without '…' in atlas it falls back to three dots.
     UiFont conPuntos;
     makeTestFont(conPuntos);
     UiGlyph punto{};
@@ -1751,14 +1752,14 @@ static void test_texto_overflow_ellipsis_clip_y_overflow()
     label.markDirty(UiElement::DirtyAll);
     UiDrawData fallback;
     canvas.buildDrawData(kW, kH, fallback);
-    CHECK(fallback.vertices.size() == 16);   // A + tres puntos
+    CHECK(fallback.vertices.size() == 16);   // A + three dots
     if (fallback.vertices.size() != 16) return;
     CHECK(nearly(fallback.vertices[4].pos.x, 122.0f));
     CHECK(nearly(fallback.vertices[8].pos.x, 127.0f));
     CHECK(nearly(fallback.vertices[12].pos.x, 132.0f));
 }
 
-// El bloque de texto medido alimenta el fitter, y desde ahí el layout del padre.
+// The measured text block feeds the fitter, and from there the parent layout.
 static void test_texto_alimenta_el_content_size_fitter()
 {
     UiFont font;
@@ -1781,18 +1782,18 @@ static void test_texto_alimenta_el_content_size_fitter()
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
 
-    // El quad del panel primero, los glyphs detrás.
+    // Panel quad first, glyphs behind.
     CHECK(data.vertices.size() == 4 + 12);
     if (data.vertices.size() != 16) return;
 
-    // Ancho = la línea (51) y alto = un lineHeight (40): ni uno ni otro salen
-    // del size del panel, que es {0,0}.
+    // Width = the line (51) and height = one lineHeight (40): neither goes
+    // outside panel size, which is {0,0}.
     CHECK(nearly(data.vertices[0].pos.x, 60.0f));
     CHECK(nearly(data.vertices[0].pos.y, 30.0f));
     CHECK(nearly(data.vertices[2].pos.x, 111.0f));
     CHECK(nearly(data.vertices[2].pos.y, 70.0f));
 
-    // Un texto más largo empuja el panel, que es de lo que va el fitter.
+    // Longer text pushes the panel, which is what the fitter is for.
     label.text = "ABCABC";
     label.markDirty(UiElement::DirtyAll);
     UiDrawData largo;
@@ -1800,11 +1801,11 @@ static void test_texto_alimenta_el_content_size_fitter()
     CHECK(largo.vertices.size() == 4 + 24);
     if (largo.vertices.size() != 28) return;
     CHECK(largo.vertices[2].pos.x > data.vertices[2].pos.x);
-    CHECK(nearly(largo.vertices[2].pos.y, 70.0f));   // sigue siendo UNA línea
+    CHECK(nearly(largo.vertices[2].pos.y, 70.0f));   // it's still ONE line
 }
 
-// Neutralidad: con los valores por defecto (Left, sin wrap, Overflow) el texto
-// plano da EXACTAMENTE los mismos vértices y lotes que la fase anterior.
+// Neutrality: with default values (Left, no wrap, Overflow) the text
+// plain gives EXACTLY the same vertices and batches as the previous phase.
 static void test_neutralidad_del_rich_text()
 {
     UiFont font;
@@ -1847,21 +1848,21 @@ static void test_neutralidad_del_rich_text()
         CHECK(nearly(a.effect.x, b.effect.x));
     }
 
-    // Los tres primeros quads siguen siendo la sombra, sin outline ni engorde.
+    // The first three quads are still the shadow, no outline or fattening.
     for (size_t i = 0; i < 12; ++i)
         CHECK(nearly(porDefecto.vertices[i].params.z, 0.0f));
     for (size_t i = 12; i < 24; ++i)
         CHECK(nearly(porDefecto.vertices[i].params.z, 2.5f));
 }
 
-// ── Imágenes: fuentes y modos de dibujo ─────────────────────────────────────
-// El atlas de todos estos tests: 200x100 con un sub-rect que NO empieza en el
-// origen y con proporciones distintas por eje.
+// ── Images: sources and draw modes ─────────────────────────────────────
+// The atlas for all these tests: 200x100 with a sub-rect that does NOT start
+// at the origin and with different proportions per axis.
 //   u: 50/200 = 0.25 -> 75/200 = 0.375   (du = 0.125)
 //   v: 10/100 = 0.10 -> 50/100 = 0.500   (dv = 0.400)
-// El sprite mide 25x40 en píxeles del atlas: ese es su tamaño NATIVO y es
-// distinto del rect de todos los elementos, así que un modo que se olvide de
-// él y use el rect da otros números.
+// The sprite is 25x40 in atlas pixels: that's its NATIVE size and it's
+// different from all elements' rect, so a mode that forgets it and uses the
+// rect gives different numbers.
 static UiTextureAtlas makeAtlas()
 {
     UiTextureAtlas atlas;
@@ -1870,8 +1871,8 @@ static UiTextureAtlas makeAtlas()
     return atlas;
 }
 
-// Comparación EXACTA, campo a campo incluidos params y effect: la neutralidad
-// no es "parecido", es el mismo buffer.
+// EXACT comparison, field by field including params and effect: neutrality
+// is not "similar", it's the same buffer.
 static bool sameVertices(const UiDrawData& a, const UiDrawData& b)
 {
     if (a.vertices.size() != b.vertices.size()) return false;
@@ -1882,17 +1883,17 @@ static bool sameVertices(const UiDrawData& a, const UiDrawData& b)
                        a.vertices.size() * sizeof(UiVertex)) == 0;
 }
 
-// Una textura suelta es un atlas SIN entradas: el nombre no resuelve y las UVs
-// salen 0..1. Un solo quad, como cualquier drawable.
+// A loose texture is an atlas with NO entries: the name doesn't resolve and
+// UVs are 0..1. One quad, like any drawable.
 static void test_imagen_textura_suelta_uv_0_1()
 {
     UiTextureAtlas textura;
-    textura.setSize(128, 64);   // ancho != alto, y sin un solo addSprite
+    textura.setSize(128, 64);   // width != height, and no addSprite at all
 
     UiCanvas canvas;
     Image& img = canvas.root().add<Image>("Fondo");
     img.position = {17.0f, 23.0f};
-    img.size     = {90.0f, 37.0f};   // rect distinto del tamaño de la textura
+    img.size     = {90.0f, 37.0f};   // rect different from texture size
     img.atlas    = &textura;
     img.sprite   = "no_registrado";
 
@@ -1905,13 +1906,13 @@ static void test_imagen_textura_suelta_uv_0_1()
 
     CHECK(nearly(data.vertices[0].uv.x, 0.0f) && nearly(data.vertices[0].uv.y, 0.0f));
     CHECK(nearly(data.vertices[2].uv.x, 1.0f) && nearly(data.vertices[2].uv.y, 1.0f));
-    // Y el rect sigue siendo el del elemento, no el de la textura.
+    // And the rect is still the element's, not the texture's.
     CHECK(nearly(data.vertices[2].pos.x, 107.0f));
     CHECK(nearly(data.vertices[2].pos.y, 60.0f));
 }
 
-// Un sprite con nombre dentro de un atlas usa las UVs de SU sub-rect, no las
-// del atlas entero: con 0..1 saldrían los cuatro valores distintos.
+// A sprite with a name in an atlas uses ITS sub-rect's UVs, not the
+// whole atlas: with 0..1 all four values would be different.
 static void test_imagen_sprite_con_nombre_usa_su_subrect()
 {
     UiTextureAtlas atlas = makeAtlas();
@@ -1919,7 +1920,7 @@ static void test_imagen_sprite_con_nombre_usa_su_subrect()
     UiCanvas canvas;
     Image& img = canvas.root().add<Image>("Botella");
     img.position = {31.0f, 12.0f};
-    img.size     = {70.0f, 44.0f};   // ni 25x40 ni cuadrado
+    img.size     = {70.0f, 44.0f};   // neither 25x40 nor square
     img.atlas    = &atlas;
     img.sprite   = "botella";
 
@@ -1931,14 +1932,14 @@ static void test_imagen_sprite_con_nombre_usa_su_subrect()
 
     CHECK(nearly(data.vertices[0].uv.x, 0.25f)  && nearly(data.vertices[0].uv.y, 0.10f));
     CHECK(nearly(data.vertices[2].uv.x, 0.375f) && nearly(data.vertices[2].uv.y, 0.50f));
-    // El rect es el del elemento: el sprite se estira, que es lo que hace Normal.
+    // The rect is the element's: the sprite stretches, which is what Normal does.
     CHECK(nearly(data.vertices[2].pos.x, 101.0f));
     CHECK(nearly(data.vertices[2].pos.y, 56.0f));
 }
 
-// Dos Image del mismo atlas van en UN lote AUNQUE estén en modos distintos y
-// emitan un montón de quads: el modo se resuelve en CPU y no es estado del
-// draw. Con otro atlas, dos lotes.
+// Two Image of the same atlas go in ONE batch EVEN THOUGH they're in different
+// modes and emit many quads: the mode is resolved in CPU and is not draw
+// state. With another atlas, two batches.
 static void test_imagen_modos_no_parten_el_lote()
 {
     UiTextureAtlas atlas = makeAtlas();
@@ -1947,7 +1948,7 @@ static void test_imagen_modos_no_parten_el_lote()
 
     Image& a = canvas.root().add<Image>("Tapiz");
     a.position = {10.0f, 10.0f};
-    a.size     = {50.0f, 40.0f};        // 2 columnas x 1 fila de 25x40
+    a.size     = {50.0f, 40.0f};        // 2 columns x 1 row of 25x40
     a.atlas    = &atlas;
     a.sprite   = "botella";
     a.mode     = UiImageMode::Tiled;
@@ -1966,13 +1967,13 @@ static void test_imagen_modos_no_parten_el_lote()
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
 
-    // 2 quads del tiled + 9 del sliced = 11.
+    // 2 quads from tiled + 9 from sliced = 11.
     CHECK(data.batches.size() == 1);
     CHECK(data.vertices.size() == 44);
     if (data.batches.size() != 1) return;
     CHECK(data.batches[0].indexCount == 66);
 
-    // El mismo árbol pero con el segundo en otro atlas: dos lotes.
+    // Same tree but the second in another atlas: two batches.
     UiTextureAtlas otro;
     otro.setSize(64, 32);
     otro.addSprite("llave", {8.0f, 4.0f, 16.0f, 8.0f});
@@ -1987,12 +1988,12 @@ static void test_imagen_modos_no_parten_el_lote()
     if (split.batches.size() != 2) return;
     CHECK(split.batches[0].atlas == &atlas);
     CHECK(split.batches[1].atlas == &otro);
-    CHECK(split.batches[0].indexCount == 12);   // los 2 tiles
+    CHECK(split.batches[0].indexCount == 12);   // the 2 tiles
 }
 
-// Tiled: el sprite se repite a su tamaño NATIVO (25x40) y la última fila y la
-// última columna se RECORTAN por UV, no se escalan.
-// rect 60x90 -> ceil(60/25) = 3 columnas (25, 25, 10) y ceil(90/40) = 3 filas
+// Tiled: the sprite repeats at its NATIVE size (25x40) and the last row and
+// last column are CLIPPED by UV, not scaled.
+// rect 60x90 -> ceil(60/25) = 3 columns (25, 25, 10) and ceil(90/40) = 3 rows
 // (40, 40, 10) = 9 quads.
 static void test_imagen_tiled_cuenta_y_recorte_por_uv()
 {
@@ -2013,39 +2014,39 @@ static void test_imagen_tiled_cuenta_y_recorte_por_uv()
     CHECK(data.vertices.size() == 36);
     if (data.vertices.size() != 36) return;
 
-    // Primer tile: tamaño nativo entero y UVs COMPLETAS del sprite.
+    // First tile: full native size and COMPLETE sprite UVs.
     CHECK(nearly(data.vertices[0].pos.x, 17.0f) && nearly(data.vertices[0].pos.y, 23.0f));
     CHECK(nearly(data.vertices[2].pos.x, 42.0f) && nearly(data.vertices[2].pos.y, 63.0f));
     CHECK(nearly(data.vertices[0].uv.x, 0.25f)  && nearly(data.vertices[0].uv.y, 0.10f));
     CHECK(nearly(data.vertices[2].uv.x, 0.375f) && nearly(data.vertices[2].uv.y, 0.50f));
 
-    // Tile del medio de la primera fila: completo también, y desplazado 25 px.
+    // Middle tile of first row: also complete, offset 25 px.
     CHECK(nearly(data.vertices[4].pos.x, 42.0f));
     CHECK(nearly(data.vertices[6].pos.x, 67.0f));
     CHECK(nearly(data.vertices[6].uv.x, 0.375f));
 
-    // Última columna (índice 2): 10 px de ancho, y la U cortada a 10/25 = 0.4
-    // del sub-rect -> 0.25 + 0.125*0.4 = 0.30. Escalar en vez de recortar
-    // dejaría 0.375 aquí.
+    // Last column (index 2): 10 px wide, and U clipped to 10/25 = 0.4
+    // of the sub-rect -> 0.25 + 0.125*0.4 = 0.30. Scaling instead of clipping
+    // would leave 0.375 here.
     CHECK(nearly(data.vertices[8].pos.x, 67.0f));
     CHECK(nearly(data.vertices[10].pos.x, 77.0f));
     CHECK(nearly(data.vertices[10].uv.x, 0.30f));
-    CHECK(nearly(data.vertices[10].uv.y, 0.50f));   // la fila 0 no se corta en V
+    CHECK(nearly(data.vertices[10].uv.y, 0.50f));   // row 0 is not clipped in V
 
-    // Última fila (índice 6): 10 px de alto, V cortada a 10/40 = 0.25 ->
-    // 0.1 + 0.4*0.25 = 0.20, y la U entera porque es la primera columna.
+    // Last row (index 6): 10 px high, V clipped to 10/40 = 0.25 ->
+    // 0.1 + 0.4*0.25 = 0.20, and full U because it's the first column.
     CHECK(nearly(data.vertices[24].pos.y, 103.0f));
     CHECK(nearly(data.vertices[26].pos.y, 113.0f));
     CHECK(nearly(data.vertices[26].uv.y, 0.20f));
     CHECK(nearly(data.vertices[26].uv.x, 0.375f));
 
-    // La esquina (índice 8) se corta en los DOS ejes.
+    // The corner (index 8) is clipped on BOTH axes.
     CHECK(nearly(data.vertices[34].pos.x, 77.0f) && nearly(data.vertices[34].pos.y, 113.0f));
     CHECK(nearly(data.vertices[34].uv.x, 0.30f) && nearly(data.vertices[34].uv.y, 0.20f));
 }
 
-// Pasado el tope de quads el Image cae a Normal: un rect grande con un sprite
-// diminuto no puede llevarse el buffer por delante.
+// Past the quad limit Image falls to Normal: a large rect with a tiny sprite
+// can't carry the buffer ahead.
 static void test_imagen_tiled_tope_cae_a_normal()
 {
     UiTextureAtlas atlas = makeAtlas();
@@ -2053,7 +2054,7 @@ static void test_imagen_tiled_tope_cae_a_normal()
     UiCanvas canvas;
     Image& img = canvas.root().add<Image>("Tapiz");
     img.position = {17.0f, 23.0f};
-    img.size     = {60.0f, 90.0f};   // pediría 3x3 = 9 tiles
+    img.size     = {60.0f, 90.0f};   // would ask for 3x3 = 9 tiles
     img.atlas    = &atlas;
     img.sprite   = "botella";
     img.mode     = UiImageMode::Tiled;
@@ -2062,20 +2063,20 @@ static void test_imagen_tiled_tope_cae_a_normal()
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
 
-    // Un solo quad estirado al rect entero, con el sub-rect completo.
+    // A single quad stretched to the entire rect, with the full sub-rect.
     CHECK(data.vertices.size() == 4);
     if (data.vertices.size() != 4) return;
     CHECK(nearly(data.vertices[2].pos.x, 77.0f) && nearly(data.vertices[2].pos.y, 113.0f));
     CHECK(nearly(data.vertices[2].uv.x, 0.375f) && nearly(data.vertices[2].uv.y, 0.50f));
 }
 
-// Sliced: 9 quads. Bordes DISTINTOS los cuatro (4/6/3/9 px del sprite) para que
-// intercambiar dos cualesquiera falle.
-// rect 100x70 en (17,23):
-//   columnas x = 17 / 21 / 111  con anchos 4 / 90 / 6
-//   filas    y = 23 / 26 / 84   con altos  3 / 58 / 9
-//   u = 0.25 / 0.27 / 0.345 / 0.375   (4/25 y 6/25 del sub-rect)
-//   v = 0.10 / 0.13 / 0.410 / 0.500   (3/40 y 9/40)
+// Sliced: 9 quads. Four DIFFERENT borders (4/6/3/9 px of sprite) so
+// swapping any two fails.
+// rect 100x70 at (17,23):
+//   columns x = 17 / 21 / 111  with widths 4 / 90 / 6
+//   rows    y = 23 / 26 / 84   with heights  3 / 58 / 9
+//   u = 0.25 / 0.27 / 0.345 / 0.375   (4/25 and 6/25 of sub-rect)
+//   v = 0.10 / 0.13 / 0.410 / 0.500   (3/40 and 9/40)
 static void test_imagen_sliced_esquinas_bordes_y_centro()
 {
     UiTextureAtlas atlas = makeAtlas();
@@ -2099,43 +2100,43 @@ static void test_imagen_sliced_esquinas_bordes_y_centro()
     CHECK(data.vertices.size() == 36);
     if (data.vertices.size() != 36) return;
 
-    // Esquina superior izquierda: 4x3, su tamaño NATIVO. Estirarla daría 100x70.
+    // Top left corner: 4x3, its NATIVE size. Stretching would give 100x70.
     CHECK(nearly(data.vertices[0].pos.x, 17.0f) && nearly(data.vertices[0].pos.y, 23.0f));
     CHECK(nearly(data.vertices[2].pos.x, 21.0f) && nearly(data.vertices[2].pos.y, 26.0f));
     CHECK(nearly(data.vertices[0].uv.x, 0.25f)  && nearly(data.vertices[0].uv.y, 0.10f));
     CHECK(nearly(data.vertices[2].uv.x, 0.27f)  && nearly(data.vertices[2].uv.y, 0.13f));
 
-    // Esquina superior derecha: 6x3 pegada al borde derecho.
+    // Top right corner: 6x3 at the right edge.
     CHECK(nearly(data.vertices[8].pos.x, 111.0f)  && nearly(data.vertices[8].pos.y, 23.0f));
     CHECK(nearly(data.vertices[10].pos.x, 117.0f) && nearly(data.vertices[10].pos.y, 26.0f));
     CHECK(nearly(data.vertices[8].uv.x, 0.345f)   && nearly(data.vertices[10].uv.x, 0.375f));
 
-    // Esquina inferior izquierda: 4x9.
+    // Bottom left corner: 4x9.
     CHECK(nearly(data.vertices[24].pos.x, 17.0f) && nearly(data.vertices[24].pos.y, 84.0f));
     CHECK(nearly(data.vertices[26].pos.x, 21.0f) && nearly(data.vertices[26].pos.y, 93.0f));
     CHECK(nearly(data.vertices[24].uv.y, 0.41f)  && nearly(data.vertices[26].uv.y, 0.50f));
 
-    // Esquina inferior derecha: 6x9, la única que toca las dos esquinas del UV.
+    // Bottom right corner: 6x9, the only one touching both UV corners.
     CHECK(nearly(data.vertices[32].pos.x, 111.0f) && nearly(data.vertices[32].pos.y, 84.0f));
     CHECK(nearly(data.vertices[34].pos.x, 117.0f) && nearly(data.vertices[34].pos.y, 93.0f));
     CHECK(nearly(data.vertices[34].uv.x, 0.375f)  && nearly(data.vertices[34].uv.y, 0.50f));
 
-    // Borde superior: estirado solo en X (90 px), con el alto nativo del borde.
+    // Top edge: stretched only in X (90 px), with the edge's native height.
     CHECK(nearly(data.vertices[4].pos.x, 21.0f)  && nearly(data.vertices[4].pos.y, 23.0f));
     CHECK(nearly(data.vertices[6].pos.x, 111.0f) && nearly(data.vertices[6].pos.y, 26.0f));
     CHECK(nearly(data.vertices[4].uv.x, 0.27f)   && nearly(data.vertices[6].uv.x, 0.345f));
 
-    // Borde izquierdo: estirado solo en Y (58 px), con el ancho nativo.
+    // Left edge: stretched only in Y (58 px), with native width.
     CHECK(nearly(data.vertices[12].pos.x, 17.0f) && nearly(data.vertices[12].pos.y, 26.0f));
     CHECK(nearly(data.vertices[14].pos.x, 21.0f) && nearly(data.vertices[14].pos.y, 84.0f));
 
-    // Centro: cubre el hueco entero, 90x58, con el sub-rect interior.
+    // Center: covers the entire gap, 90x58, with the interior sub-rect.
     CHECK(nearly(data.vertices[16].pos.x, 21.0f)  && nearly(data.vertices[16].pos.y, 26.0f));
     CHECK(nearly(data.vertices[18].pos.x, 111.0f) && nearly(data.vertices[18].pos.y, 84.0f));
     CHECK(nearly(data.vertices[16].uv.x, 0.27f)   && nearly(data.vertices[16].uv.y, 0.13f));
     CHECK(nearly(data.vertices[18].uv.x, 0.345f)  && nearly(data.vertices[18].uv.y, 0.41f));
 
-    // Sin centro: 8 quads, y el quinto pasa a ser el borde derecho.
+    // Without center: 8 quads, and the fifth becomes the right edge.
     img.fillCenter = false;
     img.markDirty(UiElement::DirtyAll);
     UiDrawData sinCentro;
@@ -2148,9 +2149,9 @@ static void test_imagen_sliced_esquinas_bordes_y_centro()
     CHECK(nearly(sinCentro.vertices[16].pos.y, 26.0f));
 }
 
-// Un rect más estrecho que la suma de bordes: los dos del eje se escalan
-// proporcionalmente (4 y 6 sobre 8 -> 3.2 y 4.8) en vez de solaparse, y la
-// columna del centro desaparece porque mide 0.
+// A rect narrower than the sum of borders: the two on the axis scale
+// proportionally (4 and 6 over 8 -> 3.2 and 4.8) instead of overlapping, and
+// the center column vanishes because it measures 0.
 static void test_imagen_sliced_bordes_mayores_que_el_rect()
 {
     UiTextureAtlas atlas = makeAtlas();
@@ -2158,7 +2159,7 @@ static void test_imagen_sliced_bordes_mayores_que_el_rect()
     UiCanvas canvas;
     Image& img = canvas.root().add<Image>("Marco");
     img.position     = {17.0f, 23.0f};
-    img.size         = {8.0f, 70.0f};   // 8 < 4+6, pero 70 > 3+9
+    img.size         = {8.0f, 70.0f};   // 8 < 4+6, but 70 > 3+9
     img.atlas        = &atlas;
     img.sprite       = "botella";
     img.mode         = UiImageMode::Sliced;
@@ -2170,27 +2171,27 @@ static void test_imagen_sliced_bordes_mayores_que_el_rect()
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
 
-    // 3 filas x 2 columnas: la del centro mide 0 y no se emite.
+    // 3 rows x 2 columns: the center one measures 0 and is not emitted.
     CHECK(data.vertices.size() == 24);
     if (data.vertices.size() != 24) return;
 
-    // Izquierda: 8 * 4/10 = 3.2 -> acaba en 20.2.
+    // Left: 8 * 4/10 = 3.2 -> ends at 20.2.
     CHECK(nearly(data.vertices[0].pos.x, 17.0f));
     CHECK(nearly(data.vertices[2].pos.x, 20.2f));
-    // Derecha: 8 * 6/10 = 4.8 -> empieza EXACTAMENTE donde acaba la izquierda.
+    // Right: 8 * 6/10 = 4.8 -> starts EXACTLY where the left ends.
     CHECK(nearly(data.vertices[4].pos.x, 20.2f));
     CHECK(nearly(data.vertices[6].pos.x, 25.0f));
-    CHECK(data.vertices[4].pos.x >= data.vertices[2].pos.x);   // sin solape
-    // El eje Y sí cabe: los bordes ahí no se tocan.
+    CHECK(data.vertices[4].pos.x >= data.vertices[2].pos.x);   // no overlap
+    // The Y axis does fit: the borders there don't touch.
     CHECK(nearly(data.vertices[2].pos.y, 26.0f));
-    // Y las UVs NO se reescalan: siguen siendo las de los bordes del sprite.
+    // And UVs are NOT rescaled: they're still the sprite's border ones.
     CHECK(nearly(data.vertices[2].uv.x, 0.27f));
     CHECK(nearly(data.vertices[4].uv.x, 0.345f));
 }
 
-// Filled: recorta la posición Y la UV a la vez. Con la UV entera el trozo
-// visible enseñaría el sprite comprimido en vez de su cuarta parte.
-// rect 80x44 en (17,23), fillAmount 0.25.
+// Filled: clips both position and UV. With full UV the visible piece
+// would show the compressed sprite instead of its quarter.
+// rect 80x44 at (17,23), fillAmount 0.25.
 static void test_imagen_filled_recorta_pos_y_uv()
 {
     UiTextureAtlas atlas = makeAtlas();
@@ -2204,19 +2205,19 @@ static void test_imagen_filled_recorta_pos_y_uv()
     img.mode       = UiImageMode::Filled;
     img.fillAmount = 0.25f;
 
-    // Horizontal desde el principio: 80*0.25 = 20 px y u1 = 0.25 + 0.125*0.25.
+    // Horizontal from start: 80*0.25 = 20 px and u1 = 0.25 + 0.125*0.25.
     UiDrawData hStart;
     canvas.buildDrawData(kW, kH, hStart);
     CHECK(hStart.vertices.size() == 4);
     if (hStart.vertices.size() != 4) return;
     CHECK(nearly(hStart.vertices[0].pos.x, 17.0f));
     CHECK(nearly(hStart.vertices[2].pos.x, 37.0f));
-    CHECK(nearly(hStart.vertices[2].pos.y, 67.0f));          // la Y no la toca
+    CHECK(nearly(hStart.vertices[2].pos.y, 67.0f));          // doesn't touch Y
     CHECK(nearly(hStart.vertices[0].uv.x, 0.25f));
     CHECK(nearly(hStart.vertices[2].uv.x, 0.28125f));
     CHECK(nearly(hStart.vertices[2].uv.y, 0.50f));
 
-    // Origen opuesto: recorta por el OTRO lado, en posición y en UV.
+    // Opposite origin: clips from the OTHER side, in position and UV.
     img.fillOrigin = UiFillOrigin::End;
     img.markDirty(UiElement::DirtyAll);
     UiDrawData hEnd;
@@ -2228,7 +2229,7 @@ static void test_imagen_filled_recorta_pos_y_uv()
     CHECK(nearly(hEnd.vertices[0].uv.x, 0.34375f));
     CHECK(nearly(hEnd.vertices[2].uv.x, 0.375f));
 
-    // Vertical desde arriba: 44*0.25 = 11 px y v1 = 0.1 + 0.4*0.25 = 0.2.
+    // Vertical from top: 44*0.25 = 11 px and v1 = 0.1 + 0.4*0.25 = 0.2.
     img.fillDirection = UiFillDirection::Vertical;
     img.fillOrigin    = UiFillOrigin::Start;
     img.markDirty(UiElement::DirtyAll);
@@ -2238,10 +2239,10 @@ static void test_imagen_filled_recorta_pos_y_uv()
     if (vStart.vertices.size() != 4) return;
     CHECK(nearly(vStart.vertices[0].pos.y, 23.0f));
     CHECK(nearly(vStart.vertices[2].pos.y, 34.0f));
-    CHECK(nearly(vStart.vertices[2].pos.x, 97.0f));          // la X no la toca
+    CHECK(nearly(vStart.vertices[2].pos.x, 97.0f));          // doesn't touch X
     CHECK(nearly(vStart.vertices[2].uv.y, 0.20f));
 
-    // Vertical desde abajo.
+    // Vertical from bottom.
     img.fillOrigin = UiFillOrigin::End;
     img.markDirty(UiElement::DirtyAll);
     UiDrawData vEnd;
@@ -2253,7 +2254,7 @@ static void test_imagen_filled_recorta_pos_y_uv()
     CHECK(nearly(vEnd.vertices[0].uv.y, 0.40f));
     CHECK(nearly(vEnd.vertices[2].uv.y, 0.50f));
 
-    // A 0 no se emite NADA: ni quad, ni lote.
+    // At 0 nothing is emitted: no quad, no batch.
     img.fillAmount = 0.0f;
     img.markDirty(UiElement::DirtyAll);
     UiDrawData vacio;
@@ -2262,7 +2263,7 @@ static void test_imagen_filled_recorta_pos_y_uv()
     CHECK(vacio.batches.empty());
 }
 
-// A 1 el Filled tiene que dar EXACTAMENTE lo mismo que Normal, byte a byte.
+// At 1 Filled has to give EXACTLY the same as Normal, byte for byte.
 static void test_imagen_filled_completo_es_normal()
 {
     UiTextureAtlas atlas = makeAtlas();
@@ -2293,8 +2294,8 @@ static void test_imagen_filled_completo_es_normal()
     CHECK(sameVertices(da, db));
 }
 
-// Neutralidad: un Image en Normal da los MISMOS vértices que el drawable de
-// siempre. Si los campos nuevos tocaran algo, este memcmp lo caza.
+// Neutrality: an Image in Normal gives the SAME vertices as the drawable
+// of yore. If the new fields touched anything, this memcmp catches it.
 static void test_neutralidad_de_los_modos_de_imagen()
 {
     UiTextureAtlas atlas = makeAtlas();
@@ -2324,8 +2325,8 @@ static void test_neutralidad_de_los_modos_de_imagen()
     CHECK(da.vertices.size() == 4);
     CHECK(sameVertices(da, db));
 
-    // Y tocar los campos de los OTROS modos sin cambiar el modo tampoco mueve
-    // nada: un Normal no mira ni bordes ni fillAmount.
+    // And touching the fields of the OTHER modes without changing mode also
+    // moves nothing: a Normal doesn't look at borders or fillAmount.
     img.borderLeft = 4.0f;
     img.borderTop  = 3.0f;
     img.fillAmount = 0.25f;
@@ -2336,22 +2337,22 @@ static void test_neutralidad_de_los_modos_de_imagen()
     CHECK(sameVertices(dc, db));
 }
 
-// ── Eventos ─────────────────────────────────────────────────────────────────
-// Todo esto es CPU pura: ni Vulkan, ni ventana, ni reloj. El tiempo entra por
-// UiInputState, así que la secuencia de eventos es la misma en cada ejecución.
+// ── Events ─────────────────────────────────────────────────────────────────
+// This is all pure CPU: no Vulkan, no window, no clock. Time comes through
+// UiInputState, so the event sequence is the same on each run.
 
 static const uint32_t kEvW = 800;
 static const uint32_t kEvH = 600;
 
-// El input REUTILIZA los rects del último buildDrawData: sin colocar el árbol no
-// hay nada que golpear, así que cada test de eventos empieza por aquí.
+// Input REUSES the rects from the last buildDrawData: without placing the tree
+// there's nothing to hit, so each event test starts here.
 static void colocar(UiCanvas& canvas)
 {
     UiDrawData basura;
     canvas.buildDrawData(kEvW, kEvH, basura);
 }
 
-// Un frame de ratón quieto, sin botones ni teclas.
+// One frame of still mouse, no buttons or keys.
 static UiInputState raton(float x, float y, float t)
 {
     UiInputState in;
@@ -2360,8 +2361,8 @@ static UiInputState raton(float x, float y, float t)
     return in;
 }
 
-// Dos elementos SOLAPADOS: gana el que se dibuja después, que es el de abajo en
-// la lista de hijos y por tanto el de arriba en pantalla.
+// Two OVERLAPPING elements: the one drawn last wins, which is the bottom one
+// in the child list and thus the top one on screen.
 static void test_eventos_hit_test_gana_el_de_arriba()
 {
     UiCanvas canvas;
@@ -2376,18 +2377,18 @@ static void test_eventos_hit_test_gana_el_de_arriba()
 
     colocar(canvas);
 
-    // Zona compartida: manda el último dibujado.
+    // Shared zone: the last drawn one wins.
     CHECK(canvas.hitTest(glm::vec2(150.0f, 70.0f)) == &arriba);
-    // Solo del de abajo.
+    // Only the bottom one.
     CHECK(canvas.hitTest(glm::vec2(50.0f, 40.0f)) == &abajo);
-    // Fuera de los dos: la raíz NO intercepta.
+    // Outside both: the root does NOT intercept.
     CHECK(canvas.hitTest(glm::vec2(700.0f, 500.0f)) == nullptr);
 
-    // raycastTarget apaga al elemento pero NO a sus hijos.
+    // raycastTarget turns off the element but NOT its children.
     arriba.raycastTarget = false;
     CHECK(canvas.hitTest(glm::vec2(150.0f, 70.0f)) == &abajo);
 
-    // Un rect de tamaño 0 no recibe nada.
+    // A rect of size 0 receives nothing.
     UiElement& vacio = canvas.root().add("vacio");
     vacio.position = glm::vec2(400.0f, 400.0f);
     vacio.size     = glm::vec2(0.0f, 0.0f);
@@ -2395,7 +2396,7 @@ static void test_eventos_hit_test_gana_el_de_arriba()
     CHECK(canvas.hitTest(glm::vec2(400.0f, 400.0f)) == nullptr);
 }
 
-// El scissor del padre recorta el hit test del hijo, no solo su dibujo.
+// The parent's scissor clips the child's hit test, not just its drawing.
 static void test_eventos_clip_recorta_el_hit_test()
 {
     UiCanvas canvas;
@@ -2410,15 +2411,15 @@ static void test_eventos_clip_recorta_el_hit_test()
 
     colocar(canvas);
 
-    // Dentro del recorte: llega al hijo.
+    // Inside the clipping: reaches the child.
     CHECK(canvas.hitTest(glm::vec2(350.0f, 120.0f)) == &hijo);
-    // Dentro del RECT del hijo pero fuera del recorte del padre: nadie.
+    // Inside the child's RECT but outside the parent's clip: nobody.
     CHECK(canvas.hitTest(glm::vec2(450.0f, 120.0f)) == nullptr);
-    // Y el padre sigue recibiendo en la parte suya que el hijo no tapa.
+    // And the parent still receives on its part that the child doesn't cover.
     CHECK(canvas.hitTest(glm::vec2(350.0f, 150.0f)) == &padre);
 }
 
-// Enter y Exit son DERIVADOS del hit de cada frame, y hovered es el estado.
+// Enter and Exit are DERIVED from each frame's hit, and hovered is the state.
 static void test_eventos_enter_exit_y_hovered()
 {
     UiCanvas canvas;
@@ -2434,20 +2435,20 @@ static void test_eventos_enter_exit_y_hovered()
     caja.onMouseExit  = [&](UiEvent&) { ++salidas; };
     caja.onMouseMove  = [&](UiEvent&) { ++movimientos; };
 
-    canvas.updateInput(raton(10.0f, 10.0f, 0.0f));          // fuera
+    canvas.updateInput(raton(10.0f, 10.0f, 0.0f));          // outside
     CHECK(entradas == 0);
     CHECK(salidas == 0);
     CHECK(caja.hovered == false);
     CHECK(canvas.hovered() == nullptr);
 
-    canvas.updateInput(raton(130.0f, 100.0f, 0.1f));        // entra
+    canvas.updateInput(raton(130.0f, 100.0f, 0.1f));        // enters
     CHECK(entradas == 1);
     CHECK(caja.hovered == true);
     CHECK(canvas.hovered() == &caja);
     CHECK(movimientos == 1);
 
-    canvas.updateInput(raton(200.0f, 140.0f, 0.2f));        // se mueve DENTRO
-    CHECK(entradas == 1);                                   // no se repite
+    canvas.updateInput(raton(200.0f, 140.0f, 0.2f));        // moves INSIDE
+    CHECK(entradas == 1);                                   // doesn't repeat
     CHECK(salidas == 0);
     CHECK(caja.hovered == true);
     CHECK(movimientos == 2);
@@ -2459,11 +2460,11 @@ static void test_eventos_enter_exit_y_hovered()
     CHECK(canvas.hovered() == nullptr);
 }
 
-// Click = Down y Up sobre el MISMO elemento.
+// Click = Down and Up on the SAME element.
 static void test_eventos_click_pide_el_mismo_elemento()
 {
     UiCanvas canvas;
-    canvas.dragThreshold = 500.0f;   // aquí no queremos que nada sea arrastre
+    canvas.dragThreshold = 500.0f;   // here we do not want anything to be a drag
 
     UiElement& a = canvas.root().add("a");
     a.position = glm::vec2(40.0f, 30.0f);
@@ -2481,7 +2482,7 @@ static void test_eventos_click_pide_el_mismo_elemento()
     a.onMouseDown = [&](UiEvent&) { ++abajoA; };
     b.onMouseUp   = [&](UiEvent&) { ++arribaB; };
 
-    // Down y Up sobre A.
+    // Down and Up on A.
     UiInputState in = raton(60.0f, 50.0f, 0.0f);
     in.mouseDown[0] = true;
     canvas.updateInput(in);
@@ -2492,7 +2493,7 @@ static void test_eventos_click_pide_el_mismo_elemento()
     CHECK(abajoA == 1);
     CHECK(clicksA == 1);
 
-    // Down sobre A, Up sobre B: ni uno ni otro se llevan el click.
+    // Down on A, Up on B: neither one gets the click.
     in = raton(60.0f, 50.0f, 0.5f);
     in.mouseDown[0] = true;
     canvas.updateInput(in);
@@ -2500,12 +2501,12 @@ static void test_eventos_click_pide_el_mismo_elemento()
     in.mouseDown[0] = false;
     canvas.updateInput(in);
 
-    CHECK(clicksA == 1);        // sigue el de antes
+    CHECK(clicksA == 1);        // the earlier one stays
     CHECK(clicksB == 0);
-    CHECK(arribaB == 1);        // el MouseUp sí es del que está debajo del cursor
+    CHECK(arribaB == 1);        // the MouseUp does belong to the one under the cursor
 }
 
-// Umbrales del canvas, y DISTINTOS entre sí: 0.25 s y 10 px.
+// Canvas thresholds, and DIFFERENT from each other: 0.25 s and 10 px.
 static void test_eventos_doble_click_por_tiempo_y_distancia()
 {
     auto montar = [](UiCanvas& c, UiElement*& caja)
@@ -2529,7 +2530,7 @@ static void test_eventos_doble_click_por_tiempo_y_distancia()
         c.updateInput(in);
     };
 
-    // Dentro de los dos umbrales: sale el doble.
+    // Within both thresholds: the double comes out.
     {
         UiCanvas c;
         UiElement* caja = nullptr;
@@ -2541,11 +2542,11 @@ static void test_eventos_doble_click_por_tiempo_y_distancia()
         click(c, 150.0f, 150.0f, 0.00f);
         click(c, 153.0f, 152.0f, 0.12f);   // 3.6 px, 0.12 s
 
-        CHECK(simples == 2);               // el doble NO sustituye al segundo click
+        CHECK(simples == 2);               // the double does NOT replace the second click
         CHECK(dobles == 1);
     }
 
-    // Pasado el tiempo: no.
+    // Once the time has passed: no.
     {
         UiCanvas c;
         UiElement* caja = nullptr;
@@ -2558,7 +2559,7 @@ static void test_eventos_doble_click_por_tiempo_y_distancia()
         CHECK(dobles == 0);
     }
 
-    // Movido más allá de la distancia: tampoco, aunque llegue a tiempo.
+    // Moved beyond the distance: no either, even if it arrives in time.
     {
         UiCanvas c;
         UiElement* caja = nullptr;
@@ -2572,7 +2573,7 @@ static void test_eventos_doble_click_por_tiempo_y_distancia()
     }
 }
 
-// Umbral de arrastre distinto del de doble click: 12 px.
+// Drag threshold different from the double click one: 12 px.
 static void test_eventos_drag_umbral_y_destino_del_drop()
 {
     UiCanvas canvas;
@@ -2601,7 +2602,7 @@ static void test_eventos_drag_umbral_y_destino_del_drop()
     origen.onDrop      = [&](UiEvent&) { ++dropsOrigen; };
     destino.onDrop     = [&](UiEvent& e) { ++dropsDestino; fuente = e.dragSource; };
 
-    // Por DEBAJO del umbral: no hay arrastre y sí hay click.
+    // BELOW the threshold: there is no drag and there is a click.
     UiInputState in = raton(60.0f, 50.0f, 0.0f);
     in.mouseDown[0] = true;
     canvas.updateInput(in);
@@ -2616,14 +2617,14 @@ static void test_eventos_drag_umbral_y_destino_del_drop()
     CHECK(drags == 0);
     CHECK(clicks == 1);
 
-    // Por ENCIMA del umbral: arrastre completo y NINGÚN click.
+    // ABOVE the threshold: a complete drag and NO click.
     in = raton(60.0f, 50.0f, 1.0f);
     in.mouseDown[0] = true;
     canvas.updateInput(in);
-    in = raton(120.0f, 90.0f, 1.02f);    // muy por encima de 12 px
+    in = raton(120.0f, 90.0f, 1.02f);    // well above 12 px
     in.mouseDown[0] = true;
     canvas.updateInput(in);
-    in = raton(320.0f, 250.0f, 1.04f);   // ya encima del destino
+    in = raton(320.0f, 250.0f, 1.04f);   // already over the target
     in.mouseDown[0] = true;
     canvas.updateInput(in);
     in.mouseDown[0] = false;
@@ -2631,16 +2632,16 @@ static void test_eventos_drag_umbral_y_destino_del_drop()
     canvas.updateInput(in);
 
     CHECK(begins == 1);
-    CHECK(drags == 2);          // uno por frame movido con el botón abajo
+    CHECK(drags == 2);          // one per frame moved with the button down
     CHECK(ends == 1);
-    CHECK(clicks == 1);         // el de antes: el arrastre NO añade otro
-    // El Drop es del elemento BAJO EL CURSOR al soltar, no del que lo empezó.
+    CHECK(clicks == 1);         // the earlier one: the drag does NOT add another
+    // The Drop belongs to the element UNDER THE CURSOR on release, not to the one that started it.
     CHECK(dropsDestino == 1);
     CHECK(dropsOrigen == 0);
     CHECK(fuente == &origen);
 }
 
-// La rueda va al de debajo del cursor y sube al padre si el hijo no la consume.
+// The wheel goes to the one under the cursor and goes up to the parent if the child does not consume it.
 static void test_eventos_scroll_burbujea_hasta_el_padre()
 {
     UiCanvas canvas;
@@ -2659,21 +2660,21 @@ static void test_eventos_scroll_burbujea_hasta_el_padre()
     fila.onScroll  = [&](UiEvent&)   { ++enFila; };
     lista.onScroll = [&](UiEvent& e) { ++enLista; recibido = e.scrollDelta; };
 
-    UiInputState in = raton(250.0f, 70.0f, 0.0f);   // encima de la fila
+    UiInputState in = raton(250.0f, 70.0f, 0.0f);   // on top of the row
     in.scrollDelta = -3.5f;
     canvas.updateInput(in);
 
     CHECK(enFila == 1);
-    CHECK(enLista == 1);            // burbujeó
+    CHECK(enLista == 1);            // it bubbled up
     CHECK(nearly(recibido, -3.5f));
 
-    // Sin rueda no se emite nada.
+    // Without a wheel nothing is emitted.
     canvas.updateInput(raton(250.0f, 70.0f, 0.1f));
     CHECK(enFila == 1);
     CHECK(enLista == 1);
 }
 
-// consumed corta la burbuja: el padre no se entera.
+// consumed cuts the bubbling: the parent does not find out.
 static void test_eventos_consumed_corta_la_burbuja()
 {
     UiCanvas canvas;
@@ -2705,15 +2706,15 @@ static void test_eventos_consumed_corta_la_burbuja()
 
     click(0.0f);
     CHECK(enHijo == 1);
-    CHECK(enPadre == 0);        // consumido en el hijo
+    CHECK(enPadre == 0);        // consumed in the child
 
     consumir = false;
     click(1.0f);
     CHECK(enHijo == 2);
-    CHECK(enPadre == 1);        // ahora sí sube
+    CHECK(enPadre == 1);        // now it does go up
 }
 
-// Tab en pre-orden saltando lo no focusable y lo invisible; Escape suelta.
+// Tab in pre-order skipping the non-focusable and the invisible; Escape releases.
 static void test_eventos_foco_tab_y_escape()
 {
     UiCanvas canvas;
@@ -2732,7 +2733,7 @@ static void test_eventos_foco_tab_y_escape()
     c.size     = glm::vec2(100.0f, 40.0f);
     c.focusable = true;
 
-    UiElement& d = canvas.root().add("d");          // focusable pero INVISIBLE
+    UiElement& d = canvas.root().add("d");          // focusable but INVISIBLE
     d.position = glm::vec2(20.0f, 200.0f);
     d.size     = glm::vec2(100.0f, 40.0f);
     d.focusable = true;
@@ -2745,7 +2746,7 @@ static void test_eventos_foco_tab_y_escape()
 
     colocar(canvas);
 
-    // Blur del viejo ANTES que Focus del nuevo.
+    // Blur of the old one BEFORE Focus of the new one.
     std::vector<int> orden;
     a.onBlur  = [&](UiEvent&) { orden.push_back(1); };
     c.onFocus = [&](UiEvent&) { orden.push_back(2); };
@@ -2756,44 +2757,44 @@ static void test_eventos_foco_tab_y_escape()
 
     auto tab = [&](bool shift, float t)
     {
-        UiInputState in = raton(700.0f, 500.0f, t);   // lejos de todo
+        UiInputState in = raton(700.0f, 500.0f, t);   // far from everything
         in.keys.push_back(UiKey::Tab);
         in.shift = shift;
         canvas.updateInput(in);
     };
 
     tab(false, 0.1f);
-    CHECK(canvas.focused() == &c);          // saltó a b, que no es focusable
+    CHECK(canvas.focused() == &c);          // it jumped to b, which is not focusable
     CHECK(a.focused == false);
     CHECK(orden.size() == 2);
     CHECK(orden[0] == 1);                   // Blur
-    CHECK(orden[1] == 2);                   // Focus, después
+    CHECK(orden[1] == 2);                   // Focus, afterwards
 
     tab(false, 0.2f);
-    CHECK(canvas.focused() == &e);          // saltó a d, invisible
+    CHECK(canvas.focused() == &e);          // it jumped to d, invisible
 
     tab(false, 0.3f);
-    CHECK(canvas.focused() == &a);          // da la vuelta
+    CHECK(canvas.focused() == &a);          // wraps around
 
     tab(true, 0.4f);
-    CHECK(canvas.focused() == &e);          // Shift+Tab va al revés
+    CHECK(canvas.focused() == &e);          // Shift+Tab goes the other way
 
     tab(true, 0.5f);
     CHECK(canvas.focused() == &c);
 
-    // Escape suelta el foco.
+    // Escape releases the focus.
     UiInputState esc = raton(700.0f, 500.0f, 0.6f);
     esc.keys.push_back(UiKey::Escape);
     canvas.updateInput(esc);
     CHECK(canvas.focused() == nullptr);
     CHECK(c.focused == false);
 
-    // Un elemento que no es focusable no lo puede tomar.
+    // An element that is not focusable cannot take it.
     canvas.setFocus(&b);
     CHECK(canvas.focused() == nullptr);
 }
 
-// El teclado va SOLO al que tiene el foco. Sin foco no se emite ni un evento.
+// The keyboard goes ONLY to the one that has the focus. Without focus not a single event is emitted.
 static void test_eventos_teclado_solo_con_foco()
 {
     UiCanvas canvas;
@@ -2810,10 +2811,10 @@ static void test_eventos_teclado_solo_con_foco()
 
     colocar(canvas);
 
-    // Lo que se prueba aquí es la ENTREGA de la tecla al foco, no la navegación:
-    // con ella encendida las flechas moverían el foco al otro focusable y el
-    // Escape del final ya no llegaría al mismo sitio. La navegación tiene su
-    // propio test.
+    // What is tested here is the DELIVERY of the key to the focus, not the navigation:
+    // with it turned on the arrows would move the focus to the other focusable and the
+    // final Escape would no longer arrive at the same place. Navigation has its
+    // own test.
     canvas.keyboardNavigation = false;
 
     int enCampo = 0, enOtro = 0;
@@ -2821,7 +2822,7 @@ static void test_eventos_teclado_solo_con_foco()
     campo.onKeyDown = [&](UiEvent& ev) { ++enCampo; vistas.push_back(ev.key); };
     otro.onKeyDown  = [&](UiEvent&)    { ++enOtro; };
 
-    // Sin foco: nada.
+    // Without focus: nothing.
     UiInputState in = raton(500.0f, 400.0f, 0.0f);
     in.keys.push_back(UiKey::Enter);
     in.keys.push_back(UiKey::Left);
@@ -2840,36 +2841,36 @@ static void test_eventos_teclado_solo_con_foco()
     canvas.updateInput(in);
 
     CHECK(enCampo == 5);
-    CHECK(enOtro == 0);                     // solo el del foco
+    CHECK(enOtro == 0);                     // only the one with the focus
     CHECK(vistas.size() == 5);
     CHECK(vistas[0] == UiKey::Enter);
     CHECK(vistas[1] == UiKey::Left);
     CHECK(vistas[4] == UiKey::Down);
 
-    // Escape se ENTREGA como tecla y además suelta el foco.
+    // Escape is DELIVERED as a key and also releases the focus.
     in = raton(500.0f, 400.0f, 0.2f);
     in.keys.push_back(UiKey::Escape);
     canvas.updateInput(in);
     CHECK(enCampo == 6);
     CHECK(canvas.focused() == nullptr);
 
-    // Y ya sin foco vuelve a no llegar nada.
+    // And now without focus nothing arrives again.
     in = raton(500.0f, 400.0f, 0.3f);
     in.keys.push_back(UiKey::Enter);
     canvas.updateInput(in);
     CHECK(enCampo == 6);
 }
 
-// Flechas y Enter: es lo que hace jugable un menú con mando. Sin esto el foco se
-// podía mover por API pero ninguna tecla lo movía, y el elemento enfocado no se
-// podía activar de ninguna forma que no fuera el ratón.
+// Arrows and Enter: it is what makes a menu playable with a gamepad. Without this the focus
+// could be moved through the API but no key moved it, and the focused element could not
+// be activated in any way other than the mouse.
 static void test_teclado_navega_y_activa_el_foco()
 {
     UiCanvas canvas;
     UiDrawData data;
 
-    // Dos botones en fila: la direccional se resuelve por geometría, así que
-    // hacen falta rects de verdad.
+    // Two buttons in a row: the directional is resolved by geometry, so
+    // real rects are needed.
     UiElement& fila = canvas.root().add<UiElement>("fila");
     fila.size = glm::vec2(600.0f, 100.0f);
     fila.drawable = false;
@@ -2892,27 +2893,27 @@ static void test_teclado_navega_y_activa_el_foco()
 
     canvas.setFocus(&izq);
 
-    // Derecha mueve el foco al de la derecha.
+    // Right moves the focus to the one on the right.
     UiInputState in = raton(-1.0f, -1.0f, 0.0f);
     in.keys.push_back(UiKey::Right);
     canvas.updateInput(in);
     CHECK(canvas.focused() == &der);
 
-    // Enter lo ACTIVA: mismo efecto que un click del ratón encima.
+    // Enter ACTIVATES it: same effect as a mouse click on top.
     in = raton(-1.0f, -1.0f, 0.1f);
     in.keys.push_back(UiKey::Enter);
     canvas.updateInput(in);
     CHECK(clicksDer == 1);
     CHECK(clicksIzq == 0);
 
-    // Izquierda vuelve.
+    // Left goes back.
     in = raton(-1.0f, -1.0f, 0.2f);
     in.keys.push_back(UiKey::Left);
     canvas.updateInput(in);
     CHECK(canvas.focused() == &izq);
 
-    // Un handler que CONSUME la tecla se queda con ella: el canvas no navega
-    // por encima de quien ya la ha usado.
+    // A handler that CONSUMES the key keeps it: the canvas does not navigate
+    // over whoever already used it.
     izq.onKeyDown = [&](UiEvent& ev) { ev.consumed = true; };
     in = raton(-1.0f, -1.0f, 0.3f);
     in.keys.push_back(UiKey::Right);
@@ -2920,7 +2921,7 @@ static void test_teclado_navega_y_activa_el_foco()
     CHECK(canvas.focused() == &izq);
     izq.onKeyDown = nullptr;
 
-    // Un botón no interactable no se activa, igual que con el ratón.
+    // A non-interactable button is not activated, same as with the mouse.
     izq.interactable = false;
     in = raton(-1.0f, -1.0f, 0.4f);
     in.keys.push_back(UiKey::Enter);
@@ -2928,12 +2929,12 @@ static void test_teclado_navega_y_activa_el_foco()
     CHECK(clicksIzq == 0);
     izq.interactable = true;
 
-    // Y submitFocused sin foco no dispara nada.
+    // And submitFocused without focus fires nothing.
     canvas.setFocus(nullptr);
     CHECK(canvas.submitFocused() == false);
     CHECK(clicksIzq == 0);
 
-    // Apagada, las flechas dejan de mover el foco (siguen llegando como KeyDown).
+    // When turned off, the arrows stop moving the focus (they still arrive as KeyDown).
     canvas.keyboardNavigation = false;
     canvas.setFocus(&izq);
     in = raton(-1.0f, -1.0f, 0.5f);
@@ -2942,8 +2943,8 @@ static void test_teclado_navega_y_activa_el_foco()
     CHECK(canvas.focused() == &izq);
 }
 
-// Neutralidad: un canvas con handlers y con input procesado da EXACTAMENTE los
-// mismos vértices que uno idéntico que nunca vio un evento.
+// Neutrality: a canvas with handlers and with processed input gives EXACTLY the
+// same vertices as an identical one that never saw an event.
 static void test_neutralidad_de_los_eventos()
 {
     UiTextureAtlas atlas = makeAtlas();
@@ -2968,8 +2969,7 @@ static void test_neutralidad_de_los_eventos()
     montar(conEventos);
     montar(sinEventos);
 
-    // Handlers en todo el árbol y un gesto completo: hover, click, arrastre,
-    // rueda, foco y teclado.
+    // Handlers across the whole tree and a complete gesture: hover, click, drag,
     UiElement* panel = const_cast<UiElement*>(conEventos.root().children()[0].get());
     UiElement* hijo  = const_cast<UiElement*>(panel->children()[0].get());
     panel->focusable = true;
@@ -2999,7 +2999,7 @@ static void test_neutralidad_de_los_eventos()
     in.keys.push_back(UiKey::Tab);
     conEventos.updateInput(in);
 
-    CHECK(golpes > 0);          // el gesto sí hizo algo
+    CHECK(golpes > 0);          // the gesture did do something
 
     UiDrawData db;
     conEventos.buildDrawData(kEvW, kEvH, db);
@@ -3008,20 +3008,20 @@ static void test_neutralidad_de_los_eventos()
     sinEventos.buildDrawData(kEvW, kEvH, dc);
 
     CHECK(!da.vertices.empty());
-    CHECK(sameVertices(da, db));    // procesar input no movió ni un vértice
-    CHECK(sameVertices(db, dc));    // y son los mismos que sin eventos
+    CHECK(sameVertices(da, db));    // processing input did not move a single vertex
+    CHECK(sameVertices(db, dc));    // and they are the same as without events
 }
 
-// ── Botones: 5 estados y 3 transiciones ─────────────────────────────────────
-// Cinco colores que NO se repiten: si la tabla de prioridad se equivoca de fila,
-// el color delata cuál eligió.
+// ── Buttons: 5 states and 3 transitions ─────────────────────────────────────
+// Five colors that are NOT repeated: if the priority table picks the wrong row,
+// the color gives away which one it chose.
 static const glm::vec4 kNormal  {0.10f, 0.20f, 0.30f, 1.00f};
 static const glm::vec4 kHover   {0.40f, 0.50f, 0.60f, 0.90f};
 static const glm::vec4 kPressed {0.70f, 0.15f, 0.25f, 0.80f};
 static const glm::vec4 kDisabled{0.05f, 0.85f, 0.45f, 0.70f};
 static const glm::vec4 kSelected{0.90f, 0.35f, 0.55f, 0.60f};
 
-// Rect con ancho != alto: un cuadrado no distingue un eje cambiado del otro.
+// Rect with width != height: a square does not distinguish one swapped axis from the other.
 static Button& montaBoton(UiCanvas& canvas, UiDrawData& data)
 {
     Button& b = canvas.root().add<Button>("Aceptar");
@@ -3035,8 +3035,8 @@ static Button& montaBoton(UiCanvas& canvas, UiDrawData& data)
     b.selectedColor = kSelected;
     b.color         = kNormal;
 
-    // El input reutiliza los rects que deja el emisor: sin esto el hit test no
-    // encuentra a nadie.
+    // The input reuses the rects that the emitter leaves: without this the hit test
+    // finds nobody.
     canvas.buildDrawData(800, 600, data);
     return b;
 }
@@ -3048,15 +3048,15 @@ static UiInputState ratonBoton(float x, float y, float t, bool abajo)
     return in;
 }
 
-// Disabled > Pressed > Selected > Hover > Normal, y en ESE orden.
+// Disabled > Pressed > Selected > Hover > Normal, and in THAT order.
 static void test_boton_prioridad_de_estados()
 {
     UiCanvas   canvas;
     UiDrawData data;
     Button&    b = montaBoton(canvas, data);
 
-    const float dentroX = 100.0f, dentroY = 60.0f;   // dentro del rect
-    const float fueraX  = 700.0f, fueraY  = 500.0f;  // lejos de todo
+    const float dentroX = 100.0f, dentroY = 60.0f;   // inside the rect
+    const float fueraX  = 700.0f, fueraY  = 500.0f;  // far from everything
 
     canvas.updateInput(ratonBoton(fueraX, fueraY, 0.0f, false));
     CHECK(b.state == UiButtonState::Normal);
@@ -3066,28 +3066,28 @@ static void test_boton_prioridad_de_estados()
     CHECK(b.hovered == true);
     CHECK(b.state == UiButtonState::Hover);
 
-    // Hover y pressed a la vez: gana Pressed.
+    // Hover and pressed at the same time: Pressed wins.
     canvas.updateInput(ratonBoton(dentroX, dentroY, 0.2f, true));
     CHECK(b.state == UiButtonState::Pressed);
 
-    // Selected gana a Hover...
+    // Selected beats Hover...
     canvas.updateInput(ratonBoton(dentroX, dentroY, 0.4f, false));
     b.selected = true;
     canvas.updateInput(ratonBoton(dentroX, dentroY, 0.5f, false));
     CHECK(b.state == UiButtonState::Selected);
 
-    // ...y sigue ganando con el ratón fuera: es estado del juego, no del ratón.
+    // ...and keeps winning with the mouse outside: it is game state, not mouse state.
     canvas.updateInput(ratonBoton(fueraX, fueraY, 0.6f, false));
     CHECK(b.state == UiButtonState::Selected);
 
-    // ...pero pierde con Pressed.
+    // ...but it loses to Pressed.
     canvas.updateInput(ratonBoton(dentroX, dentroY, 0.7f, true));
     CHECK(b.state == UiButtonState::Pressed);
 
-    // Disabled se lleva por delante a los cuatro.
+    // Disabled takes out all four.
     b.interactable = false;
     canvas.updateInput(ratonBoton(dentroX, dentroY, 0.8f, true));
-    CHECK(b.hovered == true);            // sigue recibiendo hit test
+    CHECK(b.hovered == true);            // still receives hit testing
     CHECK(b.state == UiButtonState::Disabled);
 
     b.selected = false;
@@ -3099,7 +3099,7 @@ static void test_boton_prioridad_de_estados()
     CHECK(b.state == UiButtonState::Hover);
 }
 
-// ColorTint escribe en el MISMO campo que ya lee el batcher.
+// ColorTint writes to the SAME field that the batcher already reads.
 static void test_boton_color_tint()
 {
     UiCanvas   canvas;
@@ -3127,13 +3127,13 @@ static void test_boton_color_tint()
     canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.4f, false));
     CHECK(b.color == kSelected);
 
-    // Volver a Normal devuelve EXACTAMENTE el color de partida.
+    // Going back to Normal gives back EXACTLY the starting color.
     b.selected = false;
     canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.5f, false));
     CHECK(b.state == UiButtonState::Normal);
     CHECK(b.color == partida);
 
-    // Y el color acaba en el vértice, que es de lo que iba todo esto.
+    // And the color ends up in the vertex, which is what all this was about.
     canvas.buildDrawData(800, 600, data);
     CHECK(data.vertices.size() == 4);
     CHECK(nearly(data.vertices[0].color.r, kNormal.r));
@@ -3141,10 +3141,10 @@ static void test_boton_color_tint()
     CHECK(nearly(data.vertices[0].color.b, kNormal.b));
 }
 
-// SpriteSwap cambia el nombre del sprite, no el atlas: el lote no se parte.
-// El tinte base multiplica al color del estado. Antes el campo `color` de un
-// botón no hacía NADA: el primer updateInput lo pisaba con el color del estado,
-// así que quien lo tocaba en el editor no veía ni un píxel de diferencia.
+// SpriteSwap changes the sprite name, not the atlas: the batch is not split.
+// The base tint multiplies the state color. Before, a button's `color` field
+// did NOTHING: the first updateInput overwrote it with the state color,
+// so whoever touched it in the editor saw not a pixel of difference.
 static void test_boton_base_color_tinta_los_estados()
 {
     UiCanvas   canvas;
@@ -3152,8 +3152,8 @@ static void test_boton_base_color_tinta_los_estados()
     Button&    b = montaBoton(canvas, data);
     b.transition = UiButtonTransition::ColorTint;
 
-    // Base no neutra y con los tres canales DISTINTOS: con un gris, una
-    // componente intercambiada pasaría desapercibida.
+    // Non-neutral base with the three channels DIFFERENT: with a gray, a
+    // swapped component would go unnoticed.
     b.baseColor = glm::vec4(0.5f, 0.25f, 0.75f, 1.0f);
 
     canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.0f, false));
@@ -3166,14 +3166,14 @@ static void test_boton_base_color_tinta_los_estados()
     CHECK(nearly(b.color.g, kHover.g * 0.25f));
     CHECK(nearly(b.color.b, kHover.b * 0.75f));
 
-    // Y llega al vértice, que es lo único que se ve.
+    // And it reaches the vertex, which is the only thing that can be seen.
     canvas.buildDrawData(800, 600, data);
     CHECK(data.vertices.size() == 4);
     CHECK(nearly(data.vertices[0].color.r, kHover.r * 0.5f));
     CHECK(nearly(data.vertices[0].color.g, kHover.g * 0.25f));
 
-    // Neutralidad: base blanca = el color del estado tal cual, que es lo que
-    // hacía antes de que baseColor existiera.
+    // Neutrality: white base = the state color as is, which is what it
+    // did before baseColor existed.
     b.baseColor = glm::vec4(1.0f);
     canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.2f, false));
     CHECK(b.color == kHover);
@@ -3201,7 +3201,7 @@ static void test_boton_sprite_swap_no_parte_el_lote()
     b.disabledSprite = "boton_disabled";
     b.selectedSprite = "boton_selected";
 
-    // Un vecino del MISMO atlas: si el swap partiera el lote se vería aquí.
+    // A neighbor of the SAME atlas: if the swap split the batch it would show here.
     UiElement& vecino = canvas.root().add("Fondo");
     vecino.position = glm::vec2(300.0f, 200.0f);
     vecino.size     = glm::vec2(90.0f, 45.0f);
@@ -3214,7 +3214,7 @@ static void test_boton_sprite_swap_no_parte_el_lote()
 
     canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.1f, false));
     CHECK(b.sprite == "boton_hover");
-    CHECK(b.color == kNormal);              // SpriteSwap NO toca el color
+    CHECK(b.color == kNormal);              // SpriteSwap does NOT touch the color
 
     canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.2f, true));
     CHECK(b.sprite == "boton_pressed");
@@ -3232,56 +3232,56 @@ static void test_boton_sprite_swap_no_parte_el_lote()
     canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.5f, false));
     CHECK(b.sprite == "boton_normal");
 
-    // Mismo atlas = mismo lote, con el sprite que sea.
+    // Same atlas = same batch, with whatever sprite.
     canvas.buildDrawData(800, 600, data);
     CHECK(data.batches.size() == 1);
     CHECK(data.vertices.size() == 8);
     CHECK(data.batches[0].atlas == &atlas);
 }
 
-// Animation: lineal, con el tiempo que entra por UiInputState. Sin reloj.
+// Animation: linear, with the time that comes in through UiInputState. No clock.
 static void test_boton_animation_interpola_y_no_pasa_de_largo()
 {
     UiCanvas   canvas;
     UiDrawData data;
     Button&    b = montaBoton(canvas, data);
     b.transition   = UiButtonTransition::Animation;
-    // Ni 0.35 (doble click) ni 5 (drag). Y potencia de dos: los instantes del
-    // test caen EXACTOS en float, así que el "al final es exacto" mide el
-    // clamp, no el redondeo de una división.
+    // Neither 0.35 (double click) nor 5 (drag). And a power of two: the test's
+    // instants fall EXACT in float, so the "at the end it is exact" measures the
+    // clamp, not the rounding of a division.
     b.fadeDuration = 0.25f;
 
-    // El primer updateInput COLOCA el color: no funde desde el de fábrica.
+    // The first updateInput PLACES the color: it does not fade from the factory one.
     canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.0f, false));
     CHECK(b.state == UiButtonState::Normal);
     CHECK(b.color == kNormal);
 
-    // Entra el ratón: el fundido arranca aquí, todavía sin avanzar.
+    // The mouse enters: the fade starts here, still without advancing.
     canvas.updateInput(ratonBoton(100.0f, 60.0f, 1.00f, false));
     CHECK(b.state == UiButtonState::Hover);
     CHECK(b.color == kNormal);
 
-    // A mitad de fadeDuration, a mitad de camino.
+    // At half of fadeDuration, halfway along.
     canvas.updateInput(ratonBoton(100.0f, 60.0f, 1.125f, false));
     CHECK(nearly(b.color.r, 0.5f * (kNormal.r + kHover.r)));
     CHECK(nearly(b.color.g, 0.5f * (kNormal.g + kHover.g)));
     CHECK(nearly(b.color.b, 0.5f * (kNormal.b + kHover.b)));
     CHECK(nearly(b.color.a, 0.5f * (kNormal.a + kHover.a)));
 
-    // Un octavo más: tres cuartos de camino, lineal.
+    // One eighth more: three quarters of the way, linear.
     canvas.updateInput(ratonBoton(100.0f, 60.0f, 1.1875f, false));
     CHECK(nearly(b.color.r, kNormal.r + 0.75f * (kHover.r - kNormal.r)));
     CHECK(nearly(b.color.g, kNormal.g + 0.75f * (kHover.g - kNormal.g)));
 
-    // Al final, EXACTO.
+    // At the end, EXACT.
     canvas.updateInput(ratonBoton(100.0f, 60.0f, 1.25f, false));
     CHECK(b.color == kHover);
 
-    // Y pasado el final no se pasa de largo por mucho tiempo que corra.
+    // And past the end it does not overshoot no matter how much time runs.
     canvas.updateInput(ratonBoton(100.0f, 60.0f, 9.00f, false));
     CHECK(b.color == kHover);
 
-    // Cortar un fundido a medias arranca desde el color ACTUAL, sin salto.
+    // Cutting a fade halfway starts from the CURRENT color, without a jump.
     canvas.updateInput(ratonBoton(100.0f, 60.0f, 10.00f, true));   // → Pressed
     CHECK(b.state == UiButtonState::Pressed);
     CHECK(b.color == kHover);
@@ -3291,8 +3291,8 @@ static void test_boton_animation_interpola_y_no_pasa_de_largo()
     CHECK(b.color == kPressed);
 }
 
-// No interactable: sigue cambiando de estado con el ratón encima, pero ni Click
-// ni DoubleClick.
+// Non-interactable: it still changes state with the mouse over it, but neither Click
+// nor DoubleClick.
 static void test_boton_no_interactable_no_emite_click()
 {
     UiCanvas   canvas;
@@ -3312,19 +3312,19 @@ static void test_boton_no_interactable_no_emite_click()
     };
 
     clic(0.0f);
-    clic(0.10f);            // dentro del doubleClickTime (0.35)
+    clic(0.10f);            // within doubleClickTime (0.35)
     CHECK(clicks == 0);
     CHECK(dobles == 0);
-    CHECK(abajo == 2);      // el Down sí sale: solo se comen Click y DoubleClick
+    CHECK(abajo == 2);      // the Down does come out: only Click and DoubleClick are swallowed
     CHECK(b.hovered == true);
     CHECK(b.state == UiButtonState::Disabled);
 
-    // Con el ratón fuera vuelve a Disabled (no a Normal): manda interactable.
+    // With the mouse outside it goes back to Disabled (not to Normal): interactable rules.
     canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.5f, false));
     CHECK(b.state == UiButtonState::Disabled);
 
-    // Y con interactable el mismo gesto sí da click: el gate es lo único que
-    // los estaba parando.
+    // And with interactable the same gesture does give a click: the gate is the only thing that
+    // was stopping them.
     b.interactable = true;
     clic(1.0f);
     CHECK(clicks == 1);
@@ -3334,8 +3334,8 @@ static void test_boton_no_interactable_no_emite_click()
     CHECK(dobles == 1);
 }
 
-// Sin updateInput un Button no mueve NI UN vértice: mismos bytes que un canvas
-// equivalente sin botones.
+// Without updateInput a Button moves NOT A SINGLE vertex: same bytes as an equivalent canvas
+// without buttons.
 static void test_neutralidad_de_los_botones()
 {
     UiTextureAtlas atlas;
@@ -3388,15 +3388,15 @@ static void test_neutralidad_de_los_botones()
                       a.indices.size() * sizeof(a.indices[0])) == 0);
 }
 
-// ── Máscaras rectangulares ──────────────────────────────────────────────────
-// La máscara es clipChildren + insets, y se compone SIEMPRE por intersección.
-// Todo lo que se comprueba aquí falla en silencio: un inset en el lado
-// equivocado recorta de más por un lado y de menos por el otro sin un solo
-// error de validación, y una máscara vacía que salga negativa es un VkRect2D
-// que revienta el driver, no un test rojo.
+// ── Rectangular masks ──────────────────────────────────────────────────
+// The mask is clipChildren + insets, and it is ALWAYS composed by intersection.
+// Everything checked here fails silently: an inset on the wrong
+// side clips too much on one side and too little on the other without a single
+// validation error, and an empty mask that comes out negative is a VkRect2D
+// that blows up the driver, not a red test.
 
-// Ningún scissor puede salir negativo (en uint32_t eso es un valor gigante) ni
-// mayor que el render.
+// No scissor can come out negative (in uint32_t that is a giant value) nor
+// larger than the render.
 static void scissorSano(const UiDrawData& data)
 {
     for (const auto& b : data.batches)
@@ -3407,23 +3407,23 @@ static void scissorSano(const UiDrawData& data)
     }
 }
 
-// Los cuatro insets, cada uno en SU lado: x, y, width y alto se comprueban por
-// separado porque un inset cambiado de lado deja el área total igual.
+// The four insets, each on ITS side: x, y, width and height are checked
+// separately because an inset switched to another side leaves the total area the same.
 static void test_mascara_insets_cada_uno_en_su_lado()
 {
     UiCanvas canvas;
 
     UiElement& panel = canvas.root().add("panel");
     panel.position     = glm::vec2(100.0f, 60.0f);
-    panel.size         = glm::vec2(240.0f, 150.0f);   // ancho != alto
+    panel.size         = glm::vec2(240.0f, 150.0f);   // width != height
     panel.clipChildren = true;
-    panel.maskInsetLeft   = 7.0f;                     // los cuatro distintos
+    panel.maskInsetLeft   = 7.0f;                     // all four different
     panel.maskInsetRight  = 13.0f;
     panel.maskInsetTop    = 5.0f;
     panel.maskInsetBottom = 21.0f;
 
-    // Se sale por los CUATRO lados y por distinta cantidad: 30 por la
-    // izquierda, 18 por arriba, 70 por la derecha y 92 por abajo.
+    // It goes out through ALL FOUR sides and by a different amount: 30 on the
+    // left, 18 on top, 70 on the right and 92 at the bottom.
     UiElement& hijo = panel.add("hijo");
     hijo.position = glm::vec2(-30.0f, -18.0f);
     hijo.size     = glm::vec2(340.0f, 260.0f);
@@ -3438,16 +3438,16 @@ static void test_mascara_insets_cada_uno_en_su_lado()
     CHECK(s.width  == 220);
     CHECK(s.height == 124);
 
-    // El que se dibuja es exactamente ese, no otro calculado aparte.
+    // The one that is drawn is exactly that one, not another computed separately.
     CHECK(data.batches.size() == 1);
     if (!data.batches.empty()) CHECK(data.batches[0].scissor == s);
-    // Y el hijo recortado hereda el mismo (mismo atlas + mismo scissor = 1 lote).
+    // And the clipped child inherits the same one (same atlas + same scissor = 1 batch).
     CHECK(hijo.screenScissor == s);
     CHECK(data.vertices.size() == 8);
     scissorSano(data);
 }
 
-// maskSelf = false: el marco de la ventana queda FUERA de su propia máscara.
+// maskSelf = false: the window's frame is left OUTSIDE its own mask.
 static void test_mascara_self_deja_fuera_al_propio_elemento()
 {
     UiCanvas canvas;
@@ -3471,8 +3471,8 @@ static void test_mascara_self_deja_fuera_al_propio_elemento()
 
     const UiScissor mascara{101, 49, 245, 104};       // 260-11-4 ; 130-9-17
 
-    // El panel sale con lo que HEREDÓ (la pantalla entera), el hijo con la
-    // máscara: dos scissors distintos, dos lotes.
+    // The panel comes out with what it INHERITED (the whole screen), the child with the
+    // mask: two different scissors, two batches.
     CHECK(panel.screenScissor.x == 0 && panel.screenScissor.y == 0);
     CHECK(panel.screenScissor.width == kW && panel.screenScissor.height == kH);
     CHECK(hijo.screenScissor == mascara);
@@ -3484,8 +3484,8 @@ static void test_mascara_self_deja_fuera_al_propio_elemento()
     }
     scissorSano(data);
 
-    // Con maskSelf a true (el defecto) los dos van con la máscara y vuelve a
-    // haber un solo lote.
+    // With maskSelf true (the default) both go with the mask and there is again
+    // a single batch.
     panel.maskSelf = true;
     panel.markDirty(UiElement::DirtyAll);
     UiDrawData recortado;
@@ -3497,8 +3497,8 @@ static void test_mascara_self_deja_fuera_al_propio_elemento()
     scissorSano(recortado);
 }
 
-// Máscara dentro de máscara = INTERSECCIÓN. Una hija más grande que la madre no
-// la agranda: con reemplazo, la hija pintaría fuera de su padre.
+// Mask inside mask = INTERSECTION. A daughter larger than the mother does not
+// enlarge it: with replacement, the daughter would draw outside its parent.
 static void test_mascara_anidada_es_interseccion()
 {
     UiCanvas canvas;
@@ -3509,8 +3509,8 @@ static void test_mascara_anidada_es_interseccion()
     madre.clipChildren = true;
     madre.drawable     = false;
 
-    // Más grande que la madre por los cuatro lados: la intersección tiene que
-    // seguir siendo la de la madre, ni un píxel más.
+    // Larger than the mother on all four sides: the intersection has to
+    // still be the mother's, not a pixel more.
     UiElement& grande = madre.add("grande");
     grande.position     = glm::vec2(-50.0f, -20.0f);
     grande.size         = glm::vec2(400.0f, 300.0f);
@@ -3520,13 +3520,13 @@ static void test_mascara_anidada_es_interseccion()
     UiElement& nietoGrande = grande.add("nietoGrande");
     nietoGrande.size = glm::vec2(500.0f, 400.0f);
 
-    // Y una máscara más pequeña dentro: manda ella.
+    // And a smaller mask inside: it rules.
     UiElement& pequena = madre.add("pequena");
     pequena.position     = glm::vec2(20.0f, 10.0f);   // [140,230) x [80,140)
     pequena.size         = glm::vec2(90.0f, 60.0f);
     pequena.clipChildren = true;
     pequena.drawable     = false;
-    pequena.maskInsetLeft = 6.0f;                     // y encima con insets
+    pequena.maskInsetLeft = 6.0f;                     // and with insets on top
     pequena.maskInsetTop  = 3.0f;
 
     UiElement& nietoPequeno = pequena.add("nietoPequeno");
@@ -3547,9 +3547,9 @@ static void test_mascara_anidada_es_interseccion()
     scissorSano(data);
 }
 
-// Insets que se cruzan: máscara vacía. Ni un vértice de los hijos, y NUNCA un
-// scissor con width o height negativos (en Vulkan eso es un crash, no un draw
-// vacío).
+// Insets that cross: empty mask. Not a single vertex of the children, and NEVER a
+// scissor with negative width or height (in Vulkan that is a crash, not an empty
+// draw).
 static void test_mascara_vacia_no_emite_ni_revienta()
 {
     UiCanvas canvas;
@@ -3562,7 +3562,7 @@ static void test_mascara_vacia_no_emite_ni_revienta()
     panel.maskInsetRight = 130.0f;
     panel.maskInsetTop   = 12.0f;
     panel.maskInsetBottom = 9.0f;
-    panel.maskSelf       = false;                     // el marco sí se ve
+    panel.maskSelf       = false;                     // the frame is visible
 
     UiElement& hijo = panel.add("hijo");
     hijo.size = glm::vec2(200.0f, 120.0f);
@@ -3572,18 +3572,18 @@ static void test_mascara_vacia_no_emite_ni_revienta()
     UiDrawData data;
     canvas.buildDrawData(kW, kH, data);
 
-    // Solo el panel: los descendientes no emiten ni un vértice.
+    // Only the panel: the descendants emit not a single vertex.
     CHECK(data.vertices.size() == 4);
     CHECK(data.indices.size() == 6);
     CHECK(data.batches.size() == 1);
     scissorSano(data);
 
-    // El elemento sigue vivo; los recortados quedan sin rect resuelto.
+    // The element is still alive; the clipped ones are left without a resolved rect.
     CHECK(panel.rectValid);
     CHECK(!hijo.rectValid);
     CHECK(!nieto.rectValid);
 
-    // Con maskSelf a true no se ve ni el panel, y aun así nada explota.
+    // With maskSelf true not even the panel is seen, and even so nothing blows up.
     panel.maskSelf = true;
     panel.markDirty(UiElement::DirtyAll);
     UiDrawData nada;
@@ -3594,8 +3594,8 @@ static void test_mascara_vacia_no_emite_ni_revienta()
     scissorSano(nada);
 }
 
-// Dos hijos bajo la MISMA máscara y el mismo atlas = UN lote; y maskEnabled a
-// false devuelve exactamente los lotes de no tener máscara.
+// Two children under the SAME mask and the same atlas = ONE batch; and maskEnabled at
+// false gives back exactly the batches of not having a mask.
 static void test_mascara_lotes_y_mask_enabled()
 {
     UiCanvas canvas;
@@ -3614,7 +3614,7 @@ static void test_mascara_lotes_y_mask_enabled()
     a.position = glm::vec2(10.0f, 20.0f);
     a.size     = glm::vec2(70.0f, 45.0f);
     UiElement& b = panel.add("b");
-    b.position = glm::vec2(-40.0f, 130.0f);           // se sale por dos lados
+    b.position = glm::vec2(-40.0f, 130.0f);           // it goes out through two sides
     b.size     = glm::vec2(260.0f, 90.0f);
 
     UiDrawData conMascara;
@@ -3625,7 +3625,7 @@ static void test_mascara_lotes_y_mask_enabled()
     CHECK(a.screenScissor == b.screenScissor);
     scissorSano(conMascara);
 
-    // Apagada: los mismos lotes que un árbol equivalente sin clipChildren.
+    // Turned off: the same batches as an equivalent tree without clipChildren.
     panel.maskEnabled = false;
     panel.markDirty(UiElement::DirtyAll);
     UiDrawData apagada;
@@ -3655,8 +3655,8 @@ static void test_mascara_lotes_y_mask_enabled()
                       apagada.vertices.size() * sizeof(apagada.vertices[0])) == 0);
 }
 
-// La máscara recorta el hit test igual que el dibujo, sin código propio: el
-// input reutiliza el MISMO screenScissor con el que se dibujó.
+// The mask clips the hit test just like the drawing, without code of its own: the
+// input reuses the SAME screenScissor with which it was drawn.
 static void test_mascara_recorta_el_hit_test()
 {
     UiCanvas canvas;
@@ -3665,41 +3665,41 @@ static void test_mascara_recorta_el_hit_test()
     panel.position     = glm::vec2(300.0f, 100.0f);   // [300,500) x [100,220)
     panel.size         = glm::vec2(200.0f, 120.0f);
     panel.clipChildren = true;
-    panel.maskInsetLeft   = 40.0f;                    // máscara [340,490) x [120,190)
+    panel.maskInsetLeft   = 40.0f;                    // mask [340,490) x [120,190)
     panel.maskInsetRight  = 10.0f;
     panel.maskInsetTop    = 20.0f;
     panel.maskInsetBottom = 30.0f;
 
     UiElement& hijo = panel.add("hijo");
-    hijo.size = glm::vec2(200.0f, 120.0f);            // el rect entero del panel
+    hijo.size = glm::vec2(200.0f, 120.0f);            // the panel's whole rect
 
     colocar(canvas);
 
-    // Dentro de la máscara: llega al hijo.
+    // Inside the mask: it reaches the child.
     CHECK(canvas.hitTest(glm::vec2(400.0f, 150.0f)) == &hijo);
-    // Dentro del RECT del hijo pero fuera de la máscara: nadie, por los cuatro
-    // lados.
+    // Inside the child's RECT but outside the mask: nobody, on all four
+    // sides.
     CHECK(canvas.hitTest(glm::vec2(310.0f, 150.0f)) == nullptr);
     CHECK(canvas.hitTest(glm::vec2(495.0f, 150.0f)) == nullptr);
     CHECK(canvas.hitTest(glm::vec2(400.0f, 110.0f)) == nullptr);
     CHECK(canvas.hitTest(glm::vec2(400.0f, 210.0f)) == nullptr);
 
-    // Con la máscara apagada, ese mismo punto sí lo alcanza.
+    // With the mask turned off, that same point is reached.
     panel.maskEnabled = false;
     panel.markDirty(UiElement::DirtyAll);
     colocar(canvas);
     CHECK(canvas.hitTest(glm::vec2(310.0f, 150.0f)) == &hijo);
 }
 
-// Sin clipChildren, los campos nuevos no hacen NADA: mismos bytes de vértices e
-// índices que un árbol montado sin tocarlos.
+// Without clipChildren, the new fields do NOTHING: same bytes of vertices and
+// indices as a tree built without touching them.
 static void test_mascara_neutral_sin_clip_children()
 {
     UiCanvas conCampos;
     UiElement& p = conCampos.root().add("p");
     p.position = glm::vec2(70.0f, 90.0f);
     p.size     = glm::vec2(210.0f, 130.0f);
-    p.maskInsetLeft   = 19.0f;                        // sin clipChildren: ruido
+    p.maskInsetLeft   = 19.0f;                        // without clipChildren: noise
     p.maskInsetRight  = 27.0f;
     p.maskInsetTop    = 33.0f;
     p.maskInsetBottom = 41.0f;
@@ -3735,22 +3735,22 @@ static void test_mascara_neutral_sin_clip_children()
         CHECK(conRuido.batches[0].scissor == sinRuido.batches[0].scissor);
 }
 
-// ── Animaciones de propiedades ──────────────────────────────────────────────
-// Todo CPU: se avanza el reloj a mano y se mira lo que salió por los vértices.
-// El primer updateInput NUNCA adelanta (no hay frame anterior), así que todos
-// los tests arrancan con una llamada a t=0 y cuentan desde ahí.
+// ── Property animations ──────────────────────────────────────────────
+// All CPU: the clock is advanced by hand and what came out in the vertices is looked at.
+// The first updateInput NEVER advances (there is no previous frame), so all
+// the tests start with a call at t=0 and count from there.
 
 static void avanzaReloj(UiCanvas& cv, float t)
 {
     UiInputState in{};
-    in.mousePos    = glm::vec2(-1000.0f, -1000.0f);   // lejos: sin hover que estorbe
+    in.mousePos    = glm::vec2(-1000.0f, -1000.0f);   // far away: no hover in the way
     in.timeSeconds = t;
     cv.updateInput(in);
 }
 
-// Valor de la curva en t, medido POR EL CAMINO DE VERDAD: un Fade de 0 a 1
-// devuelve exactamente f(t) en opacity. PingPong y no Once a propósito: así en
-// t=1 manda la curva y no el remate a animTo.
+// Value of the curve at t, measured THROUGH THE REAL PATH: a Fade from 0 to 1
+// returns exactly f(t) in opacity. PingPong and not Once on purpose: that way at
+// t=1 the curve rules and not the snap to animTo.
 static float curvaEn(UiAnimCurve curva, float t01)
 {
     const float dur = 2.5f;
@@ -3778,8 +3778,8 @@ static void test_anim_curvas_extremos_medio_y_desbordes()
                                    UiAnimCurve::EaseOut, UiAnimCurve::Bounce,
                                    UiAnimCurve::Elastic };
 
-    // Los extremos son EXACTOS, no "casi": una curva que cierre en 0.99999994
-    // deja la propiedad a un pelo de su destino para siempre.
+    // The extremes are EXACT, not "almost": a curve that closes at 0.99999994
+    // leaves the property a hair away from its destination forever.
     float medio[5];
     for (int i = 0; i < 5; ++i)
     {
@@ -3788,15 +3788,15 @@ static void test_anim_curvas_extremos_medio_y_desbordes()
         medio[i] = curvaEn(todas[i], 0.5f);
     }
 
-    // Las cinco DISTINTAS en t=0.5: una curva copiada de otra se ve aquí.
+    // The five DIFFERENT at t=0.5: a curve copied from another shows up here.
     for (int i = 0; i < 5; ++i)
         for (int j = i + 1; j < 5; ++j)
             CHECK(std::fabs(medio[i] - medio[j]) > 1e-3f);
 
-    CHECK(medio[1] < medio[0]);   // EaseIn por DEBAJO de Linear
-    CHECK(medio[2] > medio[0]);   // EaseOut por ENCIMA
+    CHECK(medio[1] < medio[0]);   // EaseIn BELOW Linear
+    CHECK(medio[2] > medio[0]);   // EaseOut ABOVE
 
-    // Bounce rebota: no es monótona (sube, se pasa y baja).
+    // Bounce bounces: it is not monotonic (it rises, overshoots and falls).
     bool baja = false;
     float previo = curvaEn(UiAnimCurve::Bounce, 0.0f);
     for (int i = 1; i <= 50; ++i)
@@ -3807,8 +3807,8 @@ static void test_anim_curvas_extremos_medio_y_desbordes()
     }
     CHECK(baja);
 
-    // Elastic SE SALE de [0,1] por arriba a mitad de camino, y eso no se
-    // recorta: es lo que hace que la propiedad sobrepase y vuelva.
+    // Elastic GOES OUT of [0,1] upward halfway through, and that is not
+    // clamped: it is what makes the property overshoot and come back.
     float maximo = 0.0f;
     for (int i = 0; i <= 50; ++i)
         maximo = std::fmax(maximo, curvaEn(UiAnimCurve::Elastic, (float)i / 50.0f));
@@ -3822,8 +3822,8 @@ static void test_anim_fade_mueve_el_alfa_y_no_la_posicion()
     e.position = glm::vec2(70.0f, 45.0f);
     e.size     = glm::vec2(120.0f, 34.0f);
 
-    // 0.04 -> 0.23 no es un par cualquiera: el lerp con k=1 NO devuelve 0.23
-    // exacto, así que el remate del final tiene que estar de verdad.
+    // 0.04 -> 0.23 is not just any pair: the lerp with k=1 does NOT return exactly 0.23,
+    // so the snap at the end has to really be there.
     e.anim         = UiAnim::Fade;
     e.animFrom     = glm::vec4(0.04f, 0.0f, 0.0f, 0.0f);
     e.animTo       = glm::vec4(0.23f, 0.0f, 0.0f, 0.0f);
@@ -3836,11 +3836,11 @@ static void test_anim_fade_mueve_el_alfa_y_no_la_posicion()
     CHECK(a.vertices.size() == 4);
     CHECK(nearly(a.vertices[0].color.a, 0.04f));
 
-    avanzaReloj(cv, 1.25f);       // mitad exacta de 2.5
+    avanzaReloj(cv, 1.25f);       // exact half of 2.5
     cv.buildDrawData(kW, kH, b);
     CHECK(nearly(b.vertices[0].color.a, 0.135f));   // 0.04 + 0.19*0.5
 
-    // Ni un vértice de sitio: Fade solo toca el alfa.
+    // Not a vertex out of place: Fade only touches the alpha.
     for (size_t i = 0; i < 4; ++i)
     {
         CHECK(a.vertices[i].pos.x == b.vertices[i].pos.x);
@@ -3854,8 +3854,8 @@ static void test_anim_move_mueve_la_posicion_y_no_el_tamano()
     UiElement& e = cv.root().add("m");
     e.size = glm::vec2(120.0f, 34.0f);
 
-    // Los dos ejes cambian y los dos cambian de signo; y ninguno de los dos
-    // pares cae exacto por lerp, así que el remate se nota si falta.
+    // Both axes change and both change sign; and neither of the two
+    // pairs lands exact by lerp, so the snap is noticeable if it is missing.
     e.anim         = UiAnim::Move;
     e.animFrom     = glm::vec4(-90.0f, 33.7f, 0.0f, 0.0f);
     e.animTo       = glm::vec4(8.3f, -25.9f, 0.0f, 0.0f);
@@ -3875,7 +3875,7 @@ static void test_anim_move_mueve_la_posicion_y_no_el_tamano()
     CHECK(nearly(b.vertices[0].pos.x,   8.3f));
     CHECK(nearly(b.vertices[0].pos.y, -25.9f));
 
-    // El tamaño no lo toca nadie: ancho y alto siguen siendo los de siempre.
+    // Nobody touches the size: width and height are still the usual ones.
     CHECK(nearly(a.vertices[1].pos.x - a.vertices[0].pos.x, 120.0f));
     CHECK(nearly(b.vertices[1].pos.x - b.vertices[0].pos.x, 120.0f));
     CHECK(nearly(a.vertices[2].pos.y - a.vertices[1].pos.y, 34.0f));
@@ -3910,7 +3910,7 @@ static void test_anim_scale_cambia_el_tamano_y_no_el_pivot()
     CHECK(nearly(a.vertices[2].pos.y - a.vertices[1].pos.y,  40.0f));
     CHECK(nearly(b.vertices[2].pos.y - b.vertices[1].pos.y,   4.0f));   // 40 * 0.1
 
-    // El pivot NO se mueve: escala alrededor de él, no arrastrándolo.
+    // The pivot does NOT move: it scales around it, not dragging it.
     CHECK(nearly((a.vertices[0].pos.x + a.vertices[2].pos.x) * 0.5f,
                  (b.vertices[0].pos.x + b.vertices[2].pos.x) * 0.5f));
     CHECK(nearly((a.vertices[0].pos.y + a.vertices[2].pos.y) * 0.5f,
@@ -3924,9 +3924,9 @@ static void test_anim_color_mueve_los_cuatro_canales()
     e.position = glm::vec2(15.0f, 90.0f);
     e.size     = glm::vec2(140.0f, 55.0f);
 
-    // Los cuatro canales con valores DISTINTOS entre sí a los dos lados, y los
-    // cuatro pares elegidos de forma que el lerp no cierre exacto por su
-    // cuenta: si el remate desaparece, los cuatro CHECK de igualdad caen.
+    // The four channels with values DIFFERENT from each other on both sides, and the
+    // four pairs chosen so that the lerp does not close exact on its
+    // own: if the snap disappears, the four equality CHECKs fall.
     e.anim         = UiAnim::Color;
     e.animFrom     = glm::vec4(0.04f, 0.02f, 0.01f, 0.05f);
     e.animTo       = glm::vec4(0.17f, 0.10f, 0.05f, 0.12f);
@@ -3944,7 +3944,7 @@ static void test_anim_color_mueve_los_cuatro_canales()
     CHECK(nearly(a.vertices[0].color.b, 0.01f));
     CHECK(nearly(a.vertices[0].color.a, 0.05f));
 
-    CHECK(e.color.r == 0.17f);   // animTo EXACTO, canal a canal
+    CHECK(e.color.r == 0.17f);   // animTo EXACT, channel by channel
     CHECK(e.color.g == 0.10f);
     CHECK(e.color.b == 0.05f);
     CHECK(e.color.a == 0.12f);
@@ -3953,7 +3953,7 @@ static void test_anim_color_mueve_los_cuatro_canales()
     CHECK(nearly(b.vertices[0].color.b, 0.05f));
     CHECK(nearly(b.vertices[0].color.a, 0.12f));
 
-    // Y ni un vértice de sitio.
+    // And not a vertex out of place.
     CHECK(std::memcmp(&a.vertices[0].pos, &b.vertices[0].pos, sizeof(a.vertices[0].pos)) == 0);
     CHECK(std::memcmp(&a.vertices[2].pos, &b.vertices[2].pos, sizeof(a.vertices[2].pos)) == 0);
 }
@@ -3980,12 +3980,12 @@ static void test_anim_rotation_gira_las_esquinas_conservando_la_distancia()
 
     CHECK(e.rotation == 1.32f);
 
-    // Con rotación el quad deja de estar alineado a los ejes: los dos de
-    // arriba ya no comparten la Y.
+    // With rotation the quad is no longer axis-aligned: the two on
+    // top no longer share the Y.
     CHECK(std::fabs(a.vertices[0].pos.y - a.vertices[1].pos.y) > 1e-3f);
     CHECK(std::fabs(b.vertices[0].pos.y - b.vertices[1].pos.y) > 1e-3f);
 
-    // El pivot en mundo es la position: ahí está el centro de giro.
+    // The pivot in world space is the position: that is where the center of rotation is.
     const glm::vec2 centro(200.0f, 130.0f);
     bool alguna_se_movio = false;
     for (size_t i = 0; i < 4; ++i)
@@ -3999,7 +3999,7 @@ static void test_anim_rotation_gira_las_esquinas_conservando_la_distancia()
     }
     CHECK(alguna_se_movio);
 
-    // Gira, no se estira: la diagonal sigue midiendo lo mismo.
+    // It rotates, it does not stretch: the diagonal still measures the same.
     const float diag0 = std::sqrt((a.vertices[2].pos.x - a.vertices[0].pos.x) * (a.vertices[2].pos.x - a.vertices[0].pos.x) +
                                   (a.vertices[2].pos.y - a.vertices[0].pos.y) * (a.vertices[2].pos.y - a.vertices[0].pos.y));
     const float diag1 = std::sqrt((b.vertices[2].pos.x - b.vertices[0].pos.x) * (b.vertices[2].pos.x - b.vertices[0].pos.x) +
@@ -4007,7 +4007,7 @@ static void test_anim_rotation_gira_las_esquinas_conservando_la_distancia()
     CHECK(std::fabs(diag0 - diag1) < 1e-3f);
 }
 
-// El mismo árbol animado, montado dos veces, para comparar bytes.
+// The same animated tree, built twice, to compare bytes.
 static void montaAnimada(UiCanvas& cv)
 {
     UiElement& e = cv.root().add("d");
@@ -4024,7 +4024,7 @@ static void montaAnimada(UiCanvas& cv)
 
 static void test_anim_determinismo_por_tiempo_y_por_pasos()
 {
-    // Mismo instante pedido dos veces: los mismos bytes.
+    // Same instant requested twice: the same bytes.
     UiCanvas uno, otro;
     montaAnimada(uno);
     montaAnimada(otro);
@@ -4040,8 +4040,8 @@ static void test_anim_determinismo_por_tiempo_y_por_pasos()
     CHECK(std::memcmp(a.vertices.data(), b.vertices.data(),
                       a.vertices.size() * sizeof(a.vertices[0])) == 0);
 
-    // De un salto o en cuatro pasos: da igual, porque lo que avanza es el
-    // DELTA y la suma de los cuatro es la misma.
+    // In one jump or in four steps: it does not matter, because what advances is the
+    // DELTA and the sum of the four is the same.
     UiCanvas salto, pasos;
     montaAnimada(salto);
     montaAnimada(pasos);
@@ -4065,7 +4065,7 @@ static void test_anim_determinismo_por_tiempo_y_por_pasos()
 
 static void test_anim_once_loop_y_pingpong()
 {
-    // Once: remata en animTo EXACTO y se para.
+    // Once: it snaps to animTo EXACT and stops.
     UiCanvas cv;
     UiElement& e = cv.root().add("once");
     e.size         = glm::vec2(90.0f, 30.0f);
@@ -4076,12 +4076,12 @@ static void test_anim_once_loop_y_pingpong()
     e.animPlaying  = true;
 
     avanzaReloj(cv, 0.0f);
-    avanzaReloj(cv, 9.0f);            // muy pasado de largo
+    avanzaReloj(cv, 9.0f);            // far past the end
     CHECK(e.opacity == 0.23f);
     CHECK(e.animPlaying == false);
-    CHECK(e.animTime == 2.5f);        // no sigue creciendo
+    CHECK(e.animTime == 2.5f);        // it does not keep growing
 
-    // Loop: a 3.0 con duración 2.5 está donde a 0.5, y sigue sonando.
+    // Loop: at 3.0 with duration 2.5 it is where it is at 0.5, and it keeps playing.
     UiCanvas lc, ref;
     UiElement& l = lc.root().add("loop");
     l.size         = glm::vec2(90.0f, 30.0f);
@@ -4105,9 +4105,9 @@ static void test_anim_once_loop_y_pingpong()
     avanzaReloj(ref, 0.0f); avanzaReloj(ref, 0.5f);
     CHECK(l.opacity == r.opacity);
     CHECK(l.animPlaying == true);
-    CHECK(l.opacity < 0.85f);          // ha reiniciado, no se ha quedado al final
+    CHECK(l.opacity < 0.85f);          // it has restarted, it has not stayed at the end
 
-    // PingPong: a 3.75 vuelve por donde vino y coincide con la ida en 1.25.
+    // PingPong: at 3.75 it comes back the way it went and matches the outbound at 1.25.
     UiCanvas pp, ida;
     UiElement& p = pp.root().add("pp");
     p.size         = glm::vec2(90.0f, 30.0f);
@@ -4153,7 +4153,7 @@ static void test_anim_playing_false_congela()
     cv.buildDrawData(kW, kH, b);
 
     CHECK(e.animTime == 0.0f);
-    CHECK(e.position == glm::vec2(40.0f, 25.0f));   // sin tocar
+    CHECK(e.position == glm::vec2(40.0f, 25.0f));   // untouched
     CHECK(a.vertices.size() == b.vertices.size());
     CHECK(std::memcmp(a.vertices.data(), b.vertices.data(),
                       a.vertices.size() * sizeof(a.vertices[0])) == 0);
@@ -4167,7 +4167,7 @@ static void test_rotacion_cero_no_toca_ni_un_vertice()
     a.position = glm::vec2(33.0f, 71.0f);
     a.size     = glm::vec2(170.0f, 45.0f);
     a.pivot    = glm::vec2(0.5f, 0.25f);
-    a.rotation = 0.0f;                       // explícito
+    a.rotation = 0.0f;                       // explicit
     UiElement& ah = a.add("h");
     ah.position = glm::vec2(-12.0f, 18.0f);
     ah.size     = glm::vec2(60.0f, 90.0f);
@@ -4194,8 +4194,8 @@ static void test_rotacion_cero_no_toca_ni_un_vertice()
 
 static void test_neutralidad_de_las_animaciones()
 {
-    // El de la izquierda tiene reloj (updateInput cada frame) pero ninguna
-    // animación; el de la derecha ni siquiera lo llama. Mismos bytes.
+    // The one on the left has a clock (updateInput every frame) but no
+    // animation; the one on the right does not even call it. Same bytes.
     UiCanvas conReloj, sinReloj;
 
     for (UiCanvas* cv : { &conReloj, &sinReloj })
@@ -4230,10 +4230,10 @@ static void test_neutralidad_de_las_animaciones()
                       a.indices.size() * sizeof(a.indices[0])) == 0);
 }
 
-// ── Navegación del foco (mando) ──────────────────────────────────────────────
-// Cuatro vecinos alrededor de uno central, con anchos != altos y sin formar
-// rejilla: los centros quedan desalineados a propósito para que la penalización
-// del eje transversal tenga algo que hacer.
+// ── Focus navigation (gamepad) ──────────────────────────────────────────────
+// Four neighbors around a central one, with widths != heights and not forming a
+// grid: the centers are misaligned on purpose so that the transverse axis
+// penalty has something to do.
 struct EscenaNav
 {
     UiCanvas   canvas;
@@ -4255,16 +4255,16 @@ static void montarNav(EscenaNav& e)
         return &n;
     };
 
-    e.medio  = nodo("medio",  {300.0f, 300.0f}, {120.0f, 40.0f});   // centro (360, 320)
-    e.arriba = nodo("arriba", {300.0f, 150.0f}, {100.0f, 60.0f});   // centro (350, 180)
-    e.abajo  = nodo("abajo",  {320.0f, 420.0f}, { 90.0f, 50.0f});   // centro (365, 445)
-    e.izq    = nodo("izq",    {100.0f, 290.0f}, { 80.0f, 70.0f});   // centro (140, 325)
-    e.der    = nodo("der",    {520.0f, 310.0f}, {110.0f, 30.0f});   // centro (575, 325)
+    e.medio  = nodo("medio",  {300.0f, 300.0f}, {120.0f, 40.0f});   // center (360, 320)
+    e.arriba = nodo("arriba", {300.0f, 150.0f}, {100.0f, 60.0f});   // center (350, 180)
+    e.abajo  = nodo("abajo",  {320.0f, 420.0f}, { 90.0f, 50.0f});   // center (365, 445)
+    e.izq    = nodo("izq",    {100.0f, 290.0f}, { 80.0f, 70.0f});   // center (140, 325)
+    e.der    = nodo("der",    {520.0f, 310.0f}, {110.0f, 30.0f});   // center (575, 325)
 
     colocar(e.canvas);
 }
 
-// Next y Previous son el recorrido del Tab: pre-orden y CON vuelta.
+// Next and Previous are the Tab traversal: pre-order and WITH wraparound.
 static void test_nav_next_y_previous_dan_la_vuelta()
 {
     UiCanvas canvas;
@@ -4294,11 +4294,11 @@ static void test_nav_next_y_previous_dan_la_vuelta()
     CHECK(canvas.navigate(UiNavDir::Next) == true);
     CHECK(canvas.focused() == &b);
     CHECK(canvas.navigate(UiNavDir::Next) == true);
-    CHECK(canvas.focused() == &c);          // se saltó el invisible y el apagado
+    CHECK(canvas.focused() == &c);          // it skipped the invisible one and the disabled one
     CHECK(canvas.navigate(UiNavDir::Next) == true);
-    CHECK(canvas.focused() == &a);          // y dio la vuelta
+    CHECK(canvas.focused() == &a);          // and wrapped around
 
-    // Previous es exactamente lo mismo en sentido contrario.
+    // Previous is exactly the same in the opposite direction.
     CHECK(canvas.navigate(UiNavDir::Previous) == true);
     CHECK(canvas.focused() == &c);
     CHECK(canvas.navigate(UiNavDir::Previous) == true);
@@ -4307,8 +4307,8 @@ static void test_nav_next_y_previous_dan_la_vuelta()
     CHECK(canvas.focused() == &a);
 }
 
-// Los cuatro vecinos, cada uno por su lado. Y en Right y Down el candidato
-// alineado gana a otro que está MÁS CERCA pero en diagonal.
+// The four neighbors, each on its own side. And in Right and Down the aligned
+// candidate wins over another that is CLOSER but diagonal.
 static void test_nav_direccional_elige_al_vecino_de_ese_lado()
 {
     EscenaNav e;
@@ -4335,7 +4335,7 @@ static void test_nav_direccional_elige_al_vecino_de_ese_lado()
     }
 }
 
-// Alineado a 160 px gana a un diagonal a 106 px: la distancia transversal pesa.
+// Aligned at 160 px beats a diagonal at 106 px: the transverse distance weighs.
 static void test_nav_alineado_gana_al_diagonal_mas_cercano()
 {
     UiCanvas canvas;
@@ -4361,26 +4361,26 @@ static void test_nav_alineado_gana_al_diagonal_mas_cercano()
     CHECK(diagonal.focused == false);
 }
 
-// La direccional NO da la vuelta: sin nadie a ese lado el foco se queda.
+// The directional does NOT wrap around: with nobody on that side the focus stays.
 static void test_nav_sin_candidato_no_mueve_el_foco()
 {
     EscenaNav e;
     montarNav(e);
 
-    e.canvas.setFocus(e.arriba);                 // el de más arriba de todos
+    e.canvas.setFocus(e.arriba);                 // the topmost of all
     CHECK(e.canvas.navigate(UiNavDir::Up) == false);
     CHECK(e.canvas.focused() == e.arriba);
     CHECK(e.arriba->focused == true);
 }
 
-// Los overrides mandan sobre la geometría, incluso apuntando al contrario.
+// The overrides rule over the geometry, even pointing the opposite way.
 static void test_nav_overrides_ganan_a_la_geometria()
 {
     EscenaNav e;
     montarNav(e);
 
-    e.medio->navUp   = e.abajo;                  // arriba lleva ABAJO
-    e.medio->navLeft = e.der;                    // izquierda lleva a la DERECHA
+    e.medio->navUp   = e.abajo;                  // up leads DOWN
+    e.medio->navLeft = e.der;                    // left leads to the RIGHT
 
     e.canvas.setFocus(e.medio);
     CHECK(e.canvas.navigate(UiNavDir::Up) == true);
@@ -4390,19 +4390,19 @@ static void test_nav_overrides_ganan_a_la_geometria()
     CHECK(e.canvas.navigate(UiNavDir::Left) == true);
     CHECK(e.canvas.focused() == e.der);
 
-    // Y sin override se sigue decidiendo por geometría.
+    // And without an override it is still decided by geometry.
     e.canvas.setFocus(e.medio);
     CHECK(e.canvas.navigate(UiNavDir::Down) == true);
     CHECK(e.canvas.focused() == e.abajo);
 }
 
-// Sin foco previo se entra por el primer focusable del pre-orden, venga la
-// navegación de la dirección que venga.
+// Without a previous focus you enter through the first focusable in pre-order, whichever
+// navigation direction comes.
 static void test_nav_sin_foco_toma_el_primero_en_preorden()
 {
     UiCanvas canvas;
 
-    UiElement& tapa = canvas.root().add("tapa");   // primero del árbol, NO focusable
+    UiElement& tapa = canvas.root().add("tapa");   // first of the tree, NOT focusable
     tapa.position   = {10.0f, 10.0f};
     tapa.size       = {200.0f, 30.0f};
 
@@ -4423,8 +4423,8 @@ static void test_nav_sin_foco_toma_el_primero_en_preorden()
     CHECK(canvas.focused() == &primero);
 }
 
-// Sin buildDrawData no hay rects: la direccional no encuentra a nadie (igual
-// que el hit test) pero Next, que no mira geometría, sigue funcionando.
+// Without buildDrawData there are no rects: the directional finds nobody (same as
+// the hit test) but Next, which does not look at geometry, still works.
 static void test_nav_sin_build_draw_data_solo_falla_la_direccional()
 {
     UiCanvas canvas;
@@ -4439,7 +4439,7 @@ static void test_nav_sin_build_draw_data_solo_falla_la_direccional()
     b.size       = {80.0f, 60.0f};
     b.focusable  = true;
 
-    canvas.setFocus(&a);                          // sin colocar(canvas)
+    canvas.setFocus(&a);                          // without laying out(canvas)
 
     CHECK(canvas.navigate(UiNavDir::Right) == false);
     CHECK(canvas.focused() == &a);
@@ -4448,7 +4448,7 @@ static void test_nav_sin_build_draw_data_solo_falla_la_direccional()
     CHECK(canvas.focused() == &b);
 }
 
-// UNA vez cada uno, y en el que toca.
+// ONCE each, and on the right one.
 static void test_nav_dispara_blur_y_focus_una_sola_vez()
 {
     EscenaNav e;
@@ -4459,7 +4459,7 @@ static void test_nav_dispara_blur_y_focus_una_sola_vez()
     int blurDer   = 0;
     int focoDer   = 0;
 
-    e.canvas.setFocus(e.medio);                   // antes de cablear: no cuenta
+    e.canvas.setFocus(e.medio);                   // before wiring: it does not count
 
     e.medio->onBlur  = [&](UiEvent&) { ++blurMedio; };
     e.medio->onFocus = [&](UiEvent&) { ++focoMedio; };
@@ -4473,14 +4473,14 @@ static void test_nav_dispara_blur_y_focus_una_sola_vez()
     CHECK(focoMedio == 0);
     CHECK(blurDer   == 0);
 
-    // Un intento que no mueve el foco no dispara nada.
+    // An attempt that does not move the focus fires nothing.
     CHECK(e.canvas.navigate(UiNavDir::Right) == false);
     CHECK(blurMedio == 1);
     CHECK(focoDer   == 1);
     CHECK(blurDer   == 0);
 }
 
-// La misma secuencia dos veces acaba en el mismo sitio.
+// The same sequence twice ends up in the same place.
 static void test_nav_determinismo_de_la_secuencia()
 {
     EscenaNav e;
@@ -4504,8 +4504,8 @@ static void test_nav_determinismo_de_la_secuencia()
     CHECK(primera == segunda);
 }
 
-// Navegar NO toca el dibujado: mismos bytes de vértices e índices y mismos
-// lotes que un canvas idéntico al que nadie navegó.
+// Navigating does NOT touch the drawing: same bytes of vertices and indices and same
+// batches as an identical canvas that nobody navigated.
 static void test_neutralidad_de_la_navegacion()
 {
     EscenaNav navegado;
@@ -4537,11 +4537,11 @@ static void test_neutralidad_de_la_navegacion()
                       a.indices.size() * sizeof(a.indices[0])) == 0);
 }
 
-// ── Resolución del canvas ───────────────────────────────────────────────────
-// La referencia (1920x1080) NO es múltiplo exacto del render (800x480):
-// 800/1920 = 0,416666… y 480/1080 = 0,444444…, así que ningún ratio sale
-// redondo, los dos ejes dan números distintos y un eje cambiado por el otro se
-// nota. El panel tampoco es cuadrado ni está en el origen.
+// ── Canvas resolution ───────────────────────────────────────────────────
+// The reference (1920x1080) is NOT an exact multiple of the render (800x480):
+// 800/1920 = 0.416666... and 480/1080 = 0.444444..., so no ratio comes out
+// round, the two axes give different numbers and one axis swapped for the other
+// shows. The panel is neither square nor at the origin.
 static UiElement& montaResolucion(UiCanvas& canvas)
 {
     UiElement& panel = canvas.root().add("Panel");
@@ -4561,8 +4561,8 @@ static glm::vec2 quadSize(const UiDrawData& d)
             d.vertices[2].pos.y - d.vertices[0].pos.y};
 }
 
-// La escala multiplica el rect ENTERO (posición local incluida) pero no mueve
-// el origen: sin safe area ni aspect ratio el área útil sigue empezando en 0.
+// The scale multiplies the WHOLE rect (local position included) but does not move
+// the origin: without safe area or aspect ratio the usable area still starts at 0.
 static void test_resolucion_constant_pixel_size_escala_el_quad()
 {
     UiCanvas canvas;
@@ -4579,40 +4579,40 @@ static void test_resolucion_constant_pixel_size_escala_el_quad()
     CHECK(nearly(canvas.uiScale(), 2.0f));
     CHECK(nearly(canvas.uiOrigin().x, 0.0f));
     CHECK(nearly(canvas.uiOrigin().y, 0.0f));
-    // El árbol se resuelve en unidades de referencia: con escala 2 el área útil
-    // mide la mitad en esas unidades.
+    // The tree is resolved in reference units: with scale 2 the usable area
+    // measures half in those units.
     CHECK(nearly(canvas.referenceSize().x, 400.0f));
     CHECK(nearly(canvas.referenceSize().y, 240.0f));
 
-    // 30*2 = 60 ; 40*2 = 80. Sin escalar la posición saldría (30,40).
+    // 30*2 = 60 ; 40*2 = 80. Without scaling the position would come out (30,40).
     CHECK(nearly(quadPos(data).x, 60.0f));
     CHECK(nearly(quadPos(data).y, 80.0f));
     CHECK(nearly(quadSize(data).x, 400.0f));
     CHECK(nearly(quadSize(data).y, 200.0f));
 
-    // Y el scissor raíz sigue siendo el render entero.
+    // And the root scissor is still the whole render.
     CHECK(data.batches.size() == 1);
     if (data.batches.empty()) return;
     CHECK(data.batches[0].scissor.x == 0 && data.batches[0].scissor.y == 0);
     CHECK(data.batches[0].scissor.width == kW && data.batches[0].scissor.height == kH);
 }
 
-// match 0 sigue al ancho, match 1 al alto, y 0,5 cae ENTRE los dos. Con la
-// media aritmética el 0,5 saldría distinto del lerp logarítmico, así que el
-// número exacto también se comprueba.
+// match 0 follows the width, match 1 the height, and 0.5 falls BETWEEN the two. With the
+// arithmetic mean the 0.5 would come out different from the logarithmic lerp, so the
+// exact number is also checked.
 static void test_resolucion_scale_with_screen_size_match()
 {
     const float rx = (float)kW / 1920.0f;   // 0,4166…
     const float ry = (float)kH / 1080.0f;   // 0,4444…
-    CHECK(rx < ry);                         // si no, el test no distingue nada
+    CHECK(rx < ry);                         // if not, the test distinguishes nothing
 
     struct Caso { UiScreenMatch modo; float match; float esperado; };
     const Caso casos[] = {
         {UiScreenMatch::MatchWidthOrHeight, 0.0f, rx},
         {UiScreenMatch::MatchWidthOrHeight, 1.0f, ry},
         {UiScreenMatch::MatchWidthOrHeight, 0.5f, std::sqrt(rx * ry)},
-        {UiScreenMatch::Expand,             0.5f, rx},   // el MENOR
-        {UiScreenMatch::Shrink,             0.5f, ry},   // el MAYOR
+        {UiScreenMatch::Expand,             0.5f, rx},   // the SMALLER
+        {UiScreenMatch::Shrink,             0.5f, ry},   // the LARGER
     };
 
     for (const Caso& c : casos)
@@ -4634,7 +4634,7 @@ static void test_resolucion_scale_with_screen_size_match()
         CHECK(nearly(quadSize(data).y, 100.0f * c.esperado));
     }
 
-    // El 0,5 cae ESTRICTAMENTE entre los dos extremos, no encima de ninguno.
+    // The 0.5 falls STRICTLY between the two extremes, not on top of either.
     UiCanvas medio;
     montaResolucion(medio);
     medio.scaleMode          = UiScaleMode::ScaleWithScreenSize;
@@ -4643,7 +4643,7 @@ static void test_resolucion_scale_with_screen_size_match()
     medio.buildDrawData(kW, kH, data);
     CHECK(medio.uiScale() > rx && medio.uiScale() < ry);
 
-    // Y scaleFactor multiplica también a este modo.
+    // And scaleFactor also multiplies this mode.
     medio.scaleFactor = 3.0f;
     medio.buildDrawData(kW, kH, data);
     CHECK(nearly(medio.uiScale(), std::sqrt(rx * ry) * 3.0f));
@@ -4651,7 +4651,7 @@ static void test_resolucion_scale_with_screen_size_match()
 
 static void test_resolucion_constant_physical_size()
 {
-    // DPI del doble que el de referencia: escala 2.
+    // DPI double the reference: scale 2.
     UiCanvas doble;
     montaResolucion(doble);
     doble.scaleMode    = UiScaleMode::ConstantPhysicalSize;
@@ -4664,8 +4664,8 @@ static void test_resolucion_constant_physical_size()
     CHECK(data.vertices.size() == 4);
     if (data.vertices.size() == 4) CHECK(nearly(quadSize(data).x, 400.0f));
 
-    // DPI desconocido: manda el fallback, y se pone a un valor que NO es el de
-    // referencia para que un fallback ignorado no pase igual.
+    // Unknown DPI: the fallback rules, and it is set to a value that is NOT the
+    // reference one so that an ignored fallback does not pass all the same.
     UiCanvas desconocido;
     montaResolucion(desconocido);
     desconocido.scaleMode    = UiScaleMode::ConstantPhysicalSize;
@@ -4675,8 +4675,8 @@ static void test_resolucion_constant_physical_size()
     desconocido.buildDrawData(kW, kH, data);
     CHECK(nearly(desconocido.uiScale(), 1.25f));
 
-    // DPI negativo: es "no se sabe" igual que el 0, cae al fallback por defecto
-    // (96, el mismo que la referencia) y da escala 1 sin NaN ni quad del revés.
+    // Negative DPI: it is "unknown" just like 0, it falls to the default fallback
+    // (96, the same as the reference) and gives scale 1 without NaN or an upside-down quad.
     UiCanvas negativo;
     montaResolucion(negativo);
     negativo.scaleMode = UiScaleMode::ConstantPhysicalSize;
@@ -4691,13 +4691,13 @@ static void test_resolucion_constant_physical_size()
     }
 }
 
-// Los insets mueven el origen y encogen el área útil, y el scissor raíz deja
-// fuera lo que cae dentro del inset.
+// The insets move the origin and shrink the usable area, and the root scissor leaves
+// out what falls inside the inset.
 static void test_resolucion_safe_area()
 {
     UiCanvas canvas;
     montaResolucion(canvas);
-    canvas.safeArea.left   = 40.0f;   // los cuatro distintos entre sí
+    canvas.safeArea.left   = 40.0f;   // all four different from each other
     canvas.safeArea.top    = 24.0f;
     canvas.safeArea.right  = 16.0f;
     canvas.safeArea.bottom = 8.0f;
@@ -4713,7 +4713,7 @@ static void test_resolucion_safe_area()
 
     CHECK(data.vertices.size() == 4);
     if (data.vertices.size() != 4) return;
-    // El panel se desplaza con el origen, pero no cambia de tamaño.
+    // The panel moves with the origin, but does not change size.
     CHECK(nearly(quadPos(data).x, 70.0f));    // 40 + 30
     CHECK(nearly(quadPos(data).y, 64.0f));    // 24 + 40
     CHECK(nearly(quadSize(data).x, 200.0f));
@@ -4724,8 +4724,8 @@ static void test_resolucion_safe_area()
     CHECK(s.x == 40 && s.y == 24);
     CHECK(s.width == kW - 56 && s.height == kH - 32);
 
-    // Un elemento colocado en negativo cae DENTRO del inset: se emite, pero el
-    // scissor raíz lo deja fuera de la pantalla útil.
+    // An element placed at a negative falls INSIDE the inset: it is emitted, but the
+    // root scissor leaves it off the usable screen.
     UiCanvas fuera;
     UiElement& metido = fuera.root().add("Metido");
     metido.position = {-35.0f, -20.0f};
@@ -4741,16 +4741,16 @@ static void test_resolucion_safe_area()
     CHECK(nearly(quadPos(d2).x, 5.0f));    // 40 - 35
     CHECK(nearly(quadPos(d2).y, 4.0f));    // 24 - 20
     CHECK(d2.batches[0].scissor.x == 40 && d2.batches[0].scissor.y == 24);
-    // Entero por encima y por la izquierda del scissor: ni un píxel se ve.
+    // Entirely above and to the left of the scissor: not a pixel is seen.
     CHECK(quadPos(d2).x + quadSize(d2).x <= (float)d2.batches[0].scissor.x);
     CHECK(quadPos(d2).y + quadSize(d2).y <= (float)d2.batches[0].scissor.y);
 }
 
-// 16/9 en un render 4:3 mete barras ARRIBA y ABAJO; 1:1 en un render apaisado
-// las mete a los LADOS. En los dos casos el área útil queda centrada.
+// 16/9 on a 4:3 render puts bars ABOVE and BELOW; 1:1 on a landscape render
+// puts them on the SIDES. In both cases the usable area ends up centered.
 static void test_resolucion_aspect_ratio()
 {
-    // 4:3 con 16/9 pedido: sobra alto.
+    // 4:3 with 16/9 requested: there is height left over.
     UiCanvas letterbox;
     montaResolucion(letterbox);
     letterbox.aspectRatio = 16.0f / 9.0f;
@@ -4772,7 +4772,7 @@ static void test_resolucion_aspect_ratio()
     CHECK(data.vertices.size() == 4);
     if (data.vertices.size() == 4) CHECK(nearly(quadPos(data).y, 115.0f));   // 75 + 40
 
-    // Apaisado con 1:1 pedido: sobra ancho.
+    // Landscape with 1:1 requested: there is width left over.
     UiCanvas pillarbox;
     montaResolucion(pillarbox);
     pillarbox.aspectRatio = 1.0f;
@@ -4793,20 +4793,20 @@ static void test_resolucion_aspect_ratio()
     CHECK(d2.vertices.size() == 4);
     if (d2.vertices.size() == 4) CHECK(nearly(quadPos(d2).x, 190.0f));   // 160 + 30
 
-    // Y el aspect ratio se aplica DESPUÉS del safe area: sobre el área ya
-    // recortada, no sobre el render entero.
+    // And the aspect ratio is applied AFTER the safe area: over the already
+    // trimmed area, not over the whole render.
     UiCanvas encadenado;
     montaResolucion(encadenado);
-    encadenado.safeArea.left = 200.0f;   // área útil 600x480
-    encadenado.aspectRatio   = 1.0f;     // recorta a 480x480, centrado en ella
+    encadenado.safeArea.left = 200.0f;   // usable area 600x480
+    encadenado.aspectRatio   = 1.0f;     // trims to 480x480, centered in it
     UiDrawData d3;
     encadenado.buildDrawData(kW, kH, d3);
     CHECK(nearly(encadenado.uiOrigin().x, 200.0f + (600.0f - 480.0f) * 0.5f));   // 260
     CHECK(nearly(encadenado.referenceSize().x, 480.0f));
 }
 
-// El MISMO elemento en unidades de referencia acaba en píxeles distintos según
-// la escala, y el hit test acierta con el punto en PÍXELES en los dos casos.
+// The SAME element in reference units ends up at different pixels depending on
+// the scale, and the hit test hits with the point in PIXELS in both cases.
 static void test_resolucion_hit_test_en_pixeles()
 {
     UiCanvas uno;
@@ -4822,20 +4822,20 @@ static void test_resolucion_hit_test_en_pixeles()
     UiDrawData d2;
     dos.buildDrawData(kW, kH, d2);
 
-    // (100,60) está dentro del rect a escala 1 (30..230, 40..140) y FUERA a
-    // escala 2 (60..460, 80..280).
+    // (100,60) is inside the rect at scale 1 (30..230, 40..140) and OUTSIDE at
+    // scale 2 (60..460, 80..280).
     CHECK(uno.hitTest({100.0f, 60.0f}) == &pUno);
     CHECK(dos.hitTest({100.0f, 60.0f}) == nullptr);
 
-    // (200,120) está dentro a escala 2 y también a escala 1: el punto que
-    // separa de verdad es el de arriba.
+    // (200,120) is inside at scale 2 and also at scale 1: the point that
+    // really separates them is the one above.
     CHECK(dos.hitTest({200.0f, 120.0f}) == &pDos);
 
-    // (400,200): dentro a escala 2, fuera a escala 1.
+    // (400,200): inside at scale 2, outside at scale 1.
     CHECK(dos.hitTest({400.0f, 200.0f}) == &pDos);
     CHECK(uno.hitTest({400.0f, 200.0f}) == nullptr);
 
-    // Con safe area el hit test se mueve con el origen.
+    // With safe area the hit test moves with the origin.
     UiCanvas movido;
     UiElement& pMovido = montaResolucion(movido);
     pMovido.raycastTarget = true;
@@ -4843,13 +4843,13 @@ static void test_resolucion_hit_test_en_pixeles()
     movido.safeArea.top  = 24.0f;
     UiDrawData d3;
     movido.buildDrawData(kW, kH, d3);
-    CHECK(movido.hitTest({100.0f, 60.0f}) == nullptr);          // ya no llega
+    CHECK(movido.hitTest({100.0f, 60.0f}) == nullptr);          // no longer reaches
     CHECK(movido.hitTest({140.0f, 84.0f}) == &pMovido);         // 100+40, 60+24
 }
 
-// Dos builds seguidos con la misma configuración: los mismos bytes. Sin esto,
-// un estado de módulo que se quedara encendido de un build al siguiente pasaría
-// desapercibido.
+// Two consecutive builds with the same configuration: the same bytes. Without this,
+// module state that stayed on from one build to the next would go
+// unnoticed.
 static void test_resolucion_determinismo()
 {
     UiCanvas canvas;
@@ -4879,9 +4879,9 @@ static void test_resolucion_determinismo()
                       a.indices.size() * sizeof(a.indices[0])) == 0);
 }
 
-// Con los valores por defecto no cambia NI UN BYTE: mismos vértices, mismos
-// índices y mismos lotes que antes de la feature. Es la condición que hace que
-// los tests de arriba sigan pasando sin tocar un solo valor esperado.
+// With the default values NOT A SINGLE BYTE changes: same vertices, same
+// indices and same batches as before the feature. It is the condition that makes
+// the tests above keep passing without touching a single expected value.
 static void test_neutralidad_de_la_resolucion()
 {
     UiCanvas base;
@@ -4899,8 +4899,8 @@ static void test_neutralidad_de_la_resolucion()
     UiDrawData antes;
     base.buildDrawData(kW, kH, antes);
 
-    // Los defaults, escritos a mano: si alguno de ellos no fuera neutro, esto
-    // saldría distinto del canvas que no los ha tocado.
+    // The defaults, written by hand: if any of them were not neutral, this
+    // would come out different from the canvas that has not touched them.
     UiCanvas igual;
     UiElement& panel2 = igual.root().add("Panel");
     panel2.position = {31.0f, 47.0f};
@@ -4931,12 +4931,12 @@ static void test_neutralidad_de_la_resolucion()
     CHECK(std::memcmp(antes.indices.data(), despues.indices.data(),
                       antes.indices.size() * sizeof(antes.indices[0])) == 0);
 
-    // Y la transformada por defecto es la identidad exacta, no "casi".
+    // And the default transform is the exact identity, not "almost".
     CHECK(base.uiScale() == 1.0f);
     CHECK(base.uiOrigin() == glm::vec2(0.0f, 0.0f));
     CHECK(base.referenceSize() == glm::vec2((float)kW, (float)kH));
-    // La máscara sigue cayendo EXACTAMENTE donde caía: la escala neutra no le
-    // mete un píxel de más ni de menos.
+    // The mask still falls EXACTLY where it fell: the neutral scale does not
+    // add a pixel more or less to it.
     CHECK(!antes.batches.empty());
     if (!antes.batches.empty())
     {
@@ -4944,7 +4944,7 @@ static void test_neutralidad_de_la_resolucion()
         CHECK(antes.batches[0].scissor.width == 116 && antes.batches[0].scissor.height == 54);
     }
 
-    // Y sin máscara de por medio, el scissor raíz sigue siendo el render entero.
+    // And with no mask in between, the root scissor is still the whole render.
     UiCanvas raso;
     raso.root().add("Panel").size = {50.0f, 20.0f};
     UiDrawData rasoData;
@@ -4957,19 +4957,19 @@ static void test_neutralidad_de_la_resolucion()
     }
 }
 
-// ── Caché de vértices y dirty flags ─────────────────────────────────────────
-// Todo lo de aquí se mide con los contadores del propio motor (rebuiltNodes del
-// canvas y rebuildCount por nodo), NUNCA con el reloj: el número sale igual en
-// cualquier máquina y en cualquier configuración.
+// ── Vertex cache and dirty flags ─────────────────────────────────────────
+// Everything here is measured with the engine's own counters (the canvas's rebuiltNodes and
+// the per-node rebuildCount), NEVER with the clock: the number comes out the same on
+// any machine and in any configuration.
 
 static size_t cuentaNodos(const UiElement& n)
 {
-    size_t total = 1;   // la raíz también se recorre y también emite
+    size_t total = 1;   // the root is also walked and also emits
     for (const auto& hijo : n.children()) total += cuentaNodos(*hijo);
     return total;
 }
 
-// Byte a byte: vértices, índices y lotes. Sin tolerancias.
+// Byte for byte: vertices, indices and batches. No tolerances.
 static bool mismosBytes(const UiDrawData& a, const UiDrawData& b)
 {
     if (a.vertices.size() != b.vertices.size()) return false;
@@ -4993,7 +4993,7 @@ static bool mismosBytes(const UiDrawData& a, const UiDrawData& b)
     return true;
 }
 
-// Un segundo build sin tocar NADA no reemite ni un nodo y da los mismos bytes.
+// A second build without touching ANYTHING re-emits not a single node and gives the same bytes.
 static void test_cache_segundo_build_no_reemite_nada()
 {
     UiCanvas cv;
@@ -5010,7 +5010,7 @@ static void test_cache_segundo_build_no_reemite_nada()
 
     UiDrawData uno;
     cv.buildDrawData(kW, kH, uno);
-    // Todo nace sucio: el primer build emite el árbol entero.
+    // Everything is born dirty: the first build emits the whole tree.
     CHECK(cv.rebuiltNodes() == cuentaNodos(cv.root()));
 
     UiDrawData dos;
@@ -5020,9 +5020,9 @@ static void test_cache_segundo_build_no_reemite_nada()
     CHECK(!uno.vertices.empty());
 }
 
-// Mover una hoja reemite ESA hoja y su cadena de padres (Transform sube), pero
-// no a sus hermanos. Si Transform bajara también desde el padre, el hermano
-// caería con ella y este test lo cazaría.
+// Moving a leaf re-emits THAT leaf and its chain of parents (Transform goes up), but
+// not its siblings. If Transform also went down from the parent, the sibling
+// would fall with it and this test would catch it.
 static void test_cache_mover_una_hoja_no_reemite_hermanos()
 {
     UiCanvas cv;
@@ -5053,11 +5053,11 @@ static void test_cache_mover_una_hoja_no_reemite_hermanos()
     cv.buildDrawData(kW, kH, movido);
 
     CHECK(a.rebuildCount     == aAntes + 1);
-    CHECK(b.rebuildCount     == bAntes);         // el hermano NO se reemite
-    CHECK(panel.rebuildCount == panelAntes + 1); // el padre sí: Transform sube
-    CHECK(cv.rebuiltNodes()  == 3);              // raíz + panel + a
+    CHECK(b.rebuildCount     == bAntes);         // the sibling is NOT re-emitted
+    CHECK(panel.rebuildCount == panelAntes + 1); // the parent is: Transform goes up
+    CHECK(cv.rebuiltNodes()  == 3);              // root + panel + a
 
-    // Y el hermano sigue exactamente donde estaba, byte a byte.
+    // And the sibling is still exactly where it was, byte for byte.
     if (movido.vertices.size() == d.vertices.size() && movido.vertices.size() >= 12)
     {
         CHECK(std::memcmp(&movido.vertices[8], &d.vertices[8], 4 * sizeof(UiVertex)) == 0);
@@ -5065,9 +5065,9 @@ static void test_cache_mover_una_hoja_no_reemite_hermanos()
     }
 }
 
-// Cambiar el color marca SOLO Material: no sale del nodo y no recoloca nada. Se
-// comprueba de verdad moviendo al padre SIN marcarlo: si el rect se recalculara,
-// el hijo se iría con él.
+// Changing the color marks ONLY Material: it does not leave the node and relocates nothing. It is
+// checked for real by moving the parent WITHOUT marking it: if the rect were recomputed,
+// the child would go along with it.
 static void test_cache_color_es_material_y_no_recoloca()
 {
     UiCanvas cv;
@@ -5086,8 +5086,8 @@ static void test_cache_color_es_material_y_no_recoloca()
 
     const glm::vec2 rectAntes = hijo.screenPos;
 
-    // Escritura SIN marcar: por contrato no se ve. Está aquí justamente para
-    // que el rect del hijo cambiaría si alguien lo recalculase.
+    // Write WITHOUT marking: by contract it is not seen. It is here precisely so that
+    // the child's rect would change if someone recomputed it.
     panel.position = glm::vec2(140.0f, 25.0f);
 
     hijo.color = glm::vec4(0.25f, 0.5f, 0.75f, 1.0f);
@@ -5097,13 +5097,13 @@ static void test_cache_color_es_material_y_no_recoloca()
     UiDrawData dos;
     cv.buildDrawData(kW, kH, dos);
 
-    CHECK(cv.rebuiltNodes() == 1);              // Material no sube ni baja
-    CHECK(hijo.screenPos.x == rectAntes.x);     // el rect NO se ha recalculado
+    CHECK(cv.rebuiltNodes() == 1);              // Material goes neither up nor down
+    CHECK(hijo.screenPos.x == rectAntes.x);     // the rect was NOT recomputed
     CHECK(hijo.screenPos.y == rectAntes.y);
     CHECK(dos.vertices.size() == 8);
     if (dos.vertices.size() != 8) return;
 
-    // El panel, intacto; el hijo, mismo sitio y color nuevo.
+    // The panel, intact; the child, same place and new color.
     CHECK(std::memcmp(dos.vertices.data(), uno.vertices.data(), 4 * sizeof(UiVertex)) == 0);
     CHECK(dos.vertices[4].pos.x == uno.vertices[4].pos.x);
     CHECK(dos.vertices[4].pos.y == uno.vertices[4].pos.y);
@@ -5111,8 +5111,8 @@ static void test_cache_color_es_material_y_no_recoloca()
     CHECK(nearly(dos.vertices[4].color.b, 0.75f));
 }
 
-// Cambiar el tamaño de un padre con layout reemite a TODOS sus descendientes.
-// Un tío del otro lado del árbol no se entera.
+// Changing the size of a parent with layout re-emits ALL its descendants.
+// An uncle from the other side of the tree does not find out.
 static void test_cache_layout_del_padre_baja_pero_no_cruza()
 {
     UiCanvas cv;
@@ -5153,15 +5153,15 @@ static void test_cache_layout_del_padre_baja_pero_no_cruza()
     cv.buildDrawData(kW, kH, d);
 
     CHECK(h1.rebuildCount    == h1Antes + 1);
-    CHECK(nieto.rebuildCount == nietoAntes + 1);   // Layout BAJA hasta el nieto
+    CHECK(nieto.rebuildCount == nietoAntes + 1);   // Layout GOES DOWN to the grandchild
     CHECK(h2.rebuildCount    == h2Antes + 1);
-    CHECK(tio.rebuildCount   == tioAntes);         // y no cruza al otro lado
+    CHECK(tio.rebuildCount   == tioAntes);         // and does not cross to the other side
     CHECK(primo.rebuildCount == primoAntes);
-    CHECK(cv.rebuiltNodes()  == 5);                // raíz + izq + h1 + nieto + h2
+    CHECK(cv.rebuiltNodes()  == 5);                // root + left + h1 + grandchild + h2
 }
 
-// Cambiar la resolución del render o la escala del canvas mueve la colocación de
-// todo el mundo: no queda ni una caché en pie.
+// Changing the render resolution or the canvas scale moves the placement of
+// everybody: not a single cache is left standing.
 static void test_cache_resolucion_y_escala_reemiten_todo()
 {
     UiCanvas cv;
@@ -5185,8 +5185,8 @@ static void test_cache_resolucion_y_escala_reemiten_todo()
     cv.buildDrawData(kW + 40, kH, d);
     CHECK(cv.rebuiltNodes() == 0);
 
-    // La escala del canvas no es un campo del árbol: nadie la marca y aun así
-    // tiene que invalidarlo todo.
+    // The canvas scale is not a tree field: nobody marks it and even so
+    // it has to invalidate everything.
     cv.scaleFactor = 2.0f;
     cv.buildDrawData(kW + 40, kH, d);
     CHECK(cv.rebuiltNodes() == nodos);
@@ -5195,8 +5195,8 @@ static void test_cache_resolucion_y_escala_reemiten_todo()
     CHECK(cv.rebuiltNodes() == 0);
 }
 
-// Una animación en curso ensucia su nodo en cada frame y NINGÚN otro. Color va
-// por Material, que no sube ni baja.
+// An animation in progress dirties its node on every frame and NO other. Color goes
+// through Material, which goes neither up nor down.
 static void test_cache_animacion_ensucia_solo_su_nodo()
 {
     UiCanvas cv;
@@ -5230,7 +5230,7 @@ static void test_cache_animacion_ensucia_solo_su_nodo()
         CHECK(b.rebuildCount == bAntes);
     }
 
-    // Y parada la animación, deja de ensuciar del todo.
+    // And once the animation stops, it stops dirtying altogether.
     a.animPlaying = false;
     avanzaReloj(cv, 3.0f);
     cv.buildDrawData(kW, kH, d);
@@ -5273,9 +5273,9 @@ static void montaEscenaCompleta(UiCanvas& cv, UiFont& font, UiTextureAtlas& atla
     btn.hoverColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
 }
 
-// Neutralidad: escena con texto, máscara, botón e imagen sliced. El canvas con
-// la caché en marcha da los MISMOS bytes y los mismos lotes que uno idéntico al
-// que se le ensucia el árbol entero a mano antes de cada build.
+// Neutrality: scene with text, mask, button and sliced image. The canvas with
+// the cache running gives the SAME bytes and the same batches as an identical one
+// whose whole tree is dirtied by hand before every build.
 static void test_cache_neutralidad_escena_completa()
 {
     UiFont font;
@@ -5284,7 +5284,7 @@ static void test_cache_neutralidad_escena_completa()
 
     UiCanvas conCache;
     UiCanvas sinCache;
-    // El MISMO font y el MISMO atlas en los dos: los lotes llevan el puntero.
+    // The SAME font and the SAME atlas in both: the batches carry the pointer.
     montaEscenaCompleta(conCache, font, atlas);
     montaEscenaCompleta(sinCache, font, atlas);
 
@@ -5295,7 +5295,7 @@ static void test_cache_neutralidad_escena_completa()
         conCache.updateInput(raton(200.0f, 150.0f, t));
         sinCache.updateInput(raton(200.0f, 150.0f, t));
 
-        // Caché desactivada a mano: DirtyAll desde la raíz baja a todo el árbol.
+        // Cache turned off by hand: DirtyAll from the root goes down the whole tree.
         sinCache.root().markDirty(UiElement::DirtyAll);
 
         conCache.buildDrawData(kW, kH, a);
@@ -5306,26 +5306,26 @@ static void test_cache_neutralidad_escena_completa()
     }
 
     CHECK(!a.vertices.empty());
-    CHECK(a.batches.size() >= 2);   // el texto va en otro atlas que la imagen
+    CHECK(a.batches.size() >= 2);   // the text goes in a different atlas than the image
 
-    // Y con la escena ya quieta (el hover del botón ya asentado) el que tiene
-    // caché no reemite nada, que es de lo que iba todo esto.
+    // And with the scene already still (the button's hover already settled) the one with the
+    // cache re-emits nothing, which is what all this was about.
     conCache.updateInput(raton(200.0f, 150.0f, 1.0f));
     conCache.buildDrawData(kW, kH, a);
     CHECK(conCache.rebuiltNodes() == 0);
 }
 
-// ── Horneado real de una fuente ─────────────────────────────────────────────
-// El único test que toca FreeType y el TTF del proyecto. No prueba el trazado
-// (eso es msdfgen): prueba QUÉ CODEPOINTS entran en el atlas por defecto, que
-// es lo que decide si un texto en español se ve entero. El fallo que caza es
-// MUDO: shapeText salta el codepoint sin glyph y no deja ni hueco ni caja, así
-// que "Año" sale "Ao" y no hay ni un log que lo diga.
+// ── Real baking of a font ─────────────────────────────────────────────
+// The only test that touches FreeType and the project's TTF. It does not test the outline
+// (that is msdfgen): it tests WHICH CODEPOINTS enter the default atlas, which
+// is what decides whether a Spanish text is seen whole. The failure it catches is
+// SILENT: shapeText skips the codepoint with no glyph and leaves neither a gap nor a box, so
+// "Año" comes out "Ao" and there is not a log that says so.
 static void test_fuente_por_defecto_hornea_acentos()
 {
     UiFont font;
-    // 32 px y no el default de 48: el atlas es más pequeño y el test más rápido;
-    // el rango horneado no depende del tamaño.
+    // 32 px and not the default 48: the atlas is smaller and the test faster;
+    // the baked range does not depend on the size.
     if (!font.bakeFromFile(kDefaultUiFontPath, 32.0f))
     {
         std::printf("FAIL: no se pudo hornear %s (cwd equivocado?)\n", kDefaultUiFontPath);
@@ -5333,12 +5333,12 @@ static void test_fuente_por_defecto_hornea_acentos()
         return;
     }
 
-    // ASCII: lo que ya funcionaba tiene que seguir estando.
+    // ASCII: what already worked has to stay there.
     CHECK(font.findGlyph('A') != nullptr);
     CHECK(font.findGlyph('z') != nullptr);
     CHECK(font.findGlyph(' ') != nullptr);
 
-    // Latin-1: minúsculas y mayúsculas acentuadas, eñe y signos de apertura.
+    // Latin-1: accented lowercase and uppercase letters, eñe and opening marks.
     CHECK(font.findGlyph(0x00F1) != nullptr);   // ñ
     CHECK(font.findGlyph(0x00D1) != nullptr);   // Ñ
     CHECK(font.findGlyph(0x00E1) != nullptr);   // á
@@ -5351,33 +5351,33 @@ static void test_fuente_por_defecto_hornea_acentos()
     CHECK(font.findGlyph(0x00BF) != nullptr);   // ¿
     CHECK(font.findGlyph(0x00A1) != nullptr);   // ¡
 
-    // Los puntos suspensivos de UiTextOverflow::Ellipsis: sin ellos se cae a
-    // "..." (tres quads en vez de uno) sin avisar.
+    // The ellipsis of UiTextOverflow::Ellipsis: without it it falls back to
+    // "..." (three quads instead of one) without warning.
     CHECK(font.findGlyph(0x2026) != nullptr);
 
-    // Un codepoint que la fuente no trae NO se inventa: nada de cajas .notdef
-    // ocupando sitio en el atlas.
+    // A codepoint that the font does not carry is NOT invented: no .notdef boxes
+    // taking up room in the atlas.
     CHECK(font.findGlyph(0x4E2D) == nullptr);
 
-    // Y el atlas no se dispara por ampliar el rango.
+    // And the atlas does not blow up from extending the range.
     CHECK(font.atlas().width() <= 2048);
     CHECK(font.atlas().width() == font.atlas().height());
     CHECK(font.hasGlyphs());
 }
 
-// El horneado reparte el MSDF de cada glyph entre varios hilos. El resultado NO
-// puede depender de cuántos: el empaquetado se decide ANTES y cada glyph escribe
-// en su rect. Este test compara el atlas paralelo con el secuencial BYTE A BYTE,
-// que es lo único que caza a la vez las dos formas de romperlo — que msdfgen
-// tuviera estado compartido, y que dos glyphs se pisaran el rect.
+// The baking distributes each glyph's MSDF among several threads. The result
+// CANNOT depend on how many: the packing is decided BEFORE and each glyph writes
+// into its rect. This test compares the parallel atlas with the sequential one BYTE BY BYTE,
+// which is the only thing that catches both ways of breaking it at once: that msdfgen
+// had shared state, and that two glyphs stepped on each other's rect.
 //
-// Dos intentos con hilos: una carrera puede pasar por suerte una vez.
+// Two attempts with threads: a race can pass by luck once.
 static void test_fuente_paralela_da_el_mismo_atlas()
 {
     UiFont seq;
-    // 24 px: lo que se compara es que el atlas salga igual, no la calidad, y a
-    // este tamaño la tanda entera cuesta segundos en vez de medio minuto con el
-    // heap de depuración.
+    // 24 px: what is compared is that the atlas comes out the same, not the quality, and at
+    // this size the whole batch costs seconds instead of half a minute with the
+    // debug heap.
     if (!seq.bakeFromFile(kDefaultUiFontPath, 24.0f, defaultUiCodepointRanges(), 1))
     {
         std::printf("FAIL: no se pudo hornear %s en secuencial\n", kDefaultUiFontPath);
@@ -5407,10 +5407,10 @@ static void test_fuente_paralela_da_el_mismo_atlas()
     }
 }
 
-// El kerning de una fuente MODERNA. FreeType solo lee la tabla 'kern' clásica y
-// las fuentes de hoy llevan los pares en GPOS, así que UiFont::kerning devolvía
-// 0 para todo: el motor tenía kerning implementado, probado con fuentes de
-// mentira, y muerto con las de verdad.
+// The kerning of a MODERN font. FreeType only reads the classic 'kern' table and
+// today's fonts carry the pairs in GPOS, so UiFont::kerning returned
+// 0 for everything: the engine had kerning implemented, tested with fake
+// fonts, and dead with the real ones.
 static void test_fuente_por_defecto_trae_kerning()
 {
     UiFont font;
@@ -5421,9 +5421,9 @@ static void test_fuente_por_defecto_trae_kerning()
         return;
     }
 
-    // Al menos UN par con corrección: no se fija cuál porque eso es cosa del
-    // diseñador de la fuente, pero "ninguno en 26x26" solo puede querer decir
-    // que el kerning no se está leyendo.
+    // At least ONE pair with a correction: which one is not pinned down because that is up to the
+    // font designer, but "none in 26x26" can only mean
+    // that the kerning is not being read.
     int    pares = 0;
     float  algunValor = 0.0f;
     for (uint32_t a = 'A'; a <= 'Z'; ++a)
@@ -5433,21 +5433,21 @@ static void test_fuente_por_defecto_trae_kerning()
     CHECK(pares > 0);
     CHECK(algunValor != 0.0f);
 
-    // Y en píxeles de horneado, no en unidades de diseño: un valor de cientos
-    // significaría que falta la conversión y separaría las letras media palabra.
+    // And in bake pixels, not in design units: a value in the hundreds
+    // would mean the conversion is missing and it would separate the letters by half a word.
     CHECK(std::fabs(algunValor) < 32.0f);
 
-    // Un par sin entrada sigue valiendo 0 exacto.
+    // A pair with no entry is still worth exactly 0.
     CHECK(font.kerning('A', 0x4E2D) == 0.0f);
 }
 
-// ── Caché en disco ──────────────────────────────────────────────────────────
-// Lo que se prueba es que la fuente que sale de la caché sea INDISTINGUIBLE de
-// la horneada: mismos píxeles byte a byte, mismas métricas. Si no lo fuera, el
-// texto cambiaría de aspecto entre el primer arranque y el segundo, que es la
-// clase de fallo que nadie atribuye a una caché.
+// ── Disk cache ──────────────────────────────────────────────────────────
+// What is tested is that the font coming out of the cache is INDISTINGUISHABLE from
+// the baked one: same pixels byte for byte, same metrics. If it were not, the
+// text would change appearance between the first start and the second, which is the
+// kind of failure nobody attributes to a cache.
 //
-// Y que cualquier problema con el fichero acabe en un horneado, nunca en basura.
+// And that any problem with the file ends in a bake, never in garbage.
 static const char* kCacheDirTest = ".dt-cache-test/fonts";
 
 static void test_cache_de_fuente_devuelve_lo_mismo_que_hornear()
@@ -5455,14 +5455,14 @@ static void test_cache_de_fuente_devuelve_lo_mismo_que_hornear()
     std::filesystem::remove_all(".dt-cache-test");
     UiFont::setCacheDirectory(kCacheDirTest);
 
-    // Rango corto a propósito: la caché no sabe cuántos glyphs lleva, y así el
-    // test cuesta décimas en vez de segundos.
+    // Short range on purpose: the cache does not know how many glyphs it holds, and this way the
+    // test costs tenths of a second instead of seconds.
     const std::vector<UiCodepointRange> rangos = { {65, 90}, {0x00F1, 0x00F1} };
 
     UiFont horneada;
     CHECK(horneada.bakeFromFileCached(kDefaultUiFontPath, 24.0f, rangos));
 
-    // Primera llamada: no había nada, así que tiene que haber DEJADO algo.
+    // First call: there was nothing, so it must have LEFT something behind.
     size_t ficheros = 0;
     for (const auto& e : std::filesystem::directory_iterator(kCacheDirTest))
         if (e.path().extension() == ".dtfont") ++ficheros;
@@ -5493,9 +5493,9 @@ static void test_cache_de_fuente_devuelve_lo_mismo_que_hornear()
         CHECK(a->advance == b->advance);
     }
 
-    // Kerning: comparar un par a ciegas no prueba NADA si vale 0 en los dos (lo
-    // comprobó un sabotaje que vaciaba el mapa al guardar y no lo cazó nadie).
-    // Se busca un par con corrección real y solo ese se compara.
+    // Kerning: comparing a pair blindly proves NOTHING if it is worth 0 in both (a
+    // sabotage that emptied the map on saving checked this and nobody caught it).
+    // A pair with a real correction is looked for and only that one is compared.
     uint32_t izq = 0, der = 0;
     for (uint32_t i = 65; i <= 90 && izq == 0; ++i)
         for (uint32_t j = 65; j <= 90; ++j)
@@ -5508,22 +5508,22 @@ static void test_cache_de_fuente_devuelve_lo_mismo_que_hornear()
     }
     else
     {
-        // No es un fallo del motor: FreeType solo lee la tabla 'kern' clásica y
-        // las fuentes modernas llevan el kerning en GPOS. Queda dicho para que
-        // nadie lea este test como "el kerning va y está cubierto".
+        // It is not an engine failure: FreeType only reads the classic 'kern' table and
+        // modern fonts carry the kerning in GPOS. This is stated so that
+        // nobody reads this test as "kerning works and is covered".
         std::printf("[aviso] %s no trae tabla kern: el round-trip del kerning "
                     "no queda cubierto por este test\n", kDefaultUiFontPath);
     }
 
-    // Lo que NO se pidió sigue sin estar: la caché no inventa glyphs.
+    // What was NOT requested is still not there: the cache does not invent glyphs.
     CHECK(cacheada.findGlyph('a') == nullptr);
 
-    // Otra configuración = otra entrada, no la de al lado reinterpretada.
+    // Another configuration = another entry, not the neighboring one reinterpreted.
     UiFont otroTamano;
     CHECK(otroTamano.bakeFromFileCached(kDefaultUiFontPath, 18.0f, rangos));
     CHECK(otroTamano.bakeSize() == 18.0f);
 
-    // Una entrada corrupta se hornea, no se interpreta: se le machaca el magic.
+    // A corrupt entry is baked, not interpreted: its magic is smashed.
     std::filesystem::path victima;
     for (const auto& e : std::filesystem::directory_iterator(kCacheDirTest))
         if (e.path().extension() == ".dtfont" && std::filesystem::file_size(e.path()) > 100000)
@@ -5541,7 +5541,7 @@ static void test_cache_de_fuente_devuelve_lo_mismo_que_hornear()
         CHECK(trasCorromper.atlas().sourcePixels() == horneada.atlas().sourcePixels());
     }
 
-    // Con la caché apagada se hornea igual.
+    // With the cache turned off it is baked all the same.
     UiFont::setCacheDirectory("");
     UiFont sinCache;
     CHECK(sinCache.bakeFromFileCached(kDefaultUiFontPath, 24.0f, rangos));
@@ -5550,11 +5550,11 @@ static void test_cache_de_fuente_devuelve_lo_mismo_que_hornear()
     std::filesystem::remove_all(".dt-cache-test");
 }
 
-// ── Sidecar de sprites ──────────────────────────────────────────────────────
-// Los sub-rects de un atlas viven en un JSON junto a la imagen. Lo que se prueba
-// es el viaje de ida y vuelta y, sobre todo, que un sidecar que no se puede leer
-// NO deje el atlas a medias: con media lista el widget dibuja la imagen entera
-// en vez de su sprite, y eso parece un problema de arte, no de carga.
+// ── Sprite sidecar ──────────────────────────────────────────────────────
+// The sub-rects of an atlas live in a JSON next to the image. What is tested
+// is the round trip and, above all, that a sidecar that cannot be read
+// does NOT leave the atlas half-done: with half a list the widget draws the whole image
+// instead of its sprite, and that looks like an art problem, not a loading one.
 static const char* kSidecarDir = ".dt-sprites-test";
 
 static void test_sidecar_de_sprites_ida_y_vuelta()
@@ -5565,8 +5565,8 @@ static void test_sidecar_de_sprites_ida_y_vuelta()
 
     UiTextureAtlas origen;
     origen.setSize(256, 128);
-    // Valores no neutros y distintos entre sí: con ceros o repetidos, una x
-    // escrita en el hueco de la y pasaría desapercibida.
+    // Non-neutral values different from each other: with zeros or repeated ones, an x
+    // written into y's slot would go unnoticed.
     origen.addSprite("btn_normal",  UiSpriteRect{ 3.0f,  5.0f, 64.0f, 32.0f});
     origen.addSprite("btn_hover",   UiSpriteRect{70.0f, 11.0f, 48.0f, 24.0f});
     origen.addSprite("btn_pressed", UiSpriteRect{130.0f, 17.0f, 40.0f, 20.0f});
@@ -5588,15 +5588,15 @@ static void test_sidecar_de_sprites_ida_y_vuelta()
         CHECK(nearly(r->height, 24.0f));
     }
 
-    // Y las UVs que salen de ahí son las del sub-rect, no las del atlas entero:
-    // es lo único que ve el batcher.
+    // And the UVs that come out of there are those of the sub-rect, not of the whole atlas:
+    // it is the only thing the batcher sees.
     const UiUvRect uv = destino.uvRect("btn_hover");
     CHECK(nearly(uv.u0, 70.0f / 256.0f));
     CHECK(nearly(uv.v0, 11.0f / 128.0f));
     CHECK(nearly(uv.u1, (70.0f + 48.0f) / 256.0f));
     CHECK(nearly(uv.v1, (11.0f + 24.0f) / 128.0f));
 
-    // Nombres ordenados y estables: el combo del editor los indexa.
+    // Sorted and stable names: the editor's combo indexes them.
     const std::vector<std::string> nombres = destino.spriteNames();
     CHECK(nombres.size() == 3);
     if (nombres.size() == 3)
@@ -5606,7 +5606,7 @@ static void test_sidecar_de_sprites_ida_y_vuelta()
         CHECK(nombres[2] == "btn_pressed");
     }
 
-    // Cargar REEMPLAZA: un sprite que ya no está en el fichero no sobrevive.
+    // Loading REPLACES: a sprite that is no longer in the file does not survive.
     destino.addSprite("sobra", UiSpriteRect{1.0f, 2.0f, 3.0f, 4.0f});
     CHECK(destino.loadSprites(ruta));
     CHECK(destino.hasSprite("sobra") == false);
@@ -5619,12 +5619,12 @@ static void test_sidecar_ruta_derivada_de_la_imagen()
 {
     CHECK(UiTextureAtlas::spriteSheetPathFor("assets/ui/botones.png") ==
           "assets/ui/botones.sprites.json");
-    // Mayúsculas y otras extensiones: se corta por el último punto, no por ".png".
+    // Uppercase and other extensions: it cuts at the last dot, not at ".png".
     CHECK(UiTextureAtlas::spriteSheetPathFor("a/b/HOJA.PNG") == "a/b/HOJA.sprites.json");
     CHECK(UiTextureAtlas::spriteSheetPathFor("x.tga") == "x.sprites.json");
-    // Sin extensión no hay nada que quitar.
+    // Without an extension there is nothing to remove.
     CHECK(UiTextureAtlas::spriteSheetPathFor("sinpunto") == "sinpunto.sprites.json");
-    // Un punto en un DIRECTORIO no es la extensión del fichero.
+    // A dot in a DIRECTORY is not the file's extension.
     CHECK(UiTextureAtlas::spriteSheetPathFor("v1.2/hoja.png") == "v1.2/hoja.sprites.json");
 }
 
@@ -5637,7 +5637,7 @@ static void test_sidecar_roto_no_deja_el_atlas_a_medias()
     atlas.setSize(64, 64);
     atlas.addSprite("bueno", UiSpriteRect{7.0f, 9.0f, 11.0f, 13.0f});
 
-    // (a) No existe.
+    // (a) It does not exist.
     CHECK(atlas.loadSprites(std::string(kSidecarDir) + "/no-existe.sprites.json") == false);
     CHECK(atlas.spriteCount() == 1);
     CHECK(atlas.hasSprite("bueno"));
@@ -5648,14 +5648,14 @@ static void test_sidecar_roto_no_deja_el_atlas_a_medias()
     CHECK(atlas.loadSprites(basura) == false);
     CHECK(atlas.hasSprite("bueno"));
 
-    // (c) Es JSON pero no tiene la raíz esperada.
+    // (c) It is JSON but does not have the expected root.
     const std::string ajeno = std::string(kSidecarDir) + "/ajeno.sprites.json";
     { std::ofstream f(ajeno); f << R"({"otracosa": 42})"; }
     CHECK(atlas.loadSprites(ajeno) == false);
     CHECK(atlas.hasSprite("bueno"));
 
-    // (d) Entradas sueltas inválidas: se saltan, el resto entra. Un rect de área
-    // 0 daría UVs degeneradas y un quad invisible sin ningún error.
+    // (d) Invalid loose entries: they are skipped, the rest get in. A rect of area
+    // 0 would give degenerate UVs and an invisible quad with no error.
     const std::string mixto = std::string(kSidecarDir) + "/mixto.sprites.json";
     {
         std::ofstream f(mixto);
@@ -5678,12 +5678,12 @@ static void test_sidecar_roto_no_deja_el_atlas_a_medias()
     std::filesystem::remove_all(kSidecarDir);
 }
 
-// ── Canvas de mundo ─────────────────────────────────────────────────────────
-// La matriz de un canvas de mundo. Tres cosas que fallan EN SILENCIO: que el
-// canvas quede centrado en el objeto (si no, aparece desplazado media pantalla),
-// que la Y esté VOLTEADA (el canvas crece hacia abajo y el mundo hacia arriba: un
-// signo de más pinta el cartel boca abajo) y que la escala sea unidades por
-// pixel y no al revés.
+// ── World canvas ─────────────────────────────────────────────────────
+// The matrix of a world canvas. Three things that fail SILENTLY: that the
+// canvas ends up centered on the object (otherwise it shows up shifted half a screen),
+// that the Y is FLIPPED (the canvas grows downward and the world upward: an
+// extra sign draws the sign upside down) and that the scale is units per
+// pixel and not the other way around.
 static void test_world_canvas_matrix_centra_y_voltea_la_y()
 {
     CanvasComponent c;
@@ -5697,29 +5697,29 @@ static void test_world_canvas_matrix_centra_y_voltea_la_y()
 
     const glm::mat4 m = uiWorldCanvasMatrix(c, tam, mundo, vista);
 
-    // El CENTRO del canvas (960, 540) cae en la posicion del GameObject.
+    // The canvas CENTER (960, 540) falls at the GameObject's position.
     const glm::vec4 centro = m * glm::vec4(960.0f, 540.0f, 0.0f, 1.0f);
     CHECK(nearly(centro.x, 10.0f));
     CHECK(nearly(centro.y, 5.0f));
     CHECK(nearly(centro.z, -3.0f));
 
-    // La esquina (0,0) del canvas es la de ARRIBA a la izquierda, asi que en el
-    // mundo cae a la izquierda y ARRIBA del centro.
+    // The canvas (0,0) corner is the TOP left one, so in the
+    // world it falls to the left and ABOVE the center.
     const glm::vec4 sup = m * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
     CHECK(nearly(sup.x, 10.0f - 0.96f));
     CHECK(nearly(sup.y, 5.0f + 0.54f));
 
-    // Y la (w,h) abajo a la derecha.
+    // And the (w,h) at the bottom right.
     const glm::vec4 inf = m * glm::vec4(1920.0f, 1080.0f, 0.0f, 1.0f);
     CHECK(nearly(inf.x, 10.0f + 0.96f));
     CHECK(nearly(inf.y, 5.0f - 0.54f));
 
-    // El tamano total: 1.92 x 1.08 unidades.
+    // The total size: 1.92 x 1.08 units.
     CHECK(nearly(inf.x - sup.x, 1.92f));
     CHECK(nearly(sup.y - inf.y, 1.08f));
 }
 
-// worldScale es unidades por PIXEL: doblarlo dobla el cartel.
+// worldScale is units per PIXEL: doubling it doubles the sign.
 static void test_world_canvas_matrix_escala()
 {
     CanvasComponent c;
@@ -5733,23 +5733,23 @@ static void test_world_canvas_matrix_escala()
     CHECK(nearly(b.x - a.x, 0.2f));
 }
 
-// Billboard. La camara mira desde +Z hacia el origen; el canvas esta en el
-// origen con una rotacion cualquiera que el billboard tiene que PISAR.
+// Billboard. The camera looks from +Z toward the origin; the canvas is at the
+// origin with some rotation that the billboard has to OVERRIDE.
 static void test_world_canvas_matrix_billboard()
 {
     CanvasComponent c;
     c.renderMode = UiCanvasRenderMode::World;
     c.worldScale = 0.001f;
 
-    // Rotacion absurda del objeto: si el billboard no la pisa, se nota.
+    // Absurd rotation of the object: if the billboard does not override it, it shows.
     glm::mat4 mundo = glm::rotate(glm::mat4(1.0f), 1.1f, glm::vec3(0.3f, 0.5f, 0.8f));
 
-    // Camara en (0, 4, 6) mirando al origen: mira hacia abajo y hacia -Z.
+    // Camera at (0, 4, 6) looking at the origin: it looks down and toward -Z.
     const glm::mat4 vista = glm::lookAt(glm::vec3(0.0f, 4.0f, 6.0f),
                                         glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
-    // Sin billboard la rotacion del objeto manda: el eje X del canvas NO es el
-    // (1,0,0) del mundo.
+    // Without billboard the object's rotation rules: the canvas X axis is NOT the
+    // world's (1,0,0).
     c.billboard = UiBillboard::None;
     {
         const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vista);
@@ -5757,13 +5757,13 @@ static void test_world_canvas_matrix_billboard()
         CHECK(!nearly(ejeX.x, 1.0f));
     }
 
-    // YawOnly: con la camara en (0,4,6) el acimut cae EXACTO en el eje Z del
-    // mundo (x=0): "girar el yaw de verdad" y "no hacer nada" darian la misma
-    // base por pura coincidencia de esa camara, y solo mirar ejeY no lo
-    // distingue (arriba es fijo (0,1,0) pase lo que pase con derecha/adelante).
-    // Se usa una camara con componente en X para que el acimut no coincida con
-    // ningun eje del mundo, y se comprueban a mano derecha (ejeX) y adelante
-    // (ejeZ) con sus valores EXACTOS, no solo "es distinto de".
+    // YawOnly: with the camera at (0,4,6) the azimuth falls EXACTLY on the world's Z
+    // axis (x=0): "really turning the yaw" and "doing nothing" would give the same
+    // basis by pure coincidence of that camera, and only looking at axisY does not
+    // distinguish it (up is fixed (0,1,0) no matter what happens with right/forward).
+    // A camera with an X component is used so that the azimuth does not coincide with
+    // any world axis, and right (axisX) and forward
+    // (axisZ) are checked by hand with their EXACT values, not just "is different from".
     const glm::mat4 vistaYaw = glm::lookAt(glm::vec3(5.0f, 4.0f, 6.0f),
                                            glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     c.billboard = UiBillboard::YawOnly;
@@ -5773,29 +5773,29 @@ static void test_world_canvas_matrix_billboard()
         const glm::vec3 ejeY = glm::normalize(glm::vec3(m[1]));
         const glm::vec3 ejeZ = glm::normalize(glm::vec3(m[2]));
 
-        // arriba (ejeY) sigue siendo el del mundo: no se tumba al mirar desde
-        // arriba, que es lo que quiere una barra de vida.
+        // up (axisY) is still the world's: it does not tip over when looking from
+        // above, which is what a health bar wants.
         CHECK(nearly(ejeY.x, 0.0f));
         CHECK(nearly(std::fabs(ejeY.y), 1.0f));
         CHECK(nearly(ejeY.z, 0.0f));
 
-        // adelante (ejeZ) es la proyeccion horizontal de la camara (5,4,6)
-        // sobre el plano XZ, normalizada: (5,0,6)/sqrt(61). Y = 0 (el yaw no
-        // inclina) y X != 0: SI giro. Con la camara vieja (x=0) esto habria
-        // salido (0,0,1) por casualidad, igual que sin girar nada.
+        // forward (axisZ) is the horizontal projection of the camera (5,4,6)
+        // onto the XZ plane, normalized: (5,0,6)/sqrt(61). Y = 0 (the yaw does not
+        // tilt) and X != 0: it DOES turn. With the old camera (x=0) this would have
+        // come out (0,0,1) by coincidence, same as with no turning at all.
         CHECK(nearly(ejeZ.x, 0.6401844f));
         CHECK(nearly(ejeZ.y, 0.0f));
         CHECK(nearly(ejeZ.z, 0.7682212f));
 
-        // derecha (ejeX) = arriba x adelante: perpendicular a ejeZ y con su
-        // propio valor exacto, distinto del (1,0,0) del mundo.
+        // right (axisX) = up x forward: perpendicular to axisZ and with its
+        // own exact value, different from the world's (1,0,0).
         CHECK(nearly(ejeX.x, 0.7682212f));
         CHECK(nearly(ejeX.y, 0.0f));
         CHECK(nearly(ejeX.z, -0.6401844f));
         CHECK(nearly(glm::dot(ejeX, ejeZ), 0.0f));
     }
 
-    // Full: encara la camara del todo, asi que el eje Y del canvas SE INCLINA.
+    // Full: it faces the camera fully, so the canvas Y axis TILTS.
     c.billboard = UiBillboard::Full;
     {
         const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vista);
@@ -5803,11 +5803,11 @@ static void test_world_canvas_matrix_billboard()
         CHECK(!nearly(std::fabs(ejeY.y), 1.0f));
     }
 
-    // Guarda contra mirar en VERTICAL JUSTA: con la camara encima mirando
-    // hacia abajo, la proyeccion horizontal de "atras" se anula (largo2 ~ 0) y
-    // sin la guarda normalize(0,0,0) daria NaN, que se colaria en la matriz
-    // entera. Nadie ejercitaba esta rama antes: si un refactor la borra, esta
-    // es la unica comprobacion que se entera.
+    // Guard against looking STRAIGHT VERTICAL: with the camera above looking
+    // down, the horizontal projection of "back" vanishes (length2 ~ 0) and
+    // without the guard normalize(0,0,0) would give NaN, which would slip into the entire
+    // matrix. Nobody exercised this branch before: if a refactor deletes it, this
+    // is the only check that finds out.
     const glm::mat4 vistaVertical = glm::lookAt(glm::vec3(0.0f, 10.0f, 0.0f),
                                                 glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
     c.billboard = UiBillboard::YawOnly;
@@ -5821,12 +5821,12 @@ static void test_world_canvas_matrix_billboard()
 
 int main()
 {
-    // Sin buffer: si un test revienta a media tanda, lo ya impreso NO se pierde
-    // y se ve exactamente por dónde iba.
+    // Without a buffer: if a test blows up halfway through a batch, what was already printed is NOT lost
+    // and you can see exactly where it was.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-    // Los tests hornean DE VERDAD: sin esto, el primero dejaría la caché puesta
-    // y el resto compararía ficheros en vez de horneados.
+    // The tests bake FOR REAL: without this, the first one would leave the cache set
+    // and the rest would compare files instead of bakes.
     UiFont::setCacheDirectory("");
 
     test_fuente_por_defecto_hornea_acentos();

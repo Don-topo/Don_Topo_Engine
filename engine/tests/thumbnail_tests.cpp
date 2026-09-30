@@ -1,5 +1,5 @@
-// Tests headless de las miniaturas del Content Browser (sin GPU ni ImGui).
-// Plain main + CHECK, mismo patron que content_browser_tests.cpp.
+// Headless tests of the Content Browser thumbnails (no GPU or ImGui).
+// Plain main + CHECK, same pattern as content_browser_tests.cpp.
 #include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Editor/ContentBrowserPanel.h"
@@ -33,19 +33,19 @@ static int g_failures = 0;
 
 using Rgba = std::array<uint8_t, 4>;
 
-// TGA sin comprimir de 32 bits, origen arriba a la izquierda: el formato mas
-// simple que stb_image lee con alfa, y no hace falta stb_image_write.
+// Uncompressed 32-bit TGA, origin at the top left: the simplest format
+// that stb_image reads with alpha, and stb_image_write is not needed.
 static void writeTga(const fs::path& p, int w, int h, const std::function<Rgba(int, int)>& pixel)
 {
     std::ofstream f(p, std::ios::binary);
     uint8_t hdr[18] = {};
-    hdr[2]  = 2;                               // truecolor sin comprimir
+    hdr[2]  = 2;                               // uncompressed truecolor
     hdr[12] = static_cast<uint8_t>(w & 0xFF);
     hdr[13] = static_cast<uint8_t>((w >> 8) & 0xFF);
     hdr[14] = static_cast<uint8_t>(h & 0xFF);
     hdr[15] = static_cast<uint8_t>((h >> 8) & 0xFF);
-    hdr[16] = 32;                              // bits por pixel
-    hdr[17] = 0x28;                            // origen arriba-izquierda, 8 bits de alfa
+    hdr[16] = 32;                              // bits per pixel
+    hdr[17] = 0x28;                            // origin top-left, 8 bits of alpha
     f.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x)
@@ -78,7 +78,7 @@ static fs::path makeDir()
     return dir;
 }
 
-// Apaisada 128x64: se reduce a 64x32 y se centra (16 filas transparentes arriba y abajo).
+// Landscape 128x64: it is reduced to 64x32 and centered (16 transparent rows above and below).
 static void test_landscape_is_letterboxed(const fs::path& dir)
 {
     writeTga(dir / "land.tga", 128, 64, [](int, int) { return kRed; });
@@ -93,7 +93,7 @@ static void test_landscape_is_letterboxed(const fs::path& dir)
     CHECK(isClear(pixelAt(r, 32, 48)));
 }
 
-// Vertical 32x128: escala 0.5 -> 16x64, centrada en horizontal.
+// Portrait 32x128: scale 0.5 -> 16x64, centered horizontally.
 static void test_portrait_is_pillarboxed(const fs::path& dir)
 {
     writeTga(dir / "port.tga", 32, 128, [](int, int) { return kRed; });
@@ -106,7 +106,7 @@ static void test_portrait_is_pillarboxed(const fs::path& dir)
     CHECK(isClear(pixelAt(r, 40, 32)));
 }
 
-// Mas pequena que la casilla: NO se amplia, se centra tal cual.
+// Smaller than the cell: it is NOT enlarged, it is centered as is.
 static void test_small_image_is_not_upscaled(const fs::path& dir)
 {
     writeTga(dir / "small.tga", 16, 16, [](int, int) { return kRed; });
@@ -119,7 +119,7 @@ static void test_small_image_is_not_upscaled(const fs::path& dir)
     CHECK(isClear(pixelAt(r, 40, 40)));
 }
 
-// Exactamente del tamano de la casilla: pasa sin tocar.
+// Exactly the size of the cell: it passes through untouched.
 static void test_exact_size_fills_the_tile(const fs::path& dir)
 {
     writeTga(dir / "exact.tga", 64, 64, [](int, int) { return kBlue; });
@@ -130,7 +130,7 @@ static void test_exact_size_fills_the_tile(const fs::path& dir)
     CHECK(isBlue(pixelAt(r, 63, 63)));
 }
 
-// Reduccion 2:1 con caja: mitad izquierda roja, derecha azul, sin mezcla en el centro.
+// 2:1 reduction with box filter: left half red, right half blue, no blending at the center.
 static void test_downscale_keeps_the_halves(const fs::path& dir)
 {
     writeTga(dir / "halves.tga", 128, 128, [](int x, int) { return x < 64 ? kRed : kBlue; });
@@ -141,8 +141,8 @@ static void test_downscale_keeps_the_halves(const fs::path& dir)
     CHECK(isBlue(pixelAt(r, 53, 32)));
 }
 
-// Alfa 128: el color NO debe oscurecerse (promedio ponderado por alfa); sin eso
-// aparece un halo oscuro en los bordes de cualquier sprite recortado.
+// Alpha 128: the color must NOT darken (alpha-weighted average); without that
+// a dark halo appears at the edges of any cut-out sprite.
 static void test_alpha_does_not_darken_color(const fs::path& dir)
 {
     writeTga(dir / "alpha.tga", 128, 128, [](int, int) { return Rgba{ 0, 255, 0, 128 }; });
@@ -156,8 +156,8 @@ static void test_alpha_does_not_darken_color(const fs::path& dir)
     CHECK(c[3] == 128);
 }
 
-// Alfa a cero en una zona: el color de esos pixeles es irrelevante pero no debe
-// contaminar a los vecinos opacos al promediar.
+// Alpha at zero in an area: the color of those pixels is irrelevant but must not
+// contaminate the opaque neighbors when averaging.
 static void test_transparent_neighbours_do_not_bleed(const fs::path& dir)
 {
     writeTga(dir / "edge.tga", 128, 128, [](int x, int) {
@@ -181,8 +181,8 @@ static void test_unreadable_files(const fs::path& dir)
     CHECK(makeThumbnail(dir / "vacia.png").status == ThumbnailStatus::Unreadable);
 }
 
-// Solo la cabecera de un TGA de 20000x20000 (400 MP): se rechaza por las
-// dimensiones, SIN decodificar (no hay cuerpo que decodificar).
+// Only the header of a 20000x20000 TGA (400 MP): it is rejected by
+// dimensions, WITHOUT decoding (there is no body to decode).
 static void test_huge_image_is_rejected_without_decoding(const fs::path& dir)
 {
     {
@@ -199,7 +199,7 @@ static void test_huge_image_is_rejected_without_decoding(const fs::path& dir)
 
 static bool nearF(float a, float b) { return std::fabs(a - b) < 1e-6f; }
 
-// thumbnailUv: casilla -> rect UV con medio texel de margen por lado.
+// thumbnailUv: cell -> UV rect with half a texel of margin per side.
 static void test_thumbnail_uv()
 {
     const float size = static_cast<float>(kThumbAtlasSize);
@@ -210,11 +210,11 @@ static void test_thumbnail_uv()
     CHECK(nearF(first.u1, 63.5f / size));
     CHECK(nearF(first.v1, 63.5f / size));
 
-    const UvRect second = thumbnailUv(1);              // siguiente columna, misma fila
+    const UvRect second = thumbnailUv(1);              // next column, same row
     CHECK(nearF(second.u0, 64.5f / size));
     CHECK(nearF(second.v0, 0.5f / size));
 
-    const UvRect row1 = thumbnailUv(kThumbAtlasCells); // primera columna, segunda fila
+    const UvRect row1 = thumbnailUv(kThumbAtlasCells); // first column, second row
     CHECK(nearF(row1.u0, 0.5f / size));
     CHECK(nearF(row1.v0, 64.5f / size));
 
@@ -223,8 +223,8 @@ static void test_thumbnail_uv()
     CHECK(nearF(last.v1, 2047.5f / size));
 }
 
-// ThumbnailSlots: reparto, reutilizacion de la misma clave, desalojo LRU y
-// "no desalojar lo usado este frame".
+// ThumbnailSlots: distribution, reuse of the same key, LRU eviction and
+// "do not evict what was used this frame".
 static void test_slots_basic_assignment()
 {
     ThumbnailSlots s(4);
@@ -237,13 +237,13 @@ static void test_slots_basic_assignment()
     CHECK(a != b && a != c && a != d && b != c && b != d && c != d);
     CHECK(a < 4 && b < 4 && c < 4 && d < 4);
 
-    CHECK(s.assign(101) == a);        // misma clave: misma casilla
+    CHECK(s.assign(101) == a);        // same key: same cell
     CHECK(s.find(102) == b);
     CHECK(s.find(999) == ThumbnailSlots::kNone);
     CHECK(s.capacity() == 4);
 }
 
-// Todo el atlas usado ESTE frame: no hay a quien desalojar -> kNone, y nada se pierde.
+// The whole atlas used THIS frame: there is no one to evict -> kNone, and nothing is lost.
 static void test_slots_full_this_frame_returns_none()
 {
     ThumbnailSlots s(2);
@@ -255,7 +255,7 @@ static void test_slots_full_this_frame_returns_none()
     CHECK(s.find(2) == b);
 }
 
-// Frame nuevo: se desaloja la menos usada recientemente y se avisa de cual.
+// New frame: the least recently used one is evicted and which one is reported.
 static void test_slots_evict_least_recently_used()
 {
     ThumbnailSlots s(4);
@@ -263,7 +263,7 @@ static void test_slots_evict_least_recently_used()
     const uint32_t slot1 = s.assign(1);
     s.assign(2); s.assign(3); s.assign(4);
 
-    s.beginFrame();                                     // frame B: solo se toca la 2
+    s.beginFrame();                                     // frame B: only 2 is touched
     s.find(2);
 
     s.beginFrame();                                     // frame C
@@ -271,29 +271,29 @@ static void test_slots_evict_least_recently_used()
     const uint32_t slot5 = s.assign(5, &evicted);
     CHECK(slot5 != ThumbnailSlots::kNone);
     CHECK(evicted.has_value());
-    // Las candidatas (1, 3, 4) se usaron en el frame A; la 2 en el B. Empate en
-    // la mas antigua: gana la de indice de casilla menor, o sea la 1.
+    // The candidates (1, 3, 4) were used in frame A; 2 in B. Tie on
+    // the oldest: the one with the lower cell index wins, that is, 1.
     CHECK(evicted && *evicted == 1);
     CHECK(slot5 == slot1);
     CHECK(s.find(1) == ThumbnailSlots::kNone);
-    CHECK(s.find(2) != ThumbnailSlots::kNone);          // la tocada en B sobrevive
+    CHECK(s.find(2) != ThumbnailSlots::kNone);          // the one touched in B survives
 }
 
-// Una clave usada en el frame actual nunca se desaloja aunque sea la mas antigua en indice.
+// A key used in the current frame is never evicted even if it is the oldest by index.
 static void test_slots_never_evict_current_frame()
 {
     ThumbnailSlots s(2);
     s.beginFrame();
     s.assign(1); s.assign(2);
     s.beginFrame();
-    s.find(1);                                          // 1 usada ahora
+    s.find(1);                                          // 1 used now
     std::optional<uint64_t> evicted;
     s.assign(3, &evicted);
     CHECK(evicted && *evicted == 2);
     CHECK(s.find(1) != ThumbnailSlots::kNone);
 }
 
-// release() libera la casilla sin desalojar a nadie.
+// release() frees the cell without evicting anyone.
 static void test_slots_release_frees_a_slot()
 {
     ThumbnailSlots s(2);
@@ -303,20 +303,20 @@ static void test_slots_release_frees_a_slot()
     s.release(2);
     CHECK(s.find(2) == ThumbnailSlots::kNone);
     std::optional<uint64_t> evicted;
-    CHECK(s.assign(3, &evicted) == b);                  // reutiliza el hueco liberado
+    CHECK(s.assign(3, &evicted) == b);                  // reuses the freed slot
     CHECK(!evicted.has_value());
-    s.release(12345);                                   // clave inexistente: no pasa nada
+    s.release(12345);                                   // nonexistent key: nothing happens
 }
 
 // ── ThumbnailCache ───────────────────────────────────────────────────────────
-// El "worker" es una cola manual: el test decide cuando termina cada job, asi
-// que todo es determinista. El Uploader es un doble que registra cada lote.
+// The "worker" is a manual queue: the test decides when each job finishes, so
+// everything is deterministic. The Uploader is a double that records each batch.
 struct CacheHarness
 {
-    std::vector<std::function<void()>>  pending;   // jobs encolados sin ejecutar
-    std::vector<std::vector<uint32_t>>  uploads;   // slots de cada llamada al Uploader
+    std::vector<std::function<void()>>  pending;   // jobs enqueued without running
+    std::vector<std::vector<uint32_t>>  uploads;   // slots of each call to the Uploader
     bool                                uploadOk = true;
-    bool                                runnerAccepts = true;   // false: el pool rechaza el job
+    bool                                runnerAccepts = true;   // false: the pool rejects the job
     size_t                              maxPendingSeen = 0;
     ThumbnailCache                      cache;
 
@@ -340,8 +340,8 @@ struct CacheHarness
               maxInFlight, slotCapacity, std::move(decoder), std::move(disk), maxModelsInFlight)
     {}
 
-    // Termina todos los jobs encolados (como si los workers acabaran a la vez).
-    // Igual que el worker del JobSystem, TRAGA las excepciones de un job.
+    // Finishes all the enqueued jobs (as if the workers finished at the same time).
+    // Like the JobSystem worker, it SWALLOWS the exceptions of a job.
     void runAll()
     {
         std::vector<std::function<void()>> jobs = std::move(pending);
@@ -367,20 +367,20 @@ static fs::path makeImage(const fs::path& dir, const char* name, Rgba color = kR
     return p;
 }
 
-// Ciclo normal: pedir -> (nullopt) -> job -> subida -> pedir de nuevo -> UV.
+// Normal cycle: request -> (nullopt) -> job -> upload -> request again -> UV.
 static void test_cache_request_decode_upload_ready(const fs::path& dir)
 {
     CacheHarness h;
     const fs::path f = makeImage(dir, "cache_a.tga");
 
     h.cache.beginFrame();
-    CHECK(!h.cache.request(f));                 // primera vez: nada que ensenar
-    h.cache.pump();                             // lanza la decodificacion
+    CHECK(!h.cache.request(f));                 // first time: nothing to show
+    h.cache.pump();                             // launches the decoding
     CHECK(h.pending.size() == 1);
     CHECK(h.cache.inFlight() == 1);
 
     h.runAll();
-    h.cache.pump();                             // recoge y sube
+    h.cache.pump();                             // collects and uploads
     CHECK(h.uploads.size() == 1);
     CHECK(h.tilesUploaded() == 1);
     CHECK(h.cache.inFlight() == 0);
@@ -392,7 +392,7 @@ static void test_cache_request_decode_upload_ready(const fs::path& dir)
         CHECK(nearF(uv->u0, thumbnailUv(h.uploads[0][0]).u0));
 }
 
-// Review Focus 3: 6 imagenes con tope de 4 en vuelo -> nunca mas de 4 jobs vivos.
+// Review Focus 3: 6 images with a cap of 4 in flight -> never more than 4 live jobs.
 static void test_cache_caps_jobs_in_flight(const fs::path& dir)
 {
     CacheHarness h(4);
@@ -407,7 +407,7 @@ static void test_cache_caps_jobs_in_flight(const fs::path& dir)
     CHECK(h.cache.inFlight() == 4);
 
     h.runAll();
-    h.cache.pump();                             // sube 4 y lanza los 2 que faltaban
+    h.cache.pump();                             // uploads 4 and launches the 2 that were missing
     CHECK(h.tilesUploaded() == 4);
     CHECK(h.pending.size() == 2);
 
@@ -417,26 +417,26 @@ static void test_cache_caps_jobs_in_flight(const fs::path& dir)
     CHECK(h.maxPendingSeen <= 4);
 }
 
-// Review Focus 3: tope de subidas por frame y UNA sola llamada al Uploader por lote.
+// Review Focus 3: cap of uploads per frame and ONE single call to the Uploader per batch.
 static void test_cache_caps_uploads_per_frame_in_one_batch(const fs::path& dir)
 {
     CacheHarness h(8);
     for (int i = 0; i < 5; ++i)
         h.cache.request(makeImage(dir, ("up_" + std::to_string(i) + ".tga").c_str()));
     h.cache.beginFrame();
-    h.cache.pump(2);                            // lanza los 5 jobs
+    h.cache.pump(2);                            // launches the 5 jobs
     h.runAll();
 
     h.cache.pump(2);
     CHECK(h.uploads.size() == 1);
-    CHECK(h.uploads[0].size() == 2);            // dos casillas en UNA llamada
+    CHECK(h.uploads[0].size() == 2);            // two cells in ONE call
     h.cache.pump(2);
     CHECK(h.uploads.size() == 2 && h.uploads[1].size() == 2);
     h.cache.pump(2);
     CHECK(h.tilesUploaded() == 5);
 }
 
-// Fallo de decodificacion (fichero corrupto o inexistente): se cachea, sin reintentar.
+// Decoding failure (corrupt or nonexistent file): it is cached, without retrying.
 static void test_cache_failed_decode_is_cached(const fs::path& dir)
 {
     CacheHarness h;
@@ -452,15 +452,15 @@ static void test_cache_failed_decode_is_cached(const fs::path& dir)
     h.cache.beginFrame();
     CHECK(!h.cache.request(dir / "mala.png"));
     h.cache.pump();
-    CHECK(h.pending.empty());                   // no se reencola
+    CHECK(h.pending.empty());                   // it is not re-enqueued
 
-    // Un fichero que no existe ni siquiera llega a lanzar un job.
+    // A file that does not exist does not even get to launch a job.
     CHECK(!h.cache.request(dir / "fantasma.png"));
     h.cache.pump();
     CHECK(h.pending.empty());
 }
 
-// Fallo de subida (el backend dice que no): Failed, sin reintento.
+// Upload failure (the backend says no): Failed, without retry.
 static void test_cache_failed_upload_is_cached(const fs::path& dir)
 {
     CacheHarness h;
@@ -478,11 +478,11 @@ static void test_cache_failed_upload_is_cached(const fs::path& dir)
     h.cache.beginFrame();
     CHECK(!h.cache.request(f));
     h.cache.pump();
-    CHECK(h.pending.empty());                   // no se reintenta hasta que cambie el mtime
+    CHECK(h.pending.empty());                   // it is not retried until the mtime changes
     CHECK(h.uploads.size() == 1);
 }
 
-// Cambiar el contenido (mtime nuevo) regenera la miniatura al pasar refreshStamps.
+// Changing the content (new mtime) regenerates the thumbnail when passing refreshStamps.
 static void test_cache_regenerates_when_mtime_changes(const fs::path& dir)
 {
     CacheHarness h;
@@ -493,14 +493,14 @@ static void test_cache_regenerates_when_mtime_changes(const fs::path& dir)
     h.cache.pump(); h.runAll(); h.cache.pump();
     CHECK(h.tilesUploaded() == 1);
 
-    // Mismo nombre, otro contenido, mtime posterior.
+    // Same name, other content, later mtime.
     writeTga(f, 8, 8, [](int, int) { return kBlue; });
     std::error_code ec;
     fs::last_write_time(f, fs::last_write_time(f, ec) + std::chrono::seconds(10), ec);
 
     h.cache.beginFrame();
-    h.cache.refreshStamps();                    // detecta el cambio y descarta la entrada
-    CHECK(!h.cache.request(f));                 // ahora es una peticion nueva
+    h.cache.refreshStamps();                    // detects the change and discards the entry
+    CHECK(!h.cache.request(f));                 // now it is a new request
     h.cache.pump(); h.runAll(); h.cache.pump();
     CHECK(h.tilesUploaded() == 2);
 
@@ -508,7 +508,7 @@ static void test_cache_regenerates_when_mtime_changes(const fs::path& dir)
     CHECK(h.cache.request(f).has_value());
 }
 
-// refreshStamps sin cambios no regenera nada.
+// refreshStamps without changes regenerates nothing.
 static void test_cache_refresh_without_changes_is_a_noop(const fs::path& dir)
 {
     CacheHarness h;
@@ -525,7 +525,7 @@ static void test_cache_refresh_without_changes_is_a_noop(const fs::path& dir)
     CHECK(h.tilesUploaded() == 1);
 }
 
-// Review Focus 4: cambio de carpeta a mitad de carga -> el resultado tardio se ignora.
+// Review Focus 4: folder change halfway through loading -> the late result is ignored.
 static void test_cache_new_generation_discards_pending(const fs::path& dir)
 {
     CacheHarness h;
@@ -533,23 +533,23 @@ static void test_cache_new_generation_discards_pending(const fs::path& dir)
 
     h.cache.beginFrame();
     h.cache.request(f);
-    h.cache.pump();                             // job en vuelo
+    h.cache.pump();                             // job in flight
     CHECK(h.cache.inFlight() == 1);
 
-    h.cache.newGeneration();                    // el usuario cambia de carpeta
-    h.runAll();                                 // el job termina despues
+    h.cache.newGeneration();                    // the user changes folder
+    h.runAll();                                 // the job finishes afterwards
     h.cache.pump();
-    CHECK(h.uploads.empty());                   // su resultado no se sube
-    CHECK(h.cache.inFlight() == 0);             // pero el hueco en vuelo se libera
+    CHECK(h.uploads.empty());                   // its result is not uploaded
+    CHECK(h.cache.inFlight() == 0);             // but the in-flight slot is freed
 
-    // Volver a pedirlo funciona con normalidad.
+    // Requesting it again works normally.
     h.cache.beginFrame();
     CHECK(!h.cache.request(f));
     h.cache.pump(); h.runAll(); h.cache.pump();
     CHECK(h.tilesUploaded() == 1);
 }
 
-// newGeneration conserva lo ya subido: volver a la carpeta anterior no decodifica otra vez.
+// newGeneration keeps what was already uploaded: going back to the previous folder does not decode again.
 static void test_cache_new_generation_keeps_ready_entries(const fs::path& dir)
 {
     CacheHarness h;
@@ -565,7 +565,7 @@ static void test_cache_new_generation_keeps_ready_entries(const fs::path& dir)
     CHECK(h.pending.empty());
 }
 
-// Review Focus 6: la casilla la reutiliza otra imagen -> se vuelve a decodificar, no se pinta la ajena.
+// Review Focus 6: the cell is reused by another image -> it is decoded again, the other one's is not drawn.
 static void test_cache_evicted_slot_is_requested_again(const fs::path& dir)
 {
     CacheHarness h(4, /*slotCapacity=*/2);
@@ -575,24 +575,24 @@ static void test_cache_evicted_slot_is_requested_again(const fs::path& dir)
 
     h.cache.beginFrame();
     h.cache.request(a); h.cache.request(b);
-    h.cache.pump(); h.runAll(); h.cache.pump();          // a y b ocupan las 2 casillas
+    h.cache.pump(); h.runAll(); h.cache.pump();          // a and b occupy the 2 cells
     CHECK(h.tilesUploaded() == 2);
 
     h.cache.beginFrame();
-    h.cache.request(c);                                  // nueva: hace falta desalojar una
+    h.cache.request(c);                                  // new: one has to be evicted
     h.cache.pump(); h.runAll();
-    h.cache.beginFrame();                                // frame siguiente: a y b ya no se usan
-    h.cache.pump();                                      // c entra y desaloja a una de las dos
+    h.cache.beginFrame();                                // next frame: a and b are no longer used
+    h.cache.pump();                                      // c comes in and evicts one of the two
     CHECK(h.tilesUploaded() == 3);
 
     h.cache.beginFrame();
     const bool aReady = h.cache.request(a).has_value();
     const bool bReady = h.cache.request(b).has_value();
-    CHECK(aReady != bReady);                             // exactamente una perdio su casilla
+    CHECK(aReady != bReady);                             // exactly one lost its cell
     CHECK(h.cache.request(c).has_value());
 }
 
-// Review Focus 5: el resultado llega DESPUES de destruir el cache -> no toca memoria liberada.
+// Review Focus 5: the result arrives AFTER destroying the cache -> it does not touch freed memory.
 static void test_cache_late_result_after_destruction_is_harmless(const fs::path& dir)
 {
     const fs::path f = makeImage(dir, "late.tga");
@@ -604,15 +604,15 @@ static void test_cache_late_result_after_destruction_is_harmless(const fs::path&
         c.beginFrame();
         c.request(f);
         c.pump();
-    }                                                     // el cache muere con el job sin ejecutar
+    }                                                     // the cache dies with the job not run
     CHECK(orphan.size() == 1);
-    for (auto& job : orphan) job();                       // no debe caerse
+    for (auto& job : orphan) job();                       // it must not crash
 }
 
-// ── Fix pass de la revision final ────────────────────────────────────────────
+// ── Fix pass of the final review ────────────────────────────────────────────
 
-// Fichero virtual: cabecera de un TGA de 20000x20000 a 32 bpp y despues ceros,
-// generados al vuelo (sin memoria). Cuenta cuantos bytes se le pidieron.
+// Virtual file: header of a 20000x20000 TGA at 32 bpp and then zeros,
+// generated on the fly (no memory). It counts how many bytes were requested from it.
 class VirtualHugeTga : public std::streambuf
 {
 public:
@@ -643,19 +643,19 @@ private:
     uint64_t m_served = 0;
 };
 
-// Review Focus 1, de verdad: rechazar por dimensiones debe costar la CABECERA, no
-// leer el fichero entero a memoria. Un TGA de 20000x20000 son 1,6 GB.
+// Review Focus 1, for real: rejecting by dimensions must cost the HEADER, not
+// reading the whole file into memory. A 20000x20000 TGA is 1.6 GB.
 static void test_huge_image_does_not_read_the_whole_file()
 {
-    VirtualHugeTga buf(200ull * 1024 * 1024);          // 200 MB de "fichero"
+    VirtualHugeTga buf(200ull * 1024 * 1024);          // 200 MB of "file"
     std::istream   in(&buf);
     ThumbnailResult r = makeThumbnailFromStream(in);
     CHECK(r.status == ThumbnailStatus::TooLarge);
-    CHECK(buf.served() <= 1024 * 1024);                // solo la cabecera, no el fichero
+    CHECK(buf.served() <= 1024 * 1024);                // only the header, not the file
 }
 
-// Un job que lanza NO informa (el worker del JobSystem se traga la excepcion): si
-// el cache no se protege, m_inFlight queda colgado y con tope 1 no carga nada mas.
+// A job that throws does NOT report (the JobSystem worker swallows the exception): if
+// the cache does not protect itself, m_inFlight is left hanging and with cap 1 nothing else loads.
 static void test_cache_throwing_decoder_does_not_leak_in_flight(const fs::path& dir)
 {
     CacheHarness h(1, kThumbSlotCount,
@@ -667,21 +667,21 @@ static void test_cache_throwing_decoder_does_not_leak_in_flight(const fs::path& 
     h.cache.request(a);
     h.cache.request(b);
     h.cache.pump();
-    CHECK(h.pending.size() == 1);                       // tope 1: solo lanza uno
-    h.runAll();                                         // ese job lanza
+    CHECK(h.pending.size() == 1);                       // cap 1: it only launches one
+    h.runAll();                                         // that job throws
     h.cache.pump();
-    CHECK(h.cache.inFlight() == 1);                     // ya lanzo el SEGUNDO: el hueco se libero
+    CHECK(h.cache.inFlight() == 1);                     // it already launched the SECOND: the slot was freed
     CHECK(h.pending.size() == 1);
     h.runAll();
     h.cache.pump();
     CHECK(h.cache.inFlight() == 0);
     CHECK(h.uploads.empty());
     h.cache.beginFrame();
-    CHECK(!h.cache.request(a));                         // Failed: no se reintenta
+    CHECK(!h.cache.request(a));                         // Failed: it is not retried
 }
 
-// El pool rechaza el job (parado): el hueco en vuelo se devuelve y la entrada queda
-// en Failed, sin reintentar en bucle.
+// The pool rejects the job (stopped): the in-flight slot is given back and the entry is left
+// in Failed, without retrying in a loop.
 static void test_cache_rejected_job_does_not_leak_in_flight(const fs::path& dir)
 {
     CacheHarness h(1);
@@ -697,12 +697,12 @@ static void test_cache_rejected_job_does_not_leak_in_flight(const fs::path& dir)
     h.cache.beginFrame();
     CHECK(!h.cache.request(a));
     h.cache.pump();
-    CHECK(h.pending.empty());                           // Failed: no se vuelve a intentar
+    CHECK(h.pending.empty());                           // Failed: it is not tried again
 }
 
-// El id de un boton de ImGui sale del HASH de su etiqueta entera: pasar de "IMG" a
-// "" cuando llega la miniatura cambia el id y ImGui pierde el clic o el arrastre en
-// curso. La etiqueta estable lleva "###icon".
+// An ImGui button's id comes from the HASH of its whole label: going from "IMG" to
+// "" when the thumbnail arrives changes the id and ImGui loses the click or the drag in
+// progress. The stable label carries "###icon".
 static void test_icon_button_id_is_stable_when_thumbnail_appears()
 {
     ImGuiContext* ctx = ImGui::CreateContext();
@@ -729,7 +729,7 @@ static void test_icon_button_id_is_stable_when_thumbnail_appears()
     const ImGuiID withoutThumb = idOf(assetIconButtonLabel("IMG", false));
     const ImGuiID withThumb    = idOf(assetIconButtonLabel("IMG", true));
     CHECK(withoutThumb == withThumb);
-    // Control: con las etiquetas a pelo el id SI cambia, o el test no probaria nada.
+    // Control: with the bare labels the id DOES change, or the test would prove nothing.
     CHECK(idOf("IMG") != idOf(""));
 
     ImGui::DestroyContext(ctx);
@@ -790,7 +790,7 @@ static void test_raster_uses_vertex_color_without_texture()
     CHECK(c[1] > c[0] + 40 && c[1] > c[2] + 40);
 }
 
-// Encuadre: el cubo ocupa la casilla con margen y no toca el borde.
+// Framing: the cube fills the cell with a margin and does not touch the edge.
 static void test_raster_frames_the_bbox_with_a_margin()
 {
     const ThumbnailResult r = rasterizeThumbnail({ cubePart() });
@@ -804,8 +804,8 @@ static void test_raster_frames_the_bbox_with_a_margin()
                 minX = std::min<int>(minX, x); maxX = std::max<int>(maxX, x);
                 minY = std::min<int>(minY, y); maxY = std::max<int>(maxY, y);
             }
-    CHECK(minX >= 1 && minY >= 1 && maxX <= 62 && maxY <= 62);    // margen
-    CHECK(std::max(maxX - minX, maxY - minY) >= 52);               // y aun asi llena la casilla
+    CHECK(minX >= 1 && minY >= 1 && maxX <= 62 && maxY <= 62);    // margin
+    CHECK(std::max(maxX - minX, maxY - minY) >= 52);               // and even so it fills the cell
 }
 
 static void test_raster_is_deterministic()
@@ -824,7 +824,7 @@ static void test_raster_metallic_and_roughness_change_the_result()
     CHECK(rasterizeThumbnail({ shiny }).rgba != rasterizeThumbnail({ matte }).rgba);
 }
 
-// Las dos caras de un triangulo se pintan igual (la miniatura no hace culling).
+// The two faces of a triangle are drawn the same (the thumbnail does no culling).
 static void test_raster_draws_back_faces()
 {
     auto tri = [](bool flip) {
@@ -846,13 +846,13 @@ static void test_raster_draws_back_faces()
     CHECK(covered(a) > 100);
     CHECK(covered(a) == covered(b));
 
-    // Y se ILUMINAN igual: normales hacia atras se invierten, no dejan la cara a oscuras.
+    // And they are LIT the same: backward normals are flipped, they do not leave the face dark.
     PreviewPart back = tri(false);
     for (glm::vec3& n : back.normals) n = -n;
     CHECK(rasterizeThumbnail({ back }).rgba == a.rgba);
 }
 
-// Review Focus 5: basura -> Unreadable, sin NaN ni crash.
+// Review Focus 5: garbage -> Unreadable, without NaN or a crash.
 static void test_raster_degenerate_input_is_unreadable()
 {
     CHECK(rasterizeThumbnail({}).status == ThumbnailStatus::Unreadable);
@@ -871,7 +871,7 @@ static void test_raster_degenerate_input_is_unreadable()
     outOfRange.indices = { 0, 1, 999 };
     CHECK(rasterizeThumbnail({ outOfRange }).status == ThumbnailStatus::Unreadable);
 
-    // Un triangulo bueno y uno con NaN: el bueno se pinta y no hay NaN en la salida.
+    // One good triangle and one with NaN: the good one is drawn and there is no NaN in the output.
     PreviewPart mixed = cubePart();
     mixed.positions.push_back({ q, q, q });
     const uint32_t bad = static_cast<uint32_t>(mixed.positions.size() - 1);
@@ -895,7 +895,7 @@ static void writeMat(const fs::path& p, const MaterialAsset& a)
     CHECK(saveMaterialAsset(p, a, &err));
 }
 
-// Una imagen pasa por el decodificador de siempre: mismos bytes.
+// An image goes through the usual decoder: same bytes.
 static void test_asset_thumbnail_image_is_unchanged(const fs::path& dir)
 {
     writeTga(dir / "img_same.tga", 20, 10, [](int x, int) { return x < 10 ? kRed : kBlue; });
@@ -938,8 +938,8 @@ static void test_material_thumbnail_takes_its_albedo(const fs::path& dir)
     CHECK(hasDep(r, dir / "mat_red.tga"));
 }
 
-// Heredado -> gris neutro. Y los valores LEIDOS del .mat cuentan: se prueban
-// roughness 0.1 frente a 0.9 y metallic 1, ninguno el default.
+// Inherited -> neutral gray. And the values READ from the .mat count: they are tested with
+// roughness 0.1 against 0.9 and metallic 1, none of them the default.
 static void test_material_thumbnail_inherits_neutral_and_reads_factors(const fs::path& dir)
 {
     writeMat(dir / "neutral.mat", MaterialAsset{});
@@ -948,7 +948,7 @@ static void test_material_thumbnail_inherits_neutral_and_reads_factors(const fs:
     if (!n.rgba.empty())
     {
         const Rgba c = pixelAt(n, 32, 32);
-        CHECK(std::abs(int(c[0]) - int(c[1])) <= 2 && std::abs(int(c[1]) - int(c[2])) <= 12);   // gris (el ambiente tinta un poco el azul)
+        CHECK(std::abs(int(c[0]) - int(c[1])) <= 2 && std::abs(int(c[1]) - int(c[2])) <= 12);   // gray (the ambient tints the blue a bit)
     }
 
     MaterialAsset smooth; smooth.roughness = 0.1f;
@@ -961,8 +961,8 @@ static void test_material_thumbnail_inherits_neutral_and_reads_factors(const fs:
     CHECK(makeAssetThumbnail(dir / "metal.mat").rgba != n.rgba);
 }
 
-// Textura que no existe: esfera neutra (es lo que pinta el motor) y la ruta sigue
-// siendo dependencia, para regenerar cuando aparezca.
+// Texture that does not exist: neutral sphere (it is what the engine draws) and the path is still
+// a dependency, to regenerate when it shows up.
 static void test_material_thumbnail_missing_texture_is_neutral(const fs::path& dir)
 {
     MaterialAsset a;
@@ -986,9 +986,9 @@ static void test_stamp_file_and_dependencies(const fs::path& dir)
     CHECK(s.exists && s.mtime == static_cast<int64_t>(fs::last_write_time(f, ec).time_since_epoch().count()));
 
     ThumbnailResult r;
-    r.dependencies = { { dir / "no_hay.tga" }, { f }, { dir / "no_hay.tga" } };   // con duplicado y con el propio asset
+    r.dependencies = { { dir / "no_hay.tga" }, { f }, { dir / "no_hay.tga" } };   // with a duplicate and with the asset itself
     stampDependencies(r, s);
-    CHECK(r.dependencies.size() == 2);                       // self delante, sin duplicados
+    CHECK(r.dependencies.size() == 2);                       // self first, without duplicates
     if (r.dependencies.size() == 2)
     {
         CHECK(r.dependencies[0] == s);
@@ -1049,7 +1049,7 @@ static void test_disk_roundtrip(const fs::path& dir)
     CHECK(animBack && animBack->status == ThumbnailStatus::AnimationOnly && animBack->rgba.empty());
 }
 
-// Review Focus 2: cambia una dependencia (no el asset), o aparece una que no estaba.
+// Review Focus 2: a dependency changes (not the asset), or one appears that was not there.
 static void test_disk_dependency_change_is_a_miss(const fs::path& dir)
 {
     const ThumbnailDiskCache disk(dir / "cache_dep");
@@ -1071,7 +1071,7 @@ static void test_disk_dependency_change_is_a_miss(const fs::path& dir)
     CHECK(!disk.load(asset).has_value());
 }
 
-// Review Focus 3: fichero de otra version, truncado o de otra ruta con el mismo nombre.
+// Review Focus 3: file from another version, truncated or from another path with the same name.
 static void test_disk_hostile_files_are_a_miss(const fs::path& dir)
 {
     const ThumbnailDiskCache disk(dir / "cache_bad");
@@ -1084,17 +1084,17 @@ static void test_disk_hostile_files_are_a_miss(const fs::path& dir)
     const std::string good = readAll(disk.fileFor(a));
 
     std::string otherVersion = good;
-    otherVersion[4] = static_cast<char>(otherVersion[4] + 1);          // version, tras la magia
+    otherVersion[4] = static_cast<char>(otherVersion[4] + 1);          // version, after the magic
     writeAll(disk.fileFor(a), otherVersion);
     CHECK(!disk.load(a).has_value());
 
     writeAll(disk.fileFor(a), good.substr(0, good.size() - 10));
     CHECK(!disk.load(a).has_value());
 
-    writeAll(disk.fileFor(a), good + "x");                            // bytes de mas
+    writeAll(disk.fileFor(a), good + "x");                            // extra bytes
     CHECK(!disk.load(a).has_value());
 
-    writeAll(disk.fileFor(b), good);                                  // colision de hash simulada
+    writeAll(disk.fileFor(b), good);                                  // simulated hash collision
     CHECK(!disk.load(b).has_value());
 
     writeAll(disk.fileFor(a), "");
@@ -1117,7 +1117,7 @@ static void test_disk_leaves_no_temporaries(const fs::path& dir)
     {
         const fs::path a = makeImage(dir, ("disk_t" + std::to_string(i) + ".tga").c_str());
         CHECK(disk.store(a, stampedResult(a)));
-        CHECK(disk.store(a, stampedResult(a)));                         // sobrescribe
+        CHECK(disk.store(a, stampedResult(a)));                         // overwrites
     }
     int files = 0, temps = 0;
     for (const auto& e : fs::directory_iterator(dir / "cache_tmp"))
@@ -1129,7 +1129,7 @@ static void test_disk_leaves_no_temporaries(const fs::path& dir)
     CHECK(temps == 0);
 }
 
-// Sin dependencias selladas no se guarda nada: no se sabria cuando invalidar.
+// Without sealed dependencies nothing is saved: it would not be known when to invalidate.
 static void test_disk_refuses_unstamped_results(const fs::path& dir)
 {
     const ThumbnailDiskCache disk(dir / "cache_unstamped");
@@ -1139,7 +1139,7 @@ static void test_disk_refuses_unstamped_results(const fs::path& dir)
     CHECK(!disk.store(a, r));
 }
 
-// ── ThumbnailCache: dependencias, disco, estado y tope de modelos ────────────
+// ── ThumbnailCache: dependencies, disk, state and model cap ────────────
 
 static ThumbnailResult okTile()
 {
@@ -1149,7 +1149,7 @@ static ThumbnailResult okTile()
     return r;
 }
 
-// Review Focus 2: cambia la textura de la que depende la miniatura, no el asset.
+// Review Focus 2: the texture the thumbnail depends on changes, not the asset.
 static void test_cache_dependency_change_regenerates(const fs::path& dir)
 {
     const fs::path asset = makeImage(dir, "dep_asset.tga");
@@ -1168,7 +1168,7 @@ static void test_cache_dependency_change_regenerates(const fs::path& dir)
 
     h.cache.beginFrame();
     h.cache.refreshStamps();
-    CHECK(h.cache.request(asset).has_value());          // sin cambios: sigue lista
+    CHECK(h.cache.request(asset).has_value());          // no changes: it stays ready
 
     bumpMtime(dep);
     h.cache.beginFrame();
@@ -1178,14 +1178,14 @@ static void test_cache_dependency_change_regenerates(const fs::path& dir)
     CHECK(calls == 2);
 }
 
-// Review Focus 1: el asset cambia mientras se decodifica. El mtime se tomo ANTES,
-// asi que el siguiente refreshStamps lo ve y regenera.
+// Review Focus 1: the asset changes while it is being decoded. The mtime was taken BEFORE,
+// so the next refreshStamps sees it and regenerates.
 static void test_cache_change_during_decode_regenerates(const fs::path& dir)
 {
     const fs::path asset = makeImage(dir, "racy.tga");
     int calls = 0;
     CacheHarness h(4, kThumbSlotCount, [&](const fs::path& p) {
-        if (++calls == 1) bumpMtime(p);                  // "reexportado" a mitad de decodificar
+        if (++calls == 1) bumpMtime(p);                  // "re-exported" halfway through decoding
         return okTile();
     });
     h.cache.beginFrame();
@@ -1200,25 +1200,25 @@ static void test_cache_change_during_decode_regenerates(const fs::path& dir)
 
 static void test_cache_status_reports_animation_only(const fs::path& dir)
 {
-    const fs::path f = makeImage(dir, "anim_only.fbx");     // el contenido da igual: decodificador falso
+    const fs::path f = makeImage(dir, "anim_only.fbx");     // the content does not matter: fake decoder
     CacheHarness h(4, kThumbSlotCount, [](const fs::path&) {
         ThumbnailResult r;
         r.status = ThumbnailStatus::AnimationOnly;
         return r;
     });
     h.cache.beginFrame();
-    CHECK(!h.cache.status(f).has_value());               // pendiente: aun no se sabe
+    CHECK(!h.cache.status(f).has_value());               // pending: not known yet
     h.cache.request(f);
     h.cache.pump(); h.runAll(); h.cache.pump();
     CHECK(h.cache.status(f) == ThumbnailStatus::AnimationOnly);
     h.cache.beginFrame();
     CHECK(!h.cache.request(f).has_value());
     h.cache.pump();
-    CHECK(h.pending.empty());                            // no se reintenta
+    CHECK(h.pending.empty());                            // it is not retried
     CHECK(h.uploads.empty());
 }
 
-// Review Focus 4: 4 modelos y 2 imagenes a la vez -> 2 modelos + 2 imagenes en vuelo.
+// Review Focus 4: 4 models and 2 images at once -> 2 models + 2 images in flight.
 static void test_cache_caps_models_in_flight(const fs::path& dir)
 {
     CacheHarness h(4, kThumbSlotCount, [](const fs::path&) { return okTile(); });
@@ -1230,7 +1230,7 @@ static void test_cache_caps_models_in_flight(const fs::path& dir)
     CHECK(h.cache.modelsInFlight() == 2);
 
     h.runAll();
-    h.cache.pump();                                      // quedan los 2 modelos
+    h.cache.pump();                                      // the 2 models remain
     CHECK(h.cache.modelsInFlight() == 2);
     h.runAll();
     h.cache.pump();
@@ -1259,7 +1259,7 @@ static void test_cache_stores_decoded_results_on_disk(const fs::path& dir)
 {
     auto disk = std::make_shared<ThumbnailDiskCache>(dir / "cache_store");
     const fs::path f = makeImage(dir, "store.tga");
-    CacheHarness h(4, kThumbSlotCount, {}, disk);         // decodificador real
+    CacheHarness h(4, kThumbSlotCount, {}, disk);         // real decoder
     h.cache.beginFrame();
     h.cache.request(f);
     h.cache.pump(); h.runAll(); h.cache.pump();
@@ -1268,9 +1268,9 @@ static void test_cache_stores_decoded_results_on_disk(const fs::path& dir)
     if (back) CHECK(back->rgba == makeThumbnail(f).rgba);
 }
 
-// Revision final, Important 1: la TEXTURA cambia mientras se decodifica. El
-// decodificador la sello ANTES de leerla; ese sello no puede sustituirse por uno
-// tomado despues, o la miniatura queda vieja para siempre (tambien en disco).
+// Final review, Important 1: the TEXTURE changes while it is being decoded. The
+// decoder sealed it BEFORE reading it; that seal cannot be replaced by one
+// taken afterwards, or the thumbnail is left stale forever (also on disk).
 static void test_cache_dependency_changed_during_decode_regenerates(const fs::path& dir)
 {
     const fs::path asset = makeImage(dir, "racy_dep_asset.tga");
@@ -1278,8 +1278,8 @@ static void test_cache_dependency_changed_during_decode_regenerates(const fs::pa
     int calls = 0;
     CacheHarness h(4, kThumbSlotCount, [&](const fs::path&) {
         ThumbnailResult r = okTile();
-        r.dependencies.push_back(stampFile(dep));          // sellada antes de "leerla"
-        if (++calls == 1) bumpMtime(dep);                  // se guarda a mitad de decodificar
+        r.dependencies.push_back(stampFile(dep));          // sealed before "reading it"
+        if (++calls == 1) bumpMtime(dep);                  // it is saved halfway through decoding
         return r;
     });
     h.cache.beginFrame();
@@ -1292,16 +1292,16 @@ static void test_cache_dependency_changed_during_decode_regenerates(const fs::pa
     CHECK(calls == 2);
 }
 
-// Revision final: un fallo por NO PODER ABRIR el asset (bloqueado por otro
-// programa, placeholder de OneDrive) es transitorio: no se guarda en disco, o
-// quedaria Unreadable para siempre aunque el fichero no cambie.
+// Final review: a failure due to NOT BEING ABLE TO OPEN the asset (locked by another
+// program, OneDrive placeholder) is transient: it is not saved to disk, or it
+// would stay Unreadable forever even though the file does not change.
 static void test_cache_does_not_persist_unopenable_assets(const fs::path& dir)
 {
     auto disk = std::make_shared<ThumbnailDiskCache>(dir / "cache_transient");
     const fs::path f = makeImage(dir, "vanishing.tga");
     CacheHarness h(4, kThumbSlotCount, [](const fs::path& p) {
         std::error_code ec;
-        fs::remove(p, ec);                                 // no se puede abrir durante la decodificacion
+        fs::remove(p, ec);                                 // cannot be opened during decoding
         return ThumbnailResult{};
     }, disk);
     h.cache.beginFrame();
@@ -1311,7 +1311,7 @@ static void test_cache_does_not_persist_unopenable_assets(const fs::path& dir)
     CHECK(!fs::exists(disk->fileFor(f)));
 }
 
-// Un .gltf declara su .bin: reexportar el buffer regenera la miniatura.
+// A .gltf declares its .bin: re-exporting the buffer regenerates the thumbnail.
 static void test_thumbnail_gltf_declares_its_bin(const fs::path& dir)
 {
     std::ofstream(dir / "tri.bin", std::ios::binary) << std::string(60, '\0');

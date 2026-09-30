@@ -1,5 +1,5 @@
-// Test headless de AssetImport (sin GUI). Plain main + CHECK, mismo patron
-// que content_browser_tests.cpp.
+// Headless test of AssetImport (no GUI). Plain main + CHECK, same pattern
+// as content_browser_tests.cpp.
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Core/ImportSettings.h"
 
@@ -28,7 +28,7 @@ static fs::path makeFixture()
 static void test_is_importable_extension()
 {
     CHECK(isImportableExtension(".fbx"));
-    CHECK(isImportableExtension(".PNG"));   // mayusculas
+    CHECK(isImportableExtension(".PNG"));   // uppercase
     CHECK(isImportableExtension(".wav"));
     CHECK(isImportableExtension(".ttf"));
     CHECK(!isImportableExtension(".txt"));
@@ -74,16 +74,16 @@ static void test_import_missing_source_fails(const fs::path& root)
     CHECK(!outcome.errorMessage.empty());
 }
 
-// Soltar una CARPETA (no un fichero) desde el Explorador: no debe intentar
-// copy_file sobre un directorio.
+// Dropping a FOLDER (not a file) from Explorer: it must not try
+// copy_file on a directory.
 static void test_import_directory_source_fails(const fs::path& root)
 {
     AssetImportOutcome outcome = importExternalAsset(root / "source", root / "dest");
     CHECK(outcome.result == AssetImportResult::RejectedCopyFailed);
 }
 
-// El destino ya tiene un fichero con ese nombre: se rechaza SIN tocarlo, no
-// se sobreescribe ni se renombra en automatico.
+// The destination already has a file with that name: it is rejected WITHOUT
+// touching it, it is not overwritten or renamed automatically.
 static void test_import_name_conflict_does_not_overwrite(const fs::path& root)
 {
     fs::path destDir = root / "dest" / "copia2";
@@ -102,8 +102,8 @@ static void test_import_name_conflict_does_not_overwrite(const fs::path& root)
     CHECK(ss.str() == "version-vieja");
 }
 
-// destDir vacio: "" / "x.png" resolveria a un path relativo y copiaria al CWD
-// del proceso. Se rechaza antes de tocar disco.
+// Empty destDir: "" / "x.png" would resolve to a relative path and copy into the
+// process CWD. It is rejected before touching disk.
 static void test_import_empty_dest_dir_is_rejected(const fs::path& root)
 {
     fs::path source = root / "source" / "vacio.png";
@@ -114,12 +114,12 @@ static void test_import_empty_dest_dir_is_rejected(const fs::path& root)
     CHECK(outcome.result == AssetImportResult::RejectedCopyFailed);
     CHECK(!outcome.errorMessage.empty());
     std::error_code ec;
-    CHECK(!fs::exists(fs::path("vacio.png"), ec)); // nada aterrizo en el CWD
+    CHECK(!fs::exists(fs::path("vacio.png"), ec)); // nothing landed in the CWD
 }
 
-// Si destDir no se puede crear (un tramo del path es un FICHERO), el mensaje
-// tiene que decir que falto la carpeta, no el vago "no se encuentra la ruta"
-// que devuelve copy_file despues.
+// If destDir cannot be created (a segment of the path is a FILE), the message
+// has to say that the folder was missing, not the vague "path not found"
+// that copy_file returns afterwards.
 static void test_import_uncreatable_dest_dir_reports_cause(const fs::path& root)
 {
     fs::path blocker = root / "dest" / "es_un_fichero";
@@ -148,9 +148,9 @@ static void test_import_external_copies_sidecar(const fs::path& root)
     CHECK(outcome.result == AssetImportResult::Copied);
     CHECK(outcome.errorMessage.empty());
     CHECK(loadTextureImportSettings(outcome.destPath) == s);
-    CHECK(fs::exists(importSidecarPath(source)));                   // el origen conserva el suyo
+    CHECK(fs::exists(importSidecarPath(source)));                   // the source keeps its own
 
-    // Sin sidecar en el origen: no aparece ninguno en el destino.
+    // No sidecar at the source: none shows up at the destination.
     const fs::path plain = root / "source" / "liso.png";
     std::ofstream(plain) << "png";
     const AssetImportOutcome o2 = importExternalAsset(plain, destDir);
@@ -158,9 +158,9 @@ static void test_import_external_copies_sidecar(const fs::path& root)
     CHECK(!fs::exists(importSidecarPath(o2.destPath)));
 }
 
-// Revision final, Critical 1: importar un .gltf separado o un .obj con .mtl copia
-// tambien lo que el modelo lee, en su misma ruta relativa. Sin esto la copia del
-// proyecto no carga (.gltf) o sale sin material ni textura (.obj).
+// Final review, Critical 1: importing a separate .gltf or an .obj with .mtl also
+// copies what the model reads, at the same relative path. Without this the project
+// copy does not load (.gltf) or comes out with no material or texture (.obj).
 static void test_import_model_brings_its_companions(const fs::path& root)
 {
     std::error_code ec;

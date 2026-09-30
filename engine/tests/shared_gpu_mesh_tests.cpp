@@ -1,14 +1,14 @@
-// Test headless del compartido de recursos GPU (sin GUI, sin device Vulkan).
-// SharedGpuMeshCache no llama a Vulkan: crear y destruir son callbacks del
-// caller, y eso es justo lo que permite ejercitar aquí la parte que puede
-// romperse de verdad — la clave de contenido y el refcount — con handles
-// falsos pero DISTINTOS por creación. Plain main + asserts, sin framework,
-// coherente con frustum_tests.cpp.
+// Headless test of GPU resource sharing (no GUI, no Vulkan device).
+// SharedGpuMeshCache does not call Vulkan: create and destroy are callbacks of the
+// caller, and that is exactly what allows exercising here the part that can
+// really break (the content key and the refcount) with fake handles but
+// DISTINCT per creation. Plain main + asserts, no framework,
+// consistent with frustum_tests.cpp.
 //
-// Lo que se prueba no es "¿comparte?" sino las dos formas de romperlo:
-// compartir de MÁS (dos mallas distintas acabando en el mismo buffer) y
-// liberar de MÁS (borrar un objeto y llevarse por delante los recursos que
-// sus gemelos siguen dibujando).
+// What is tested is not "does it share?" but the two ways to break it:
+// sharing TOO MUCH (two different meshes ending up in the same buffer) and
+// releasing TOO MUCH (deleting one object and taking with it the resources
+// that its twins are still drawing).
 #include "DonTopo/Renderer/SharedGpuMesh.h"
 #include "DonTopo/Renderer/Mesh.h"
 
@@ -26,10 +26,10 @@ using namespace DonTopo;
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
-// Handles falsos con identidad propia: cada creación reparte números nuevos, de
-// modo que "los dos objetos tienen el mismo VkBuffer" solo puede pasar si la
-// entrada NO se ha creado dos veces. Afirmar tamaños iguales no distinguiría
-// nada; afirmar handles iguales sí.
+// Fake handles with their own identity: each creation hands out new numbers, so
+// that "both objects have the same VkBuffer" can only happen if the
+// entry has NOT been created twice. Asserting equal sizes would not distinguish
+// anything; asserting equal handles does.
 namespace
 {
     struct FakeGpu
@@ -67,8 +67,8 @@ namespace
         SharedGpuMeshCache::Destroyer destroyer() { return [this](const SharedGpuMesh& g) { destroy(g); }; }
     };
 
-    // Cubo mínimo pero con contenido real: dos triángulos con posiciones y UVs
-    // distintas entre sí, para que cambiar un solo vértice cambie el hash.
+    // Minimal cube but with real content: two triangles with positions and UVs
+    // different from each other, so that changing a single vertex changes the hash.
     Mesh makeMesh(const char* name, float x = 0.0f)
     {
         Mesh m;
@@ -106,17 +106,17 @@ namespace
     }
 }
 
-// N objetos con la misma malla+material resuelven a la MISMA entrada, y el
-// creador se invoca una sola vez. Sin esto, agrupar draws por "mismo vertex
-// buffer" agruparía cero objetos.
+// N objects with the same mesh+material resolve to the SAME entry, and the
+// creator is invoked only once. Without this, grouping draws by "same vertex
+// buffer" would group zero objects.
 static void test_objetos_identicos_comparten_handles()
 {
     FakeGpu gpu;
     SharedGpuMeshCache cache;
 
     const Mesh a = makeMesh("Cube");
-    // Mismo contenido, distinto nombre y distinto fichero de origen: ninguna de
-    // las dos cosas sube un byte a la GPU, así que no deben impedir compartir.
+    // Same content, different name and different source file: neither
+    // uploads a byte to the GPU, so they must not prevent sharing.
     Mesh b = makeMesh("Cube (1)");
     b.name       = "otro nombre";
     b.sourcePath = "otra/ruta.fbx";
@@ -139,16 +139,16 @@ static void test_objetos_identicos_comparten_handles()
         CHECK(sameHandles(*ga, *gb));
     }
 
-    // Un tercero más, por el caso de N>2 que es el que motiva la feature.
+    // A third one, for the N>2 case that is the one that motivates the feature.
     const int ic = cache.acquire(makeSharedMeshKey(makeMesh("Cube (2)")), gpu.creator());
     CHECK(ic == ia);
     CHECK(gpu.creations == 1);
     CHECK(cache.refCount(ia) == 3);
 }
 
-// El otro modo de fallo: compartir de más. Geometría distinta o material
-// distinto tienen que dar entradas separadas. Los factores PBR ya NO: ver
-// test_factores_distintos_si_comparten justo debajo.
+// The other failure mode: sharing too much. Different geometry or different
+// material have to give separate entries. The PBR factors no longer do: see
+// test_factores_distintos_si_comparten right below.
 static void test_mallas_distintas_no_comparten()
 {
     FakeGpu gpu;
@@ -190,14 +190,14 @@ static void test_mallas_distintas_no_comparten()
         }
 }
 
-// El reverso, y la razón de ser del arrastre en vivo: dos mallas iguales que
-// solo difieren en los factores PBR ahora COMPARTEN entrada. Mientras los
-// factores estuvieron en la clave, esto eran dos copias de la misma geometría y
-// las mismas texturas en VRAM, y mover un slider obligaba a re-clavear el objeto
-// —rehaciendo sus recursos— en vez de escribir dos floats.
+// The reverse, and the reason for live dragging: two equal meshes that
+// only differ in the PBR factors now SHARE an entry. While the
+// factors were in the key, these were two copies of the same geometry and
+// the same textures in VRAM, and moving a slider forced re-keying the object
+// (redoing its resources) instead of writing two floats.
 //
-// Lo que NO puede pasar es que se cuele el mapa ORM: su ruta nombra una textura
-// de verdad y sigue partiendo la entrada (lo cubre el test de arriba, con
+// What CANNOT happen is the ORM map sneaking in: its path names a real
+// texture and still splits the entry (the test above covers it, with
 // otroOrm).
 static void test_factores_distintos_si_comparten()
 {
@@ -220,8 +220,8 @@ static void test_factores_distintos_si_comparten()
     CHECK(cache.refCount(i0) == 2);
 }
 
-// Borrar uno de N objetos idénticos NO puede destruir nada: los N-1 que quedan
-// siguen dibujando esos mismos handles. Solo el último los suelta.
+// Deleting one of N identical objects CANNOT destroy anything: the N-1 that remain
+// keep drawing those same handles. Only the last one releases them.
 static void test_borrar_uno_deja_vivos_los_demas()
 {
     FakeGpu gpu;
@@ -232,8 +232,8 @@ static void test_borrar_uno_deja_vivos_los_demas()
     const int i2 = cache.acquire(makeSharedMeshKey(makeMesh("Cube (2)")), gpu.creator());
     CHECK(i0 == i1 && i1 == i2);
 
-    // Copia de los handles ANTES de soltar nada: es contra estos contra los que
-    // se comprueba que el superviviente sigue siendo el mismo recurso.
+    // Copy of the handles BEFORE releasing anything: it is against these that
+    // it is checked that the survivor is still the same resource.
     const SharedGpuMesh original = *cache.get(i0);
 
     cache.release(i0, gpu.destroyer());
@@ -241,9 +241,9 @@ static void test_borrar_uno_deja_vivos_los_demas()
     CHECK(cache.refCount(i1) == 2);
     const SharedGpuMesh* survivor = cache.get(i1);
     CHECK(survivor != nullptr);
-    // Los CHECK van dentro del if a propósito: con el refcount roto survivor es
-    // nullptr y el test tiene que FALLAR, no petar — un crash aquí no
-    // distinguiría un bug del compartido de un bug del propio test.
+    // The CHECKs go inside the if on purpose: with the refcount broken survivor is
+    // nullptr and the test has to FAIL, not crash; a crash here would not
+    // distinguish a bug in the sharing from a bug in the test itself.
     if (survivor)
     {
         CHECK(survivor->vertexBuffer != VK_NULL_HANDLE);
@@ -257,7 +257,7 @@ static void test_borrar_uno_deja_vivos_los_demas()
     CHECK(ultimo != nullptr);
     if (ultimo) CHECK(sameHandles(*ultimo, original));
 
-    // Ahora sí: cae el último holder y los recursos se destruyen una vez.
+    // Now it does: the last holder falls and the resources are destroyed once.
     cache.release(i2, gpu.destroyer());
     CHECK(gpu.destructions == 1);
     CHECK(cache.liveCount() == 0);
@@ -266,16 +266,16 @@ static void test_borrar_uno_deja_vivos_los_demas()
     CHECK(gpu.destroyed.size() == 1);
     if (!gpu.destroyed.empty()) CHECK(sameHandles(gpu.destroyed[0], original));
 
-    // Releases de más (el editor puede pedir borrar dos veces el mismo índice)
-    // no vuelven a destruir.
+    // Extra releases (the editor may ask to delete the same index twice)
+    // do not destroy again.
     cache.release(i2, gpu.destroyer());
     CHECK(gpu.destructions == 1);
 }
 
-// El slot liberado se reutiliza en cuanto entra otra malla, pero la destrucción
-// real va diferida varios frames: si release entregara la entrada por
-// referencia en vez de por copia, el destructor acabaría cerrando los handles
-// del inquilino NUEVO.
+// The freed slot is reused as soon as another mesh comes in, but the real
+// destruction is deferred several frames: if release handed over the entry by
+// reference instead of by copy, the destructor would end up closing the handles
+// of the NEW tenant.
 static void test_reutilizar_slot_no_pisa_el_snapshot()
 {
     FakeGpu gpu;
@@ -288,17 +288,17 @@ static void test_reutilizar_slot_no_pisa_el_snapshot()
     CHECK(gpu.destroyed.size() == 1);
 
     const int nuevo = cache.acquire(makeSharedMeshKey(makeMesh("B", /*x=*/9.0f)), gpu.creator());
-    CHECK(nuevo == viejo);                       // slot reciclado
+    CHECK(nuevo == viejo);                       // recycled slot
     CHECK(gpu.creations == 2);
     CHECK(cache.get(nuevo) != nullptr);
     if (cache.get(nuevo))
         CHECK(cache.get(nuevo)->vertexBuffer != handlesViejos.vertexBuffer);
-    // El snapshot que se encoló sigue apuntando a los recursos viejos.
+    // The snapshot that was enqueued still points to the old resources.
     if (!gpu.destroyed.empty()) CHECK(sameHandles(gpu.destroyed[0], handlesViejos));
 }
 
-// destroyAll (shutdown) se lleva todo aunque queden holders, y una sola vez por
-// entrada, no una por objeto.
+// destroyAll (shutdown) takes everything even if holders remain, and only once per
+// entry, not once per object.
 static void test_destroy_all_libera_cada_entrada_una_vez()
 {
     FakeGpu gpu;
@@ -315,8 +315,8 @@ static void test_destroy_all_libera_cada_entrada_una_vez()
     CHECK(cache.liveIndices().empty());
 }
 
-// liveIndices es lo que recorre createDescriptorSets: tiene que dar una entrada
-// por recurso, no una por objeto, o se alojarían sets de más y se perderían.
+// liveIndices is what createDescriptorSets walks: it has to give one entry
+// per resource, not one per object, or extra sets would be allocated and lost.
 static void test_live_indices_son_entradas_no_objetos()
 {
     FakeGpu gpu;
@@ -330,8 +330,8 @@ static void test_live_indices_son_entradas_no_objetos()
     CHECK(gpu.creations == 2);
 }
 
-// Tras re-clavear, la entrada se encuentra por la clave nueva y la vieja queda
-// libre para una entrada distinta.
+// After re-keying, the entry is found by the new key and the old one is left
+// free for a different entry.
 static void test_rekey_moves_the_entry()
 {
     SharedGpuMeshCache cache;
@@ -341,16 +341,16 @@ static void test_rekey_moves_the_entry()
     const int idx = cache.acquire("vieja", crear);
     CHECK(cache.rekey(idx, "nueva"));
 
-    // La clave nueva devuelve la MISMA entrada, sin crear otra.
+    // The new key returns the SAME entry, without creating another.
     CHECK(cache.acquire("nueva", crear) == idx);
     CHECK(creadas == 1);
-    // Y la vieja ya no la encuentra: crea una entrada distinta.
+    // And the old one no longer finds it: it creates a different entry.
     CHECK(cache.acquire("vieja", crear) != idx);
     CHECK(creadas == 2);
 }
 
-// Re-clavear a una clave que ya tiene OTRA entrada se rechaza: dejaría una de
-// las dos inalcanzable en el mapa, o sea una fuga de recursos GPU.
+// Re-keying to a key that already has ANOTHER entry is rejected: it would leave one of
+// the two unreachable in the map, that is, a GPU resource leak.
 static void test_rekey_rejects_collision()
 {
     SharedGpuMeshCache cache;
@@ -359,11 +359,11 @@ static void test_rekey_rejects_collision()
     const int b = cache.acquire("b", crear);
     CHECK(a != b);
     CHECK(!cache.rekey(a, "b"));
-    // Y la de a sigue encontrándose por su clave de siempre.
+    // And a's is still found by its usual key.
     CHECK(cache.acquire("a", crear) == a);
 }
 
-// Índice muerto: no hace nada y lo dice.
+// Dead index: it does nothing and says so.
 static void test_rekey_on_dead_index()
 {
     SharedGpuMeshCache cache;
@@ -371,7 +371,7 @@ static void test_rekey_on_dead_index()
     CHECK(!cache.rekey(-1, "loquesea"));
 }
 
-// Re-clavear a la clave que ya tenía es un no-op que devuelve true.
+// Re-keying to the key it already had is a no-op that returns true.
 static void test_rekey_to_same_key()
 {
     SharedGpuMeshCache cache;
@@ -381,7 +381,7 @@ static void test_rekey_to_same_key()
     CHECK(cache.acquire("k", crear) == idx);
 }
 
-// El refcount no lo toca: dos dueños antes, dos dueños después.
+// The refcount is not touched: two owners before, two owners after.
 static void test_rekey_preserves_refcount()
 {
     SharedGpuMeshCache cache;
@@ -393,12 +393,12 @@ static void test_rekey_preserves_refcount()
     CHECK(cache.refCount(idx) == 2);
 }
 
-// Indice EN RANGO pero cuyo slot se liberó: es el caso que de verdad justifica
-// la comprobación de `live` (los índices fuera de rango ya caen antes, por los
-// límites del vector). Tiene que rechazarse y, sobre todo, no puede dejar en
-// el mapa una entrada apuntando a un slot muerto: un acquire posterior con esa
-// clave nueva tiene que crear una entrada de verdad, no reciclar el índice
-// muerto.
+// IN-RANGE index but whose slot was freed: it is the case that really justifies
+// the `live` check (out-of-range indices already fall earlier, because of the
+// vector bounds). It has to be rejected and, above all, it cannot leave in
+// the map an entry pointing to a dead slot: a later acquire with that new
+// key has to create a real entry, not recycle the dead
+// index.
 static void test_rekey_on_freed_slot_in_range()
 {
     SharedGpuMeshCache cache;
@@ -412,19 +412,19 @@ static void test_rekey_on_freed_slot_in_range()
 
     CHECK(!cache.rekey(idx, "otra"));
 
-    // El mapa no quedó apuntando al slot muerto bajo "otra": acquire crea una
-    // entrada nueva, no devuelve el índice reciclado.
+    // The map was not left pointing to the dead slot under "otra": acquire creates a new
+    // entry, it does not return the recycled index.
     const int nuevo = cache.acquire("otra", crear);
     CHECK(creadas == 2);
     CHECK(cache.get(nuevo) != nullptr);
 }
 
-// keyOf es lo que lee rebuildStaticMesh antes de mutar una entrada en su sitio:
-// compara el prefijo de geometría de esta clave contra el de la clave nueva. Si
-// devolviera la clave de un slot muerto —o sea, la del inquilino anterior—, esa
-// comparación diría "misma geometría" sobre una entrada que ya no es la que se
-// creyó, y el dedup repartiría la malla equivocada. Por eso lo que se afirma no
-// es solo que acierte con la viva, sino que la muerta da VACÍO.
+// keyOf is what rebuildStaticMesh reads before mutating an entry in place:
+// it compares the geometry prefix of this key against that of the new key. If it
+// returned the key of a dead slot (that is, the previous tenant's), that
+// comparison would say "same geometry" about an entry that is no longer the one that
+// was believed, and the dedup would hand out the wrong mesh. That is why what is asserted is
+// not only that it gets the live one right, but that the dead one gives EMPTY.
 static void test_key_of_entrada_viva_y_muerta()
 {
     SharedGpuMeshCache cache;
@@ -434,37 +434,37 @@ static void test_key_of_entrada_viva_y_muerta()
     const int idx = cache.acquire("12|30|difusa.png", crear);
     CHECK(cache.keyOf(idx) == "12|30|difusa.png");
 
-    // Sigue a la entrada cuando se re-clavea: es lo que la hace utilizable
-    // después de un cambio de material.
+    // It follows the entry when it is re-keyed: it is what makes it usable
+    // after a material change.
     CHECK(cache.rekey(idx, "12|30|otra.png"));
     CHECK(cache.keyOf(idx) == "12|30|otra.png");
 
-    // Fuera de rango por arriba y por abajo. Esto SÍ discrimina: sin la
-    // comprobación de límites, keyOf(-1) indexa el vector fuera de sitio.
+    // Out of range above and below. This DOES discriminate: without the
+    // bounds check, keyOf(-1) indexes the vector out of place.
     CHECK(cache.keyOf(idx + 1).empty());
     CHECK(cache.keyOf(-1).empty());
 
-    // Índice EN rango cuyo slot se liberó. Aviso para quien lea esto creyendo
-    // que prueba la guarda `live` de keyOf: NO la prueba. release deja la
-    // entrada en Entry{}, o sea con la clave ya vacía, así que esto pasaría
-    // igual sin esa guarda (comprobado saboteándola). Lo que afirma es la
-    // pareja —release limpia Y keyOf no delata claves de entradas muertas—,
-    // que es la propiedad de la que depende el llamante.
+    // IN-range index whose slot was freed. Warning for whoever reads this believing
+    // that it tests the `live` guard of keyOf: it does NOT test it. release leaves the
+    // entry as Entry{}, that is, with the key already empty, so this would pass
+    // just the same without that guard (checked by sabotaging it). What it asserts is
+    // the pair (release cleans AND keyOf does not betray keys of dead entries),
+    // which is the property the caller depends on.
     cache.release(idx, nada);
     CHECK(cache.keyOf(idx).empty());
 
-    // Y el caso que de verdad tiene filo: el slot vuelve al freelist y lo
-    // estrena otra entrada. keyOf tiene que dar la clave del INQUILINO NUEVO.
-    // Quien se guardara la clave de antes y la comparase contra esta —que es
-    // exactamente lo que hace el camino rápido de rebuildStaticMesh— tiene que
-    // ver que ha cambiado, no la clave del muerto.
+    // And the case that really has an edge: the slot goes back to the freelist and
+    // another entry takes it over. keyOf has to give the key of the NEW TENANT.
+    // Whoever kept the earlier key and compared it against this one (which is
+    // exactly what the fast path of rebuildStaticMesh does) has to
+    // see that it has changed, not the dead one's key.
     const int reciclado = cache.acquire("99|7|otra_malla.png", crear);
     CHECK(reciclado == idx);
     CHECK(cache.keyOf(reciclado) == "99|7|otra_malla.png");
 }
 
-// Review Focus 3: dos mallas identicas con el mismo fichero de textura pero con
-// ajustes de importacion distintos NO comparten entrada en VRAM.
+// Review Focus 3: two identical meshes with the same texture file but with
+// different import settings do NOT share an entry in VRAM.
 static void test_key_changes_with_texture_import_settings()
 {
     std::error_code ec;
@@ -483,12 +483,12 @@ static void test_key_changes_with_texture_import_settings()
     const std::string conMips = makeSharedMeshKey(a);
     CHECK(conMips != sinSidecar);
 
-    // El prefijo de geometria (los dos primeros campos) no se altera: lo usa
-    // rebuildStaticMesh para saber si la geometria sigue siendo la misma.
+    // The geometry prefix (the first two fields) is not altered: rebuildStaticMesh
+    // uses it to know whether the geometry is still the same.
     auto prefijo = [](const std::string& k) { return k.substr(0, k.find('|', k.find('|') + 1)); };
     CHECK(prefijo(conMips) == prefijo(sinSidecar));
 
-    // Sin sidecar de ningun tipo, la clave es la de siempre.
+    // With no sidecar of any kind, the key is the usual one.
     Mesh b = makeMesh("A");
     b.material.texturePath = (d / "otra.png").string();
     CHECK(makeSharedMeshKey(b).find("|ts") == std::string::npos);

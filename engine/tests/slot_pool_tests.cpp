@@ -1,11 +1,11 @@
-// Test headless de SlotPool, la lista de huecos libres con la que los dos
-// backends reciclan las ranuras de objeto en vez de crecer sin parar (P11/P13,
+// Headless test of SlotPool, the free-slot list with which the two backends
+// recycle the object slots instead of growing endlessly (P11/P13,
 // H19/H32/H43).
 //
-// El pool no toca la GPU, asi que se prueba entero sin device. Lo que se
-// verifica aqui es lo unico que puede corromper el render: que un hueco NO se
-// entregue dos veces. Si eso pasa, dos GameObject distintos escriben en la
-// misma ranura y en el mismo bloque de descriptores, y no lo avisa nadie.
+// The pool does not touch the GPU, so it is tested in full without a device. What
+// is verified here is the only thing that can corrupt the render: that a slot is
+// NOT handed out twice. If that happens, two different GameObjects write to the
+// same slot and the same descriptor block, and nobody reports it.
 #include "DonTopo/Renderer/SlotPool.h"
 
 #include <cstdio>
@@ -16,8 +16,8 @@ using namespace DonTopo;
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
-// Sin nada liberado no hay hueco que dar: el llamante tiene que crecer el
-// vector, que es el comportamiento de hoy.
+// With nothing freed there is no slot to give: the caller has to grow the
+// vector, which is today's behavior.
 static void test_pool_vacio_no_da_hueco()
 {
     SlotPool pool;
@@ -35,8 +35,8 @@ static void test_lo_liberado_se_reutiliza()
     CHECK(pool.acquire() == -1);
 }
 
-// LIFO: el ultimo en liberarse es el primero en volver. Reutilizar el hueco
-// mas reciente mantiene calientes las entradas que el frame anterior ya tocó.
+// LIFO: the last one freed is the first to come back. Reusing the most recent
+// slot keeps hot the entries that the previous frame already touched.
 static void test_orden_lifo()
 {
     SlotPool pool;
@@ -48,10 +48,10 @@ static void test_orden_lifo()
     CHECK(pool.acquire() == 1);
 }
 
-// EL test de este fichero. Liberar dos veces el mismo hueco —un removeGameObject
-// sobre un subarbol que ya se habia quitado, o un Ctrl+Z que rehace un borrado—
-// dejaria el indice dos veces en la lista, y dos objetos NUEVOS acabarian
-// compartiendo ranura y bloque de descriptores. La segunda liberacion se ignora.
+// THE test of this file. Freeing the same slot twice (a removeGameObject
+// on a subtree that had already been removed, or a Ctrl+Z that redoes a delete)
+// would leave the index twice in the list, and two NEW objects would end up
+// sharing a slot and a descriptor block. The second free is ignored.
 static void test_liberar_dos_veces_no_duplica_el_hueco()
 {
     SlotPool pool;
@@ -62,8 +62,8 @@ static void test_liberar_dos_veces_no_duplica_el_hueco()
     CHECK(pool.acquire() == -1);
 }
 
-// Y despues de volver a entregarse, ese mismo hueco se puede liberar otra vez:
-// el bloqueo es "ya esta libre", no "ya se libero alguna vez".
+// And after being handed out again, that same slot can be freed once more:
+// the block is "already free", not "was freed at some point".
 static void test_un_hueco_reentregado_se_puede_liberar_de_nuevo()
 {
     SlotPool pool;
@@ -73,8 +73,8 @@ static void test_un_hueco_reentregado_se_puede_liberar_de_nuevo()
     CHECK(pool.acquire() == 4);
 }
 
-// Indice negativo: lo produce cualquier *RenderIndex sin asignar. Ignorarlo
-// aqui evita repetir la guarda en cada llamante.
+// Negative index: produced by any unassigned *RenderIndex. Ignoring it
+// here avoids repeating the guard in every caller.
 static void test_indice_negativo_se_ignora()
 {
     SlotPool pool;
@@ -83,8 +83,8 @@ static void test_indice_negativo_se_ignora()
     CHECK(pool.acquire() == -1);
 }
 
-// clear() lo llaman clearStaticMeshes y el apagado: los vectores de objetos se
-// vacian enteros, asi que ningun hueco viejo sigue siendo valido.
+// clear() is called by clearStaticMeshes and the shutdown: the object vectors are
+// emptied entirely, so no old slot is still valid.
 static void test_clear_olvida_los_huecos()
 {
     SlotPool pool;
@@ -95,8 +95,8 @@ static void test_clear_olvida_los_huecos()
     CHECK(pool.acquire() == -1);
 }
 
-// El motivo de existir: un ciclo Play/Stop repetido no puede seguir subiendo el
-// numero de ranuras. Con el pool, N crear/borrar reutilizan siempre la misma.
+// The reason to exist: a repeated Play/Stop cycle cannot keep raising the
+// number of slots. With the pool, N create/delete cycles always reuse the same one.
 static void test_ciclos_repetidos_no_crecen()
 {
     SlotPool pool;
@@ -106,16 +106,16 @@ static void test_ciclos_repetidos_no_crecen()
     for (int ciclo = 0; ciclo < 100; ++ciclo)
     {
         int slot = pool.acquire();
-        if (slot < 0) slot = siguienteNuevo++;   // lo que hace el llamante: crecer
+        if (slot < 0) slot = siguienteNuevo++;   // what the caller does: grow
         vistos.insert(slot);
         pool.release(slot);
     }
 
-    CHECK(siguienteNuevo == 1);      // solo el primer ciclo tuvo que crecer
+    CHECK(siguienteNuevo == 1);      // only the first cycle had to grow
     CHECK(vistos.size() == 1u);
 }
 
-// Varios vivos a la vez: el pool nunca entrega un hueco ocupado.
+// Several alive at once: the pool never hands out an occupied slot.
 static void test_nunca_entrega_dos_veces_el_mismo_hueco()
 {
     SlotPool pool;
@@ -126,7 +126,7 @@ static void test_nunca_entrega_dos_veces_el_mismo_hueco()
     {
         const int slot = pool.acquire();
         CHECK(slot >= 0);
-        CHECK(entregados.insert(slot).second);   // false = repetido
+        CHECK(entregados.insert(slot).second);   // false = duplicate
     }
     CHECK(pool.acquire() == -1);
 }

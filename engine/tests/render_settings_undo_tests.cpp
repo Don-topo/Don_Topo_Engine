@@ -1,13 +1,13 @@
-// Test headless del undo/redo de los ajustes de render del menu View (P8/H49).
+// Headless test of the undo/redo of the View menu render settings (P8/H49).
 //
-// No hay GUI aqui: se prueba el COMANDO y su lambda, no el widget de ImGui —
-// mismo patron que los tests de undo de camera_tests.cpp. El sujeto de prueba
-// es `makeRenderSettingCommand`, que es el seam: EditorUI solo lee el valor
-// previo, dibuja el widget y llama a ese helper.
+// There is no GUI here: the COMMAND and its lambda are tested, not the ImGui widget,
+// same pattern as the undo tests of camera_tests.cpp. The test subject
+// is `makeRenderSettingCommand`, which is the seam: EditorUI only reads the
+// previous value, draws the widget and calls that helper.
 //
-// El estado de destino es un RendererState de verdad, no un doble: la clase no
-// toca la API grafica (es justo lo que documenta su cabecera), asi que se puede
-// construir en un test sin device ni ventana.
+// The target state is a real RendererState, not a double: the class does not
+// touch the graphics API (it is exactly what its header documents), so it can be
+// built in a test without a device or window.
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Renderer/RendererState.h"
@@ -26,15 +26,15 @@ static int g_failures = 0;
 
 static bool nearlyEqual(float a, float b, float eps = 0.0001f) { return std::fabs(a - b) < eps; }
 
-// Comando de escena cualquiera, para los tests que mezclan las dos familias en
-// el mismo stack. No toca nada: solo deja constancia de por donde ha pasado.
+// Any scene command, for the tests that mix the two families in
+// the same stack. It touches nothing: it only records where it has been.
 static std::unique_ptr<ICommand> makeSceneCommand(int& target, int before, int after)
 {
     return std::make_unique<PropertyCommand<int>>(
         "Scene edit", before, after, [&target](const int& v) { target = v; });
 }
 
-// CompositeCommand: un solo paso; execute en orden, undo al reves.
+// CompositeCommand: a single step; execute in order, undo in reverse.
 struct RecordingCommand : public ICommand
 {
     std::vector<std::string>& log;
@@ -57,10 +57,10 @@ static void test_composite_command_order()
     CHECK(group.label() == "grupo");
 }
 
-// ── El flag que separa las dos familias ─────────────────────────────────────
+// ── The flag that separates the two families ─────────────────────────────────
 
-// Un ajuste de render NO es una edicion de la escena: mover el bloom no puede
-// hacer que el Content Browser pida guardar una escena que nadie ha tocado.
+// A render setting is NOT a scene edit: moving the bloom cannot
+// make the Content Browser ask to save a scene that nobody has touched.
 static void test_push_de_render_no_ensucia_la_escena()
 {
     UndoManager undo;
@@ -77,8 +77,8 @@ static void test_push_de_render_no_ensucia_la_escena()
     CHECK(undo.canUndo());
 }
 
-// Y el default sigue ensuciando: los ~30 push que ya existian no cambian de
-// comportamiento por llevar el parametro nuevo.
+// And the default still marks dirty: the ~30 pushes that already existed do not change
+// behavior for carrying the new parameter.
 static void test_push_de_escena_si_ensucia()
 {
     UndoManager undo;
@@ -87,8 +87,8 @@ static void test_push_de_escena_si_ensucia()
     CHECK(undo.isSceneDirty());
 }
 
-// Un push de render no puede LIMPIAR el dirty de una edicion de escena
-// anterior: seria perder trabajo sin avisar.
+// A render push cannot CLEAR the dirty flag of a previous scene edit: it
+// would be losing work without warning.
 static void test_un_push_de_render_no_limpia_el_dirty_previo()
 {
     UndoManager undo;
@@ -108,9 +108,9 @@ static void test_un_push_de_render_no_limpia_el_dirty_previo()
     CHECK(undo.isSceneDirty());
 }
 
-// ── Un tipo por cada forma de widget del menu View ──────────────────────────
+// ── One type for each widget shape of the View menu ──────────────────────────
 
-// SliderFloat (25 de los 39).
+// SliderFloat (25 of the 39).
 static void test_undo_redo_float()
 {
     UndoManager undo;
@@ -118,7 +118,7 @@ static void test_undo_redo_float()
     int saves = 0;
     const float antes = state.bloomThreshold();
 
-    state.setBloomThreshold(3.25f);   // lo que ya hizo el widget al arrastrarse
+    state.setBloomThreshold(3.25f);   // what the widget already did when dragged
     undo.push(makeRenderSettingCommand<float>(
                   "Bloom threshold", antes, 3.25f,
                   [&state](const float& v) { state.setBloomThreshold(v); },
@@ -152,7 +152,7 @@ static void test_undo_redo_int()
     CHECK(state.ssrMaxSteps() == 96);
 }
 
-// Checkbox (los seis interruptores de efecto, mas Wireframe).
+// Checkbox (the six effect switches, plus Wireframe).
 static void test_undo_redo_bool()
 {
     UndoManager undo;
@@ -173,8 +173,8 @@ static void test_undo_redo_bool()
     CHECK(state.isWireframeMode() == !antes);
 }
 
-// ColorEdit3 (Fog scattering) — el unico vec3 del menu, y el unico widget cuyo
-// valor no cabe en un escalar.
+// ColorEdit3 (Fog scattering): the only vec3 of the menu, and the only widget whose
+// value does not fit in a scalar.
 static void test_undo_redo_vec3()
 {
     UndoManager undo;
@@ -220,12 +220,12 @@ static void test_undo_redo_enum()
     CHECK(state.aaMode() == AaMode::Taa);
 }
 
-// ── Lo que separa este comando de un PropertyCommand a secas ────────────────
+// ── What separates this command from a plain PropertyCommand ─────────────────
 
-// Un ajuste de render vive en el project.json, no en la escena: si el undo
-// aplica el valor pero no vuelve a escribir el fichero, la imagen se corrige y
-// al reabrir el proyecto reaparece lo deshecho. El helper tiene que persistir
-// en LOS DOS sentidos.
+// A render setting lives in project.json, not in the scene: if undo
+// applies the value but does not write the file again, the image is corrected and
+// on reopening the project what was undone comes back. The helper has to persist
+// in BOTH directions.
 static void test_undo_y_redo_persisten()
 {
     UndoManager undo;
@@ -238,7 +238,7 @@ static void test_undo_y_redo_persisten()
                   [&saves]() { ++saves; }),
               /*dirtiesScene=*/false);
 
-    CHECK(saves == 0);   // push() no ejecuta: el widget ya aplico y ya guardo
+    CHECK(saves == 0);   // push() does not execute: the widget already applied and already saved
     undo.undo();
     CHECK(saves == 1);
     undo.redo();
@@ -247,8 +247,8 @@ static void test_undo_y_redo_persisten()
 
 // ── El stack es UNO SOLO ────────────────────────────────────────────────────
 
-// Ctrl+Z deshace la ultima accion del usuario, sea de la familia que sea. Este
-// es el motivo de no haber montado un segundo UndoManager para el render.
+// Ctrl+Z undoes the user's last action, whatever family it belongs to. This
+// is the reason for not having built a second UndoManager for render.
 static void test_orden_unico_mezclando_escena_y_render()
 {
     UndoManager undo;
@@ -267,16 +267,16 @@ static void test_orden_unico_mezclando_escena_y_render()
                   [&saves]() { ++saves; }),
               /*dirtiesScene=*/false);
 
-    undo.undo();                                   // el de render, que es el ultimo
+    undo.undo();                                   // the render one, which is the last
     CHECK(nearlyEqual(state.ssaoIntensity(), antes));
-    CHECK(target == 1);                            // el de escena sigue sin tocarse
+    CHECK(target == 1);                            // the scene one is still untouched
 
-    undo.undo();                                   // ahora si, el de escena
+    undo.undo();                                   // now the scene one
     CHECK(target == 0);
 }
 
-// Un ajuste de render nuevo invalida el redo pendiente igual que cualquier otra
-// accion: el flag solo decide si la ESCENA queda sucia, nada mas.
+// A new render setting invalidates the pending redo just like any other
+// action: the flag only decides whether the SCENE ends up dirty, nothing else.
 static void test_un_push_de_render_invalida_el_redo()
 {
     UndoManager undo;
@@ -299,18 +299,18 @@ static void test_un_push_de_render_invalida_el_redo()
     CHECK(!undo.canRedo());
 }
 
-// revision() es la señal con la que AnimatorGraphUndoTracker sabe que alguien
-// ha tocado el historial en mitad de un gesto. Tiene que cambiar con TODO lo
-// que mueve los stacks y con nada más: si no cambiara en un undo, el tracker
-// metería lo deshecho dentro del comando del gesto; si cambiara en un undo
-// vacío, descartaría gestos del usuario sin motivo.
+// revision() is the signal with which AnimatorGraphUndoTracker knows that someone
+// touched the history in the middle of a gesture. It has to change with EVERYTHING
+// that moves the stacks and with nothing else: if it did not change on an undo, the tracker
+// would put the undone thing inside the gesture's command; if it changed on an
+// empty undo, it would discard user gestures for no reason.
 static void test_revision_cambia_con_cada_movimiento_del_historial()
 {
     UndoManager undo;
     int target = 0;
 
     const uint64_t r0 = undo.revision();
-    undo.undo();   // stacks vacíos: no hacen nada
+    undo.undo();   // empty stacks: they do nothing
     undo.redo();
     CHECK(undo.revision() == r0);
 

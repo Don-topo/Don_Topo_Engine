@@ -1,12 +1,12 @@
-// Tests de AsyncAssetLoader. Headless: no crea device Vulkan, solo comprueba
-// que el worker produce los mismos datos en RAM que la ruta sincrona.
+// Tests of AsyncAssetLoader. Headless: it does not create a Vulkan device, it only checks
+// that the worker produces the same data in RAM as the synchronous path.
 //
-// Las aserciones comparan contra ModelLoader::load / loadAuto, NO contra
-// constantes hardcodeadas: si manana cambian los flags de Assimp, el test sigue
-// siendo valido en vez de convertirse en una constante a reajustar.
+// The assertions compare against ModelLoader::load / loadAuto, NOT against
+// hardcoded constants: if the Assimp flags change tomorrow, the test remains
+// valid instead of turning into a constant to readjust.
 //
-// Cada caso corre kIters veces, igual que jobsystem_tests.cpp: un race que
-// aparece 1 de cada 20 ejecuciones no se caza en una sola pasada.
+// Each case runs kIters times, same as jobsystem_tests.cpp: a race that
+// shows up 1 out of 20 runs is not caught in a single pass.
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/ModelLoader.h"
@@ -26,12 +26,12 @@ namespace {
 
 constexpr int kIters = 50;
 
-// Ruta al FBX de pruebas. El test se salta los casos que dependen de el si no
-// existe, en vez de fallar: un clone sin assets debe poder correr el resto.
+// Path to the test FBX. The test skips the cases that depend on it if it does not
+// exist, instead of failing: a clone without assets must be able to run the rest.
 //
-// No hay assets/models/cube.fbx en el repo; assets/modelTexture.fbx si existe
-// y ademas trae textura de albedo, lo que ejercita testTexturesArriveDecoded.
-// Se prueban varias profundidades porque el exe de test corre headless desde
+// There is no assets/models/cube.fbx in the repo; assets/modelTexture.fbx does exist
+// and also carries an albedo texture, which exercises testTexturesArriveDecoded.
+// Several depths are tried because the test exe runs headless from
 // build-ninja/engine/tests/.
 std::string findTestFbx()
 {
@@ -45,8 +45,8 @@ std::string findTestFbx()
     return {};
 }
 
-// Bombea hasta que lleguen `expected` resultados o se agote el plazo. Devuelve
-// lo recogido. Sin plazo, un fallo del loader colgaria el test para siempre.
+// Pumps until `expected` results arrive or the deadline runs out. Returns
+// what was collected. Without a deadline, a loader failure would hang the test forever.
 std::vector<DonTopo::LoadedMesh> drain(DonTopo::AsyncAssetLoader& loader,
                                        size_t expected, int timeoutMs = 30000)
 {
@@ -62,9 +62,9 @@ std::vector<DonTopo::LoadedMesh> drain(DonTopo::AsyncAssetLoader& loader,
     return out;
 }
 
-// El mesh que sale del worker es el mismo que da la ruta sincrona. Sabotaje:
-// en el job, cambiar loadAuto(path) por loadAuto(path) y vaciar mesh->indices
-// — el assert de indices salta.
+// The mesh that comes out of the worker is the same one the synchronous path gives.
+// Sabotage: in the job, replace loadAuto(path) with loadAuto(path) and empty
+// mesh->indices; the indices assert fires.
 void testAsyncMatchesSync(const std::string& fbx)
 {
     for (int it = 0; it < kIters; ++it)
@@ -91,10 +91,10 @@ void testAsyncMatchesSync(const std::string& fbx)
     }
 }
 
-// Un path inexistente NO lanza: devuelve error no vacio y mesh nulo. Sabotaje:
-// quitar el try/catch del job — el proceso muere por std::terminate (o, con
-// la red de seguridad de JobSystem::workerLoop ya puesta, el resultado nunca
-// llega al buzon y drain() agota el timeout: el assert de tamano igual salta).
+// A nonexistent path does NOT throw: it returns a non-empty error and a null mesh.
+// Sabotage: remove the job's try/catch; the process dies from std::terminate (or, with
+// the JobSystem::workerLoop safety net already in place, the result never
+// reaches the mailbox and drain() exhausts the timeout: the size assert fires anyway).
 void testMissingFileReportsError()
 {
     for (int it = 0; it < kIters; ++it)
@@ -114,21 +114,21 @@ void testMissingFileReportsError()
     }
 }
 
-// pumpCompleted(0) no procesa nada Y no pierde nada: el siguiente pump entrega
-// todo. Sabotaje: hacer que pumpCompleted vacie el buzon antes de mirar el
-// presupuesto — el segundo drain se queda a cero y el test se cuelga hasta el
-// timeout, fallando el assert de tamano.
+// pumpCompleted(0) processes nothing AND loses nothing: the next pump delivers
+// everything. Sabotage: make pumpCompleted empty the mailbox before looking at the
+// budget; the second drain stays at zero and the test hangs until the
+// timeout, failing the size assert.
 //
-// kIters a 50 como el resto de casos de concurrencia (pump/leftover/cancel):
-// la version anterior esperaba a "pending() == 0" antes de tocar
-// pumpCompleted, pero pending() SOLO decrementa cuando pumpCompleted entrega
-// algo (ver el header de AsyncAssetLoader) — ese while nunca salia antes del
-// deadline, asi que cada pasada quemaba 30s fijos por diseno, no por el coste
-// real de la aserción. El fix es detectar el "ya esta listo" CONSUMIENDO con
-// un presupuesto real (pumpCompleted(1000ms)) dentro del propio bucle de
-// espera, en vez de mirar pending(): cada iteracion termina en cuanto el
-// worker postea, del orden de milisegundos, y 50 pasadas quedan dominadas
-// solo por 50 cargas reales del FBX.
+// kIters at 50 like the rest of the concurrency cases (pump/leftover/cancel):
+// the previous version waited for "pending() == 0" before touching
+// pumpCompleted, but pending() ONLY decrements when pumpCompleted delivers
+// something (see the AsyncAssetLoader header); that while never exited before the
+// deadline, so each pass burned a fixed 30s by design, not because of the real cost
+// of the assertion. The fix is to detect "it is ready" by CONSUMING with
+// a real budget (pumpCompleted(1000ms)) inside the wait loop itself,
+// instead of looking at pending(): each iteration ends as soon as the
+// worker posts, on the order of milliseconds, and 50 passes end up dominated
+// only by 50 real loads of the FBX.
 void testZeroBudgetKeepsResults(const std::string& fbx)
 {
     for (int it = 0; it < kIters; ++it)
@@ -143,16 +143,16 @@ void testZeroBudgetKeepsResults(const std::string& fbx)
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (std::chrono::steady_clock::now() < deadline)
         {
-            // Presupuesto 0: SIEMPRE vacio, este resultado ya este listo o
-            // no — es la aserción central del test, se comprueba en CADA
-            // vuelta del sondeo, no solo una vez al final.
+            // Budget 0: ALWAYS empty, whether this result is already ready or
+            // not. It is the central assertion of the test, checked on EVERY
+            // turn of the polling, not just once at the end.
             assert(loader.pumpCompleted(0.0f).empty() && "presupuesto 0 no procesa nada");
 
-            // Detecta que el worker ya termino consumiendo con presupuesto
-            // real. Si llega algo, es el resultado que buscabamos: ni
-            // pumpCompleted(0) lo devolvio antes (assert de arriba) ni lo
-            // perdio (si no, este pump se quedaria vacio para siempre y el
-            // assert de everReady de mas abajo saltaria al agotar el plazo).
+            // Detects that the worker has already finished by consuming with a real
+            // budget. If something arrives, it is the result we were looking for: neither
+            // pumpCompleted(0) returned it earlier (assert above) nor
+            // lost it (otherwise this pump would stay empty forever and the
+            // everReady assert further down would fire when the deadline runs out).
             std::vector<DonTopo::LoadedMesh> got = loader.pumpCompleted(1000.0f);
             if (!got.empty())
             {
@@ -168,21 +168,21 @@ void testZeroBudgetKeepsResults(const std::string& fbx)
     }
 }
 
-// Las texturas del material llegan DECODIFICADAS desde el worker. Es el punto
-// de la feature: si stbi_load siguiera en el hilo principal, se perderia la
-// mayor parte de la ganancia. Sabotaje: en el job, no rellenar images — el
-// assert de w/h salta.
+// The material textures arrive DECODED from the worker. It is the point
+// of the feature: if stbi_load stayed on the main thread, most of the
+// gain would be lost. Sabotage: in the job, do not fill images; the
+// w/h assert fires.
 //
-// Solo aplica si el FBX de pruebas trae textura; si no, el caso se salta.
+// It only applies if the test FBX carries a texture; otherwise the case is skipped.
 //
-// NOTA: los dos únicos FBX trackeados en este repo (model.fbx y
-// modelTexture.fbx) son personajes Mixamo CON rig — ModelLoader::loadAuto
-// siempre devuelve un SkinnedMesh para ellos, y SkinnedMesh guarda sus
-// texturas en materials[] (plural, por submesh), no en el Mesh::material
-// (singular) que decodeSlot() lee aquí. Con los assets de este repo este
-// caso se salta siempre — ver el comentario de runJob() en
-// AsyncAssetLoader.cpp y el informe de la Task 2 (hallazgo documentado,
-// decisión: diferido).
+// NOTE: the only two FBX tracked in this repo (model.fbx and
+// modelTexture.fbx) are Mixamo characters WITH a rig; ModelLoader::loadAuto
+// always returns a SkinnedMesh for them, and SkinnedMesh stores its
+// textures in materials[] (plural, per submesh), not in the Mesh::material
+// (singular) that decodeSlot() reads here. With the assets of this repo this
+// case is always skipped; see the comment of runJob() in
+// AsyncAssetLoader.cpp and the Task 2 report (documented finding,
+// decision: deferred).
 void testTexturesArriveDecoded(const std::string& fbx)
 {
     for (int it = 0; it < kIters; ++it)
@@ -217,20 +217,20 @@ void testTexturesArriveDecoded(const std::string& fbx)
     }
 }
 
-// cancel() de una peticion todavia en cola no debe dejar pending() colgado
-// para siempre. Con 1 solo worker y un job bloqueante por delante, la
-// peticion de requestMesh() no puede haber arrancado cuando llega cancel():
-// JobSystem la salta en workerLoop (igual que testCancelPreventsQueuedJob en
-// jobsystem_tests.cpp) y AsyncAssetLoader::runJob() nunca se ejecuta para ese
-// id — nadie mas iba a decrementar m_pending. Sabotaje: en cancel(), no tocar
-// m_pending (dejar solo el m_jobs.cancel(id)) — pending() se queda en 1 para
-// siempre y el ultimo assert salta.
+// cancel() of a request still in the queue must not leave pending() hanging
+// forever. With only 1 worker and a blocking job ahead of it, the
+// requestMesh() request cannot have started when cancel() arrives:
+// JobSystem skips it in workerLoop (same as testCancelPreventsQueuedJob in
+// jobsystem_tests.cpp) and AsyncAssetLoader::runJob() is never executed for that
+// id; nobody else was going to decrement m_pending. Sabotage: in cancel(), do not touch
+// m_pending (leave only m_jobs.cancel(id)); pending() stays at 1 forever
+// and the last assert fires.
 void testCancelBeforeStartDropsPending()
 {
     for (int it = 0; it < kIters; ++it)
     {
         DonTopo::JobSystem js;
-        js.start(1);   // 1 hilo: garantiza que la peticion se quede en cola
+        js.start(1);   // 1 thread: guarantees that the request stays in the queue
 
         std::atomic<bool> release{false};
         js.submit([&release] { while (!release.load(std::memory_order_acquire)) {} });
@@ -245,9 +245,9 @@ void testCancelBeforeStartDropsPending()
         loader.cancel(id);
 
         release.store(true, std::memory_order_release);
-        js.shutdown();   // drena la cola: el job cancelado se salta ahi
+        js.shutdown();   // drains the queue: the cancelled job is skipped there
 
-        // Nada debe llegar para este id: el worker nunca lo ejecuto.
+        // Nothing must arrive for this id: the worker never executed it.
         std::vector<DonTopo::LoadedMesh> got = loader.pumpCompleted(1000.0f);
         assert(got.empty() && "un job cancelado antes de arrancar no debe entregar resultado");
         assert(loader.pending() == 0 &&
@@ -255,22 +255,22 @@ void testCancelBeforeStartDropsPending()
     }
 }
 
-// Cuatro peticiones del mismo path con targetId distintos comparten UN ReadFile
-// y producen cuatro LoadedMesh de contenido identico con punteros DISTINTOS.
+// Four requests for the same path with different targetIds share ONE ReadFile
+// and produce four LoadedMesh with identical content but DISTINCT pointers.
 //
-// Los dos lados importan. Comprobar solo el contenido pasaria tambien
-// compartiendo el shared_ptr, que es justo lo que el diseno descarta: hoy cada
-// nodo de Scene::nodeFromJson tiene su propio make_shared<Mesh> (Scene.cpp:721),
-// y dos GameObject sobre el mismo Mesh mutable cambiaria esa semantica.
+// Both sides matter. Checking only the content would also pass while
+// sharing the shared_ptr, which is exactly what the design rules out: today each
+// node of Scene::nodeFromJson has its own make_shared<Mesh> (Scene.cpp:721),
+// and two GameObjects over the same mutable Mesh would change that semantics.
 //
-// Fresh JobSystem+loader por iteracion, como el resto de casos: readFileCount()
-// es acumulativo por loader, asi que con un loader nuevo por vuelta la
-// aserción "== 1" vale en cada pasada. Cuatro peticiones deduplicadas = un solo
-// ReadFile por iteracion, mas barato que testAsyncMatchesSync (que carga dos
-// veces por vuelta), asi que las 50 iteraciones no penalizan.
+// Fresh JobSystem+loader per iteration, like the rest of the cases: readFileCount()
+// is cumulative per loader, so with a new loader per turn the
+// "== 1" assertion holds on every pass. Four deduplicated requests = a single
+// ReadFile per iteration, cheaper than testAsyncMatchesSync (which loads twice
+// per turn), so the 50 iterations do not penalize.
 //
-// Sabotaje: devolver el mismo shared_ptr a los cuatro (quitar la copia en
-// buildResultFor) — el assert de punteros distintos salta.
+// Sabotage: return the same shared_ptr to all four (remove the copy in
+// buildResultFor); the distinct pointers assert fires.
 void testDedupSharesReadFileNotPointers(const std::string& fbx)
 {
     for (int it = 0; it < kIters; ++it)
@@ -297,11 +297,11 @@ void testDedupSharesReadFileNotPointers(const std::string& fbx)
             targets.push_back(r.targetId);
         }
 
-        // Los cuatro targetId son distintos y estan los cuatro esperados.
+        // The four targetIds are distinct and all four expected ones are there.
         std::sort(targets.begin(), targets.end());
         assert((targets == std::vector<uint64_t>{100, 101, 102, 103}));
 
-        // Y los punteros NO se comparten.
+        // And the pointers are NOT shared.
         for (size_t i = 0; i < got.size(); ++i)
             for (size_t k = i + 1; k < got.size(); ++k)
                 assert(got[i].mesh.get() != got[k].mesh.get()
@@ -311,27 +311,27 @@ void testDedupSharesReadFileNotPointers(const std::string& fbx)
     }
 }
 
-// Carrera cancelAllPending() vs runJob posteando resultados. Con N waiters del
-// mismo path, runJob saca los N del grupo e incrementa readFileCount bajo el
-// lock (seccion 1), COPIA los N meshes FUERA del lock, y re-bloquea para postar
-// (seccion 2). Si cancelAllPending() cae entre ambas secciones, esos resultados
-// son de targets ya cancelados (su m_pending se puso a 0 en el cancel): postar
-// dejaria pending() negativo PARA SIEMPRE — el loader es longevo, uno por
-// Renderer, y pending() es la senal de "carga terminada" del modal — y
-// entregaria meshes de objetos muertos. El contador de epoch los descarta.
+// Race of cancelAllPending() vs runJob posting results. With N waiters of the
+// same path, runJob takes the N out of the group and increments readFileCount under the
+// lock (section 1), COPIES the N meshes OUTSIDE the lock, and re-locks to post
+// (section 2). If cancelAllPending() lands between the two sections, those results
+// belong to targets already cancelled (their m_pending was set to 0 in the cancel): posting
+// would leave pending() negative FOREVER (the loader is long-lived, one per
+// Renderer, and pending() is the modal's "load finished" signal) and
+// would deliver meshes of dead objects. The epoch counter discards them.
 //
-// Se sincroniza sobre readFileCount()==1 (que runJob incrementa en la seccion
-// 1, bajo el lock, justo antes de copiar) para llamar a cancelAllPending()
-// mientras el job esta copiando: asi la ventana se ataca de forma fiable en vez
-// de por suerte ciega. Aun asi, kIters=50 cubre las interleavings en que el job
-// termina de copiar antes (buzon limpiado por el cancel, tambien correcto).
+// It synchronizes on readFileCount()==1 (which runJob increments in section
+// 1, under the lock, right before copying) to call cancelAllPending()
+// while the job is copying: this way the window is attacked reliably instead
+// of by blind luck. Even so, kIters=50 covers the interleavings in which the job
+// finishes copying earlier (mailbox cleaned by the cancel, also correct).
 //
-// Invariante tras un cancel en bloque sin peticiones nuevas: NADA se entrega y
-// pending() queda en 0, jamas negativo.
+// Invariant after a bulk cancel with no new requests: NOTHING is delivered and
+// pending() stays at 0, never negative.
 //
-// Sabotaje: quitar el chequeo de epoch en la seccion 2 de runJob (postar
-// siempre) — en las vueltas que caen en la ventana, pumpCompleted entrega los
-// huerfanos y hace pending() negativo; ambos asserts saltan.
+// Sabotage: remove the epoch check in section 2 of runJob (always
+// post); in the turns that fall in the window, pumpCompleted delivers the
+// orphans and makes pending() negative; both asserts fire.
 void testCancelAllPendingDropsInflightResults(const std::string& fbx)
 {
     for (int it = 0; it < kIters; ++it)
@@ -344,19 +344,19 @@ void testCancelAllPendingDropsInflightResults(const std::string& fbx)
         for (uint64_t t = 0; t < kWaiters; ++t)
             loader.requestMesh(fbx, t);
 
-        // Esperar a que la seccion 1 de runJob corra (readFileCount pasa a 1):
-        // a partir de ahi el job esta copiando los meshes fuera del lock, que
-        // es la ventana que queremos atacar.
+        // Wait for section 1 of runJob to run (readFileCount goes to 1):
+        // from there on the job is copying the meshes outside the lock, which
+        // is the window we want to attack.
         const auto d1 = std::chrono::steady_clock::now() + std::chrono::seconds(15);
         while (loader.readFileCount() == 0 && std::chrono::steady_clock::now() < d1)
             std::this_thread::sleep_for(std::chrono::microseconds(50));
 
-        // Cancelar en bloque, idealmente mientras el job aun copia.
+        // Cancel in bulk, ideally while the job is still copying.
         loader.cancelAllPending();
 
-        // Tras el cancel, sin peticiones nuevas: NADA debe entregarse y
-        // pending() nunca puede quedar negativo (ni distinto de 0). Se comprueba
-        // en CADA pump, no solo al final.
+        // After the cancel, with no new requests: NOTHING must be delivered and
+        // pending() can never end up negative (or different from 0). It is checked
+        // on EVERY pump, not just at the end.
         const auto d2 = std::chrono::steady_clock::now() + std::chrono::seconds(15);
         while (std::chrono::steady_clock::now() < d2)
         {
@@ -368,8 +368,8 @@ void testCancelAllPendingDropsInflightResults(const std::string& fbx)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
-        // Drenar el pool del todo y reconfirmar: ningun resultado tardio, y
-        // pending() sigue en 0.
+        // Drain the pool completely and reconfirm: no late result, and
+        // pending() is still 0.
         js.shutdown();
         std::vector<DonTopo::LoadedMesh> tail = loader.pumpCompleted(1000.0f);
         assert(tail.empty() && "nada tardio debe llegar tras shutdown");
@@ -377,8 +377,8 @@ void testCancelAllPendingDropsInflightResults(const std::string& fbx)
     }
 }
 
-// Dos piezas del mismo fichero: UN ReadFile, cada objeto su pieza, y la lista de
-// apariciones viaja con el resultado.
+// Two pieces of the same file: ONE ReadFile, each object its piece, and the list of
+// occurrences travels with the result.
 void testPiecesShareOneReadFile()
 {
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "dt_loader_pieces";
@@ -406,17 +406,17 @@ void testPiecesShareOneReadFile()
     js.shutdown();
 }
 
-// Dos waiters de la MISMA pieza comparten la decodificacion (una textura
-// decodificada, no dos) pero NO el Mesh (cada uno tiene su propia copia,
-// mismo contrato que la rama personaje) — y todos los waiters del grupo, sin
-// importar su pieza, comparten los MISMOS punteros en pieceMeshes (se
-// construyen una vez por job, no una vez por waiter).
+// Two waiters of the SAME piece share the decoding (one decoded
+// texture, not two) but NOT the Mesh (each one has its own copy,
+// same contract as the character branch), and all the waiters of the group, regardless
+// of their piece, share the SAME pointers in pieceMeshes (they are
+// built once per job, not once per waiter).
 //
-// Sabotaje de la Task 3 (revision de coste): compartir el shared_ptr<Mesh>
-// entre los dos waiters de la pieza 0 en vez de copiarlo — el assert de
-// punteros distintos de mesh salta. O: reconstruir pieceMeshes por waiter en
-// vez de compartir el vector — el assert de punteros iguales de pieceMeshes
-// salta (comparten CONTENIDO pero no IDENTIDAD).
+// Task 3 sabotage (cost review): share the shared_ptr<Mesh>
+// between the two waiters of piece 0 instead of copying it; the mesh
+// distinct pointers assert fires. Or: rebuild pieceMeshes per waiter
+// instead of sharing the vector; the pieceMeshes equal pointers assert
+// fires (they share CONTENT but not IDENTITY).
 void testSamePieceSharesDecodeDistinctMesh()
 {
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "dt_loader_pieces";
@@ -427,9 +427,9 @@ void testSamePieceSharesDecodeDistinctMesh()
     DonTopo::JobSystem js;
     js.start();
     DonTopo::AsyncAssetLoader loader(js);
-    loader.requestMesh(gltf, 20, 0);   // pieza 0, primer waiter
-    loader.requestMesh(gltf, 21, 0);   // pieza 0, SEGUNDO waiter, misma pieza
-    loader.requestMesh(gltf, 22, 1);   // pieza 1, para variar
+    loader.requestMesh(gltf, 20, 0);   // piece 0, first waiter
+    loader.requestMesh(gltf, 21, 0);   // piece 0, SECOND waiter, same piece
+    loader.requestMesh(gltf, 22, 1);   // piece 1, for variety
     std::vector<DonTopo::LoadedMesh> got = drain(loader, 3);
     assert(got.size() == 3);
     assert(loader.readFileCount() == 1 && "tres peticiones del mismo fichero = un solo ReadFile");
@@ -447,15 +447,15 @@ void testSamePieceSharesDecodeDistinctMesh()
     }
     assert(r20 && r21);
 
-    // Misma pieza, pero cada waiter tiene su PROPIO Mesh: compartir el
-    // puntero rompería el contrato de propiedad de siempre (dos GameObject
-    // sobre el mismo Mesh mutable).
+    // Same piece, but each waiter has its OWN Mesh: sharing the
+    // pointer would break the usual ownership contract (two GameObjects
+    // over the same mutable Mesh).
     assert(r20->mesh.get() != r21->mesh.get()
            && "dos waiters de la misma pieza no deben compartir el Mesh");
 
-    // pieceMeshes, en cambio, SI se comparte entre todos los waiters del
-    // grupo (se construye una vez por job): mismos punteros, no solo mismo
-    // contenido.
+    // pieceMeshes, on the other hand, IS shared among all the waiters of the
+    // group (it is built once per job): same pointers, not just same
+    // content.
     for (size_t i = 0; i < r20->pieceMeshes.size(); ++i)
         assert(r20->pieceMeshes[i].get() == r21->pieceMeshes[i].get()
                && "pieceMeshes debe compartir los mismos Mesh entre waiters del mismo job");

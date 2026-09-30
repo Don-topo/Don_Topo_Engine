@@ -1,6 +1,6 @@
-// Test headless del splash: la carga del PNG (sin GPU) y el calculo puro del
-// alpha por fase. La parte Vulkan de SplashScreen NO se testea aqui (requiere
-// device, fragil sin GPU): va a verificacion manual.
+// Headless splash test: the PNG load (no GPU) and the pure computation of the
+// alpha per phase. The Vulkan part of SplashScreen is NOT tested here (it needs a
+// device, fragile without a GPU): it goes to manual verification.
 #include "DonTopo/Renderer/SplashScreen.h"
 #include "SplashDriver.h"
 
@@ -15,7 +15,7 @@ using namespace DonTopo;
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
-// Un PNG real del repo carga a RGBA con dimensiones > 0.
+// A real PNG from the repo loads as RGBA with dimensions > 0.
 static void test_load_valid_png()
 {
     std::vector<uint8_t> rgba;
@@ -26,8 +26,8 @@ static void test_load_valid_png()
     CHECK(rgba.size() == (size_t)w * h * 4);
 }
 
-// Un fichero inexistente devuelve false sin tocar los out (garantia de "logo
-// ausente no bloquea el arranque").
+// A nonexistent file returns false without touching the outputs (guarantee that a
+// "missing logo does not block startup").
 static void test_missing_png_returns_false()
 {
     std::vector<uint8_t> rgba;
@@ -36,13 +36,13 @@ static void test_missing_png_returns_false()
     CHECK(rgba.empty());
 }
 
-// SplashDriver tests: calculo puro del alpha por fase.
+// SplashDriver tests: pure computation of the alpha per phase.
 static bool near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 
 static void test_fade_in_rises()
 {
     SplashTimings t; // fadeIn=0.3
-    // A mitad del fade-in, alpha ~0.5, aun no crossfade ni done.
+    // Halfway through the fade-in, alpha ~0.5, no crossfade or done yet.
     SplashState s = splashStateAt(t, 0.15f, /*loadingDone=*/false, 0.0f);
     CHECK(near(s.alpha, 0.5f));
     CHECK(!s.crossfading);
@@ -52,7 +52,7 @@ static void test_fade_in_rises()
 static void test_hold_while_loading()
 {
     SplashTimings t;
-    // Tras el fade-in, cargando todavia: alpha 1, sin crossfade.
+    // After the fade-in, still loading: alpha 1, no crossfade.
     SplashState s = splashStateAt(t, 1.0f, /*loadingDone=*/false, 0.0f);
     CHECK(near(s.alpha, 1.0f));
     CHECK(!s.crossfading);
@@ -62,8 +62,8 @@ static void test_hold_while_loading()
 static void test_min_total_respected()
 {
     SplashTimings t; // minTotal=1.5
-    // Carga termino pronto (a 0.5s) pero aun no se alcanzo minTotal: sigue en
-    // hold a alpha 1, sin empezar el fade-out.
+    // Loading finished early (at 0.5s) but minTotal has not been reached yet: it stays
+    // in hold at alpha 1, without starting the fade-out.
     SplashState s = splashStateAt(t, 1.0f, /*loadingDone=*/true, 0.5f);
     CHECK(near(s.alpha, 1.0f));
     CHECK(!s.crossfading);
@@ -73,8 +73,8 @@ static void test_min_total_respected()
 static void test_crossfade_after_load_and_min()
 {
     SplashTimings t; // minTotal=1.5, fadeOut=0.3
-    // Carga termino a 1.0s; fade-out empieza en max(1.0,1.5)=1.5. A 1.65s
-    // (mitad del fade-out) alpha ~0.5 y crossfading.
+    // Loading finished at 1.0s; the fade-out starts at max(1.0,1.5)=1.5. At 1.65s
+    // (halfway through the fade-out) alpha ~0.5 and crossfading.
     SplashState s = splashStateAt(t, 1.65f, /*loadingDone=*/true, 1.0f);
     CHECK(near(s.alpha, 0.5f));
     CHECK(s.crossfading);
@@ -84,7 +84,7 @@ static void test_crossfade_after_load_and_min()
 static void test_done_after_fade_out()
 {
     SplashTimings t;
-    // Fade-out completo (1.5 + 0.3 = 1.8): done, alpha 0.
+    // Fade-out complete (1.5 + 0.3 = 1.8): done, alpha 0.
     SplashState s = splashStateAt(t, 2.0f, /*loadingDone=*/true, 1.0f);
     CHECK(near(s.alpha, 0.0f));
     CHECK(s.done);

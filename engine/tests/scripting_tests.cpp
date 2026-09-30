@@ -1,24 +1,23 @@
-// Tests headless de ScriptBindings: el guard ensureFinite (NaN/Inf desde Lua,
-// ver ScriptBindings.cpp) y su contrato de "silencio + aviso". Plain main +
-// asserts, sin framework — mismo patrón que camera_tests.cpp/audio_tests.cpp/
+// Headless tests of ScriptBindings: the ensureFinite guard (NaN/Inf from Lua,
+// see ScriptBindings.cpp) and its "silence + warning" contract. Plain main +
+// asserts, no framework, same pattern as camera_tests.cpp/audio_tests.cpp/
 // physics_tests.cpp.
 //
-// Antes de este fichero, ensureFinite (131 líneas cambiadas en
-// ScriptBindings.cpp) no lo ejercitaba ningún test: podía romperse en
-// silencio sin que ningún exe rojo lo delatara.
+// Before this file, no test exercised ensureFinite (131 lines changed in
+// ScriptBindings.cpp): it could break silently without any red exe giving it away.
 //
-// PhysX solo admite UNA PxFoundation por proceso: se comparte un único
-// PhysicsManager (y AudioManager) entre todos los tests, creados en main() y
-// pasados por referencia — nunca uno por test (ver physics_tests.cpp).
+// PhysX only supports ONE PxFoundation per process: a single
+// PhysicsManager (and AudioManager) is shared among all the tests, created in main() and
+// passed by reference, never one per test (see physics_tests.cpp).
 //
-// ScriptManager se ejercita headless de verdad: init() con una carpeta que no
-// existe registra igualmente los bindings de Lua (solo loguea "carpeta no
-// encontrada" y sigue, ver ScriptManager::init) — no hace falta ningún .lua
-// en disco para llamar a Transform/Collider/Rigidbody directamente. Cada test
-// empuja una LuaEntity ya resuelta a un global Lua ("e") y ejecuta Lua REAL
-// contra ella (mismo mecanismo que instantiateComponentWith usa para inyectar
-// self.entity, solo que aquí sin ScriptComponent de por medio) y captura el
-// Log en un std::vector<std::string> vía setLogCallback.
+// ScriptManager is exercised headless for real: init() with a folder that does not
+// exist registers the Lua bindings all the same (it only logs "folder not
+// found" and carries on, see ScriptManager::init); no .lua is needed
+// on disk to call Transform/Collider/Rigidbody directly. Each test
+// pushes an already resolved LuaEntity into a Lua global ("e") and runs REAL Lua
+// against it (same mechanism that instantiateComponentWith uses to inject
+// self.entity, only here without a ScriptComponent in between) and captures the
+// Log in a std::vector<std::string> via setLogCallback.
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Scripting/LuaSyntaxCheck.h"
@@ -77,7 +76,7 @@ static int g_failures = 0;
 
 static bool nearlyEqual(float a, float b, float eps = 0.01f) { return std::fabs(a - b) < eps; }
 
-// true si alguna línea logueada contiene needle (p.ej. el nombre del método o
+// true if any logged line contains needle (e.g. the method name or
 // "WARN").
 static bool logContains(const std::vector<std::string>& log, const std::string& needle)
 {
@@ -86,10 +85,10 @@ static bool logContains(const std::vector<std::string>& log, const std::string& 
     return false;
 }
 
-// SetPosition con un Vec3 que trae un componente NaN (0/0 en Lua): la
-// posición NO cambia (se conserva la de antes) y el Log recibe un aviso que
-// nombra el método. Ejercita el guard tal cual lo ve un script real, que es
-// justo lo que el review señaló sin cobertura.
+// SetPosition with a Vec3 that carries a NaN component (0/0 in Lua): the
+// position does NOT change (the earlier one is kept) and the Log receives a warning that
+// names the method. It exercises the guard exactly as a real script sees it, which is
+// exactly what the review pointed out as uncovered.
 static void test_set_position_rejects_nan(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -112,10 +111,10 @@ static void test_set_position_rejects_nan(ScriptManager& sm)
     CHECK(logContains(log, "WARN"));
 }
 
-// CASO DE CONTROL: el MISMO setter con un Vec3 finito de verdad SÍ cambia la
-// posición y NO deja ningún aviso en el Log. Sin este test, un ensureFinite
-// que devolviera siempre false pasaría igual el test de arriba (posición sin
-// cambiar "porque nunca aplica nada" en vez de "porque el valor era NaN").
+// CONTROL CASE: the SAME setter with a truly finite Vec3 DOES change the
+// position and leaves NO warning in the Log. Without this test, an ensureFinite
+// that always returned false would pass the test above all the same (position
+// unchanged "because it never applies anything" instead of "because the value was NaN").
 static void test_set_position_applies_finite_value(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -136,8 +135,8 @@ static void test_set_position_applies_finite_value(ScriptManager& sm)
     CHECK(log.empty());
 }
 
-// Caso de un FLOAT SUELTO (no un Vec3): SphereCollider.SetRadius con NaN.
-// Mismo contrato que SetPosition: el radio no cambia y el Log avisa.
+// Case of a LOOSE FLOAT (not a Vec3): SphereCollider.SetRadius with NaN.
+// Same contract as SetPosition: the radius does not change and the Log warns.
 static void test_set_radius_rejects_nan(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -158,8 +157,8 @@ static void test_set_radius_rejects_nan(ScriptManager& sm, PhysicsManager& pm)
     CHECK(logContains(log, "WARN"));
 }
 
-// Control: el mismo SetRadius con un valor finito SÍ cambia el radio y NO
-// loguea nada.
+// Control: the same SetRadius with a finite value DOES change the radius and logs
+// NOTHING.
 static void test_set_radius_applies_finite_value(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -179,9 +178,9 @@ static void test_set_radius_applies_finite_value(ScriptManager& sm, PhysicsManag
     CHECK(log.empty());
 }
 
-// AddForce recibe x,y,z SUELTOS (no un Vec3 ya construido): con un NaN entre
-// ellos, la fuerza NO se aplica (la velocidad se queda a 0 tras avanzar la
-// física) y el Log recibe un aviso.
+// AddForce receives x,y,z LOOSE (not an already built Vec3): with a NaN among
+// them, the force is NOT applied (the velocity stays at 0 after advancing the
+// physics) and the Log receives a warning.
 static void test_add_force_rejects_nan(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -189,9 +188,9 @@ static void test_add_force_rejects_nan(ScriptManager& sm, PhysicsManager& pm)
     GameObject* go = scene.addGameObject("Cuerpo");
     auto rb = std::make_shared<Rigidbody>();
     rb->setUseGravity(false);
-    // El actor PhysX vive en el collider (Rigidbody no lo posee, ver
-    // Rigidbody.h) — col tiene que seguir vivo mientras se usa rb, igual que
-    // en physics_tests.cpp.
+    // The PhysX actor lives in the collider (Rigidbody does not own it, see
+    // Rigidbody.h); col has to stay alive while rb is used, same as
+    // in physics_tests.cpp.
     auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
     pm.attachRigidbody(col, rb);
     go->setRigidbody(rb);
@@ -210,9 +209,9 @@ static void test_add_force_rejects_nan(ScriptManager& sm, PhysicsManager& pm)
     CHECK(logContains(log, "WARN"));
 }
 
-// Control: el mismo AddForce con x,y,z finitos SÍ mueve el cuerpo (velocidad
-// no nula tras avanzar la física) y NO loguea nada. Sin este test, un
-// ensureFinite que devolviera siempre false pasaría igual el test de arriba.
+// Control: the same AddForce with finite x,y,z DOES move the body (non-zero
+// velocity after advancing the physics) and logs NOTHING. Without this test, an
+// ensureFinite that always returned false would pass the test above all the same.
 static void test_add_force_applies_finite_value(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -236,17 +235,17 @@ static void test_add_force_applies_finite_value(ScriptManager& sm, PhysicsManage
     CHECK(log.empty());
 }
 
-// El ORDEN importa, y este test es lo único que lo protege: ensureFinite
-// tiene que correr DESPUÉS del deref, no antes.
+// The ORDER matters, and this test is the only thing that protects it: ensureFinite
+// has to run AFTER the deref, not before.
 //
-// Con el guard delante, un script que toca una entity ya destruida pasándole
-// además un NaN recibía un aviso de "valor no finito" y un return silencioso
-// — enmascarando el use-after-destroy, que es el fallo grave de los dos. Con
-// el orden correcto, deref lanza error de Lua y del NaN no se llega a hablar.
+// With the guard first, a script that touches an already destroyed entity while also
+// passing a NaN received a "non-finite value" warning and a silent return,
+// masking the use-after-destroy, which is the graver failure of the two. With
+// the right order, deref throws a Lua error and the NaN is never even mentioned.
 //
-// Sin este test, revertir ese reordenamiento entero deja los 7 ejecutables en
-// verde: el caso feliz no lo distingue, porque cuando la entity está viva los
-// dos órdenes se comportan igual.
+// Without this test, reverting that whole reordering leaves the 7 executables
+// green: the happy path does not tell them apart, because when the entity is alive the
+// two orders behave the same.
 static void test_dead_entity_wins_over_nan(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -258,29 +257,29 @@ static void test_dead_entity_wins_over_nan(ScriptManager& sm)
     sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
     sm.lua()["e"] = LuaEntity{ go, &sm };
 
-    // El Transform se obtiene MIENTRAS la entity vive y se guarda. Si se
-    // pidiera después del borrado, el deref que hace el propio GetTransform
-    // lanzaría antes de llegar a SetPosition y este test pasaría sin ejercitar
-    // nada — comprobado: así no distinguía el orden correcto del invertido.
+    // The Transform is obtained WHILE the entity is alive and stored. If it were
+    // requested after the deletion, the deref that GetTransform itself does
+    // would throw before reaching SetPosition and this test would pass without exercising
+    // anything; checked: that way it did not tell the correct order from the inverted one.
     sm.lua().script("t = e:GetTransform()");
 
-    // Ahora sí: la entity de Lua sostiene un GameObject que ya no está en la
-    // escena, y el Transform guardado apunta a ella.
+    // Now yes: the Lua entity holds a GameObject that is no longer in the
+    // scene, and the stored Transform points to it.
     scene.removeGameObject(go);
     sm.rebuildAliveSet();
 
-    // pcall: se espera que LANCE. Con script() a secas el error se propagaría
-    // y abortaría el test en vez de comprobarlo.
+    // pcall: it is expected to THROW. With a bare script() the error would propagate
+    // and abort the test instead of checking it.
     sm.lua().script(
         "ok, err = pcall(function() t:SetPosition(Vec3.new(0/0, 1, 2)) end)");
 
     const bool ok = sm.lua()["ok"];
-    CHECK(!ok);                              // tiene que fallar, no avisar
+    CHECK(!ok);                              // it has to fail, not warn
 
-    // Y el motivo debe ser la entity muerta, no el NaN. El early-return es
-    // necesario: si la llamada NO lanzó, "err" es nil y leerlo como string
-    // hace panic a sol2, que abortaría el proceso en vez de dejar un FAIL
-    // legible.
+    // And the reason must be the dead entity, not the NaN. The early return is
+    // necessary: if the call did NOT throw, "err" is nil and reading it as a string
+    // makes sol2 panic, which would abort the process instead of leaving a
+    // readable FAIL.
     if (!ok)
     {
         const std::string err = sm.lua()["err"];
@@ -290,87 +289,87 @@ static void test_dead_entity_wins_over_nan(ScriptManager& sm)
     CHECK(!logContains(log, "SetPosition"));
 }
 
-// checkLuaSyntax alimenta los markers de error del Script Editor y no tenía
-// ninguna cobertura. Lo que importa es que devuelva la LÍNEA correcta: el
-// marker se pinta por número de línea, así que un off-by-one o un fallo del
-// regex que parsea el mensaje de Lua deja el aviso en el sitio equivocado —
-// o, si no detecta nada, sin marker ninguno.
+// checkLuaSyntax feeds the Script Editor error markers and had no
+// coverage. What matters is that it returns the correct LINE: the
+// marker is drawn by line number, so an off-by-one or a failure of the
+// regex that parses the Lua message leaves the warning in the wrong place,
+// or, if it detects nothing, without any marker at all.
 static void test_lua_syntax_check_detects_error()
 {
-    // Script válido: no hay error.
+    // Valid script: no error.
     CHECK(!checkLuaSyntax("local x = 1\nprint(x)\n").has_value());
 
-    // 'end' que falta: el caso MÁS COMÚN, y el que destapó que los markers no
-    // se veían. Lua lo reporta en <eof>, o sea UNA LÍNEA MÁS ALLÁ del final —
-    // con 2 líneas de texto, dice línea 3. El editor solo pinta markers de
-    // líneas que existen, así que ScriptEditorPanel::saveTab tiene que acotar
-    // la línea al documento antes de pasarla; si alguien quita ese clamp, el
-    // marker vuelve a guardarse sin dibujarse nunca.
+    // Missing 'end': the MOST COMMON case, and the one that uncovered that the markers were not
+    // being seen. Lua reports it at <eof>, that is, ONE LINE PAST the end;
+    // with 2 lines of text, it says line 3. The editor only draws markers for
+    // lines that exist, so ScriptEditorPanel::saveTab has to clamp
+    // the line to the document before passing it; if someone removes that clamp, the
+    // marker goes back to being saved without ever being drawn.
     auto err = checkLuaSyntax("function f()\n  local y = 2\n");
     CHECK(err.has_value());
     if (!err) return;
-    CHECK(err->first == 3);          // fuera del texto: 2 líneas, error en la 3
+    CHECK(err->first == 3);          // outside the text: 2 lines, error on the 3rd
     CHECK(!err->second.empty());
 
-    // Error en una línea concreta del medio: la línea reportada tiene que ser
-    // ESA, no la primera ni la última.
+    // Error on a specific line in the middle: the reported line has to be
+    // THAT one, not the first nor the last.
     auto mid = checkLuaSyntax("local a = 1\nlocal b = = 2\nlocal c = 3\n");
     CHECK(mid.has_value());
     if (!mid) return;
     CHECK(mid->first == 2);
 }
 
-// El editor real: SetText -> GetText -> checkLuaSyntax, que es exactamente lo
-// que hace saveTab. Fija las dos trampas que impedían ver el marker, medidas
-// con el TextEditor de verdad y no supuestas:
+// The real editor: SetText -> GetText -> checkLuaSyntax, which is exactly what
+// saveTab does. It pins down the two traps that prevented seeing the marker, measured
+// with the real TextEditor and not assumed:
 //
-//  a) GetText() devuelve UN CARÁCTER MÁS del que se metió (el editor añade un
-//     salto final), así que Lua ve una línea de más y sitúa el <eof> fuera del
-//     documento. El editor solo pinta markers de líneas existentes.
-//  b) Esa última línea, además, está VACÍA — acotar el marker ahí lo deja al
-//     final del fichero, sin señalar nada útil.
+//  a) GetText() returns ONE CHARACTER MORE than what was put in (the editor adds a
+//     trailing newline), so Lua sees one extra line and places the <eof> outside the
+//     document. The editor only draws markers for existing lines.
+//  b) That last line is also EMPTY; clamping the marker there leaves it at the
+//     end of the file, pointing at nothing useful.
 static void test_syntax_error_line_is_out_of_document()
 {
-    // Script SIN el 'end' final, con salto final como cualquier fichero real.
+    // Script WITHOUT the final 'end', with a trailing newline like any real file.
     const std::string roto = "Rotator = {\n  speed = 45\n}\n\nfunction Rotator:Update(dt)\n  local t = 1\n";
 
     TextEditor ed;
     ed.SetText(roto);
     const std::string ida = ed.GetText();
 
-    // (a) el round-trip por el editor añade el salto final
+    // (a) the round trip through the editor adds the trailing newline
     CHECK(ida.size() == roto.size() + 1);
 
     auto err = checkLuaSyntax(ida);
     CHECK(err.has_value());
     if (!err) return;
 
-    // El error cae MÁS ALLÁ de la última línea del editor: ese marker no se
-    // pintaría nunca. Es el corazón del bug.
+    // The error falls BEYOND the editor's last line: that marker would
+    // never be drawn. It is the heart of the bug.
     CHECK(err->first > ed.GetTotalLines());
 
-    // Y el mensaje nombra la línea donde se abrió lo que quedó sin cerrar
-    // (aquí el 'function' de la línea 5), que es lo que markerLine usa para
-    // poner la banda en un sitio con sentido.
+    // And the message names the line where what was left unclosed was opened
+    // (here the 'function' on line 5), which is what markerLine uses to
+    // put the band in a place that makes sense.
     CHECK(err->second.find("to close") != std::string::npos);
     CHECK(err->second.find("at line 5") != std::string::npos);
 }
 
-// ── UI desde Lua ────────────────────────────────────────────────────────────
-// Sin GPU: el loader falso devuelve nullptr, que es lo que devuelve el Renderer
-// con una ruta vacía. Lo que se prueba es el DATO que llega al nodo, no la
-// textura (mismo loader que camera_tests).
+// ── UI from Lua ────────────────────────────────────────────────────────────
+// Without a GPU: the fake loader returns nullptr, which is what the Renderer returns
+// with an empty path. What is tested is the DATA that reaches the node, not the
+// texture (same loader as camera_tests).
 struct FakeUiLoader
 {
     UiTextureAtlas* loadUiAtlas(const std::string&) { return nullptr; }
     UiFont*         loadUiFont(const std::string&)  { return nullptr; }
 };
 
-// Adaptador SOLO DE TESTS a la firma que syncUiWidgets tenía antes de que las
-// listas se agruparan en UiWidgetLists. Mismo apaño que en camera_tests.cpp: la
-// API de producción es UNA (la de la struct) y esto solo evita reescribir las
-// llamadas que prueban otra cosa. Las aridades no se solapan, así que ADL no
-// tiene nada que desempatar.
+// TEST-ONLY adapter to the signature that syncUiWidgets had before the
+// lists were grouped into UiWidgetLists. Same workaround as in camera_tests.cpp: the
+// production API is ONE (the struct's) and this only avoids rewriting the
+// calls that test something else. The arities do not overlap, so ADL has
+// nothing to disambiguate.
 template <class Loader>
 static void syncUiWidgets(
     const std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
@@ -389,10 +388,10 @@ static void syncUiWidgets(
     DonTopo::syncUiWidgets(w, canvas, cache, loader);
 }
 
-// Un click completo sobre p: un frame de hover, uno con el botón abajo y otro
-// con el botón arriba. El hit test necesita rects, o sea un buildDrawData
-// previo. Los tiempos se separan entre clicks para no cruzar el umbral del
-// doble click sin querer.
+// A complete click on p: one hover frame, one with the button down and another
+// with the button up. The hit test needs rects, that is, a prior
+// buildDrawData. The times are spaced out between clicks so as not to cross the
+// double-click threshold by accident.
 static void clickEn(UiCanvas& canvas, glm::vec2 p, float t0)
 {
     UiInputState in;
@@ -409,11 +408,11 @@ static void clickEn(UiCanvas& canvas, glm::vec2 p, float t0)
     canvas.updateInput(in);
 }
 
-// Un script escribe TODOS los campos de los cuatro componentes con valores no
-// neutros y distintos entre sí, y C++ los lee del componente de la escena. Los
-// valores son todos distintos a propósito: un binding que escribiera siempre en
-// el mismo campo, o que se dejara un campo sin conectar, pasaría un test hecho
-// con ceros y unos repetidos.
+// A script writes ALL the fields of the four components with non-neutral values
+// different from each other, and C++ reads them from the scene's component. The
+// values are all different on purpose: a binding that always wrote to
+// the same field, or that left a field unconnected, would pass a test made
+// with zeros and repeated ones.
 static void test_ui_lua_escribe_todos_los_campos(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -616,8 +615,8 @@ static void test_ui_lua_escribe_todos_los_campos(ScriptManager& sm)
     CHECK(nearlyEqual(p.color.r, 0.26f) && nearlyEqual(p.color.a, 0.29f));
     CHECK(nearlyEqual(p.fillColor.r, 0.36f) && nearlyEqual(p.fillColor.a, 0.39f));
 
-    // Y la LECTURA desde Lua devuelve lo mismo que se escribió: sin esto un
-    // getter cableado a un campo distinto del setter pasaría desapercibido.
+    // And the READ from Lua returns the same as what was written: without this a
+    // getter wired to a different field than the setter would go unnoticed.
     CHECK(nearlyEqual(sm.lua()["leidos"]["escala"].get<float>(), 2.5f));
     CHECK(sm.lua()["leidos"]["texto"].get<std::string>() == "Jugar");
     CHECK(sm.lua()["leidos"]["align"].get<int>() == (int)UiTextAlign::Justify);
@@ -630,9 +629,9 @@ static void test_ui_lua_escribe_todos_los_campos(ScriptManager& sm)
     CHECK(nearlyEqual(sm.lua()["bh"].get<float>(), 55.0f));
 }
 
-// El getter de un componente que no está devuelve nil, Add lo crea, Remove lo
-// quita, y usar el wrapper DESPUÉS del remove da un error de Lua capturable en
-// vez de tumbar el proceso (el wrapper resuelve por id en cada acceso).
+// The getter of a component that is not there returns nil, Add creates it, Remove
+// removes it, and using the wrapper AFTER the remove gives a catchable Lua error instead
+// of bringing down the process (the wrapper resolves by id on every access).
 static void test_ui_getter_nil_add_y_remove(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -669,10 +668,10 @@ static void test_ui_getter_nil_add_y_remove(ScriptManager& sm)
     CHECK(sm.lua()["mensajeTrasRemove"].get<std::string>().find("Button") != std::string::npos);
 }
 
-// El Layout desde Lua: el mismo contrato que los otros tres componentes de UI
-// (getter que da nil sin componente, Add, campos, Remove). Los valores son no
-// neutros y distintos entre sí para que un campo que el binding no escriba no
-// pueda pasar por el default.
+// The Layout from Lua: the same contract as the other three UI components
+// (getter that gives nil without the component, Add, fields, Remove). The values are
+// non-neutral and different from each other so that a field the binding does not write
+// cannot pass for the default.
 static void test_ui_layout_desde_lua(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -738,7 +737,7 @@ static void test_ui_layout_desde_lua(ScriptManager& sm)
     CHECK(nearlyEqual(l.cellSize.x, 64.0f));
     CHECK(nearlyEqual(l.cellSize.y, 48.0f));
 
-    // Y el camino de vuelta: lo que Lua LEE es lo que hay en el componente.
+    // And the way back: what Lua READS is what is in the component.
     CHECK(sm.lua()["modoLeido"].get<int>() == (int)UiLayoutMode::Grid);
 
     auto r2 = sm.lua().safe_script(R"(
@@ -750,9 +749,9 @@ static void test_ui_layout_desde_lua(ScriptManager& sm)
     CHECK(!go->hasLayout());
 }
 
-// El Panel desde Lua: mismo contrato que los otros componentes de UI (getter que
-// da nil sin componente, Add, campos, Remove). Valores no neutros y distintos
-// entre sí: un campo que el binding no escriba no puede pasar por el default.
+// The Panel from Lua: same contract as the other UI components (getter that
+// gives nil without the component, Add, fields, Remove). Non-neutral values different
+// from each other: a field the binding does not write cannot pass for the default.
 static void test_ui_panel_desde_lua(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -808,7 +807,7 @@ static void test_ui_panel_desde_lua(ScriptManager& sm)
     CHECK(nearlyEqual(p.color.r, 0.11f));
     CHECK(nearlyEqual(p.color.a, 0.14f));
 
-    // Y el camino de vuelta: lo que Lua LEE es lo que hay en el componente.
+    // And the way back: what Lua READS is what is in the component.
     CHECK(sm.lua()["spriteLeido"].get<std::string>() == "marco_dorado");
 
     auto r2 = sm.lua().safe_script(R"(
@@ -820,8 +819,8 @@ static void test_ui_panel_desde_lua(ScriptManager& sm)
     CHECK(!go->hasPanel());
 }
 
-// El Image desde Lua. Además del rect, los campos PROPIOS del widget del núcleo:
-// modo, bordes del 9-slice, tope de tiles y el bloque de Filled.
+// The Image from Lua. Besides the rect, the core widget's OWN fields:
+// mode, 9-slice borders, tile cap and the Filled block.
 static void test_ui_image_desde_lua(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -897,12 +896,12 @@ static void test_ui_image_desde_lua(ScriptManager& sm)
 }
 
 
-// Los cuatro widgets interactivos del segundo lote desde Lua: mismo contrato que
-// los demás (getter que da nil sin componente, Add, campos, Remove) más el
-// camino que solo tienen ellos: OnValueChanged, que es como un script se entera
-// de que el jugador ha movido algo.
+// The four interactive widgets of the second batch from Lua: same contract as
+// the others (getter that gives nil without the component, Add, fields, Remove) plus the
+// path that only they have: OnValueChanged, which is how a script finds out
+// that the player has moved something.
 //
-// Valores no neutros y distintos entre sí, por lo de siempre.
+// Non-neutral values different from each other, for the usual reason.
 static void test_ui_slider_desde_lua(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -966,7 +965,7 @@ static void test_ui_slider_desde_lua(ScriptManager& sm)
     CHECK(nearlyEqual(s.fillColor.g, 0.22f));
     CHECK(nearlyEqual(s.handleColor.b, 0.33f));
 
-    // El camino de vuelta: (30 - -10) / (90 - -10) = 0.4
+    // The way back: (30 - -10) / (90 - -10) = 0.4
     CHECK(nearlyEqual(sm.lua()["normalizado"].get<float>(), 0.4f));
 
     auto r2 = sm.lua().safe_script(R"(
@@ -978,10 +977,10 @@ static void test_ui_slider_desde_lua(ScriptManager& sm)
     CHECK(!go->hasSlider());
 }
 
-// OnValueChanged es lo que distingue a estos widgets de los que solo se pintan:
-// el script se entera de que el jugador ha movido algo SIN sondear el valor cada
-// frame. El callback lo dispara el nodo vivo, así que hace falta un sync y un
-// buildDrawData antes de tocar nada.
+// OnValueChanged is what distinguishes these widgets from those that are only drawn:
+// the script finds out that the player has moved something WITHOUT polling the value every
+// frame. The callback is fired by the live node, so a sync and a
+// buildDrawData are needed before touching anything.
 static void test_ui_slider_callback_desde_lua(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -1029,7 +1028,7 @@ static void test_ui_slider_callback_desde_lua(ScriptManager& sm)
     CHECK(sm.lua()["avisos"].get<int>() == 1);
     CHECK(nearlyEqual(sm.lua()["ultimo"].get<float>(), 75.0f));
 
-    // Pasar nil lo quita: el siguiente movimiento no avisa a nadie.
+    // Passing nil removes it: the next movement notifies nobody.
     auto r2 = sm.lua().safe_script("e:GetSlider():OnValueChanged(nil)",
                                    sol::script_pass_on_error);
     CHECK(r2.valid());
@@ -1221,7 +1220,7 @@ static void test_ui_scrollbar_desde_lua(ScriptManager& sm)
     CHECK(nearlyEqual(s.color.r, 0.19f));
     CHECK(nearlyEqual(s.handleColor.g, 0.69f));
 
-    // 7 pasos = 6 tramos: la parada más cercana a 0.3 es 2/6 = 0.3333...
+    // 7 steps = 6 segments: the stop closest to 0.3 is 2/6 = 0.3333...
     CHECK(nearlyEqual(sm.lua()["pegado"].get<float>(), 1.0f / 3.0f));
 
     auto r2 = sm.lua().safe_script(R"(
@@ -1234,9 +1233,9 @@ static void test_ui_scrollbar_desde_lua(ScriptManager& sm)
 }
 
 
-// Los tres widgets del tercer lote desde Lua. El InputField es el que trae algo
-// que ninguno de los anteriores tenía: se puede escribir en él, así que aquí se
-// prueba también el camino completo — tecla del canvas -> componente -> script.
+// The three widgets of the third batch from Lua. The InputField is the one that brings something
+// that none of the earlier ones had: it can be typed into, so here the complete path
+// is also tested: canvas key -> component -> script.
 static void test_ui_input_field_desde_lua(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -1310,7 +1309,7 @@ static void test_ui_input_field_desde_lua(ScriptManager& sm)
     CHECK(nearlyEqual(f.placeholderColor.b, 0.34f));
     CHECK(nearlyEqual(f.caretColor.a, 0.45f));
 
-    // Password: lo que se enseña son ocho almohadillas, y el texto sigue entero.
+    // Password: what is shown is eight hash marks, and the text is still whole.
     CHECK(sm.lua()["ensenado"].get<std::string>() == "########");
 
     auto r2 = sm.lua().safe_script(R"(
@@ -1322,9 +1321,9 @@ static void test_ui_input_field_desde_lua(ScriptManager& sm)
     CHECK(!go->hasInputField());
 }
 
-// El camino entero: una tecla entra por el canvas, el handler del nodo la mete
-// en el componente y el script se entera por OnValueChanged. Es lo que el canal
-// de caracteres del core existe para permitir.
+// The whole path: a key comes in through the canvas, the node's handler puts it
+// into the component and the script finds out through OnValueChanged. It is what the core's
+// character channel exists to allow.
 static void test_ui_input_field_callback_desde_lua(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -1451,7 +1450,7 @@ static void test_ui_dropdown_desde_lua(ScriptManager& sm)
     CHECK(nearlyEqual(d.arrowColor.r, 0.56f));
     CHECK(nearlyEqual(d.textColor.g, 0.67f));
 
-    // Las opciones se leen desde Lua con índice 1-based, que es lo natural allí.
+    // The options are read from Lua with a 1-based index, which is the natural one there.
     CHECK(sm.lua()["cuantas"].get<int>() == 3);
     CHECK(sm.lua()["segunda"].get<std::string>() == "Medio");
     CHECK(sm.lua()["elegida"].get<std::string>() == "Alto");
@@ -1519,8 +1518,8 @@ static void test_ui_scroll_view_desde_lua(ScriptManager& sm)
     CHECK(nearlyEqual(v.normalizedPosition.x, 0.3125f));
     CHECK(nearlyEqual(v.normalizedPosition.y, 0.6875f));
 
-    // El eje vertical está APAGADO: su recorrido es 0 aunque el contenido sea
-    // más alto que la vista. El horizontal sí: 613 - 311 = 302.
+    // The vertical axis is OFF: its travel is 0 even if the content is
+    // taller than the view. The horizontal one is on: 613 - 311 = 302.
     CHECK(nearlyEqual(sm.lua()["rx"].get<float>(), 302.0f));
     CHECK(nearlyEqual(sm.lua()["ry"].get<float>(), 0.0f));
     CHECK(nearlyEqual(sm.lua()["ox"].get<float>(), -302.0f * 0.3125f));
@@ -1535,9 +1534,9 @@ static void test_ui_scroll_view_desde_lua(ScriptManager& sm)
     CHECK(!go->hasScrollView());
 }
 
-// Lo que un script escribe en el COMPONENTE llega al nodo vivo en el siguiente
-// syncUiWidgets. Es la razón de que los setters no toquen el nodo: el sync lo
-// vuelca solo.
+// What a script writes into the COMPONENT reaches the live node on the next
+// syncUiWidgets. It is the reason the setters do not touch the node: the sync
+// dumps it on its own.
 static void test_ui_valor_de_lua_llega_al_nodo(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -1572,15 +1571,15 @@ static void test_ui_valor_de_lua_llega_al_nodo(ScriptManager& sm)
     CHECK(nearlyEqual(cache.barNodes[0]->size.x, 300.0f));
     CHECK(nearlyEqual(cache.barNodes[0]->size.y, 30.0f));
     CHECK(nearlyEqual(cache.barNodes[0]->color.r, 0.9f));
-    // El relleno es el cuarto del ancho: el valor de Lua ha llegado hasta el
-    // rect que se dibuja, no solo hasta el campo.
+    // The fill is a quarter of the width: the Lua value has reached the
+    // rect that is drawn, not just the field.
     CHECK(nearlyEqual(cache.barFills[0]->size.x, 75.0f));
 }
 
-// El callback de Lua se dispara UNA vez por click y SIGUE disparándose después
-// de que el sync reconstruya la raíz del canvas (clearChildren destruye el nodo
-// que tenía el handler). Es el test de la trampa: el dueño del callback es el
-// componente y el sync lo reinstala.
+// The Lua callback fires ONCE per click and KEEPS firing after
+// the sync rebuilds the canvas root (clearChildren destroys the node
+// that held the handler). It is the trap test: the owner of the callback is the
+// component and the sync reinstalls it.
 static void test_ui_click_sobrevive_a_la_reconstruccion(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -1618,20 +1617,20 @@ static void test_ui_click_sobrevive_a_la_reconstruccion(ScriptManager& sm)
     CHECK(sm.lua()["clicks"].get<int>() == 1);
     CHECK(sm.lua()["dobles"].get<int>() == 0);
 
-    // Añadir un botón cambia el conjunto -> el sync llama a clearChildren() y
-    // monta nodos NUEVOS. Un handler enganchado a pelo al nodo moriría aquí.
+    // Adding a button changes the set -> the sync calls clearChildren() and
+    // builds NEW nodes. A handler hooked bare onto the node would die here.
     syncUiWidgets(dos, {}, {}, canvas, cache, loader);
     data.clear();
     canvas.buildDrawData(800, 480, data);
     clickEn(canvas, glm::vec2(20.0f, 20.0f), 10.0f);
     CHECK(sm.lua()["clicks"].get<int>() == 2);
 
-    // Dos clicks seguidos en el mismo sitio: uno solo debe contar como doble.
+    // Two consecutive clicks in the same spot: only one must count as a double.
     clickEn(canvas, glm::vec2(20.0f, 20.0f), 10.2f);
     CHECK(sm.lua()["clicks"].get<int>() == 3);
     CHECK(sm.lua()["dobles"].get<int>() == 1);
 
-    // Y el estado del nodo vuelve al componente: el ratón se quedó encima.
+    // And the node's state goes back to the component: the mouse stayed on top.
     syncUiWidgets(dos, {}, {}, canvas, cache, loader);
     auto r2 = sm.lua().safe_script("estado = e:GetButton():GetState()",
                                    sol::script_pass_on_error);
@@ -1639,9 +1638,9 @@ static void test_ui_click_sobrevive_a_la_reconstruccion(ScriptManager& sm)
     CHECK(sm.lua()["estado"].get<int>() == (int)UiButtonState::Hover);
 }
 
-// Un callback registrado por un script que se recarga en caliente NO se vuelve
-// a llamar (apunta a la clase vieja), y uno que sobrevive a su ScriptManager
-// tampoco toca el lua_State muerto.
+// A callback registered by a script that is hot-reloaded is NOT called
+// again (it points to the old class), and one that outlives its ScriptManager
+// does not touch the dead lua_State either.
 static void test_ui_callback_no_invoca_estado_viejo(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -1669,14 +1668,14 @@ static void test_ui_callback_no_invoca_estado_viejo(ScriptManager& sm)
     clickEn(canvas, glm::vec2(20.0f, 20.0f), 1.0f);
     CHECK(sm.lua()["recargaClicks"].get<int>() == 1);
 
-    // Lo que hace la recarga en caliente al terminar de cargar el .lua.
+    // What the hot reload does when it finishes loading the .lua.
     sm.invalidateScriptCallbacks();
     clickEn(canvas, glm::vec2(20.0f, 20.0f), 10.0f);
-    CHECK(sm.lua()["recargaClicks"].get<int>() == 1);   // mudo, no re-disparado
+    CHECK(sm.lua()["recargaClicks"].get<int>() == 1);   // muted, not re-fired
 
-    // Y ahora el caso duro: el componente sobrevive al ScriptManager que
-    // registró el callback. Si el handler guardara un sol::protected_function,
-    // aquí ya habría petado al destruirlo.
+    // And now the hard case: the component outlives the ScriptManager that
+    // registered the callback. If the handler stored a sol::protected_function,
+    // it would already have crashed here on destroying it.
     Scene otraEscena("Test2");
     GameObject* go2 = otraEscena.addGameObject("Boton2");
     go2->setButton(std::make_shared<ButtonComponent>());
@@ -1700,13 +1699,13 @@ static void test_ui_callback_no_invoca_estado_viejo(ScriptManager& sm)
         syncUiWidgets(lista2, {}, {}, canvas2, cache2, loader);
         canvas2.buildDrawData(800, 480, data2);
     }
-    // ScriptManager destruido: el click no puede llamar a nada.
+    // ScriptManager destroyed: the click cannot call anything.
     clickEn(canvas2, glm::vec2(20.0f, 20.0f), 1.0f);
-    CHECK(go2->getButton()->callbacks.ptr->onClick != nullptr);   // sigue ahí, pero mudo
+    CHECK(go2->getButton()->callbacks.ptr->onClick != nullptr);   // still there, but muted
 }
 
-// Un error dentro de un callback se registra en el Log y NO impide que el
-// callback del otro botón se ejecute.
+// An error inside a callback is recorded in the Log and does NOT prevent the
+// other button's callback from running.
 static void test_ui_error_en_callback_no_tumba_el_tick(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -1741,17 +1740,17 @@ static void test_ui_error_en_callback_no_tumba_el_tick(ScriptManager& sm)
     syncUiWidgets(lista, {}, {}, canvas, cache, loader);
     canvas.buildDrawData(800, 480, data);
 
-    clickEn(canvas, glm::vec2(20.0f, 20.0f), 1.0f);      // el roto
-    clickEn(canvas, glm::vec2(420.0f, 320.0f), 10.0f);   // el sano
+    clickEn(canvas, glm::vec2(20.0f, 20.0f), 1.0f);      // the broken one
+    clickEn(canvas, glm::vec2(420.0f, 320.0f), 10.0f);   // the healthy one
 
     CHECK(logContains(log, "callback roto a proposito"));
     CHECK(logContains(log, "Button.OnClick"));
     CHECK(sm.lua()["sanoClicks"].get<int>() == 1);
 }
 
-// Los cuatro componentes en el MISMO GameObject: cada wrapper escribe en el
-// suyo y el sync monta los tres nodos sin mezclarlos (Button, Text y
-// ProgressBar comparten id de dueño).
+// The four components on the SAME GameObject: each wrapper writes into its own
+// and the sync builds the three nodes without mixing them (Button, Text and
+// ProgressBar share the owner id).
 static void test_ui_cuatro_componentes_en_el_mismo_objeto(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -1806,15 +1805,15 @@ static void test_ui_cuatro_componentes_en_el_mismo_objeto(ScriptManager& sm)
 }
 
 // ---------------------------------------------------------------------------
-// Physics.Raycast — la PxScene la comparte todo el fichero (una sola
-// PxFoundation por proceso, ver la cabecera): cada test monta sus colliders en
-// un Scene local y los suelta al salir.
+// Physics.Raycast: the PxScene is shared by the whole file (a single
+// PxFoundation per process, see the header): each test sets up its colliders in
+// a local Scene and releases them on exit.
 // ---------------------------------------------------------------------------
 
-// Esfera de radio 1 centrada en (0,2,10). El rayo (0,2,0)->+Z la toca a 9
-// unidades, en el punto (0,2,9) y con normal (0,0,-1): los tres campos con
-// valores distintos entre sí y ninguno neutro, así un hit relleno a ceros no
-// pasaría. El owner se pone a mano igual que hace Scene.cpp al deserializar.
+// Sphere of radius 1 centered at (0,2,10). The ray (0,2,0)->+Z hits it at 9
+// units, at the point (0,2,9) and with normal (0,0,-1): the three fields with
+// values different from each other and none neutral, so a hit filled with zeros would not
+// pass. The owner is set by hand just as Scene.cpp does when deserializing.
 static GameObject* addDiana(Scene& scene, PhysicsManager& pm, const char* name,
                             const glm::vec3& center, bool withOwner = true)
 {
@@ -1852,8 +1851,8 @@ static void test_raycast_campos_del_impacto(ScriptManager& sm, PhysicsManager& p
     CHECK(e.go == go);
 }
 
-// La dirección se normaliza dentro: con (0,0,5) la distancia sigue siendo 9
-// (PhysX exige dir unitaria; sin normalizar sale escalada o directamente mal).
+// The direction is normalized inside: with (0,0,5) the distance is still 9
+// (PhysX requires a unit dir; unnormalized it comes out scaled or just plain wrong).
 static void test_raycast_normaliza_la_direccion(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -1868,7 +1867,7 @@ static void test_raycast_normaliza_la_direccion(ScriptManager& sm, PhysicsManage
     CHECK(nearlyEqual((*hit)["distance"].get<float>(), 9.0f));
 }
 
-// Dirección de longitud 0 -> nil sin tocar PhysX.
+// Direction of length 0 -> nil without touching PhysX.
 static void test_raycast_direccion_cero(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -1880,8 +1879,8 @@ static void test_raycast_direccion_cero(ScriptManager& sm, PhysicsManager& pm)
     CHECK(luaIsNil(sm, "hit"));
 }
 
-// maxDistance ausente o <= 0 -> default 1000 (el impacto a 9 entra); un
-// maxDistance corto de verdad recorta.
+// maxDistance absent or <= 0 -> default 1000 (the hit at 9 gets in); a
+// truly short maxDistance cuts it off.
 static void test_raycast_max_distance(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -1898,8 +1897,8 @@ static void test_raycast_max_distance(ScriptManager& sm, PhysicsManager& pm)
     CHECK(luaIsNil(sm, "corto"));
 }
 
-// hitTriggers: por defecto un collider Is Trigger NO cuenta como impacto (PhysX
-// sí lo deja en las consultas de escena, lo descarta nuestro prefiltro).
+// hitTriggers: by default an Is Trigger collider does NOT count as a hit (PhysX
+// does leave it in scene queries, our prefilter discards it).
 static void test_raycast_hit_triggers(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -1917,8 +1916,8 @@ static void test_raycast_hit_triggers(ScriptManager& sm, PhysicsManager& pm)
     pm.setTrigger(go->getSphereCollider(), false);
 }
 
-// static / dynamic: la diana es un PxRigidStatic, así que apagando 'static'
-// desaparece; apagando solo 'dynamic' sigue ahí; con los dos apagados, nil.
+// static / dynamic: the target is a PxRigidStatic, so turning off 'static'
+// makes it disappear; turning off only 'dynamic' it is still there; with both off, nil.
 static void test_raycast_filtro_static_dynamic(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -1935,8 +1934,8 @@ static void test_raycast_filtro_static_dynamic(ScriptManager& sm, PhysicsManager
     CHECK(luaIsNil(sm, "ninguno"));
 }
 
-// ignore: la entidad que dispara no se choca consigo misma, pero ignorar a otra
-// no le quita el impacto.
+// ignore: the entity that fires does not hit itself, but ignoring another one does
+// not remove the hit.
 static void test_raycast_ignore(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -1954,8 +1953,8 @@ static void test_raycast_ignore(ScriptManager& sm, PhysicsManager& pm)
     CHECK(!luaIsNil(sm, "ignoraOtro"));
 }
 
-// Un argumento del tipo equivocado devuelve nil y avisa, pero NO tumba el
-// script: la línea siguiente se ejecuta.
+// An argument of the wrong type returns nil and warns, but does NOT bring down the
+// script: the next line runs.
 static void test_raycast_tipos_invalidos_no_tumban_el_script(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -1984,7 +1983,7 @@ static void test_raycast_tipos_invalidos_no_tumban_el_script(ScriptManager& sm, 
     sm.setLogCallback(nullptr);
 }
 
-// Sin PhysicsManager (fuera de Play) -> nil, no excepción.
+// Without a PhysicsManager (outside Play) -> nil, not an exception.
 static void test_raycast_sin_fisica(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2002,7 +2001,7 @@ static void test_raycast_sin_fisica(ScriptManager& sm, PhysicsManager& pm)
     CHECK(sm.lua()["toco"].get<bool>() == false);
 }
 
-// Collider sin GameObject asociado: entity nil, el resto de campos llenos.
+// Collider without an associated GameObject: entity nil, the other fields filled.
 static void test_raycast_actor_sin_gameobject(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2021,7 +2020,7 @@ static void test_raycast_actor_sin_gameobject(ScriptManager& sm, PhysicsManager&
     CHECK(nearlyEqual((*hit)["point"].get<glm::vec3>().z, 9.0f));
 }
 
-// RaycastHit: solo el booleano, mismos filtros.
+// RaycastHit: only the boolean, same filters.
 static void test_raycast_hit_booleano(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2039,13 +2038,13 @@ static void test_raycast_hit_booleano(ScriptManager& sm, PhysicsManager& pm)
 }
 
 // ---------------------------------------------------------------------------
-// Physics.RaycastAll — mismas dianas, pero TRES en fila sobre el mismo rayo.
+// Physics.RaycastAll: same targets, but THREE in a row on the same ray.
 // ---------------------------------------------------------------------------
 
-// Tres esferas a z=10/20/30: el rayo (0,2,0)->+Z las toca a 9, 19 y 29. Se
-// crean en orden INVERSO (la más lejana primero) a propósito: PhysX entrega los
-// touches en el orden del barrido espacial, no por distancia, así que un
-// RaycastAll sin ordenar tiene todas las papeletas de sacarlas al revés.
+// Three spheres at z=10/20/30: the ray (0,2,0)->+Z hits them at 9, 19 and 29. They are
+// created in REVERSE order (the farthest first) on purpose: PhysX delivers the
+// touches in spatial sweep order, not by distance, so an unsorted
+// RaycastAll has every chance of returning them backwards.
 static void test_raycast_all_ordenado_por_distancia(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2064,7 +2063,7 @@ static void test_raycast_all_ordenado_por_distancia(ScriptManager& sm, PhysicsMa
     CHECK(hits.has_value());
     if (!hits || sm.lua()["n"].get<int>() != 3) return;
 
-    // Orden estricto por distancia ascendente + la entidad que toca a cada una.
+    // Strict ascending distance order + the entity that hits each one.
     const float d1 = (*hits)[1]["distance"].get<float>();
     const float d2 = (*hits)[2]["distance"].get<float>();
     const float d3 = (*hits)[3]["distance"].get<float>();
@@ -2077,9 +2076,9 @@ static void test_raycast_all_ordenado_por_distancia(ScriptManager& sm, PhysicsMa
     CHECK((*hits)[3]["entity"].get<LuaEntity>().go == lejos);
 }
 
-// Cada elemento lleva EXACTAMENTE los mismos campos (y valores) que devolvería
-// Physics.Raycast para ese impacto: se comparan uno contra otro, no contra
-// constantes, así el día que Raycast cambie de forma este test lo canta.
+// Each element carries EXACTLY the same fields (and values) that
+// Physics.Raycast would return for that hit: they are compared against each other, not against
+// constants, so the day Raycast changes shape this test calls it out.
 static void test_raycast_all_misma_forma_que_raycast(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2107,15 +2106,15 @@ static void test_raycast_all_misma_forma_que_raycast(ScriptManager& sm, PhysicsM
     CHECK(nearlyEqual(nA.x, nB.x) && nearlyEqual(nA.y, nB.y) && nearlyEqual(nA.z, nB.z));
     CHECK(primero["entity"].get<LuaEntity>().go == (*uno)["entity"].get<LuaEntity>().go);
 
-    // Y ningún campo de más: la tabla del hit tiene exactamente 4 claves.
+    // And no extra field: the hit table has exactly 4 keys.
     sm.lua().script(
         "claves = 0\n"
         "for k, v in pairs(todos[1]) do claves = claves + 1 end\n");
     CHECK(sm.lua()["claves"].get<int>() == 4);
 }
 
-// Sin impactos, sin física y con argumentos inválidos: SIEMPRE tabla (vacía),
-// nunca nil. Un nil aquí rompería el ipairs del caller.
+// Without hits, without physics and with invalid arguments: ALWAYS a table (empty),
+// never nil. A nil here would break the caller's ipairs.
 static void test_raycast_all_sin_impactos_devuelve_tabla_vacia(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2141,7 +2140,7 @@ static void test_raycast_all_sin_impactos_devuelve_tabla_vacia(ScriptManager& sm
     CHECK(logContains(log, "RaycastAll"));
     sm.setLogCallback(nullptr);
 
-    // Fuera de Play (sin PhysicsManager) tampoco sale nil.
+    // Outside Play (without a PhysicsManager) it does not come out nil either.
     sm.setPhysicsManager(nullptr);
     sm.lua().script(
         "fuera = Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
@@ -2150,8 +2149,8 @@ static void test_raycast_all_sin_impactos_devuelve_tabla_vacia(ScriptManager& sm
     CHECK(sm.lua()["fueraOk"].get<bool>() == true);
 }
 
-// Los filtros de options valen igual que en Raycast: el trigger del medio solo
-// aparece con hitTriggers, y el ignore quita justo esa entidad de la lista.
+// The options filters apply the same as in Raycast: the trigger in the middle only
+// shows up with hitTriggers, and ignore removes exactly that entity from the list.
 static void test_raycast_all_filtros(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2170,10 +2169,10 @@ static void test_raycast_all_filtros(ScriptManager& sm, PhysicsManager& pm)
         "ignorando   = Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100, { ignore = cerca })\n"
         "nIgnorando  = #ignorando\n");
 
-    CHECK(sm.lua()["porDefecto"].get<int>() == 2);   // el trigger no bloquea ni cuenta
+    CHECK(sm.lua()["porDefecto"].get<int>() == 2);   // the trigger neither blocks nor counts
     CHECK(sm.lua()["conTriggers"].get<int>() == 3);
     CHECK(sm.lua()["sinStatic"].get<int>() == 0);
-    CHECK(sm.lua()["nIgnorando"].get<int>() == 1);   // queda solo Lejos
+    CHECK(sm.lua()["nIgnorando"].get<int>() == 1);   // only Lejos remains
     if (sm.lua()["nIgnorando"].get<int>() == 1)
     {
         sol::table ign = sm.lua()["ignorando"];
@@ -2183,9 +2182,9 @@ static void test_raycast_all_filtros(ScriptManager& sm, PhysicsManager& pm)
     pm.setTrigger(medio->getSphereCollider(), false);
 }
 
-// Physics.Raycast sigue parando en el PRIMER impacto: RaycastAll no puede
-// haberle contagiado el eNO_BLOCK (con él, 'block' se queda sin escribir y la
-// distancia saldría basura o el hit directamente nil).
+// Physics.Raycast still stops at the FIRST hit: RaycastAll cannot have
+// passed on the eNO_BLOCK to it (with it, 'block' is left unwritten and the
+// distance would come out garbage or the hit directly nil).
 static void test_raycast_all_no_altera_raycast(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2207,12 +2206,12 @@ static void test_raycast_all_no_altera_raycast(ScriptManager& sm, PhysicsManager
 }
 
 // ---------------------------------------------------------------------------
-// Physics.SphereCast / OverlapSphere / OverlapBox — mismas dianas (esferas de
-// radio 1) y los mismos filtros de 'options' que el rayo.
+// Physics.SphereCast / OverlapSphere / OverlapBox: same targets (spheres of
+// radius 1) and the same 'options' filters as the ray.
 // ---------------------------------------------------------------------------
 
-// Devuelve la Entity que hay en out[i] (1-indexado) del array de un overlap, o
-// nullptr si no es una Entity viva.
+// Returns the Entity at out[i] (1-indexed) of an overlap's array, or
+// nullptr if it is not a live Entity.
 static GameObject* overlapAt(ScriptManager& sm, const char* name, int i)
 {
     sol::optional<sol::table> t = sm.lua()[name];
@@ -2222,10 +2221,10 @@ static GameObject* overlapAt(ScriptManager& sm, const char* name, int i)
     return o.as<LuaEntity>().go;
 }
 
-// El sweep es el rayo CON GROSOR: desde (0,3.5,0) el rayo pasa 0.5 por encima
-// de la diana (centro y=2, radio 1) y no la toca, pero barriendo una esfera de
-// radio 0.8 sí. Con el radio ignorado (o a 0) el CHECK de 'gordo' se pone rojo.
-// De paso fija la forma de la tabla: los mismos cuatro campos que Raycast.
+// The sweep is the ray WITH THICKNESS: from (0,3.5,0) the ray passes 0.5 above
+// the target (center y=2, radius 1) and does not hit it, but sweeping a sphere of
+// radius 0.8 does. With the radius ignored (or at 0) the 'gordo' CHECK turns red.
+// By the way it pins down the shape of the table: the same four fields as Raycast.
 static void test_sphere_cast_usa_el_radio(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2239,24 +2238,24 @@ static void test_sphere_cast_usa_el_radio(ScriptManager& sm, PhysicsManager& pm)
         "fino  = Physics.SphereCast(Vec3(0,3.5,0), Vec3(0,0,1), 0.1, 100)\n"
         "recto = Physics.SphereCast(Vec3(0,2,0), Vec3(0,0,1), 0.5, 100)\n");
 
-    CHECK(luaIsNil(sm, "rayo"));   // el rayo de grosor cero pasa de largo
-    CHECK(luaIsNil(sm, "fino"));   // y una esfera demasiado fina, también
-    CHECK(!luaIsNil(sm, "gordo")); // pero la gorda alcanza
+    CHECK(luaIsNil(sm, "rayo"));   // the zero-thickness ray passes by
+    CHECK(luaIsNil(sm, "fino"));   // and a sphere that is too thin, too
+    CHECK(!luaIsNil(sm, "gordo")); // but the fat one reaches
 
     sol::optional<sol::table> recto = sm.lua()["recto"];
     CHECK(recto.has_value());
     if (!recto) return;
-    // Centro a 10, radio de la diana 1, radio barrido 0.5 -> contacto a 8.5.
+    // Center at 10, target radius 1, sweep radius 0.5 -> contact at 8.5.
     CHECK(nearlyEqual((*recto)["distance"].get<float>(), 8.5f));
     glm::vec3 p = (*recto)["point"].get<glm::vec3>();
     glm::vec3 n = (*recto)["normal"].get<glm::vec3>();
-    CHECK(nearlyEqual(p.z, 9.0f));                        // punto sobre la diana
+    CHECK(nearlyEqual(p.z, 9.0f));                        // point on the target
     CHECK(nearlyEqual(n.x, 0.0f) && nearlyEqual(n.z, -1.0f));
     CHECK((*recto)["entity"].get<LuaEntity>().go == go);
 }
 
-// Barridos que no tocan: al revés, corto por maxDistance, y radio inválido
-// (0 o negativo -> nil con aviso, nunca geometría inválida a PhysX).
+// Sweeps that do not hit: the other way around, short because of maxDistance, and invalid radius
+// (0 or negative -> nil with a warning, never invalid geometry to PhysX).
 static void test_sphere_cast_pasa_de_largo(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2288,9 +2287,9 @@ static void test_sphere_cast_pasa_de_largo(ScriptManager& sm, PhysicsManager& pm
     sm.setLogCallback(nullptr);
 }
 
-// 0, 1 y N solapes con la misma escena, cambiando sólo el radio. El caso N cae
-// si falta el eNO_BLOCK (la consulta cerraría en el primero) y el caso 0 fija
-// que sale tabla vacía, no nil.
+// 0, 1 and N overlaps with the same scene, changing only the radius. The N case fails
+// if eNO_BLOCK is missing (the query would close on the first one) and the 0 case pins down
+// that an empty table comes out, not nil.
 static void test_overlap_sphere_cero_uno_n(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2298,14 +2297,14 @@ static void test_overlap_sphere_cero_uno_n(ScriptManager& sm, PhysicsManager& pm
     GameObject* cerca = addDiana(scene, pm, "Cerca", glm::vec3(0.0f, 2.0f, 10.0f));
     addDiana(scene, pm, "Medio", glm::vec3(0.0f, 2.0f, 20.0f));
     addDiana(scene, pm, "Lejos", glm::vec3(0.0f, 2.0f, 30.0f));
-    // Cuarta diana DENTRO del radio de 'tres' pero sin GameObject detrás: hay
-    // cuatro solapes y sólo tres entidades que devolver, así que 'nTres' == 3
-    // fija que los actores huérfanos se omiten en vez de colar un nil (o de
-    // reventar) en el array.
+    // Fourth target INSIDE the radius of 'tres' but without a GameObject behind it: there are
+    // four overlaps and only three entities to return, so 'nTres' == 3
+    // pins down that orphan actors are omitted instead of sneaking a nil (or
+    // blowing up) into the array.
     addDiana(scene, pm, "Anonima", glm::vec3(0.0f, 2.0f, 21.0f), /*withOwner=*/false);
-    // Y 'Cerca' se lleva un SEGUNDO collider en el mismo sitio: dos shapes que
-    // solapan, un solo GameObject. 'nUno' == 1 fija que la entidad no sale
-    // duplicada en el array.
+    // And 'Cerca' gets a SECOND collider in the same spot: two shapes that
+    // overlap, a single GameObject. 'nUno' == 1 pins down that the entity does not come out
+    // duplicated in the array.
     auto extra = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f, 2.0f, 10.0f),
                                                 glm::mat4(1.0f), /*dynamic=*/false);
     extra->setOwner(cerca);
@@ -2316,8 +2315,8 @@ static void test_overlap_sphere_cero_uno_n(ScriptManager& sm, PhysicsManager& pm
         "vacio  = Physics.OverlapSphere(Vec3(0,500,0), 2)\n"
         "uno    = Physics.OverlapSphere(Vec3(0,2,10), 2)\n"
         "tres   = Physics.OverlapSphere(Vec3(0,2,20), 15)\n"
-        // Sin radio: argumento ausente, tabla vacía y aviso (y NO un crash al
-        // mirarle el tipo a un sol::object sin lua_State).
+        // Without a radius: argument absent, empty table and warning (and NOT a crash when
+        // looking at the type of a sol::object without a lua_State).
         "sinRadio = Physics.OverlapSphere(Vec3(0,2,10))\n"
         "nVacio  = #vacio\n"
         "nUno    = #uno\n"
@@ -2333,8 +2332,8 @@ static void test_overlap_sphere_cero_uno_n(ScriptManager& sm, PhysicsManager& pm
     CHECK(overlapAt(sm, "uno", 1) == cerca);
 }
 
-// Los mismos filtros que el rayo: el trigger sólo aparece con hitTriggers, y
-// 'ignore' quita justo su GameObject de la lista.
+// The same filters as the ray: the trigger only shows up with hitTriggers, and
+// 'ignore' removes exactly its GameObject from the list.
 static void test_overlap_sphere_filtros(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2356,18 +2355,18 @@ static void test_overlap_sphere_filtros(ScriptManager& sm, PhysicsManager& pm)
         "nSinStatic  = #sinStatic\n"
         "nIgnorando  = #ignorando\n");
 
-    CHECK(sm.lua()["nPorDefecto"].get<int>() == 2);   // el trigger no cuenta
+    CHECK(sm.lua()["nPorDefecto"].get<int>() == 2);   // the trigger does not count
     CHECK(sm.lua()["nConTriggers"].get<int>() == 3);
     CHECK(sm.lua()["nSinStatic"].get<int>() == 0);
-    CHECK(sm.lua()["nIgnorando"].get<int>() == 1);    // sin trigger y sin Cerca
+    CHECK(sm.lua()["nIgnorando"].get<int>() == 1);    // without trigger and without Cerca
     CHECK(overlapAt(sm, "ignorando", 1) == lejos);
 
     pm.setTrigger(medio->getSphereCollider(), false);
 }
 
-// La caja está ORIENTADA: larga en Z ve las tres dianas, girada 90° sobre Y no
-// ve ninguna. Y el tercer argumento se desambigua por tipo: una tabla es
-// 'options', no una rotación.
+// The box is ORIENTED: long in Z it sees the three targets, rotated 90° about Y it sees
+// none. And the third argument is disambiguated by type: a table is
+// 'options', not a rotation.
 static void test_overlap_box_rotacion_y_options(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2386,17 +2385,17 @@ static void test_overlap_box_rotacion_y_options(ScriptManager& sm, PhysicsManage
         "malos    = Physics.OverlapBox(Vec3(0,2,20), 7)\n"
         "nMalos   = #malos\n");
 
-    CHECK(sm.lua()["larga"].get<int>() == 2);      // Cerca y Lejos (Medio es trigger)
-    CHECK(sm.lua()["girada"].get<int>() == 0);     // ahora la caja es larga en X
-    CHECK(sm.lua()["conOpts"].get<int>() == 3);    // tabla en 3ª posición = options
+    CHECK(sm.lua()["larga"].get<int>() == 2);      // Cerca and Lejos (Medio is a trigger)
+    CHECK(sm.lua()["girada"].get<int>() == 0);     // now the box is long in X
+    CHECK(sm.lua()["conOpts"].get<int>() == 3);    // table in 3rd position = options
     CHECK(sm.lua()["rotYOpts"].get<int>() == 3);
-    CHECK(sm.lua()["nMalos"].get<int>() == 0);     // argumentos inválidos -> tabla vacía
+    CHECK(sm.lua()["nMalos"].get<int>() == 0);     // invalid arguments -> empty table
 
     pm.setTrigger(medio->getSphereCollider(), false);
 }
 
-// Fuera de Play (sin PhysicsManager) las tres consultas devuelven lo mismo que
-// dentro pero vacío: nil el sweep, tabla vacía los overlaps. Nunca excepción.
+// Outside Play (without a PhysicsManager) the three queries return the same as
+// inside but empty: nil the sweep, empty table the overlaps. Never an exception.
 static void test_sweep_y_overlaps_sin_fisica(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2416,12 +2415,12 @@ static void test_sweep_y_overlaps_sin_fisica(ScriptManager& sm, PhysicsManager& 
     CHECK(sm.lua()["nCaja"].get<int>() == 0);
 }
 
-// Rigidbody.constraints es un BITMASK, no un float: se compone desde Lua con
-// el OR bit a bit de 5.4 sobre la tabla RigidbodyConstraints. El test escribe
-// un valor DISTINTO del inicial (RB_None), lo lee de vuelta por la misma
-// propiedad y remata midiendo la simulación: con Freeze-Y puesto, el cuerpo no
-// cae aunque tenga gravedad. Sin el setter, el bitmask no llega al actor y la
-// última comprobación se pone roja.
+// Rigidbody.constraints is a BITMASK, not a float: it is composed from Lua with
+// the 5.4 bitwise OR on the RigidbodyConstraints table. The test writes
+// a value DIFFERENT from the initial one (RB_None), reads it back through the same
+// property and finishes by measuring the simulation: with Freeze-Y set, the body does not
+// fall even though it has gravity. Without the setter, the bitmask does not reach the actor and the
+// last check turns red.
 static void test_constraints_desde_lua(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2433,7 +2432,7 @@ static void test_constraints_desde_lua(ScriptManager& sm, PhysicsManager& pm)
     go->setRigidbody(rb);
     sm.rebuildAliveSet();
 
-    CHECK(rb->getConstraints() == RB_None); // punto de partida, no lo que se prueba
+    CHECK(rb->getConstraints() == RB_None); // starting point, not what is being tested
 
     sm.lua()["e"] = LuaEntity{ go, &sm };
     sm.lua().script(
@@ -2445,24 +2444,24 @@ static void test_constraints_desde_lua(ScriptManager& sm, PhysicsManager& pm)
     CHECK(sm.lua()["leido"].get<uint32_t>() == esperado);
     CHECK(rb->getConstraints() == esperado);
 
-    // Con gravedad, el eje congelado se queda quieto.
+    // With gravity, the frozen axis stays still.
     const float y0 = col->getWorldTransform()[3].y;
     for (int i = 0; i < 30; ++i) pm.stepSimulation(1.0f / 60.0f);
     CHECK(std::fabs(col->getWorldTransform()[3].y - y0) < 0.001f);
 
-    // Bits que no existen en Rigidbody.h: se recortan contra la máscara en vez
-    // de lanzar (un OR de más no debe tumbar el script).
+    // Bits that do not exist in Rigidbody.h: they are trimmed against the mask instead
+    // of throwing (an extra OR must not bring down the script).
     sm.lua().script("rb.constraints = 0xFFFFFFFF\n");
     const uint32_t todos = RB_FreezePositionX | RB_FreezePositionY | RB_FreezePositionZ |
                            RB_FreezeRotationX | RB_FreezeRotationY | RB_FreezeRotationZ;
     CHECK(rb->getConstraints() == todos);
 }
 
-// Rigidbody.ccd y Rigidbody.interpolate desde Lua. No basta con leer de vuelta
-// lo escrito (eso lo daría un campo suelto que no llega a ningún sitio): el
-// test mira el flag que ve PhysX en el actor para ccd, y la pose que devuelve
-// getWorldTransform para interpolate. Independientes: encender una no toca la
-// otra.
+// Rigidbody.ccd and Rigidbody.interpolate from Lua. Reading back what was
+// written is not enough (a loose field that reaches nowhere would give that): the
+// test looks at the flag PhysX sees on the actor for ccd, and at the pose that
+// getWorldTransform returns for interpolate. Independent: turning one on does not touch the
+// other.
 static void test_ccd_e_interpolate_desde_lua(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2480,7 +2479,7 @@ static void test_ccd_e_interpolate_desde_lua(ScriptManager& sm, PhysicsManager& 
         return dyn && (dyn->getRigidBodyFlags() & physx::PxRigidBodyFlag::eENABLE_CCD);
     };
 
-    // Punto de partida: los dos apagados, en C++ y en el actor.
+    // Starting point: both off, in C++ and on the actor.
     CHECK(!rb->getCcd());
     CHECK(!rb->getInterpolate());
     CHECK(!actorTieneCcd());
@@ -2492,44 +2491,44 @@ static void test_ccd_e_interpolate_desde_lua(ScriptManager& sm, PhysicsManager& 
         "interp0 = rb.interpolate\n"
         "rb.ccd = true\n");
 
-    CHECK(sm.lua()["ccd0"].get<bool>() == false);      // el getter lee el estado real
+    CHECK(sm.lua()["ccd0"].get<bool>() == false);      // the getter reads the real state
     CHECK(sm.lua()["interp0"].get<bool>() == false);
     CHECK(rb->getCcd());
-    CHECK(actorTieneCcd());                            // y el setter llega hasta PhysX
-    CHECK(!rb->getInterpolate());                      // independientes: ccd no encendió la otra
+    CHECK(actorTieneCcd());                            // and the setter reaches PhysX
+    CHECK(!rb->getInterpolate());                      // independent: ccd did not turn on the other one
 
-    // Ahora interpolate: se comprueba MIRANDO LA POSE, no el getter. Con el
-    // acumulador a 0 tras un paso exacto, alpha vale 0 y lo visible es la pose
-    // PREVIA al sub-step, no la del actor.
+    // Now interpolate: it is checked LOOKING AT THE POSE, not the getter. With the
+    // accumulator at 0 after an exact step, alpha is 0 and what is visible is the pose
+    // PRIOR to the sub-step, not the actor's.
     sm.lua().script("rb.interpolate = true\nleido = rb.interpolate\n");
     CHECK(sm.lua()["leido"].get<bool>() == true);
     CHECK(rb->getInterpolate());
 
     auto* actor = static_cast<physx::PxRigidActor*>(col->actorHandle());
-    pm.stepSimulation(1000.0f);                        // vacía el acumulador
-    // La referencia se lee del ACTOR, no de getWorldTransform: con la
-    // interpolación ya encendida, el getter devuelve la pose previa y compararse
-    // contra sí mismo no probaría nada.
+    pm.stepSimulation(1000.0f);                        // empties the accumulator
+    // The reference is read from the ACTOR, not from getWorldTransform: with
+    // interpolation already on, the getter returns the previous pose and comparing against
+    // itself would prove nothing.
     const float yPartida = actor->getGlobalPose().p.y;
     pm.stepSimulation(pm.getFixedDeltaTime());
     const float yCrudo   = actor->getGlobalPose().p.y;
     const float yVisible = col->getWorldTransform()[3].y;
-    CHECK(yCrudo < yPartida - 0.01f);                  // el actor cayó
-    CHECK(std::fabs(yVisible - yPartida) < 1e-3f);     // lo visible sigue en la pose previa
-    CHECK(std::fabs(yVisible - yCrudo) > 0.01f);       // o sea, NO es la pose cruda
+    CHECK(yCrudo < yPartida - 0.01f);                  // the actor fell
+    CHECK(std::fabs(yVisible - yPartida) < 1e-3f);     // what is visible is still at the previous pose
+    CHECK(std::fabs(yVisible - yCrudo) > 0.01f);       // that is, it is NOT the raw pose
 
-    // Apagar desde Lua devuelve el camino de siempre.
+    // Turning it off from Lua brings back the usual path.
     sm.lua().script("rb.ccd = false\nrb.interpolate = false\n");
     CHECK(!actorTieneCcd());
     CHECK(std::fabs(col->getWorldTransform()[3].y - actor->getGlobalPose().p.y) < 1e-4f);
 }
 
-// --- ForceMode desde Lua -----------------------------------------------------
+// --- ForceMode from Lua -----------------------------------------------------
 //
-// Monta un cuerpo sin gravedad con el Rigidbody expuesto en 'rb' y devuelve la
-// velocidad en X tras un paso de la simulación del script dado. El collider se
-// queda vivo dentro de la función (el actor PhysX lo posee él, no el
-// Rigidbody), así que se mide antes de salir.
+// Sets up a body without gravity with the Rigidbody exposed as 'rb' and returns the
+// X velocity after one simulation step of the given script. The collider
+// stays alive inside the function (the PhysX actor is owned by it, not by the
+// Rigidbody), so it is measured before leaving.
 static float velocidadTrasScript(ScriptManager& sm, PhysicsManager& pm, const char* script)
 {
     Scene scene("Test");
@@ -2548,15 +2547,15 @@ static float velocidadTrasScript(ScriptManager& sm, PhysicsManager& pm, const ch
     return rb->getVelocity().x;
 }
 
-// Retrocompatibilidad: la llamada de TRES argumentos sigue funcionando y sigue
-// significando ForceMode.Force. Y con el 4º argumento el resultado es otro:
-// VelocityChange escribe la velocidad de golpe (v = F) en vez de integrarla
-// durante el paso (v = F*dt/m), o sea 60× más con dt = 1/60.
+// Backward compatibility: the THREE-argument call still works and still
+// means ForceMode.Force. And with the 4th argument the result is another one:
+// VelocityChange writes the velocity at once (v = F) instead of integrating it
+// over the step (v = F*dt/m), that is, 60x more with dt = 1/60.
 static void test_force_mode_desde_lua(ScriptManager& sm, PhysicsManager& pm)
 {
     const float dt = 1.0f / 60.0f;
-    // Callback propio (el de otro test ya no es válido) y de paso comprueba que
-    // el camino feliz no avisa de nada.
+    // Own callback (the one from another test is no longer valid) and by the way it checks that
+    // the happy path warns about nothing.
     std::vector<std::string> log;
     sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
 
@@ -2568,15 +2567,15 @@ static void test_force_mode_desde_lua(ScriptManager& sm, PhysicsManager& pm)
     std::printf("  ForceMode Lua: 3 args -> %.4f | Force -> %.4f | VelocityChange -> %.4f\n",
                 vTresArgs, vExplicito, vVelCh);
 
-    CHECK(std::fabs(vTresArgs - 100.0f * dt) < 0.01f);   // igual que siempre
+    CHECK(std::fabs(vTresArgs - 100.0f * dt) < 0.01f);   // same as always
     CHECK(std::fabs(vTresArgs - vExplicito) < 1e-5f);    // 3 args == ForceMode.Force
-    CHECK(std::fabs(vVelCh - 100.0f) < 0.01f);           // v de golpe
-    CHECK(vVelCh > vTresArgs * 10.0f);                   // inequívocamente distintos
+    CHECK(std::fabs(vVelCh - 100.0f) < 0.01f);           // v at once
+    CHECK(vVelCh > vTresArgs * 10.0f);                   // unmistakably different
     CHECK(log.empty());
 }
 
-// Un modo fuera del rango [0,3] no lanza error de Lua: avisa por el Log y NO
-// aplica la fuerza (mismo contrato que un NaN en x,y,z).
+// A mode outside the range [0,3] does not raise a Lua error: it warns through the Log and does NOT
+// apply the force (same contract as a NaN in x,y,z).
 static void test_force_mode_fuera_de_rango(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2601,10 +2600,10 @@ static void test_force_mode_fuera_de_rango(ScriptManager& sm, PhysicsManager& pm
     CHECK(logContains(log, "WARN"));
 }
 
-// Collider.isTrigger desde Lua. La lectura tiene que reflejar el cambio, pero
-// eso solo no prueba nada: lo que demuestra que el setter pasó de verdad por
-// PhysicsManager::setTrigger (flip de flags en PhysX) es que a partir de ahí
-// un cuerpo dinámico ATRAVIESA el suelo en vez de posarse encima.
+// Collider.isTrigger from Lua. The read has to reflect the change, but
+// that alone proves nothing: what shows that the setter really went through
+// PhysicsManager::setTrigger (flag flip in PhysX) is that from then on
+// a dynamic body GOES THROUGH the floor instead of settling on top of it.
 static void test_is_trigger_desde_lua(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2628,8 +2627,8 @@ static void test_is_trigger_desde_lua(ScriptManager& sm, PhysicsManager& pm)
     CHECK(sm.lua()["despues"].get<bool>() == true);
     CHECK(piso->isTrigger() == true);
 
-    // Caída desde y=5 sobre un suelo que ya es trigger: solape sin colisión.
-    // Con el suelo sólido acabaría reposando en ~1,5.
+    // Fall from y=5 onto a floor that is already a trigger: overlap without collision.
+    // With a solid floor it would end up resting at ~1.5.
     auto rb  = std::make_shared<Rigidbody>();
     auto caja = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
                                                glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 5.0f, 0.0f)),
@@ -2639,10 +2638,10 @@ static void test_is_trigger_desde_lua(ScriptManager& sm, PhysicsManager& pm)
     CHECK(caja->getWorldTransform()[3].y < -3.0f);
 }
 
-// --- Capas de colisión desde Lua --------------------------------------------
+// --- Collision layers from Lua --------------------------------------------
 
-// collider.layer va y vuelve, y el número llega al Collider de verdad (no se
-// queda en una copia del binding).
+// collider.layer goes and comes back, and the number really reaches the Collider (it does not
+// stay in a copy in the binding).
 static void test_layer_desde_lua(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2665,8 +2664,8 @@ static void test_layer_desde_lua(ScriptManager& sm, PhysicsManager& pm)
     CHECK(col->getLayer() == 5);
 }
 
-// Índice fuera de [0,31]: error de Lua (no un clamp silencioso), y la capa se
-// queda como estaba. Se prueban los dos extremos.
+// Index outside [0,31]: a Lua error (not a silent clamp), and the layer is
+// left as it was. Both extremes are tested.
 static void test_layer_fuera_de_rango_es_error(ScriptManager& sm, PhysicsManager& pm)
 {
     Scene scene("Test");
@@ -2681,9 +2680,9 @@ static void test_layer_fuera_de_rango_es_error(ScriptManager& sm, PhysicsManager
     sm.lua().script(
         "bc = e:GetComponent('BoxCollider')\n"
         "bc.layer = 3\n"
-        // tostring: si el pcall NO falla el segundo valor es nil, y leerlo como
-        // string desde C++ entra en panic de Lua y se lleva el proceso — el
-        // fallo hay que verlo como un CHECK, no como un aborto.
+        // tostring: if the pcall does NOT fail the second value is nil, and reading it as a
+        // string from C++ causes a Lua panic and takes the process with it; the
+        // failure has to be seen as a CHECK, not as an abort.
         "okAlto, errAlto = pcall(function() bc.layer = 32 end)\n"
         "okBajo, errBajo = pcall(function() bc.layer = -1 end)\n"
         "errAlto = tostring(errAlto)\n");
@@ -2691,11 +2690,11 @@ static void test_layer_fuera_de_rango_es_error(ScriptManager& sm, PhysicsManager
     CHECK(sm.lua()["okAlto"].get<bool>() == false);
     CHECK(sm.lua()["okBajo"].get<bool>() == false);
     CHECK(sm.lua()["errAlto"].get<std::string>().find("out of range") != std::string::npos);
-    CHECK(col->getLayer() == 3); // ni el 32 ni el -1 han entrado
+    CHECK(col->getLayer() == 3); // neither 32 nor -1 got in
 }
 
-// La matriz desde Lua: apagar (6,7) se ve al leerla y llega al PhysicsManager;
-// los índices inválidos también son error aquí.
+// The matrix from Lua: turning off (6,7) is seen when reading it and reaches the PhysicsManager;
+// invalid indices are an error here too.
 static void test_matriz_de_capas_desde_lua(ScriptManager& sm, PhysicsManager& pm)
 {
     sm.lua().script(
@@ -2708,26 +2707,26 @@ static void test_matriz_de_capas_desde_lua(ScriptManager& sm, PhysicsManager& pm
 
     CHECK(sm.lua()["antes"].get<bool>() == true);
     CHECK(sm.lua()["despues"].get<bool>() == false);
-    CHECK(sm.lua()["simetrico"].get<bool>() == false); // la matriz es simétrica
+    CHECK(sm.lua()["simetrico"].get<bool>() == false); // the matrix is symmetric
     CHECK(sm.lua()["okSet"].get<bool>() == false);
     CHECK(sm.lua()["okGet"].get<bool>() == false);
-    CHECK(pm.getLayerCollision(6, 7) == false);        // ha llegado al manager
+    CHECK(pm.getLayerCollision(6, 7) == false);        // it has reached the manager
 
     sm.lua().script("Physics.SetLayerCollision(6, 7, true)\n");
     CHECK(pm.getLayerCollision(6, 7) == true);
 }
 
-// --- Persistencia de las capas en el project.json ----------------------------
+// --- Persistence of the layers in project.json ----------------------------
 
-// Escribe un project.json de mentira en 'dir' con el contenido dado.
+// Writes a fake project.json in 'dir' with the given content.
 static void escribirProjectJson(const std::filesystem::path& dir, const std::string& contenido)
 {
     std::ofstream out(dir / "project.json", std::ios::binary | std::ios::trunc);
     out << contenido;
 }
 
-// Guardar -> recargar devuelve nombres y matriz IDÉNTICOS. Es el round-trip
-// entero, pasando por disco.
+// Save -> reload returns IDENTICAL names and matrix. It is the whole round-trip,
+// going through disk.
 static void test_capas_round_trip_en_project_json()
 {
     const std::filesystem::path dir =
@@ -2737,12 +2736,12 @@ static void test_capas_round_trip_en_project_json()
     std::filesystem::create_directories(dir, ec);
 
     ProjectContext::ViewSettings s;
-    s.layerActive    = 8;            // 8 capas creadas de las 32 posibles
+    s.layerActive    = 8;            // 8 layers created out of the 32 possible
     s.layerNames[3]  = "Enemigos";
     s.layerNames[31] = "UI";
-    s.layerMasks[3] &= ~(1u << 7);   // (3,7) apagada, en las dos mitades
+    s.layerMasks[3] &= ~(1u << 7);   // (3,7) off, in both halves
     s.layerMasks[7] &= ~(1u << 3);
-    s.layerMasks[0] &= ~(1u << 0);   // una capa que ni consigo colisiona
+    s.layerMasks[0] &= ~(1u << 0);   // a layer that does not even collide with itself
 
     CHECK(ProjectContext::writeSettings(dir, s));
 
@@ -2759,8 +2758,8 @@ static void test_capas_round_trip_en_project_json()
     std::filesystem::remove_all(dir, ec);
 }
 
-// JSON ausente, ilegible o con las capas de otro tipo: DEFAULTS, nunca una
-// excepción ni una matriz a medias.
+// JSON absent, unreadable or with the layers of another type: DEFAULTS, never an
+// exception or a half matrix.
 static void test_capas_json_ausente_o_corrupto_da_defaults()
 {
     const ProjectContext::ViewSettings def;
@@ -2768,22 +2767,22 @@ static void test_capas_json_ausente_o_corrupto_da_defaults()
         std::filesystem::temp_directory_path() / "dt_capas_corrupto";
     std::error_code ec;
 
-    // 1) Sin project.json.
+    // 1) Without project.json.
     std::filesystem::remove_all(dir, ec);
     std::filesystem::create_directories(dir, ec);
     ProjectContext::ViewSettings s = ProjectContext::readSettings(dir, ProjectContext::ViewSettings{});
     CHECK(s.layerMasks == def.layerMasks);
     CHECK(s.layerNames == def.layerNames);
 
-    // 2) JSON truncado.
+    // 2) Truncated JSON.
     escribirProjectJson(dir, "{ \"settings\": { \"layerNames\": ");
     s = ProjectContext::readSettings(dir, ProjectContext::ViewSettings{});
     CHECK(s.loadFailed);
     CHECK(s.layerMasks == def.layerMasks);
     CHECK(s.layerNames == def.layerNames);
 
-    // 3) JSON válido pero con las capas de otro tipo, o con basura dentro del
-    //    array: cada hueco malo se cae a su default, el bueno sí entra.
+    // 3) Valid JSON but with the layers of another type, or with garbage inside the
+    //    array: each bad slot falls to its default, the good one does get in.
     escribirProjectJson(dir,
         "{ \"name\": \"x\", \"settings\": {"
         " \"layerNames\": \"no soy un array\","
@@ -2791,28 +2790,28 @@ static void test_capas_json_ausente_o_corrupto_da_defaults()
         " \"layerActive\": 0 } }");
     s = ProjectContext::readSettings(dir, ProjectContext::ViewSettings{});
     CHECK(!s.loadFailed);
-    CHECK(s.layerActive == 1);                   // el 0 se clampea: la Default existe siempre
+    CHECK(s.layerActive == 1);                   // 0 is clamped: Default always exists
     CHECK(s.layerNames == def.layerNames);
-    CHECK(s.layerMasks[0] == def.layerMasks[0]); // negativo: ignorado
-    CHECK(s.layerMasks[1] == def.layerMasks[1]); // string: ignorado
-    CHECK(s.layerMasks[2] == 8u);                // el único válido
-    CHECK(s.layerMasks[3] == def.layerMasks[3]); // > 32 bits: ignorado
-    CHECK(s.layerMasks[4] == def.layerMasks[4]); // fuera del array: default
+    CHECK(s.layerMasks[0] == def.layerMasks[0]); // negative: ignored
+    CHECK(s.layerMasks[1] == def.layerMasks[1]); // string: ignored
+    CHECK(s.layerMasks[2] == 8u);                // the only valid one
+    CHECK(s.layerMasks[3] == def.layerMasks[3]); // > 32 bits: ignored
+    CHECK(s.layerMasks[4] == def.layerMasks[4]); // outside the array: default
 
     std::filesystem::remove_all(dir, ec);
 }
 
-// --- Persistencia de la visibilidad de panel ---------------------------------
+// --- Persistence of panel visibility ---------------------------------
 
-// El bug: el panel Rendering se dockeaba como pestana y desaparecia al reabrir
-// el editor. Su POSICION si estaba guardada (imgui.ini la tenia, con DockId y
-// todo); lo que no se guardaba era que estuviera ABIERTO, porque "rendering" no
-// existia ni en el enum Panel ni en kPanelKeys. El menu View ya llamaba a
-// saveProjectSettings() al marcarlo, asi que la mitad de guardar parecia hecha.
+// The bug: the Rendering panel docked as a tab and disappeared when reopening
+// the editor. Its POSITION was saved (imgui.ini had it, with DockId and
+// everything); what was not saved was that it was OPEN, because "rendering" did not
+// exist either in the Panel enum or in kPanelKeys. The View menu already called
+// saveProjectSettings() when ticking it, so the saving half looked done.
 //
-// Se afirma el round-trip ENTERO pasando por disco, que es donde se perdia, y
-// para TODOS los paneles del enum: el fallo fue de omision, asi que un test que
-// solo mire Rendering se volveria a quedar corto con el panel siguiente.
+// The WHOLE round-trip through disk is asserted, which is where it was lost, and
+// for ALL the panels of the enum: the failure was one of omission, so a test that
+// only looked at Rendering would fall short again with the next panel.
 static void test_visibilidad_de_panel_round_trip()
 {
     using VS = ProjectContext::ViewSettings;
@@ -2822,15 +2821,15 @@ static void test_visibilidad_de_panel_round_trip()
     std::filesystem::remove_all(dir, ec);
     std::filesystem::create_directories(dir, ec);
 
-    // Su clave en disco, panel a panel. La lista esta AQUI a proposito, y
-    // repetida a mano: es una segunda opinion sobre la de ProjectContext.cpp, y
-    // sin ella el test no valdria nada.
+    // Its key on disk, panel by panel. The list is HERE on purpose, and
+    // repeated by hand: it is a second opinion on the one in ProjectContext.cpp, and
+    // without it the test would be worthless.
     //
-    // Un round-trip no puede ver el enum cruzado con kPanelKeys, porque escribir
-    // y leer usan el MISMO mapa equivocado y el viaje sale bien igual —
-    // comprobado saboteandolo: mover "rendering" de sitio en kPanelKeys dejaba
-    // el test verde. Lo que hay que afirmar es el par indice-nombre, y para eso
-    // se escribe UN solo panel y se mira que clave aparece.
+    // A round-trip cannot see the enum crossed with kPanelKeys, because writing
+    // and reading use the SAME wrong map and the trip comes out fine anyway;
+    // checked by sabotaging it: moving "rendering" to another place in kPanelKeys left
+    // the test green. What has to be asserted is the index-name pair, and for that
+    // ONE single panel is written and it is checked which key appears.
     const struct { int panel; const char* clave; } kEsperado[] = {
         {VS::PanelScene,          "scene"},
         {VS::PanelViewport,       "viewport"},
@@ -2847,7 +2846,7 @@ static void test_visibilidad_de_panel_round_trip()
 
     for (const auto& e : kEsperado)
     {
-        // Solo este panel tiene dato; los otros nueve no se escriben.
+        // Only this panel has data; the other nine are not written.
         ProjectContext::ViewSettings s;
         s.panelOpen[e.panel] = true;
         CHECK(ProjectContext::writeSettings(dir, s));
@@ -2856,13 +2855,13 @@ static void test_visibilidad_de_panel_round_trip()
         const std::string json((std::istreambuf_iterator<char>(in)),
                                 std::istreambuf_iterator<char>());
 
-        // Aparece la suya...
+        // Its own appears...
         if (json.find(std::string("\"") + e.clave + "\"") == std::string::npos)
             std::printf("FAIL: falta la clave '%s' del panel %d\n", e.clave, e.panel);
         CHECK(json.find(std::string("\"") + e.clave + "\"") != std::string::npos);
 
-        // ...y NINGUNA otra. Esto es lo que caza el cruce: con el enum y las
-        // claves desalineados, escribir el panel N saca la clave de otro.
+        // ...and NO other. This is what catches the crossing: with the enum and the
+        // keys misaligned, writing panel N produces another one's key.
         for (const auto& otro : kEsperado)
         {
             if (otro.panel == e.panel) continue;
@@ -2873,7 +2872,7 @@ static void test_visibilidad_de_panel_round_trip()
             CHECK(!sobra);
         }
 
-        // Y vuelve al MISMO indice del enum: el viaje completo, no solo la ida.
+        // And it comes back to the SAME enum index: the complete trip, not just the outbound one.
         const ProjectContext::ViewSettings leido =
             ProjectContext::readSettings(dir, ProjectContext::ViewSettings{});
         CHECK(!leido.loadFailed);
@@ -2885,12 +2884,12 @@ static void test_visibilidad_de_panel_round_trip()
     std::filesystem::remove_all(dir, ec);
 }
 
-// Un panel SIN dato guardado se queda como este, que no es lo mismo que
-// cerrado. Importa por lo que costo: el inicializador de panelOpen era una
-// lista de nueve -1 escritos a mano, asi que anadir el decimo panel al enum le
-// habria dado un 0 —"cerrado"— en vez de "sin dato", y habria CERRADO el panel
-// nuevo en todos los proyectos que ya existen. Con optional el hueco nuevo nace
-// vacio solo.
+// A panel WITHOUT saved data stays like this, which is not the same as
+// closed. It matters because of what it cost: the panelOpen initializer was
+// a list of nine hand-written -1s, so adding the tenth panel to the enum would
+// have given it a 0 ("closed") instead of "no data", and it would have CLOSED the new panel
+// in every project that already exists. With optional the new slot is born
+// empty on its own.
 static void test_panel_sin_dato_no_es_cerrado()
 {
     using VS = ProjectContext::ViewSettings;
@@ -2900,7 +2899,7 @@ static void test_panel_sin_dato_no_es_cerrado()
     std::filesystem::remove_all(dir, ec);
     std::filesystem::create_directories(dir, ec);
 
-    // Un project.json que solo sabe de un panel: el resto no tiene dato.
+    // A project.json that only knows about one panel: the rest have no data.
     escribirProjectJson(dir,
         "{ \"name\": \"x\", \"settings\": { \"panels\": { \"log\": false } } }");
 
@@ -2908,18 +2907,18 @@ static void test_panel_sin_dato_no_es_cerrado()
     CHECK(!s.loadFailed);
 
     CHECK(s.panelOpen[VS::PanelLog].has_value());
-    CHECK(s.panelOpen[VS::PanelLog] == false);           // dato: cerrado
-    CHECK(!s.panelOpen[VS::PanelRendering].has_value()); // sin dato: NO es cerrado
+    CHECK(s.panelOpen[VS::PanelLog] == false);           // data: closed
+    CHECK(!s.panelOpen[VS::PanelRendering].has_value()); // no data: it is NOT closed
     CHECK(!s.panelOpen[VS::PanelScene].has_value());
 
-    // Y un ViewSettings recien construido no trae dato de ninguno.
+    // And a freshly constructed ViewSettings carries no data for any of them.
     const ProjectContext::ViewSettings limpio;
     for (int i = 0; i < VS::PanelCount; ++i)
         CHECK(!limpio.panelOpen[i].has_value());
 
-    // Lo que no tiene dato no se ESCRIBE: el fichero no debe mentir diciendo
-    // "cerrado" sobre lo que nadie ha decidido. Se reescribe lo leido y solo
-    // "log" tiene que quedar dentro de panels.
+    // What has no data is not WRITTEN: the file must not lie by saying
+    // "closed" about what nobody has decided. What was read is rewritten and only
+    // "log" has to remain inside panels.
     CHECK(ProjectContext::writeSettings(dir, s));
     std::ifstream in(dir / "project.json");
     const std::string json((std::istreambuf_iterator<char>(in)),
@@ -2930,14 +2929,14 @@ static void test_panel_sin_dato_no_es_cerrado()
     std::filesystem::remove_all(dir, ec);
 }
 
-// Los bindings de audio que faltaban: distancias, playOnAwake, path y el estado
-// de la voz. Antes, un script tenía diez métodos y ninguno de estos, así que
-// min/maxDistance solo se podían tocar desde el Inspector aunque el componente
-// los soportara desde el principio.
+// The audio bindings that were missing: distances, playOnAwake, path and the voice
+// state. Before, a script had ten methods and none of these, so
+// min/maxDistance could only be touched from the Inspector even though the component
+// supported them from the start.
 //
-// Se ejercitan CON valores no neutros y leyéndolos de vuelta por Lua: un
-// binding que existiera pero llamara al setter equivocado (un clásico entre
-// min y max) pasaría cualquier test que solo comprobara que no lanza.
+// They are exercised WITH non-neutral values and read back through Lua: a
+// binding that existed but called the wrong setter (a classic between
+// min and max) would pass any test that only checked that it does not throw.
 static void test_audio_bindings_nuevos(ScriptManager& sm, AudioManager& am)
 {
     if (!am.available())
@@ -2971,8 +2970,8 @@ static void test_audio_bindings_nuevos(ScriptManager& sm, AudioManager& am)
         pausado   = c:IsPaused()
     )");
 
-    // Leídos por Lua Y comprobados en el componente: si el binding escribiera
-    // en el sitio equivocado, uno de los dos lados lo delataría.
+    // Read through Lua AND checked on the component: if the binding wrote
+    // to the wrong place, one of the two sides would give it away.
     CHECK(nearlyEqual(sm.lua()["leidoMin"].get<float>(), 7.5f));
     CHECK(nearlyEqual(sm.lua()["leidoMax"].get<float>(), 300.0f));
     CHECK(nearlyEqual(go->getAudioClip()->getMinDistance(), 7.5f));
@@ -2980,12 +2979,12 @@ static void test_audio_bindings_nuevos(ScriptManager& sm, AudioManager& am)
     CHECK(sm.lua()["leidoAwake"].get<bool>() == true);
     CHECK(go->getAudioClip()->getPlayOnAwake() == true);
     CHECK(sm.lua()["leidoPath"].get<std::string>() == "assets/audio.mp3");
-    // Sin haber llamado a Play: nada suena y nada está pausado.
+    // Without having called Play: nothing sounds and nothing is paused.
     CHECK(sm.lua()["sonando"].get<bool>() == false);
     CHECK(sm.lua()["pausado"].get<bool>() == false);
 
-    // NaN por los setters nuevos: mismo trato que SetVolume/SetPitch — se
-    // rechaza, se avisa, y el valor anterior queda intacto.
+    // NaN through the new setters: same treatment as SetVolume/SetPitch; it is
+    // rejected, a warning is given, and the previous value is left intact.
     std::vector<std::string> log;
     sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
     sm.lua().script("e:GetComponent(\"AudioClip\"):SetMinDistance(0/0)");
@@ -2995,9 +2994,9 @@ static void test_audio_bindings_nuevos(ScriptManager& sm, AudioManager& am)
     sm.setLogCallback(nullptr);
 }
 
-// Buses desde Lua: por nombre en las dos direcciones, y un nombre desconocido
-// avisa sin cambiar nada (en vez de caer a un bus arbitrario, que es lo que
-// haría un cast desde entero).
+// Buses from Lua: by name in both directions, and an unknown name
+// warns without changing anything (instead of falling to an arbitrary bus, which is what
+// a cast from an integer would do).
 static void test_audio_bus_desde_lua(ScriptManager& sm, AudioManager& am)
 {
     if (!am.available())
@@ -3028,7 +3027,7 @@ static void test_audio_bus_desde_lua(ScriptManager& sm, AudioManager& am)
     CHECK(sm.lua()["busTrasSet"].get<std::string>() == "music");
     CHECK(go->getAudioClip()->getBus() == AudioBus::Music);
 
-    // Nombre inventado: avisa y CONSERVA el anterior.
+    // Made-up name: warns and KEEPS the previous one.
     std::vector<std::string> log;
     sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
     sm.lua().script("e:GetComponent(\"AudioClip\"):SetBus(\"reverb\")");
@@ -3036,9 +3035,9 @@ static void test_audio_bus_desde_lua(ScriptManager& sm, AudioManager& am)
     CHECK(logContains(log, "SetBus"));
     CHECK(logContains(log, "WARN"));
 
-    // Volúmenes globales por la tabla Audio. Se leen de vuelta por Lua Y del
-    // manager: si el binding escribiera en el bus equivocado, uno de los dos
-    // lados lo delataría.
+    // Global volumes through the Audio table. They are read back through Lua AND from the
+    // manager: if the binding wrote to the wrong bus, one of the two
+    // sides would give it away.
     log.clear();
     sm.lua().script(R"(
         Audio.SetBusVolume("music", 0.25)
@@ -3051,9 +3050,9 @@ static void test_audio_bus_desde_lua(ScriptManager& sm, AudioManager& am)
     CHECK(nearlyEqual(am.getBusVolume(AudioBus::Music), 0.25f));
     CHECK(nearlyEqual(am.getBusVolume(AudioBus::Sfx), 0.75f));
 
-    // Fuera de rango se clampa, y un NaN se rechaza avisando: sin esto, el bus
-    // se quedaría inutilizable el resto de la partida y no hay ningún fichero
-    // donde se vea para depurarlo.
+    // Out of range it is clamped, and a NaN is rejected with a warning: without this, the bus
+    // would be left unusable for the rest of the game and there is no file
+    // where it can be seen to debug it.
     sm.lua().script("Audio.SetBusVolume(\"music\", 5.0)");
     CHECK(nearlyEqual(am.getBusVolume(AudioBus::Music), 1.0f));
     sm.lua().script("Audio.SetBusVolume(\"sfx\", 0/0)");
@@ -3061,18 +3060,18 @@ static void test_audio_bus_desde_lua(ScriptManager& sm, AudioManager& am)
     CHECK(logContains(log, "WARN"));
     sm.setLogCallback(nullptr);
 
-    // Neutros otra vez: este manager lo comparten todos los tests del binario.
+    // Neutral again: this manager is shared by all the tests of the binary.
     am.setBusVolume(AudioBus::Master, 1.0f);
     am.setBusVolume(AudioBus::Music,  1.0f);
     am.setBusVolume(AudioBus::Sfx,    1.0f);
 }
 
 // ---------------------------------------------------------------------------
-// Autocompletado: el filtro vive en LuaApiReference (Core), no en el panel, y
-// por eso se puede probar aquí sin ImGui ni ventana.
+// Autocomplete: the filter lives in LuaApiReference (Core), not in the panel, and
+// that is why it can be tested here without ImGui or a window.
 // ---------------------------------------------------------------------------
 
-// true si alguna sugerencia tiene ese símbolo exacto.
+// true if any suggestion has that exact symbol.
 static bool tieneSimbolo(const std::vector<LuaApiMatch>& ms, const std::string& s)
 {
     for (const auto& m : ms) if (m.symbol == s) return true;
@@ -3085,9 +3084,9 @@ static const LuaApiMatch* buscaSimbolo(const std::vector<LuaApiMatch>& ms, const
     return nullptr;
 }
 
-// Escribir el nombre del tipo entero: el comportamiento de siempre, que no se
-// puede haber roto al añadir el filtro por miembro. La sustitución cubre el
-// fragmento entero (offset 0) y lo que se escribe es el símbolo completo.
+// Typing the whole type name: the usual behavior, which cannot have
+// been broken by adding the per-member filter. The substitution covers the
+// whole fragment (offset 0) and what is typed is the complete symbol.
 static void test_autocomplete_prefijo_de_tipo()
 {
     auto ms = luaApiMatches("Transform:Set");
@@ -3100,13 +3099,13 @@ static void test_autocomplete_prefijo_de_tipo()
         CHECK(m->replaceOffset == 0);
         CHECK(m->insert == "Transform:SetPosition");
     }
-    // Sin distinguir mayúsculas.
+    // Case-insensitive.
     CHECK(tieneSimbolo(luaApiMatches("transform:set"), "Transform:SetPosition"));
 }
 
-// El caso que antes no daba NADA: el receptor es una variable local, así que
-// se busca por el nombre del miembro. Lo que se escribe es SOLO el miembro y
-// la sustitución empieza detrás del ':', para no dejar "t:Transform:...".
+// The case that before gave NOTHING: the receiver is a local variable, so
+// the search is by the member's name. What is typed is ONLY the member and
+// the substitution starts after the ':', so as not to leave "t:Transform:...".
 static void test_autocomplete_por_miembro_conserva_receptor()
 {
     auto ms = luaApiMatches("t:GetPosi");
@@ -3115,9 +3114,9 @@ static void test_autocomplete_por_miembro_conserva_receptor()
     if (m)
     {
         CHECK(m->insert == "GetPosition");
-        CHECK(m->replaceOffset == 2);   // detrás de "t:"
+        CHECK(m->replaceOffset == 2);   // after "t:"
     }
-    // Con un receptor más largo el offset sigue cayendo detrás del separador.
+    // With a longer receiver the offset still falls after the separator.
     auto ms2 = luaApiMatches("miRigidbody:AddFor");
     const LuaApiMatch* m2 = buscaSimbolo(ms2, "Rigidbody:AddForce");
     CHECK(m2 != nullptr);
@@ -3128,8 +3127,8 @@ static void test_autocomplete_por_miembro_conserva_receptor()
     }
 }
 
-// '.' es propiedad y ':' es método: sugerir un método donde se escribió un
-// punto daría código que no compila.
+// '.' is a property and ':' is a method: suggesting a method where a
+// dot was typed would give code that does not compile.
 static void test_autocomplete_respeta_el_separador()
 {
     auto conPunto = luaApiMatches("t.GetPosi");
@@ -3140,15 +3139,15 @@ static void test_autocomplete_respeta_el_separador()
     CHECK(!tieneSimbolo(luaApiMatches("rb:mas"), "Rigidbody.mass"));
 }
 
-// Orden: primero lo que empieza por el fragmento entero, después lo hallado
-// por miembro. Y fragmento vacío no abre nada.
+// Order: first what starts with the whole fragment, then what was found
+// by member. And an empty fragment opens nothing.
 static void test_autocomplete_orden_y_vacio()
 {
     CHECK(luaApiMatches("").empty());
 
     auto ms = luaApiMatches("Text.v");
-    // "Text.vAlign" empieza por el fragmento; "InputField...".vAlign no existe,
-    // pero el orden general sí se puede fijar con un caso con los dos rangos.
+    // "Text.vAlign" starts with the fragment; "InputField...".vAlign does not exist,
+    // but the general order can be pinned down with a case with both ranges.
     CHECK(!ms.empty());
     if (!ms.empty()) CHECK(ms.front().symbol == "Text.vAlign");
 
@@ -3156,20 +3155,20 @@ static void test_autocomplete_orden_y_vacio()
     CHECK(!mixtas.empty());
     if (!mixtas.empty()) CHECK(mixtas.front().symbol == "Button:GetSize");
 
-    // El límite se respeta.
+    // The limit is respected.
     CHECK(luaApiMatches("Entity:", 3).size() == 3);
 }
 
-// Todo binding nuevo tiene que estar en la tabla o el autocompletado no lo
-// enseña nunca (regla del proyecto). Incluye los cinco huecos que la auditoría
-// encontró ya registrados en ScriptBindings pero ausentes de la lista.
+// Every new binding has to be in the table or autocomplete never
+// shows it (project rule). It includes the five gaps the audit
+// found already registered in ScriptBindings but absent from the list.
 static void test_autocomplete_simbolos_nuevos_en_la_tabla()
 {
     const std::vector<std::string> esperados = {
-        // Huecos preexistentes
+        // Pre-existing gaps
         "Vec3.x", "Entity:GetLayout", "Text.vAlign", "Button.textVAlign",
         "UiTextVAlign.Top",
-        // Bindings nuevos
+        // New bindings
         "Time.deltaTime", "Time.fixedDeltaTime", "Time.time", "Time.frameCount",
         "Vec3:Length", "Vec3:Dot", "Vec3:Lerp",
         "Transform:GetForward", "Transform:LookAt", "Transform:SetWorldPosition",
@@ -3187,8 +3186,8 @@ static void test_autocomplete_simbolos_nuevos_en_la_tabla()
     }
 }
 
-// Firma y documentación: las anotadas salen, y un símbolo sin anotar no
-// desaparece del popup — solo va sin texto de ayuda.
+// Signature and documentation: the annotated ones come out, and an unannotated symbol does not
+// disappear from the popup; it just goes without help text.
 static void test_autocomplete_firma_y_doc()
 {
     std::string firma, doc;
@@ -3197,17 +3196,17 @@ static void test_autocomplete_firma_y_doc()
     CHECK(!doc.empty());
 
     luaApiDoc("Button:GetSize", firma, doc);
-    CHECK(firma == "() -> width, height");   // generada en bucle para los 14 widgets
+    CHECK(firma == "() -> width, height");   // generated in a loop for the 14 widgets
 
-    // Una keyword de Lua no tiene firma, pero sigue estando en la tabla.
+    // A Lua keyword has no signature, but it is still in the table.
     luaApiDoc("while", firma, doc);
     CHECK(firma.empty());
     CHECK(doc.empty());
     CHECK(tieneSimbolo(luaApiMatches("whil"), "while"));
 
-    // La firma viaja dentro de la sugerencia, que es lo que pinta el popup.
-    // El vector va a una local a propósito: buscaSimbolo devuelve un puntero
-    // DENTRO de él, y pasarle el temporal directamente lo dejaría colgando.
+    // The signature travels inside the suggestion, which is what the popup draws.
+    // The vector goes into a local on purpose: buscaSimbolo returns a pointer
+    // INSIDE it, and passing it the temporary directly would leave it dangling.
     const std::vector<LuaApiMatch> deVec3 = luaApiMatches("Vec3:Len");
     const LuaApiMatch* m = buscaSimbolo(deVec3, "Vec3:Length");
     CHECK(m != nullptr);
@@ -3215,7 +3214,7 @@ static void test_autocomplete_firma_y_doc()
 }
 
 // ---------------------------------------------------------------------------
-// Bindings nuevos
+// New bindings
 // ---------------------------------------------------------------------------
 
 static void test_vec3_algebra_desde_lua(ScriptManager& sm)
@@ -3246,22 +3245,22 @@ static void test_vec3_algebra_desde_lua(ScriptManager& sm)
     CHECK(nearlyEqual(sm.lua()["negX"], -5.0f));
     CHECK(sm.lua()["iguales"] == true);
     CHECK(sm.lua()["distintos"] == false);
-    // El escalar a la izquierda: sin la segunda sobrecarga de __mul esto era
-    // un error de tipos que tumbaba el script.
+    // The scalar on the left: without the second __mul overload this was
+    // a type error that brought down the script.
     CHECK(nearlyEqual(sm.lua()["izq"], 6.0f));
-    // Normalizar el vector cero da cero, no NaN.
+    // Normalizing the zero vector gives zero, not NaN.
     CHECK(nearlyEqual(sm.lua()["cero"], 0.0f));
 }
 
-// Time se llena desde ScriptManager::update, no desde el binding: sin la
-// llamada a tickTime la tabla se queda en los ceros del registro.
+// Time is filled from ScriptManager::update, not from the binding: without the
+// call to tickTime the table stays at the registration's zeros.
 static void test_time_desde_lua(ScriptManager& sm)
 {
     Scene scene("Test");
     sm.setScene(&scene);
     sm.rebuildAliveSet();
 
-    // fixedDeltaTime es constante y ya está antes de jugar nada.
+    // fixedDeltaTime is constant and is already there before playing anything.
     CHECK(nearlyEqual(sm.lua()["Time"]["fixedDeltaTime"], ScriptManager::kFixedStep, 0.0001f));
 
     sm.onPlayStart();
@@ -3277,11 +3276,11 @@ static void test_time_desde_lua(ScriptManager& sm)
     CHECK(nearlyEqual(sm.lua()["Time"]["time"], 0.75f));
     CHECK(static_cast<int>(sm.lua()["Time"]["frameCount"]) == 2);
 
-    // Un dt no finito no envenena el acumulado.
+    // A non-finite dt does not poison the accumulated value.
     sm.update(std::nanf(""));
     CHECK(nearlyEqual(sm.lua()["Time"]["time"], 0.75f));
 
-    // Volver a jugar reinicia el reloj.
+    // Playing again restarts the clock.
     sm.onPlayStop();
     sm.onPlayStart();
     CHECK(nearlyEqual(sm.lua()["Time"]["time"], 0.0f));
@@ -3300,7 +3299,7 @@ static void test_transform_ejes_y_lookat(ScriptManager& sm)
     sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
     sm.lua()["e"] = LuaEntity{ go, &sm };
 
-    // Sin rotar: forward = -Z, right = +X, up = +Y.
+    // Unrotated: forward = -Z, right = +X, up = +Y.
     sm.lua().script(R"(
         local t = e:GetTransform()
         f = t:GetForward(); r = t:GetRight(); u = t:GetUp()
@@ -3309,7 +3308,7 @@ static void test_transform_ejes_y_lookat(ScriptManager& sm)
     CHECK(nearlyEqual(sm.lua()["r"]["x"], 1.0f));
     CHECK(nearlyEqual(sm.lua()["u"]["y"], 1.0f));
 
-    // Mirar a +X deja el forward apuntando a +X.
+    // Looking at +X leaves the forward pointing to +X.
     sm.lua().script(R"(
         local t = e:GetTransform()
         t:LookAt(Vec3.new(100, 0, 0))
@@ -3318,7 +3317,7 @@ static void test_transform_ejes_y_lookat(ScriptManager& sm)
     CHECK(nearlyEqual(sm.lua()["f2"]["x"], 1.0f, 0.02f));
     CHECK(nearlyEqual(sm.lua()["f2"]["z"], 0.0f, 0.02f));
 
-    // Mirarse a sí mismo no tiene respuesta: se avisa y la rotación no cambia.
+    // Looking at yourself has no answer: a warning is given and the rotation does not change.
     log.clear();
     sm.lua().script(R"(
         local t = e:GetTransform()
@@ -3327,9 +3326,9 @@ static void test_transform_ejes_y_lookat(ScriptManager& sm)
     )");
     CHECK(logContains(log, "WARN"));
     CHECK(logContains(log, "LookAt"));
-    CHECK(nearlyEqual(sm.lua()["f3"]["x"], 1.0f, 0.02f));   // sigue mirando a +X
+    CHECK(nearlyEqual(sm.lua()["f3"]["x"], 1.0f, 0.02f));   // still looking at +X
 
-    // 'up' paralelo a la dirección: mismo trato.
+    // 'up' parallel to the direction: same treatment.
     log.clear();
     sm.lua().script("e:GetTransform():LookAt(Vec3.new(0, 100, 0), Vec3.new(0, 1, 0))");
     CHECK(logContains(log, "WARN"));
@@ -3337,8 +3336,8 @@ static void test_transform_ejes_y_lookat(ScriptManager& sm)
     sm.setLogCallback(nullptr);
 }
 
-// Con padre, la posición de mundo NO es la local: si SetWorldPosition no
-// deshiciera la transformada del padre, el objeto acabaría al doble de lejos.
+// With a parent, the world position is NOT the local one: if SetWorldPosition did not
+// undo the parent's transform, the object would end up twice as far away.
 static void test_transform_set_world_position_con_padre(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -3352,7 +3351,7 @@ static void test_transform_set_world_position_con_padre(ScriptManager& sm)
     sm.lua()["e"] = LuaEntity{ hijo, &sm };
     sm.lua().script("e:GetTransform():SetWorldPosition(Vec3.new(0, 0, 0))");
 
-    // Local = -10 en X para acabar en el origen del mundo.
+    // Local = -10 in X to end up at the world origin.
     const glm::vec3 local(hijo->localTransform[3]);
     CHECK(nearlyEqual(local.x, -10.0f));
     const glm::vec3 mundo(hijo->worldTransform[3]);
@@ -3370,7 +3369,7 @@ static void test_light_y_camera_desde_lua(ScriptManager& sm)
     sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
     sm.lua()["e"] = LuaEntity{ go, &sm };
 
-    // Antes de añadirla, el getter devuelve nil (no error).
+    // Before adding it, the getter returns nil (not an error).
     sm.lua().script("sinLuz = (e:GetLight() == nil)");
     CHECK(sm.lua()["sinLuz"] == true);
 
@@ -3395,17 +3394,17 @@ static void test_light_y_camera_desde_lua(ScriptManager& sm)
     CHECK(nearlyEqual(sm.lua()["col"]["y"], 0.5f));
     CHECK(sm.lua()["porNombre"] == true);
 
-    // Clamp del core: 500 se recorta a 100, no se escribe tal cual.
+    // Core clamp: 500 is trimmed to 100, it is not written as is.
     sm.lua().script("e:GetLight().intensity = 500");
     CHECK(nearlyEqual(go->getLight()->getIntensity(), 100.0f));
 
-    // Tipo fuera del enum: aviso y sin cambio.
+    // Type outside the enum: warning and no change.
     log.clear();
     sm.lua().script("e:GetLight().type = 99");
     CHECK(logContains(log, "WARN"));
     CHECK(go->getLight()->getType() == LightType::Spot);
 
-    // NaN: mismo contrato que el resto de setters.
+    // NaN: same contract as the rest of the setters.
     log.clear();
     sm.lua().script("e:GetLight().range = 0/0");
     CHECK(logContains(log, "WARN"));
@@ -3414,7 +3413,7 @@ static void test_light_y_camera_desde_lua(ScriptManager& sm)
     sm.lua().script("e:RemoveLight()");
     CHECK(!go->hasLight());
 
-    // Cámara.
+    // Camera.
     sm.lua().script(R"(
         local c = e:AddCamera()
         c.mode = CameraProjection.Orthographic
@@ -3449,7 +3448,7 @@ static void test_entity_mesh_visible_desde_lua(ScriptManager& sm)
     sm.rebuildAliveSet();
     sm.lua()["e"] = LuaEntity{ go, &sm };
 
-    CHECK(go->meshVisible);            // default del core
+    CHECK(go->meshVisible);            // core default
     sm.lua().script("antes = e.meshVisible; e.meshVisible = false");
     CHECK(sm.lua()["antes"] == true);
     CHECK(!go->meshVisible);
@@ -3458,12 +3457,12 @@ static void test_entity_mesh_visible_desde_lua(ScriptManager& sm)
 }
 
 // ---------------------------------------------------------------------------
-// Entity:SetParent — el movimiento vive en Scene::reparent (Core) y lo comparten
-// Lua y el reparent de la jerarquía del editor.
+// Entity:SetParent: the movement lives in Scene::reparent (Core) and is shared by
+// Lua and the editor hierarchy reparent.
 // ---------------------------------------------------------------------------
 
-// Por defecto se conserva la pose de MUNDO (como transform.parent de Unity): el
-// objeto se queda donde estaba y lo que se recalcula es su local.
+// By default the WORLD pose is preserved (like Unity's transform.parent): the
+// object stays where it was and what is recomputed is its local.
 static void test_set_parent_mantiene_la_pose_de_mundo(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -3481,18 +3480,18 @@ static void test_set_parent_mantiene_la_pose_de_mundo(ScriptManager& sm)
 
     CHECK(sm.lua()["ok"] == true);
     CHECK(suelto->parent == padre);
-    // Sigue en x=30 en MUNDO...
+    // Still at x=30 in WORLD...
     CHECK(nearlyEqual(glm::vec3(suelto->worldTransform[3]).x, 30.0f));
-    // ...y por eso su local pasa a ser -70 (30 - 100).
+    // ...and that is why its local becomes -70 (30 - 100).
     CHECK(nearlyEqual(glm::vec3(suelto->localTransform[3]).x, -70.0f));
 
-    // El world está al día YA, sin esperar al frame siguiente.
+    // The world is up to date ALREADY, without waiting for the next frame.
     sm.lua().script("wx = hijo:GetTransform():GetWorldPosition().x");
     CHECK(nearlyEqual(sm.lua()["wx"], 30.0f));
 }
 
-// Con false se conserva el LOCAL y el objeto salta con su padre nuevo — que es
-// lo que hace arrastrar en la jerarquía del editor.
+// With false the LOCAL is preserved and the object jumps along with its new parent, which is
+// what dragging in the editor hierarchy does.
 static void test_set_parent_conservando_el_local(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -3508,11 +3507,11 @@ static void test_set_parent_conservando_el_local(ScriptManager& sm)
     sm.lua()["papa"] = LuaEntity{ padre,  &sm };
     sm.lua().script("hijo:SetParent(papa, false)");
 
-    CHECK(nearlyEqual(glm::vec3(suelto->localTransform[3]).x, 30.0f));   // local intacto
-    CHECK(nearlyEqual(glm::vec3(suelto->worldTransform[3]).x, 130.0f));  // world saltó
+    CHECK(nearlyEqual(glm::vec3(suelto->localTransform[3]).x, 30.0f));   // local intact
+    CHECK(nearlyEqual(glm::vec3(suelto->worldTransform[3]).x, 130.0f));  // world jumped
 }
 
-// Sin argumento vuelve a la raíz, y GetParent lo refleja.
+// Without an argument it goes back to the root, and GetParent reflects it.
 static void test_set_parent_nil_vuelve_a_la_raiz(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -3535,8 +3534,8 @@ static void test_set_parent_nil_vuelve_a_la_raiz(ScriptManager& sm)
     CHECK(padre->children.empty());
 }
 
-// Colgar un objeto de su propio descendiente desengancharía el subárbol del
-// árbol y se llevaría por delante el unique_ptr que lo mantiene vivo.
+// Hanging an object from its own descendant would detach the subtree from the
+// tree and take with it the unique_ptr that keeps it alive.
 static void test_set_parent_rechaza_el_ciclo(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -3555,16 +3554,16 @@ static void test_set_parent_rechaza_el_ciclo(ScriptManager& sm)
     CHECK(sm.lua()["ok"] == false);
     CHECK(logContains(log, "WARN"));
     CHECK(logContains(log, "SetParent"));
-    // El árbol sigue como estaba.
+    // The tree remains as it was.
     CHECK(nieto->parent == abuelo);
     CHECK(abuelo->parent == &scene.getRoot());
     CHECK(abuelo->children.size() == 1);
     sm.setLogCallback(nullptr);
 }
 
-// El reparent de la jerarquía del editor pasa ahora por Scene::reparent: este
-// test protege que execute/undo sigan dejando el nodo donde tocaba. Sin él, el
-// haber sacado el algoritmo de ReparentCommand no lo comprobaba nadie.
+// The editor hierarchy reparent now goes through Scene::reparent: this
+// test protects that execute/undo keep leaving the node where it belongs. Without it, the
+// move of the algorithm out of ReparentCommand was checked by nobody.
 static void test_reparent_command_sigue_moviendo_y_deshaciendo()
 {
     Scene scene("Test");
@@ -3585,9 +3584,9 @@ static void test_reparent_command_sigue_moviendo_y_deshaciendo()
     CHECK(a->children.size() == 1);
     CHECK(b->children.empty());
 
-    // Con UN solo hijo el índice da igual, así que hace falta un caso donde
-    // importe: reordenar dentro del mismo padre. Un reparent que ignorase el
-    // índice y añadiese siempre al final pasaría el bloque de arriba entero.
+    // With ONE single child the index does not matter, so a case where it
+    // matters is needed: reordering within the same parent. A reparent that ignored the
+    // index and always appended at the end would pass the whole block above.
     GameObject* p  = scene.addGameObject("P");
     GameObject* h0 = scene.addGameObject("H0", p);
     GameObject* h1 = scene.addGameObject("H1", p);
@@ -3599,16 +3598,16 @@ static void test_reparent_command_sigue_moviendo_y_deshaciendo()
     orden.execute();
     CHECK(p->children.size() == 3);
     CHECK(p->children[0].get() == h0);
-    CHECK(p->children[1].get() == h2);   // se coló en medio
+    CHECK(p->children[1].get() == h2);   // got in the middle
     CHECK(p->children[2].get() == h1);
 
     orden.undo();
     CHECK(p->children[0].get() == h0);
     CHECK(p->children[1].get() == h1);
-    CHECK(p->children[2].get() == h2);   // vuelve al final
+    CHECK(p->children[2].get() == h2);   // goes back to the end
 }
 
-// Animator desde Lua: Play, CrossFade, ResetTrigger y GetNormalizedTime.
+// Animator from Lua: Play, CrossFade, ResetTrigger and GetNormalizedTime.
 static void test_animator_lua_play_crossfade_reset_and_time(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -3616,7 +3615,7 @@ static void test_animator_lua_play_crossfade_reset_and_time(ScriptManager& sm)
     GameObject* go = scene.addGameObject("Personaje");
     auto a = std::make_shared<AnimatorComponent>();
     AnimatorComponent::State s;
-    s.duration = 100.0f; s.ticksPerSecond = 10.0f;     // 10 s por vuelta
+    s.duration = 100.0f; s.ticksPerSecond = 10.0f;     // 10 s per loop
     s.name = "Idle"; s.clipName = "Idle"; a->addState(s);
     s.name = "Run";  s.clipName = "Run";  a->addState(s);
     a->addParameter("go", AnimatorComponent::ParamType::Trigger);
@@ -3640,8 +3639,8 @@ static void test_animator_lua_play_crossfade_reset_and_time(ScriptManager& sm)
         an:ResetTrigger("go")
     )", sol::script_pass_on_error);
     CHECK(r.valid());
-    // Sin esto, un script roto deja los globales a nil y get<bool> hace saltar
-    // el panic de sol2, que tumba el ejecutable entero en vez de un FAIL.
+    // Without this, a broken script leaves the globals at nil and get<bool> triggers
+    // the sol2 panic, which brings down the whole executable instead of a FAIL.
     if (!r.valid()) return;
     CHECK(sm.lua()["okPlay"].get<bool>());
     CHECK(!sm.lua()["noExiste"].get<bool>());
@@ -3649,18 +3648,18 @@ static void test_animator_lua_play_crossfade_reset_and_time(ScriptManager& sm)
     CHECK(a->currentStateName() == "Idle");
     CHECK(a->previousStateName() == "Run");
 
-    // El trigger desarmado no dispara Idle -> Run.
+    // The disarmed trigger does not fire Idle -> Run.
     a->update(0.016f, true);
     CHECK(a->currentStateName() == "Idle");
 
-    a->update(2.484f, false);                          // 0.25 vueltas en Idle
+    a->update(2.484f, false);                          // 0.25 loops in Idle
     auto r2 = sm.lua().safe_script("tn = e:GetComponent('Animator'):GetNormalizedTime()",
                                    sol::script_pass_on_error);
     CHECK(r2.valid());
     if (!r2.valid()) return;
     CHECK(nearlyEqual(sm.lua()["tn"].get<float>(), 0.25f));
 
-    // Velocidad global desde Lua; un negativo congela (0).
+    // Global speed from Lua; a negative freezes (0).
     auto r3 = sm.lua().safe_script(R"(
         local an = e:GetComponent("Animator")
         an:SetSpeed(1.5)
@@ -3675,7 +3674,7 @@ static void test_animator_lua_play_crossfade_reset_and_time(ScriptManager& sm)
     CHECK(nearlyEqual(a->speed(), 0.0f));
 }
 
-// Capas desde Lua: peso, número de capas y el argumento de capa opcional.
+// Layers from Lua: weight, layer count and the optional layer argument.
 static void test_animator_lua_layers(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -3730,7 +3729,7 @@ static void test_animator_lua_layers(ScriptManager& sm)
     CHECK(a->layerCount() == 2);
 }
 
-// IK desde Lua: peso, objetivo, pole y recuento.
+// IK from Lua: weight, target, pole and count.
 static void test_animator_lua_ik(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -3768,14 +3767,14 @@ static void test_animator_lua_ik(ScriptManager& sm)
     CHECK(a->ikConstraints()[0].targetId == objetivo->id);
     CHECK(a->ikConstraints()[1].poleId == objetivo->id);
 
-    // Quitar el objetivo con nil.
+    // Removing the target with nil.
     auto r2 = sm.lua().safe_script("e:GetComponent('Animator'):SetIkTarget('mirar', nil)",
                                     sol::script_pass_on_error);
     CHECK(r2.valid());
     CHECK(a->ikConstraints()[0].targetId == 0u);
 }
 
-// Regla del repo: todo binding nuevo va también al autocompletado.
+// Repo rule: every new binding also goes into autocomplete.
 static void test_animator_lua_new_methods_are_in_the_reference()
 {
     const auto& simbolos = luaApiSymbols();
@@ -3799,8 +3798,8 @@ static void test_animator_lua_new_methods_are_in_the_reference()
     }
 }
 
-// OnAnimationEvent: un evento que dispara el Animator llega a los scripts del
-// mismo GameObject en el siguiente ScriptManager::update, una sola vez.
+// OnAnimationEvent: an event fired by the Animator reaches the scripts of the
+// same GameObject on the next ScriptManager::update, only once.
 static void test_animation_event_reaches_lua(ScriptManager& sm)
 {
     Scene scene("Test");
@@ -3822,18 +3821,18 @@ static void test_animation_event_reaches_lua(ScriptManager& sm)
     )", sol::script_pass_on_error);
     CHECK(r.valid());
     if (!r.valid()) { sm.onPlayStop(); return; }
-    // Instancia a mano y ya arrancada: no hay .lua en disco que cargar.
+    // Instance by hand and already started: there is no .lua on disk to load.
     auto comp = std::make_unique<ScriptComponent>("OyenteEventos", go);
     comp->instance = sm.lua()["OyenteEventos"];
     comp->started  = true;
     go->addScript(std::move(comp));
 
-    a->update(1.1f, true);                 // cruza la mitad del ciclo de 2 s
+    a->update(1.1f, true);                 // crosses half of the 2 s cycle
     CHECK(a->firedEvents().size() == 1u);
     sm.update(0.016f);
     CHECK(sm.lua()["recibidos"].get<std::string>() == "paso;");
 
-    a->update(0.1f, true);                 // no cruza nada
+    a->update(0.1f, true);                 // crosses nothing
     sm.update(0.016f);
     CHECK(sm.lua()["recibidos"].get<std::string>() == "paso;");
     sm.onPlayStop();
@@ -3846,9 +3845,9 @@ int main()
     AudioManager am;
     am.init();
 
-    // Carpeta inexistente a propósito: init() registra los bindings de Lua
-    // igual (solo loguea el aviso de "carpeta no encontrada" y sigue, ver
-    // ScriptManager::init) — estos tests no cargan ningún .lua de disco.
+    // Nonexistent folder on purpose: init() registers the Lua bindings
+    // all the same (it only logs the "folder not found" warning and carries on, see
+    // ScriptManager::init); these tests load no .lua from disk.
     ScriptManager sm;
     sm.init("__scripting_tests_sin_carpeta_de_scripts__");
     sm.setPhysicsManager(&pm);

@@ -1,10 +1,10 @@
-// Test headless de la traducción de bindings del panel Input Actions (sin GUI
-// ni mando conectado). Plain main + asserts, sin framework — mismo patrón que
+// Headless test of the binding translation of the Input Actions panel (no GUI
+// and no gamepad connected). Plain main + asserts, no framework, same pattern as
 // content_browser_tests.cpp.
 //
-// Cubre el camino que el panel NO podía recorrer: un botón de mando llega como
-// código GLFW (Core lo lee con glfwGetGamepadState), no como ImGuiKey, así que
-// hace falta la traducción inversa para poder guardarlo como binding.
+// It covers the path that the panel could NOT walk: a gamepad button arrives as a
+// GLFW code (Core reads it with glfwGetGamepadState), not as an ImGuiKey, so the
+// inverse translation is needed to be able to save it as a binding.
 #include "DonTopo/Core/Input.h"
 #include "DonTopo/Editor/EditorShortcuts.h"
 #include "DonTopo/Editor/InputActionsPanel.h"
@@ -25,12 +25,12 @@ using namespace DonTopo;
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
-// Cada botón digital del mando da un ImGuiKey distinto, y ese ImGuiKey vuelve
-// al MISMO código GLFW: si la ida y la vuelta no cuadran, el binding se pinta
-// con un nombre y el runtime dispara con otro botón.
+// Each digital gamepad button gives a distinct ImGuiKey, and that ImGuiKey goes back to the
+// SAME GLFW code: if the round trip does not match, the binding is drawn with
+// one name and the runtime fires with another button.
 //
-// Excepción: GLFW_GAMEPAD_BUTTON_GUIDE (el botón central de Xbox/PS) no tiene
-// ImGuiKey, así que no se puede bindear y su ida devuelve -1.
+// Exception: GLFW_GAMEPAD_BUTTON_GUIDE (the central Xbox/PS button) has no
+// ImGuiKey, so it cannot be bound and its outbound trip returns -1.
 static void testPadRoundTrip()
 {
     std::set<int> seen;
@@ -41,25 +41,25 @@ static void testPadRoundTrip()
         CHECK(key > 0);
         if (key <= 0) continue;
 
-        // Dentro del rango que load() acepta: un binding fuera de él se
-        // descartaría al releer el fichero.
+        // Within the range that load() accepts: a binding outside it would be
+        // discarded when the file is re-read.
         CHECK(key >= ImGuiKey_NamedKey_BEGIN && key < ImGuiKey_NamedKey_END);
-        // Y dentro del bloque de mando: si cayera en el de teclado, GetKeyName
-        // pintaría una tecla cualquiera.
+        // And within the gamepad block: if it fell in the keyboard one, GetKeyName
+        // would draw an arbitrary key.
         CHECK(key >= ImGuiKey_GamepadStart && key <= ImGuiKey_GamepadRStickDown);
-        CHECK(seen.insert(key).second);   // dos botones no pueden mapear al mismo
+        CHECK(seen.insert(key).second);   // two buttons cannot map to the same one
 
         const char* device = nullptr;
         int code = -1;
         CHECK(InputActionsPanel::bindingToGlfw(key, device, code));
         CHECK(device != nullptr && std::strcmp(device, "pad") == 0);
-        CHECK(code == b);                 // ida y vuelta al mismo botón
+        CHECK(code == b);                 // round trip to the same button
     }
-    CHECK(seen.size() == static_cast<size_t>(GLFW_GAMEPAD_BUTTON_LAST));   // todos menos GUIDE
+    CHECK(seen.size() == static_cast<size_t>(GLFW_GAMEPAD_BUTTON_LAST));   // all except GUIDE
 }
 
-// Un índice que no es un botón del mando no puede colarse como binding: sin
-// esto, un GLFW_GAMEPAD_BUTTON_LAST+1 devolvería basura del enum de ImGui.
+// An index that is not a gamepad button cannot slip through as a binding: without
+// this, a GLFW_GAMEPAD_BUTTON_LAST+1 would return garbage from the ImGui enum.
 static void testPadOutOfRange()
 {
     CHECK(InputActionsPanel::padButtonToBinding(-1) < 0);
@@ -67,8 +67,8 @@ static void testPadOutOfRange()
     CHECK(InputActionsPanel::padButtonToBinding(1000) < 0);
 }
 
-// Los tres dispositivos comparten el rango de ImGuiKey; la traducción tiene que
-// separarlos bien, no solo el mando.
+// The three devices share the ImGuiKey range; the translation has to
+// separate them properly, not just the gamepad.
 static void testKeyboardAndMouseStillTranslate()
 {
     const char* device = nullptr;
@@ -86,17 +86,17 @@ static void testKeyboardAndMouseStillTranslate()
     CHECK(InputActionsPanel::bindingToGlfw(ImGuiKey_MouseRight, device, code));
     CHECK(std::strcmp(device, "mouse") == 0 && code == GLFW_MOUSE_BUTTON_RIGHT);
 
-    // Las ruedas del ratón siguen sin equivalente: son ejes de ImGui que Core
-    // no lee, y colarlas daría un binding que no dispara nunca.
+    // The mouse wheels still have no equivalent: they are ImGui axes that Core
+    // does not read, and letting them through would give a binding that never fires.
     CHECK(!InputActionsPanel::bindingToGlfw(ImGuiKey_MouseWheelX, device, code));
     CHECK(!InputActionsPanel::bindingToGlfw(ImGuiKey_MouseWheelY, device, code));
 }
 
-// Gatillos y sticks son ejes, no botones: van por el dispositivo "padaxis" con
-// el código eje*2+signo. Se comprueba cada dirección por separado porque el
-// signo del eje Y de GLFW está invertido respecto a lo que dice el nombre
-// (arriba es NEGATIVO), y un signo cambiado manda la acción al lado contrario
-// sin que ninguna prueba de GUI lo note.
+// Triggers and sticks are axes, not buttons: they go through the "padaxis" device with
+// the code axis*2+sign. Each direction is checked separately because the
+// sign of GLFW's Y axis is inverted relative to what the name says
+// (up is NEGATIVE), and a flipped sign sends the action to the opposite side
+// without any GUI test noticing.
 static void testPadAxisDirections()
 {
     struct Case { int imguiKey; int axis; bool negative; };
@@ -122,14 +122,14 @@ static void testPadAxisDirections()
         CHECK(code == Input::padAxisCode(c.axis, c.negative));
         CHECK(Input::padAxisIndex(code) == c.axis);
         CHECK(Input::padAxisNegative(code) == c.negative);
-        // Y la vuelta: el panel captura por código de eje y guarda ImGuiKey.
+        // And the way back: the panel captures by axis code and stores an ImGuiKey.
         CHECK(InputActionsPanel::padAxisToBinding(code) == c.imguiKey);
     }
 }
 
-// Todo código de eje válido va y vuelve al mismo sitio, y ningún ImGuiKey se
-// repite. Los dos códigos sin equivalente (gatillo en negativo: un gatillo solo
-// se pulsa hacia un lado) no se pueden bindear.
+// Every valid axis code goes and comes back to the same place, and no ImGuiKey is
+// repeated. The two codes with no equivalent (trigger in the negative: a trigger is only
+// pressed toward one side) cannot be bound.
 static void testPadAxisRoundTrip()
 {
     std::set<int> seen;
@@ -154,7 +154,7 @@ static void testPadAxisRoundTrip()
         CHECK(device != nullptr && std::strcmp(device, "padaxis") == 0);
         CHECK(code == c);
     }
-    CHECK(seen.size() == 10);   // 8 direcciones de stick + 2 gatillos
+    CHECK(seen.size() == 10);   // 8 stick directions + 2 triggers
 }
 
 static void testPadAxisOutOfRange()
@@ -164,16 +164,16 @@ static void testPadAxisOutOfRange()
     CHECK(InputActionsPanel::padAxisToBinding(1000) < 0);
 }
 
-// La digitalización del eje: umbral con histéresis (activa a 0.5, suelta a 0.4)
-// para que un stick parado justo en el borde no escupa un flanco por frame.
+// The digitization of the axis: threshold with hysteresis (activates at 0.5, releases at 0.4)
+// so that a stick resting right at the edge does not spit out an edge per frame.
 static void testPadAxisHysteresis()
 {
     const int right = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_X, false);
-    CHECK(!Input::padAxisActive(right, 0.30f, false));   // por debajo del umbral
-    CHECK(Input::padAxisActive(right, 0.60f, false));    // lo cruza
-    CHECK(Input::padAxisActive(right, 0.45f, true));     // zona muerta: sigue activo
-    CHECK(!Input::padAxisActive(right, 0.35f, true));    // baja del de suelta
-    // Empujar al lado contrario no activa esta dirección.
+    CHECK(!Input::padAxisActive(right, 0.30f, false));   // below the threshold
+    CHECK(Input::padAxisActive(right, 0.60f, false));    // crosses it
+    CHECK(Input::padAxisActive(right, 0.45f, true));     // dead zone: stays active
+    CHECK(!Input::padAxisActive(right, 0.35f, true));    // falls below the release one
+    // Pushing to the opposite side does not activate this direction.
     CHECK(!Input::padAxisActive(right, -0.90f, false));
 
     const int left = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_X, true);
@@ -181,26 +181,26 @@ static void testPadAxisHysteresis()
     CHECK(!Input::padAxisActive(left, 0.60f, false));
 }
 
-// GLFW da los gatillos en [-1, 1] con el reposo en -1, no en 0: sin
-// renormalizar a [0, 1] haría falta apretar el gatillo al 75% para llegar al
-// umbral, y en reposo el valor quedaría a un pelo de activarse.
+// GLFW gives the triggers in [-1, 1] with rest at -1, not at 0: without
+// renormalizing to [0, 1] the trigger would have to be squeezed to 75% to reach the
+// threshold, and at rest the value would be a hair away from activating.
 static void testPadTriggerRange()
 {
     const int l2 = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER, false);
-    CHECK(!Input::padAxisActive(l2, -1.00f, false));   // reposo
-    CHECK(!Input::padAxisActive(l2, -1.00f, true));    // y suelta si venía pulsado
-    CHECK(!Input::padAxisActive(l2, -0.20f, false));   // 40% de recorrido
-    CHECK(Input::padAxisActive(l2, 0.20f, false));     // 60%: cruza el umbral
-    CHECK(Input::padAxisActive(l2, 1.00f, false));     // a fondo
+    CHECK(!Input::padAxisActive(l2, -1.00f, false));   // rest
+    CHECK(!Input::padAxisActive(l2, -1.00f, true));    // and releases if it was pressed
+    CHECK(!Input::padAxisActive(l2, -0.20f, false));   // 40% of travel
+    CHECK(Input::padAxisActive(l2, 0.20f, false));     // 60%: crosses the threshold
+    CHECK(Input::padAxisActive(l2, 1.00f, false));     // fully pressed
 
-    // El gatillo en negativo no existe como binding y nunca puede activarse.
+    // The trigger in the negative does not exist as a binding and can never activate.
     const int l2neg = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER, true);
     CHECK(!Input::padAxisActive(l2neg, -1.00f, false));
     CHECK(!Input::padAxisActive(l2neg, 1.00f, false));
 }
 
-// Sin mando conectado, Input::update no toca los ejes y todo consulta a false:
-// una acción bindeada a un stick no puede dispararse sola en un PC sin mando.
+// With no gamepad connected, Input::update does not touch the axes and every query gives false:
+// an action bound to a stick cannot fire by itself on a PC without a gamepad.
 static void testPadAxisWithoutGamepad()
 {
     for (int c = 0; c < Input::kPadAxisBindingCount; ++c)
@@ -212,17 +212,17 @@ static void testPadAxisWithoutGamepad()
     CHECK(!Input::isPadAxisDown(Input::kPadAxisBindingCount));
 }
 
-// H5 de docs/core-audit.md: takeActionDiagnostics() devolvia SIEMPRE una lista
-// vacia. El canal existe —el header lo promete y ScriptBindings.cpp:501 lo
-// vuelca al Log— pero nadie escribia nunca en el: los dos sitios que descartan
-// un binding al cargar (codigo de eje fuera de rango y dispositivo desconocido)
-// lo hacian con un `continue` mudo.
+// H5 of docs/core-audit.md: takeActionDiagnostics() ALWAYS returned an empty
+// list. The channel exists (the header promises it and ScriptBindings.cpp:501 dumps it
+// to the Log) but nobody ever wrote into it: the two places that discard
+// a binding on load (axis code out of range and unknown device)
+// did so with a silent `continue`.
 //
-// Lo que costaba: una accion que no dispara nunca porque su binding se descarto
-// al cargar es indistinguible de una accion mal configurada.
+// What it cost: an action that never fires because its binding was discarded
+// on load is indistinguishable from a misconfigured action.
 //
-// El fichero vive en el directorio de trabajo y es EL MISMO que usa el editor,
-// asi que el test respalda el del usuario y lo devuelve al terminar.
+// The file lives in the working directory and is THE SAME one the editor uses,
+// so the test backs up the user's and restores it when it finishes.
 static void testActionDiagnosticsReportDiscardedBindings()
 {
     const char* kFile = "input_actions.json";
@@ -248,20 +248,20 @@ static void testActionDiagnosticsReportDiscardedBindings()
     Input::reloadActions();
     std::vector<std::string> avisos = Input::takeActionDiagnostics();
 
-    // Dos descartes: el dispositivo que no existe y el eje fuera de rango.
+    // Two discards: the device that does not exist and the axis out of range.
     CHECK(avisos.size() == 2);
     int nombran = 0;
     for (const std::string& a : avisos)
         if (a.find("Saltar") != std::string::npos) ++nombran;
     CHECK(nombran == 2);
 
-    // Se vacia al leerla: el consumidor los vuelca al Log una sola vez.
+    // It is emptied when read: the consumer dumps them to the Log only once.
     CHECK(Input::takeActionDiagnostics().empty());
 
-    // Y la accion sigue existiendo con su binding bueno: descartar uno malo no
-    // se lleva por delante los demas.
+    // And the action still exists with its good binding: discarding a bad one does not
+    // take the others with it.
     CHECK(Input::hasAction("Saltar"));
-    CHECK(Input::isActionDown("Saltar") == false);   // sin ventana, sin teclas
+    CHECK(Input::isActionDown("Saltar") == false);   // no window, no keys
 
     if (habia)
     {
@@ -274,22 +274,22 @@ static void testActionDiagnosticsReportDiscardedBindings()
     }
 }
 
-// H10 de docs/core-audit.md, ampliado por lo que se vio al mirarlo: el cargador
-// ya tiene escrita la regla en su propio comentario -"codigo fuera de rango: se
-// descarta AQUI y no en cada consulta, y se NOMBRA"- pero solo la aplicaba a
-// padaxis. Los codigos de key, mouse y pad entraban sin mirar.
+// H10 of docs/core-audit.md, extended by what was seen when looking at it: the loader
+// already has the rule written in its own comment ("code out of range: it is
+// discarded HERE and not on every query, and it is NAMED") but only applied it to
+// padaxis. The key, mouse and pad codes came in without being looked at.
 //
-// Lo que costaba, por dispositivo:
-//   - mouse: isActionDown resolvia con isMouseButtonDown, que le pasaba el
-//     codigo a GLFW sin acotar -un error de GLFW por consulta y por frame-,
-//     mientras isActionPressed/Released lo descartaban. Tres funciones de la
-//     misma familia, tres comportamientos ante el MISMO fichero.
-//   - key y pad: el binding se quedaba vivo y mudo, y una accion que no dispara
-//     nunca es indistinguible de una mal configurada.
+// What it cost, per device:
+//   - mouse: isActionDown resolved with isMouseButtonDown, which passed the
+//     code to GLFW unbounded (a GLFW error per query and per frame),
+//     while isActionPressed/Released discarded it. Three functions of the
+//     same family, three behaviors for the SAME file.
+//   - key and pad: the binding stayed alive and mute, and an action that never fires
+//     is indistinguishable from a misconfigured one.
 //
-// Se prueba en el cargador y no en las consultas a proposito: sin ventana de
-// GLFW toda consulta devuelve false pase lo que pase, asi que un test ahi
-// pasaria igual de roto -es el caso del fixture que nunca llega a la linea-.
+// It is tested in the loader and not in the queries on purpose: without a GLFW
+// window every query returns false no matter what, so a test there would
+// pass just as broken (it is the case of the fixture that never reaches the line).
 static void testOutOfRangeCodesDiscardedForEveryDevice()
 {
     const char* kFile = "input_actions.json";
@@ -307,25 +307,25 @@ static void testOutOfRangeCodesDiscardedForEveryDevice()
     {
         std::ofstream out(kFile);
         out << "{\"actions\":[{\"name\":\"Disparar\",\"glfw\":["
-               "{\"device\":\"mouse\",\"code\":99},"      // fuera de rango
-               "{\"device\":\"mouse\",\"code\":-1},"      // negativo
-               "{\"device\":\"key\",\"code\":50000},"     // fuera de rango
-               "{\"device\":\"pad\",\"code\":77},"        // fuera de rango
-               "{\"device\":\"mouse\",\"code\":0}]}]}";   // el bueno, se queda
+               "{\"device\":\"mouse\",\"code\":99},"      // out of range
+               "{\"device\":\"mouse\",\"code\":-1},"      // negative
+               "{\"device\":\"key\",\"code\":50000},"     // out of range
+               "{\"device\":\"pad\",\"code\":77},"        // out of range
+               "{\"device\":\"mouse\",\"code\":0}]}]}";   // the good one, it stays
     }
 
     Input::reloadActions();
     std::vector<std::string> avisos = Input::takeActionDiagnostics();
 
-    // Cuatro descartes, uno por binding malo, y todos NOMBRAN la accion: sin el
-    // nombre el aviso no sirve para arreglar el fichero.
+    // Four discards, one per bad binding, and all of them NAME the action: without the
+    // name the warning is useless for fixing the file.
     CHECK(avisos.size() == 4);
     int nombran = 0;
     for (const std::string& a : avisos)
         if (a.find("Disparar") != std::string::npos) ++nombran;
     CHECK(nombran == 4);
 
-    // Y el binding bueno sobrevive: descartar los malos no se lleva la accion.
+    // And the good binding survives: discarding the bad ones does not take the action.
     CHECK(Input::hasAction("Disparar"));
 
     if (habia)
