@@ -58,14 +58,14 @@ void GpuDevice::createInstance()
 
     const char* validationLayer = "VK_LAYER_KHRONOS_validation";
 
-    // ¿Está instalada? La capa viene con el SDK de Vulkan, no con el driver, así
-    // que una máquina con Vulkan perfectamente funcional puede no tenerla. Pedirla
-    // a ciegas hacía que vkCreateInstance devolviera VK_ERROR_LAYER_NOT_PRESENT y
-    // la build Debug muriera con «failed to create Vulkan instance!», que apunta
-    // al sitio equivocado: parece que la GPU no vale (H27).
+    // Is it installed? The layer ships with the Vulkan SDK, not with the driver, so
+    // a machine with perfectly working Vulkan may not have it. Requesting it
+    // blindly made vkCreateInstance return VK_ERROR_LAYER_NOT_PRESENT and
+    // the Debug build died with "failed to create Vulkan instance!", which points
+    // at the wrong place: it looks like the GPU is not good enough (H27).
     //
-    // Sin capa se arranca igual y se dice. Perder los mensajes de validación es
-    // muchísimo menos malo que no poder ejecutar.
+    // Without the layer it starts anyway and says so. Losing the validation messages is
+    // far less bad than not being able to run.
     bool validationAvailable = false;
     if (ENABLE_VALIDATION) {
         uint32_t layerCount = 0;
@@ -82,8 +82,8 @@ void GpuDevice::createInstance()
                    "       without the validation layer: there will be no misuse messages.\n",
                    validationLayer);
             fflush(stdout);
-            // La extensión del messenger la trae la capa: pedirla sin ella es el
-            // mismo fallo un paso más adelante.
+            // The messenger extension comes with the layer: requesting it without the layer is the
+            // same failure one step later.
             extensions.erase(std::remove_if(extensions.begin(), extensions.end(),
                                             [](const char* e) {
                                                 return std::strcmp(
@@ -123,10 +123,10 @@ void GpuDevice::setupDebugMessenger()
 
     auto func = (PFN_vkCreateDebugUtilsMessengerEXT)
         vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT");
-    // Sin capa instalada no hay puntero que resolver, y eso NO es un error: la
-    // instancia se creo a proposito sin ella y ya se aviso al crearla. Lanzar
-    // aqui era el mismo fallo de H27 un paso mas adelante — matar el arranque
-    // por no tener una herramienta de diagnostico.
+    // With no layer installed there is no pointer to resolve, and that is NOT an error: the
+    // instance was created without it on purpose and a warning was already given at creation.
+    // Throwing here was the same H27 failure one step later, killing startup
+    // for lacking a diagnostic tool.
     if (!func) return;
     if (func(m_instance, &createInfo, nullptr, &m_debugMessenger) != VK_SUCCESS)
         throw std::runtime_error("failed to set up debug messenger!");
@@ -182,14 +182,14 @@ void GpuDevice::pickPhysicalDevice()
     if (m_physicalDevice == VK_NULL_HANDLE)
         throw std::runtime_error("failed to find a suitable GPU!");
 
-    // Tope de asignaciones de memoria del device. Se lee aquí, una vez, porque
-    // varía muchísimo entre implementaciones: la spec garantiza 4096 y una
-    // NVIDIA de escritorio da 4.189.151. Con dos asignaciones vivas por malla,
-    // eso son 2.048 mallas en la peor y dos millones en la otra.
+    // Device memory allocation limit. It is read here, once, because it
+    // varies enormously between implementations: the spec guarantees 4096 and a
+    // desktop NVIDIA reports 4,189,151. With two live allocations per mesh,
+    // that is 2,048 meshes in the worst case and two million in the other.
     //
-    // Solo se avisa cuando el tope es ESTRECHO: en una GPU generosa el mensaje
-    // sería ruido en cada arranque, y avisar de lo que no puede pasar entrena
-    // a no leer los avisos.
+    // A warning is only given when the limit is NARROW: on a generous GPU the message
+    // would be noise on every startup, and warning about what cannot happen trains
+    // people not to read warnings.
     {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
@@ -227,7 +227,7 @@ void GpuDevice::createDevice()
 
     const char* extensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
-    // fillModeNonSolid: requerida para VK_POLYGON_MODE_LINE (modo wireframe).
+    // fillModeNonSolid: required for VK_POLYGON_MODE_LINE (wireframe mode).
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.fillModeNonSolid = VK_TRUE;
 

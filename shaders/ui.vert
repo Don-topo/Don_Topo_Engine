@@ -1,26 +1,26 @@
 #version 450
 
-// Quads 2D de la UI. Las posiciones llegan en PIXELES con (0,0) arriba a la
-// izquierda; la ortografica del push constant (orthoRH_ZO con top=0 y
-// bottom=alto) es quien las lleva a NDC sin voltear nada aqui.
+// 2D UI quads. Positions arrive in PIXELS with (0,0) at the top
+// left; the push constant's orthographic (orthoRH_ZO with top=0 and
+// bottom=height) is what takes them to NDC without flipping anything here.
 
 layout(location = 0) in vec2 inPos;
 layout(location = 1) in vec2 inUv;
 layout(location = 2) in vec4 inColor;
-// params.x = modo (0 = sprite/color plano, 1 = MSDF)
-// params.y = screenPxRange ya escalado al tamano de ESTE quad
-// params.z = grosor del outline en pixeles de pantalla
-// effect   = color del outline. Todo por vertice: asi el texto no parte el lote.
+// params.x = mode (0 = sprite/flat color, 1 = MSDF)
+// params.y = screenPxRange already scaled to the size of THIS quad
+// params.z = outline thickness in screen pixels
+// effect   = outline color. All per vertex: that way text does not break the batch.
 layout(location = 3) in vec4 inParams;
 layout(location = 4) in vec4 inEffect;
 
 layout(push_constant) uniform Push {
     mat4 proj;
-    // 0 = el destino es SRGB y el hardware convierte al escribir; 1 = el
-    // destino es HDR LINEAL (el pase de escena) y la conversion la hace a mano
-    // ui.frag. Aqui no se lee, pero el bloque tiene que ir DECLARADO IGUAL en
-    // las dos etapas: el push constant es UNO SOLO para vertex y fragment, y un
-    // desajuste de offsets entre ellas no da ni error ni aviso de validacion.
+    // 0 = the destination is SRGB and the hardware converts when writing; 1 = the
+    // destination is LINEAR HDR (the scene pass) and the conversion is done by hand in
+    // ui.frag. It is not read here, but the block has to be DECLARED THE SAME in
+    // both stages: the push constant is ONE SINGLE one for vertex and fragment, and an
+    // offset mismatch between them gives neither an error nor a validation warning.
     int linearOutput;
 } pc;
 

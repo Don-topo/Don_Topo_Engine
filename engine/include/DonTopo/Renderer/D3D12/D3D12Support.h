@@ -1,35 +1,35 @@
 #pragma once
 
-// Solo existe cuando el backend DirectX 12 se compila (DTE_ENABLE_D3D12=ON).
-// Los consumidores deben guardar sus llamadas con el mismo #ifdef.
+// Only exists when the DirectX 12 backend is compiled (DTE_ENABLE_D3D12=ON).
+// Consumers must guard their calls with the same #ifdef.
 #ifdef DT_D3D12_ENABLED
 
 #include <string>
 
 namespace DonTopo::D3D12 {
 
-// Resultado de preguntarle al sistema si hay un adaptador capaz de DX12, sin
-// llegar a crear el device. Lo usa el selector de backend del editor: ofrecer
-// DirectX 12 en una máquina que no lo soporta llevaría a un fallo al arrancar,
-// que es justo el momento en el que peor se puede avisar.
+// Result of asking the system whether there is a DX12-capable adapter, without
+// creating the device. Used by the editor's backend selector: offering
+// DirectX 12 on a machine that does not support it would lead to a failure at
+// startup, which is exactly the moment when it is hardest to warn the user.
 struct SupportInfo {
     bool supported = false;
-    std::string adapterName;  // Descripción del adaptador elegido; vacío si no hay
-    std::string error;        // Motivo; solo tiene contenido cuando supported == false
+    std::string adapterName;  // Description of the chosen adapter; empty if there is none
+    std::string error;        // Reason; only has content when supported == false
 };
 
-// Enumera los adaptadores por DXGI y devuelve el primero que acepte
-// D3D_FEATURE_LEVEL_11_0. Descarta los adaptadores software (WARP). No crea
-// device ni deja ningún objeto vivo tras devolver.
+// Enumerates the adapters through DXGI and returns the first one that accepts
+// D3D_FEATURE_LEVEL_11_0. Discards software adapters (WARP). Creates no
+// device and leaves no live object behind after returning.
 SupportInfo querySupport();
 
-// UTF-16 -> UTF-8. La descripcion de un adaptador y el JSON de estadisticas de
-// D3D12MA llegan en wchar_t, y el resto del motor habla std::string en UTF-8
-// (el log, el project.json, ImGui). Cadena vacia si `wide` es nullptr o vacia.
+// UTF-16 -> UTF-8. An adapter description and the D3D12MA statistics JSON
+// arrive as wchar_t, and the rest of the engine speaks UTF-8 std::string
+// (the log, project.json, ImGui). Empty string if `wide` is nullptr or empty.
 //
-// Vive aqui porque estaba escrita DOS veces —esta y otra en D3D12Renderer.cpp,
-// byte a byte la misma salvo el estilo de llaves— y las dos convierten lo que
-// acaba en el mismo log (H48).
+// It lives here because it was written TWICE (this one and another in D3D12Renderer.cpp,
+// byte for byte the same except for the brace style), and both convert what
+// ends up in the same log (H48).
 std::string narrow(const wchar_t* wide);
 
 }  // namespace DonTopo::D3D12

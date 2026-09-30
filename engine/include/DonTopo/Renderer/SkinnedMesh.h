@@ -52,28 +52,28 @@ namespace DonTopo
         uint32_t materialIndex;
     };
 
-    // Fichero del que salieron uno o más clips. La lista existe para poder
-    // mostrar los clips agrupados por origen en el Animator Panel y para poder
-    // quitar un fichero entero; la evaluación en GPU no la mira nunca, sigue
-    // consumiendo animationClips plano.
+    // File that one or more clips came from. The list exists so that clips can be
+    // shown grouped by origin in the Animator Panel and so that a whole file can be
+    // removed; the GPU evaluation never looks at it, it keeps
+    // consuming the flat animationClips.
     //
-    // builtin marca el FBX que aportó la malla y el esqueleto: no se puede
-    // quitar (quitarlo sería quitar el modelo) y la escena lo reconstruye vía
-    // Mesh::sourcePath, no vía addAnimationSource.
+    // builtin marks the FBX that provided the mesh and the skeleton: it cannot be
+    // removed (removing it would remove the model) and the scene rebuilds it via
+    // Mesh::sourcePath, not via addAnimationSource.
     struct AnimationSource
     {
         std::string              path;
         bool                     builtin = false;
-        std::vector<std::string> clipNames; // nombres finales, en el orden en que se añadieron
+        std::vector<std::string> clipNames; // final names, in the order they were added
     };
 
-    // Reparte los pesos de un vértice para que sumen 1 (A9). Devuelve false
-    // cuando el FBX no pesó ese vértice contra NINGÚN hueso: entonces los
-    // cuatro salen a 0 y el shader lo deja donde está, porque una matriz de
-    // skinning a cero mandaría el vértice al origen.
+    // Distributes the weights of a vertex so that they sum to 1 (A9). Returns false
+    // when the FBX did not weight that vertex against ANY bone: then all
+    // four come out as 0 and the shader leaves it where it is, because a zero
+    // skinning matrix would send the vertex to the origin.
     //
-    // Vive aquí y no dentro del bucle del cargador para poder probar el caso
-    // degenerado, que ningún asset del repo produce.
+    // It lives here and not inside the loader loop so that the degenerate case
+    // can be tested, which no asset in the repo produces.
     inline bool normalizeBoneWeights(const float in[4], float out[4])
     {
         float total = 0.0f;
@@ -86,20 +86,20 @@ namespace DonTopo
     {
         std::vector<SkinnedVertex>   skinnedVertices;
         Skeleton                     skeleton;
-        // Todas las animaciones del fichero de origen, en el orden de
-        // scene->mAnimations. El Animator las referencia por nombre (no por
-        // índice): reexportar el modelo puede reordenarlas.
+        // All the animations of the source file, in the order of
+        // scene->mAnimations. The Animator references them by name (not by
+        // index): re-exporting the model can reorder them.
         std::vector<AnimationClip>   animationClips;
-        // Origen de cada clip. Invariante: la concatenación de los clipNames de
-        // todas las fuentes es una permutación de los nombres de animationClips.
+        // Origin of each clip. Invariant: the concatenation of the clipNames of
+        // all the sources is a permutation of the names of animationClips.
         std::vector<AnimationSource> animationSources;
         std::vector<SubMeshRange>    subMeshRanges;
         std::vector<Material>        materials;
-        // Vértices que el FBX no pesó contra ningún hueso (A9). No los mueve
-        // nadie: el shader los deja donde están (identidad) en vez de mandarlos
-        // al origen, pero se ven quietos mientras el resto anima. Es un defecto
-        // del modelo, y sin este contador no hay forma de distinguirlo de un
-        // fallo del motor.
+        // Vertices that the FBX did not weight against any bone (A9). Nobody moves them:
+        // the shader leaves them where they are (identity) instead of sending them
+        // to the origin, but they look still while the rest animates. It is a defect
+        // of the model, and without this counter there is no way to tell it apart from an
+        // engine failure.
         int                          verticesWithoutWeights = 0;
     };
 
@@ -115,34 +115,34 @@ namespace DonTopo
         glm::vec4 value;
     };
 
-    // Espejo exacto del struct BoneInfo de shaders/bone_eval.comp y
-    // shaders/bone_hierarchy.comp (std430). Cualquier campo que se añada aquí
-    // hay que añadirlo en LOS DOS shaders y en el mismo sitio: un desajuste no
-    // da error de compilación, sólo lecturas desplazadas.
+    // Exact mirror of the BoneInfo struct in shaders/bone_eval.comp and
+    // shaders/bone_hierarchy.comp (std430). Any field added here
+    // must be added in BOTH shaders and in the same place: a mismatch does not
+    // give a compile error, only shifted reads.
     struct GpuBoneInfo
     {
         int32_t posOffset, posCount;
         int32_t rotOffset, rotCount;
         int32_t scaleOffset, scaleCount;
         int32_t parentIndex;
-        // Niveles por debajo de su raíz (0 = raíz). bone_hierarchy.comp evalúa
-        // la jerarquía en paralelo nivel a nivel, así que exige que cada hueso
-        // valga exactamente uno más que su padre. Ocupa el hueco que antes era
-        // relleno: el layout std430 no cambia.
+        // Levels below its root (0 = root). bone_hierarchy.comp evaluates
+        // the hierarchy in parallel level by level, so it requires each bone to
+        // be worth exactly one more than its parent. It takes the slot that used to be
+        // padding: the std430 layout does not change.
         int32_t depth;
         glm::mat4 inverseBindPose;
-        // Transform local del hueso en bind pose, o sea el que tiene respecto a
-        // su padre tal y como lo rigearon. Es el valor por defecto de un hueso
-        // del que el clip activo no dice nada: la identidad no vale, porque
-        // borraría su offset con el padre y lo colapsaría encima de él.
+        // Local transform of the bone in bind pose, that is, the one relative to
+        // its parent as they rigged it. It is the default value for a bone
+        // the active clip says nothing about: identity is not valid, because it
+        // would erase its offset from the parent and collapse it on top of it.
         glm::mat4 bindLocal;
     };
 
-    // Offsets y tamaño que glslc genera para el BoneInfo std430 de los dos
-    // shaders (verificado con spirv-dis: Offset 0/4/8/12/16/20/24/28/32/96,
-    // ArrayStride 160). Un desajuste de layout entre CPU y GPU no da error de
-    // compilación en ningún lado, sólo lecturas desplazadas y basura en pantalla
-    // — así que se comprueba aquí, donde sí puede fallar el build.
+    // Offsets and size that glslc generates for the std430 BoneInfo of both
+    // shaders (verified with spirv-dis: Offset 0/4/8/12/16/20/24/28/32/96,
+    // ArrayStride 160). A layout mismatch between CPU and GPU gives no compile
+    // error anywhere, only shifted reads and garbage on screen,
+    // so it is checked here, where the build can fail.
     static_assert(offsetof(GpuBoneInfo, parentIndex)     == 24, "BoneInfo std430 layout broken");
     static_assert(offsetof(GpuBoneInfo, inverseBindPose) == 32, "BoneInfo std430 layout broken");
     static_assert(offsetof(GpuBoneInfo, bindLocal)       == 96, "BoneInfo std430 layout broken");

@@ -7,16 +7,16 @@ namespace DonTopo
 {
     class GpuDevice;
 
-    // Agrupa todos los uploads de un pump en UN command buffer, UN submit y UNA
+    // Groups all the uploads of a pump into ONE command buffer, ONE submit and ONE
     // fence.
     //
-    // Antes, cada createTextureImage encadenaba tres vkQueueWaitIdle (transición
-    // → copia → transición) y cada buffer uno más: unos 11 vaciados completos de
-    // la cola gráfica por mesh estático, ~440 al abrir una escena de 40 objetos.
+    // Before, each createTextureImage chained three vkQueueWaitIdle (transition
+    // -> copy -> transition) and each buffer one more: about 11 full drains of the
+    // graphics queue per static mesh, ~440 when opening a scene of 40 objects.
     //
-    // La corrección se mantiene porque las barreras (vkCmdPipelineBarrier)
-    // ordenan dentro del command buffer igual que ordenaban entre submits. Lo
-    // que desaparece es la espera, no la sincronización.
+    // Correctness is kept because the barriers (vkCmdPipelineBarrier)
+    // order within the command buffer just as they used to order between submits. What
+    // disappears is the wait, not the synchronization.
     class TransferBatch
     {
         public:
@@ -25,22 +25,22 @@ namespace DonTopo
             TransferBatch(const TransferBatch&)            = delete;
             TransferBatch& operator=(const TransferBatch&) = delete;
 
-            // Abre el command buffer la primera vez que se llama. Todas las
-            // operaciones del batch comparten este.
+            // Opens the command buffer the first time it is called. All the
+            // operations of the batch share this one.
             VkCommandBuffer cmd();
 
-            // El staging vive hasta que la fence señala: liberarlo antes es un
-            // use-after-free en la GPU que no peta de forma reproducible.
+            // The staging lives until the fence signals: freeing it earlier is a
+            // use-after-free on the GPU that does not crash reproducibly.
             void addStaging(VkBuffer buf, VkDeviceMemory mem);
 
-            // Cierra y envía. No espera.
+            // Closes and submits. Does not wait.
             void submit();
 
-            // vkGetFenceStatus. NO bloquea: es lo que consulta el Renderer cada
-            // frame para decidir si ya puede dibujar los objetos del batch.
+            // vkGetFenceStatus. Does NOT block: it is what the Renderer queries every
+            // frame to decide whether it can already draw the objects of the batch.
             bool complete() const;
 
-            // Destruye staging y command buffer. Exige complete() == true.
+            // Destroys staging and command buffer. Requires complete() == true.
             void reclaim();
 
             bool empty() const { return m_cmd == VK_NULL_HANDLE; }

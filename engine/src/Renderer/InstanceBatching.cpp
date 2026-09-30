@@ -6,19 +6,19 @@ namespace DonTopo::Batching
 {
     namespace
     {
-        // La clave de agrupado, en UN sitio. Las dos pasadas de abajo recorren
-        // la misma cadena buscando el mismo grupo, y mientras la comparación
-        // estuvo escrita dos veces bastaba con tocar una para que la pasada 2
-        // metiera transforms en el grupo equivocado — un objeto dibujándose con
-        // el material de otro, sin error en ningún lado.
+        // The grouping key, in ONE place. The two passes below walk
+        // the same chain looking for the same group, and while the comparison
+        // was written twice, touching only one was enough for pass 2 to
+        // put transforms in the wrong group: an object drawn with
+        // another's material, with no error anywhere.
         //
-        // sharedIndex NO entra: la cadena ya sale de slotOf[sharedIndex], así
-        // que todos sus eslabones lo comparten por construcción.
+        // sharedIndex does NOT take part: the chain already comes from slotOf[sharedIndex], so
+        // all its links share it by construction.
         //
-        // Comparación exacta de floats a propósito: no se busca "parecido" sino
-        // "el mismo valor", que es lo que garantiza que el push constant del
-        // grupo vale para todas sus instancias. Dos valores que difieran en el
-        // último bit tienen que salir en draws distintos.
+        // Exact float comparison on purpose: we are not looking for "similar" but for
+        // "the same value", which is what guarantees that the group's push constant
+        // holds for all its instances. Two values that differ in the
+        // last bit have to end up in different draws.
         bool mismaClave(const InstanceBatch& b, const BatchCandidate& c)
         {
             return b.ssrStrength == c.ssr && b.metallic == c.metallic &&
@@ -36,26 +36,26 @@ namespace DonTopo::Batching
         outBatches.clear();
         if (count == 0 || outCapacity == 0 || outTransforms == nullptr) return 0;
 
-        // Tabla sharedIndex -> posición en outBatches. Los sharedIndex son
-        // índices densos y pequeños de la caché, así que una tabla plana evita
-        // el hash de un unordered_map (que en escenas de miles de objetos se
-        // comía justo lo que este agrupado viene a ahorrar).
+        // Table sharedIndex -> position in outBatches. The sharedIndex values are
+        // dense, small indices of the cache, so a flat table avoids
+        // the hash of an unordered_map (which in scenes of thousands of objects ate
+        // up exactly what this grouping is meant to save).
         int maxShared = -1;
         for (size_t i = 0; i < count; i++)
             if (candidates[i].visible && candidates[i].sharedIndex > maxShared)
                 maxShared = candidates[i].sharedIndex;
-        if (maxShared < 0) return 0; // no hay nada visible
+        if (maxShared < 0) return 0; // nothing is visible
         std::vector<int> slotOf((size_t)maxShared + 1, -1);
-        // Cadena de grupos que comparten sharedIndex y difieren en la fuerza de
-        // SSR, paralela a outBatches. Va aparte y no dentro de InstanceBatch
-        // porque es contabilidad del agrupado, no algo que el llamante necesite:
-        // en el caso normal (un único valor por malla) la cadena tiene un
-        // eslabón y el resultado es idéntico al de agrupar solo por sharedIndex.
+        // Chain of groups that share sharedIndex and differ in SSR strength,
+        // parallel to outBatches. It is kept apart and not inside InstanceBatch
+        // because it is grouping bookkeeping, not something the caller needs:
+        // in the normal case (a single value per mesh) the chain has one
+        // link and the result is identical to grouping only by sharedIndex.
         std::vector<int> nextOf;
         nextOf.reserve(count);
 
-        // Pasada 1: un grupo por (sharedIndex, ssr), en orden de primera
-        // aparición.
+        // Pass 1: one group per (sharedIndex, ssr), in order of first
+        // appearance.
         for (size_t i = 0; i < count; i++)
         {
             const BatchCandidate& c = candidates[i];
@@ -76,9 +76,9 @@ namespace DonTopo::Batching
             outBatches[(size_t)slot].instanceCount++;
         }
 
-        // Offsets contiguos. Si un grupo no cabe entero se recorta a lo que
-        // queda y los siguientes se quedan a cero: mejor perder objetos que
-        // escribir fuera del buffer.
+        // Contiguous offsets. If a group does not fit whole it is trimmed to what
+        // remains and the following ones are left at zero: better to lose objects than to
+        // write outside the buffer.
         uint32_t written = 0;
         for (auto& b : outBatches)
         {
@@ -88,17 +88,17 @@ namespace DonTopo::Batching
             written += b.instanceCount;
         }
 
-        // Pasada 2: transforms contiguos por grupo, en el orden de los
-        // candidatos. cursor lleva cuántos se han escrito ya de cada grupo, que
-        // es también el hueco relativo dentro de su rango.
+        // Pass 2: contiguous transforms per group, in the order of the
+        // candidates. cursor holds how many have already been written for each group, which
+        // is also the relative slot within its range.
         std::vector<uint32_t> cursor(outBatches.size(), 0);
         for (size_t i = 0; i < count; i++)
         {
             const BatchCandidate& c = candidates[i];
             if (!c.visible || c.sharedIndex < 0 || c.transform == nullptr) continue;
-            // Misma búsqueda que en la pasada 1: la cabeza de la cadena no tiene
-            // por qué ser el grupo de ESTE candidato si comparten malla y
-            // difieren en la fuerza de SSR.
+            // Same lookup as in pass 1: the head of the chain is not necessarily
+            // THIS candidate's group if they share a mesh and
+            // differ in SSR strength.
             int found = -1;
             for (int s = slotOf[(size_t)c.sharedIndex]; s >= 0; s = nextOf[(size_t)s])
             {
@@ -106,14 +106,14 @@ namespace DonTopo::Batching
             }
             if (found < 0) continue;
             const size_t slot = (size_t)found;
-            if (cursor[slot] >= outBatches[slot].instanceCount) continue; // grupo recortado
+            if (cursor[slot] >= outBatches[slot].instanceCount) continue; // trimmed group
             const uint32_t dst = (outBatches[slot].firstInstance - firstInstanceBase) + cursor[slot];
             outTransforms[dst] = *c.transform;
             cursor[slot]++;
         }
 
-        // Los grupos que se quedaron sin sitio no deben llegar como draws de 0
-        // instancias.
+        // Groups that ran out of room must not arrive as draws of 0
+        // instances.
         outBatches.erase(std::remove_if(outBatches.begin(), outBatches.end(),
                              [](const InstanceBatch& b) { return b.instanceCount == 0; }),
                          outBatches.end());

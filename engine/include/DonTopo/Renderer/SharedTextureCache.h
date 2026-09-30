@@ -6,23 +6,23 @@
 
 namespace DonTopo
 {
-    // Qué se sube: el mismo fichero como color (sRGB) o como normal/ORM
-    // (lineal) son imágenes distintas.
+    // What gets uploaded: the same file as color (sRGB) or as normal/ORM
+    // (linear) are different images.
     enum class TextureKind : uint8_t { BaseColor, Normal, Orm };
 
-    // Clave de contenido de una textura de material. De fichero: la ruta. Embebida
-    // en el FBX: tamaño + FNV-1a de los bytes, así que dos FBX con la misma
-    // textura dentro comparten imagen, y la ruta no cuenta. Vacía si no hay
-    // textura: esos materiales usan la blanca de relleno, que ya se presta por
-    // su cuenta (GpuResources::releaseMaterialImage) y NO debe entrar aquí.
+    // Content key of a material texture. From a file: the path. Embedded
+    // in the FBX: size + FNV-1a of the bytes, so two FBX with the same
+    // texture inside share an image, and the path does not count. Empty if there is no
+    // texture: those materials use the white filler, which is already lent out on
+    // its own (GpuResources::releaseMaterialImage) and must NOT go in here.
     inline std::string makeTextureKey(const std::string& path, const std::vector<uint8_t>& embedded,
                                       TextureKind kind, const std::string& settingsSuffix = {})
     {
         if (path.empty() && embedded.empty()) return {};
         const char tipo = kind == TextureKind::BaseColor ? 'c' : (kind == TextureKind::Normal ? 'n' : 'o');
-        // Los ajustes de importacion son de un FICHERO: sin ruta no hay sidecar.
-        // Por valor a proposito: una referencia ligada a un ternario que mezcla
-        // un temporal y un lvalue dependeria de la extension de vida del temporal.
+        // Import settings belong to a FILE: without a path there is no sidecar.
+        // By value on purpose: a reference bound to a ternary that mixes
+        // a temporary and an lvalue would depend on the temporary's lifetime extension.
         const std::string sufijo = path.empty() ? std::string() : settingsSuffix;
         if (!embedded.empty())
         {
@@ -33,17 +33,17 @@ namespace DonTopo
         return std::string(1, tipo) + ":" + path + sufijo;
     }
 
-    // Texturas de material compartidas con recuento de referencias. No sabe nada
-    // de la GPU: crear y destruir son del backend, que es lo que la deja probar
-    // sin device (shared_texture_cache_tests). Pocas entradas por escena, así
-    // que un vector lineal basta.
+    // Reference-counted shared material textures. It knows nothing about the GPU:
+    // creating and destroying belong to the backend, which is what lets it be tested
+    // without a device (shared_texture_cache_tests). Few entries per scene, so
+    // a linear vector is enough.
     template <typename Handle>
     class SharedTextureCache
     {
     public:
-        // El handle de `key`, creándolo con `create` solo la primera vez. Con
-        // clave vacía, o si `create` devuelve un handle vacío (Handle{}: no se
-        // pudo crear), no se guarda nada: no es de la caché.
+        // The handle of `key`, creating it with `create` only the first time. With an empty
+        // key, or if `create` returns an empty handle (Handle{}: it could not
+        // be created), nothing is stored: it does not belong to the cache.
         Handle acquire(const std::string& key, const std::function<Handle()>& create,
                        bool* createdOut = nullptr)
         {
@@ -61,9 +61,9 @@ namespace DonTopo
             return h;
         }
 
-        // Una referencia menos; a cero, fuera de la tabla y `destroy`. Un handle
-        // que no está (el relleno, o ya soltado) es un no-op: quien lo pidió
-        // sigue su camino de siempre.
+        // One reference less; at zero, out of the table and `destroy`. A handle
+        // that is not there (the filler, or already released) is a no-op: whoever asked for it
+        // goes on its usual way.
         void release(const Handle& h, const std::function<void(const Handle&)>& destroy)
         {
             for (size_t i = 0; i < m_entries.size(); i++)

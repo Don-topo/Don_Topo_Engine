@@ -1,32 +1,32 @@
 #version 450
 
-// Forward+ TILED. Un workgroup por tile de 16x16 pixeles de la resolucion
-// INTERNA del render (m_renderExtent, que con SSAA no es la de la ventana).
-// Cada invocacion lee su texel del depth pre-pass que ya graba recordSsaoPass,
-// se reduce el maximo del tile y con el se recorta el plano lejano del frustum
-// del tile antes de probar las esferas de las luces.
+// TILED Forward+. One workgroup per 16x16 pixel tile of the INTERNAL
+// render resolution (m_renderExtent, which with SSAA is not the window's).
+// Each invocation reads its texel from the depth pre-pass that recordSsaoPass already records,
+// the tile's maximum is reduced and with it the far plane of the tile's
+// frustum is trimmed before testing the lights' spheres.
 //
-// El plano CERCANO se queda en zNear a proposito, sin usar el minimo del tile:
-// el pre-pass no dibuja mallas skinned, asi que un personaje por delante de la
-// geometria estatica quedaria fuera del rango [min, max] y perderia luces. Con
-// [zNear, maxDelTile] la cota es correcta para TODO fragmento visible: uno
-// skinned visible esta por delante de la profundidad estatica de su texel, que
-// ya entra en el maximo.
+// The NEAR plane stays at zNear on purpose, without using the tile's minimum:
+// the pre-pass does not draw skinned meshes, so a character in front of the
+// static geometry would fall outside the [min, max] range and lose lights. With
+// [zNear, tile's max] the bound is correct for EVERY visible fragment: a visible
+// skinned one is in front of the static depth of its texel, which
+// already enters the maximum.
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-// Debe coincidir con Renderer::kFpMaxLights.
+// It must match Renderer::kFpMaxLights.
 #define FP_MAX_LIGHTS 256
 #define FP_MASK_WORDS 8     // FP_MAX_LIGHTS / 32
 #define FP_THREADS    256   // local_size_x * local_size_y
 
 struct FpLight
 {
-    vec4 posRadius;     // xyz mundo, w radio
-    vec4 color;         // rgb color, a intensidad
+    vec4 posRadius;     // xyz world, w radius
+    vec4 color;         // rgb color, a intensity
     vec4 viewPosR;      // xyz view space, w radio
-    vec4 direction;     // xyz dir, w tipo (0 point, 1 spot, 2 directional, 3 area)
-    vec4 params;        // range, cos interior, cos exterior, ancho
+    vec4 direction;     // xyz dir, w type (0 point, 1 spot, 2 directional, 3 area)
+    vec4 params;        // range, inner cos, outer cos, width
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer FpParamsBuf {
@@ -64,7 +64,7 @@ layout(push_constant) uniform FpPush {
 shared uint s_maxDepth;
 shared uint s_mask[FP_MASK_WORDS];
 
-// RH_ZO: d = (p22*z + p32) / -z  con z negativa en view space.
+// RH_ZO: d = (p22*z + p32) / -z  with z negative in view space.
 float viewDepthFromZ(float d)
 {
     return pc.p32 / (d + pc.p22);
@@ -86,17 +86,17 @@ void main()
     {
         float d  = texelFetch(depthTex, texel, 0).r;
         float vd = clamp(viewDepthFromZ(d), fp.zNear, fp.zFar);
-        // Las profundidades son positivas: el orden de los float coincide con el
-        // de su patron de bits, asi que atomicMax sobre uint vale como maximo.
+        // The depths are positive: the order of the floats matches that of
+        // their bit pattern, so atomicMax over uint works as a maximum.
         atomicMax(s_maxDepth, floatBitsToUint(vd));
     }
     barrier();
 
     float tileFar = max(uintBitsToFloat(s_maxDepth), fp.zNear);
 
-    // Planos laterales del tile en view space. El tile va en pixeles de la
-    // resolucion interna; el ultimo de cada fila/columna puede salirse y se
-    // recorta a la pantalla.
+    // Side planes of the tile in view space. The tile is in pixels of the
+    // internal resolution; the last one of each row/column may stick out and is
+    // clamped to the screen.
     float ts  = float(fp.tileSize);
     float x0  = float(tileX) * ts;
     float x1  = min(x0 + ts, float(pc.screenW));
@@ -108,9 +108,9 @@ void main()
     float ny0 = 2.0 * y0 / float(pc.screenH) - 1.0;
     float ny1 = 2.0 * y1 / float(pc.screenH) - 1.0;
 
-    // x = k * viewDepth con k = ndc / p00. p11 llega NEGATIVO (el Y-flip de
-    // Vulkan va en la proyeccion), asi que las dos k se ordenan con min/max en
-    // vez de darlas por ordenadas.
+    // x = k * viewDepth with k = ndc / p00. p11 arrives NEGATIVE (Vulkan's Y-flip
+    // is in the projection), so the two k are ordered with min/max instead
+    // of assuming they are already ordered.
     float kxa  = nx0 / pc.p00;
     float kxb  = nx1 / pc.p00;
     float kya  = ny0 / pc.p11;
@@ -118,7 +118,7 @@ void main()
     float kxLo = min(kxa, kxb), kxHi = max(kxa, kxb);
     float kyLo = min(kya, kyb), kyHi = max(kya, kyb);
 
-    // Con viewDepth = -z, "x >= kxLo*viewDepth" es "x + kxLo*z >= 0".
+    // With viewDepth = -z, "x >= kxLo*viewDepth" is "x + kxLo*z >= 0".
     vec3 n0 = normalize(vec3( 1.0,  0.0,  kxLo));
     vec3 n1 = normalize(vec3(-1.0,  0.0, -kxHi));
     vec3 n2 = normalize(vec3( 0.0,  1.0,  kyLo));
@@ -129,8 +129,8 @@ void main()
         vec3  c  = lights[i].viewPosR.xyz;
         float r  = lights[i].viewPosR.w;
         float vd = -c.z;
-        // Una directional no tiene posicion ni alcance: ilumina TODO, asi que
-        // entra en cada tile sin pasar por los planos.
+        // A directional has neither position nor reach: it lights EVERYTHING, so it
+        // enters each tile without going through the planes.
         bool inside = (int(lights[i].direction.w + 0.5) == 2)
                    || ((vd + r >= fp.zNear) && (vd - r <= tileFar)
                    && (dot(n0, c) >= -r) && (dot(n1, c) >= -r)
@@ -139,10 +139,10 @@ void main()
     }
     barrier();
 
-    // Una sola invocacion vuelca la mascara EN ORDEN ASCENDENTE de indice. Es lo
-    // que hace que la lista salga igual que la del clustered, y con ella la suma
-    // de luces del fragment shader: si se emitiera en el orden en que ganan los
-    // atomicos, las dos rutas sumarian los mismos terminos en distinto orden.
+    // A single invocation dumps the mask IN ASCENDING INDEX ORDER. It is what
+    // makes the list come out the same as the clustered one's, and with it the sum
+    // of lights in the fragment shader: if it were emitted in the order in which the
+    // atomics win, the two paths would sum the same terms in a different order.
     if (gl_LocalInvocationIndex == 0u)
     {
         uint base  = cell * fp.maxPerCell;

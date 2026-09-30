@@ -8,9 +8,9 @@ namespace DonTopo {
 void InstanceBuffers::destroyBuffer(const Context& ctx, int frame)
 {
     if (m_buffers[frame] == VK_NULL_HANDLE) return;
-    // El mapeo persistente muere con la memoria; no hace falta unmap
-    // explícito, pero sí olvidar el puntero para no escribir en él si algo
-    // fallara entre el destroy y el create.
+    // The persistent mapping dies with the memory; no explicit unmap is
+    // needed, but the pointer must be forgotten so as not to write through it if something
+    // failed between the destroy and the create.
     m_mapped[frame] = nullptr;
     vkDestroyBuffer(ctx.gpu.device(), m_buffers[frame], nullptr);
     vkFreeMemory(ctx.gpu.device(), m_memory[frame], nullptr);
@@ -36,10 +36,10 @@ void InstanceBuffers::create(const Context& ctx)
     if (vkCreateDescriptorSetLayout(ctx.gpu.device(), &dslInfo, nullptr, &m_descLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create instance descriptor set layout!");
 
-    // Pool propio y no la cadena de pools compartidos del Renderer: esa se
-    // reparte por objeto y solo tiene UNIFORM_BUFFER y COMBINED_IMAGE_SAMPLER.
-    // Aquí hacen falta exactamente kFrames sets con un STORAGE_BUFFER cada uno,
-    // y los sets viven todo el proceso (no se liberan nunca).
+    // Own pool and not the Renderer's chain of shared pools: that one is
+    // handed out per object and only has UNIFORM_BUFFER and COMBINED_IMAGE_SAMPLER.
+    // Here we need exactly kFrames sets with one STORAGE_BUFFER each,
+    // and the sets live for the whole process (they are never freed).
     VkDescriptorPoolSize poolSize{};
     poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSize.descriptorCount = kFrames;
@@ -63,12 +63,12 @@ void InstanceBuffers::create(const Context& ctx)
     if (vkAllocateDescriptorSets(ctx.gpu.device(), &allocInfo, m_descSets) != VK_SUCCESS)
         throw std::runtime_error("failed to allocate instance descriptor sets!");
 
-    // Los buffers de TODOS los frames, no solo el actual: el descriptor set de
-    // cada frame tiene que apuntar a algo válido desde el primer draw.
+    // The buffers of ALL frames, not just the current one: each frame's descriptor set
+    // has to point at something valid from the first draw.
     //
-    // Antes esto guardaba y restauraba el m_currentFrame del Renderer para poder
-    // llamar a ensureInstanceCapacity, que leía el frame de ahí. Con el frame
-    // como argumento el apaño sobra.
+    // This used to save and restore the Renderer's m_currentFrame in order to
+    // call ensureInstanceCapacity, which read the frame from there. With the frame
+    // as an argument the workaround is unnecessary.
     for (int i = 0; i < kFrames; i++)
         ensureCapacity(ctx, i, kInitialCapacity);
 }
@@ -80,7 +80,7 @@ void InstanceBuffers::destroy(const Context& ctx)
 
     if (m_descPool != VK_NULL_HANDLE)
     {
-        // Los sets se van con el pool; no hay vkFreeDescriptorSets que valga.
+        // The sets go away with the pool; vkFreeDescriptorSets does not apply here.
         vkDestroyDescriptorPool(ctx.gpu.device(), m_descPool, nullptr);
         m_descPool = VK_NULL_HANDLE;
     }
@@ -91,7 +91,7 @@ void InstanceBuffers::destroy(const Context& ctx)
         vkDestroyDescriptorSetLayout(ctx.gpu.device(), m_descLayout, nullptr);
         m_descLayout = VK_NULL_HANDLE;
     }
-    // El cursor apuntaba a memoria que acaba de morir.
+    // The cursor pointed at memory that has just died.
     m_cur.reset(nullptr, 0);
 }
 
@@ -99,8 +99,8 @@ void InstanceBuffers::ensureCapacity(const Context& ctx, int frame, uint32_t mat
 {
     if (matrices <= m_capacity[frame]) return;
 
-    // Duplicar en vez de ajustar al pelo: instanciar un objeto por frame
-    // (scripts Lua) no debe recrear el buffer en cada uno.
+    // Double the size instead of fitting it tightly: instancing one object per frame
+    // (Lua scripts) must not recreate the buffer every frame.
     uint32_t capacity = m_capacity[frame] ? m_capacity[frame] : kInitialCapacity;
     while (capacity < matrices) capacity *= 2;
 
@@ -128,7 +128,7 @@ void InstanceBuffers::ensureCapacity(const Context& ctx, int frame, uint32_t mat
         throw std::runtime_error("failed to allocate instance buffer memory!");
     vkBindBufferMemory(ctx.gpu.device(), m_buffers[frame], m_memory[frame], 0);
 
-    // Mapeo persistente, como los uniform buffers: se escribe cada frame.
+    // Persistent mapping, like the uniform buffers: it is written every frame.
     vkMapMemory(ctx.gpu.device(), m_memory[frame], 0, size, 0, &m_mapped[frame]);
     m_capacity[frame] = capacity;
 
@@ -150,8 +150,8 @@ void InstanceBuffers::ensureCapacity(const Context& ctx, int frame, uint32_t mat
 void InstanceBuffers::beginFrame(const Context& ctx, int frame, uint32_t matrices)
 {
     ensureCapacity(ctx, frame, matrices);
-    // Despues de ensureCapacity, no antes: crecer recrea el buffer y el puntero
-    // mapeado de antes queda colgando.
+    // After ensureCapacity, not before: growing recreates the buffer and the previously
+    // mapped pointer is left dangling.
     m_cur.reset((glm::mat4*)m_mapped[frame], m_capacity[frame]);
 }
 

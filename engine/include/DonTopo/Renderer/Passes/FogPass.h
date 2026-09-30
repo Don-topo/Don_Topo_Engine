@@ -9,40 +9,40 @@ namespace DonTopo {
 class GpuDevice;
 class RendererState;
 
-// Niebla volumetrica. El pase entero -pipeline, descriptor sets, queries de
-// tiempo y grabacion- vive aqui; el Renderer sigue siendo el dueno de la
-// instancia y el que decide CUANDO se llama a cada cosa.
+// Volumetric fog. The whole pass (pipeline, descriptor sets, time queries
+// and recording) lives here; the Renderer remains the owner of the
+// instance and the one that decides WHEN each thing is called.
 class FogPass {
 public:
-    // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
+    // It must match Renderer::MAX_FRAMES (checked with static_assert in Renderer.cpp).
     static constexpr int kFramesInFlight = 2;
 
-    // Lo que el pase necesita del Renderer y NO es suyo. Se construye en el
-    // sitio de llamada y se pasa por referencia: nada de guardarlo, que los
-    // handles se recrean con el swapchain.
+    // What the pass needs from the Renderer and is NOT its own. It is built at the
+    // call site and passed by reference: do not store it, since the
+    // handles are recreated with the swapchain.
     struct Context {
         GpuDevice&           gpu;
         const RendererState& state;
-        // Resolucion INTERNA del render (la del HDR), no la del swapchain.
+        // INTERNAL render resolution (the HDR's), not the swapchain's.
         const VkExtent2D&    renderExtent;
         int                  currentFrame;
-        // La niebla no tiene imagen propia: reescribe el HDR in situ.
+        // The fog has no image of its own: it rewrites the HDR in place.
         const VkImage*       hdrImage;       // [kFramesInFlight]
         const VkImageView*   hdrView;        // [kFramesInFlight]
         const VkImageView*   ssaoDepthView;  // [kFramesInFlight]
         VkSampler            ssaoSampler;
-        // El UBO del frame: matriz de vista, cortes y matrices de cascada.
+        // The frame's UBO: view matrix, cuts and cascade matrices.
         const VkBuffer*      uniformBuffers; // [kFramesInFlight]
-        // El mismo par vista+sampler que muestrea pbr.frag.
+        // The same view+sampler pair that pbr.frag samples.
         VkImageView          shadowView;
         VkSampler            shadowSampler;
-        // La luz key es m_lights[0]; sin luces la niebla solo absorbe.
+        // The key light is m_lights[0]; without lights the fog only absorbs.
         const std::vector<Light>& lights;
-        // A donde apunta una luz de PUNTO. El MISMO valor que recibieron las
-        // cascadas este frame: si los dos no coinciden, el in-scattering apunta
-        // a un lado y el shadow map esta construido hacia otro.
+        // Where a POINT light aims. The SAME value the cascades received this
+        // frame: if the two do not match, the in-scattering points to one side
+        // and the shadow map is built towards another.
         glm::vec3            sceneCenter;
-        // Los resolvio el bloom; aqui solo se leen.
+        // They were resolved by the bloom; here they are only read.
         bool                 timestampsSupported;
         float                timestampPeriod;
     };
@@ -51,23 +51,23 @@ public:
     FogPass(const FogPass&)            = delete;
     FogPass& operator=(const FogPass&) = delete;
 
-    // Lo que no depende del tamano: layout, pool, pipeline y el pool de
-    // queries. Una sola vez, en el init.
+    // What does not depend on the size: layout, pool, pipeline and the query
+    // pool. Only once, in init.
     void createPipelines(const Context& ctx);
-    // Contrapartida de createPipelines, en el cleanup.
+    // Counterpart of createPipelines, in cleanup.
     void destroyPipelines(const Context& ctx);
-    // Los sets van con el swapchain: referencian hdrView y ssaoDepthView, que
-    // se recrean con el.
+    // The sets go with the swapchain: they reference hdrView and ssaoDepthView, which
+    // are recreated with it.
     void createSets(const Context& ctx);
     void destroySets();
-    // Un solo dispatch que reescribe el HDR in situ. Va DESPUES del pass de
-    // escena y del SSR -necesita el color ya iluminado y con los reflejos
-    // sumados- y ANTES del bloom, para que la niebla florezca y pase por el
-    // tonemap como el resto de la imagen.
+    // A single dispatch that rewrites the HDR in place. It goes AFTER the scene
+    // pass and the SSR (it needs the already lit color with the reflections
+    // added) and BEFORE the bloom, so that the fog blooms and goes through the
+    // tonemap like the rest of the image.
     void record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& view, const glm::mat4& proj);
 
-    // Coste GPU del dispatch en ms. 0 si esta apagada o el dispositivo no
-    // soporta timestamps.
+    // GPU cost of the dispatch in ms. 0 if it is off or the device does not
+    // support timestamps.
     float gpuMs() const { return m_gpuMs; }
 
 private:
@@ -76,9 +76,9 @@ private:
     VkPipelineLayout      m_pipelineLayout        = VK_NULL_HANDLE;
     VkPipeline            m_pipeline              = VK_NULL_HANDLE;
     VkDescriptorSet       m_sets[kFramesInFlight] = {};
-    // Dos queries por frame que acotan el unico dispatch. El depth pre-pass
-    // NO entra aqui: ya lo miden el SSAO o el SSR cuando son ellos quienes lo
-    // piden.
+    // Two queries per frame that bound the single dispatch. The depth pre-pass
+    // does NOT count here: SSAO or SSR already measure it when they are the ones
+    // requesting it.
     VkQueryPool           m_queryPool                  = VK_NULL_HANDLE;
     bool                  m_queryPending[kFramesInFlight] = {};
     float                 m_gpuMs                      = 0.0f;

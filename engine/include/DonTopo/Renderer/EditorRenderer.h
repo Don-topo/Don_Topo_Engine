@@ -29,43 +29,43 @@ namespace DonTopo
     struct DecodedImage;
     struct UiCanvasBinding;
 
-    // Lo que el editor necesita de un backend de render, por encima de los
-    // ajustes de calidad que ya comparten los dos (RendererState).
+    // What the editor needs from a render backend, on top of the
+    // quality settings that both already share (RendererState).
     //
-    // Existe para que los paneles no hablen con el Renderer de Vulkan por su
-    // nombre: cualquier backend que implemente esto puede llevar el editor. Lo
-    // que no sabe hacer lo dice devolviendo cero o no haciendo nada — un
-    // backend sin sondas de reflexión responde 0 sondas, y el panel lo enseña
-    // tal cual en vez de esconder la sección.
+    // It exists so that the panels do not talk to the Vulkan Renderer by its
+    // name: any backend that implements this can drive the editor. What
+    // it does not know how to do it says by returning zero or doing nothing: a
+    // backend without reflection probes answers 0 probes, and the panel shows it
+    // as is instead of hiding the section.
     //
-    // Lo que NO entra aquí: el ciclo de vida (init, drawFrame, shutdown) ni los
-    // handles nativos. Eso lo lleva quien construye el backend, que sabe cuál
-    // es; el editor solo consume la escena, el viewport y las métricas.
+    // What does NOT go in here: the lifecycle (init, drawFrame, shutdown) nor the native
+    // handles. That is carried by whoever builds the backend, which knows which one
+    // it is; the editor only consumes the scene, the viewport and the metrics.
     class EditorRenderer : public RendererState
     {
         public:
             virtual ~EditorRenderer() = default;
 
-            // ── Ciclo de vida ───────────────────────────────────────────────
-            // Lo que necesita el RUNTIME para llevar un backend sin saber cuál
-            // es. NO son puros: llevan el comportamiento de "este backend no
-            // hace eso", que es lo correcto para un splash que no existe o para
-            // un backend que no distingue las dos fases de arranque. El editor
-            // no pasa por aquí — lo construye main, que sí sabe qué backend hay.
+            // ── Lifecycle ───────────────────────────────────────────────────
+            // What the RUNTIME needs to drive a backend without knowing which one
+            // it is. They are NOT pure: they carry the "this backend does not
+            // do that" behavior, which is right for a splash that does not exist or for
+            // a backend that does not distinguish the two startup phases. The editor
+            // does not go through here; it is built by main, which does know which backend there is.
             //
-            // Fase 1: poder presentar. Fase 2: lo que depende de las mallas
-            // (auto-fit de la cámara y recursos de escena). Un backend que lo
-            // haga todo de una vez implementa la primera y deja la segunda.
+            // Phase 1: being able to present. Phase 2: what depends on the meshes
+            // (camera auto-fit and scene resources). A backend that does
+            // everything at once implements the first and leaves the second.
             virtual void initPresentation(Window& window) { (void)window; }
             virtual void initSceneResources(const std::vector<Mesh>& meshes) { (void)meshes; }
             virtual void initSkybox(const std::array<std::string, 6>& facePaths) { (void)facePaths; }
 
-            // Sin ventana de editor: el que no monte ImGui por su cuenta no
-            // tiene nada que apagar.
+            // No editor window: one that does not set up ImGui on its own has
+            // nothing to shut down.
             virtual void setHeadless(bool headless) { (void)headless; }
 
-            // Splash de arranque. false = no hay, y quien llama sigue sin él en
-            // vez de quedarse esperando a un fundido que nunca llega.
+            // Startup splash. false = there is none, and the caller carries on without it instead
+            // of waiting for a fade that never arrives.
             virtual bool beginSplash(const std::string& logoPath) { (void)logoPath; return false; }
             virtual void drawSplashFrame(float alpha) { (void)alpha; }
 
@@ -73,13 +73,13 @@ namespace DonTopo
             virtual void notifyResize() {}
             virtual void shutdown() {}
 
-            // ¿Queda algo por subir del camino asíncrono? El que sube síncrono
-            // no tiene cola y responde que no.
+            // Is anything left to upload from the asynchronous path? One that uploads synchronously
+            // has no queue and answers no.
             virtual bool hasPendingUploads() const { return false; }
 
-            // Atlas y fuentes de la UI 2D. El dueño es el backend; quien las
-            // pide se queda con el puntero. nullptr = no se pudo cargar, y el
-            // widget se dibuja con su color plano.
+            // Atlas and fonts of the 2D UI. The owner is the backend; whoever
+            // asks for them keeps the pointer. nullptr = it could not be loaded, and the
+            // widget is drawn with its flat color.
             virtual UiTextureAtlas* loadUiAtlas(const std::string& path)
             {
                 (void)path;
@@ -92,62 +92,62 @@ namespace DonTopo
                 return nullptr;
             }
 
-            // ── Escena ──────────────────────────────────────────────────────
-            // Índice de render del objeto, o -1. decoded son los píxeles que un
-            // worker ya descomprimió; nullptr es el camino síncrono.
+            // ── Scene ───────────────────────────────────────────────────────
+            // Render index of the object, or -1. decoded are the pixels a
+            // worker already decompressed; nullptr is the synchronous path.
             virtual int  addStaticMesh(const Mesh& mesh,
                                        const std::vector<DecodedImage>* decoded = nullptr) = 0;
             virtual void rebuildSkinnedMesh(int index, const SkinnedMesh& mesh)            = 0;
-            // Rehace los recursos de GPU de un mesh ESTÁTICO ya registrado, sin
-            // moverle el índice de render: transform, visibilidad y SSR se
-            // conservan, y los comandos de undo que guardan ese índice siguen
-            // valiendo. Es lo que usa el cambio de textura desde Properties.
+            // Rebuilds the GPU resources of an already registered STATIC mesh, without
+            // moving its render index: transform, visibility and SSR are
+            // kept, and the undo commands that store that index remain
+            // valid. It is what the texture change from Properties uses.
             //
-            // Los objetos que compartían malla y material con este NO cambian
-            // de aspecto: al cambiar el material cambia la clave de dedup, así
-            // que este objeto se separa del grupo y los demás se quedan con la
-            // entrada de antes, intacta.
+            // Objects that shared mesh and material with this one do NOT change
+            // appearance: changing the material changes the dedup key, so
+            // this object splits off from the group and the others keep the
+            // previous entry, intact.
             //
-            // `mesh` es el mismo mesh ya registrado CON EL MATERIAL CAMBIADO, y
-            // eso es lo único que esto rehace: el backend da la geometría por
-            // buena y reaprovecha la que ya subió. Cambiar los vértices por aquí
-            // NO está soportado (ver el aviso de Renderer::rebuildStaticMesh);
-            // para eso está volver a registrar el objeto.
+            // `mesh` is the same already registered mesh WITH THE MATERIAL CHANGED, and
+            // that is the only thing this rebuilds: the backend takes the geometry as
+            // good and reuses what it already uploaded. Changing the vertices through here
+            // is NOT supported (see the warning of Renderer::rebuildStaticMesh);
+            // for that, re-register the object.
             virtual void rebuildStaticMesh(int index, const Mesh& mesh)                    = 0;
             virtual void registerGameObject(GameObject* node)                              = 0;
             virtual void removeGameObject(GameObject* node)                                = 0;
             virtual void removeMeshComponent(GameObject* node)                             = 0;
 
-            // Textura que no se pudo cargar: se sustituye por la de "falta esto"
-            // para que el objeto siga viéndose y el fallo se note.
+            // A texture that could not be loaded: it is replaced by the "something is missing"
+            // one so that the object stays visible and the failure is noticed.
             enum class TextureSlot { Diffuse, Normal, MetallicRoughness };
             virtual void replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot) = 0;
 
-            // Cierra los envíos pendientes y espera: lo usan las transiciones
-            // que tienen que ver el resultado en ESTE frame (deshacer un
-            // Create, salir de Play).
+            // Closes the pending submissions and waits: used by the transitions
+            // that need to see the result in THIS frame (undoing a
+            // Create, leaving Play).
             virtual void flushUploadsAndWait() = 0;
 
-            // Cierra el lote de subidas del frame sin esperar: lo que aterrice
-            // se verá en cuanto su fence señale.
+            // Closes the frame's upload batch without waiting: whatever lands
+            // will be seen as soon as its fence signals.
             virtual void flushPendingUploads() = 0;
 
-            // Recalcula el rango de profundidad con lo que hay cargado. Sin
-            // esto, cambiar la escena de arranque recorta el fondo.
+            // Recomputes the depth range with what is loaded. Without
+            // this, changing the startup scene clips the background.
             virtual void refitCameraRange() = 0;
 
-            // Qué se dibuja con contorno; -1 en ambos para ninguno.
+            // What is drawn with an outline; -1 in both for none.
             virtual void setOutlineTarget(int staticIndex, int skinnedIndex) = 0;
 
-            // ── Escena del frame ────────────────────────────────────────────
-            // Lo que el bucle principal fija cada vuelta: con qué cámara se
-            // dibuja, qué luces hay y dónde está cada objeto.
+            // ── Frame scene ─────────────────────────────────────────────────
+            // What the main loop sets on each pass: which camera is used to
+            // draw, which lights there are and where each object is.
             virtual void setScene(Scene* scene)                   = 0;
             virtual void setSceneRoot(GameObject* root)           = 0;
             virtual void setCamera(const Camera& camera)          = 0;
             virtual void setLights(const std::vector<Light>& lights) = 0;
-            // Radio de alcance por luz, en el mismo orden que setLights. Lo usa
-            // el reparto por celdas; vacío = el radio global.
+            // Reach radius per light, in the same order as setLights. Used by
+            // the per-cell split; empty = the global radius.
             virtual void setLightRadii(const std::vector<float>& radii) = 0;
 
             virtual int  addSkinnedMesh(const SkinnedMesh& mesh,
@@ -157,77 +157,77 @@ namespace DonTopo
             virtual void setSkinnedTransform(int index, const glm::mat4& transform)   = 0;
             virtual void setObjectMeshVisible(size_t objectIndex, bool visible)       = 0;
             virtual void setSkinnedMeshVisible(int index, bool visible)               = 0;
-            // Cuánto refleja el objeto; 0 = nada.
+            // How much the object reflects; 0 = nothing.
             virtual void setObjectSsr(size_t objectIndex, float strength) = 0;
             virtual void setSkinnedSsr(int index, float strength)         = 0;
 
-            // Factores PBR del objeto, sin subir ni rehacer NADA: son dos floats
-            // por objeto que viajan por push constant, igual que la fuerza de
-            // SSR de arriba. Ese es todo el motivo de que exista — el camino
-            // anterior (rebuildStaticMesh) hacía waitForGpu y resubía tres
-            // texturas, así que un slider solo podía aplicar al soltar; por aquí
-            // se puede arrastrar en vivo.
+            // PBR factors of the object, without uploading or rebuilding ANYTHING: they are two floats
+            // per object that travel by push constant, like the SSR strength
+            // above. That is the whole reason it exists: the previous path
+            // (rebuildStaticMesh) did waitForGpu and re-uploaded three
+            // textures, so a slider could only apply on release; through here
+            // it can be dragged live.
             //
-            // Si el material del objeto trae MAPA ORM, el backend ignora estos
-            // valores y deja los dos en 1.0: manda la textura, que es la misma
-            // regla que ya aplican addStaticMesh y Vulkan al registrar. Llamar
-            // aquí con un mapa puesto no es un error, simplemente no hace nada.
+            // If the object's material brings an ORM MAP, the backend ignores these
+            // values and leaves both at 1.0: the texture rules, which is the same
+            // rule that addStaticMesh and Vulkan already apply when registering. Calling
+            // here with a map set is not an error, it simply does nothing.
             //
-            // Índice fuera de rango: no-op, como los setters de arriba.
+            // Index out of range: no-op, like the setters above.
             virtual void setObjectMaterialFactors(size_t objectIndex, float metallic,
                                                   float roughness) = 0;
 
-            // Avanza el tiempo de animación de un personaje, o fija el que ya
-            // calculó un Animator en CPU.
+            // Advances the animation time of a character, or sets the one that an
+            // Animator already computed on the CPU.
             virtual void updateAnimation(int index, float deltaTime)                    = 0;
             virtual void setAnimationState(int index, uint32_t clipIndex, float animTime) = 0;
-            // Cross-fade: los DOS clips en vuelo y el peso de la mezcla.
-            // weight 0 = solo prevClip, 1 = solo clipIndex. Es un superconjunto
-            // de setAnimationState (que equivale a weight 1), pero se queda
-            // aparte para no tocar la firma que ya usan los objetos sin mezcla.
-            // Desde la fila 13 del audit de animación es la POSE entera: hasta 4
-            // muestras (clip, tiempo, peso), el peso de la pose congelada y la
-            // petición de congelar, más el modo de raíz (ver AnimationPose).
+            // Cross-fade: the TWO clips in flight and the blend weight.
+            // weight 0 = prevClip only, 1 = clipIndex only. It is a superset
+            // of setAnimationState (which is equivalent to weight 1), but it stays
+            // separate so as not to touch the signature already used by objects without a blend.
+            // Since row 13 of the animation audit it is the whole POSE: up to 4
+            // samples (clip, time, weight), the weight of the frozen pose and the
+            // freeze request, plus the root mode (see AnimationPose).
             virtual void setAnimationPose(int index, const AnimationPose& pose) = 0;
-            // IK del frame (fila 15 del audit de animación): hasta 4
-            // restricciones ya resueltas contra la escena, con el objetivo y el
-            // pole en espacio del MODELO. count 0 = sin IK, y hay que llamarlo
-            // igual para apagar la del frame anterior.
+            // IK of the frame (row 15 of the animation audit): up to 4
+            // constraints already resolved against the scene, with the target and the
+            // pole in MODEL space. count 0 = no IK, and it has to be called
+            // all the same to turn off the previous frame's.
             virtual void setAnimationIk(int index, const AnimationIk& ik) = 0;
 
-            // Suelta lo que quedó pendiente de borrar cuando la GPU lo permita.
+            // Releases what was left pending deletion when the GPU allows it.
             virtual void tickDeferredDeletes() = 0;
 
             // ── Viewport ────────────────────────────────────────────────────
             virtual void     setViewportSize(uint32_t width, uint32_t height) = 0;
             virtual uint32_t renderWidth() const                              = 0;
             virtual uint32_t renderHeight() const                             = 0;
-            // Tamano de SALIDA. Con SSAA no es el del render interno, y es el
-            // espacio en el que se resuelve el canvas de UI (buildDrawData) y en
-            // el que hay que meterle el raton a UiCanvas::updateInput.
+            // OUTPUT size. With SSAA it is not the internal render's, and it is the
+            // space in which the UI canvas is resolved (buildDrawData) and in
+            // which the mouse has to be fed to UiCanvas::updateInput.
             virtual uint32_t uiWidth() const                                  = 0;
             virtual uint32_t uiHeight() const                                 = 0;
 
-            // Identificador de un atlas ya cargado PARA LA INTERFAZ (lo que
-            // ImGui::Image entiende por textura), o 0 si ese atlas no está
-            // subido. Lo pide el editor de sprites, que necesita enseñar la
-            // imagen sobre la que se dibujan los sub-rects. El valor lo fabrica
-            // cada backend a su manera y se cachea: registrar la misma textura
-            // en cada frame agota el pool de descriptores en segundos.
+            // Identifier of an already loaded atlas FOR THE INTERFACE (what
+            // ImGui::Image understands as a texture), or 0 if that atlas is not
+            // uploaded. Requested by the sprite editor, which needs to show the
+            // image the sub-rects are drawn on. The value is made by
+            // each backend in its own way and cached: registering the same texture
+            // every frame exhausts the descriptor pool in seconds.
             virtual uint64_t uiAtlasTextureId(const UiTextureAtlas* atlas)    = 0;
 
-            // Atlas compartido de miniaturas del Content Browser: UNA textura de
-            // kThumbAtlasSize² con un solo descriptor de ImGui (los pools de ImGui
-            // son de 48 sets en Vulkan y 16 huecos en D3D12: una textura por
-            // miniatura no cabe). No son puros: un backend sin soporte responde
-            // "no", y el grid se queda con su icono de color.
+            // Shared thumbnail atlas of the Content Browser: ONE texture of
+            // kThumbAtlasSize² with a single ImGui descriptor (ImGui's pools
+            // are 48 sets in Vulkan and 16 slots in D3D12: one texture per
+            // thumbnail does not fit). They are not pure: a backend without support answers
+            // "no", and the grid keeps its colored icon.
             //
-            // Id del atlas (lo que ImGui::AddImage entiende por textura), o 0 si el
-            // backend no lo soporta o no pudo crearlo. Se crea en la primera
-            // llamada y despues devuelve siempre el mismo valor.
+            // Atlas id (what ImGui::AddImage understands as a texture), or 0 if the
+            // backend does not support it or could not create it. It is created on the first
+            // call and afterwards always returns the same value.
             virtual uint64_t uiThumbnailAtlasId() { return 0; }
-            // Copia las casillas al atlas, TODAS en una sola espera de GPU. false =
-            // no se pudo y no se copió nada fiable (el lote entero falla).
+            // Copies the cells into the atlas, ALL of them in a single GPU wait. false =
+            // it could not be done and nothing reliable was copied (the whole batch fails).
             virtual bool uploadUiThumbnails(const ThumbnailTile* tiles, size_t count)
             {
                 (void)tiles;
@@ -237,132 +237,131 @@ namespace DonTopo
 
             virtual float    viewportAspect() const                           = 0;
 
-            // La capa de interfaz que dibuja encima. El backend la llama dentro
-            // del frame; el editor la fija una vez.
+            // The interface layer drawn on top. The backend calls it inside
+            // the frame; the editor sets it once.
             virtual void setUiLayer(UiLayer* ui) = 0;
 
-            // Árbol de la interfaz 2D del juego, el de PANTALLA. Un backend que
-            // todavía no la dibuje devuelve el suyo vacío: el editor lo edita
-            // igual.
+            // Tree of the game's 2D interface, the SCREEN one. A backend that
+            // does not draw it yet returns its own empty one: the editor edits it
+            // all the same.
             virtual UiCanvas& uiCanvas() = 0;
 
-            // TODOS los canvas de PANTALLA, en orden de PRIORIDAD DE INPUT: el
-            // de más arriba primero (el último que se dibuja). Es lo que hace
-            // falta para repartir el ratón y el teclado entre varios canvas con
-            // dispatchUiInput, y para que el clic del editor seleccione lo que
-            // el usuario ve ENCIMA.
+            // ALL the SCREEN canvases, in INPUT PRIORITY order: the topmost
+            // first (the last one drawn). It is what is needed to split the mouse and keyboard
+            // among several canvases with dispatchUiInput, and so that the editor's click
+            // selects what the user sees ON TOP.
             //
-            // uiCanvas() no vale para eso: devuelve UNO solo (el primero de
-            // pantalla), y con él los botones de un segundo canvas se dibujan
-            // pero no tienen ni hover, ni colores de estado, ni Click.
+            // uiCanvas() is no good for that: it returns just ONE (the first screen
+            // one), and with it the buttons of a second canvas are drawn
+            // but have no hover, no state colors, no Click.
             virtual void screenUiCanvases(std::vector<UiCanvas*>& out) = 0;
 
-            // El canvas de UN GameObject, por su id, o nullptr si no tiene. Lo
-            // usa el gizmo del canvas SELECCIONADO: `uiCanvas()` le daba el
-            // PRIMERO de pantalla, así que seleccionar un segundo canvas pintaba
-            // el rect del primero.
+            // The canvas of ONE GameObject, by its id, or nullptr if it has none. Used
+            // by the gizmo of the SELECTED canvas: `uiCanvas()` gave it the
+            // FIRST screen one, so selecting a second canvas painted
+            // the first one's rect.
             //
-            // Va aparte de screenUiCanvases y no dentro porque aquella alimenta a
-            // dispatchUiInput, cuya firma es del core de UI
-            // (`vector<UiCanvas*>`): meterle el ownerId obligaría a que el core
-            // conociera los tipos del Renderer, o a desempaquetar una segunda
-            // lista por frame en los tres bucles.
+            // It goes apart from screenUiCanvases and not inside it because that one feeds
+            // dispatchUiInput, whose signature belongs to the UI core
+            // (`vector<UiCanvas*>`): putting the ownerId in it would force the core to
+            // know the Renderer's types, or unpacking a second
+            // list per frame in the three loops.
             virtual const UiCanvas* uiCanvasOf(uint64_t ownerId) const = 0;
 
-            // Monta el árbol vivo de CADA canvas de la escena. Sustituye al
-            // collect + syncUiWidgets que antes repetían los tres bucles
-            // (runtime y sandbox x2) — tres copias de lo mismo es como se
-            // desincronizan.
+            // Builds the live tree of EACH canvas in the scene. Replaces the
+            // collect + syncUiWidgets that the three loops used to repeat
+            // (runtime and sandbox x2); three copies of the same thing is how they
+            // get out of sync.
             virtual void syncUiCanvases(const std::vector<UiCanvasBinding>& bindings) = 0;
 
-            // Busca un nodo por nombre en TODOS los canvas, no solo en el de
-            // pantalla. Lo usan los nueve gizmos de widget del editor: sin esto,
-            // un botón dentro de un canvas de mundo se quedaría sin gizmo y nada
-            // lo diría.
+            // Looks up a node by name in ALL the canvases, not just the screen
+            // one. Used by the editor's nine widget gizmos: without this,
+            // a button inside a world canvas would be left without a gizmo and nothing
+            // would say so.
             virtual const UiElement* findUiNode(const std::string& name) const = 0;
 
-            // ── Anti-aliasing con recursos detrás ───────────────────────────
-            // El modo y las muestras viven en RendererState, pero cambiarlos
-            // mueve imágenes y pipelines, y eso lo sabe cada backend.
+            // ── Anti-aliasing with resources behind it ──────────────────────
+            // The mode and the samples live in RendererState, but changing them
+            // moves images and pipelines, and each backend knows that.
             virtual void  setAaMode(AaMode mode)   = 0;
             virtual void  setMsaaSamples(int v)    = 0;
             virtual int   maxMsaaSamples() const   = 0;
             virtual void  setSsaaFactor(float v)   = 0;
-            // El getter lo da RendererState; aqui solo el interruptor, que es
-            // quien mueve los targets.
+            // The getter is provided by RendererState; here only the switch, which is
+            // the one that moves the targets.
             virtual void  setSsaoEnabled(bool v)   = 0;
 
-            // El bloom se apaga soltando su cadena de imágenes, así que el
-            // interruptor tampoco puede ser un simple bool del estado.
-            // El getter ya lo da RendererState: aquí solo hace falta el
-            // interruptor, que es el que mueve recursos.
+            // Bloom is turned off by releasing its image chain, so the
+            // switch cannot be a simple state bool either.
+            // The getter is already provided by RendererState: here only the
+            // switch is needed, which is the one that moves resources.
             virtual void  setBloomEnabled(bool v)  = 0;
 
-            // El lado del shadow map mueve la imagen, sus vistas y los
-            // framebuffers, así que tampoco puede ser un simple int del estado.
-            // El getter ya lo da RendererState. Cada backend decide CUÁNDO
-            // rehacerlo: con la GPU en reposo y reescribiendo después los
-            // descriptores que apuntaban al mapa viejo.
+            // The shadow map side moves the image, its views and the
+            // framebuffers, so it cannot be a simple state int either.
+            // The getter is already provided by RendererState. Each backend decides WHEN to
+            // redo it: with the GPU idle and afterwards rewriting the
+            // descriptors that pointed at the old map.
             virtual void  setShadowResolution(int v) = 0;
 
-            // Modo de presentación. Recrea el swapchain, así que tampoco puede
-            // ser un simple valor del estado. El getter ya lo da RendererState.
+            // Presentation mode. It recreates the swapchain, so it cannot
+            // be a simple state value either. The getter is already provided by RendererState.
             //
-            // El backend CAE A VSYNC si el modo pedido no está soportado: es el
-            // único que Vulkan garantiza siempre y el que DXGI da sin extensión.
-            // presentMode() sigue devolviendo lo PEDIDO aunque se haya caído,
-            // para que el project.json conserve la intención del usuario si
-            // luego abre el proyecto en una máquina que sí lo soporta.
+            // The backend FALLS BACK TO VSYNC if the requested mode is not supported: it is the
+            // only one Vulkan always guarantees and the one DXGI gives without an extension.
+            // presentMode() keeps returning what was REQUESTED even if it fell back,
+            // so that project.json keeps the user's intent if they
+            // later open the project on a machine that does support it.
             virtual void  setPresentMode(PresentMode v) = 0;
 
-            // Qué modos puede dar ESTE device. Lo consulta la UI para
-            // deshabilitar los que no, con el motivo en un tooltip, en vez de
-            // esconderlos: si el core soporta N opciones, la UI ofrece N y el
-            // matiz se documenta.
+            // Which modes THIS device can provide. The UI queries it to
+            // disable those that cannot, with the reason in a tooltip, instead of
+            // hiding them: if the core supports N options, the UI offers N and the
+            // nuance is documented.
             //
-            // Vsync siempre devuelve true.
+            // Vsync always returns true.
             virtual bool  presentModeSupported(PresentMode v) const = 0;
 
-            // ── Sondas de reflexión ─────────────────────────────────────────
+            // ── Reflection probes ───────────────────────────────────────────
             virtual void  requestProbeBake(uint64_t ownerId) = 0;
             virtual void  requestProbeBakeAll()              = 0;
             virtual int   probeCount() const                 = 0;
             virtual float lastProbeBakeMs() const            = 0;
-            // Memoria de GPU de UNA sonda, en bytes. Virtual y no una
-            // constante compartida porque los dos backends guardan cosas
-            // DISTINTAS por sonda: Vulkan cuenta irradiancia y prefiltrado (su
-            // cubemap de captura es uno solo para todas), y D3D12 le suma
-            // ademas el de captura, que ahi es por sonda. El panel llamaba al
-            // constexpr estatico de la clase de Vulkan (H51), asi que bajo
-            // DirectX 12 no solo era la cifra del backend que no corria: la
-            // subestimaba.
+            // GPU memory of ONE probe, in bytes. Virtual and not a shared
+            // constant because the two backends store DIFFERENT things per probe:
+            // Vulkan counts irradiance and prefilter (its capture
+            // cubemap is a single one for all of them), and D3D12 also adds the
+            // capture one, which there is per probe. The panel called the
+            // static constexpr of the Vulkan class (H51), so under
+            // DirectX 12 it was not only the figure of the backend that was not running: it
+            // underestimated it.
             virtual uint64_t probeMemoryBytes() const = 0;
             virtual float probeBakeMs(uint64_t ownerId) const = 0;
 
-            // ── Ranuras de objeto ───────────────────────────────────────────
-            // Cuántas entradas de render hay vivas y cuántas caben. Borrar un
-            // objeto no compacta el vector —los índices están anotados en cada
-            // GameObject— pero sí devuelve su hueco, así que un ciclo
-            // Play/Stop repetido tiene que dejar `used` donde estaba. Que se
-            // vea es lo que distingue el reciclaje de una fuga (H19, H43).
+            // ── Object slots ────────────────────────────────────────────────
+            // How many render entries are alive and how many fit. Deleting an
+            // object does not compact the vector (the indices are recorded in each
+            // GameObject) but it does return its slot, so a repeated
+            // Play/Stop cycle has to leave `used` where it was. Being able to
+            // see it is what tells recycling apart from a leak (H19, H43).
             //
-            // capacity == 0 significa "sin tope duro": el backend crece el
-            // vector. Vulkan es así; D3D12 tiene 512 y 16, que son los tamaños
-            // con los que se repartió el heap de descriptores.
+            // capacity == 0 means "no hard limit": the backend grows the
+            // vector. Vulkan is like that; D3D12 has 512 and 16, which are the sizes
+            // the descriptor heap was divided with.
             struct SlotUsage {
                 size_t objects         = 0;
                 size_t objectCapacity  = 0;
                 size_t skinned         = 0;
                 size_t skinnedCapacity = 0;
             };
-            // No es virtual pura: un backend que no lleve la cuenta devuelve
-            // ceros y el panel lo trata como "sin dato", en vez de obligar a
-            // los dos a implementarla el día que se añada un tercero.
+            // Not pure virtual: a backend that does not keep the count returns
+            // zeros and the panel treats it as "no data", instead of forcing
+            // both to implement it the day a third one is added.
             virtual SlotUsage slotUsage() const { return {}; }
 
-            // ── Métricas ────────────────────────────────────────────────────
-            // En milisegundos de GPU del último frame medido. Cero si el
-            // backend no las toma.
+            // ── Metrics ─────────────────────────────────────────────────────
+            // In GPU milliseconds of the last measured frame. Zero if the
+            // backend does not take them.
             virtual void  setPerfCaptureEnabled(bool on)      = 0;
             virtual float renderGpuMs() const                 = 0;
             virtual float ssaoGpuMs() const                   = 0;
@@ -370,24 +369,23 @@ namespace DonTopo
             virtual float bloomGpuMs() const                  = 0;
             virtual float fogGpuMs() const                    = 0;
             virtual float aaGpuMs() const                     = 0;
-            // Motion blur. Era el UNICO pase sin medir en NINGUN backend, asi
-            // que se encendia a ciegas pese a ser de los caros: un dispatch mas
-            // una copia de la imagen entera.
+            // Motion blur. It was the ONLY unmeasured pass in ANY backend, so
+            // it was turned on blindly despite being one of the expensive ones: one more dispatch plus
+            // a copy of the whole image.
             virtual float motionBlurGpuMs() const { return 0.0f; }
             virtual float sceneGpuMs() const                  = 0;
             virtual float shadowGpuMs() const                 = 0;
             virtual float forwardPlusGpuMs() const            = 0;
 
-            // Cuentas del último frame: draws enviados, instancias dibujadas y
-            // objetos descartados por el frustum.
+            // Counts of the last frame: draws sent, instances drawn and
+            // objects discarded by the frustum.
             virtual int statDrawCalls() const = 0;
             virtual int statInstances() const = 0;
             virtual int statCulled() const    = 0;
-            // Objetos que se quedaron sin sitio en el SSBO de instancias del
-            // frame, y por tanto sin sombra ni profundidad. Tiene que ser
-            // SIEMPRE 0: si sube, la capacidad esta mal dimensionada. No es
-            // pura porque no todos los backends reparten asi sus instancias;
-            // el que no lo mida responde 0 y el panel no enseña nada (H23).
+            // Objects that were left without room in the frame's instance SSBO, and therefore
+            // without shadow or depth. It must ALWAYS be 0: if it goes up, the capacity is wrongly
+            // sized. It is not pure because not all backends split their instances this way; one
+            // that does not measure it answers 0 and the panel shows nothing (H23).
             virtual int statInstanceOverflow() const { return 0; }
             virtual float forwardPlusAvgPerCell() const       = 0;
             virtual uint32_t forwardPlusOverflowCells() const = 0;

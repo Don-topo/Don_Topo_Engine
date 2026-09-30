@@ -10,34 +10,34 @@
 
 namespace DonTopo
 {
-    // Todo lo que hay que decirle al backend por frame sobre un GameObject con
-    // malla skinned. Estaba copiado en los TRES hosts —el runtime y los dos
-    // caminos del sandbox, Vulkan y D3D12—, así que cada valor nuevo de la pose
-    // había que añadirlo tres veces y el que se olvidara compilaba igual y
-    // fallaba solo en un backend.
+    // Everything that has to be told to the backend per frame about a GameObject with
+    // a skinned mesh. It was copied in the THREE hosts (the runtime and the two
+    // sandbox paths, Vulkan and D3D12), so every new pose value
+    // had to be added three times and the one that got forgotten compiled all the same and
+    // failed only in one backend.
     //
-    // Plantilla y no `EditorRenderer&` por los tests: los dos backends heredan
-    // de esa interfaz, pero son 75 métodos puros y un doble tendría que
-    // implementarlos todos para comprobar estas cinco llamadas. Con la
-    // plantilla, el doble declara los cinco que se usan. De paso no hay
-    // despacho virtual.
+    // A template and not `EditorRenderer&` because of the tests: both backends inherit
+    // from that interface, but it is 75 pure methods and a double would have to
+    // implement all of them to check these five calls. With the
+    // template, the double declares the five that are used. Incidentally there is no
+    // virtual dispatch.
     //
-    // evaluateTransitions distingue Edit de Play: en Edit el tiempo del estado
-    // avanza pero el grafo no se mueve. Llega como parámetro porque cada host
-    // lo sabe de un sitio distinto (el runtime siempre juega, el sandbox lo
-    // pregunta al editor o al renderer) y la interfaz del backend no lo conoce.
-    // Lo del Animator que NO depende de la malla con esqueleto: avanzar el
-    // grafo, el root motion y los clips de propiedades. Antes esto vivía dentro
-    // de applySkinnedFrame, que salía en cuanto el objeto no tenía índice
-    // skinned: un objeto sin esqueleto no animaba nada.
+    // evaluateTransitions distinguishes Edit from Play: in Edit the state's time
+    // advances but the graph does not move. It arrives as a parameter because each host
+    // knows it from a different place (the runtime always plays, the sandbox
+    // asks the editor or the renderer) and the backend interface does not know it.
+    // The part of the Animator that does NOT depend on the skeleton mesh: advancing the
+    // graph, root motion and property clips. Before, this lived inside
+    // applySkinnedFrame, which returned as soon as the object had no skinned
+    // index: an object without a skeleton animated nothing.
     //
-    // Devuelve QUÉ escribió, porque los dos hosts propagan los worldTransform y
-    // empujan el transform al backend ANTES de llegar aquí: lo que se anima en
-    // este frame tiene que reenviarse, o iría un frame por detrás.
+    // It returns WHAT it wrote, because both hosts propagate the worldTransforms and
+    // push the transform to the backend BEFORE getting here: whatever is animated in
+    // this frame has to be resent, or it would go one frame behind.
     struct AnimatorFrameResult
     {
-        bool transform = false;   // alguna de posición, rotación o escala
-        bool material  = false;   // metálico o rugosidad
+        bool transform = false;   // any of position, rotation or scale
+        bool material  = false;   // metallic or roughness
     };
 
     inline AnimatorFrameResult applyAnimatorFrame(GameObject& go, float dt, bool evaluateTransitions)
@@ -45,12 +45,12 @@ namespace DonTopo
         AnimatorFrameResult res;
         const auto& anim = go.getAnimator();
         if (!anim) return res;
-        // El Animator es el único dueño de animTime: calcula en CPU y el
-        // backend solo recibe el resultado.
+        // The Animator is the sole owner of animTime: it computes on the CPU and the
+        // backend only receives the result.
         anim->update(dt, evaluateTransitions);
-        // Root motion antes de mandar el transform: el avance de este update ya
-        // sale en la posición que recibe el backend. dt es el del frame: la
-        // velocidad del Animator ya va en los ticks.
+        // Root motion before sending the transform: this update's advance already
+        // comes out in the position the backend receives. dt is the frame's: the
+        // Animator's speed is already in the ticks.
         if (!anim->rootMotionSamples().empty())
             if (const SkinnedMesh* sk = go.getSkinnedMesh())
                 applyRootMotion(go, rootMotionDelta(*sk, *anim), dt);
@@ -71,18 +71,18 @@ namespace DonTopo
                 const PropertyClip& clip = anim->propertyClips()[(size_t)muestras[k].clip];
                 for (const auto& tr : clip.tracks)
                 {
-                    // Las pistas con destino parámetro (las curvas) ya las
-                    // escribió el componente dentro de update(): aquí solo van
-                    // las propiedades del objeto.
+                    // Tracks with a parameter target (the curves) were already
+                    // written by the component inside update(): here only
+                    // the object's properties go.
                     if (tr.target != TrackTarget::Property) continue;
                     if (tr.property != id || !tr.resolved || tr.keys.empty()) continue;
                     aporta[m++] = { samplePropertyTrack(tr, muestras[k].time, propertyGet(go, id)),
                                     muestras[k].weight };
-                    break;   // una pista por propiedad y clip: la primera manda
+                    break;   // one track per property and clip: the first one rules
                 }
             }
-            // Una propiedad que NADIE anima no se toca: así una pista de solo Y
-            // no pisa la X y la Z del objeto.
+            // A property that NOBODY animates is not touched: this way a Y-only track
+            // does not overwrite the object's X and Z.
             if (m == 0) continue;
             escritas[p] = true;
             valores[p]  = blendPropertyValues(id, aporta, m);
@@ -91,9 +91,9 @@ namespace DonTopo
 
         for (int p = 0; p <= (int)PropertyId::ScaleZ; p++) res.transform = res.transform || escritas[p];
         res.material = escritas[(int)PropertyId::MaterialMetallic] || escritas[(int)PropertyId::MaterialRoughness];
-        // El mundo de ESTE objeto y el de sus hijos, aquí mismo: los hosts ya
-        // propagaron antes del recorrido, así que sin esto lo animado llegaría
-        // al backend un frame tarde y los hijos, dos.
+        // The world of THIS object and its children's, right here: the hosts already
+        // propagated before the traversal, so without this the animated part would reach
+        // the backend one frame late and the children two.
         if (res.transform)
             go.updateWorldTransforms(go.parent ? go.parent->worldTransform : glm::mat4(1.0f));
         return res;
@@ -102,14 +102,14 @@ namespace DonTopo
     template <typename R>
     void applySkinnedFrame(GameObject& go, R& renderer, float dt, bool evaluateTransitions)
     {
-        // El grafo corre SIEMPRE, tenga o no malla con esqueleto: es lo que
-        // permite animar una puerta o una luz con un clip de propiedades.
+        // The graph ALWAYS runs, whether or not there is a skeleton mesh: it is what
+        // allows animating a door or a light with a property clip.
         const AnimatorFrameResult animado = applyAnimatorFrame(go, dt, evaluateTransitions);
         if (go.staticRenderIndex >= 0)
         {
-            // Reenviar lo que se acaba de animar: el host empujó el transform de
-            // este objeto ANTES de llamar aquí, y los factores de material solo
-            // los empujaban el panel y los comandos del editor.
+            // Resend what was just animated: the host pushed this object's transform
+            // BEFORE calling here, and the material factors were only pushed
+            // by the panel and the editor commands.
             if (animado.transform) renderer.setTransform(go.staticRenderIndex, go.worldTransform);
             if (animado.material)
                 renderer.setObjectMaterialFactors((size_t)go.staticRenderIndex,
@@ -117,42 +117,42 @@ namespace DonTopo
                                                   propertyGet(go, PropertyId::MaterialRoughness));
         }
 
-        // Sin índice no está dado de alta en el backend: ni se dibuja ni hay
-        // pose que mandar.
+        // Without an index it is not registered in the backend: it is not drawn and there is
+        // no pose to send.
         if (go.skinnedRenderIndex < 0) return;
 
-        // ANTES de tocar la animación. Hoy donde de verdad importa es el camino
-        // sin Animator en Vulkan: `Renderer::updateAnimation` congela el reloj
-        // de un mesh oculto, así que el flag tiene que estar ya puesto o iría un
-        // frame por detrás. Con Animator el orden no cambia nada (el reloj lo
-        // lleva la CPU y `setAnimationPose` no mira la visibilidad), y D3D12 no
-        // congela en ningún camino; se mantiene un único orden para los dos
-        // para que esa diferencia no dependa de quién llama.
+        // BEFORE touching the animation. Today where it really matters is the path
+        // without an Animator in Vulkan: `Renderer::updateAnimation` freezes the clock
+        // of a hidden mesh, so the flag has to be set already or it would go one
+        // frame behind. With an Animator the order changes nothing (the clock
+        // is kept by the CPU and `setAnimationPose` does not look at visibility), and D3D12 does not
+        // freeze on any path; a single order is kept for both
+        // so that this difference does not depend on who calls.
         renderer.setSkinnedMeshVisible(go.skinnedRenderIndex, go.meshVisible);
 
         if (const auto& anim = go.getAnimator())
         {
-            // El update y el root motion ya los hizo applyAnimatorFrame.
-            // La pose entera siempre: muestras del estado actual, del que se
-            // apaga (con su propio blend) y la congelada si un fade se
-            // interrumpió. La petición de congelar se consume AQUÍ, al
-            // entregarla, y no en el siguiente update: un CrossFade de Lua
-            // entre dos updates la perdería.
+            // The update and root motion were already done by applyAnimatorFrame.
+            // The whole pose always: samples of the current state, of the one that is
+            // fading out (with its own blend) and the frozen one if a fade was
+            // interrupted. The freeze request is consumed HERE, when
+            // delivering it, and not in the next update: a Lua CrossFade
+            // between two updates would lose it.
             renderer.setAnimationPose(go.skinnedRenderIndex, anim->pose());
             anim->clearFreezeRequest();
         }
         else
         {
-            // Sin Animator: clip 0 en bucle, exactamente como antes de que el
-            // componente existiera. Los dos caminos no se pisan.
+            // Without an Animator: clip 0 in a loop, exactly as before the
+            // component existed. The two paths do not step on each other.
             renderer.updateAnimation(go.skinnedRenderIndex, dt);
         }
 
-        // IK: el objetivo y el pole son GameObjects de la escena, y el shader
-        // los quiere en espacio del MODELO. Se resuelven aquí, que es donde hay
-        // GameObject; el Animator no conoce la escena. Se llama SIEMPRE, también
-        // con count 0: si no, quitar la última restricción dejaría encendida la
-        // del frame anterior.
+        // IK: the target and the pole are scene GameObjects, and the shader
+        // wants them in MODEL space. They are resolved here, which is where a
+        // GameObject exists; the Animator does not know the scene. It is ALWAYS called, also
+        // with count 0: otherwise, removing the last constraint would leave the
+        // previous frame's one switched on.
         AnimationIk ik;
         if (const auto& anim = go.getAnimator())
         {
@@ -197,7 +197,7 @@ namespace DonTopo
         renderer.setAnimationIk(go.skinnedRenderIndex, ik);
 
         renderer.setSkinnedTransform(go.skinnedRenderIndex, go.worldTransform);
-        // El backend no conoce el flag: con el SSR apagado se le manda un 0.
+        // The backend does not know the flag: with SSR off it is sent a 0.
         renderer.setSkinnedSsr(go.skinnedRenderIndex,
                                go.ssrEnabled ? go.ssrIntensity : 0.0f);
     }

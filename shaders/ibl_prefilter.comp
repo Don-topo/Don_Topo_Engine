@@ -1,9 +1,9 @@
 #version 450
 
-// Prefiltrado especular del cubemap de entorno: un mip por nivel de rugosidad.
-// Se dispara una vez por mip, con pc.roughness y pc.faceSize del mip en curso.
-// Aproximacion split-sum de Karis: se asume N = V = R, que es lo que permite
-// guardar el resultado indexado solo por direccion y rugosidad.
+// Specular prefilter of the environment cubemap: one mip per roughness level.
+// It is dispatched once per mip, with pc.roughness and pc.faceSize of the current mip.
+// Karis's split-sum approximation: N = V = R is assumed, which is what allows
+// storing the result indexed only by direction and roughness.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -13,8 +13,8 @@ layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray outCube;
 layout(push_constant) uniform Push {
     float roughness;
     uint  faceSize;
-    // Mismo layout que ibl_irradiance.comp: 1.0 en el IBL global, intensidad de
-    // la sonda cuando esto prefiltra la captura de una reflection probe.
+    // Same layout as ibl_irradiance.comp: 1.0 in the global IBL, the probe's
+    // intensity when this prefilters the capture of a reflection probe.
     float intensity;
 } pc;
 
@@ -48,8 +48,8 @@ vec2 hammersley(uint i, uint n)
     return vec2(float(i) / float(n), radicalInverse(i));
 }
 
-// Half-vector muestreado segun la NDF GGX del mismo `rough` que usa pbr.frag
-// (a = rough*rough), pa que el prefiltrado y la luz directa coincidan.
+// Half-vector sampled according to the GGX NDF of the same `rough` that pbr.frag uses
+// (a = rough*rough), so that the prefilter and the direct light match.
 vec3 importanceSampleGGX(vec2 xi, vec3 N, float rough)
 {
     float a        = rough * rough;
@@ -75,8 +75,8 @@ void main()
     vec3 R  = N;
     vec3 V  = N;
 
-    // Mip 0 es rugosidad 0: el lobulo es un espejo y todas las muestras caen en
-    // la misma direccion. Copiarlo directo evita 256 fetches identicos.
+    // Mip 0 is roughness 0: the lobe is a mirror and all the samples fall in
+    // the same direction. Copying it directly avoids 256 identical fetches.
     if (pc.roughness <= 0.0)
     {
         imageStore(outCube, ivec3(gid), vec4(textureLod(envMap, R, 0.0).rgb * pc.intensity, 1.0));
@@ -91,8 +91,8 @@ void main()
         vec3 H  = importanceSampleGGX(xi, N, pc.roughness);
         vec3 L  = normalize(2.0 * dot(V, H) * H - V);
 
-        // Pesar por NdotL y descartar el hemisferio de atras: sin esto los
-        // lobulos anchos arrastran radiancia de detras de la superficie.
+        // Weight by NdotL and discard the back hemisphere: without this the
+        // wide lobes drag in radiance from behind the surface.
         float NdotL = dot(N, L);
         if (NdotL <= 0.0) continue;
         sum    += textureLod(envMap, L, 0.0).rgb * NdotL;

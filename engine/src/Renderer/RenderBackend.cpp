@@ -46,8 +46,8 @@ BackendSelection resolveRenderBackend(RenderBackend requested)
         return sel;
     }
 
-    // La máquina lo soporta: se arranca con él. El aviso NO es un fallback, es
-    // la advertencia de hasta dónde llega el backend hoy.
+    // The machine supports it: it starts with it. The warning is NOT a fallback, it is
+    // a notice of how far the backend goes today.
     sel.backend  = RenderBackend::D3D12;
     sel.fellBack = false;
     sel.message  = "DirectX 12 backend active (" + support.adapterName +

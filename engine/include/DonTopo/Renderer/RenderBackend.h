@@ -4,38 +4,38 @@
 
 namespace DonTopo {
 
-// Backend de render con el que arranca el proceso. NO se puede cambiar en
-// caliente: el device, la swapchain y todos los recursos de GPU cuelgan de él,
-// así que cambiarlo obliga a reiniciar la aplicación.
+// Render backend the process starts with. It CANNOT be changed at
+// runtime: the device, the swapchain and all the GPU resources hang from it,
+// so changing it forces an application restart.
 enum class RenderBackend {
     Vulkan,
     D3D12,
 };
 
-// Nombres que se persisten en el project.json. Igual que aaMode/fpMode: el
-// ajuste se guarda por NOMBRE, nunca por índice, para que reordenar el combo no
-// cambie lo que ya hay guardado.
+// Names persisted in project.json. Same as aaMode/fpMode: the
+// setting is saved by NAME, never by index, so that reordering the combo does not
+// change what is already saved.
 const char* renderBackendName(RenderBackend backend);
 
-// ok = false si el nombre no es ninguno de los de hoy (fichero de una versión
-// futura, o editado a mano): el caller se cae a Vulkan y lo deja en el Log.
+// ok = false if the name is none of today's (file from a future version,
+// or hand-edited): the caller falls back to Vulkan and leaves it in the Log.
 RenderBackend renderBackendFromName(const std::string& name, bool& ok);
 
-// Qué backend se va a usar de verdad, frente al que se pidió.
+// Which backend will actually be used, as opposed to the one that was requested.
 struct BackendSelection {
-    RenderBackend backend  = RenderBackend::Vulkan;  // el que se puede arrancar
-    bool          fellBack = false;                  // true si no es el pedido
-    // Qué contarle al usuario. Va lleno en DOS casos distintos: cuando hubo
-    // fallback (fellBack, con el motivo) y cuando el backend elegido arranca
-    // pero con alcance limitado. El llamante lo enseña siempre que no esté
-    // vacío, sin mirar fellBack.
+    RenderBackend backend  = RenderBackend::Vulkan;  // the one that can be started
+    bool          fellBack = false;                  // true if it is not the requested one
+    // What to tell the user. It is filled in TWO different cases: when there was a
+    // fallback (fellBack, with the reason) and when the chosen backend starts
+    // but with limited scope. The caller shows it whenever it is not
+    // empty, without looking at fellBack.
     std::string   message;
 };
 
-// Resuelve el backend de arranque. NUNCA falla ni lanza: si el pedido no se
-// puede usar —build sin DX12, máquina sin adaptador capaz— devuelve Vulkan y
-// explica el motivo en `message`. Esta es la única puerta por la que se elige
-// backend.
+// Resolves the startup backend. NEVER fails or throws: if the requested one
+// cannot be used (build without DX12, machine without a capable adapter) it returns Vulkan and
+// explains the reason in `message`. This is the only door through which the
+// backend is chosen.
 BackendSelection resolveRenderBackend(RenderBackend requested);
 
 }  // namespace DonTopo

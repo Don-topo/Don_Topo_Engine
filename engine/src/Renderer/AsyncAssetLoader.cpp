@@ -19,15 +19,15 @@ namespace DonTopo
 {
     namespace
     {
-        // Decodifica un slot a RGBA8. Devuelve false si no hay nada que
-        // decodificar o si stb falla — el fallback (checkerboard, normal plana,
-        // blanco) lo sigue poniendo GpuResources en el hilo principal, que es
-        // donde vive esa política hoy.
+        // Decodes a slot to RGBA8. Returns false if there is nothing to
+        // decode or if stb fails; the fallback (checkerboard, flat normal,
+        // white) is still supplied by GpuResources on the main thread, which is
+        // where that policy lives today.
         bool decodeSlot(const std::string& path, const std::vector<uint8_t>& embedded,
                         DecodedImage::Slot slot, std::vector<DecodedImage>& out)
         {
             const DecodedTexture tex = decodeMaterialTexture(path, embedded);
-            if (!tex) return false;  // el fallback lo pone GpuResources en el hilo principal
+            if (!tex) return false;  // the fallback is supplied by GpuResources on the main thread
 
             DecodedImage img;
             img.slot = slot;
@@ -45,15 +45,15 @@ namespace DonTopo
     void discardOverriddenDecodedImages(std::vector<DecodedImage>& images,
                                         const std::vector<MaterialOverride>& overrides)
     {
-        // r.images solo decodifica DonTopo::Mesh::material (el campo singular,
-        // no SkinnedMesh::materials), así que solo el override de índice 0 le
-        // afecta — ver el comentario grande de runJob(), más abajo. Un índice
-        // distinto no tiene nada que descartar aquí.
+        // r.images only decodes DonTopo::Mesh::material (the singular field,
+        // not SkinnedMesh::materials), so only the index 0 override affects
+        // it; see the big comment in runJob(), further down. A different index
+        // has nothing to discard here.
         for (const MaterialOverride& ov : overrides)
         {
             if (ov.index != 0) continue;
-            // El .mat cuenta igual que una override propia: si aporta esa
-            // textura, la decodificada del FBX ya no es la que se va a usar.
+            // The .mat counts the same as an own override: if it provides that
+            // texture, the one decoded from the FBX is no longer the one that will be used.
             MaterialAsset matAsset;
             if (!ov.matAsset.empty()) matAsset = loadMaterialAsset(ov.matAsset);
             if (!ov.albedo.empty() || !matAsset.albedo.empty())
@@ -67,11 +67,11 @@ namespace DonTopo
 
     JobSystem::JobId AsyncAssetLoader::requestMesh(const std::string& path, uint64_t targetId, int piece)
     {
-        // El id se reserva ANTES de tocar el grupo: el primer waiter de un path
-        // encola el job con ESTE id, y el grupo lo guarda para poder
-        // cancelarlo después aunque su waiter original desaparezca. Reservar
-        // fuera del lock es seguro — reserveId() toma el lock del JobSystem, no
-        // el nuestro.
+        // The id is reserved BEFORE touching the group: the first waiter of a path
+        // enqueues the job with THIS id, and the group stores it so it can
+        // cancel it later even if its original waiter disappears. Reserving
+        // outside the lock is safe: reserveId() takes the JobSystem's lock, not
+        // ours.
         const JobSystem::JobId id = m_jobs.reserveId();
 
         bool needsJob = false;
@@ -80,10 +80,10 @@ namespace DonTopo
             ++m_pending;
 
             PendingGroup& group = m_groups[path];
-            // El primero que pide un path arranca el job; los que llegan
-            // mientras sigue en vuelo se apuntan al mismo. El coste dominante es
-            // el ReadFile de Assimp, así que deduplicarlo captura casi toda la
-            // ganancia aunque luego se copie el Mesh por target.
+            // The first one to request a path starts the job; those that arrive
+            // while it is still in flight join the same one. The dominant cost is
+            // Assimp's ReadFile, so deduplicating it captures almost all the
+            // gain even if the Mesh is then copied per target.
             needsJob = group.waiters.empty();
             if (needsJob)
                 group.jobId = id;
@@ -92,8 +92,8 @@ namespace DonTopo
 
         if (needsJob)
         {
-            // path por copia: por referencia sería dangling en cuanto el caller
-            // saliera de scope, y no se vería hasta que el worker arrancase.
+            // path by copy: by reference it would dangle as soon as the caller
+            // left scope, and it would not show until the worker started.
             m_jobs.submitWithId(id, [this, path] { runJob(path); });
         }
         return id;
@@ -101,24 +101,24 @@ namespace DonTopo
 
     void AsyncAssetLoader::cancel(JobSystem::JobId id)
     {
-        // cancel() sólo recibe un id, sin path: hay que localizar su waiter
-        // recorriendo los grupos bajo el lock. Los grupos son pocos (el loader
-        // se drena por frame) y el único caller de cancel(id) es el test —
-        // producción cancela en bloque con cancelAllPending() — así que un
-        // barrido lineal sobra.
+        // cancel() only receives an id, with no path: its waiter has to be located
+        // by walking the groups under the lock. The groups are few (the loader
+        // is drained every frame) and the only caller of cancel(id) is the test
+        // (production cancels in bulk with cancelAllPending()), so a linear
+        // sweep is plenty.
         //
-        // Carrera cancel() vs runJob(), resuelta por m_mutex: un waiter sale de
-        // m_pending por EXACTAMENTE UNA de dos vías mutuamente excluyentes,
-        // ambas bajo este mutex:
-        //   1) runJob() saca los waiters del grupo (move + erase) → luego
-        //      pumpCompleted() entrega su resultado y decrementa ALLÍ.
-        //   2) cancel() encuentra el waiter todavía en su grupo → lo quita y
-        //      decrementa AQUÍ; ese target no produce resultado.
-        // Como el move-out de runJob() y el erase de cancel() ocurren ambos
-        // bajo m_mutex, un waiter o sigue en el grupo (caso 2) o ya está en
-        // resultados (caso 1), nunca las dos — sin tombstones ni doble
-        // decremento. Por eso este diseño puede prescindir del m_started /
-        // m_cancelledBeforeStart de la Task 2.
+        // cancel() vs runJob() race, resolved by m_mutex: a waiter leaves
+        // m_pending through EXACTLY ONE of two mutually exclusive paths,
+        // both under this mutex:
+        //   1) runJob() takes the waiters out of the group (move + erase) -> then
+        //      pumpCompleted() delivers its result and decrements THERE.
+        //   2) cancel() finds the waiter still in its group -> removes it and
+        //      decrements HERE; that target produces no result.
+        // Since the move-out in runJob() and the erase in cancel() both happen
+        // under m_mutex, a waiter either is still in the group (case 2) or is already in
+        // results (case 1), never both, with no tombstones or double
+        // decrement. That is why this design can do without the m_started /
+        // m_cancelledBeforeStart of Task 2.
         JobSystem::JobId jobToCancel = 0;
         bool             cancelJob   = false;
         {
@@ -136,26 +136,26 @@ namespace DonTopo
 
                 if (group.waiters.empty())
                 {
-                    // Nadie más espera este ReadFile: se puede intentar parar el
-                    // job (best-effort; si ya arrancó, JobSystem lo ignora y
-                    // runJob() terminará encontrando el grupo vacío/ausente y no
-                    // construirá nada). Si quedan waiters, el job DEBE seguir:
-                    // los demás necesitan el ReadFile.
+                    // Nobody else is waiting for this ReadFile: we can try to stop the
+                    // job (best-effort; if it already started, JobSystem ignores it and
+                    // runJob() will end up finding the group empty/absent and will not
+                    // build anything). If waiters remain, the job MUST keep going:
+                    // the others need the ReadFile.
                     jobToCancel = group.jobId;
                     cancelJob   = true;
                     m_groups.erase(it);
                 }
                 break;
             }
-            // id no encontrado en ningún grupo: el resultado ya se construyó y
-            // se movió a resultados/buzón. pumpCompleted() es el dueño de ese
-            // decremento — aquí no se toca m_pending.
+            // id not found in any group: the result was already built and
+            // moved to results/mailbox. pumpCompleted() owns that
+            // decrement; m_pending is not touched here.
         }
 
-        // m_jobs.cancel() toma el lock del JobSystem, no el nuestro. Llamarlo
-        // dentro de nuestro lock sería un orden de adquisición cruzado con el
-        // worker (que toma primero el del JobSystem y luego el nuestro):
-        // deadlock clásico. Por eso se hace FUERA del lock.
+        // m_jobs.cancel() takes the JobSystem's lock, not ours. Calling it
+        // inside our lock would be a crossed acquisition order with the
+        // worker (which takes the JobSystem's first and then ours):
+        // classic deadlock. That is why it is done OUTSIDE the lock.
         if (cancelJob)
             m_jobs.cancel(jobToCancel);
     }
@@ -174,11 +174,11 @@ namespace DonTopo
 
         if (model)
         {
-            // Estatico: src.mesh no se usa (runJob no lo rellena para este
-            // camino). El error de runJob (p.ej. "no tiene mallas") tiene
-            // prioridad sobre el de rango: comprobarlo ANTES evita pisar un
-            // mensaje mas preciso con "no tiene la pieza 0" cuando el fichero
-            // ni siquiera trae mallas.
+            // Static: src.mesh is not used (runJob does not fill it in for this
+            // path). The runJob error (e.g. "has no meshes") takes
+            // priority over the range one: checking it BEFORE avoids overwriting a
+            // more precise message with "has no piece 0" when the file
+            // does not even contain meshes.
             if (!src.error.empty())
                 return out;
             if (w.piece < 0 || static_cast<size_t>(w.piece) >= model->meshes.size())
@@ -186,33 +186,33 @@ namespace DonTopo
                 out.error = "'" + src.path + "' has no piece " + std::to_string(w.piece);
                 return out;
             }
-            // Copia PROPIA del Mesh para este waiter: el mismo contrato de
-            // propiedad que la rama personaje de mas abajo (dos GameObject no
-            // pueden compartir un Mesh mutable). decodedImages, en cambio, ya
-            // viene calculado por runJob UNA vez por pieza distinta — aqui
-            // solo se copia el vector de pixeles, nunca se vuelve a decodificar.
+            // OWN copy of the Mesh for this waiter: the same ownership contract as
+            // the character branch further down (two GameObjects cannot
+            // share a mutable Mesh). decodedImages, on the other hand, already
+            // comes computed by runJob ONCE per distinct piece; here
+            // only the pixel vector is copied, it is never decoded again.
             out.mesh = std::make_shared<Mesh>(model->meshes[w.piece]);
-            if (decodedImages) out.images = *decodedImages;   // copia: cada waiter sube su propia textura
+            if (decodedImages) out.images = *decodedImages;   // copy: each waiter uploads its own texture
             if (model->pieces.size() > 1)
             {
-                out.pieces      = model->pieces;   // copia pequeña: unas pocas apariciones
-                // Copia del VECTOR DE PUNTEROS, no de las mallas: pieceMeshes
-                // ya trae los Mesh construidos (una vez por job, en runJob) y
-                // aqui se comparten via shared_ptr entre todos los waiters del
-                // grupo, en vez de duplicar las N mallas del fichero por cada
-                // uno de los N waiters.
+                out.pieces      = model->pieces;   // small copy: a few occurrences
+                // Copy of the VECTOR OF POINTERS, not of the meshes: pieceMeshes
+                // already holds the built Meshes (once per job, in runJob) and
+                // here they are shared via shared_ptr among all the waiters of the
+                // group, instead of duplicating the file's N meshes for each
+                // of the N waiters.
                 out.pieceMeshes = pieceMeshes;
             }
             return out;
         }
 
-        out.images = src.images;   // copia: cada target sube su propia textura
+        out.images = src.images;   // copy: each target uploads its own texture
 
-        // Copia profunda del Mesh, no del shared_ptr. Compartirlo dejaría a dos
-        // GameObject apuntando al mismo Mesh mutable, cambiando la semántica de
-        // propiedad que hay hoy en Scene.cpp:721 (un make_shared por nodo).
-        // Tampoco ahorraría VRAM: addStaticMesh sube cada Mesh a su propio par
-        // de buffers.
+        // Deep copy of the Mesh, not of the shared_ptr. Sharing it would leave two
+        // GameObjects pointing at the same mutable Mesh, changing the ownership
+        // semantics that exist today in Scene.cpp:721 (one make_shared per node).
+        // It would not save VRAM either: addStaticMesh uploads each Mesh to its own pair
+        // of buffers.
         if (src.mesh)
         {
             if (const SkinnedMesh* sk = dynamic_cast<const SkinnedMesh*>(src.mesh.get()))
@@ -227,36 +227,36 @@ namespace DonTopo
     {
         LoadedMesh loaded;
         loaded.path = path;
-        std::shared_ptr<StaticModel> model;   // solo si el fichero no tiene huesos
+        std::shared_ptr<StaticModel> model;   // only if the file has no bones
 
         try
         {
             if (ModelLoader::hasBones(path))
             {
-                // Personaje: entero, como siempre. SkinnedMesh guarda sus
-                // texturas por submesh en materials[] (plural), que aquí no se
-                // toca a propósito — decisión diferida (ver el comentario de
-                // testTexturesArriveDecoded). loaded.images queda vacío y la
-                // textura se resuelve en el hilo principal por la vía síncrona
-                // existente (el fallback de buildRenderObject, Task 6).
-                // loadSkinned directo, no loadAuto: hasBones ya se pregunto
-                // arriba, y loadAuto lo repetiria (otro ReadFile completo).
+                // Character: whole, as always. SkinnedMesh keeps its
+                // textures per submesh in materials[] (plural), which is deliberately not
+                // touched here; the decision is deferred (see the comment of
+                // testTexturesArriveDecoded). loaded.images stays empty and the
+                // texture is resolved on the main thread via the existing
+                // synchronous path (the buildRenderObject fallback, Task 6).
+                // loadSkinned directly, not loadAuto: hasBones was already asked
+                // above, and loadAuto would repeat it (another full ReadFile).
                 loaded.mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(path));
                 if (!loaded.mesh) loaded.error = "Could not load the model: " + path;
             }
             else
             {
-                // Estatico: UN ReadFile para todas las mallas del fichero,
-                // independientemente de cuantas piezas esten esperando. Cada
-                // waiter decodifica su propia textura en buildResultFor.
+                // Static: ONE ReadFile for all the file's meshes,
+                // regardless of how many pieces are waiting. Each
+                // waiter decodes its own texture in buildResultFor.
                 model = std::make_shared<StaticModel>(ModelLoader::loadStatic(path));
                 if (model->meshes.empty()) loaded.error = "'" + path + "' has no meshes";
             }
         }
         catch (const std::exception& e)
         {
-            // Una excepción no puede cruzar el límite de hilo: escapar de un
-            // worker es std::terminate. Viaja como string.
+            // An exception cannot cross the thread boundary: escaping from a
+            // worker is std::terminate. It travels as a string.
             loaded.mesh  = nullptr;
             loaded.error = e.what();
             model        = nullptr;
@@ -273,40 +273,40 @@ namespace DonTopo
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             ++m_readFileCount;
-            myEpoch = m_epoch;   // generación vigente al sacar los waiters
+            myEpoch = m_epoch;   // current generation when the waiters are taken out
             auto it = m_groups.find(path);
             if (it != m_groups.end())
             {
-                // Sacar los waiters bajo el lock cierra la carrera con
-                // cancel(): a partir de aquí ese grupo ya no existe, así que un
-                // cancel() posterior no encontrará el id y no tocará m_pending
-                // (pumpCompleted lo hará al entregar).
+                // Taking the waiters out under the lock closes the race with
+                // cancel(): from here on that group no longer exists, so a later
+                // cancel() will not find the id and will not touch m_pending
+                // (pumpCompleted will do it on delivery).
                 waiters = std::move(it->second.waiters);
                 m_groups.erase(it);
             }
-            // Si el grupo ya no está, cancel() vació y borró el grupo antes de
-            // que este job (ya arrancado, incancelable) llegara: no hay waiters
-            // que servir.
+            // If the group is no longer there, cancel() emptied and erased the group before
+            // this job (already started, uncancelable) got here: there are no waiters
+            // to serve.
         }
 
-        // Las copias (y la decodificacion) se hacen FUERA del lock: con
-        // decenas de objetos del mismo path, el hilo principal se quedaría
-        // esperando el mutex justo mientras intenta pintar.
+        // The copies (and the decoding) are done OUTSIDE the lock: with
+        // dozens of objects of the same path, the main thread would end up
+        // waiting on the mutex just while it tries to draw.
         //
-        // Dos cachés LOCALES a este job, construidas UNA vez y compartidas por
-        // TODOS los waiters (nunca una vez por waiter):
-        //  - decodedByPiece: si dos waiters piden la MISMA pieza (100
-        //    instancias del mismo modelo estatico), decodificar su textura una
-        //    sola vez y copiar el vector de pixeles ya decodificados es mucho
-        //    mas barato que decodificar N veces — stbi_load es la mitad del
-        //    coste de cargar un modelo (ver el comentario de DecodedImage en
-        //    el header).
-        //  - pieceMeshesShared: el vector de punteros a TODAS las mallas del
-        //    fichero (solo si pieces.size() > 1) se construye una vez; cada
-        //    waiter recibe una copia del VECTOR de shared_ptr, que comparte
-        //    los Mesh (const, inmutables) en vez de duplicarlos. Con un modelo
-        //    de 200 piezas cargado como 200 hijos, construir las 200 mallas
-        //    por waiter serian 40000 copias; asi son 200, compartidas.
+        // Two caches LOCAL to this job, built ONCE and shared by
+        // ALL the waiters (never once per waiter):
+        //  - decodedByPiece: if two waiters ask for the SAME piece (100
+        //    instances of the same static model), decoding its texture only
+        //    once and copying the already decoded pixel vector is much
+        //    cheaper than decoding N times; stbi_load is half the
+        //    cost of loading a model (see the DecodedImage comment in
+        //    the header).
+        //  - pieceMeshesShared: the vector of pointers to ALL the meshes of the
+        //    file (only if pieces.size() > 1) is built once; each
+        //    waiter receives a copy of the shared_ptr VECTOR, which shares
+        //    the Meshes (const, immutable) instead of duplicating them. With a model
+        //    of 200 pieces loaded as 200 children, building the 200 meshes
+        //    per waiter would be 40000 copies; this way it is 200, shared.
         std::unordered_map<int, std::vector<DecodedImage>> decodedByPiece;
         std::vector<std::shared_ptr<const Mesh>>            pieceMeshesShared;
         if (model && loaded.error.empty() && model->pieces.size() > 1)
@@ -335,11 +335,11 @@ namespace DonTopo
         }
 
         std::lock_guard<std::mutex> lock(m_mutex);
-        // Si hubo un cancelAllPending() mientras copiábamos fuera del lock, la
-        // generación cambió: estos waiters ya se cancelaron (su m_pending se
-        // puso a 0 allí) y sus targets son basura. Descartar los resultados —
-        // postarlos dejaría m_pending negativo para siempre en el siguiente
-        // pumpCompleted (-= out.size()) y entregaría meshes de objetos muertos.
+        // If a cancelAllPending() happened while we were copying outside the lock, the
+        // generation changed: these waiters were already cancelled (their m_pending was
+        // set to 0 there) and their targets are garbage. Discard the results;
+        // posting them would leave m_pending negative forever at the next
+        // pumpCompleted (-= out.size()) and would deliver meshes for dead objects.
         if (myEpoch != m_epoch)
             return;
         for (auto& r : results)
@@ -352,9 +352,9 @@ namespace DonTopo
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_inbox.empty()) return ready;
-            // Swap-and-drain: se saca todo bajo el lock y se procesa fuera. Con
-            // el presupuesto agotado, lo que sobra vuelve al buzón — nunca se
-            // descarta.
+            // Swap-and-drain: everything is taken out under the lock and processed outside. With
+            // the budget exhausted, what is left goes back to the mailbox; it is never
+            // discarded.
             ready.swap(m_inbox);
         }
 
@@ -367,8 +367,8 @@ namespace DonTopo
             const float elapsedMs = std::chrono::duration<float, std::milli>(
                 std::chrono::steady_clock::now() - start).count();
 
-            // El presupuesto se comprueba ANTES de aceptar cada elemento. Con
-            // budgetMs == 0 no sale ninguno, que es justo lo que pide el test.
+            // The budget is checked BEFORE accepting each element. With
+            // budgetMs == 0 none comes out, which is exactly what the test asks for.
             if (elapsedMs >= budgetMs && !out.empty())
             {
                 leftover.push_back(std::move(r));
@@ -386,12 +386,12 @@ namespace DonTopo
             std::lock_guard<std::mutex> lock(m_mutex);
             for (auto& r : leftover)
                 m_inbox.push_back(std::move(r));
-            // Un decremento por resultado ENTREGADO. Cada resultado nació de un
-            // waiter que sumó +1 en requestMesh() y que runJob() sacó de su
-            // grupo (nunca lo canceló cancel(), o no estaría aquí). Los waiters
-            // cancelados antes de construirse ya decrementaron en cancel() y no
-            // llegan a 'out'. Sin tombstones: la exclusión grupo-vs-resultado
-            // bajo m_mutex garantiza que no hay doble conteo (ver cancel()).
+            // One decrement per DELIVERED result. Each result was born from a
+            // waiter that added +1 in requestMesh() and that runJob() took out of its
+            // group (cancel() never cancelled it, or it would not be here). Waiters
+            // cancelled before being built already decremented in cancel() and do not
+            // reach 'out'. No tombstones: the group-vs-result exclusion
+            // under m_mutex guarantees there is no double counting (see cancel()).
             m_pending -= static_cast<int>(out.size());
         }
         return out;
@@ -412,14 +412,14 @@ namespace DonTopo
     bool applyLoadedMesh(LoadedMesh& r, Scene& scene, EditorRenderer& renderer,
                          std::string* outError, std::vector<std::string>* outWarnings)
     {
-        // Recorrido en vivo, no una lista cacheada: el editor permite borrar
-        // GameObjects en cualquier frame, así que un puntero guardado en la
-        // petición sería colgante. Mismo motivo que el liveCube de main.cpp:293.
+        // Live traversal, not a cached list: the editor allows deleting
+        // GameObjects on any frame, so a pointer stored in the
+        // request would dangle. Same reason as the liveCube in main.cpp:293.
         GameObject* target = nullptr;
         scene.traverse([&](GameObject* go) { if (go->id == r.targetId) target = go; });
 
-        // Borrado mientras cargaba: el trabajo del worker se tira y ya está. Sin
-        // tocar memoria liberada, que es justo lo que evita resolver por id.
+        // Deleted while loading: the worker's work is thrown away and that is it. Without
+        // touching freed memory, which is exactly what resolving by id avoids.
         if (!target) return false;
 
         target->pendingMeshJob = 0;
@@ -431,58 +431,58 @@ namespace DonTopo
         }
         if (!r.mesh) return false;
 
-        // Precondición IMPUESTA, no solo documentada: los dos callers de hoy
-        // (PropertiesPanel::loadMeshForSelected, y la rama async de
-        // Scene::nodeFromJson cuando encola loader->requestMesh) encolan la
-        // petición con el target todavía sin malla, pero nada obliga a que
-        // siga siendo así mañana. Guardar la malla previa aquí y restaurarla
-        // en el catch cubre el fallo Y deja de ser un contrato que el
-        // siguiente caller pudiera romper sin que nada lo delate.
+        // ENFORCED precondition, not just documented: today's two callers
+        // (PropertiesPanel::loadMeshForSelected, and the async branch of
+        // Scene::nodeFromJson when it enqueues loader->requestMesh) enqueue the
+        // request with the target still having no mesh, but nothing forces that to
+        // stay true tomorrow. Saving the previous mesh here and restoring it
+        // in the catch covers the failure AND stops being a contract that the
+        // next caller could break without anything revealing it.
         const std::shared_ptr<const Mesh> previousMesh = target->getMesh();
 
-        // Los overrides pisan mesh.material más abajo (applyMaterialOverrides),
-        // pero r.images sigue trayendo los píxeles que decodeSlot sacó del FBX
-        // EN EL WORKER (runJob(), más arriba en este fichero), ANTES de que
-        // nadie pisara nada. Renderer::createSharedGpuMesh (Vulkan) PREFIERE
-        // esos píxeles ya decodificados sobre la ruta del material: sin este
-        // filtro, un override sobre un FBX que trae textura propia —el caso
-        // normal— subiría a GPU la del FBX pese al override, exactamente el
-        // síntoma que el reordenamiento de abajo dice estar evitando. Peor
-        // aún: la clave de SharedGpuMesh SÍ lee la ruta ya pisada
-        // (makeSharedMeshKey), así que la entrada quedaría registrada con la
-        // clave del override pero los píxeles del FBX dentro — cualquier otro
-        // objeto que comparta FBX y el mismo override reutilizaría esa
-        // entrada envenenada, y ni rebuildStaticMesh la arregla (su acquire()
-        // encuentra la clave ya viva y no sube ni un byte). D3D12 no lo sufre
-        // —su addStaticMesh ignora el parámetro de imágenes decodificadas—
-        // pero el filtro se aplica aquí, antes de llamar a ningún backend,
-        // para que el resultado no dependa de cuál esté activo.
+        // The overrides overwrite mesh.material further down (applyMaterialOverrides),
+        // but r.images still carries the pixels that decodeSlot took from the FBX
+        // IN THE WORKER (runJob(), further up in this file), BEFORE
+        // anyone overwrote anything. Renderer::createSharedGpuMesh (Vulkan) PREFERS
+        // those already decoded pixels over the material's path: without this
+        // filter, an override on an FBX that carries its own texture (the
+        // normal case) would upload the FBX's to the GPU despite the override, exactly the
+        // symptom that the reordering below claims to avoid. Worse
+        // still: the SharedGpuMesh key DOES read the already overwritten path
+        // (makeSharedMeshKey), so the entry would be registered with the
+        // override's key but the FBX's pixels inside; any other
+        // object that shares the FBX and the same override would reuse that
+        // poisoned entry, and not even rebuildStaticMesh fixes it (its acquire()
+        // finds the key already alive and does not upload a single byte). D3D12 does not suffer from it
+        // (its addStaticMesh ignores the decoded images parameter)
+        // but the filter is applied here, before calling any backend,
+        // so that the result does not depend on which one is active.
         //
-        // Orden: setMesh -> applyMaterialOverrides -> filtro de decoded ->
-        // registro en el Renderer. ANTES el orden era registro -> setMesh (el
-        // registro iba primero para que, si lanzaba, target->setMesh nunca se
-        // llegara a ejecutar y el GameObject quedara intacto). Se invierte
-        // porque addSkinnedMesh/addStaticMesh SUBEN A GPU el material y las
-        // imágenes decodificadas tal cual estén en ESE instante; el filtro
-        // necesita ir DESPUÉS de applyMaterialOverrides (para saber qué pisó
-        // el override) y ANTES del registro (para que lo filtrado no llegue a
-        // subir). applyMaterialOverrides opera sobre el GameObject (lee
-        // target->materialOverrides y escribe en target->getMesh()->material),
-        // así que necesita el setMesh ya hecho — no puede ir suelta sobre
-        // r.mesh antes de tener target enlazado.
+        // Order: setMesh -> applyMaterialOverrides -> decoded filter ->
+        // registration in the Renderer. BEFORE, the order was registration -> setMesh (the
+        // registration went first so that, if it threw, target->setMesh would never
+        // get executed and the GameObject would stay intact). It is reversed
+        // because addSkinnedMesh/addStaticMesh UPLOAD TO THE GPU the material and the
+        // decoded images as they are at THAT instant; the filter
+        // has to go AFTER applyMaterialOverrides (to know what the
+        // override overwrote) and BEFORE the registration (so that what is filtered never
+        // gets uploaded). applyMaterialOverrides operates on the GameObject (reads
+        // target->materialOverrides and writes into target->getMesh()->material),
+        // so it needs setMesh already done; it cannot go loose on
+        // r.mesh before target is linked.
         //
-        // La garantía de "GameObject intacto si el registro lanza" se
-        // conserva invirtiendo la reparación en vez del orden: en el catch se
-        // restaura la malla previa (target->setMesh(previousMesh), guardada
-        // arriba) en vez de asumir que siempre era nullptr.
+        // The guarantee of "GameObject intact if the registration throws" is
+        // kept by reversing the repair instead of the order: in the catch the
+        // previous mesh is restored (target->setMesh(previousMesh), saved
+        // above) instead of assuming it was always nullptr.
         try
         {
             target->setMesh(r.mesh);
-            // ANTES de aplicar, que es cuando `mats` todavia describe lo que
-            // el usuario guardo: el aviso solo necesita el numero de materiales
-            // del mesh recien puesto, y applyMaterialOverrides no cambia ese
-            // numero, asi que el orden da igual para el contenido -- se pone
-            // aqui porque leerlo pegado al setMesh dice de que malla habla.
+            // BEFORE applying, which is when `mats` still describes what
+            // the user saved: the warning only needs the number of materials
+            // of the mesh just set, and applyMaterialOverrides does not change that
+            // number, so the order does not matter for the content; it is placed
+            // here because reading it right next to setMesh says which mesh it talks about.
             if (outWarnings)
                 collectMaterialOverrideWarnings(*target, *outWarnings);
             applyMaterialOverrides(*target);
@@ -507,16 +507,16 @@ namespace DonTopo
         std::vector<JobSystem::JobId> toCancel;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            // Bump de generación: un job ya arrancado (incancelable) que sacó
-            // sus waiters ANTES de este bump y todavía está copiando fuera del
-            // lock verá el epoch cambiado al ir a postar y descartará sus
-            // resultados (ver runJob()). Sin esto, esos posts dejarían
-            // m_pending negativo para siempre y entregarían meshes cancelados.
+            // Generation bump: an already started (uncancelable) job that took out
+            // its waiters BEFORE this bump and is still copying outside the
+            // lock will see the epoch changed when it goes to post and will discard its
+            // results (see runJob()). Without this, those posts would leave
+            // m_pending negative forever and would deliver cancelled meshes.
             ++m_epoch;
-            // Solo el id encolado por grupo: los ids reservados por waiters no
-            // primeros nunca se enviaron al JobSystem, así que cancelarlos solo
-            // ensuciaría su set m_cancelled (que no se limpia hasta que un job
-            // con ese id se saca de la cola, cosa que nunca pasaría).
+            // Only the id enqueued per group: the ids reserved by non-first
+            // waiters were never sent to the JobSystem, so cancelling them would only
+            // dirty its m_cancelled set (which is not cleaned until a job
+            // with that id is taken off the queue, which would never happen).
             for (const auto& [path, group] : m_groups)
                 toCancel.push_back(group.jobId);
             m_groups.clear();
@@ -524,9 +524,9 @@ namespace DonTopo
             m_pending = 0;
         }
 
-        // cancel() toma el lock del JobSystem, no el nuestro. Llamarlo dentro de
-        // nuestro lock sería un orden de adquisición cruzado con el worker, que
-        // toma primero el del JobSystem y luego el nuestro: deadlock clásico.
+        // cancel() takes the JobSystem's lock, not ours. Calling it inside
+        // our lock would be a crossed acquisition order with the worker, which
+        // takes the JobSystem's first and then ours: classic deadlock.
         for (JobSystem::JobId id : toCancel)
             m_jobs.cancel(id);
     }

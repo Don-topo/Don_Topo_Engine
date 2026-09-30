@@ -2,19 +2,19 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-// Profundidad de TODA la escena, escrita por el depth pre-pass de este mismo
-// frame. NEAREST: el filtrado lineal sobre D32_SFLOAT no es obligatorio en
-// Vulkan y aqui no aporta nada, cada tap quiere el texel exacto.
+// Depth of the WHOLE scene, written by this same frame's depth pre-pass.
+// NEAREST: linear filtering on D32_SFLOAT is not mandatory in Vulkan and
+// here it adds nothing, each tap wants the exact texel.
 layout(set = 0, binding = 0) uniform sampler2D depthTex;
 layout(set = 0, binding = 1, r32f) uniform writeonly image2D outAo;
 
-// Propia de este pipeline: el bloque UBO esta declarado en 5 shaders y meterle
-// un miembro desplazaria en silencio todo lo de detras por std140, y PushData
-// (la de pbr/triangle/outline) esta llena a 80 bytes exactos.
+// Specific to this pipeline: the UBO block is declared in 5 shaders and adding
+// a member would silently shift everything behind it under std140, and PushData
+// (the pbr/triangle/outline one) is full at exactly 80 bytes.
 layout(push_constant) uniform SsaoPush {
-    // p00, p11, p22, p32 de la proyeccion del frame. Con estos cuatro
-    // coeficientes se reconstruye la posicion en view space y se vuelve a
-    // proyectar, sin traer las dos matrices enteras.
+    // p00, p11, p22, p32 of the frame's projection. With these four
+    // coefficients the view space position is reconstructed and projected
+    // again, without bringing in the two whole matrices.
     vec4  projParams;
     vec2  invRes;
     float radius;
@@ -26,26 +26,26 @@ layout(push_constant) uniform SsaoPush {
 #define SSAO_SAMPLES 16
 const float PI = 3.14159265359;
 
-// z en view space (negativo) a partir del depth [0,1] de Vulkan:
+// view space z (negative) from Vulkan's depth [0,1]:
 // depth = (p22*z + p32) / -z  ->  z = p32 / (-depth - p22).
 float viewZ(float d)
 {
     return push.projParams.w / (-d - push.projParams.z);
 }
 
-// uv en [0,1] sobre el framebuffer -> posicion en view space.
-// El SIGNO de p11 da igual, y conviene saberlo porque los dos backends mandan
-// signos OPUESTOS: Vulkan el de su proyeccion con Y-flip, DirectX 12 el de la
-// suya sin flip. Aun asi la imagen sale identica, verificado comparando los dos.
+// uv in [0,1] over the framebuffer -> view space position.
+// The SIGN of p11 does not matter, and it is worth knowing because the two backends send
+// OPPOSITE signs: Vulkan the one from its projection with Y-flip, DirectX 12 the one from
+// its own without flip. Even so the image comes out identical, verified by comparing the two.
 //
-// Se cancela porque este pase nunca sale del espacio de pantalla: reconstruye
-// con p11, saca la normal de las PROPIAS posiciones reconstruidas y reproyecta
-// con el MISMO p11, asi que sp.y * p11 no cambia al invertir los dos. Invertir
-// el signo "para que cuadre con el comentario" no arregla nada y puede romperlo.
+// It cancels out because this pass never leaves screen space: it reconstructs
+// with p11, takes the normal from the reconstructed positions THEMSELVES and reprojects
+// with the SAME p11, so sp.y * p11 does not change when both are inverted. Inverting
+// the sign "to make it match the comment" fixes nothing and may break it.
 //
-// Lo que SI depende del signo es cualquier pase que salga a espacio de mundo con
-// la matriz completa: ahi la inversion no tiene con que cancelarse y hay que
-// meterla explicitamente (ver fog.comp y H62 en docs/renderer-audit.md).
+// What DOES depend on the sign is any pass that goes out to world space with
+// the full matrix: there the inversion has nothing to cancel against and must be
+// put in explicitly (see fog.comp and H62 in docs/renderer-audit.md).
 vec3 viewPos(vec2 uv, float d)
 {
     float z   = viewZ(d);
@@ -65,9 +65,9 @@ float hash2(vec2 p)
     return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453123);
 }
 
-// Kernel procedural: hemisferio +Z con las muestras apinadas cerca del origen
-// (peso cuadratico), que es donde el AO de contacto tiene la senal. Va aqui y
-// no en un buffer nuevo porque es constante y cabe en unas pocas ALU.
+// Procedural kernel: +Z hemisphere with the samples clustered near the origin
+// (quadratic weight), which is where contact AO has its signal. It goes here and
+// not in a new buffer because it is constant and fits in a few ALU ops.
 vec3 kernelSample(int i)
 {
     float a = hash1(float(i) * 3.0 + 0.0) * 2.0 - 1.0;
@@ -87,8 +87,8 @@ void main()
     vec2  uv = (vec2(px) + 0.5) * push.invRes;
     float d  = texture(depthTex, uv).r;
 
-    // Fondo: sin geometria no hay nada que ocluir, y la reconstruccion divide
-    // por cero justo ahi.
+    // Background: without geometry there is nothing to occlude, and the reconstruction divides
+    // by zero right there.
     if (d >= 1.0)
     {
         imageStore(outAo, px, vec4(1.0));
@@ -97,12 +97,12 @@ void main()
 
     vec3 P = viewPos(uv, d);
 
-    // Normal reconstruida del propio depth: de los dos vecinos de cada eje se
-    // queda el que menos salto de profundidad tiene, que es el que sigue estando
-    // en la MISMA superficie. Con la diferencia central a secas, un pixel al
-    // borde de una silueta mezclaria dos superficies y sacaria una normal que no
-    // existe. Asi no hace falta ningun attachment de normales ni tocar los
-    // pipelines de geometria.
+    // Normal reconstructed from the depth itself: of the two neighbors on each axis it
+    // keeps the one with the smaller depth jump, which is the one still
+    // on the SAME surface. With the plain central difference, a pixel at the
+    // edge of a silhouette would mix two surfaces and produce a normal that does not
+    // exist. This way no normals attachment is needed nor touching the geometry
+    // pipelines.
     vec2 tx = vec2(push.invRes.x, 0.0);
     vec2 ty = vec2(0.0, push.invRes.y);
     vec3 pR = viewPos(uv + tx, texture(depthTex, uv + tx).r);
@@ -120,12 +120,12 @@ void main()
         return;
     }
     N = normalize(N);
-    // Una superficie visible tiene su normal geometrica mirando a la camara.
+    // A visible surface has its geometric normal facing the camera.
     if (dot(N, P) > 0.0) N = -N;
 
-    // Rotacion distinta por pixel: sin ella los 16 rayos serian los mismos en
-    // toda la pantalla y el AO saldria en bandas. El blur de despues es el que
-    // convierte este ruido en gradiente.
+    // Different rotation per pixel: without it the 16 rays would be the same across
+    // the whole screen and the AO would come out in bands. The blur afterwards is what
+    // turns this noise into a gradient.
     float ang = hash2(vec2(px)) * 2.0 * PI;
     vec3  rv  = vec3(cos(ang), sin(ang), 0.0);
     vec3  T   = normalize(rv - N * dot(rv, N));
@@ -136,9 +136,9 @@ void main()
     for (int i = 0; i < SSAO_SAMPLES; i++)
     {
         vec3 sp = P + (TBN * kernelSample(i)) * push.radius;
-        if (sp.z >= 0.0) continue;              // detras del plano de la camara
+        if (sp.z >= 0.0) continue;              // behind the camera plane
 
-        // Reproyeccion con los mismos coeficientes: clip.w = -z.
+        // Reprojection with the same coefficients: clip.w = -z.
         vec2 sclip = vec2(sp.x * push.projParams.x, sp.y * push.projParams.y);
         vec2 suv   = (sclip / -sp.z) * 0.5 + 0.5;
         if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) continue;
@@ -147,13 +147,13 @@ void main()
         if (sd >= 1.0) continue;
         float sceneZ = viewZ(sd);
 
-        // En view space RH la camara mira a -Z: mas cerca = z mayor. Si lo que
-        // hay dibujado esta por delante de la muestra, la muestra esta tapada.
+        // In RH view space the camera looks at -Z: closer = greater z. If what is
+        // drawn is in front of the sample, the sample is covered.
         if (sceneZ >= sp.z + push.bias)
         {
-            // Un objeto muy lejano que cae en el mismo pixel no debe ocluir: sin
-            // esto, una pared del fondo oscureceria el borde de lo que tiene
-            // delante.
+            // A very distant object that falls on the same pixel must not occlude: without
+            // this, a wall in the background would darken the edge of what is in
+            // front of it.
             occ += smoothstep(0.0, 1.0, push.radius / max(abs(P.z - sceneZ), 1e-4));
         }
     }

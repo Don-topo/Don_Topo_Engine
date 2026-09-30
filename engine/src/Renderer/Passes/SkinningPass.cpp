@@ -13,7 +13,7 @@ namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// ── recursos ────────────────────────────────────────────────────────────────
+// ── resources ────────────────────────────────────────────────────────────────
 
 void SkinningPass::createPipelines(const Context& ctx)
 {
@@ -52,13 +52,13 @@ void SkinningPass::createPipelines(const Context& ctx)
         throw std::runtime_error("failed to create compute pipeline layout!");
     }
 
-    // --- Descriptor pool: el primero de la cadena (ver allocateSet) ---
+    // --- Descriptor pool: the first of the chain (see allocateSet) ---
     if (!addPool(ctx))
     {
         throw std::runtime_error("failed to create compute descriptor pool!");
     }
 
-    // --- Crear los tres pipelines ---
+    // --- Create the three pipelines ---
     auto makePipeline = [&](const std::string& spv, VkPipeline& pipeline)
     {
         auto module = loadShaderModule(ctx.gpu.device(), spv);
@@ -85,7 +85,7 @@ void SkinningPass::createPipelines(const Context& ctx)
 
 bool SkinningPass::addPool(const Context& ctx)
 {
-    // 12 SSBOs por set, que son los doce buffers que ata initSkinnedRenderObject.
+    // 12 SSBOs per set, which are the twelve buffers that initSkinnedRenderObject binds.
     VkDescriptorPoolSize ps{};
     ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     ps.descriptorCount = 12 * kSetsPerPool;
@@ -114,11 +114,11 @@ VkDescriptorPool SkinningPass::allocateSet(const Context& ctx, VkDescriptorSet& 
     dsAlloc.descriptorSetCount = 1;
     dsAlloc.pSetLayouts        = &m_descLayout;
 
-    // Dos intentos: el ultimo pool y, si esta lleno, uno recien creado. No hace
-    // falta recorrer los anteriores — al liberar un set su hueco vuelve a SU
-    // pool, asi que un pool viejo puede tener sitio; lo que se pierde por no
-    // buscarlo es un poco de memoria, no correccion, y a cambio el camino
-    // normal es una sola llamada.
+    // Two attempts: the last pool and, if it is full, a freshly created one. There
+    // is no need to go through the previous ones: when a set is freed its slot goes back to ITS
+    // pool, so an old pool may have room; what is lost by not
+    // looking for it is a bit of memory, not correctness, and in exchange the normal
+    // path is a single call.
     for (int intento = 0; intento < 2; ++intento)
     {
         if (!m_descPools.empty())
@@ -127,8 +127,8 @@ VkDescriptorPool SkinningPass::allocateSet(const Context& ctx, VkDescriptorSet& 
             const VkResult r = vkAllocateDescriptorSets(ctx.gpu.device(), &dsAlloc, &outSet);
             if (r == VK_SUCCESS)
                 return m_descPools.back();
-            // Cualquier cosa que no sea "este pool esta lleno" no la arregla
-            // otro pool.
+            // Anything that is not "this pool is full" is not fixed by
+            // another pool.
             if (r != VK_ERROR_OUT_OF_POOL_MEMORY && r != VK_ERROR_FRAGMENTED_POOL)
                 return VK_NULL_HANDLE;
         }
@@ -140,8 +140,8 @@ VkDescriptorPool SkinningPass::allocateSet(const Context& ctx, VkDescriptorSet& 
 
 void SkinningPass::destroyPipelines(const Context& ctx)
 {
-    // Los pools ANTES que nada: los descriptor sets de las mallas salen de aqui
-    // y el caller ya ha soltado los suyos.
+    // The pools BEFORE anything else: the meshes' descriptor sets come from here
+    // and the caller has already released its own.
     for (VkDescriptorPool pool : m_descPools)
     {
         if (pool != VK_NULL_HANDLE)
@@ -156,21 +156,21 @@ void SkinningPass::destroyPipelines(const Context& ctx)
     vkDestroyDescriptorSetLayout(ctx.gpu.device(), m_descLayout, nullptr);
 }
 
-// ── grabacion ───────────────────────────────────────────────────────────────
+// ── recording ───────────────────────────────────────────────────────────────
 
 void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
 {
     if (ctx.skinnedObjects.empty()) return;
 
-    // Personajes a skinear este frame. Borrado desde el editor, aún en vuelo
-    // (despachar skinning sobre un SSBO cuyo batch no ha señalado sería un
-    // read-after-write que la validación de sync marca) o fuera de cámara: los
-    // tres casos los resolvió el culling del principio del frame, y el bucle
-    // de dibujo de más abajo lee ESA misma lista. Saltar aquí un objeto que sí
-    // se dibujara le dejaría la pose del último frame en que fue visible. Y con
-    // el checkbox "Visible" apagado no se dibuja en ningún pass: skinearlo
-    // sería trabajo de GPU que nadie lee, y la pose se queda congelada igual
-    // que hace el culling con un personaje fuera de cámara.
+    // Characters to skin this frame. Deleted from the editor, still in flight
+    // (dispatching skinning over an SSBO whose batch has not signaled would be a
+    // read-after-write that the sync validation flags) or off camera: the
+    // three cases were resolved by the culling at the start of the frame, and the drawing
+    // loop further down reads THAT same list. Skipping here an object that does
+    // get drawn would leave it with the pose of the last frame in which it was visible. And with
+    // the "Visible" checkbox off it is not drawn in any pass: skinning it
+    // would be GPU work that nobody reads, and the pose stays frozen just
+    // as the culling does with a character off camera.
     std::vector<size_t> activos;
     activos.reserve(ctx.skinnedObjects.size());
     for (size_t i = 0; i < ctx.skinnedObjects.size(); i++)
@@ -181,8 +181,8 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
     }
     if (activos.empty()) return;
 
-    // El bloque de pose de este frame, en su copia: la pose del Animator o,
-    // sin él, una muestra (clip activo, peso 1) con el reloj de updateAnimation.
+    // This frame's pose block, in its copy: the Animator's pose or,
+    // without it, a sample (active clip, weight 1) with updateAnimation's clock.
     for (size_t i : activos)
     {
         SkinnedRenderObject& obj = ctx.skinnedObjects[i];
@@ -191,8 +191,8 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
         unica.count = 1;
         unica.samples[0] = { (int)obj.activeClip, obj.animTime, 1.0f, 0 };
         AnimationPose& pose = obj.hasPose ? obj.pose : unica;
-        // Las máscaras apuntan a la copia del objeto: el vector de objetos
-        // puede haberse realojado desde setAnimationPose.
+        // The masks point to the object's copy: the objects vector
+        // may have been reallocated since setAnimationPose.
         for (int L = 0; L < kMaxLayersPose; L++)
             pose.layers[L].mask = obj.poseMasks[L].empty() ? nullptr : &obj.poseMasks[L];
         writePoseBlock(pose, obj.boneCount,
@@ -211,9 +211,9 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
         return push;
     };
 
-    // Congelar la pose de pantalla de cada capa con un fade interrumpido
-    // ANTES de evaluar: poseTrs tiene la del frame anterior. Una vez por
-    // petición.
+    // Freeze the on-screen pose of each layer with an interrupted fade
+    // BEFORE evaluating: poseTrs holds the previous frame's. Once per
+    // request.
     auto pideCongelar = [](const SkinnedRenderObject& o) {
         if (!o.hasPose) return false;
         for (int L = 0; L < o.pose.layerCount; L++) if (o.pose.layers[L].freezeNow) return true;
@@ -253,12 +253,12 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
                              0, 1, &despues, 0, nullptr, 0, nullptr);
     }
 
-    // Tres FASES para todos los personajes, no tres pases por personaje: los
-    // buffers de cada uno son suyos, así que dentro de una fase no dependen
-    // entre sí y basta UNA barrera entre fases. Antes eran dos barreras por
-    // personaje, que serializaban a todos: 1,41 ms de 11,16 con 30 personajes
-    // (docs/animation-audit.md, fila 9). De paso cada pipeline se enlaza una
-    // vez por frame y no una por personaje.
+    // Three PHASES for all the characters, not three passes per character: each
+    // one's buffers are its own, so within a phase they do not depend on
+    // each other and ONE barrier between phases is enough. Before there were two barriers per
+    // character, which serialized all of them: 1.41 ms of 11.16 with 30 characters
+    // (docs/animation-audit.md, row 9). Incidentally each pipeline is bound once
+    // per frame and not once per character.
     auto fase = [&](VkPipeline pipeline, const std::vector<size_t>& lista, uint32_t flags, auto grupos) {
         if (lista.empty()) return;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
@@ -274,7 +274,7 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
             vkCmdDispatch(cmd, grupos(obj), 1, 1);
         }
     };
-    // Lo escrito por compute en una fase lo lee compute en la siguiente.
+    // What compute wrote in one phase is read by compute in the next.
     auto barreraEntreFases = [&]() {
         VkMemoryBarrier mb{};
         mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -286,34 +286,34 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
             0, 1, &mb, 0, nullptr, 0, nullptr);
     };
 
-    // Los personajes con IK necesitan los transforms de MUNDO entre la
-    // jerarquía y el skinning, así que su jerarquía corre dos veces: la primera
-    // sin la pasada 2 (flags bit 0), bone_ik corrige los locales y la segunda
-    // deja ya las matrices de skinning. Los demás no pagan nada.
+    // Characters with IK need the WORLD transforms between the
+    // hierarchy and the skinning, so their hierarchy runs twice: the first time
+    // without pass 2 (flags bit 0), bone_ik corrects the locals and the second
+    // leaves the skinning matrices ready. The others pay nothing.
     std::vector<size_t> conIk;
     for (size_t i : activos)
         if (ctx.skinnedObjects[i].ik.count > 0) conIk.push_back(i);
 
-    // 1) bone_eval: claves -> transformaciones locales. Un hilo por hueso.
+    // 1) bone_eval: keys -> local transformations. One thread per bone.
     fase(m_boneEval, activos, 0u, [](const SkinnedRenderObject& o) { return (o.boneCount + 63) / 64; });
     barreraEntreFases();
     if (!conIk.empty())
     {
-        // 2a) jerarquía solo mundo y 2b) IK sobre los locales.
+        // 2a) world-only hierarchy and 2b) IK over the locals.
         fase(m_boneHierarchy, conIk, 1u, [](const SkinnedRenderObject&) { return 1u; });
         barreraEntreFases();
         fase(m_boneIk, conIk, 1u, [](const SkinnedRenderObject&) { return 1u; });
         barreraEntreFases();
     }
-    // 2) bone_hierarchy: locales -> finales (mundo x inverse bind pose). Un
-    //    workgroup por personaje, por niveles de profundidad.
+    // 2) bone_hierarchy: locals -> finals (world x inverse bind pose). One
+    //    workgroup per character, by depth levels.
     fase(m_boneHierarchy, activos, 0u, [](const SkinnedRenderObject&) { return 1u; });
     barreraEntreFases();
-    // 3) skinning: vértices deformados. Un hilo por vértice.
+    // 3) skinning: deformed vertices. One thread per vertex.
     fase(m_skinning, activos, 0u, [](const SkinnedRenderObject& o) { return (o.vertexCount + 63) / 64; });
 
-    // Los vértices escritos por compute los lee el ensamblador de vértices de
-    // los pases de dibujo: una sola barrera para todos los personajes.
+    // The vertices written by compute are read by the vertex assembler of
+    // the drawing passes: a single barrier for all the characters.
     VkMemoryBarrier alDibujo{};
     alDibujo.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     alDibujo.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;

@@ -18,9 +18,9 @@ namespace DonTopo {
 // ── Depth pre-pass ──────────────────────────────────────────────────────────
 void DepthPrepassPass::createRenderPassAndPipeline(const Context& ctx)
 {
-    // NEAREST: ni D32_SFLOAT ni R32_SFLOAT tienen garantizado el filtrado
-    // lineal, y los dos shaders muestrean a texel exacto. CLAMP_TO_EDGE para
-    // que los taps del borde no traigan profundidad del lado opuesto.
+    // NEAREST: neither D32_SFLOAT nor R32_SFLOAT is guaranteed to support linear
+    // filtering, and the two shaders sample at exact texel. CLAMP_TO_EDGE so that
+    // the edge taps do not bring in depth from the opposite side.
     VkSamplerCreateInfo si{};
     si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     si.magFilter    = VK_FILTER_NEAREST;
@@ -32,7 +32,7 @@ void DepthPrepassPass::createRenderPassAndPipeline(const Context& ctx)
     if (vkCreateSampler(ctx.gpu.device(), &si, nullptr, &m_sampler) != VK_SUCCESS)
         throw std::runtime_error("failed to create ssao sampler!");
 
-    // --- Render pass del depth pre-pass (solo profundidad) ---------------
+    // --- Depth pre-pass render pass (depth only) ---------------
     VkAttachmentDescription depthAtt{};
     depthAtt.format         = VK_FORMAT_D32_SFLOAT;
     depthAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
@@ -41,7 +41,7 @@ void DepthPrepassPass::createRenderPassAndPipeline(const Context& ctx)
     depthAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depthAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAtt.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    // READ_ONLY: en cuanto acaba el pass, el compute del SSAO la muestrea.
+    // READ_ONLY: as soon as the pass ends, the SSAO compute samples it.
     depthAtt.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference depthRef{};
@@ -53,15 +53,15 @@ void DepthPrepassPass::createRenderPassAndPipeline(const Context& ctx)
     subpass.pDepthStencilAttachment = &depthRef;
 
     VkSubpassDependency deps[2]{};
-    // Entrada: el compute del frame anterior en este mismo slot pudo estar
-    // leyendo esta imagen.
+    // Input: the previous frame's compute in this same slot may have been
+    // reading this image.
     deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
     deps[0].dstSubpass    = 0;
     deps[0].srcStageMask  = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     deps[0].dstStageMask  = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     deps[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    // Salida: ssao.comp muestrea la profundidad recién escrita.
+    // Output: ssao.comp samples the freshly written depth.
     deps[1].srcSubpass    = 0;
     deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
     deps[1].srcStageMask  = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
@@ -80,7 +80,7 @@ void DepthPrepassPass::createRenderPassAndPipeline(const Context& ctx)
     if (vkCreateRenderPass(ctx.gpu.device(), &rpInfo, nullptr, &m_renderPass) != VK_SUCCESS)
         throw std::runtime_error("failed to create ssao depth render pass!");
 
-    // --- Pipeline del pre-pass (vertex-only, como el de sombras) ---------
+    // --- Pre-pass pipeline (vertex-only, like the shadow one) ---------
     VkShaderModule vertModule = loadShaderModule(ctx.gpu.device(), "shaders/depth_prepass.vert.spv");
 
     VkPipelineShaderStageCreateInfo vertStage{};
@@ -122,9 +122,9 @@ void DepthPrepassPass::createRenderPassAndPipeline(const Context& ctx)
     rasterizer.cullMode    = VK_CULL_MODE_NONE;
     rasterizer.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.lineWidth   = 1.0f;
-    // Sin depthBias, al reves que el pass de sombras: esta profundidad no se
-    // compara contra nada, se reconstruye a posicion. Un sesgo aqui movería
-    // la geometría en Z y el AO saldría despegado del contacto.
+    // No depthBias, unlike the shadow pass: this depth is not compared against
+    // anything, it is reconstructed into a position. A bias here would move
+    // the geometry in Z and the AO would come out detached from the contact.
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -158,20 +158,20 @@ void DepthPrepassPass::createRenderPassAndPipeline(const Context& ctx)
     pipelineInfo.pDepthStencilState  = &depthStencil;
     pipelineInfo.pColorBlendState    = &colorBlend;
     pipelineInfo.pDynamicState       = &dynamicState;
-    // Prestado del pass de sombras: mismos dos sets (objeto + SSBO de
-    // instancias) y mismo rango de push constants, que este shader no usa.
+    // Borrowed from the shadow pass: same two sets (object + instance
+    // SSBO) and same push constant range, which this shader does not use.
     pipelineInfo.layout              = ctx.shadowPipelineLayout;
     pipelineInfo.renderPass          = m_renderPass;
     if (vkCreateGraphicsPipelines(ctx.gpu.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline) != VK_SUCCESS)
         throw std::runtime_error("failed to create ssao depth pipeline!");
 
-    // Variante para las mallas con huesos. Todo el estado se copia del de
-    // arriba; lo unico distinto es el vertex input, igual que en ShadowPass.
+    // Variant for the meshes with bones. All the state is copied from the one
+    // above; the only difference is the vertex input, as in ShadowPass.
     //
-    // stride 80 y no sizeof(SkinnedVertex): aquel es el vertice de ENTRADA del
-    // compute (7 x vec4, con indices y pesos de hueso). Lo que se dibuja aqui es
-    // su SALIDA, el OutputVertex de skinning.comp: 5 x vec4 con la posicion en
-    // el primero.
+    // stride 80 and not sizeof(SkinnedVertex): that one is the compute's INPUT vertex
+    // (7 x vec4, with bone indices and weights). What is drawn here is
+    // its OUTPUT, the OutputVertex of skinning.comp: 5 x vec4 with the position in
+    // the first one.
     VkVertexInputBindingDescription skinnedBinding{};
     skinnedBinding.binding   = 0;
     skinnedBinding.stride    = 5 * (uint32_t)sizeof(glm::vec4);  // 80 bytes
@@ -209,8 +209,8 @@ void DepthPrepassPass::createImages(const Context& ctx)
 {
     for (int f = 0; f < kFramesInFlight; f++)
     {
-        // Depth del pre-pass. SAMPLED ademas de ATTACHMENT: lo muestrea
-        // ssao.comp.
+        // Pre-pass depth. SAMPLED in addition to ATTACHMENT: ssao.comp samples
+        // it.
         ctx.res.createImage(
             ctx.renderExtent.width, ctx.renderExtent.height,
             VK_FORMAT_D32_SFLOAT,
@@ -219,7 +219,7 @@ void DepthPrepassPass::createImages(const Context& ctx)
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             m_image[f], m_memory[f]);
 
-        // Inline y no createTextureImageView: esa fija el aspecto a COLOR.
+        // Inline and not createTextureImageView: that one fixes the aspect to COLOR.
         VkImageViewCreateInfo dvi{};
         dvi.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         dvi.image                           = m_image[f];

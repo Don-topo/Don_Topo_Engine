@@ -2,17 +2,17 @@
 
 layout(location = 0) in vec3 inPos;
 
-// Solo los dos primeros miembros del bloque: std140 los deja en los offsets 0 y
-// 64 pase lo que pase detras, asi que declarar el bloque recortado es valido y
-// evita repetir aqui el resto del UBO.
+// Only the first two members of the block: std140 puts them at offsets 0 and
+// 64 no matter what comes behind, so declaring the trimmed block is valid and
+// avoids repeating the rest of the UBO here.
 layout(set = 0, binding = 0) uniform UBO {
     mat4 view;
     mat4 proj;
 } ubo;
 
-// Mismo SSBO por frame que triangle.vert y shadow.vert (set 1, binding 0), con
-// su propio rango: este pass culea con el frustum de la CAMARA, asi que su
-// tramo del buffer va detras del de las cascadas.
+// Same per-frame SSBO as triangle.vert and shadow.vert (set 1, binding 0), with
+// its own range: this pass culls with the CAMERA's frustum, so its
+// section of the buffer goes behind the cascades'.
 layout(std430, set = 1, binding = 0) readonly buffer InstanceData
 {
     mat4 models[];

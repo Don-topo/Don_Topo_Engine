@@ -3,25 +3,25 @@
 
 namespace DonTopo {
 
-// El estado de pipeline que comparten TODOS los pipelines graficos del pass de
-// escena: los dos de mallas estaticas, los dos de mallas con huesos y, a traves
-// de la plantilla, los cuatro del contorno de seleccion.
+// The pipeline state shared by ALL the graphics pipelines of the scene
+// pass: the two for static meshes, the two for bone meshes and, through
+// the template, the four of the selection outline.
 //
-// Estaba escrito dos veces —createPipeline y createSkinnedGraphicsPipelines—
-// con los mismos valores y distintos nombres de variable (H10). Se compararon
-// antes de unificar, mismo criterio que en H3 y H75, y solo habia UNA diferencia
-// aparente: el bloque estatico ponia depthBoundsTestEnable y stencilTestEnable a
-// VK_FALSE explicitamente y el de huesos no. Los dos se declaran con `{}`, que
-// los deja a 0 = VK_FALSE, asi que son equivalentes: no habia ninguna
-// divergencia deliberada que preservar.
+// It was written twice (createPipeline and createSkinnedGraphicsPipelines)
+// with the same values and different variable names (H10). They were compared
+// before unifying, same criterion as in H3 and H75, and there was only ONE
+// apparent difference: the static block set depthBoundsTestEnable and stencilTestEnable to
+// VK_FALSE explicitly and the bone one did not. Both are declared with `{}`, which
+// leaves them at 0 = VK_FALSE, so they are equivalent: there was no
+// deliberate divergence to preserve.
 //
-// Lo que NO entra aqui es lo que de verdad distingue a los dos: el vertex input
-// (stride del Vertex del motor contra los 80 bytes de la salida del compute de
-// skinning, con sus cinco atributos en offsets distintos) y los shaders.
+// What does NOT go in here is what really distinguishes the two: the vertex input
+// (the engine Vertex stride against the 80 bytes of the skinning compute
+// output, with its five attributes at different offsets) and the shaders.
 struct GraphicsPipelineState {
-    // Triangulos, viewport y scissor dinamicos (se fijan al grabar), relleno
-    // solido con culling de caras traseras y winding CCW, profundidad LESS con
-    // escritura, y opaco sin blending.
+    // Triangles, dynamic viewport and scissor (set when recording), solid
+    // fill with back-face culling and CCW winding, LESS depth with
+    // write, and opaque without blending.
     explicit GraphicsPipelineState(VkSampleCountFlagBits samples)
     {
         inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -37,9 +37,9 @@ struct GraphicsPipelineState {
         rasterization.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rasterization.lineWidth   = 1.0f;
 
-        // Lo fija el modo de AA, y TIENE que coincidir con el numero de muestras
-        // del render pass contra el que se compile el pipeline (escena para las
-        // mallas, composicion para el contorno) o el pipeline es invalido.
+        // Set by the AA mode, and it MUST match the number of samples
+        // of the render pass against which the pipeline is compiled (scene for the
+        // meshes, composition for the outline) or the pipeline is invalid.
         multisample.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         multisample.rasterizationSamples = samples;
 
@@ -65,19 +65,19 @@ struct GraphicsPipelineState {
         dynamic.pDynamicStates    = dynamicStates;
     }
 
-    // NO copiable, y no es un capricho: colorBlend.pAttachments apunta a
-    // blendAttachment y dynamic.pDynamicStates a dynamicStates, o sea a
-    // miembros de ESTE objeto. Una copia se llevaria los punteros apuntando al
-    // original, y si el original muere antes de crear el pipeline, Vulkan lee
-    // memoria muerta. Eso NO da error de validacion: se manifiesta mas tarde y
-    // en otro sitio, igual que un pipeline compilado contra un render pass ya
-    // destruido. Prohibirlo lo hace imposible en vez de documentarlo.
+    // NOT copyable, and it is not a whim: colorBlend.pAttachments points to
+    // blendAttachment and dynamic.pDynamicStates to dynamicStates, that is, to
+    // members of THIS object. A copy would carry the pointers still pointing to the
+    // original, and if the original dies before the pipeline is created, Vulkan reads
+    // dead memory. That does NOT give a validation error: it shows up later and
+    // elsewhere, just like a pipeline compiled against an already
+    // destroyed render pass. Forbidding it makes it impossible instead of documenting it.
     GraphicsPipelineState(const GraphicsPipelineState&)            = delete;
     GraphicsPipelineState& operator=(const GraphicsPipelineState&) = delete;
 
-    // Engancha en `pci` los punteros a los miembros de este objeto. Lo que el
-    // llamante pone despues —shaders, vertex input, layout y render pass— es
-    // justo lo que NO es comun.
+    // Hooks into `pci` the pointers to the members of this object. What the
+    // caller sets afterwards (shaders, vertex input, layout and render pass)
+    // is precisely what is NOT common.
     void fill(VkGraphicsPipelineCreateInfo& pci) const
     {
         pci.sType                = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;

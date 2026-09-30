@@ -13,11 +13,11 @@ namespace DonTopo
         const float PI = 3.14159265358979323846f;
         const float halfHeight = height * 0.5f;
 
-        // Perfil (r, y, normal_r, normal_y) de abajo a arriba: casquete inferior
-        // (capRings+1 anillos, polo incluido), cilindro (2 anillos, mismo radio),
-        // casquete superior (capRings+1 anillos, polo incluido). Se revoluciona
-        // este perfil alrededor del eje Y (mismo enfoque que Sphere::create pero
-        // con un perfil no-circular).
+        // Profile (r, y, normal_r, normal_y) from bottom to top: lower cap
+        // (capRings+1 rings, pole included), cylinder (2 rings, same radius),
+        // upper cap (capRings+1 rings, pole included). This profile is revolved
+        // around the Y axis (same approach as Sphere::create but with a
+        // non-circular profile).
         struct ProfilePoint { float r, y, nr, ny; };
         std::vector<ProfilePoint> profile;
 

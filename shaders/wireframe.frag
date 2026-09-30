@@ -4,5 +4,5 @@ layout(location = 0) out vec4 outColor;
 
 void main()
 {
-    outColor = vec4(0.1, 1.0, 0.3, 1.0); // verde wireframe
+    outColor = vec4(0.1, 1.0, 0.3, 1.0); // wireframe green
 }

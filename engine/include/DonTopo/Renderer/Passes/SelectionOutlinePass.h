@@ -5,30 +5,30 @@ namespace DonTopo {
 
 class GpuDevice;
 
-// Contorno de seleccion: el casco extruido que el EDITOR pinta alrededor del
-// objeto seleccionado. Nadie mas lo usa — `setOutlineTarget` solo lo llama
-// ViewportPanel—, y aun asi sus cuatro pipelines vivian sueltos dentro del
-// Renderer, que es el unico efecto del motor que seguia sin pase propio (H15).
+// Selection outline: the extruded hull that the EDITOR paints around the
+// selected object. Nobody else uses it (`setOutlineTarget` is only called by
+// ViewportPanel), and even so its four pipelines lived loose inside the
+// Renderer, which is the only engine effect that still had no pass of its own (H15).
 //
-// Que conste el numero, porque el motivo que daba la ficha no se sostiene: el
-// runtime se ahorra 1,88 ms de arranque, no mas. Esto se saca por el
-// acoplamiento —codigo que solo usa el editor dentro del backend—, igual que
-// paso con H8 cuando el reloj no se movio.
+// Let the number be on record, because the reason the ticket gave does not hold up: the
+// runtime saves 1.88 ms of startup, no more. This is pulled out because of the
+// coupling (code that only the editor uses inside the backend), just as
+// happened with H8 when the clock did not move.
 //
-// Reparto, el mismo que DepthPrepassPass y ShadowPass: esta clase posee los
-// PIPELINES y el objetivo seleccionado. Los DRAWS se quedan en el Renderer,
-// porque salen de sus listas de objetos, de su cache de mallas y de su
-// pipeline layout, que no son de este pase.
+// Split, the same as DepthPrepassPass and ShadowPass: this class owns the
+// PIPELINES and the selected target. The DRAWS stay in the Renderer,
+// because they come from its object lists, its mesh cache and its
+// pipeline layout, which are not this pass's.
 class SelectionOutlinePass {
 public:
     struct Context {
         GpuDevice&       gpu;
-        // Prestado del Renderer: el contorno usa EXACTAMENTE el mismo layout
-        // que las mallas (set 0 del objeto y las mismas push constants), asi
-        // que no crea uno propio.
+        // Borrowed from the Renderer: the outline uses EXACTLY the same layout
+        // as the meshes (the object's set 0 and the same push constants), so
+        // it does not create one of its own.
         VkPipelineLayout pipelineLayout;
-        // El de COMPOSICION, no el de escena: el contorno se pinta ya en LDR
-        // para que el tonemap no le cambie el naranja plano.
+        // The COMPOSITION one, not the scene one: the outline is painted already in LDR
+        // so that the tonemap does not change its flat orange.
         VkRenderPass     compositeRenderPass;
     };
 
@@ -36,20 +36,20 @@ public:
     SelectionOutlinePass(const SelectionOutlinePass&)            = delete;
     SelectionOutlinePass& operator=(const SelectionOutlinePass&) = delete;
 
-    // Los dos pipelines de mallas estaticas (relleno y wireframe). Se crean
-    // junto al pipeline principal porque comparten casi todo su estado, que
-    // llega en `plantilla` ya rellena.
+    // The two static mesh pipelines (fill and wireframe). They are created
+    // together with the main pipeline because they share almost all their state, which
+    // arrives in `plantilla` already filled in.
     //
-    // `plantilla` tiene que traer el vertex input del Vertex del motor: aqui
-    // solo se le cambian los shaders, el culling y los atributos.
+    // `plantilla` has to carry the engine's Vertex vertex input: here only
+    // the shaders, the culling and the attributes are changed.
     void createStaticPipelines(const Context& ctx,
                                const VkGraphicsPipelineCreateInfo& plantilla,
                                const VkPipelineRasterizationStateCreateInfo& rasterizacion,
                                const VkPipelineVertexInputStateCreateInfo& vertexInput,
                                uint32_t posOffset, uint32_t normalOffset);
-    // Los dos de mallas con huesos. Van aparte porque su vertex input es la
-    // SALIDA del compute de skinning (stride 80), no el Vertex empaquetado: el
-    // casco se extruye sobre la pose ya deformada de ESTE frame.
+    // The two for meshes with bones. They go apart because their vertex input is the
+    // OUTPUT of the skinning compute (stride 80), not the packed Vertex: the
+    // hull is extruded over THIS frame's already deformed pose.
     void createSkinnedPipelines(const Context& ctx,
                                 const VkGraphicsPipelineCreateInfo& plantilla,
                                 const VkPipelineRasterizationStateCreateInfo& rasterizacion,
@@ -57,8 +57,8 @@ public:
                                 uint32_t posOffset, uint32_t normalOffset);
     void destroyResources(const Context& ctx);
 
-    // Lo llama el editor una vez por frame. Con el default (-1, -1) no se
-    // dibuja nada, que es lo que ve el runtime siempre.
+    // Called by the editor once per frame. With the default (-1, -1) nothing is
+    // drawn, which is what the runtime always sees.
     void setTarget(int staticIndex, int skinnedIndex)
     {
         m_staticIndex  = staticIndex;
@@ -68,8 +68,8 @@ public:
     int  skinnedTarget() const { return m_skinnedIndex; }
     bool hasTarget()     const { return m_staticIndex >= 0 || m_skinnedIndex >= 0; }
 
-    // El pipeline que toca segun el modo de relleno. El Renderer lo bindea
-    // justo antes de su draw.
+    // The pipeline that applies according to the fill mode. The Renderer binds it
+    // right before its draw.
     VkPipeline staticPipeline(bool wireframe) const
     {
         return wireframe ? m_staticWire : m_static;
@@ -80,10 +80,10 @@ public:
     }
 
 private:
-    // Estado comun a los cuatro: descartar las caras FRONTALES. Las traseras
-    // del casco extruido quedan por detras de la superficie del objeto, asi
-    // que el depth test (LESS) solo deja pasar el reborde que sobresale de su
-    // silueta.
+    // State common to the four: discard the FRONT faces. The back faces
+    // of the extruded hull end up behind the object's surface, so
+    // the depth test (LESS) only lets through the rim that sticks out of its
+    // silhouette.
     static constexpr VkCullModeFlags kCullMode = VK_CULL_MODE_FRONT_BIT;
 
     void crearPar(const Context& ctx,

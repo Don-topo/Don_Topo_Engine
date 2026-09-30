@@ -15,15 +15,15 @@ namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// Los tres modos con pass propio. None y MSAA no lo tienen: en MSAA el resolve
-// ocurre dentro del pass de composicion.
+// The three modes with their own pass. None and MSAA do not have one: in MSAA the resolve
+// happens inside the composition pass.
 static bool needsIntermediate(RendererState::AaMode m)
 {
     return m == RendererState::AaMode::Fxaa || m == RendererState::AaMode::Ssaa
         || m == RendererState::AaMode::Taa;
 }
 
-// FXAA: mismo layout que declara fxaa.frag.
+// FXAA: same layout as declared by fxaa.frag.
 struct FxaaPush {
     float invResX;
     float invResY;
@@ -33,15 +33,15 @@ struct FxaaPush {
 };
 static_assert(sizeof(FxaaPush) == 20, "FxaaPush must stay at 20 bytes: fxaa.frag declares this layout");
 
-// SSAA: mismo layout que declara ssaa_resolve.frag.
+// SSAA: same layout as declared by ssaa_resolve.frag.
 struct SsaaPush {
-    float invSrcX;      // 1/ancho de la imagen intermedia (la grande)
+    float invSrcX;      // 1/width of the intermediate image (the big one)
     float invSrcY;
-    int32_t taps;       // muestras por eje del filtro de bajada
+    int32_t taps;       // samples per axis of the downsampling filter
 };
 static_assert(sizeof(SsaaPush) == 12, "SsaaPush must stay at 12 bytes: ssaa_resolve.frag declares this layout");
 
-// TAA: mismo layout que declara taa.frag.
+// TAA: same layout as declared by taa.frag.
 struct TaaPush {
     glm::mat4 reproject;
     float     invResX;
@@ -54,9 +54,9 @@ static_assert(sizeof(TaaPush) == 80, "TaaPush must stay at 80 bytes: taa.frag de
 // ── Anti-aliasing ───────────────────────────────────────────────────────────
 void AaPass::createRenderPasses(const Context& ctx)
 {
-    // Un solo attachment: la offscreen de siempre. El triangulo la
-    // cubre entera, asi que no hay nada que cargar. Sin depth: el contorno y
-    // los gizmos ya se dibujaron en el pass de composicion, aguas arriba.
+    // A single attachment: the usual offscreen. The triangle covers it
+    // entirely, so there is nothing to load. No depth: the outline and the
+    // gizmos were already drawn in the composition pass, upstream.
     VkAttachmentDescription colorAtt{};
     colorAtt.format         = ctx.swapChainFormat;
     colorAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
@@ -65,9 +65,9 @@ void AaPass::createRenderPasses(const Context& ctx)
     colorAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     colorAtt.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    // El MISMO finalLayout que deja el pass de composicion cuando el FXAA
-    // esta apagado: encender o apagar el efecto en caliente no deja a
-    // la offscreen en un layout distinto del que espera la UI o el blit.
+    // The SAME finalLayout that the composition pass leaves when FXAA
+    // is off: turning the effect on or off at runtime does not leave
+    // the offscreen in a layout different from the one the UI or the blit expects.
     colorAtt.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference colorRef{};
@@ -80,8 +80,8 @@ void AaPass::createRenderPasses(const Context& ctx)
     subpass.pColorAttachments    = &colorRef;
 
     VkSubpassDependency deps[2]{};
-    // Entrada: espera a que el pass de composicion haya terminado de escribir
-    // la imagen intermedia, que es lo unico que muestrea este pass.
+    // Input: waits for the composition pass to finish writing
+    // the intermediate image, which is the only thing this pass samples.
     deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
     deps[0].dstSubpass    = 0;
     deps[0].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -90,7 +90,7 @@ void AaPass::createRenderPasses(const Context& ctx)
     deps[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     deps[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
-    // Salida: la UI (o el blit headless) lee la imagen ya suavizada.
+    // Output: the UI (or the headless blit) reads the already smoothed image.
     deps[1].srcSubpass      = 0;
     deps[1].dstSubpass      = VK_SUBPASS_EXTERNAL;
     deps[1].srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -111,12 +111,12 @@ void AaPass::createRenderPasses(const Context& ctx)
     if (vkCreateRenderPass(ctx.gpu.device(), &rpInfo, nullptr, &m_renderPass) != VK_SUCCESS)
         throw std::runtime_error("failed to create aa render pass!");
 
-    // --- Variante del TAA: dos attachments ------------------------------
-    // El mismo color va a la vez a la offscreen (que se presenta) y al
-    // historial (que se muestrea el frame siguiente). Escribirlo una vez con
-    // dos targets ahorra un segundo pass entero sobre toda la pantalla.
+    // --- TAA variant: two attachments ------------------------------
+    // The same color goes at once to the offscreen (which is presented) and to the
+    // history (which is sampled the next frame). Writing it once with
+    // two targets saves a whole second pass over the entire screen.
     VkAttachmentDescription taaAtts[2] = { colorAtt, colorAtt };
-    // El historial no se presenta: sale listo para que lo lea taa.frag.
+    // The history is not presented: it comes out ready for taa.frag to read.
     taaAtts[1].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference taaRefs[2]{};
@@ -143,9 +143,9 @@ void AaPass::createRenderPasses(const Context& ctx)
 
 void AaPass::createPipelines(const Context& ctx)
 {
-    // Filtrado LINEAL: los tres modos muestrean entre texeles (FXAA a media
-    // distancia, SSAA en la rejilla de bajada, TAA en la uv reproyectada) y
-    // es de ahi de donde sale el suavizado. Con NEAREST no harian nada.
+    // LINEAR filtering: the three modes sample between texels (FXAA at half
+    // distance, SSAA on the downsampling grid, TAA at the reprojected uv) and
+    // that is where the smoothing comes from. With NEAREST they would do nothing.
     VkSamplerCreateInfo si{};
     si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     si.magFilter    = VK_FILTER_LINEAR;
@@ -157,7 +157,7 @@ void AaPass::createPipelines(const Context& ctx)
     if (vkCreateSampler(ctx.gpu.device(), &si, nullptr, &m_sampler) != VK_SUCCESS)
         throw std::runtime_error("failed to create aa sampler!");
 
-    // --- Layout de un binding: la imagen intermedia. FXAA y SSAA -------
+    // --- Layout of one binding: the intermediate image. FXAA and SSAA -------
     VkDescriptorSetLayoutBinding binding{};
     binding.binding         = 0;
     binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -183,7 +183,7 @@ void AaPass::createPipelines(const Context& ctx)
     if (vkCreateDescriptorPool(ctx.gpu.device(), &dpi, nullptr, &m_descPool) != VK_SUCCESS)
         throw std::runtime_error("failed to create aa descriptor pool!");
 
-    // --- Layout de tres bindings: color, historial y profundidad. TAA ---
+    // --- Layout of three bindings: color, history and depth. TAA ---
     VkDescriptorSetLayoutBinding taaBindings[3]{};
     for (int i = 0; i < 3; i++)
     {
@@ -211,8 +211,8 @@ void AaPass::createPipelines(const Context& ctx)
     if (vkCreateDescriptorPool(ctx.gpu.device(), &taaDpi, nullptr, &m_taaDescPool) != VK_SUCCESS)
         throw std::runtime_error("failed to create taa descriptor pool!");
 
-    // Un pipeline layout por modo: las push constants no tienen el mismo
-    // tamano y el TAA ademas usa otro descriptor set layout.
+    // One pipeline layout per mode: the push constants are not the same
+    // size and TAA also uses another descriptor set layout.
     auto makeLayout = [&](VkDescriptorSetLayout setLayout, uint32_t pushSize, VkPipelineLayout& out)
     {
         VkPushConstantRange pcr{};
@@ -233,9 +233,9 @@ void AaPass::createPipelines(const Context& ctx)
     makeLayout(m_descLayout,    (uint32_t)sizeof(SsaaPush), m_ssaaPipelineLayout);
     makeLayout(m_taaDescLayout, (uint32_t)sizeof(TaaPush),  m_taaPipelineLayout);
 
-    // Mismo vertex shader que la composicion: el triangulo sale de
-    // gl_VertexIndex y saca la UV en location 0, que es justo lo que esperan
-    // los tres fragment shaders.
+    // Same vertex shader as the composition: the triangle comes from
+    // gl_VertexIndex and outputs the UV at location 0, which is exactly what
+    // the three fragment shaders expect.
     VkShaderModule vertModule = loadShaderModule(ctx.gpu.device(), "shaders/fullscreen.vert.spv");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
@@ -269,9 +269,9 @@ void AaPass::createPipelines(const Context& ctx)
     ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    // El TAA escribe en DOS attachments (pantalla + historial) y el estado de
-    // blending tiene que declarar uno por attachment o el pipeline es
-    // invalido, aunque los dos sean identicos.
+    // TAA writes to TWO attachments (screen + history) and the blending
+    // state has to declare one per attachment or the pipeline is
+    // invalid, even if both are identical.
     VkPipelineColorBlendAttachmentState blend[2]{};
     for (int i = 0; i < 2; i++)
         blend[i].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -297,16 +297,16 @@ void AaPass::createPipelines(const Context& ctx)
     pci.pViewportState      = &vp;
     pci.pRasterizationState = &rs;
     pci.pMultisampleState   = &ms;
-    // Sin pDepthStencilState: ningun subpass de resolucion declara attachment
-    // de profundidad, asi que Vulkan permite (y espera) un puntero nulo.
+    // No pDepthStencilState: no resolve subpass declares a depth
+    // attachment, so Vulkan allows (and expects) a null pointer.
     pci.pDepthStencilState  = nullptr;
     pci.pColorBlendState    = &cb;
     pci.pDynamicState       = &dyn;
     pci.subpass             = 0;
 
-    // Los tres pipelines comparten TODO el estado fijo: solo cambian el
-    // fragment shader, el pipeline layout y (en el TAA) el render pass y el
-    // numero de attachments.
+    // The three pipelines share ALL the fixed state: only the
+    // fragment shader, the pipeline layout and (in TAA) the render pass and the
+    // number of attachments change.
     auto makePipeline = [&](const char* spv, VkPipelineLayout layout,
                             VkRenderPass pass, uint32_t attachments, VkPipeline& out)
     {
@@ -354,9 +354,9 @@ void AaPass::createImages(const Context& ctx)
 
     for (int f = 0; f < kFramesInFlight; f++)
     {
-        // Destino alternativo de la composicion. Tiene el tamano INTERNO del
-        // render, que en SSAA no es el de la ventana. COLOR_ATTACHMENT porque
-        // es un target de render, SAMPLED porque el pass de resolucion lo lee.
+        // Alternative destination of the composition. It has the INTERNAL size of the
+        // render, which in SSAA is not the window's. COLOR_ATTACHMENT because
+        // it is a render target, SAMPLED because the resolve pass reads it.
         ctx.res.createImage(
             ctx.renderExtent.width, ctx.renderExtent.height,
             ctx.swapChainFormat, VK_IMAGE_TILING_OPTIMAL,
@@ -365,9 +365,9 @@ void AaPass::createImages(const Context& ctx)
             m_srcImage[f], m_srcMemory[f]);
         ctx.res.createTextureImageView(m_srcImage[f], m_srcView[f], ctx.swapChainFormat);
 
-        // Framebuffer del pass de COMPOSICION apuntando aqui, con el mismo
-        // depth compartido que el framebuffer de siempre: el contorno y los
-        // gizmos siguen cargando la profundidad de la escena.
+        // Framebuffer of the COMPOSITION pass pointing here, with the same shared
+        // depth as the usual framebuffer: the outline and the gizmos keep
+        // loading the scene's depth.
         VkImageView compAtts[] = { m_srcView[f], ctx.sceneDepthView };
         VkFramebufferCreateInfo fbInfo{};
         fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -382,9 +382,9 @@ void AaPass::createImages(const Context& ctx)
 
         if (taa)
         {
-            // Historial: mismo formato y tamano que la imagen que se
-            // presenta. TRANSFER_DST no se usa para copiar nada: es el
-            // requisito de la transicion inicial de layout de aqui abajo.
+            // History: same format and size as the image that is
+            // presented. TRANSFER_DST is not used to copy anything: it is the
+            // requirement of the initial layout transition below.
             ctx.res.createImage(
                 ctx.viewport.width, ctx.viewport.height,
                 ctx.swapChainFormat, VK_IMAGE_TILING_OPTIMAL,
@@ -394,21 +394,21 @@ void AaPass::createImages(const Context& ctx)
                 m_historyImage[f], m_historyMemory[f]);
             ctx.res.createTextureImageView(m_historyImage[f], m_historyView[f], ctx.swapChainFormat);
 
-            // El historial se MUESTREA antes de escribirse: el primer frame
-            // de cada slot (y el primero tras cada resize) lo lee todavia
-            // recien creado. taa.frag descarta ese contenido por
-            // historyValid, pero el descriptor lo declara en
-            // SHADER_READ_ONLY y la capa de validacion exige que la imagen
-            // este de verdad en ese layout, no en UNDEFINED. Se pasa por
-            // TRANSFER_DST porque es la unica cadena que admite
-            // transitionImageLayout; no se copia nada.
+            // The history is SAMPLED before being written: the first frame
+            // of each slot (and the first after each resize) still reads it
+            // freshly created. taa.frag discards that content through
+            // historyValid, but the descriptor declares it in
+            // SHADER_READ_ONLY and the validation layer requires the image
+            // to really be in that layout, not in UNDEFINED. It goes through
+            // TRANSFER_DST because it is the only chain that transitionImageLayout
+            // supports; nothing is copied.
             ctx.res.transitionImageLayout(m_historyImage[f],
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             ctx.res.transitionImageLayout(m_historyImage[f],
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-            // Un solo pass escribe los dos: la imagen que se presenta y el
-            // historial que se leera el frame siguiente.
+            // A single pass writes both: the image that is presented and the
+            // history that will be read the next frame.
             VkImageView taaAtts[] = { ctx.offscreenView[f], m_historyView[f] };
             VkFramebufferCreateInfo taaFb = fbInfo;
             taaFb.renderPass      = m_historyRenderPass;
@@ -421,10 +421,10 @@ void AaPass::createImages(const Context& ctx)
         }
         else
         {
-            // Framebuffer del pass de resolucion: escribe en la offscreen de
-            // siempre, que es la que muestrea la UI y la que blitea el
-            // runtime headless. Va a tamano de VENTANA aunque la fuente sea
-            // mayor: eso es exactamente el downsample del SSAA.
+            // Framebuffer of the resolve pass: it writes to the usual offscreen,
+            // which is the one the UI samples and the one the headless runtime
+            // blits. It goes at WINDOW size even if the source is
+            // larger: that is exactly the SSAA downsample.
             VkFramebufferCreateInfo outFb = fbInfo;
             outFb.renderPass      = m_renderPass;
             outFb.attachmentCount = 1;
@@ -436,8 +436,8 @@ void AaPass::createImages(const Context& ctx)
         }
     }
 
-    // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
-    // free, igual que en el bloom, el SSAO y el SSR.
+    // The sets from the previous time point to already destroyed views: reset and not
+    // free, as in the bloom, the SSAO and the SSR.
     vkResetDescriptorPool(ctx.gpu.device(), m_descPool, 0);
     if (taa) vkResetDescriptorPool(ctx.gpu.device(), m_taaDescPool, 0);
 
@@ -457,13 +457,13 @@ void AaPass::createImages(const Context& ctx)
             infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             infos[0].imageView   = m_srcView[f];
             infos[0].sampler     = m_sampler;
-            // El historial que se LEE es el del otro slot: el que escribio el
-            // frame anterior. Con kFramesInFlight = 2 alternan solos.
+            // The history that is READ is the one from the other slot: the one written by the
+            // previous frame. With kFramesInFlight = 2 they alternate on their own.
             infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             infos[1].imageView   = m_historyView[(f + 1) % kFramesInFlight];
             infos[1].sampler     = m_sampler;
-            // Profundidad del depth pre-pass, que ya sale en el layout de
-            // lectura y se graba sin jitter (es la geometrica).
+            // Depth from the depth pre-pass, which already comes out in the read
+            // layout and is recorded without jitter (it is the geometric one).
             infos[2].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
             infos[2].imageView   = ctx.prepassDepthView[f];
             infos[2].sampler     = ctx.prepassDepthSampler;
@@ -537,24 +537,24 @@ void AaPass::destroyImages(const Context& ctx)
         m_sets[f]    = VK_NULL_HANDLE;
         m_taaSets[f] = VK_NULL_HANDLE;
     }
-    // El historial que quede es de un tamano o un modo que ya no existe.
+    // Whatever history remains is of a size or a mode that no longer exists.
     m_historyValid = false;
 }
 
 void AaPass::updateFrameMatrices(const Context& ctx, const glm::mat4& view, const glm::mat4& proj)
 {
-    // El relevo prev<-curr se hace aqui y TODOS los frames porque el motion
-    // blur tambien reproyecta con estas dos, y corre con el TAA apagado. La
-    // linea equivalente del final del pass del TAA escribe exactamente el
-    // mismo valor: con el TAA activo esto es redundante, no un cambio.
+    // The prev<-curr handover is done here and EVERY frame because motion
+    // blur also reprojects with these two, and it runs with TAA off. The
+    // equivalent line at the end of the TAA pass writes exactly the same
+    // value: with TAA active this is redundant, not a change.
     m_prevViewProj = m_currViewProj;
     m_currViewProj = proj * view;
     m_jitteredProj = proj;
     if (ctx.activeMode != AaMode::Taa) return;
 
-    // Secuencia y aplicacion en TaaJitter.h, compartidas con D3D12: estaban
-    // escritas dos veces y descuadrarlas no da error, solo hace converger el
-    // TAA a una imagen distinta segun el backend.
+    // Sequence and application in TaaJitter.h, shared with D3D12: they were
+    // written twice and getting them out of sync gives no error, it only makes
+    // TAA converge to a different image depending on the backend.
     m_jitter = taaJitterPixels(m_jitterIndex, ctx.state.taaJitterScale());
     applyTaaJitter(m_jitteredProj, m_jitter,
                    (float)ctx.renderExtent.width, (float)ctx.renderExtent.height);
@@ -564,11 +564,11 @@ void AaPass::record(const Context& ctx, VkCommandBuffer cmd)
 {
     if (!needsIntermediate(ctx.activeMode))
     {
-        // None y MSAA no tienen pass propio. En MSAA el resolve ocurre dentro
-        // del pass de composicion y su coste sale en renderGpuMs(); en None no
-        // hay ni un comando de mas: la composicion ya escribio directamente en
-        // la offscreen y la dejo en SHADER_READ_ONLY, que es exactamente
-        // lo que esperan la UI y el blit headless.
+        // None and MSAA do not have their own pass. In MSAA the resolve happens inside
+        // the composition pass and its cost comes out in renderGpuMs(); in None there
+        // is not a single extra command: the composition already wrote directly to
+        // the offscreen and left it in SHADER_READ_ONLY, which is exactly
+        // what the UI and the headless blit expect.
         m_passStamped[ctx.currentFrame] = false;
         return;
     }
@@ -576,11 +576,11 @@ void AaPass::record(const Context& ctx, VkCommandBuffer cmd)
     const bool taa = (ctx.activeMode == AaMode::Taa);
     const VkFramebuffer fb = taa ? m_historyFramebuffer[ctx.currentFrame]
                                  : m_framebuffer[ctx.currentFrame];
-    // Red de seguridad: el modo activo y los recursos construidos van
-    // siempre a la par (activeMode solo cambia dentro de
-    // rebuildAaResources), pero grabar un render pass con un framebuffer
-    // nulo mata el proceso. Si algun dia se vuelven a desincronizar, se
-    // pierde el anti-aliasing de un frame en vez de la aplicacion entera.
+    // Safety net: the active mode and the built resources always go
+    // together (activeMode only changes inside
+    // rebuildAaResources), but recording a render pass with a null
+    // framebuffer kills the process. If one day they get out of sync again, one
+    // frame of anti-aliasing is lost instead of the whole application.
     if (fb == VK_NULL_HANDLE)
     {
         m_passStamped[ctx.currentFrame] = false;
@@ -589,7 +589,7 @@ void AaPass::record(const Context& ctx, VkCommandBuffer cmd)
 
     if (ctx.timestampsSupported)
     {
-        // El pool ya lo reseteo el arranque del frame: aqui solo se escribe.
+        // The pool was already reset by the frame start: here it is only written to.
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ctx.queryPool, ctx.currentFrame * 4);
         m_passStamped[ctx.currentFrame] = true;
     }
@@ -598,11 +598,11 @@ void AaPass::record(const Context& ctx, VkCommandBuffer cmd)
     rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpInfo.renderPass        = taa ? m_historyRenderPass : m_renderPass;
     rpInfo.framebuffer       = fb;
-    // Tamano de VENTANA, no de render: este pass es justo el que baja de la
-    // resolucion interna a la de presentacion.
+    // WINDOW size, not render size: this pass is precisely the one that goes down from
+    // the internal resolution to the presentation one.
     rpInfo.renderArea.extent = ctx.viewport;
     rpInfo.renderArea.offset = {0, 0};
-    rpInfo.clearValueCount   = 0;   // los attachments son DONT_CARE
+    rpInfo.clearValueCount   = 0;   // the attachments are DONT_CARE
 
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -622,9 +622,9 @@ void AaPass::record(const Context& ctx, VkCommandBuffer cmd)
     case AaMode::Fxaa:
     {
         FxaaPush push{};
-        // invRes de la imagen que se MUESTREA. En FXAA la intermedia tiene el
-        // tamano de la ventana, pero se toma del extent interno igualmente
-        // para que el shader no dependa de que ambos coincidan.
+        // invRes of the image that is SAMPLED. In FXAA the intermediate has the
+        // window's size, but it is taken from the internal extent anyway
+        // so that the shader does not depend on both matching.
         push.invResX          = 1.0f / (float)ctx.renderExtent.width;
         push.invResY          = 1.0f / (float)ctx.renderExtent.height;
         push.subpix           = ctx.state.fxaaSubpix();
@@ -643,9 +643,9 @@ void AaPass::record(const Context& ctx, VkCommandBuffer cmd)
         SsaaPush push{};
         push.invSrcX = 1.0f / (float)ctx.renderExtent.width;
         push.invSrcY = 1.0f / (float)ctx.renderExtent.height;
-        // Una muestra por texel de origen y por eje: a factor 2 son los 4
-        // texeles que caen dentro del pixel de destino, que es exactamente el
-        // promedio que define el supersampling.
+        // One sample per source texel and per axis: at factor 2 they are the 4
+        // texels that fall inside the destination pixel, which is exactly the
+        // average that defines supersampling.
         push.taps    = (int32_t)std::lround((double)ctx.ssaaFactor);
         if (push.taps < 1) push.taps = 1;
 
@@ -659,9 +659,9 @@ void AaPass::record(const Context& ctx, VkCommandBuffer cmd)
     default:   // AaMode::Taa
     {
         TaaPush push{};
-        // De clip de este frame a clip del anterior, los dos SIN jitter: es
-        // la transformacion geometrica pura, el jitter es ruido de muestreo y
-        // meterlo aqui desplazaria el historial medio pixel cada frame.
+        // From this frame's clip to the previous one's clip, both WITHOUT jitter: it is
+        // the pure geometric transformation, jitter is sampling noise and putting
+        // it in here would shift the history half a pixel every frame.
         push.reproject    = m_prevViewProj * glm::inverse(m_currViewProj);
         push.invResX      = 1.0f / (float)ctx.viewport.width;
         push.invResY      = 1.0f / (float)ctx.viewport.height;
@@ -685,8 +685,8 @@ void AaPass::record(const Context& ctx, VkCommandBuffer cmd)
 
     if (taa)
     {
-        // A partir del segundo frame ya hay historial que acumular, y la
-        // view-proj de este frame pasa a ser la "anterior" del siguiente.
+        // From the second frame on there is history to accumulate, and this frame's
+        // view-proj becomes the next frame's "previous".
         m_historyValid = true;
         m_prevViewProj = m_currViewProj;
     }

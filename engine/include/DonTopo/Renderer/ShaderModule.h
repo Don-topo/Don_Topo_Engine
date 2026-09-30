@@ -5,31 +5,31 @@
 
 namespace DonTopo {
 
-// Carga de shaders SPIR-V, en un solo sitio.
+// Loading of SPIR-V shaders, in a single place.
 //
-// Esto vivia copiado en DIECISEIS ficheros —los doce pases, Gizmos, Skybox,
-// SplashScreen y UiSpriteBatch— como un par `loadSpv` + `makeModule` estatico
-// (H11). Once copias eran identicas byte a byte y las otras cinco solo
-// cambiaban el prefijo del mensaje de error, asi que unificar no cambia el
-// comportamiento de ninguna: el mensaje lleva la ruta, que dice lo mismo que
-// decia el prefijo y ademas cual de los dos shaders del modulo fallo.
+// This lived copied in SIXTEEN files (the twelve passes, Gizmos, Skybox,
+// SplashScreen and UiSpriteBatch) as a static `loadSpv` + `makeModule` pair
+// (H11). Eleven copies were byte-for-byte identical and the other five only
+// changed the error message prefix, so unifying does not change the
+// behavior of any: the message carries the path, which says the same thing the
+// prefix said and also which of the module's two shaders failed.
 //
-// Lo que SI cambia es que ahora se valida el tamano. Con la copia repetida
-// nadie lo hacia porque hacerlo obligaba a tocar los dieciseis sitios, que es
-// exactamente el sintoma que describia el hallazgo.
+// What DOES change is that the size is now validated. With the repeated copy
+// nobody did it because doing so meant touching the sixteen places, which is
+// exactly the symptom the finding described.
 
-// Lee un .spv entero. Lanza std::runtime_error, con la ruta en el mensaje, si
-// el fichero no abre o si su tamano no puede ser SPIR-V.
+// Reads a whole .spv. Throws std::runtime_error, with the path in the message, if
+// the file does not open or if its size cannot be SPIR-V.
 //
-// El tamano importa: `VkShaderModuleCreateInfo::pCode` es un `const uint32_t*`
-// y Vulkan lee `codeSize` bytes desde ahi. Un fichero truncado —una compilacion
-// de shaders interrumpida deja alguno a medias— hacia que la lectura se saliera
-// del vector, y el fallo aparecia mas tarde y en otro sitio.
+// The size matters: `VkShaderModuleCreateInfo::pCode` is a `const uint32_t*`
+// and Vulkan reads `codeSize` bytes from there. A truncated file (an interrupted
+// shader build leaves some half done) made the read run past the end
+// of the vector, and the failure showed up later and elsewhere.
 std::vector<char> readSpvFile(const std::string& path);
 
-// Lee y crea el modulo. Los veinte llamantes que habia hacian estas dos cosas
-// seguidas y ninguno se quedaba con el blob, asi que la unica forma util del
-// helper es esta. El modulo lo destruye el llamante, como antes.
+// Reads and creates the module. The twenty callers that existed did these two things
+// back to back and none kept the blob, so the only useful form of the
+// helper is this one. The module is destroyed by the caller, as before.
 VkShaderModule loadShaderModule(VkDevice device, const std::string& path);
 
 } // namespace DonTopo

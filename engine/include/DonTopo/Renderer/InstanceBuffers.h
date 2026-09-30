@@ -7,31 +7,31 @@ namespace DonTopo {
 
 class GpuDevice;
 
-// Reparto por bump dentro de un buffer ya mapeado: quien pide sitio dice cuantas
-// matrices quiere y recibe donde escribirlas, o **nullptr** si no caben.
+// Bump allocation inside an already mapped buffer: whoever asks for space says how many
+// matrices it wants and receives where to write them, or **nullptr** if they do not fit.
 //
-// Sin una sola linea de Vulkan a proposito. Aqui vive la unica logica del
-// asunto, asi que asi se puede afirmar entera sin GPU — y falta hacia, porque
-// esta guarda estaba copiada a mano en TRES sitios del Renderer:
+// Not a single line of Vulkan on purpose. The only logic of the
+// matter lives here, so all of it can be asserted without a GPU, and it was needed,
+// because this guard was copied by hand in THREE places in the Renderer:
 //
 //     if (m_instanceCursor >= m_instanceCapacity[m_currentFrame]) { ... break; }
 //     const uint32_t i = m_instanceCursor++;
 //     ((glm::mat4*)m_instanceMapped[m_currentFrame])[i] = sobj.transform;
 //
-// Con `alloc` no hay forma de escribir sin haber mirado: el que no comprueba el
-// nulo no escribe fuera del buffer, revienta en el acto. La aritmetica de
-// punteros y el cursor dejan de estar al alcance del llamante.
+// With `alloc` there is no way to write without having looked: whoever does not check the
+// null does not write outside the buffer, it blows up on the spot. The pointer arithmetic
+// and the cursor are no longer within the caller's reach.
 class InstanceCursor {
 public:
-    // Buffer del frame y matrices que caben. `mapped` nulo = no cabe nada, que
-    // es el estado valido de un frame cuyo buffer aun no existe.
+    // Buffer of the frame and matrices that fit. Null `mapped` = nothing fits, which
+    // is the valid state of a frame whose buffer does not exist yet.
     //
-    // **Este es el UNICO sitio que escribe el buffer y su capacidad**, y de ahi
-    // sale la invariante de la que vive todo lo demas: sin buffer, capacidad
-    // CERO. Por eso ni `alloc` ni `rest` vuelven a preguntar por el puntero —
-    // comprobar el tope ya cubre el caso, y una segunda guarda que no puede
-    // dispararse es una que nadie sabe si sigue haciendo falta (se saboteo:
-    // quitarla no ponia rojo ni un test).
+    // **This is the ONLY place that writes the buffer and its capacity**, and from that
+    // comes the invariant everything else lives on: no buffer, capacity
+    // ZERO. That is why neither `alloc` nor `rest` ask about the pointer again:
+    // checking the limit already covers the case, and a second guard that cannot
+    // fire is one that nobody knows whether it is still needed (it was sabotaged:
+    // removing it did not turn a single test red).
     void reset(glm::mat4* mapped, uint32_t capacity)
     {
         m_mapped   = mapped;
@@ -39,20 +39,20 @@ public:
         m_cursor   = 0;
     }
 
-    // `n` matrices contiguas, o nullptr si no caben.
+    // `n` contiguous matrices, or nullptr if they do not fit.
     //
-    // `outBase` recibe el INDICE de la primera, que es lo que el draw pone en
-    // `firstInstance` para que el shader la encuentre por `gl_InstanceIndex`.
-    // Va aqui y no en un `cursor()` leido aparte porque son el mismo acto: leer
-    // el indice antes de reservar y que la reserva falle deja un indice que
-    // apunta a lo que escriba el siguiente.
+    // `outBase` receives the INDEX of the first one, which is what the draw puts in
+    // `firstInstance` so that the shader finds it by `gl_InstanceIndex`.
+    // It goes here and not in a separately read `cursor()` because they are the same act: reading
+    // the index before reserving and having the reservation fail leaves an index that
+    // points to whatever the next one writes.
     glm::mat4* alloc(uint32_t n, uint32_t* outBase = nullptr)
     {
-        // La suma en 64 bits a proposito: con el cursor cerca del tope,
-        // `m_cursor + n` en 32 bits podria dar la vuelta y pasar la comparacion.
+        // The sum in 64 bits on purpose: with the cursor near the limit,
+        // `m_cursor + n` in 32 bits could wrap around and pass the comparison.
         //
-        // Sin buffer la capacidad es 0 (invariante de reset), asi que esta
-        // comprobacion tambien cubre ese caso y no hace falta mirar el puntero.
+        // Without a buffer the capacity is 0 (reset invariant), so this
+        // check also covers that case and there is no need to look at the pointer.
         if ((uint64_t)m_cursor + n > (uint64_t)m_capacity) return nullptr;
         glm::mat4* dst = m_mapped + m_cursor;
         if (outBase) *outBase = m_cursor;
@@ -60,21 +60,21 @@ public:
         return dst;
     }
 
-    // Lo que queda libre, para quien no sabe cuantas matrices va a escribir
-    // hasta que termina (el agrupado por lotes). Se cierra con commit().
+    // What is left free, for whoever does not know how many matrices it will write
+    // until it finishes (batch grouping). Closed with commit().
     struct Span {
-        glm::mat4* data     = nullptr;  // donde empieza el hueco libre
-        uint32_t   capacity = 0;        // matrices que caben ahi
-        uint32_t   base     = 0;        // indice de la primera, para firstInstance
+        glm::mat4* data     = nullptr;  // where the free gap starts
+        uint32_t   capacity = 0;        // matrices that fit there
+        uint32_t   base     = 0;        // index of the first one, for firstInstance
     };
 
     Span rest() const
     {
         Span s;
-        // La resta va con guarda porque es SIN SIGNO: un cursor pasado del tope
-        // daria una capacidad enorme en vez de cero, y eso es escribir fuera del
-        // buffer sin que nada avise. Con capacidad 0 (buffer sin mapear) tambien
-        // sale por aqui, asi que no hay que mirar el puntero aparte.
+        // The subtraction is guarded because it is UNSIGNED: a cursor past the limit
+        // would give a huge capacity instead of zero, and that is writing outside the
+        // buffer with nothing warning. With capacity 0 (unmapped buffer) it also
+        // exits through here, so there is no need to look at the pointer separately.
         if (m_cursor >= m_capacity) return s;
         s.base     = m_cursor;
         s.data     = m_mapped + m_cursor;
@@ -82,17 +82,17 @@ public:
         return s;
     }
 
-    // Cierra un `rest()`: `used` es lo que de verdad se escribio. Se recorta al
-    // tope por si el llamante miente; pasarse aqui movia el cursor fuera del
-    // buffer y el siguiente pase escribia en tierra de nadie.
+    // Closes a `rest()`: `used` is what was actually written. It is clamped to the
+    // limit in case the caller lies; going over here moved the cursor outside the
+    // buffer and the next pass wrote into no man's land.
     void commit(uint32_t used)
     {
         const uint32_t libre = m_capacity - m_cursor;
         m_cursor += (used < libre) ? used : libre;
     }
 
-    // Matrices ya escritas en el frame. Es la base de los `firstInstance` del
-    // siguiente pase, que comparte buffer con este.
+    // Matrices already written in the frame. It is the base of the `firstInstance` of the
+    // next pass, which shares the buffer with this one.
     uint32_t cursor() const { return m_cursor; }
     uint32_t capacity() const { return m_capacity; }
 
@@ -102,26 +102,26 @@ private:
     uint32_t   m_cursor   = 0;
 };
 
-// SSBO de transforms por instancia (set 1, binding 0): el buffer del que
-// triangle.vert y shadow.vert sacan el model matrix por `gl_InstanceIndex`.
+// Per-instance transforms SSBO (set 1, binding 0): the buffer from which
+// triangle.vert and shadow.vert take the model matrix by `gl_InstanceIndex`.
 //
-// Uno por frame-in-flight y mapeado en persistente, porque el frame anterior
-// puede seguir en vuelo leyendo el suyo. Los pases del frame COMPARTEN el
-// buffer: sombras escribe primero, la escena detras, y el cursor marca donde
-// acaba lo ya escrito para que el siguiente no lo pise.
+// One per frame-in-flight and persistently mapped, because the previous frame
+// may still be in flight reading its own. The passes of the frame SHARE the
+// buffer: shadows writes first, the scene after, and the cursor marks where
+// what has been written ends so that the next one does not overwrite it.
 //
-// Era estado suelto del Renderer —ocho miembros y tres metodos— y sale por lo
-// mismo que salieron los trece pases: los recursos y su destruccion viajan
-// juntos, y el que escribe ya no tiene que acordarse de nada.
+// It was loose Renderer state (eight members and three methods) and comes out for the
+// same reason the thirteen passes did: the resources and their destruction travel
+// together, and whoever writes no longer has to remember anything.
 class InstanceBuffers {
 public:
-    // Frames en vuelo. Renderer::MAX_FRAMES tiene que valer lo mismo, y hay un
-    // static_assert en Renderer.h que lo comprueba: si alguien sube uno y no el
-    // otro, los descriptor sets de los frames de mas nacerian sin buffer.
+    // Frames in flight. Renderer::MAX_FRAMES has to be worth the same, and there is a
+    // static_assert in Renderer.h that checks it: if someone raises one and not the
+    // other, the descriptor sets of the extra frames would be born without a buffer.
     static constexpr int kFrames = 2;
 
-    // Matrices del buffer inicial. Se duplica al crecer, asi que instanciar un
-    // objeto mas por frame (scripts Lua) no recrea el buffer en cada uno.
+    // Matrices of the initial buffer. It doubles when growing, so instancing one
+    // more object per frame (Lua scripts) does not recreate the buffer on each one.
     static constexpr uint32_t kInitialCapacity = 1024;
 
     struct Context {
@@ -132,18 +132,18 @@ public:
     InstanceBuffers(const InstanceBuffers&)            = delete;
     InstanceBuffers& operator=(const InstanceBuffers&) = delete;
 
-    // Set layout, pool, los kFrames sets y un buffer inicial para CADA frame.
-    // Los dos, no solo el actual: el descriptor set de cada frame tiene que
-    // apuntar a algo valido desde el primer draw.
+    // Set layout, pool, the kFrames sets and an initial buffer for EACH frame.
+    // Both, not just the current one: the descriptor set of each frame has to
+    // point to something valid from the first draw.
     void create(const Context& ctx);
     void destroy(const Context& ctx);
 
-    // Principio del frame: asegura sitio para `matrices` y pone el cursor a 0.
-    // Crecer recrea el buffer, asi que esto va ANTES de grabar nada del frame,
-    // nunca en mitad.
+    // Start of the frame: ensures room for `matrices` and sets the cursor to 0.
+    // Growing recreates the buffer, so this goes BEFORE recording anything of the frame,
+    // never in the middle.
     void beginFrame(const Context& ctx, int frame, uint32_t matrices);
 
-    // El reparto del frame en curso. Todo lo que escribe matrices pasa por aqui.
+    // The allocator of the current frame. Everything that writes matrices goes through here.
     InstanceCursor&       cur()       { return m_cur; }
     const InstanceCursor& cur() const { return m_cur; }
 
@@ -151,7 +151,7 @@ public:
     VkDescriptorSet       set(int frame) const { return m_descSets[frame]; }
 
 private:
-    // Crece el buffer de `frame` hasta que quepan `matrices`, si no cabian ya.
+    // Grows the buffer of `frame` until `matrices` fit, if they did not already.
     void ensureCapacity(const Context& ctx, int frame, uint32_t matrices);
     void destroyBuffer(const Context& ctx, int frame);
 
@@ -162,8 +162,8 @@ private:
     VkDeviceMemory        m_memory[kFrames]   = {};
     void*                 m_mapped[kFrames]   = {};
     uint32_t              m_capacity[kFrames] = {};   // en matrices
-    // El cursor NO es por frame: solo hay uno vivo cada vez, y beginFrame lo
-    // reapunta al buffer de ese frame.
+    // The cursor is NOT per frame: there is only one alive at a time, and beginFrame
+    // repoints it to that frame's buffer.
     InstanceCursor        m_cur;
 };
 

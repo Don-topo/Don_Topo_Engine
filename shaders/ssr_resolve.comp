@@ -2,16 +2,16 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-// Reflejo aislado que dejo ssr.comp.
+// Isolated reflection that ssr.comp left.
 layout(set = 0, binding = 0) uniform sampler2D srcTex;
-// Sin usar aqui: el descriptor set layout es el MISMO que el de ssr.comp (un
-// solo layout, un solo pipeline layout, un solo pool), y este pipeline
-// simplemente no lee este binding.
+// Unused here: the descriptor set layout is the SAME as ssr.comp's (a
+// single layout, a single pipeline layout, a single pool), and this pipeline
+// simply does not read this binding.
 layout(set = 0, binding = 1) uniform sampler2D depthTex;
-// La escena HDR, esta vez como storage: se lee y se reescribe el MISMO texel, asi
-// que no hay carrera posible entre invocaciones. Va antes del bloom a proposito:
-// el reflejo tiene que pasar por el umbral del bloom y por el tonemap ACES igual
-// que el resto de la imagen.
+// The HDR scene, this time as storage: the SAME texel is read and rewritten, so
+// no race is possible between invocations. It goes before the bloom on purpose:
+// the reflection has to go through the bloom threshold and the ACES tonemap just
+// like the rest of the image.
 layout(set = 0, binding = 2, rgba16f) uniform image2D outHdr;
 
 layout(push_constant) uniform SsrPush {
@@ -33,8 +33,8 @@ void main()
 
     vec3 refl = texelFetch(srcTex, px, 0).rgb;
     vec4 hdr  = imageLoad(outHdr, px);
-    // El alfa se conserva tal cual (lleva la mascara de SSR del objeto). Nadie lo
-    // lee despues de este punto, pero reescribirlo a otra cosa seria mentir sobre
-    // el contenido de la imagen.
+    // The alpha is kept as is (it carries the object's SSR mask). Nobody reads
+    // it after this point, but rewriting it to something else would be lying about
+    // the image's content.
     imageStore(outHdr, px, vec4(hdr.rgb + refl, hdr.a));
 }

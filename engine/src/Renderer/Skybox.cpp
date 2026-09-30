@@ -18,16 +18,16 @@ void Skybox::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
                   const std::array<std::string, 6>& facePaths,
                   VkSampleCountFlagBits samples)
 {
-    // Re-entrada: sin esto, una segunda llamada pisaba imagen, memoria, vista,
-    // sampler, pool, layout y pipeline sin destruir nada — un cubemap entero
-    // filtrado por cambio de cielo. Hoy no pasa (initSkybox se llama una sola
-    // vez, desde el arranque del sandbox y del runtime), pero IblPass ya está
-    // escrito para que puedan llamarlo otra vez (ver el "Reset y no free" de
-    // IblPass::precompute) y esto era la mitad que faltaba.
+    // Re-entry: without this, a second call overwrote image, memory, view,
+    // sampler, pool, layout and pipeline without destroying anything: a whole cubemap
+    // leaked per sky change. Today it does not happen (initSkybox is called only once,
+    // from the sandbox and runtime startup), but IblPass is already
+    // written so that it can be called again (see the "Reset and not free" in
+    // IblPass::precompute) and this was the missing half.
     //
-    // El wait va aquí y no en el llamante porque es quien no puede saberlo: se
-    // paga solo cuando hay algo que destruir, así que en el arranque cuesta
-    // cero.
+    // The wait goes here and not in the caller because this is the one that cannot know: it is
+    // paid only when there is something to destroy, so at startup it costs
+    // zero.
     if (isInitialized()) {
         vkDeviceWaitIdle(gpu.device());
         shutdown(gpu);
@@ -40,11 +40,11 @@ void Skybox::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
 
 void Skybox::recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples)
 {
-    // Sin cubemap cargado no hay nada que recrear: el skybox no está activo.
+    // With no cubemap loaded there is nothing to recreate: the skybox is not active.
     if (m_pipeline == VK_NULL_HANDLE) return;
     vkDestroyPipeline(gpu.device(), m_pipeline, nullptr);
     m_pipeline = VK_NULL_HANDLE;
-    // El formato sigue viniendo del render pass; se pasa por simetría con init.
+    // The format still comes from the render pass; it is passed for symmetry with init.
     createPipeline(gpu, renderPass, VK_FORMAT_UNDEFINED, samples);
 }
 
@@ -61,10 +61,10 @@ void Skybox::shutdown(GpuDevice& gpu)
     vkDestroyImage(dev,               m_image,      nullptr);
     vkFreeMemory(dev,                 m_memory,     nullptr);
 
-    // TODOS a nulo, no solo el pipeline. Mientras esto era solo el apagado
-    // final daba igual, pero init() ahora llama aquí para reiniciarse: si una
-    // recarga fallase a medias, los handles viejos seguirían pareciendo
-    // válidos y el shutdown de verdad los destruiría por segunda vez.
+    // ALL to null, not just the pipeline. While this was only the final shutdown
+    // it did not matter, but init() now calls here to reset itself: if a
+    // reload failed halfway, the old handles would keep looking
+    // valid and the real shutdown would destroy them a second time.
     m_pipeline   = VK_NULL_HANDLE;
     m_pipeLayout = VK_NULL_HANDLE;
     m_descPool   = VK_NULL_HANDLE;
@@ -94,12 +94,12 @@ void Skybox::loadCubemap(GpuDevice& gpu, const std::array<std::string, 6>& faceP
     int w = 0, h = 0;
     std::array<stbi_uc*, 6> pixels{};
 
-    // Las caras cargadas se liberan pase lo que pase. Las dos salidas de error
-    // de este bucle son las MÁS frecuentes que hay —una ruta mal escrita, o seis
-    // imágenes que el usuario no recortó al mismo tamaño— y las dos lanzaban
-    // dejando reservado todo lo anterior: hasta cinco caras a 2048x2048 son 80
-    // MB de fuga por intento, y el editor sobrevive a la excepción, así que se
-    // podía repetir (H30).
+    // The loaded faces are released no matter what. The two error exits
+    // of this loop are the MOST frequent there are (a misspelled path, or six
+    // images the user did not crop to the same size) and both threw
+    // leaving everything before them allocated: up to five faces at 2048x2048 are 80
+    // MB of leak per attempt, and the editor survives the exception, so it
+    // could be repeated (H30).
     struct FreeFaces {
         std::array<stbi_uc*, 6>& p;
         bool armado = true;
@@ -117,8 +117,8 @@ void Skybox::loadCubemap(GpuDevice& gpu, const std::array<std::string, 6>& faceP
             throw std::runtime_error("Skybox: failed to load face: " + facePaths[i]);
         if (i == 0) { w = iw; h = ih; }
         else if (iw != w || ih != h)
-            // Con los tamaños: «face size mismatch» no decía CUÁL sobra ni por
-            // cuánto, y el arreglo es recortar la imagen.
+            // With the sizes: "face size mismatch" did not say WHICH one is off or by
+            // how much, and the fix is to crop the image.
             throw std::runtime_error("Skybox: face " + std::to_string(i) + " measures " +
                                      std::to_string(iw) + "x" + std::to_string(ih) +
                                      " and the previous ones " + std::to_string(w) + "x" +
@@ -152,8 +152,8 @@ void Skybox::loadCubemap(GpuDevice& gpu, const std::array<std::string, 6>& faceP
 
     void* mapped;
     vkMapMemory(gpu.device(), stagingMem, 0, totalSize, 0, &mapped);
-    // Camino bueno: se copian y se liberan aqui, asi que el guard se desarma.
-    // Desde este punto ya no hay nada suyo que soltar.
+    // Good path: they are copied and released here, so the guard is disarmed.
+    // From this point on there is nothing of its own left to release.
     for (int i = 0; i < 6; i++) {
         memcpy((uint8_t*)mapped + i * faceSize, pixels[i], (size_t)faceSize);
         stbi_image_free(pixels[i]);
@@ -210,7 +210,7 @@ void Skybox::loadCubemap(GpuDevice& gpu, const std::array<std::string, 6>& faceP
             0, 0, nullptr, 0, nullptr, 1, &b);
     }
 
-    // Copiar cada cara al array layer correspondiente
+    // Copy each face to the corresponding array layer
     std::array<VkBufferImageCopy, 6> copies{};
     for (int i = 0; i < 6; i++) {
         copies[i].bufferOffset      = faceSize * (VkDeviceSize)i;
@@ -318,7 +318,7 @@ void Skybox::createDescriptors(GpuDevice& gpu)
 void Skybox::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
                             VkSampleCountFlagBits samples)
 {
-    (void)colorFormat; // el renderPass ya tiene el formato correcto
+    (void)colorFormat; // the renderPass already has the right format
 
     VkShaderModule vertMod = loadShaderModule(gpu.device(), "shaders/skybox.vert.spv");
     VkShaderModule fragMod = loadShaderModule(gpu.device(), "shaders/skybox.frag.spv");
@@ -333,7 +333,7 @@ void Skybox::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkFormat co
     stages[1].module = fragMod;
     stages[1].pName  = "main";
 
-    // Sin vertex input — posiciones hardcoded en el vertex shader
+    // No vertex input — positions hardcoded in the vertex shader
     VkPipelineVertexInputStateCreateInfo vtxInput{};
     vtxInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
@@ -355,11 +355,11 @@ void Skybox::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkFormat co
 
     VkPipelineMultisampleStateCreateInfo ms{};
     ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    // Lo fija el modo de anti-aliasing del Renderer: el skybox se dibuja en el
-    // pass de escena y tiene que declarar las mismas muestras que él.
+    // It is set by the Renderer's anti-aliasing mode: the skybox is drawn in the
+    // scene pass and has to declare the same samples as it.
     ms.rasterizationSamples = samples;
 
-    // Depth: test LEQUAL (z=1.0 en far plane), sin escritura
+    // Depth: LEQUAL test (z=1.0 at the far plane), no write
     VkPipelineDepthStencilStateCreateInfo ds{};
     ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable  = VK_TRUE;
@@ -394,9 +394,9 @@ void Skybox::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkFormat co
     layoutCI.pSetLayouts            = &m_descLayout;
     layoutCI.pushConstantRangeCount = 1;
     layoutCI.pPushConstantRanges    = &push;
-    // Al recrear el pipeline por un cambio de muestras (MSAA) el layout no
-    // cambia: volver a crearlo aquí dejaría huérfano el anterior, y eso solo se
-    // ve al cerrar, como un VkPipelineLayout sin destruir por cada cambio.
+    // When the pipeline is recreated due to a change of samples (MSAA) the layout does not
+    // change: creating it again here would orphan the previous one, and that is only
+    // seen at shutdown, as one undestroyed VkPipelineLayout per change.
     if (m_pipeLayout == VK_NULL_HANDLE)
         vkCreatePipelineLayout(gpu.device(), &layoutCI, nullptr, &m_pipeLayout);
 

@@ -3,9 +3,9 @@
 layout(location = 0) in vec3 inPos;
 
 #include "shadow_config.glsl"
-// Huecos de matriz de sombra. Los 6 primeros son de la luz KEY (4 cascadas,
-// o 6 caras de cubemap, o 1 cara de foco); los 4 de detras son un foco
-// secundario cada uno. Mismo valor que SHADOW_MATRICES en
+// Shadow matrix slots. The first 6 belong to the KEY light (4 cascades,
+// or 6 cubemap faces, or 1 spot face); the 4 after them are one secondary
+// spot each. Same value as SHADOW_MATRICES in
 // UniformBufferObject.h.
 
 layout(set = 0, binding = 0) uniform UBO {
@@ -14,18 +14,18 @@ layout(set = 0, binding = 0) uniform UBO {
     mat4 lightSpaceMatrix[SHADOW_MATRICES];
 } ubo;
 
-// Que capa del texture array se esta grabando. Rango propio del pipeline de
-// sombras: no comparte pipeline layout con triangle/pbr/outline, asi que el
-// bloque PushData de esos no se toca.
+// Which layer of the texture array is being recorded. The shadow pipeline's own range:
+// it does not share pipeline layout with triangle/pbr/outline, so the
+// PushData block of those is not touched.
 layout(push_constant) uniform ShadowPush {
     uint cascade;
 } push;
 
-// Mismo SSBO por frame que triangle.vert (set 1, binding 0), pero con su propio
-// rango: el pass de sombras culea con el frustum de la LUZ, asi que el conjunto
-// visible no es el de la camara y sus transforms van en otro tramo del buffer.
-// Este pass solo dibuja objetos estaticos agrupados, asi que no hay ruta de push
-// constant que conservar.
+// Same per-frame SSBO as triangle.vert (set 1, binding 0), but with its own
+// range: the shadow pass culls with the LIGHT's frustum, so the visible
+// set is not the camera's and its transforms go in another section of the buffer.
+// This pass only draws grouped static objects, so there is no push
+// constant path to preserve.
 layout(std430, set = 1, binding = 0) readonly buffer InstanceData
 {
     mat4 models[];

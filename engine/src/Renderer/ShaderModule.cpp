@@ -14,10 +14,10 @@ std::vector<char> readSpvFile(const std::string& path)
     const std::streamoff size = f.tellg();
     if (size <= 0)
         throw std::runtime_error("empty shader: " + path);
-    // SPIR-V son palabras de 32 bits. Un tamano que no es multiplo de 4 no es
-    // que sea sospechoso: es que `pCode` leeria una palabra a medias fuera del
-    // buffer. Mejor decirlo aqui, con la ruta, que dejar que reviente dentro
-    // del driver.
+    // SPIR-V is made of 32-bit words. A size that is not a multiple of 4 is not
+    // merely suspicious: `pCode` would read half a word past the end of the
+    // buffer. Better to say so here, with the path, than to let it blow up inside
+    // the driver.
     if (size % 4 != 0)
         throw std::runtime_error("truncated shader (" + std::to_string(size) +
                                  " bytes, not a multiple of 4): " + path);

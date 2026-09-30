@@ -3,32 +3,32 @@
 
 namespace DonTopo
 {
-    // Numeros que los DOS backends tienen que ver iguales y que no dependen de
-    // ninguna API grafica. Estaban declarados por duplicado —una copia en el
-    // camino Vulkan y otra en D3D12Renderer.cpp, esta con un comentario
-    // admitiendo que eran "los mismos valores que el camino Vulkan"—.
+    // Numbers that BOTH backends must see as equal and that do not depend on
+    // any graphics API. They were declared twice (one copy in the
+    // Vulkan path and another in D3D12Renderer.cpp, this one with a comment
+    // admitting they were "the same values as the Vulkan path").
     //
-    // Ese comentario era la unica defensa: nada obliga a que las dos copias
-    // coincidan, y descuadrarlas no da error en ninguna capa de validacion. La
-    // imagen sale distinta segun el backend y solo se ve comparando capturas.
+    // That comment was the only defense: nothing forces the two copies to
+    // match, and letting them drift apart gives no error in any validation layer. The
+    // image comes out different depending on the backend and it only shows when comparing captures.
 
     // ── IBL ─────────────────────────────────────────────────────────────────
-    // Lado de los dos cubemaps precomputados del ambiente.
+    // Side of the two precomputed ambient cubemaps.
     constexpr uint32_t IBL_IRRADIANCE_SIZE = 32;
     constexpr uint32_t IBL_PREFILTER_SIZE  = 128;
-    // Mips del prefiltrado especular: el prefiltrado reparte la rugosidad entre
-    // ellos y pbr.frag lo da por hecho.
+    // Mips of the specular prefilter: the prefilter spreads roughness across
+    // them and pbr.frag takes it for granted.
     //
-    // OJO, este numero vive en TRES sitios y solo dos pueden compartirse: aqui,
-    // y como `#define IBL_PREFILTER_MIPS` en shaders/pbr.frag. Un shader no
-    // puede incluir un header de C++, y meterlo en el bloque UBO lo desplazaria
-    // en silencio para los seis shaders que lo declaran (std140). Si cambia
-    // aqui, hay que cambiarlo ALLI a mano.
+    // CAREFUL, this number lives in THREE places and only two can be shared: here,
+    // and as `#define IBL_PREFILTER_MIPS` in shaders/pbr.frag. A shader cannot
+    // include a C++ header, and putting it in the UBO block would silently shift it
+    // for the six shaders that declare it (std140). If it changes
+    // here, it has to be changed THERE by hand.
     constexpr uint32_t IBL_PREFILTER_MIPS  = 5;
 
     // ── Bloom ───────────────────────────────────────────────────────────────
-    // Niveles de la cadena de reduccion. Mas niveles = halo mas ancho y mas
-    // barato de calcular, pero por debajo de unos pocos pixeles el mip deja de
-    // aportar y solo cuesta dos dispatches.
+    // Levels of the reduction chain. More levels = wider halo and cheaper
+    // to compute, but below a few pixels the mip stops contributing and only
+    // costs two dispatches.
     constexpr int BLOOM_MIPS = 5;
 }

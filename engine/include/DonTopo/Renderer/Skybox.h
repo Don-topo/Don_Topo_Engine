@@ -15,24 +15,24 @@ public:
     Skybox& operator=(const Skybox&)  = delete;
 
     // facePaths: +X, -X, +Y, -Y, +Z, -Z
-    // samples: muestras del render pass de escena, impuestas por el modo de
-    // anti-aliasing del Renderer.
+    // samples: samples of the scene render pass, imposed by the Renderer's
+    // anti-aliasing mode.
     void init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
               const std::array<std::string, 6>& facePaths,
               VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
-    // Rehace SOLO el pipeline, para cuando el MSAA cambia el número de muestras:
-    // en Vulkan 1.0 rasterizationSamples no es estado dinámico.
+    // Rebuilds ONLY the pipeline, for when MSAA changes the sample count:
+    // in Vulkan 1.0 rasterizationSamples is not dynamic state.
     void recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples);
     void shutdown(GpuDevice& gpu);
 
-    // invViewProj = inverse(proj * mat4(mat3(view))) — sin traslación de cámara
+    // invViewProj = inverse(proj * mat4(mat3(view))), without camera translation
     void draw(VkCommandBuffer cmd, const glm::mat4& invViewProj);
 
     bool isInitialized() const { return m_pipeline != VK_NULL_HANDLE; }
 
-    // El cubemap de entorno es tambien la fuente del IBL: el Renderer lo
-    // muestrea desde sus compute shaders de precomputacion. Solo lectura; el
-    // ciclo de vida sigue siendo de esta clase.
+    // The environment cubemap is also the IBL source: the Renderer samples it
+    // from its precomputation compute shaders. Read-only; the lifetime is
+    // still owned by this class.
     VkImageView cubeView()    const { return m_view; }
     VkSampler   cubeSampler() const { return m_sampler; }
 

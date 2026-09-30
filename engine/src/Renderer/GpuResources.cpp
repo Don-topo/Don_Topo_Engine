@@ -10,10 +10,10 @@
 #include <stb_image.h>
 
 namespace {
-    // Devuelve el command buffer a usar. Con batch == nullptr abre uno
-    // one-time igual que hasta ahora, y el caller debe cerrarlo con
-    // endOneTime(). Con batch, se cuelga del command buffer compartido y NO se
-    // cierra aquí.
+    // Returns the command buffer to use. With batch == nullptr it opens a
+    // one-time one as before, and the caller must close it with
+    // endOneTime(). With a batch, it hangs off the shared command buffer and is NOT
+    // closed here.
     struct CmdScope
     {
         const DonTopo::GpuDevice& gpu;
@@ -23,8 +23,8 @@ namespace {
         CmdScope(const DonTopo::GpuDevice& g, DonTopo::TransferBatch* b)
             : gpu(g), batch(b), cmd(b ? b->cmd() : g.beginOneTimeCommands()) {}
 
-        // Solo cierra y espera si NO hay batch: con batch, el submit y la fence
-        // son responsabilidad de quien lo posee.
+        // Only closes and waits if there is NO batch: with a batch, the submit and the fence
+        // are the responsibility of whoever owns it.
         ~CmdScope() { if (!batch) gpu.endOneTimeCommands(cmd); }
     };
 }
@@ -32,11 +32,11 @@ namespace {
 namespace DonTopo {
 
 namespace {
-    // VK_ERROR_TOO_MANY_OBJECTS es el tope de asignaciones VIVAS del device, y
-    // el mensaje generico ("failed to allocate buffer memory") apunta al sitio
-    // equivocado: parece falta de VRAM cuando lo que falta son ranuras. Un
-    // motor que pide una asignacion por recurso lo alcanza con una escena
-    // grande en una GPU que se quede en el minimo de la spec (H72).
+    // VK_ERROR_TOO_MANY_OBJECTS is the device's limit on LIVE allocations, and
+    // the generic message ("failed to allocate buffer memory") points at the wrong
+    // place: it looks like a lack of VRAM when what is lacking are slots. An
+    // engine that requests one allocation per resource reaches it with a large scene
+    // on a GPU that stays at the spec minimum (H72).
     std::string mensajeDeAsignacion(const char* que, VkResult r, uint32_t maxAllocs)
     {
         std::string m = std::string("failed to allocate ") + que + " memory";
@@ -112,7 +112,7 @@ void GpuResources::uploadBuffer(const void* data, VkDeviceSize size,
     copyBuffer(stagingBuf, buf, size, batch);
 
     if (batch)
-        batch->addStaging(stagingBuf, stagingMem);   // se libera al senalar la fence
+        batch->addStaging(stagingBuf, stagingMem);   // released when the fence is signaled
     else
     {
         vkDestroyBuffer(m_gpu.device(), stagingBuf, nullptr);
@@ -154,10 +154,10 @@ void GpuResources::createImage(uint32_t w, uint32_t h, VkFormat format, VkImageT
 }
 
 namespace {
-    // Las dos operaciones de imagen, grabadas en un command buffer que ya está
-    // abierto. Existen aparte de los métodos públicos porque uploadPixelsToImage
-    // mete las TRES —transición, copia, transición— en el mismo buffer: por los
-    // métodos serían tres submits y tres esperas para el mismo trabajo.
+    // The two image operations, recorded into a command buffer that is already
+    // open. They exist apart from the public methods because uploadPixelsToImage
+    // puts all THREE (transition, copy, transition) in the same buffer: through the
+    // methods it would be three submits and three waits for the same work.
     void grabarTransicion(VkCommandBuffer cmd, VkImage image,
                           VkImageLayout oldLayout, VkImageLayout newLayout,
                           uint32_t levelCount = 1);
@@ -196,9 +196,9 @@ void GpuResources::uploadPixelsToImage(const void* pixels, uint32_t w, uint32_t 
     void* data = nullptr;
     vkMapMemory(m_gpu.device(), stagingMem, 0, total, 0, &data);
 
-    // Todos los niveles en UN staging y UNA llamada de copia: el nivel i ocupa
-    // w*h*4 bytes (multiplo de 4, el alineado que pide RGBA8) a continuacion del
-    // anterior.
+    // All levels in ONE staging buffer and ONE copy call: level i takes up
+    // w*h*4 bytes (a multiple of 4, the alignment RGBA8 requires) right after the
+    // previous one.
     std::vector<VkBufferImageCopy> regions(levels);
     VkDeviceSize offset = 0;
     auto poner = [&](uint32_t level, const void* src, uint32_t lw, uint32_t lh) {
@@ -223,9 +223,9 @@ void GpuResources::uploadPixelsToImage(const void* pixels, uint32_t w, uint32_t 
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem, levels);
 
-    // Un solo scope para las tres: sin batch eso es un submit en vez de tres. La
-    // barrera cubre TODOS los niveles: un nivel sin transicionar es exactamente el
-    // aviso de layout que la validacion de sincronizacion caza.
+    // A single scope for all three: without a batch that is one submit instead of three. The
+    // barrier covers ALL levels: an untransitioned level is exactly the
+    // layout warning that synchronization validation catches.
     {
         CmdScope scope(m_gpu, batch);
         grabarTransicion(scope.cmd, img, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -235,9 +235,9 @@ void GpuResources::uploadPixelsToImage(const void* pixels, uint32_t w, uint32_t 
         grabarTransicion(scope.cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, levels);
     }
-    // El destructor del scope ya ha esperado si no habia batch, asi que el
-    // staging se puede soltar. Con batch la copia sigue en vuelo y se libera al
-    // senalar la fence.
+    // The scope's destructor has already waited if there was no batch, so the
+    // staging buffer can be released. With a batch the copy is still in flight and it is released
+    // when the fence is signaled.
     if (batch)
         batch->addStaging(staging, stagingMem);
     else
@@ -258,7 +258,7 @@ void GpuResources::createBlankImage(uint32_t w, uint32_t h, VkFormat fmt,
     grabarTransicion(scope.cmd, img, VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-    const VkClearColorValue clear{};   // ceros: transparente
+    const VkClearColorValue clear{};   // zeros: transparent
     VkImageSubresourceRange range{};
     range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     range.levelCount = 1;
@@ -309,7 +309,7 @@ void GpuResources::uploadPixelsToImageRegions(VkImage img, const ImageTileUpload
     vkUnmapMemory(m_gpu.device(), stagingMem);
 
     {
-        // Un solo scope: sin batch, un submit y una espera para las N regiones.
+        // A single scope: without a batch, one submit and one wait for the N regions.
         CmdScope scope(m_gpu, batch);
         grabarTransicion(scope.cmd, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -358,8 +358,8 @@ void grabarTransicion(VkCommandBuffer cmd, VkImage image,
         srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     } else if(oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-        // Reescribir una imagen que la GPU puede estar leyendo en un frame en vuelo:
-        // la barrera espera a esas lecturas antes de dejar escribir.
+        // Rewriting an image that the GPU may be reading in an in-flight frame:
+        // the barrier waits for those reads before allowing the write.
         barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         srcStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
@@ -391,12 +391,12 @@ void grabarCopiaABufferImagen(VkCommandBuffer cmd, VkBuffer buffer, VkImage imag
 
 void GpuResources::createTextureImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch, VkFormat* outFormat)
 {
-    if (outFormat) *outFormat = VK_FORMAT_R8G8B8A8_SRGB;   // relleno y blanca compartida
-    // Material que NO pide textura -una primitiva procedural, por ejemplo-: la
-    // blanca compartida, prestada. Antes cada malla se llevaba su propia 1x1
-    // blanca, con su asignacion de memoria y la de su staging. El caso de
-    // "la pide y no se pudo leer" NO entra aqui: ese sigue con su damero
-    // propio, y es raro por definicion.
+    if (outFormat) *outFormat = VK_FORMAT_R8G8B8A8_SRGB;   // fill-in and shared white
+    // Material that does NOT request a texture (a procedural primitive, for example):
+    // the shared white one, borrowed. Before, each mesh took its own 1x1
+    // white one, with its memory allocation and that of its staging buffer. The case of
+    // "it requests one and it could not be read" does NOT come in here: that one keeps its own
+    // checkerboard, and it is rare by definition.
     if (path.empty() && embedded.empty())
     {
         static constexpr uint8_t kBlanco[4] = {0xFF, 0xFF, 0xFF, 0xFF};
@@ -410,10 +410,10 @@ void GpuResources::createTextureImage(const std::string& path, const std::vector
     int w = tex.w, h = tex.h;
     const unsigned char* pixels = tex.pixels.get();
 
-    // Sin pixeles hay DOS motivos distintos y hasta ahora los dos acababan en
-    // damero. Ver PlaceholderTexture.h: el material que no pide ninguna textura
-    // -una primitiva procedural- se rellena de blanco, y solo el que la pide y
-    // no se ha podido leer se marca con el damero.
+    // Without pixels there are TWO different reasons and until now both ended up as a
+    // checkerboard. See PlaceholderTexture.h: a material that requests no texture
+    // (a procedural primitive) is filled with white, and only one that requests it and
+    // could not be read is marked with the checkerboard.
     std::vector<uint8_t> placeholder;
     if (!pixels) {
         const bool sePidioTextura = !embedded.empty() || !path.empty();
@@ -421,29 +421,29 @@ void GpuResources::createTextureImage(const std::string& path, const std::vector
             placeholder = makeMissingTextureRgba();
             w = h = kMissingTextureSize;
         } else {
-            placeholder.assign(4, 0xFF);  // 1x1 blanco
+            placeholder.assign(4, 0xFF);  // 1x1 white
             w = h = 1;
         }
         pixels = placeholder.data();
     }
 
-    // El formato lo decide resolveSrgb (slot + sidecar) SOLO cuando hay textura
-    // decodificada; los rellenos siguen siendo sRGB, como hasta ahora.
+    // The format is decided by resolveSrgb (slot + sidecar) ONLY when there is a decoded
+    // texture; the fill-ins remain sRGB, as before.
     VkFormat fmt = VK_FORMAT_R8G8B8A8_SRGB;
     if (tex)
         fmt = resolveSrgb(TextureKind::BaseColor, tex.colorSpace) ? VK_FORMAT_R8G8B8A8_SRGB
                                                                    : VK_FORMAT_R8G8B8A8_UNORM;
     if (outFormat) *outFormat = fmt;
 
-    // Copiados al staging aquí dentro: `tex` suelta los de stb al salir.
+    // Copied into the staging buffer in here: `tex` releases the stb ones on exit.
     uploadPixelsToImage(pixels, (uint32_t)w, (uint32_t)h, fmt, img, mem, batch,
                         tex.mips.data(), tex.mips.size());
 }
 
 void GpuResources::createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch, VkFormat* outFormat)
 {
-    if (outFormat) *outFormat = VK_FORMAT_R8G8B8A8_UNORM;   // relleno y plana compartida
-    // Sin normal map: la plana compartida (0,0,1 en tangent space).
+    if (outFormat) *outFormat = VK_FORMAT_R8G8B8A8_UNORM;   // fill-in and shared flat one
+    // No normal map: the shared flat one (0,0,1 in tangent space).
     if (path.empty() && embedded.empty())
     {
         static constexpr uint8_t kNormalPlana[4] = {0x80, 0x80, 0xFF, 0xFF};
@@ -464,7 +464,7 @@ void GpuResources::createNormalMapImage(const std::string& path, const std::vect
         w = h = 1;
     }
 
-    // Tambien lo usa el ORM: resolveSrgb(Normal, o) == resolveSrgb(Orm, o) siempre.
+    // The ORM also uses it: resolveSrgb(Normal, o) == resolveSrgb(Orm, o) always.
     VkFormat fmt = VK_FORMAT_R8G8B8A8_UNORM;
     if (tex)
         fmt = resolveSrgb(TextureKind::Normal, tex.colorSpace) ? VK_FORMAT_R8G8B8A8_SRGB
@@ -484,7 +484,7 @@ void GpuResources::createTextureImageView(VkImage image, VkImageView& view, VkFo
     viewInfo.format                          = format;
     viewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel   = 0;
-    viewInfo.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;   // 1 o N, la que tenga la imagen
+    viewInfo.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;   // 1 or N, whichever the image has
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount     = 1;
 
@@ -506,8 +506,8 @@ void GpuResources::createTextureSampler(VkSampler& outSampler)
     samplerInfo.unnormalizedCoordinates = VK_FALSE;
     samplerInfo.compareEnable           = VK_FALSE;
     samplerInfo.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    // Con maxLod a 0 (el valor por defecto de la struct) los mips no se leerian
-    // nunca. Las imagenes de un solo nivel siguen leyendo el 0.
+    // With maxLod at 0 (the struct's default value) the mips would never be
+    // read. Single-level images keep reading level 0.
     samplerInfo.minLod                  = 0.0f;
     samplerInfo.maxLod                  = VK_LOD_CLAMP_NONE;
 
@@ -517,8 +517,8 @@ void GpuResources::createTextureSampler(VkSampler& outSampler)
 
 VkSampler GpuResources::sharedMaterialSampler()
 {
-    // Perezoso y no en el constructor: GpuResources se construye con el
-    // GpuDevice, y en ese momento el device de Vulkan todavia no existe.
+    // Lazy and not in the constructor: GpuResources is constructed together with the
+    // GpuDevice, and at that moment the Vulkan device does not exist yet.
     if (m_materialSampler == VK_NULL_HANDLE)
         createTextureSampler(m_materialSampler);
     return m_materialSampler;
@@ -532,7 +532,7 @@ void GpuResources::destroySharedSampler()
     m_materialSampler = VK_NULL_HANDLE;
 }
 
-// ── Texturas de relleno compartidas ─────────────────────────────────────────
+// ── Shared fill-in textures ─────────────────────────────────────────────────
 
 void GpuResources::ensurePlaceholder(VkImage& img, VkDeviceMemory& mem,
                                      const uint8_t rgba[4], VkFormat fmt)
@@ -540,9 +540,9 @@ void GpuResources::ensurePlaceholder(VkImage& img, VkDeviceMemory& mem,
     if (img != VK_NULL_HANDLE)
         return;
 
-    // Sin batch a proposito: son 4 bytes y se suben UNA vez en toda la vida del
-    // proceso. Meterlas en el batch del llamante las ataria a su fence y
-    // obligaria a razonar sobre quien sube primero.
+    // Without a batch on purpose: they are 4 bytes and are uploaded ONCE in the whole life of the
+    // process. Putting them in the caller's batch would tie them to its fence and
+    // force reasoning about who uploads first.
     uploadPixelsToImage(rgba, 1, 1, fmt, img, mem, nullptr);
 }
 
@@ -563,17 +563,17 @@ bool GpuResources::isSharedPlaceholder(VkImage img) const
 
 void GpuResources::releaseMaterialImage(VkImage img, VkDeviceMemory mem)
 {
-    // Prestada: es de este GpuResources y la comparten todas las mallas sin
-    // material. Destruirla con la primera dejaria a las demas muestreando una
-    // imagen liberada, y eso no lo delata nada hasta que se ve basura.
-    // Las tres de relleno son las ULTIMAS que se sueltan, asi que llegar aqui
-    // despues significa que el orden del teardown esta mal. Y no es un detalle:
-    // isSharedPlaceholder decide comparando handles contra los tres miembros,
-    // que destroySharedPlaceholders acaba de anular, o sea que la guarda de
-    // abajo ya no los reconoce y los destruiria por segunda vez sin decir una
-    // palabra (H79: eso pasaba con los personajes, que se soltaban 15 lineas
-    // despues). Cerrar en falso convierte un doble free —corrupcion de estado
-    // del driver— en una fuga al salir del proceso, y encima lo dice.
+    // Borrowed: it belongs to this GpuResources and is shared by all meshes without a
+    // material. Destroying it with the first one would leave the others sampling a
+    // freed image, and nothing reveals that until garbage shows up on screen.
+    // The three fill-ins are the LAST ones released, so getting here
+    // afterwards means the teardown order is wrong. And it is not a detail:
+    // isSharedPlaceholder decides by comparing handles against the three members,
+    // which destroySharedPlaceholders has just nulled, so the guard
+    // below no longer recognizes them and would destroy them a second time without saying a
+    // word (H79: that happened with the characters, which were released 15 lines
+    // later). Closing in the false case turns a double free (driver state
+    // corruption) into a leak at process exit, and it also reports it.
     if (m_placeholdersDestroyed)
     {
         fprintf(stderr, "[GpuResources] releaseMaterialImage(img=%p) after "
@@ -601,8 +601,8 @@ void GpuResources::destroySharedPlaceholders()
     suelta(m_whiteSrgb,  m_whiteSrgbMem);
     suelta(m_flatNormal, m_flatNormalMem);
     suelta(m_whiteUnorm, m_whiteUnormMem);
-    // A partir de aqui isSharedPlaceholder ya no puede reconocer a nadie: sus
-    // tres handles son VK_NULL_HANDLE. Ver releaseMaterialImage.
+    // From here on isSharedPlaceholder can no longer recognize anything: its
+    // three handles are VK_NULL_HANDLE. See releaseMaterialImage.
     m_placeholdersDestroyed = true;
 }
 

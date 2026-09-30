@@ -14,9 +14,9 @@ namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// Compartida por ssr.comp y ssr_resolve.comp, que comparten pipeline
-// layout. 48 bytes: los mismos campos y en el mismo orden que el
-// bloque de los dos .comp.
+// Shared by ssr.comp and ssr_resolve.comp, which share a pipeline
+// layout. 48 bytes: the same fields and in the same order as the
+// block of the two .comp files.
 struct SsrPush {
     float   projP00;
     float   projP11;
@@ -37,22 +37,22 @@ static_assert(sizeof(SsrPush) == 48, "SsrPush must stay at 48 bytes: both .comp 
 bool SsrPass::active(const Context& ctx) const
 {
     if (!ctx.state.ssrEnabled()) return false;
-    // Recursos aún sin crear (viewport degenerado): nada que grabar.
+    // Resources not created yet (degenerate viewport): nothing to record.
     if (m_image[ctx.currentFrame] == VK_NULL_HANDLE) return false;
-    // Interruptor puesto pero ningún objeto marcado = ningún píxel con
-    // máscara: se salta el pass entero en vez de despachar y multiplicar por
-    // cero. Es un float por objeto, mucho menos que el culling que ya se hace
-    // en este mismo frame.
+    // Switch on but no object marked = no pixel with a
+    // mask: the whole pass is skipped instead of dispatching and multiplying by
+    // zero. It is one float per object, much less than the culling that is already done
+    // in this same frame.
     return ctx.anyObjectWithSsr;
 }
 
 void SsrPass::createPipelines(const Context& ctx)
 {
-    // LINEAR: el impacto del rayo cae entre texeles y R16G16B16A16_SFLOAT sí
-    // tiene garantizado el filtrado lineal. La profundidad NO se muestrea con
-    // este sampler sino con el del SSAO (NEAREST), que es el que le
-    // corresponde a D32_SFLOAT. CLAMP_TO_EDGE para que un tap del borde no
-    // traiga color del lado opuesto de la pantalla.
+    // LINEAR: the ray hit falls between texels and R16G16B16A16_SFLOAT does
+    // guarantee linear filtering. The depth is NOT sampled with
+    // this sampler but with SSAO's (NEAREST), which is the one that
+    // corresponds to D32_SFLOAT. CLAMP_TO_EDGE so that an edge tap does not
+    // bring in color from the opposite side of the screen.
     VkSamplerCreateInfo si{};
     si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     si.magFilter    = VK_FILTER_LINEAR;
@@ -64,9 +64,9 @@ void SsrPass::createPipelines(const Context& ctx)
     if (vkCreateSampler(ctx.gpu.device(), &si, nullptr, &m_sampler) != VK_SUCCESS)
         throw std::runtime_error("failed to create ssr sampler!");
 
-    // Un solo layout para los dos pipelines: color muestreado, profundidad
-    // muestreada y destino como storage image. ssr_resolve.comp declara el
-    // binding 1 y no lo lee.
+    // A single layout for the two pipelines: sampled color, sampled depth
+    // and destination as a storage image. ssr_resolve.comp declares
+    // binding 1 and does not read it.
     VkDescriptorSetLayoutBinding bindings[3]{};
     for (int i = 0; i < 3; i++)
     {
@@ -84,7 +84,7 @@ void SsrPass::createPipelines(const Context& ctx)
     if (vkCreateDescriptorSetLayout(ctx.gpu.device(), &dsl, nullptr, &m_descLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create ssr descriptor set layout!");
 
-    // Dos sets por frame: marcha (HDR + depth → reflejo) y suma (reflejo →
+    // Two sets per frame: march (HDR + depth → reflection) and sum (reflection →
     // HDR).
     const uint32_t ssrSets = kFramesInFlight * 2;
     VkDescriptorPoolSize sizes[2]{};
@@ -135,8 +135,8 @@ void SsrPass::createPipelines(const Context& ctx)
     makeSsrPipeline("shaders/ssr.comp.spv",         m_pipeline);
     makeSsrPipeline("shaders/ssr_resolve.comp.spv", m_resolvePipeline);
 
-    // Cuatro por frame: [0,1] el depth pre-pass cuando lo pide el SSR, [2,3]
-    // los dos dispatches. timestampsSupported ya lo resolvió el bloom.
+    // Four per frame: [0,1] the depth pre-pass when SSR requests it, [2,3]
+    // the two dispatches. timestampsSupported was already resolved by the bloom.
     if (ctx.timestampsSupported)
     {
         VkQueryPoolCreateInfo qpi{};
@@ -152,8 +152,8 @@ void SsrPass::createPipelines(const Context& ctx)
 
 void SsrPass::destroyPipelines(const Context& ctx)
 {
-    // Las imagenes y los sets ya se fueron con destroyImages; aqui solo queda
-    // lo que es independiente del tamano.
+    // The images and the sets are already gone with destroyImages; here only
+    // what is independent of the size remains.
     vkDestroyPipeline(ctx.gpu.device(), m_pipeline, nullptr);
     vkDestroyPipeline(ctx.gpu.device(), m_resolvePipeline, nullptr);
     vkDestroyPipelineLayout(ctx.gpu.device(), m_pipelineLayout, nullptr);
@@ -171,8 +171,8 @@ void SsrPass::createImages(const Context& ctx)
 {
     for (int f = 0; f < kFramesInFlight; f++)
     {
-        // Mismo formato que el HDR: ssr_resolve.comp declara los dos con el
-        // qualifier rgba16f. Resolución completa, como el SSAO.
+        // Same format as the HDR: ssr_resolve.comp declares both with the
+        // rgba16f qualifier. Full resolution, like SSAO.
         ctx.res.createImage(
             ctx.renderExtent.width, ctx.renderExtent.height,
             ctx.hdrFormat, VK_IMAGE_TILING_OPTIMAL,
@@ -182,8 +182,8 @@ void SsrPass::createImages(const Context& ctx)
         ctx.res.createTextureImageView(m_image[f], m_view[f], ctx.hdrFormat);
     }
 
-    // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
-    // free, igual que en el bloom y en el SSAO.
+    // The sets from the previous time point to already destroyed views: reset and not
+    // free, as in the bloom and the SSAO.
     vkResetDescriptorPool(ctx.gpu.device(), m_descPool, 0);
 
     for (int f = 0; f < kFramesInFlight; f++)
@@ -203,8 +203,8 @@ void SsrPass::createImages(const Context& ctx)
         m_resolveSets[f] = sets[1];
 
         VkDescriptorImageInfo infos[6]{};
-        // Marcha: color de la escena (sale del render pass en SHADER_READ_ONLY)
-        // + profundidad del pre-pass → reflejo.
+        // March: scene color (comes out of the render pass in SHADER_READ_ONLY)
+        // + pre-pass depth → reflection.
         infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         infos[0].imageView   = ctx.hdrView[f];
         infos[0].sampler     = m_sampler;
@@ -213,9 +213,9 @@ void SsrPass::createImages(const Context& ctx)
         infos[1].sampler     = ctx.ssaoSampler;
         infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         infos[2].imageView   = m_view[f];
-        // Suma: el reflejo (ya en GENERAL) → el HDR como storage. El binding 1
-        // se rellena con la misma profundidad aunque el shader no lo lea: un
-        // descriptor set no puede quedarse con un binding sin escribir.
+        // Sum: the reflection (already in GENERAL) → the HDR as storage. Binding 1
+        // is filled with the same depth even though the shader does not read it: a
+        // descriptor set cannot be left with an unwritten binding.
         infos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         infos[3].imageView   = m_view[f];
         infos[3].sampler     = m_sampler;
@@ -267,13 +267,13 @@ void SsrPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& p
     if (!active(ctx))
     {
         m_gpuMs = 0.0f;
-        // Ni dispatches ni barreras: el HDR se queda tal y como lo dejó el
-        // pass de escena, en SHADER_READ_ONLY, que es justo lo que esperan el
-        // bloom y la composición. Imagen idéntica a la de antes del SSR.
+        // Neither dispatches nor barriers: the HDR stays exactly as the
+        // scene pass left it, in SHADER_READ_ONLY, which is precisely what the
+        // bloom and the composition expect. Image identical to the one before SSR.
         return;
     }
 
-    // Timestamps de hace dos frames en este mismo slot, ya señalados.
+    // Timestamps from two frames ago in this same slot, already signaled.
     if (ctx.timestampsSupported && m_queryPending[ctx.currentFrame])
     {
         uint64_t stamps[4] = {};
@@ -281,9 +281,9 @@ void SsrPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& p
                                   sizeof(stamps), stamps, sizeof(uint64_t),
                                   VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
         {
-            // El pre-pass solo cuenta como coste del SSR cuando es el SSR
-            // quien lo pide: con el SSAO encendido ya sale en ssaoGpuMs y
-            // sumarlo aquí lo contaría dos veces.
+            // The pre-pass only counts as SSR cost when SSR is the one
+            // requesting it: with SSAO on it already shows up in ssaoGpuMs and
+            // adding it here would count it twice.
             const uint64_t prepass = ctx.state.ssaoEnabled() ? 0 : (stamps[1] - stamps[0]);
             m_gpuMs = (float)((double)(prepass + (stamps[3] - stamps[2]))
                               * ctx.timestampPeriod * 1e-6);
@@ -297,8 +297,8 @@ void SsrPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& p
             }
         }
     }
-    // Solo se da por bueno el frame en el que recordSsaoPass dejó escrito el
-    // par [0,1]: sin eso la lectura de los cuatro daría NOT_READY.
+    // The frame is only accepted when recordSsaoPass left the
+    // pair [0,1] written: without that, reading all four would give NOT_READY.
     if (ctx.timestampsSupported && ctx.stampedPrepass)
     {
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_queryPool, ctx.currentFrame * 4 + 2);
@@ -310,8 +310,8 @@ void SsrPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& p
     }
 
     SsrPush push{};
-    // Los mismos cuatro coeficientes que usa el SSAO, de la proyección que
-    // grabó el depth. El signo de p11 se cancela igual que allí: ver ssao.comp.
+    // The same four coefficients SSAO uses, from the projection that
+    // recorded the depth. The sign of p11 cancels out just as there: see ssao.comp.
     push.projP00     = proj[0][0];
     push.projP11     = proj[1][1];
     push.projP22     = proj[2][2];
@@ -321,8 +321,8 @@ void SsrPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& p
     push.maxDistance = ctx.state.ssrMaxDistance();
     push.thickness   = ctx.state.ssrThickness();
     push.maxSteps    = (int32_t)ctx.state.ssrMaxSteps();
-    // Fijo y no configurable: cuatro bisecciones ya sitúan el impacto dentro
-    // de 1/16 de paso, y subirlo no cambia nada visible.
+    // Fixed and not configurable: four bisections already place the hit within
+    // 1/16 of a step, and raising it changes nothing visible.
     push.refineSteps = 4;
     push.edgeFade    = ctx.state.ssrEdgeFade();
     push.intensity   = ctx.state.ssrIntensity();
@@ -337,9 +337,9 @@ void SsrPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& p
     b.subresourceRange.baseArrayLayer = 0;
     b.subresourceRange.layerCount     = 1;
 
-    // El reflejo entra desde UNDEFINED: se reescribe entero (ssr.comp empieza
-    // por poner el píxel a 0) y el contenido del frame anterior no se
-    // reutiliza.
+    // The reflection enters from UNDEFINED: it is rewritten entirely (ssr.comp starts
+    // by setting the pixel to 0) and the previous frame's content is not
+    // reused.
     b.image         = m_image[ctx.currentFrame];
     b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
     b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
@@ -357,10 +357,10 @@ void SsrPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& p
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(cmd, gx, gy, 1);
 
-    // Dos transiciones antes de la suma: el reflejo que se acaba de escribir
-    // pasa a leerse, y el HDR sale de SHADER_READ_ONLY (donde lo dejó el
-    // render pass, y desde donde acaba de leerlo la marcha) a GENERAL, que es
-    // el único layout válido para imageLoad/imageStore.
+    // Two transitions before the sum: the reflection that was just written
+    // becomes readable, and the HDR goes from SHADER_READ_ONLY (where the
+    // render pass left it, and from where the march just read it) to GENERAL, which is
+    // the only valid layout for imageLoad/imageStore.
     VkImageMemoryBarrier toResolve[2] = { b, b };
     toResolve[0].image         = m_image[ctx.currentFrame];
     toResolve[0].oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
@@ -381,8 +381,8 @@ void SsrPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& p
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(cmd, gx, gy, 1);
 
-    // Y el HDR vuelve a SHADER_READ_ONLY, que es el layout que declaran los
-    // descriptor sets del bloom (compute) y de la composición (fragment).
+    // And the HDR goes back to SHADER_READ_ONLY, which is the layout declared by the
+    // descriptor sets of the bloom (compute) and the composition (fragment).
     b.image         = ctx.hdrImage[ctx.currentFrame];
     b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
     b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

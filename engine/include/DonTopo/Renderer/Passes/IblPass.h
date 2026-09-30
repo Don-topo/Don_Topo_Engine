@@ -7,51 +7,51 @@ namespace DonTopo {
 
 class GpuDevice;
 
-// IBL global: dos cubemaps precomputados UNA vez sobre el cubemap del skybox,
-// irradiancia (difuso) y entorno prefiltrado por rugosidad (mips). El termino
-// BRDF no es una textura: pbr.frag usa la aproximacion analitica de Karis, asi
-// que no hay LUT ni un tercer binding.
+// Global IBL: two cubemaps precomputed ONCE over the skybox cubemap,
+// irradiance (diffuse) and environment prefiltered by roughness (mips). The BRDF
+// term is not a texture: pbr.frag uses Karis's analytic approximation, so
+// there is no LUT or third binding.
 //
-// Las imagenes se crean SIEMPRE en el init, con contenido neutro, y solo se
-// rellenan de verdad si initSkybox() ha cargado un cubemap. Asi los descriptor
-// sets nunca apuntan a un handle nulo y una escena sin skybox se ilumina con un
-// ambiente plano en vez de reventar.
+// The images are ALWAYS created in init, with neutral content, and only
+// really filled in if initSkybox() has loaded a cubemap. That way the descriptor
+// sets never point at a null handle and a scene without a skybox is lit with a
+// flat ambient instead of blowing up.
 //
-// Ataduras con codigo que no es suyo:
-//  - irradianceView()/prefilterView()/sampler(): los escriben en los bindings 5
-//    y 6 de sus descriptor sets allocateObjectDescriptorSet y la ruta skinned,
-//    que son del Renderer.
-//  - los dos pipelines de convolucion, su layout, su pool y su set layout los
-//    REUSA ReflectionProbePass para convolucionar la captura de cada sonda: por
-//    eso salen a la interfaz publica, por handle.
+// Ties with code that is not its own:
+//  - irradianceView()/prefilterView()/sampler(): written into bindings 5
+//    and 6 of their descriptor sets by allocateObjectDescriptorSet and the skinned path,
+//    which belong to the Renderer.
+//  - the two convolution pipelines, their layout, their pool and their set layout are
+//    REUSED by ReflectionProbePass to convolve each probe's capture: that is
+//    why they are exposed in the public interface, by handle.
 class IblPass {
 public:
-    // Los tres salen de RenderConstants.h: el backend D3D12 los necesita
-    // IGUALES y los tenia copiados con su valor a fuego. Aqui se re-exponen con
-    // el nombre que ya usaba este pase, para no tocar sus llamantes.
+    // The three come from RenderConstants.h: the D3D12 backend needs them
+    // IDENTICAL and had them copied with their value hardcoded. Here they are re-exposed with
+    // the name this pass already used, so as not to touch its callers.
     //
-    // kPrefilterMips vive ademas como #define IBL_PREFILTER_MIPS en
-    // shaders/pbr.frag, y esa tercera copia NO se puede compartir: un shader no
-    // incluye un header de C++, y meterlo en el bloque UBO lo desplazaria en
-    // silencio para los seis shaders que lo declaran (std140).
+    // kPrefilterMips also lives as #define IBL_PREFILTER_MIPS in
+    // shaders/pbr.frag, and that third copy CANNOT be shared: a shader does not
+    // include a C++ header, and putting it in the UBO block would silently shift it
+    // for the six shaders that declare it (std140).
     static constexpr uint32_t kIrradianceSize = IBL_IRRADIANCE_SIZE;
     static constexpr uint32_t kPrefilterSize  = IBL_PREFILTER_SIZE;
     static constexpr uint32_t kPrefilterMips  = IBL_PREFILTER_MIPS;
-    // rgba16f: los cubemaps son HDR. Con 8 bits el especular prefiltrado se
-    // bandearia en las zonas de gradiente suave.
+    // rgba16f: the cubemaps are HDR. With 8 bits the prefiltered specular would
+    // band in the smooth gradient areas.
     static constexpr VkFormat kFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
-    // Push de ibl_irradiance.comp y de ibl_prefilter.comp.
-    // intensity: peso que se hornea en el cubemap resultante. 1.0 en el IBL
-    // global (resultado identico al de antes de las sondas) y la intensidad de
-    // la probe cuando esto convoluciona su captura.
+    // Push of ibl_irradiance.comp and ibl_prefilter.comp.
+    // intensity: weight that is baked into the resulting cubemap. 1.0 in the global
+    // IBL (result identical to the one before the probes) and the probe's intensity
+    // when this convolves its capture.
     struct Push { float roughness; uint32_t faceSize; float intensity; };
 
     struct Context {
         GpuDevice& gpu;
-        // Cubemap de entorno del skybox. VK_NULL_HANDLE = no hay entorno
-        // cargado: precompute() no hace nada y los dos cubemaps se quedan con
-        // el contenido neutro que dejo createResources().
+        // Skybox environment cubemap. VK_NULL_HANDLE = no environment
+        // loaded: precompute() does nothing and the two cubemaps stay with
+        // the neutral content that createResources() left.
         VkImageView envView;
         VkSampler   envSampler;
     };
@@ -60,34 +60,34 @@ public:
     IblPass(const IblPass&)            = delete;
     IblPass& operator=(const IblPass&) = delete;
 
-    // Imagenes, vistas, sampler, layout, pool y los dos pipelines compute, mas
-    // el clear al ambiente neutro. Una sola vez, en el init.
+    // Images, views, sampler, layout, pool and the two compute pipelines, plus
+    // the clear to the neutral ambient. Only once, in init.
     void createResources(const Context& ctx);
     void destroyResources(const Context& ctx);
 
-    // Rellena los dos cubemaps a partir del cubemap del skybox. No-op si no hay
-    // entorno. Una sola vez, desde initSkybox().
+    // Fills the two cubemaps from the skybox cubemap. No-op if there is no
+    // environment. Only once, from initSkybox().
     void precompute(const Context& ctx);
 
-    // Un write suelto de los bindings 5 y 6 sobre un set YA alojado, igual que
-    // writeSsaoBinding: reescribirlos es lo unico que hace falta para que un
-    // objeto pase del IBL global a una sonda. Ni layout nuevo, ni miembro nuevo
-    // en el UBO, ni un indice en PushData (que esta a 80 bytes justos).
+    // A standalone write of bindings 5 and 6 on an ALREADY allocated set, like
+    // writeSsaoBinding: rewriting them is the only thing needed for an
+    // object to go from the global IBL to a probe. No new layout, no new member
+    // in the UBO, no index in PushData (which is at exactly 80 bytes).
     void writeBindings(const Context& ctx, VkDescriptorSet set,
                        VkImageView irradiance, VkImageView prefilter) const;
 
-    // Los DOS bindings del IBL, en un solo sitio.
+    // The TWO IBL bindings, in a single place.
     //
-    // Los escriben TRES caminos —las mallas estaticas, los personajes y el pase
-    // de sondas, que cambia el cubemap global por el de una sonda— y cada uno
-    // tenia su copia del bloque. Divergir no falla en ningun lado: el objeto
-    // muestrea el ambiente de otro y solo se ve comparando capturas, que es
-    // exactamente como se colaron H3, H65, H75 y H76.
+    // They are written by THREE paths (the static meshes, the characters and the probe
+    // pass, which swaps the global cubemap for a probe's) and each one
+    // had its own copy of the block. Diverging fails nowhere: the object
+    // samples another object's ambient and it is only seen by comparing captures, which is
+    // exactly how H3, H65, H75 and H76 slipped through.
     //
-    // RELLENA los writes, no los envia: mallas y personajes los mandan junto a
-    // sus otros cinco bindings en una sola llamada, y partir eso en dos
-    // vkUpdateDescriptorSets por objeto seria pagar por unificar. `infos` lo
-    // pone el llamante porque tiene que seguir vivo hasta esa llamada.
+    // It FILLS the writes, it does not send them: meshes and characters send them along with
+    // their other five bindings in a single call, and splitting that into two
+    // vkUpdateDescriptorSets per object would be paying to unify. `infos` is
+    // provided by the caller because it has to stay alive until that call.
     static constexpr uint32_t kBindingIrradiance = 5;
     static constexpr uint32_t kBindingPrefilter  = 6;
     static void fillIblWrites(VkDescriptorSet set, VkImageView irradiance,
@@ -95,12 +95,12 @@ public:
                               VkDescriptorImageInfo infos[2],
                               VkWriteDescriptorSet writes[2]);
 
-    // Las dos vistas CUBE que van en los descriptor sets de cada objeto.
+    // The two CUBE views that go in each object's descriptor sets.
     VkImageView irradianceView() const { return m_irradianceView; }
     VkImageView prefilterView()  const { return m_prefilterView; }
     VkSampler   sampler()        const { return m_sampler; }
 
-    // Lo que reusa el bake de las sondas.
+    // What the probe bake reuses.
     VkPipeline            irradiancePipeline() const { return m_irradiancePipeline; }
     VkPipeline            prefilterPipeline()  const { return m_prefilterPipeline; }
     VkPipelineLayout      pipelineLayout()     const { return m_pipelineLayout; }
@@ -110,9 +110,9 @@ public:
 private:
     VkImage        m_irradianceImage  = VK_NULL_HANDLE;
     VkDeviceMemory m_irradianceMemory = VK_NULL_HANDLE;
-    // Vista CUBE pa muestrear desde pbr.frag; vista 2D_ARRAY pa que el compute
-    // pueda escribirla como storage image (un imageCube de escritura exigiria
-    // capacidades que no hacen falta).
+    // CUBE view for sampling from pbr.frag; 2D_ARRAY view so that the compute
+    // can write it as a storage image (a write imageCube would require
+    // capabilities that are not needed).
     VkImageView    m_irradianceView   = VK_NULL_HANDLE;
     VkImageView    m_irradianceStore  = VK_NULL_HANDLE;
     VkImage        m_prefilterImage   = VK_NULL_HANDLE;

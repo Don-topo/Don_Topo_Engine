@@ -1,42 +1,42 @@
 #version 450
 
-// Motion blur de CAMARA por reproyeccion. Corre despues de la niebla y antes
-// del bloom: la estela arrastra los highlights y florece con ellos, igual que
-// hace el SSR.
+// CAMERA motion blur by reprojection. It runs after the fog and before
+// the bloom: the trail drags the highlights and blooms with them, just as
+// SSR does.
 //
-// La velocidad de cada pixel sale de la misma matriz que ya usa el TAA
-// (prevViewProj * inverse(currViewProj)) aplicada al depth del pre-pass. Eso
-// cubre el movimiento de la camara -traslacion y rotacion- que es el que genera
-// casi toda la estela visible. Los objetos que se mueven POR SI MISMOS no
-// aportan velocidad propia: haria falta un buffer de velocidad con la matriz
-// anterior de cada objeto (y los bones anteriores de las mallas skinned), que es
-// otro attachment en el pass de escena. Aqui no hay estado nuevo por objeto.
+// Each pixel's velocity comes from the same matrix that TAA already uses
+// (prevViewProj * inverse(currViewProj)) applied to the pre-pass depth. That
+// covers the camera's motion (translation and rotation), which is the one that generates
+// almost all the visible trail. Objects that move BY THEMSELVES contribute
+// no velocity of their own: it would take a velocity buffer with each object's
+// previous matrix (and the previous bones of the skinned meshes), which is
+// another attachment in the scene pass. Here there is no new per-object state.
 layout(local_size_x = 8, local_size_y = 8) in;
 
-// La escena HDR ya iluminada, como textura: este shader lee pixeles ARBITRARIOS
-// a lo largo de la velocidad, asi que no puede escribir en la misma imagen. El
-// alfa NO es opacidad -pbr.frag guarda ahi la fuerza de SSR del objeto- y por
-// eso se copia sin mezclar.
+// The already lit HDR scene, as a texture: this shader reads ARBITRARY pixels
+// along the velocity, so it cannot write to the same image. The
+// alpha is NOT opacity (pbr.frag stores the object's SSR strength there) and
+// that is why it is copied without blending.
 layout(set = 0, binding = 0) uniform sampler2D sceneTex;
-// Profundidad de TODA la escena, del mismo depth pre-pass que alimenta al SSAO,
-// al SSR y al TAA. NEAREST: D32_SFLOAT no tiene garantizado el filtrado lineal.
+// Depth of the WHOLE scene, from the same depth pre-pass that feeds SSAO,
+// SSR and TAA. NEAREST: D32_SFLOAT is not guaranteed to support linear filtering.
 layout(set = 0, binding = 1) uniform sampler2D depthTex;
-// Destino: imagen intermedia del mismo formato y tamano que la escena. El
-// backend la copia de vuelta sobre el HDR cuando el pase termina.
+// Destination: intermediate image of the same format and size as the scene. The
+// backend copies it back onto the HDR when the pass finishes.
 layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outImage;
 
-// Propia de este pipeline, igual que SsrPush y FogPush: el bloque UBO esta
-// declarado en varios shaders y meterle un miembro desplazaria en silencio todo
-// lo de detras por std140.
+// Specific to this pipeline, like SsrPush and FogPush: the UBO block is
+// declared in several shaders and adding a member would silently shift everything
+// behind it under std140.
 layout(push_constant) uniform MotionBlurPush {
-    // Clip de ESTE frame (sin jitter) -> clip del anterior. Se calcula en la CPU
-    // como prevViewProj * inverse(currViewProj), exactamente igual que en el TAA.
+    // Clip of THIS frame (without jitter) -> clip of the previous one. It is computed on the CPU
+    // as prevViewProj * inverse(currViewProj), exactly as in TAA.
     mat4  reproject;
     vec2  invRes;
-    float intensity;   // escala de la velocidad; 1.0 = desplazamiento de un frame
-    float maxRadius;   // tope de la estela en pixeles, para que un giro brusco no
-                       // barra media pantalla
-    int   samples;     // taps repartidos a lo largo de la velocidad
+    float intensity;   // velocity scale; 1.0 = displacement of one frame
+    float maxRadius;   // cap of the trail in pixels, so that a sharp turn does not
+                       // smear half the screen
+    int   samples;     // taps spread along the velocity
 } push;
 
 void main()
@@ -48,15 +48,15 @@ void main()
     vec2 uv     = (vec2(px) + 0.5) * push.invRes;
     vec4 center = texture(sceneTex, uv);
 
-    // Reproyeccion: de (uv, depth) de este frame a la uv que ocupaba ese mismo
-    // punto en el anterior. El depth viene del pre-pass, que se graba SIN jitter,
-    // asi que la posicion reconstruida es la geometrica.
+    // Reprojection: from (uv, depth) of this frame to the uv that this same point occupied in the
+    // previous one. The depth comes from the pre-pass, which is recorded WITHOUT jitter, so the
+    // reconstructed position is the geometric one.
     float depth = texture(depthTex, uv).r;
     vec4  clip  = vec4(uv * 2.0 - 1.0, depth, 1.0);
     vec4  prev  = push.reproject * clip;
 
-    // w degenerada en el fondo lejano: no hay reproyeccion que valga, se deja el
-    // pixel tal cual en vez de dividir por casi cero.
+    // Degenerate w in the far background: no reprojection is valid, the pixel is left
+    // as is instead of dividing by almost zero.
     if (abs(prev.w) < 1e-6)
     {
         imageStore(outImage, px, center);
@@ -65,19 +65,19 @@ void main()
 
     vec2 prevUv = (prev.xy / prev.w) * 0.5 + 0.5;
 
-    // Del pixel de ahora al de antes. El signo hace que la estela salga POR
-    // DETRAS del movimiento, que es donde el pixel estuvo.
+    // From the current pixel to the previous one. The sign makes the trail go BEHIND
+    // the motion, which is where the pixel was.
     vec2 velocity = (prevUv - uv) * push.intensity;
 
-    // Tope en pixeles. Sin esto un giro rapido de camara convierte la estela en
-    // un barrido de pantalla completa y el coste se dispara por cache.
+    // Cap in pixels. Without this a fast camera turn turns the trail into
+    // a full-screen sweep and the cost shoots up due to the cache.
     vec2  velPx = velocity / max(push.invRes, vec2(1e-8));
     float lenPx = length(velPx);
     if (lenPx > push.maxRadius && lenPx > 1e-6)
         velocity *= push.maxRadius / lenPx;
 
-    // Por debajo de medio pixel no hay nada que emborronar: el promedio daria el
-    // mismo color pero con N muestras de coste.
+    // Below half a pixel there is nothing to blur: the average would give the
+    // same color but at the cost of N samples.
     const int taps = max(push.samples, 1);
     if (lenPx < 0.5 || taps < 2)
     {
@@ -85,10 +85,10 @@ void main()
         return;
     }
 
-    // Muestreo uniforme CENTRADO en el pixel: la mitad de los taps caen donde el
-    // punto estuvo y la otra mitad donde va. Centrar evita que la imagen entera
-    // parezca desplazada hacia atras cuando la camara se mueve a velocidad
-    // constante.
+    // Uniform sampling CENTERED on the pixel: half of the taps fall where the
+    // point was and the other half where it is going. Centering avoids the whole image
+    // looking shifted backwards when the camera moves at constant
+    // speed.
     vec3 sum = vec3(0.0);
     for (int i = 0; i < taps; i++)
     {
@@ -96,7 +96,7 @@ void main()
         sum += texture(sceneTex, uv + velocity * t).rgb;
     }
 
-    // El alfa se conserva sin mezclar: lleva la mascara de SSR del objeto, que no
-    // es una magnitud que tenga sentido promediar entre pixeles distintos.
+    // The alpha is kept without blending: it carries the object's SSR mask, which is not
+    // a quantity that makes sense to average across different pixels.
     imageStore(outImage, px, vec4(sum / float(taps), center.a));
 }

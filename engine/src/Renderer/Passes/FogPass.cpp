@@ -12,8 +12,8 @@ namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// 128 bytes exactos -el minimo que Vulkan garantiza-: los mismos
-// campos y en el mismo orden que el bloque de fog.comp.
+// Exactly 128 bytes (the minimum Vulkan guarantees): the same
+// fields and in the same order as the fog.comp block.
 struct FogPush {
     glm::mat4 invViewProj;
     glm::vec4 camPosDensity;
@@ -23,12 +23,12 @@ struct FogPush {
 };
 static_assert(sizeof(FogPush) == 128, "FogPush must stay at 128 bytes: fog.comp declares this layout");
 
-// ── Niebla volumetrica ──────────────────────────────────────────────────────
+// ── Volumetric fog ──────────────────────────────────────────────────────────
 void FogPass::createPipelines(const Context& ctx)
 {
-    // Cuatro bindings: HDR como storage (lectura + escritura in situ), la
-    // profundidad del pre-pass, el UBO del frame (matriz de vista, cortes y
-    // matrices de cascada) y el shadow map de la luz key.
+    // Four bindings: HDR as storage (read + write in place), the
+    // pre-pass depth, the frame's UBO (view matrix, cuts and
+    // cascade matrices) and the key light's shadow map.
     VkDescriptorSetLayoutBinding bindings[4]{};
     const VkDescriptorType types[4] = {
         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
@@ -95,8 +95,8 @@ void FogPass::createPipelines(const Context& ctx)
 
     vkDestroyShaderModule(ctx.gpu.device(), module, nullptr);
 
-    // Dos por frame, las que acotan el dispatch. timestampsSupported ya lo
-    // resolvio el bloom.
+    // Two per frame, the ones that bound the dispatch. timestampsSupported was already
+    // resolved by the bloom.
     if (ctx.timestampsSupported)
     {
         VkQueryPoolCreateInfo qpi{};
@@ -125,14 +125,14 @@ void FogPass::destroyPipelines(const Context& ctx)
 
 void FogPass::createSets(const Context& ctx)
 {
-    // El UBO del frame es uno de los cuatro bindings y en el primer init
-    // todavia no existe cuando corre createOffscreenImages: ahi se sale sin
-    // hacer nada y el final de init vuelve a llamar.
+    // The frame's UBO is one of the four bindings and on the first init
+    // it does not exist yet when createOffscreenImages runs: it exits here without
+    // doing anything and the end of init calls it again.
     if (ctx.uniformBuffers[0] == VK_NULL_HANDLE) return;
 
-    // La niebla no tiene imagen propia: escribe dentro del HDR. Lo unico que
-    // hay que rehacer con el swapchain son los sets, que referencian
-    // hdrView y ssaoDepthView. Reset y no free, igual que en el SSR.
+    // The fog has no image of its own: it writes inside the HDR. The only thing that
+    // has to be rebuilt with the swapchain is the sets, which reference
+    // hdrView and ssaoDepthView. Reset and not free, as in SSR.
     vkResetDescriptorPool(ctx.gpu.device(), m_descPool, 0);
 
     for (int f = 0; f < kFramesInFlight; f++)
@@ -159,8 +159,8 @@ void FogPass::createSets(const Context& ctx)
         uboInfo.offset = 0;
         uboInfo.range  = sizeof(UniformBufferObject);
 
-        // El mismo par vista+sampler que muestrea pbr.frag: comparador de
-        // profundidad incluido, que es lo que espera sampler2DArrayShadow.
+        // The same view+sampler pair that pbr.frag samples: depth comparator
+        // included, which is what sampler2DArrayShadow expects.
         VkDescriptorImageInfo shadowInfo{};
         shadowInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         shadowInfo.imageView   = ctx.shadowView;
@@ -189,10 +189,10 @@ void FogPass::createSets(const Context& ctx)
 
 void FogPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& view, const glm::mat4& proj)
 {
-    // Apagada (o sets aun sin alojar, viewport degenerado): ni dispatch, ni
-    // barreras, ni timestamps. El HDR se queda tal y como lo dejaron el pass
-    // de escena y el SSR, en SHADER_READ_ONLY, que es justo lo que esperan el
-    // bloom y la composicion. Imagen identica a la de antes de la feature.
+    // Off (or sets not yet allocated, degenerate viewport): no dispatch, no
+    // barriers, no timestamps. The HDR stays exactly as the scene pass
+    // and the SSR left it, in SHADER_READ_ONLY, which is precisely what the
+    // bloom and the composition expect. Image identical to the one before the feature.
     if (!ctx.state.fogEnabled() || m_sets[ctx.currentFrame] == VK_NULL_HANDLE)
     {
         m_gpuMs = 0.0f;
@@ -200,8 +200,8 @@ void FogPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& v
         return;
     }
 
-    // Timestamps de hace dos frames en este mismo slot, cuya fence ya esperó
-    // drawFrame, así que no bloquean a nadie.
+    // Timestamps from two frames ago in this same slot, whose fence was already awaited by
+    // drawFrame, so they do not block anyone.
     if (ctx.timestampsSupported && m_queryPending[ctx.currentFrame])
     {
         uint64_t stamps[2] = {};
@@ -226,41 +226,41 @@ void FogPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& v
     }
 
     FogPush push{};
-    // La proyeccion EFECTIVA del frame (Y-flip de Vulkan dentro) por la
-    // vista: es la que grabo el depth, asi que desproyectar es consistente.
+    // The frame's EFFECTIVE projection (with Vulkan's Y-flip) times the
+    // view: it is the one the depth was recorded with, so unprojecting is consistent.
     push.invViewProj = glm::inverse(proj * view);
-    // La cámara en mundo sale de la propia vista: la cuarta columna de su
-    // inversa. Así no hay que arrastrar un parámetro más hasta aquí.
+    // The camera in world comes from the view itself: the fourth column of its
+    // inverse. That way there is no need to drag one more parameter down to here.
     const glm::vec3 camPos = glm::vec3(glm::inverse(view)[3]);
     push.camPosDensity = glm::vec4(camPos, ctx.state.fogDensity());
 
-    // Luz key = la misma que alimenta las cascadas (m_lights[0]) y con su MISMO
-    // criterio, que vive en keyLightDirection.
-    // Sin luces, dirección neutra y color negro: la niebla solo absorbe, que
-    // es lo correcto cuando no hay nada que disperse.
+    // Key light = the same one that feeds the cascades (m_lights[0]) and with its SAME
+    // criterion, which lives in keyLightDirection.
+    // Without lights, neutral direction and black color: the fog only absorbs, which
+    // is right when there is nothing to scatter.
     glm::vec3 lightDir(0.0f, -1.0f, 0.0f);
     glm::vec3 lightColor(0.0f);
     if (!ctx.lights.empty())
     {
-        // El MISMO criterio que las cascadas, no una copia: cuando esto derivaba
-        // la direccion por su cuenta y el shadow pass cambio el suyo, el
-        // scattering apuntaba a un lado y el shadow map estaba construido hacia
-        // otro. Por eso el punto de mira de una luz de punto no se calcula aqui:
-        // llega por el Context, ya resuelto, y es el mismo objeto que recibieron
-        // las cascadas en este frame.
+        // The SAME criterion as the cascades, not a copy: when this derived
+        // the direction on its own and the shadow pass changed its own, the
+        // scattering pointed to one side and the shadow map was built towards
+        // another. That is why a point light's aim point is not computed here:
+        // it arrives through the Context, already resolved, and it is the same object that the
+        // cascades received in this frame.
         keyLightDirection(ctx.lights[0].position, ctx.lights[0].direction,
                           ctx.sceneCenter, lightDir);
         lightColor = glm::vec3(ctx.lights[0].color) * ctx.lights[0].color.a;
     }
     push.lightDirFalloff = glm::vec4(lightDir, ctx.state.fogHeightFalloff());
-    // El color de la luz key se pliega aquí sobre el tinte de la niebla: la
-    // push constant está en los 128 bytes exactos que Vulkan garantiza y no
-    // cabe un vec4 más.
+    // The key light's color is folded here into the fog's tint: the
+    // push constant is at the exact 128 bytes that Vulkan guarantees and
+    // one more vec4 does not fit.
     push.scatterBaseHeight = glm::vec4(ctx.state.fogScatter() * lightColor, ctx.state.fogBaseHeight());
     push.gStepsRes = glm::vec4(ctx.state.fogAnisotropy(), (float)ctx.state.fogSteps(),
                                (float)ctx.renderExtent.width, (float)ctx.renderExtent.height);
 
-    // El HDR pasa a GENERAL, el único layout válido para imageLoad/imageStore.
+    // The HDR goes to GENERAL, the only valid layout for imageLoad/imageStore.
     VkImageMemoryBarrier toFog{};
     toFog.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     toFog.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -276,10 +276,10 @@ void FogPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& v
     toFog.srcAccessMask                   = VK_ACCESS_SHADER_READ_BIT;
     toFog.dstAccessMask                   = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 
-    // Y la profundidad del pre-pass y el shadow map se leen desde compute:
-    // los escribió el rasterizador, así que hace falta hacer visible esa
-    // escritura. Van por memory barrier y no por image barrier porque su
-    // layout NO cambia (los dos siguen en DEPTH_STENCIL_READ_ONLY).
+    // And the pre-pass depth and the shadow map are read from compute:
+    // they were written by the rasterizer, so that write has to be
+    // made visible. They go through a memory barrier and not an image barrier because their
+    // layout does NOT change (both stay in DEPTH_STENCIL_READ_ONLY).
     VkMemoryBarrier mem{};
     mem.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     mem.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -301,8 +301,8 @@ void FogPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& v
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(cmd, gx, gy, 1);
 
-    // Y el HDR vuelve a SHADER_READ_ONLY, el layout que declaran los
-    // descriptor sets del bloom (compute) y de la composición (fragment).
+    // And the HDR goes back to SHADER_READ_ONLY, the layout declared by the
+    // descriptor sets of the bloom (compute) and the composition (fragment).
     toFog.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
     toFog.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     toFog.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -317,9 +317,9 @@ void FogPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& v
 
 void FogPass::destroySets()
 {
-    // Los sets mueren con el reset del pool que hace createSets; aqui
-    // solo se anulan los handles para que nadie los ate a vistas ya
-    // destruidas.
+    // The sets die with the pool reset done by createSets; here
+    // the handles are only nulled so that nobody ties them to already
+    // destroyed views.
     for (int f = 0; f < kFramesInFlight; f++) m_sets[f] = VK_NULL_HANDLE;
 }
 

@@ -5,14 +5,15 @@ namespace DonTopo
 {
     struct Mesh;
 
-    // Clave de contenido: dos Mesh que produzcan la misma clave generan
-    // exactamente los mismos recursos GPU. Mezcla discriminantes exactos
-    // (tamaños, paths de textura, metallic/roughness) con un FNV-1a de los
-    // bytes de vértices, índices y texturas embebidas. El nombre del mesh y su
-    // sourcePath NO entran: no afectan a un solo byte de lo que sube a GPU.
+    // Content key: two Mesh that produce the same key generate exactly the same
+    // GPU resources. It mixes exact discriminants (sizes, texture paths,
+    // metallic/roughness) with an FNV-1a of the bytes of vertices, indices and
+    // embedded textures. The mesh name and its sourcePath do NOT go in: they do
+    // not affect a single byte of what is uploaded to the GPU.
     //
-    // Vive en su propia cabecera y no en SharedGpuMesh.h porque no depende de
-    // ningún backend: la usan el Renderer de Vulkan y el de DirectX 12, y
-    // arrastrar vulkan.h al segundo por una función de hashing no tiene sentido.
+    // It lives in its own header and not in SharedGpuMesh.h because it does not
+    // depend on any backend: the Vulkan Renderer and the DirectX 12 one both use
+    // it, and dragging vulkan.h into the second one for a hashing function makes
+    // no sense.
     std::string makeSharedMeshKey(const Mesh& mesh);
 }

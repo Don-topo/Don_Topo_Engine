@@ -1,37 +1,37 @@
-// Tamanos del bloque de sombras del UBO, en UN solo sitio del lado GLSL.
+// Sizes of the UBO's shadow block, in a SINGLE place on the GLSL side.
 //
-// Estos tres numeros estaban escritos a mano en los SEIS shaders que declaran el
-// bloque (pbr.frag, triangle.frag, triangle.vert, outline.vert, shadow.vert y
-// fog.comp). Cambiarlos obligaba a acertar seis veces, y fallar no da ningun
-// error: std140 desplaza en silencio todo lo que va detras de lightSpaceMatrix y
-// el shader lee el UBO corrido. Es el patron de H76 —constantes duplicadas entre
-// consumidores del mismo bloque— aplicado al lado del shader.
+// These three numbers were written by hand in the SIX shaders that declare the
+// block (pbr.frag, triangle.frag, triangle.vert, outline.vert, shadow.vert and
+// fog.comp). Changing them required getting it right six times, and failing gives no
+// error: std140 silently shifts everything behind lightSpaceMatrix and
+// the shader reads the shifted UBO. It is the H76 pattern (constants duplicated between
+// consumers of the same block) applied to the shader side.
 //
-// La otra copia inevitable es la de C++ (UniformBufferObject.h): un shader no
-// puede incluir un header de C++. Dos sitios, no ocho, y los dos documentados el
-// uno en el otro.
+// The other unavoidable copy is the C++ one (UniformBufferObject.h): a shader cannot
+// include a C++ header. Two places, not eight, and the two documented in
+// each other.
 #ifndef DT_SHADOW_CONFIG_GLSL
 #define DT_SHADOW_CONFIG_GLSL
 
-// Cascadas de la luz key cuando es direccional.
+// Cascades of the key light when it is directional.
 #define SHADOW_CASCADES 4
 
-// Huecos reservados a la luz KEY: 4 si es direccional (una por cascada), 6 si es
-// de punto o un foco muy abierto (una por cara del cubemap), 1 si es un foco
-// normal. Nunca coexisten: solo hay una key y solo tiene un tipo.
+// Slots reserved for the KEY light: 4 if it is directional (one per cascade), 6 if it is
+// a point light or a very wide spot (one per cubemap face), 1 if it is a normal
+// spot. They never coexist: there is only one key and it has only one type.
 #define SHADOW_KEY_MATRICES 6
 
-// Capas para las luces SECUNDARIAS, detras de las de la key. Una por foco
-// estrecho, seis por luz de punto o foco muy abierto. Con seis caben una luz de
-// punto O seis focos.
+// Layers for the SECONDARY lights, behind the key's. One per narrow
+// spot, six per point light or very wide spot. With six, a point light
+// OR six spots fit.
 //
-// El freno es la MEMORIA: estas capas viven en el mismo array que las de la key,
-// o sea a su misma resolucion, y a 2048 cada una son 16 MB. Darles un array
-// propio mas pequeno permitiria subirlas sin pagarlo, pero obliga a un binding
-// nuevo en los seis shaders del bloque.
+// The limit is MEMORY: these layers live in the same array as the key's,
+// that is, at the same resolution, and at 2048 each one is 16 MB. Giving them
+// a separate smaller array would allow raising them without paying for it, but it requires a new
+// binding in the six shaders of the block.
 #define SHADOW_EXTRA_LAYERS 6
 
-// Total del array del UBO. Tiene que valer lo mismo que SHADOW_MATRICES en
+// Total of the UBO's array. It has to have the same value as SHADOW_MATRICES in
 // UniformBufferObject.h.
 #define SHADOW_MATRICES (SHADOW_KEY_MATRICES + SHADOW_EXTRA_LAYERS)
 

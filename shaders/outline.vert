@@ -1,27 +1,27 @@
 #version 450
 
-// Casco invertido del objeto seleccionado en el editor: la misma malla
-// extruida a lo largo de su normal, dibujada con las caras frontales
-// culleadas. Solo asoma el reborde que queda fuera de la silueta original;
-// el resto del casco cae por detras de la geometria y lo descarta el depth
-// test. Comparte pipeline layout con triangle.vert (mismo UBO en set 0 y el
-// mismo bloque de push constants), asi que no necesita descriptor sets ni
-// rangos propios.
+// Inverted hull of the object selected in the editor: the same mesh
+// extruded along its normal, drawn with front faces
+// culled. Only the rim that lies outside the original silhouette shows;
+// the rest of the hull falls behind the geometry and is discarded by the depth
+// test. It shares pipeline layout with triangle.vert (same UBO in set 0 and the
+// same push constants block), so it needs neither descriptor sets nor
+// ranges of its own.
 
 layout(location = 0) in vec3 inPos;
-// Las locations 1 (color), 2 (uv) y 4 (tangent) del vertex input existen en
-// el pipeline pero no se declaran aqui: un shader no esta obligado a
-// consumir todos los atributos del binding.
+// Locations 1 (color), 2 (uv) and 4 (tangent) of the vertex input exist in
+// the pipeline but are not declared here: a shader is not obliged to
+// consume all the attributes of the binding.
 layout(location = 3) in vec3 inNormal;
 
-// El array de cascadas no se usa aqui, pero se declara igual que en los demas
-// shaders del set 0: si el bloque se quedara con una sola mat4, cualquier
-// miembro que se anadiera detras leeria de un offset distinto al que escribe
-// el UBO de C++.
+// The cascade array is not used here, but it is declared the same as in the other
+// set 0 shaders: if the block were left with a single mat4, any
+// member added behind it would read from a different offset than the one the C++
+// UBO writes.
 #include "shadow_config.glsl"
-// Huecos de matriz de sombra. Los 6 primeros son de la luz KEY (4 cascadas,
-// o 6 caras de cubemap, o 1 cara de foco); los 4 de detras son un foco
-// secundario cada uno. Mismo valor que SHADOW_MATRICES en
+// Shadow matrix slots. The first 6 belong to the KEY light (4 cascades,
+// or 6 cubemap faces, or 1 spot face); the 4 after them are one secondary
+// spot each. Same value as SHADOW_MATRICES in
 // UniformBufferObject.h.
 
 layout(set = 0, binding = 0) uniform UBO
@@ -31,27 +31,27 @@ layout(set = 0, binding = 0) uniform UBO
     mat4 lightSpaceMatrix[SHADOW_MATRICES];
 } ubo;
 
-// Mismo layout que el bloque de triangle.vert/pbr.frag: mat4 + 2 float + vec2.
-// flags.x no se usa aqui (el outline dibuja UN objeto con su matriz en el push,
-// nunca por instancing); flags.y lleva el grosor de la extrusion en unidades de
-// mundo, que era el hueco libre de esa vec2.
+// Same layout as the triangle.vert/pbr.frag block: mat4 + 2 float + vec2.
+// flags.x is not used here (the outline draws ONE object with its matrix in the push,
+// never through instancing); flags.y carries the extrusion thickness in world
+// units, which was the free slot of that vec2.
 layout(push_constant) uniform PushData
 {
     mat4  transform;
     float metallic;
     float roughness;
-    vec2  flags;      // y: grosor del contorno (mundo)
+    vec2  flags;      // y: outline thickness (world)
 } push;
 
 void main()
 {
     vec4 worldPos = push.transform * vec4(inPos, 1.0);
 
-    // Normal a mundo SIN normalizar primero: mat3(transform) puede llevar
-    // escala. Si sale de longitud cero (malla sin normales) normalize daria
-    // NaN y el triangulo entero desapareceria, asi que en ese caso no se
-    // extruye y el casco coincide con la malla (no se ve contorno, pero
-    // tampoco se rompe nada).
+    // Normal to world WITHOUT normalizing first: mat3(transform) may carry
+    // scale. If it comes out with zero length (mesh without normals) normalize would give
+    // NaN and the whole triangle would disappear, so in that case it is not
+    // extruded and the hull coincides with the mesh (no outline is seen, but
+    // nothing breaks either).
     vec3 n = mat3(push.transform) * inNormal;
     float len = length(n);
     vec3 offset = len > 1e-6 ? (n / len) * push.flags.y : vec3(0.0);

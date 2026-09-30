@@ -1,9 +1,9 @@
 #version 450
 
-// Un nivel de la cadena de upsample: lee el mip N (ya filtrado) con un tent 3x3
-// y lo SUMA sobre el mip N-1, que ya contiene lo que dejo el downsample. Por eso
-// dstImg no es writeonly: hace falta imageLoad para acumular. El qualifier de
-// formato (rgba16f) es lo que permite leerla sin exigir
+// One level of the upsample chain: reads mip N (already filtered) with a 3x3 tent
+// and ADDS it onto mip N-1, which already contains what the downsample left. That is why
+// dstImg is not writeonly: imageLoad is needed to accumulate. The format
+// qualifier (rgba16f) is what allows reading it without requiring
 // shaderStorageImageReadWithoutFormat.
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -11,11 +11,11 @@ layout(set = 0, binding = 0) uniform sampler2D srcTex;
 layout(set = 0, binding = 1, rgba16f) uniform image2D dstImg;
 
 layout(push_constant) uniform Push {
-    vec2  srcTexel;   // 1 / tamano del nivel de ORIGEN (el mip pequeno)
-    float threshold;  // sin uso aqui
-    float knee;       // sin uso aqui
-    float radius;     // separacion del tent, en texels del origen
-    int   prefilter;  // sin uso aqui
+    vec2  srcTexel;   // 1 / size of the SOURCE level (the small mip)
+    float threshold;  // unused here
+    float knee;       // unused here
+    float radius;     // tent spacing, in source texels
+    int   prefilter;  // unused here
 } push;
 
 vec3 tap(vec2 uv, vec2 off)
@@ -31,7 +31,7 @@ void main()
 
     vec2 uv = (vec2(dstCoord) + 0.5) / vec2(dstSize);
 
-    // Tent 3x3 (1 2 1 / 2 4 2 / 1 2 1) / 16.
+    // 3x3 tent (1 2 1 / 2 4 2 / 1 2 1) / 16.
     vec3 sum = tap(uv, vec2(-1.0, -1.0)) * 1.0
              + tap(uv, vec2( 0.0, -1.0)) * 2.0
              + tap(uv, vec2( 1.0, -1.0)) * 1.0

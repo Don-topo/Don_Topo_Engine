@@ -1,14 +1,14 @@
 #version 450
-// Un hilo por restricción de IK (tope 4), un workgroup por personaje. Corre
-// entre una jerarquía "solo mundo" (bone_hierarchy con flags bit 0) y la
-// jerarquía normal: lee los transforms de MUNDO y corrige los LOCALES, que es
-// lo que hace que la corrección se propague a los hijos (los dedos siguen a la
-// mano). Réplica en CPU: resolverIk en animator_tests.cpp.
+// One thread per IK constraint (cap 4), one workgroup per character. It runs
+// between a "world-only" hierarchy (bone_hierarchy with flags bit 0) and the
+// normal hierarchy: it reads the WORLD transforms and corrects the LOCALS, which is
+// what makes the correction propagate to the children (the fingers follow the
+// hand). CPU replica: resolverIk in animator_tests.cpp.
 layout(local_size_x = 4) in;
 
-// Layout std430, espejo de GpuBoneInfo (engine/include/DonTopo/Renderer/SkinnedMesh.h)
-// y del mismo struct en bone_eval.comp y bone_hierarchy.comp: los cuatro
-// comparten la SSBO del binding 3, así que ningún campo se puede omitir.
+// std430 layout, mirror of GpuBoneInfo (engine/include/DonTopo/Renderer/SkinnedMesh.h)
+// and of the same struct in bone_eval.comp and bone_hierarchy.comp: the four
+// share the SSBO of binding 3, so no field can be omitted.
 struct BoneInfo {
     int posOffset, posCount;
     int rotOffset, rotCount;
@@ -21,7 +21,7 @@ struct BoneInfo {
 layout(set=0, binding=3,  std430) readonly buffer BoneInfos   { BoneInfo data[]; } boneInfos;
 layout(set=0, binding=4,  std430)          buffer LocalXforms { mat4 data[]; }     localXforms;
 layout(set=0, binding=5,  std430) readonly buffer FinalBones  { mat4 data[]; }     finalBones;
-// Bloque de IK; layout en engine/include/DonTopo/Renderer/IkBlock.h.
+// IK block; layout in engine/include/DonTopo/Renderer/IkBlock.h.
 layout(set=0, binding=11, std430) readonly buffer IkBlock     { uint data[]; }     ikBlock;
 
 layout(push_constant) uniform PC {
@@ -54,8 +54,8 @@ vec4 qAxisAngle(vec3 eje, float ang)
     return vec4(normalize(eje) * s, cos(ang * 0.5));
 }
 
-// Rotación de un transform de mundo. Se asume escala uniforme (limitación
-// documentada de la IK).
+// Rotation of a world transform. Uniform scale is assumed (documented
+// limitation of the IK).
 vec4 rotDe(mat4 m)
 {
     vec3 c0 = normalize(m[0].xyz), c1 = normalize(m[1].xyz), c2 = normalize(m[2].xyz);
@@ -85,8 +85,8 @@ vec4 rotDe(mat4 m)
     return normalize(q);
 }
 
-// Giro mínimo de a a b (unitarios). Con vectores opuestos cualquier eje
-// perpendicular vale: se elige uno estable.
+// Minimal rotation from a to b (unit vectors). With opposite vectors any
+// perpendicular axis works: a stable one is chosen.
 vec4 giroEntre(vec3 a, vec3 b)
 {
     float d = clamp(dot(a, b), -1.0, 1.0);
@@ -100,7 +100,7 @@ vec4 giroEntre(vec3 a, vec3 b)
     return qAxisAngle(cross(a, b), acos(d));
 }
 
-// Acota el giro a maxAngle grados y lo escala por el peso.
+// Clamps the rotation to maxAngle degrees and scales it by the weight.
 vec4 acotaYPesa(vec4 q, float maxAngleDeg, float weight)
 {
     vec4  u   = normalize(q);
@@ -119,8 +119,8 @@ vec4 slerpDesdeIdentidad(vec4 q, float t)
     return qAxisAngle(u.xyz / sin(ang * 0.5), ang * clamp(t, 0.0, 1.0));
 }
 
-// Escribe la rotación de mundo `nueva` como LOCAL del hueso i, conservando su
-// posición y su escala locales.
+// Writes the world rotation `nueva` as the LOCAL of bone i, keeping its local
+// position and scale.
 void escribeRot(int i, vec4 nuevaMundo)
 {
     int  padre = boneInfos.data[i].parentIndex;
@@ -129,7 +129,7 @@ void escribeRot(int i, vec4 nuevaMundo)
     mat4 m     = localXforms.data[i];
     vec3 t     = m[3].xyz;
     vec3 s     = vec3(length(m[0].xyz), length(m[1].xyz), length(m[2].xyz));
-    // mat4_cast + escala por columnas, igual que trs() de bone_eval.
+    // mat4_cast + per-column scale, like trs() in bone_eval.
     vec3 x = qrot(local, vec3(1.0, 0.0, 0.0)) * s.x;
     vec3 y = qrot(local, vec3(0.0, 1.0, 0.0)) * s.y;
     vec3 z = qrot(local, vec3(0.0, 0.0, 1.0)) * s.z;
@@ -166,7 +166,7 @@ void main()
         return;
     }
 
-    // TwoBone: A abuelo, B padre, C extremo.
+    // TwoBone: A grandparent, B parent, C end effector.
     if (A < 0 || B < 0 || A >= int(push.boneCount) || B >= int(push.boneCount)) return;
     vec3  pA = finalBones.data[A][3].xyz;
     vec3  pB = finalBones.data[B][3].xyz;
@@ -177,7 +177,7 @@ void main()
     if (length(haciaT) < 1e-5) return;
     float lAT = clamp(length(haciaT), 1e-4, lAB + lBC - 1e-4);
 
-    // 1) Codo: ángulo actual y deseado por la ley de cosenos.
+    // 1) Elbow: current and desired angle by the law of cosines.
     vec3  BA   = normalize(pA - pB), BC = normalize(pC - pB);
     float ang0 = acos(clamp(dot(BA, BC), -1.0, 1.0));
     float ang1 = acos(clamp((lAB * lAB + lBC * lBC - lAT * lAT) / (2.0 * lAB * lBC), -1.0, 1.0));
@@ -186,16 +186,16 @@ void main()
     if (length(eje) < 1e-5) eje = vec3(0.0, 1.0, 0.0);
     vec4 flex = qAxisAngle(eje, (ang1 - ang0) * clamp(peso, 0.0, 1.0));
 
-    // 2) Hombro: lleva el extremo (ya flexionado) al objetivo.
+    // 2) Shoulder: brings the end effector (already flexed) to the target.
     vec3 pCflex = pB + qrot(flex, pC - pB);
     vec4 giro   = slerpDesdeIdentidad(giroEntre(normalize(pCflex - pA), normalize(haciaT)), peso);
 
-    // 3) Pole: gira alrededor del eje A->objetivo hasta meter el codo en su plano.
+    // 3) Pole: rotates around the A->target axis until putting the elbow in its plane.
     if (conPole)
     {
         vec3 ejeT    = normalize(haciaT);
-        // El codo solo lo mueve el giro del hombro: la flexión es la rotación del
-        // PROPIO codo y no cambia su posición.
+        // The elbow is only moved by the shoulder's rotation: the flexion is the rotation of the
+        // elbow ITSELF and does not change its position.
         vec3 pBnuevo = pA + qrot(giro, pB - pA);
         vec3 actual  = pBnuevo - pA - ejeT * dot(pBnuevo - pA, ejeT);
         vec3 deseado = pole - pA - ejeT * dot(pole - pA, ejeT);
@@ -211,8 +211,8 @@ void main()
     vec4 RAnuevo = normalize(qmul(giro, RA));
     vec4 RBnuevo = normalize(qmul(giro, qmul(flex, RB)));
     escribeRot(A, RAnuevo);
-    // B se mide contra el mundo NUEVO de A, que escribeRot no ha propagado (la
-    // jerarquía corre después): se compone a mano.
+    // B is measured against A's NEW world, which escribeRot has not propagated (the
+    // hierarchy runs afterwards): it is composed by hand.
     vec4 local = normalize(qmul(vec4(-RAnuevo.xyz, RAnuevo.w), RBnuevo));
     mat4 mB = localXforms.data[B];
     vec3 t  = mB[3].xyz;

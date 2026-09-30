@@ -12,13 +12,13 @@ layout(location = 2) out vec3 fragNormal;
 layout(location = 3) out vec3 fragWorldPos;
 layout(location = 4) out vec3 fragTangent;
 layout(location = 5) out vec3 fragBitangent;
-// No hay varying de posicion en espacio de luz: con cascadas harian falta N, y
-// el fragment shader ya reconstruye la que toca desde fragWorldPos.
+// There is no light-space position varying: with cascades N would be needed, and
+// the fragment shader already reconstructs the right one from fragWorldPos.
 
 #include "shadow_config.glsl"
-// Huecos de matriz de sombra. Los 6 primeros son de la luz KEY (4 cascadas,
-// o 6 caras de cubemap, o 1 cara de foco); los 4 de detras son un foco
-// secundario cada uno. Mismo valor que SHADOW_MATRICES en
+// Shadow matrix slots. The first 6 belong to the KEY light (4 cascades,
+// or 6 cubemap faces, or 1 spot face); the 4 after them are one secondary
+// spot each. Same value as SHADOW_MATRICES in
 // UniformBufferObject.h.
 
 layout(set = 0, binding = 0) uniform UBO
@@ -28,31 +28,31 @@ layout(set = 0, binding = 0) uniform UBO
     mat4 lightSpaceMatrix[SHADOW_MATRICES];
 } ubo;
 
-// Transforms por instancia, uno por frame-in-flight. Los objetos estaticos que
-// comparten malla+material se dibujan en un solo draw instanciado y cada
-// instancia coge su matriz de aqui por gl_InstanceIndex.
+// Per-instance transforms, one per frame-in-flight. Static objects that
+// share mesh+material are drawn in a single instanced draw and each
+// instance takes its matrix from here by gl_InstanceIndex.
 layout(std430, set = 1, binding = 0) readonly buffer InstanceData
 {
     mat4 models[];
 } instances;
 
-// Mismos tipos y offsets que el bloque de pbr.frag (las dos etapas del mismo
-// pipeline comparten el rango de push constants): mat4 + 2 float + vec2. El
-// hueco de esa vec2 era relleno; ahora su .x lleva el flag de instancing y su .y
-// sigue sin usarse, asi que ningun offset se ha movido y pbr.frag no cambia.
+// Same types and offsets as the pbr.frag block (the two stages of the same
+// pipeline share the push constants range): mat4 + 2 float + vec2. The
+// slot of that vec2 was padding; now its .x carries the instancing flag and its .y
+// is still unused, so no offset has moved and pbr.frag does not change.
 layout(push_constant) uniform PushData
 {
     mat4  transform;
     float metallic;
     float roughness;
-    vec2  flags;      // x: 1 = coger el model matrix del SSBO de instancias
+    vec2  flags;      // x: 1 = take the model matrix from the instance SSBO
 } push;
 
 void main()
 {
-    // useInstancing == 0 es la ruta skinned: comparte este vertex shader y este
-    // pipeline layout, dibuja una sola instancia y trae su matriz en el push
-    // constant, no en el SSBO.
+    // useInstancing == 0 is the skinned path: it shares this vertex shader and this
+    // pipeline layout, draws a single instance and brings its matrix in the push
+    // constant, not in the SSBO.
     mat4 model = push.flags.x != 0.0 ? instances.models[gl_InstanceIndex] : push.transform;
 
     gl_Position = ubo.proj * ubo.view * model * vec4(inPos, 1.0);

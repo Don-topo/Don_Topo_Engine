@@ -6,34 +6,34 @@ namespace DonTopo {
 class GpuDevice;
 class RendererState;
 
-// Bloom: cadena de mips a media resolucion (bajada con umbral + subida
-// acumulativa). Lo que NO es suyo y por eso se queda en el Renderer: el pass de
-// COMPOSICION, que suma el mip 0 sobre el HDR, tonemapea y ademas hospeda el
-// contorno, los gizmos y la UI de juego.
+// Bloom: half-resolution mip chain (down pass with threshold + cumulative
+// up pass). What is NOT its own and therefore stays in the Renderer: the
+// COMPOSITION pass, which adds mip 0 onto the HDR, tonemaps and also hosts the
+// outline, the gizmos and the game UI.
 //
-// Dos ataduras con ese vecino, y por eso salen a la interfaz publica:
-//  - sampler() y mipView0(): el descriptor set de la composicion los necesita.
-//  - queryPool(): el par de timestamps mide "bloom + composicion", asi que el
-//    cierre se escribe DESPUES del render pass de composicion, que graba el
-//    Renderer.
+// Two ties with that neighbor, and that is why they come out in the public interface:
+//  - sampler() and mipView0(): the composition's descriptor set needs them.
+//  - queryPool(): the timestamp pair measures "bloom + composition", so the
+//    closing one is written AFTER the composition render pass, which the
+//    Renderer records.
 class BloomPass {
 public:
-    // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
+    // It must match Renderer::MAX_FRAMES (checked with static_assert in Renderer.cpp).
     static constexpr int      kFramesInFlight = 2;
     static constexpr uint32_t kMaxMips        = 5;
 
     struct Context {
         GpuDevice&           gpu;
         const RendererState& state;
-        // Resolucion INTERNA del render: la cadena arranca a la mitad de esta.
+        // INTERNAL render resolution: the chain starts at half of this.
         const VkExtent2D&    renderExtent;
-        // La del swapchain, solo para el informe de medida.
+        // The swapchain's, only for the measurement report.
         const VkExtent2D&    swapChainExtent;
         int                  currentFrame;
-        // El target de escena: el mip 0 lo lee con umbral.
+        // The scene target: mip 0 reads it with a threshold.
         VkFormat             hdrFormat;
         const VkImageView*   hdrView;   // [kFramesInFlight]
-        // Los resolvio el Renderer justo antes de crear los pipelines.
+        // They were resolved by the Renderer right before creating the pipelines.
         bool                 timestampsSupported;
         float                timestampPeriod;
     };
@@ -42,44 +42,44 @@ public:
     BloomPass(const BloomPass&)            = delete;
     BloomPass& operator=(const BloomPass&) = delete;
 
-    // Lo que no depende del tamano: sampler, layout, pool, los dos pipelines y
-    // el pool de queries. Una sola vez, en el init.
+    // What does not depend on the size: sampler, layout, pool, the two pipelines and
+    // the query pool. Only once, in init.
     void createPipelines(const Context& ctx);
     void destroyPipelines(const Context& ctx);
-    // La cadena de mips y sus sets: van con el swapchain.
+    // The mip chain and its sets: they go with the swapchain.
     void createImages(const Context& ctx);
     void destroyImages(const Context& ctx);
 
-    // Bajada + subida. No graba nada sin cadena (viewport diminuto).
+    // Down + up. It records nothing without a chain (tiny viewport).
     void record(const Context& ctx, VkCommandBuffer cmd);
-    // Con el bloom apagado la composicion sigue muestreando la cadena, asi que
-    // hay que dejarla en negro y en GENERAL. Pasa UNA vez por imagen (al
-    // crearla y al apagar el efecto), no cada frame.
+    // With the bloom off the composition keeps sampling the chain, so
+    // it has to be left black and in GENERAL. It happens ONCE per image (when
+    // creating it and when turning the effect off), not every frame.
     void recordClear(const Context& ctx, VkCommandBuffer cmd);
-    // Abre el par de timestamps del frame y lee el de hace dos. Va antes de
-    // record(); el cierre lo escribe el Renderer tras la composicion.
+    // Opens the frame's timestamp pair and reads the one from two frames ago. It goes before
+    // record(); the closing one is written by the Renderer after the composition.
     void beginQuery(const Context& ctx, VkCommandBuffer cmd);
-    // Con el bloom apagado: la medida se anula y el par no se abre.
+    // With the bloom off: the measurement is voided and the pair is not opened.
     void skipQuery(const Context& ctx);
 
-    // Niveles realmente usados: un viewport pequeno no da para kMaxMips. Con 0
-    // no hay nada que sumar y la composicion fuerza la intensidad a cero.
+    // Levels actually used: a small viewport does not allow kMaxMips. With 0
+    // there is nothing to add and the composition forces the intensity to zero.
     uint32_t    mipCount() const { return m_mipCount; }
-    // Lo que necesita el descriptor set de la composicion.
+    // What the composition's descriptor set needs.
     VkImageView mipView0(int frame) const { return m_mipView[frame][0]; }
     VkSampler   sampler()           const { return m_sampler; }
     VkQueryPool queryPool()         const { return m_queryPool; }
     float       gpuMs()             const { return m_gpuMs; }
-    // Al apagar el efecto hay que volver a dejar la cadena en negro.
+    // When turning the effect off the chain has to be left black again.
     void markClearPending();
 
 private:
     VkImage               m_image[kFramesInFlight]  = {};
     VkDeviceMemory        m_memory[kFramesInFlight] = {};
-    // Una vista 2D por nivel: imageStore no elige mip, igual que en el
-    // prefiltrado del IBL. La misma vista hace de storage image y de
-    // textura muestreada — la imagen se queda en GENERAL toda la cadena,
-    // que es un layout valido para ambas cosas y ahorra el ping-pong.
+    // One 2D view per level: imageStore does not choose the mip, as in the
+    // IBL prefilter. The same view acts as storage image and as
+    // sampled texture: the image stays in GENERAL for the whole chain,
+    // which is a layout valid for both and saves the ping-pong.
     VkImageView           m_mipView[kFramesInFlight][kMaxMips] = {};
     VkExtent2D            m_mipExtent[kMaxMips]                = {};
     uint32_t              m_mipCount                           = 0;

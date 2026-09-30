@@ -22,19 +22,19 @@ bool loadSplashImage(const std::string& path, std::vector<uint8_t>& outRGBA,
     return true;
 }
 
-// ── helpers (molde: Skybox.cpp) ─────────────────────────────────────────────
+// ── helpers (template: Skybox.cpp) ─────────────────────────────────────────
 
 // ── public ───────────────────────────────────────────────────────────────────
 
 bool SplashScreen::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
                          const std::string& logoPath)
 {
-    (void)colorFormat; // el renderPass ya tiene el formato correcto (igual que Skybox)
+    (void)colorFormat; // the renderPass already has the right format (same as Skybox)
 
     std::vector<uint8_t> pixels;
     int w = 0, h = 0;
     if (!loadSplashImage(logoPath, pixels, w, h))
-        return false; // logo ausente: no se crea ningun objeto Vulkan
+        return false; // logo missing: no Vulkan object is created
 
     m_logoW = w;
     m_logoH = h;
@@ -68,7 +68,7 @@ bool SplashScreen::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorF
     memcpy(mapped, pixels.data(), (size_t)imageSize);
     vkUnmapMemory(gpu.device(), stagingMem);
 
-    // Imagen 2D de una sola capa (sin CUBE_COMPATIBLE, arrayLayers=1)
+    // Single-layer 2D image (no CUBE_COMPATIBLE, arrayLayers=1)
     {
         VkImageCreateInfo ci{};
         ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -115,7 +115,7 @@ bool SplashScreen::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorF
             0, 0, nullptr, 0, nullptr, 1, &b);
     }
 
-    // Copia unica (una sola capa) — textura subida tal cual, sin flip vertical
+    // Single copy (one layer) — texture uploaded as is, no vertical flip
     VkBufferImageCopy copy{};
     copy.bufferOffset      = 0;
     copy.bufferRowLength   = 0;
@@ -172,11 +172,11 @@ bool SplashScreen::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorF
         vkCreateSampler(gpu.device(), &ci, nullptr, &m_sampler);
     }
 
-    // Todo lo que sigue (descriptores + pipeline) puede lanzar
-    // std::runtime_error (shader ausente/corrupto, fallo de creacion de
-    // pipeline). El splash es siempre opcional: cualquier fallo aqui debe
-    // resultar en init() devolviendo false, nunca en una excepcion que suba
-    // hasta main(). Se libera todo lo ya creado y se reporta false.
+    // Everything that follows (descriptors + pipeline) can throw
+    // std::runtime_error (missing/corrupt shader, pipeline creation
+    // failure). The splash is always optional: any failure here must
+    // result in init() returning false, never in an exception that propagates
+    // up to main(). Everything already created is released and false is reported.
     try {
         createDescriptors(gpu);
         createPipeline(gpu, renderPass);
@@ -292,7 +292,7 @@ void SplashScreen::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
     stages[1].module = fragMod;
     stages[1].pName  = "main";
 
-    // Sin vertex input — posiciones hardcoded en el vertex shader
+    // No vertex input — positions hardcoded in the vertex shader
     VkPipelineVertexInputStateCreateInfo vtxInput{};
     vtxInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
@@ -316,13 +316,13 @@ void SplashScreen::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
     ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    // Sin depth: el splash no usa depth (render pass de Task 5 sin attachment
-    // de depth para este pipeline).
+    // No depth: the splash does not use depth (Task 5 render pass has no depth
+    // attachment for this pipeline).
     VkPipelineColorBlendAttachmentState blendAtt{};
     blendAtt.colorWriteMask =
         VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    // Blend opaco: el alpha ya se aplica en el shader multiplicando el color.
+    // Opaque blend: alpha is already applied in the shader by multiplying the color.
     blendAtt.blendEnable = VK_FALSE;
 
     VkPipelineColorBlendStateCreateInfo blend{};
@@ -336,7 +336,7 @@ void SplashScreen::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
     dyn.dynamicStateCount = 2;
     dyn.pDynamicStates    = dynStates;
 
-    // Push constant: 3 floats sueltos = 12 bytes, solo fragment stage
+    // Push constant: 3 loose floats = 12 bytes, fragment stage only
     VkPushConstantRange push{};
     push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     push.offset     = 0;
@@ -369,10 +369,10 @@ void SplashScreen::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
     VkResult pipeResult = vkCreateGraphicsPipelines(
         gpu.device(), VK_NULL_HANDLE, 1, &pCI, nullptr, &m_pipeline);
 
-    // Los shader modules son locales a esta funcion y solo hacen falta
-    // durante la creacion del pipeline: se destruyen aqui SIEMPRE, tanto en
-    // el camino de exito como en el de fallo, para que un throw no los deje
-    // filtrados (vkCreateGraphicsPipelines no los consume/posee).
+    // The shader modules are local to this function and are only needed
+    // during pipeline creation: they are ALWAYS destroyed here, both on
+    // the success path and on the failure path, so that a throw does not leave them
+    // leaked (vkCreateGraphicsPipelines does not consume/own them).
     vkDestroyShaderModule(gpu.device(), vertMod, nullptr);
     vkDestroyShaderModule(gpu.device(), fragMod, nullptr);
 

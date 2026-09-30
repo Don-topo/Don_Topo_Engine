@@ -15,42 +15,42 @@ class GpuDevice;
 class Scene;
 class Skybox;
 
-// Sondas de entorno: capturan la escena desde su posicion en 6 caras y
-// sustituyen al IBL global (bindings 5 y 6 del set 0) en los objetos que caen
-// dentro de su radio. El bake es un EVENTO: no graba ni un comando en el
-// command buffer del frame, asi que el coste GPU por frame con N sondas ya
-// bakeadas es exactamente el mismo que con 0.
+// Environment probes: they capture the scene from their position in 6 faces and
+// replace the global IBL (bindings 5 and 6 of set 0) on the objects that fall
+// inside their radius. The bake is an EVENT: it does not record a single command into the
+// frame's command buffer, so the per-frame GPU cost with N already baked
+// probes is exactly the same as with 0.
 //
-// Lado de captura: un solo cubemap COMPARTIDO por todas las sondas (es un
-// intermedio del bake, no persiste), creado la primera vez que hay algo que
-// bakear. Sin sondas no se crea y no gasta nada.
+// Capture side: a single cubemap SHARED by all the probes (it is an
+// intermediate of the bake, it does not persist), created the first time there is something to
+// bake. Without probes it is not created and costs nothing.
 //
-// Ataduras con codigo que no es suyo, todas por el Context:
-//  - el bake REDIBUJA la escena, asi que necesita el pass offscreen entero del
-//    Renderer (render pass, framebuffer y HDR del slot 0, los dos pipelines de
-//    escena con su layout, el set de instancias y el UBO mapeado) mas las
-//    listas de objetos. Nada de eso se mueve: viaja por referencia.
-//  - los pipelines de convolucion y las dos vistas globales son de IblPass.
-//  - fp: el bake tiene que APAGAR el Forward+ mientras captura (su rejilla se
-//    culleo contra el frustum de la camara del frame, no contra las 6 caras).
-//    Es la unica atadura que no cabe en un handle, porque muta estado del otro
-//    pase; sigue siendo pase->pase y nunca pase->Renderer.
+// Ties with code that is not its own, all through the Context:
+//  - the bake REDRAWS the scene, so it needs the Renderer's whole offscreen pass
+//    (render pass, framebuffer and HDR of slot 0, the two scene pipelines
+//    with their layout, the instance set and the mapped UBO) plus the object
+//    lists. None of that moves: it travels by reference.
+//  - the convolution pipelines and the two global views belong to IblPass.
+//  - fp: the bake has to TURN OFF Forward+ while capturing (its grid was
+//    culled against the frame camera's frustum, not against the 6 faces).
+//    It is the only tie that does not fit in a handle, because it mutates the other
+//    pass's state; it is still pass->pass and never pass->Renderer.
 class ReflectionProbePass {
 public:
     static constexpr uint32_t kFaceSize = 128;
-    // 7 pares: uno por cara mas el de la convolucion. Se suman los deltas en
-    // vez de medir del primero al ultimo, que contaria tambien las esperas del
-    // host entre submits.
+    // 7 pairs: one per face plus the convolution one. The deltas are summed instead of
+    // measuring from the first to the last, which would also count the host waits
+    // between submits.
     static constexpr uint32_t kQueryCount = 14;
 
     struct GpuProbe
     {
-        uint64_t  ownerId  = 0;          // GameObject::id de la sonda
+        uint64_t  ownerId  = 0;          // GameObject::id of the probe
         glm::vec3 position { 0.0f };
         float     radius    = 0.0f;
         float     intensity = 1.0f;
-        // Mismas dos imagenes que el IBL global, por sonda: irradiancia
-        // (1 mip) y entorno prefiltrado (IblPass::kPrefilterMips).
+        // The same two images as the global IBL, per probe: irradiance
+        // (1 mip) and prefiltered environment (IblPass::kPrefilterMips).
         VkImage        irradianceImage  = VK_NULL_HANDLE;
         VkDeviceMemory irradianceMemory = VK_NULL_HANDLE;
         VkImageView    irradianceView   = VK_NULL_HANDLE;
@@ -59,20 +59,20 @@ public:
         VkDeviceMemory prefilterMemory  = VK_NULL_HANDLE;
         VkImageView    prefilterView    = VK_NULL_HANDLE;
         VkImageView    prefilterStore[IblPass::kPrefilterMips] {};
-        bool           baked  = false;   // false: todavia con el neutro
-        float          bakeMs = 0.0f;    // ultimo bake, timestamps GPU
-        // Llamadas a sync() seguidas SIN cambios en los ajustes de la sonda. El
-        // auto-bake espera a que llegue a 1: sin esto, arrastrar el slider de
-        // Intensity dispararia un bake por frame (con su vkDeviceWaitIdle y sus
+        bool           baked  = false;   // false: still with the neutral one
+        float          bakeMs = 0.0f;    // last bake, GPU timestamps
+        // Consecutive calls to sync() WITHOUT changes in the probe's settings. The
+        // auto-bake waits for it to reach 1: without this, dragging the Intensity
+        // slider would trigger a bake per frame (with its vkDeviceWaitIdle and its
         // 7 submits).
         int            settleFrames = 0;
     };
 
     struct Context {
         GpuDevice& gpu;
-        // nullptr = sin escena cargada: no hay arbol que recorrer.
+        // nullptr = no scene loaded: there is no tree to traverse.
         Scene*     scene;
-        // El cielo se dibuja en cada una de las seis caras.
+        // The sky is drawn on each of the six faces.
         Skybox&    skybox;
 
         // ── IBL global (handles de IblPass) ──────────────────────────────────
@@ -85,33 +85,32 @@ public:
         VkImageView           globalIrradianceView;
         VkImageView           globalPrefilterView;
 
-        // ── El pass de escena, tal cual lo graba el frame ────────────────────
-        // Resolucion INTERNA del render, no la del swapchain: la cara se
-        // recorta a min(kFaceSize, extent) porque el framebuffer es el del
-        // viewport.
+        // ── The scene pass, exactly as the frame records it ────────────────────
+        // INTERNAL render resolution, not the swapchain's: the face is
+        // cropped to min(kFaceSize, extent) because the framebuffer is the viewport's.
         const VkExtent2D& renderExtent;
         VkRenderPass      sceneRenderPass;
-        VkFramebuffer     sceneFramebuffer;    // el del slot 0
-        VkImage           hdrImage;            // idem, origen del blit
+        VkFramebuffer     sceneFramebuffer;    // the one of slot 0
+        VkImage           hdrImage;            // same, source of the blit
         VkPipeline        scenePipeline;
         VkPipeline        skinnedPipeline;
         VkPipelineLayout  scenePipelineLayout;
         VkDescriptorSet   instanceSet;         // set 1, slot 0
-        void*             uboMapped;           // UBO del slot 0, mapeado
-        // false = todavia no se ha escrito un frame: el UBO del slot 0 es
-        // basura (ni luces ni matrices de cascada) y los bakes esperan.
+        void*             uboMapped;           // UBO of slot 0, mapped
+        // false = no frame has been written yet: the UBO of slot 0 is
+        // garbage (no lights or cascade matrices) and the bakes wait.
         bool              uboWritten;
         ForwardPlusPass&  fp;
 
-        // ── Lo que hay que dibujar ───────────────────────────────────────────
+        // ── What has to be drawn ───────────────────────────────────────────
         const std::vector<RenderObject>&  objects;
         SharedGpuMeshCache&               sharedMeshes;
         std::vector<SkinnedRenderObject>& skinnedObjects;
         uint64_t                          lastCompletedTicket;
 
-        // El mapa de AO del slot 0: se limpia a 1.0 antes de capturar, porque
-        // el que hay en la GPU es el de la camara del frame. VK_NULL_HANDLE si
-        // el SSAO nunca ha creado sus imagenes.
+        // The AO map of slot 0: it is cleared to 1.0 before capturing, because
+        // the one on the GPU is the frame camera's. VK_NULL_HANDLE if
+        // SSAO has never created its images.
         VkImage ssaoBlurImage;
 
         bool  timestampsSupported;
@@ -122,21 +121,21 @@ public:
     ReflectionProbePass(const ReflectionProbePass&)            = delete;
     ReflectionProbePass& operator=(const ReflectionProbePass&) = delete;
 
-    // Reconcilia la lista de sondas con la escena, lanza los bakes pendientes y
-    // reasigna sonda->objeto. Una vez por frame, al principio de drawFrame: es
-    // donde se puede esperar a que la GPU quede libre sin pillar el command
-    // buffer a medio grabar.
+    // Reconciles the probe list with the scene, launches the pending bakes and
+    // reassigns probe->object. Once per frame, at the start of drawFrame: it is
+    // where one can wait for the GPU to become idle without catching the command
+    // buffer half recorded.
     void sync(const Context& ctx);
     void destroy(const Context& ctx);
 
-    // La UI solo ENCOLA: el bake ocurre en el sync del frame siguiente.
+    // The UI only QUEUES: the bake happens in the next frame's sync.
     void requestBake(uint64_t ownerId) { m_bakeQueue.push_back(ownerId); }
     void requestBakeAll()              { m_bakeAllQueued = true; }
 
     int   count()      const { return (int)m_probes.size(); }
-    // ms del ULTIMO bake (una sonda o la tanda entera), por timestamps.
+    // ms of the LAST bake (one probe or the whole batch), by timestamps.
     float lastBakeMs() const { return m_lastBakeMs; }
-    // ms del ultimo bake de UNA sonda concreta, o -1 si nunca se bakeo.
+    // ms of the last bake of ONE specific probe, or -1 if it was never baked.
     float bakeMs(uint64_t ownerId) const
     {
         for (const GpuProbe& p : m_probes)
@@ -144,12 +143,12 @@ public:
         return -1.0f;
     }
 
-    // Memoria GPU de las capturas persistentes de UNA sonda, en bytes.
-    // No cuenta el cubemap de captura, que es uno solo pa todas.
+    // GPU memory of the persistent captures of ONE probe, in bytes.
+    // It does not count the capture cubemap, which is a single one for all.
     static constexpr uint64_t probeMemoryBytes()
     {
-        // rgba16f = 8 bytes/texel, 6 caras. El prefiltrado suma sus mips
-        // (la serie 1 + 1/4 + 1/16 + ... truncada a kPrefilterMips).
+        // rgba16f = 8 bytes/texel, 6 faces. The prefilter adds its mips
+        // (the series 1 + 1/4 + 1/16 + ... truncated to kPrefilterMips).
         uint64_t pre = 0;
         for (uint32_t m = 0; m < IblPass::kPrefilterMips; m++)
         {
@@ -160,23 +159,23 @@ public:
     }
 
 private:
-    // Cubemap intermedio del bake y su query pool. La primera vez que hay algo
-    // que bakear.
+    // Intermediate bake cubemap and its query pool. The first time there is something
+    // to bake.
     void createCapture(const Context& ctx);
     void createProbeImages(const Context& ctx, GpuProbe& probe);
     void destroyProbeImages(const Context& ctx, GpuProbe& probe);
-    // Las 6 caras + la convolucion de UNA sonda. Submits propios, no toca el
-    // command buffer del frame.
+    // The 6 faces + the convolution of ONE probe. Own submits, it does not touch the
+    // frame's command buffer.
     void bake(const Context& ctx, GpuProbe& probe);
-    // La sonda MAS CERCANA cuyo radio contiene el punto. -1 = ninguna.
+    // The NEAREST probe whose radius contains the point. -1 = none.
     int  pickProbeFor(const glm::vec3& worldPos) const;
-    // Calcula la asignacion DESEADA y solo toca la GPU si difiere de la ya
-    // escrita.
+    // Computes the DESIRED assignment and only touches the GPU if it differs from the one
+    // already written.
     void refreshAssignment(const Context& ctx);
-    // Devuelve TODOS los objetos al IBL global. Justo antes de una tanda de
-    // bakes, o la captura se realimenta.
+    // Returns ALL the objects to the global IBL. Right before a batch of
+    // bakes, or the capture feeds back on itself.
     void assignAllToGlobalIbl(const Context& ctx);
-    // Los bindings 5 y 6 de un set ya alojado, con el sampler del IBL.
+    // Bindings 5 and 6 of an already allocated set, with the IBL sampler.
     void writeIblBindings(const Context& ctx, VkDescriptorSet set,
                           VkImageView irradiance, VkImageView prefilter) const;
 
@@ -190,9 +189,9 @@ private:
     bool                  m_bakeAllQueued = false;
     float                 m_lastBakeMs    = 0.0f;
 
-    // Asignacion resuelta: sharedIndex -> indice en m_probes (-1 = IBL
-    // global). Es la CACHE de lo ya escrito en los descriptor sets; solo se
-    // reescriben bindings cuando el mapa recalculado difiere de este.
+    // Resolved assignment: sharedIndex -> index in m_probes (-1 = global
+    // IBL). It is the CACHE of what is already written in the descriptor sets; bindings are only
+    // rewritten when the recomputed map differs from this one.
     std::unordered_map<int, int> m_assignShared;
     std::vector<int>             m_assignSkinned;
 };
