@@ -3965,11 +3965,12 @@ namespace DonTopo
 
     namespace
     {
-        // The keys of a mesh.materials[] entry that nodeToJson writes through
-        // toStoredPath. Keep in sync with nodeToJson / nodeFromJson (a test compares
-        // both routes so a new path field cannot drift silently).
-        constexpr const char* kStoredPathKeys[] = { "albedo", "normal", "orm", "matAsset",
-                                                    "baseAlbedo", "baseNormal", "baseOrm" };
+        // The keys of a mesh.materials[] entry that the DISK form stores through
+        // toStoredPath. The base* baselines are deliberately absent: they are only
+        // written and read with carryOverrideBaseline (memory form), never in a
+        // .scene/.prefab. Keep in sync with nodeToJson / nodeFromJson (a test compares
+        // both routes for the keys present in its fixture).
+        constexpr const char* kStoredPathKeys[] = { "albedo", "normal", "orm", "matAsset" };
 
         template <typename Convert>
         void rewriteStoredPaths(nlohmann::json& node, const Convert& convert)

@@ -40,8 +40,10 @@ namespace DonTopo
     std::string meshCacheKey(const std::string& sourcePath, int piece);
 
     // Rewrite IN PLACE the stored-path fields of a node tree (mesh.materials[].albedo/
-    // normal/orm/matAsset and base*): exactly the fields nodeToJson writes with
-    // toStoredPath. resolveStoredPaths goes stored -> absolute (what nodeFromJson does on
+    // normal/orm/matAsset): the disk-form fields nodeToJson writes with toStoredPath.
+    // The base* baselines are NOT handled on purpose: disk form (.scene/.prefab) never
+    // carries them, they exist only in the memory form (carryOverrideBaseline).
+    // resolveStoredPaths goes stored -> absolute (what nodeFromJson does on
     // the disk path), storeRelativePaths the other way. They let a prefab file (disk
     // form) be compared and instantiated through the memory form (empty root).
     void resolveStoredPaths(nlohmann::json& nodeTree, const std::string& assetRoot);

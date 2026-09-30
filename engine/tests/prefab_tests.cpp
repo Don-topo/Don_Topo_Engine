@@ -213,9 +213,7 @@ nlohmann::json materialNode(uint64_t id)
     // without any disk read (no sourcePath).
     nlohmann::json entry = { {"index", 0},
                              {"albedo", "Textures/a.png"}, {"normal", "Textures/n.png"},
-                             {"orm", "Textures/o.png"}, {"matAsset", "Materials/m.mat"},
-                             {"baseAlbedo", "Textures/ba.png"}, {"baseNormal", "Textures/bn.png"},
-                             {"baseOrm", "Textures/bo.png"} };
+                             {"orm", "Textures/o.png"}, {"matAsset", "Materials/m.mat"} };
     return { {"id", id}, {"name", "Crate"}, {"localTransform", mat4Json(glm::mat4(1.0f))},
              {"mesh", { {"sourcePath", ""}, {"name", "Cube"},
                         {"vertices", nlohmann::json::array()}, {"indices", nlohmann::json::array()},
@@ -248,6 +246,8 @@ void testResolveStoreInverse()
     CHECK(j == original, "resolve then store gives back the original");
 }
 
+// Drift guard. Limit: it only guards the keys present in the fixture, so a new
+// stored-path field added to nodeToJson must be added to materialNode() too.
 void testResolveMatchesNodeFromJson()
 {
     const std::string root = (std::filesystem::temp_directory_path() / "dt_prefab_root2").string();
@@ -272,7 +272,26 @@ void testResolveMatchesNodeFromJson()
     if (!n) return;
     nlohmann::json pathB = b.subtreeToMemoryJson(n);
 
-    CHECK(pathA["mesh"].contains("materials"), "materials survive the load");
+    // Non-vacuous: every stored-path field must survive the disk load as a non-empty
+    // absolute path with the expected relative suffix.
+    CHECK(pathA["mesh"].contains("materials") && pathA["mesh"]["materials"].size() == 1,
+          "materials survive the load");
+    if (pathA["mesh"].contains("materials") && pathA["mesh"]["materials"].size() == 1)
+    {
+        const auto& m = pathA["mesh"]["materials"][0];
+        const std::pair<const char*, const char*> expected[] = {
+            {"albedo", "Textures/a.png"}, {"normal", "Textures/n.png"},
+            {"orm", "Textures/o.png"}, {"matAsset", "Materials/m.mat"} };
+        for (const auto& [key, suffix] : expected)
+        {
+            const std::string v = m.value(key, std::string());
+            const std::string suf = suffix;
+            CHECK(!v.empty() && std::filesystem::path(v).is_absolute() &&
+                  v.size() >= suf.size() &&
+                  std::filesystem::path(v).generic_string().ends_with(suf),
+                  (std::string("disk load resolves ") + key).c_str());
+        }
+    }
     stripIds(pathA); stripIds(pathB);
     CHECK(pathA == pathB, "resolveStoredPaths + memory route == nodeFromJson disk route");
 }
