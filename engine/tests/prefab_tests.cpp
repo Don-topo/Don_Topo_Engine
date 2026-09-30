@@ -460,9 +460,10 @@ void testPropagationRespectsOverrides()
 
     prefab["children"][0]["light"]["range"]     = 20.0;
     prefab["children"][0]["light"]["intensity"] = 2.0;
-    a = s.rebuildPrefabInstance(a, prefab, physics(), audio());
-    b = s.rebuildPrefabInstance(b, prefab, physics(), audio());
-    CHECK(a && b, "both rebuilt");
+    bool okA = false, okB = false;
+    a = s.rebuildPrefabInstance(a, prefab, physics(), audio(), nullptr, nullptr, &okA);
+    b = s.rebuildPrefabInstance(b, prefab, physics(), audio(), nullptr, nullptr, &okB);
+    CHECK(a && b && okA && okB, "both rebuilt");
     if (!a || !b) return;
     auto* la = childNamed(a, "Lamp");
     auto* lb = childNamed(b, "Lamp");
@@ -491,8 +492,9 @@ void testPropagationKeepsIdsAndAddsNew()
     nlohmann::json gun = { {"id", 99}, {"name", "Gun"}, {"localTransform", mat4Json(glm::mat4(1.0f))},
                            {"children", nlohmann::json::array()} };
     prefab["children"].push_back(gun);
-    auto* n = s.rebuildPrefabInstance(a, prefab, physics(), audio());
-    CHECK(n != nullptr, "rebuilt");
+    bool ok = false;
+    auto* n = s.rebuildPrefabInstance(a, prefab, physics(), audio(), nullptr, nullptr, &ok);
+    CHECK(n != nullptr && ok, "rebuilt");
     if (!n) return;
     CHECK(n->id == rootId && s.findById(rootId) == n, "root keeps its id and findById finds the new root");
     CHECK(indexInParent(n) == 1, "same index in the parent");
@@ -515,8 +517,9 @@ void testAddedChildSurvivesPropagation()
     auto* extra = s.addGameObject("Extra", childNamed(a, "Lamp"));
     const uint64_t extraId = extra->id;
     prefab["children"][0]["light"]["range"] = 20.0;
-    a = s.rebuildPrefabInstance(a, prefab, physics(), audio());
-    CHECK(a != nullptr, "rebuilt");
+    bool ok = false;
+    a = s.rebuildPrefabInstance(a, prefab, physics(), audio(), nullptr, nullptr, &ok);
+    CHECK(a != nullptr && ok, "rebuilt");
     auto* e = childNamed(childNamed(a, "Lamp"), "Extra");
     CHECK(e && e->id == extraId && e->prefabNode == 0, "Extra still under Lamp, same id, still added");
 }
@@ -585,12 +588,95 @@ void testRebuildFailureRestoresOldSubtree()
     // A root field of the wrong type makes nodeFromJson throw on the ROOT (a child
     // would only be skipped with a warning), which is what fails the whole build.
     prefab["ssrEnabled"] = "yes";
-    auto* n = s.rebuildPrefabInstance(a, prefab, physics(), audio());
-    CHECK(n == nullptr, "a failed rebuild returns nullptr");
+    bool ok = true;
+    auto* n = s.rebuildPrefabInstance(a, prefab, physics(), audio(), nullptr, nullptr, &ok);
+    CHECK(!ok, "a failed rebuild reports rebuilt == false");
+    CHECK(n != nullptr && n->id == rootId && s.findById(rootId) == n,
+          "it returns the RESTORED root, same id, and findById agrees");
     auto* back = s.findById(rootId);
     CHECK(back && indexInParent(back) == index, "the old subtree is back at the same index");
     CHECK(back && s.subtreeToMemoryJson(back) == before, "exactly as before, ids included");
     CHECK(s.getRoot().children.size() == 3, "no leftover partial node");
+    // The old slots were released on the way out: the restored subtree is NOT
+    // registered, which is why the caller must register what comes back.
+    bool unregistered = true;
+    if (n) n->traverse([&](DonTopo::GameObject* x) { if (x->staticRenderIndex != -1) unregistered = false; });
+    CHECK(unregistered, "restored nodes have staticRenderIndex -1 (caller registers them)");
+    CHECK(anyWarningContains(s, "left as it was"), "the failure is reported");
+}
+
+void testClonedInstanceChildBecomesAddedChild()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    auto* a = makeInstance(s, prefab);
+    if (!a) { CHECK(false, "instance"); return; }
+    auto* lamp = childNamed(a, "Lamp");
+    s.addGameObject("Bulb", lamp);   // an added child inside the cloned subtree
+    auto* c = s.cloneGameObject(lamp, nullptr, physics(), audio());
+    CHECK(c != nullptr, "clone created");
+    if (!c) return;
+    bool linked = false;
+    c->traverse([&](DonTopo::GameObject* x) { if (x->prefabNode != 0 || x->prefabLink) linked = true; });
+    CHECK(!linked, "a clone of an instance child carries no prefabNode anywhere");
+    const uint64_t cloneId = c->id;
+
+    // Cloning the instance ROOT keeps the link: the clone is a second instance.
+    auto* c2 = s.cloneGameObject(a, nullptr, physics(), audio());
+    CHECK(c2 && c2->prefabLink && c2->prefabNode == 1 && childNamed(c2, "Lamp") &&
+          childNamed(c2, "Lamp")->prefabNode == 2, "a clone of the root stays linked");
+
+    bool ok = false;
+    a = s.rebuildPrefabInstance(a, prefab, physics(), audio(), nullptr, nullptr, &ok);
+    CHECK(a && ok, "rebuilt");
+    if (!a) return;
+    auto* back = s.findById(cloneId);
+    CHECK(back && back->parent == a && back->prefabNode == 0, "the clone survives as an added child");
+    size_t lamps = 0;
+    for (auto& ch : a->children) if (ch->prefabNode == 2) ++lamps;
+    CHECK(lamps == 1, "exactly one linked lamp");
+}
+
+void testDuplicatedLinkedNodeKeptAsAddedChild()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    auto* a = makeInstance(s, prefab);
+    if (!a) { CHECK(false, "instance"); return; }
+    // Hand-built duplicate (what a clone made before the unlink, or a hand-edited
+    // file, leaves behind): a second sibling claiming prefab node 2.
+    auto* dup = s.addGameObject("LampCopy", a);
+    dup->prefabNode = 2;
+    auto* dupKid = s.addGameObject("Wick", dup);
+    dupKid->prefabNode = 2;
+    const uint64_t dupId = dup->id, dupKidId = dupKid->id;
+    const uint64_t lampId = childNamed(a, "Lamp")->id;
+
+    bool ok = false;
+    a = s.rebuildPrefabInstance(a, prefab, physics(), audio(), nullptr, nullptr, &ok);
+    CHECK(a && ok, "rebuilt");
+    if (!a) return;
+    auto* lamp = s.findById(lampId);
+    auto* copy = s.findById(dupId);
+    auto* wick = s.findById(dupKidId);
+    CHECK(lamp && lamp->prefabNode == 2 && lamp->parent == a, "the first one stays linked");
+    CHECK(copy && copy->parent == a && copy->prefabNode == 0, "the duplicate is kept as an added child");
+    CHECK(wick && wick->parent == copy && wick->prefabNode == 0, "with its subtree, unlinked");
+    size_t dupWarnings = 0;
+    for (const auto& w : s.lastWarnings()) if (w.find("duplicates prefab node") != std::string::npos) ++dupWarnings;
+    CHECK(dupWarnings == 1, "warned once");
+}
+
+void testRootWithoutPrefabNodeWarns()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    auto* a = makeInstance(s, prefab);
+    if (!a) { CHECK(false, "instance"); return; }
+    a->prefabNode = 0;
+    a = s.rebuildPrefabInstance(a, prefab, physics(), audio());
+    CHECK(a != nullptr, "still rebuilt");
+    CHECK(anyWarningContains(s, "its root has no prefabNode"), "and the unmatched root is reported");
 }
 
 void testRebuildReleasesOldRootOnce()
@@ -650,6 +736,9 @@ int main()
     testRebuildFailureRestoresOldSubtree();
     testRebuildReleasesOldRootOnce();
     testRootPoseKeptScaleFollowsPrefab();
+    testClonedInstanceChildBecomesAddedChild();
+    testDuplicatedLinkedNodeKeptAsAddedChild();
+    testRootWithoutPrefabNodeWarns();
     if (g_failures) { std::fprintf(stderr, "%d failure(s)\n", g_failures); return 1; }
     std::printf("prefab_tests OK\n");
     return 0;

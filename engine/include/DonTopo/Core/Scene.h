@@ -245,16 +245,26 @@ namespace DonTopo
             //    (where an instance stands is never an override); its scale follows the
             //    prefab unless overridden.
             //  - The old subtree leaves through removeGameObject, so onNodeRemoved
-            //    releases its GPU slots; the caller registers the new subtree (render
-            //    indices at -1, same as insertFromJson).
+            //    releases its GPU slots.
             //  - Overrides whose node or component is gone are dropped from the link
-            //    and reported in lastWarnings() (with "dropped").
-            // Returns the NEW root, or nullptr if the rebuild failed: then the old
-            // subtree is put back at the same index with the same ids.
+            //    and reported in lastWarnings() (with "dropped"). Two nodes claiming the
+            //    same prefabNode: the first is linked, the rest are kept as added children
+            //    (with a warning).
+            // Returns the LIVE root of the instance, same id and index either way: the
+            // rebuilt one (*rebuilt = true), or, if the build failed, the old subtree
+            // re-inserted as it was (*rebuilt = false). In BOTH cases the old slots are
+            // already released and the returned subtree has render indices at -1: the
+            // caller must register it on the GPU (Renderer::registerGameObject) every
+            // time, or the instance stays invisible.
+            // nullptr means there is nothing to register: either nothing was touched
+            // (null root, the scene root, no link, prefabMemoryRoot not an object; the
+            // instance is still live and registered), or even the restore failed and
+            // the instance was lost. lastWarnings() says which.
             GameObject* rebuildPrefabInstance(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot,
                                               PhysicsManager& physics, AudioManager& audio,
                                               const PreloadedMeshCache* meshes = nullptr,
-                                              const MaterialAssetCache* mats = nullptr);
+                                              const MaterialAssetCache* mats = nullptr,
+                                              bool* rebuilt = nullptr);
 
             // Replaces instanceRoot->prefabLink->overrides with the diff of the live
             // subtree against prefabMemoryRoot (matched by prefabNode). Returns true if

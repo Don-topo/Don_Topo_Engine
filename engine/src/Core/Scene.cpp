@@ -3610,6 +3610,23 @@ namespace DonTopo
         };
         stripIds(j);
 
+        // A clone of a NON-root node of a prefab instance (it has prefabNode but no
+        // link of its own) becomes an ADDED child, like Unity: without this the
+        // clone would carry the same prefabNode as its original, the instance would
+        // have two nodes claiming one prefab node, and propagation and override
+        // detection could only honor one of them. Cloning an instance ROOT (it has
+        // the link) keeps everything: the clone is a second instance.
+        if (src->prefabNode != 0 && !src->prefabLink)
+        {
+            std::function<void(nlohmann::json&)> unlink = [&](nlohmann::json& node) {
+                node.erase("prefabNode");
+                if (auto it = node.find("children"); it != node.end() && it->is_array())
+                    for (nlohmann::json& child : *it)
+                        unlink(child);
+            };
+            unlink(j);
+        }
+
         GameObject* clone = target->addChild(src->name + " (Clone)");
         // Before nodeFromJson: if it were cleared after (as it was), the
         // warnings that bindClips pushes to m_warnings during the load would
@@ -4291,32 +4308,81 @@ namespace DonTopo
 
     GameObject* Scene::rebuildPrefabInstance(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot,
                                              PhysicsManager& physics, AudioManager& audio,
-                                             const PreloadedMeshCache* meshes, const MaterialAssetCache* mats)
+                                             const PreloadedMeshCache* meshes, const MaterialAssetCache* mats,
+                                             bool* rebuiltOut)
     {
         m_warnings.clear();
+        if (rebuiltOut) *rebuiltOut = false;
+        // Nothing is touched on these: the instance stays live and registered, and
+        // nullptr tells the caller there is nothing new to register.
         if (!instanceRoot || !instanceRoot->parent || !instanceRoot->prefabLink || !prefabMemoryRoot.is_object())
+        {
+            if (instanceRoot)
+                m_warnings.push_back("prefab instance '" + instanceRoot->name + "': not rebuilt (" +
+                                     (!instanceRoot->parent        ? "it is the scene root"
+                                      : !instanceRoot->prefabLink ? "it has no prefab link"
+                                                                  : "its prefab is not loaded") +
+                                     "); nothing was changed");
             return nullptr;
+        }
 
         // 1. The instance as it is now. Memory form, no baseline: the same form the
         //    template is in, and the one the failure path re-inserts verbatim.
         const nlohmann::json inst = subtreeToMemoryJson(instanceRoot);
+        std::vector<std::string> warnings;
+
+        // A link on a root with no prefabNode cannot be matched to the template:
+        // every node would be rebuilt with a fresh id and every added child lost.
+        // It is not blocked (the rebuild is still the prefab), but not silent either.
+        if (instanceRoot->prefabNode == 0)
+            warnings.push_back("prefab instance '" + instanceRoot->name + "': its root has no prefabNode; "
+                               "its children could not be matched, so their ids and any added children "
+                               "were not kept");
 
         // Scene id of every linked node by its prefab-local id, and the added
         // children (nodes with no prefabNode) by the local id of the linked parent
         // they hang from. An added child travels whole, its own subtree and scene
         // ids included; it is re-attached below under the same prefab node.
+        //
+        // Two nodes claiming the SAME prefabNode (a hand-edited file, or a clone
+        // made before cloneGameObject unlinked them): the first in pre-order is the
+        // linked one, the rest become added children — kept whole with their ids,
+        // prefabNode erased from their subtree — instead of being dropped.
         std::unordered_map<uint64_t, uint64_t> sceneIdByLocal;
+        std::unordered_set<uint64_t> seenLocal;
         std::unordered_map<uint64_t, std::vector<nlohmann::json>> added;
+        std::function<void(nlohmann::json&)> unlinkAll = [&](nlohmann::json& n) {
+            n.erase("prefabNode");
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (auto& c : *kids) unlinkAll(c);
+        };
         std::function<void(const nlohmann::json&)> scan = [&](const nlohmann::json& n) {
             const uint64_t local = localIdOf(n, "prefabNode");
             if (local == 0) return;   // an added child: carried whole by its parent below
+            seenLocal.insert(local);
             if (const uint64_t id = localIdOf(n, "id"); id != 0) sceneIdByLocal.emplace(local, id);
             auto kids = n.find("children");
             if (kids == n.end() || !kids->is_array()) return;
             for (const auto& c : *kids)
             {
-                if (localIdOf(c, "prefabNode") == 0) added[local].push_back(c);
-                else                                 scan(c);
+                const uint64_t childLocal = localIdOf(c, "prefabNode");
+                if (childLocal == 0)
+                {
+                    added[local].push_back(c);
+                }
+                else if (seenLocal.count(childLocal))
+                {
+                    warnings.push_back("prefab instance '" + instanceRoot->name + "': node '" +
+                                       c.value("name", std::string()) + "' duplicates prefab node " +
+                                       std::to_string(childLocal) + "; it is kept as an added child");
+                    nlohmann::json dup = c;
+                    unlinkAll(dup);
+                    added[local].push_back(std::move(dup));
+                }
+                else
+                {
+                    scan(c);
+                }
             }
         };
         scan(inst);
@@ -4324,7 +4390,6 @@ namespace DonTopo
         // 2. Template + stored overrides. Orphans (node or component no longer in
         //    the prefab) come back as warnings and are left out of `applied`, which
         //    is what the rebuilt link stores: they are dropped, not kept dormant.
-        std::vector<std::string> warnings;
         nlohmann::json tree = prefabMemoryRoot;
         const std::vector<PrefabOverride> applied =
             applyPrefabOverrides(tree, instanceRoot->prefabLink->overrides, &warnings);
@@ -4405,17 +4470,33 @@ namespace DonTopo
         if (!rebuilt)
         {
             // The old subtree comes back where it was, with its ids (they are not
-            // live, the failed build left nothing behind). Warnings of the failed
+            // live, the failed build left nothing behind). It is returned, not
+            // hidden behind a nullptr: its GPU slots were already released by the
+            // removeGameObject above, so the caller has to register it just like a
+            // rebuilt one or the instance stays invisible. Warnings of the failed
             // build are kept: they say WHY it failed.
             std::vector<std::string> failWarnings = std::move(m_warnings);
-            failWarnings.push_back("prefab instance '" + inst.value("name", std::string()) +
-                                   "': could not be rebuilt from its prefab; left as it was");
-            insertSubtree(inst, parent, index, physics, audio, &cache, mats, /*carryOverrideBaseline=*/false);
+            const std::string name = inst.value("name", std::string());
+            GameObject* restored = nullptr;
+            try
+            {
+                restored = insertSubtree(inst, parent, index, physics, audio, &cache, mats,
+                                         /*carryOverrideBaseline=*/false);
+            }
+            catch (const std::exception&)
+            {
+                restored = nullptr;
+            }
+            failWarnings.push_back(restored
+                ? "prefab instance '" + name + "': could not be rebuilt from its prefab; left as it was"
+                : "prefab instance '" + name + "': could not be rebuilt from its prefab, and restoring it "
+                  "failed too; the instance was LOST");
             failWarnings.insert(failWarnings.end(), m_warnings.begin(), m_warnings.end());
             m_warnings = std::move(failWarnings);
             collapseWarnings();
-            return nullptr;
+            return restored;
         }
+        if (rebuiltOut) *rebuiltOut = true;
         collapseWarnings();
         return rebuilt;
     }
