@@ -4,6 +4,7 @@
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/AnimatorSerialization.h"
 #include "DonTopo/Core/PropertyTracks.h"
@@ -2105,6 +2106,9 @@ namespace
     // carryOverrideBaseline: read counterpart of the same nodeToJson flag —
     // see its big comment, next to "baseAlbedo". Default false (disk);
     // cloneGameObject and insertFromJson set it to true.
+    // matCache: already-loaded .mat files by absolute path; passed down to the
+    // children and to applyMaterialOverrides so a preloaded template is built
+    // without reading them from disk. nullptr (every older caller) = disk.
     void nodeFromJson(const nlohmann::json& j, GameObject* node, const glm::mat4& parentWorld,
                        DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio,
                        std::vector<std::string>* warnings,
@@ -2112,7 +2116,8 @@ namespace
                        const std::string& assetRoot,
                        DonTopo::AsyncAssetLoader* loader = nullptr,
                        const DonTopo::PreloadedMeshCache* preloaded = nullptr,
-                       bool carryOverrideBaseline = false)
+                       bool carryOverrideBaseline = false,
+                       const DonTopo::MaterialAssetCache* matCache = nullptr)
     {
         // "id" does not exist in .scene files saved before this field —
         // the id that the GameObject constructor already assigned (atomic
@@ -2556,8 +2561,8 @@ namespace
                 // through its channel, and with two twin loops that lasts as long as it takes
                 // someone to touch only one.
                 if (warnings)
-                    collectMaterialOverrideWarnings(*node, *warnings);
-                applyMaterialOverrides(*node);
+                    collectMaterialOverrideWarnings(*node, *warnings, matCache);
+                applyMaterialOverrides(*node, matCache);
             }
         }
 
@@ -3484,7 +3489,7 @@ namespace
             // would be the usual hand-written list.
             try
             {
-                nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, loadCache, assetRoot, loader, preloaded, carryOverrideBaseline);
+                nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, loadCache, assetRoot, loader, preloaded, carryOverrideBaseline, matCache);
             }
             catch (const nlohmann::json::exception& e)
             {
@@ -4073,6 +4078,14 @@ namespace DonTopo
                                        PhysicsManager& physics, AudioManager& audio,
                                        const PreloadedMeshCache* preloaded)
     {
+        return insertFromJsonWithCaches(j, parent, index, physics, audio, preloaded, nullptr);
+    }
+
+    GameObject* Scene::insertFromJsonWithCaches(const nlohmann::json& j, GameObject* parent, size_t index,
+                                                 PhysicsManager& physics, AudioManager& audio,
+                                                 const PreloadedMeshCache* preloaded,
+                                                 const MaterialAssetCache* matCache)
+    {
         GameObject* target = parent ? parent : &m_root;
 
         // Ids already alive in the rest of the scene, taken BEFORE inserting
@@ -4130,7 +4143,7 @@ namespace DonTopo
             // root (verbatim paths), so it is read the same way. carryOverrideBaseline
             // matching the same true of subtreeToJson.
             nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
-                         /*loader=*/nullptr, preloaded, /*carryOverrideBaseline=*/true);
+                         /*loader=*/nullptr, preloaded, /*carryOverrideBaseline=*/true, matCache);
         }
         catch (const nlohmann::json::exception&)
         {

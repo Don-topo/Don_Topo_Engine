@@ -135,7 +135,8 @@ namespace DonTopo
         return static_cast<SkinnedMesh*>(editMesh());
     }
 
-    void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out)
+    void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out,
+                                         const MaterialAssetCache* matCache)
     {
         if (!go.hasMesh()) return;
 
@@ -159,6 +160,8 @@ namespace DonTopo
         for (const MaterialOverride& ov : go.materialOverrides)
         {
             if (ov.matAsset.empty()) continue;
+            // Preloaded: no IO, and a cached entry has nothing to warn about.
+            if (matCache && matCache->find(ov.matAsset) != matCache->end()) continue;
             // Single warning per path (spec): this function is called once PER
             // OBJECT on the same shared `out` of the whole scene (see
             // Scene::fromJson), so several objects sharing a broken .mat
@@ -175,7 +178,7 @@ namespace DonTopo
         }
     }
 
-    void applyMaterialOverrides(GameObject& go)
+    void applyMaterialOverrides(GameObject& go, const MaterialAssetCache* matCache)
     {
         // It is applied on a COPY of the materials and only written to the
         // mesh if something changes: the mesh may be shared (clone, undo of
@@ -207,7 +210,16 @@ namespace DonTopo
             // identical to what it was before this field existed.
             MaterialAsset matAsset;
             if (!ov.matAsset.empty())
-                matAsset = loadMaterialAsset(ov.matAsset);   // tolerant: invalid = inherit everything
+            {
+                // A preloaded .mat is taken from the cache (no IO); a miss falls
+                // back to the disk like the no-cache path.
+                const auto cached = matCache ? matCache->find(ov.matAsset)
+                                             : MaterialAssetCache::const_iterator{};
+                if (matCache && cached != matCache->end())
+                    matAsset = cached->second;
+                else
+                    matAsset = loadMaterialAsset(ov.matAsset);   // tolerant: invalid = inherit everything
+            }
 
             auto effective = [](const std::string& objOverride, const std::string& matValue)
             {

@@ -226,6 +226,15 @@ namespace DonTopo
                                         PhysicsManager& physics, AudioManager& audio,
                                         const PreloadedMeshCache* preloaded = nullptr);
 
+            // insertFromJson plus matCache: .mat files already loaded by absolute
+            // path, so building the subtree reads no material asset from disk
+            // (the zero-IO Instantiate of a preloaded prefab). insertFromJson is
+            // this with matCache == nullptr.
+            GameObject* insertFromJsonWithCaches(const nlohmann::json& j, GameObject* parent, size_t index,
+                                                  PhysicsManager& physics, AudioManager& audio,
+                                                  const PreloadedMeshCache* preloaded,
+                                                  const MaterialAssetCache* matCache);
+
             // The meshes of the subtree that have a file, by sourcePath. It is
             // what seeds the preload cache of the clone and of the undo of Delete.
             static PreloadedMeshCache collectMeshes(GameObject* root);

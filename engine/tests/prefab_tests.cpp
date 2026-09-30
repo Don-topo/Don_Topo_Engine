@@ -1,8 +1,10 @@
 // Tests of the prefab system (spec docs/superpowers/specs/2026-09-30-prefabs-design.md).
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Core/PrefabOverrides.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Physics/PhysicsManager.h"
+#include "DonTopo/Renderer/Material.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <nlohmann/json.hpp>
@@ -331,10 +333,57 @@ void testMakePrefabRenumbersAndLinks()
     CHECK(g["root"]["id"] == 1 && solo->prefabNode == 0 && !solo->prefabLink,
           "link == false does not touch the scene");
 }
+
+// The cache is what supplies the .mat: the file is deleted before the nodes are
+// built, so only the cached copy can give the albedo. The same call without the
+// cache proves the difference is the cache and not some other source.
+void testMatCacheAvoidsDisk()
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "dt_prefab_matcache";
+    fs::create_directories(dir);
+    const fs::path matPath = dir / "c.mat";
+    DonTopo::MaterialAsset asset;
+    asset.albedo = (dir / "x.png").string();
+    std::string err;
+    CHECK(DonTopo::saveMaterialAsset(matPath, asset, &err), "test .mat written");
+
+    const std::string key = matPath.string();
+    const DonTopo::MaterialAssetCache cache{ { key, DonTopo::loadMaterialAsset(matPath) } };
+    CHECK(fs::path(cache.at(key).albedo).filename() == "x.png", "cached .mat carries x.png");
+    fs::remove(matPath);   // from here on the disk has nothing
+
+    nlohmann::json entry = { {"index", 0}, {"matAsset", key} };
+    nlohmann::json j = { {"id", 1}, {"name", "Crate"}, {"localTransform", mat4Json(glm::mat4(1.0f))},
+                         {"mesh", { {"sourcePath", ""}, {"name", "Cube"},
+                                    {"vertices", nlohmann::json::array()},
+                                    {"indices", nlohmann::json::array()},
+                                    {"materials", nlohmann::json::array({entry})} }},
+                         {"children", nlohmann::json::array()} };
+
+    auto albedoOf = [](DonTopo::GameObject* n) {
+        const auto mats = DonTopo::materialsOfMesh(*n);
+        return mats.empty() ? std::string("<no material>") : mats[0]->texturePath;
+    };
+
+    DonTopo::Scene withCache;
+    auto* a = withCache.insertFromJsonWithCaches(j, nullptr, SIZE_MAX, physics(), audio(), nullptr, &cache);
+    CHECK(a != nullptr, "insert with cache");
+    if (a)
+        CHECK(fs::path(albedoOf(a)).filename() == "x.png", "cache supplies the albedo of the deleted .mat");
+
+    DonTopo::Scene without;
+    auto* b = without.insertFromJsonWithCaches(j, nullptr, SIZE_MAX, physics(), audio(), nullptr, nullptr);
+    CHECK(b != nullptr, "insert without cache");
+    if (b)
+        CHECK(fs::path(albedoOf(b)).filename() != "x.png", "without the cache the deleted .mat gives nothing");
+    fs::remove_all(dir);
+}
 } // namespace
 
 int main()
 {
+    testMatCacheAvoidsDisk();
     testResolveStoreInverse();
     testResolveMatchesNodeFromJson();
     testMakePrefabRenumbersAndLinks();
