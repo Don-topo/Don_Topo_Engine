@@ -235,6 +235,38 @@ namespace DonTopo
                                                   const PreloadedMeshCache* preloaded,
                                                   const MaterialAssetCache* matCache);
 
+            // Propagation: rebuilds instanceRoot as prefab + its stored overrides + its
+            // added children. prefabMemoryRoot is the prefab root node in MEMORY form
+            // (resolveStoredPaths applied) with prefab-local ids.
+            //  - Every node matched by prefabNode keeps its scene id (selection and older
+            //    Undo commands keep resolving), nodes new to the prefab get a fresh one,
+            //    and the result still goes through the live-id guard of insertFromJson.
+            //  - The root keeps its id, its parent index, and its position/rotation
+            //    (where an instance stands is never an override); its scale follows the
+            //    prefab unless overridden.
+            //  - The old subtree leaves through removeGameObject, so onNodeRemoved
+            //    releases its GPU slots; the caller registers the new subtree (render
+            //    indices at -1, same as insertFromJson).
+            //  - Overrides whose node or component is gone are dropped from the link
+            //    and reported in lastWarnings() (with "dropped").
+            // Returns the NEW root, or nullptr if the rebuild failed: then the old
+            // subtree is put back at the same index with the same ids.
+            GameObject* rebuildPrefabInstance(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot,
+                                              PhysicsManager& physics, AudioManager& audio,
+                                              const PreloadedMeshCache* meshes = nullptr,
+                                              const MaterialAssetCache* mats = nullptr);
+
+            // Replaces instanceRoot->prefabLink->overrides with the diff of the live
+            // subtree against prefabMemoryRoot (matched by prefabNode). Returns true if
+            // the list changed. No-op (false) without a link or without a template
+            // (prefabMemoryRoot not an object): a missing prefab must never be read as
+            // "every override was reverted".
+            bool recomputePrefabOverrides(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot);
+
+            // Unpack: strips prefabLink and prefabNode from the whole subtree. The
+            // objects stay exactly as they are.
+            void unpackPrefab(GameObject* instanceRoot);
+
             // The meshes of the subtree that have a file, by sourcePath. It is
             // what seeds the preload cache of the clone and of the undo of Delete.
             static PreloadedMeshCache collectMeshes(GameObject* root);
@@ -372,6 +404,18 @@ namespace DonTopo
             // object, which takes the whole matrix of the other one.
             void pruneDuplicateIds();
             void pruneExtraCameras();
+
+            // Body of insertFromJsonWithCaches with the baseline flag exposed. The
+            // public entry points pass true (their json comes from subtreeToJson, which
+            // carries the baseline); propagation passes false, because its json is a
+            // template plus memory-form nodes with no baseline in them, and reading
+            // "no baseline" as the baseline would wipe it instead of re-deriving it
+            // from the mesh.
+            GameObject* insertSubtree(const nlohmann::json& j, GameObject* parent, size_t index,
+                                      PhysicsManager& physics, AudioManager& audio,
+                                      const PreloadedMeshCache* preloaded,
+                                      const MaterialAssetCache* matCache,
+                                      bool carryOverrideBaseline);
 
             // The same for the Audio Listener: it keeps the first in pre-order
             // and removes the component from the rest, leaving a warning per discarded

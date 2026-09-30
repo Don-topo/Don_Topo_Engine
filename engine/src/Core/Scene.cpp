@@ -9,6 +9,7 @@
 #include "DonTopo/Core/AnimatorSerialization.h"
 #include "DonTopo/Core/PropertyTracks.h"
 #include "DonTopo/Core/PrefabOverrides.h"
+#include "DonTopo/Core/TransformDecompose.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
@@ -36,6 +37,7 @@
 #include <unordered_set>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/UiWidgets.h"
@@ -4086,6 +4088,16 @@ namespace DonTopo
                                                  const PreloadedMeshCache* preloaded,
                                                  const MaterialAssetCache* matCache)
     {
+        return insertSubtree(j, parent, index, physics, audio, preloaded, matCache,
+                             /*carryOverrideBaseline=*/true);
+    }
+
+    GameObject* Scene::insertSubtree(const nlohmann::json& j, GameObject* parent, size_t index,
+                                     PhysicsManager& physics, AudioManager& audio,
+                                     const PreloadedMeshCache* preloaded,
+                                     const MaterialAssetCache* matCache,
+                                     bool carryOverrideBaseline)
+    {
         GameObject* target = parent ? parent : &m_root;
 
         // Ids already alive in the rest of the scene, taken BEFORE inserting
@@ -4141,9 +4153,10 @@ namespace DonTopo
         {
             // Empty root, counterpart of subtreeToJson: j came from there with an empty
             // root (verbatim paths), so it is read the same way. carryOverrideBaseline
-            // matching the same true of subtreeToJson.
+            // matching the same true of subtreeToJson (false only for propagation,
+            // see insertSubtree in Scene.h).
             nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
-                         /*loader=*/nullptr, preloaded, /*carryOverrideBaseline=*/true, matCache);
+                         /*loader=*/nullptr, preloaded, carryOverrideBaseline, matCache);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -4239,6 +4252,226 @@ namespace DonTopo
         }
         collapseWarnings();
         return node;
+    }
+
+    namespace
+    {
+        // Prefab-local id of a node json ("id" in a template, "prefabNode" in an
+        // instance), 0 when absent or not an unsigned integer. 0 is never a valid
+        // local id (makePrefab numbers from 1), so it doubles as "not linked".
+        // A positive SIGNED integer is accepted too: a parsed file gives unsigned,
+        // but a template built in code ({"id", 99}) holds a signed int.
+        uint64_t localIdOf(const nlohmann::json& node, const char* key)
+        {
+            auto it = node.find(key);
+            if (it == node.end()) return 0;
+            if (it->is_number_unsigned()) return it->get<uint64_t>();
+            if (it->is_number_integer() && it->get<int64_t>() > 0) return (uint64_t)it->get<int64_t>();
+            return 0;
+        }
+
+        // Root transform of a rebuilt instance: position and rotation are the
+        // instance's (where an instance stands is never an override, see
+        // diffPrefabNode), the scale is the template's, which already carries a
+        // /transform/scale override if there was one. When the scale did not
+        // change the instance's matrix is kept verbatim: re-composing it from TRS
+        // would add float noise to a pose nobody touched.
+        glm::mat4 rebuiltRootTransform(const glm::mat4& instance, const glm::mat4& tmpl)
+        {
+            glm::vec3 pos, instScale, tmplScale;
+            glm::quat rot;
+            decomposeTransform(instance, &pos, &rot, &instScale);
+            decomposeTransform(tmpl, nullptr, nullptr, &tmplScale);
+            if (glm::all(glm::lessThanEqual(glm::abs(instScale - tmplScale), glm::vec3(1e-5f))))
+                return instance;
+            return glm::translate(glm::mat4(1.0f), pos) * glm::mat4_cast(rot) *
+                   glm::scale(glm::mat4(1.0f), tmplScale);
+        }
+    }
+
+    GameObject* Scene::rebuildPrefabInstance(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot,
+                                             PhysicsManager& physics, AudioManager& audio,
+                                             const PreloadedMeshCache* meshes, const MaterialAssetCache* mats)
+    {
+        m_warnings.clear();
+        if (!instanceRoot || !instanceRoot->parent || !instanceRoot->prefabLink || !prefabMemoryRoot.is_object())
+            return nullptr;
+
+        // 1. The instance as it is now. Memory form, no baseline: the same form the
+        //    template is in, and the one the failure path re-inserts verbatim.
+        const nlohmann::json inst = subtreeToMemoryJson(instanceRoot);
+
+        // Scene id of every linked node by its prefab-local id, and the added
+        // children (nodes with no prefabNode) by the local id of the linked parent
+        // they hang from. An added child travels whole, its own subtree and scene
+        // ids included; it is re-attached below under the same prefab node.
+        std::unordered_map<uint64_t, uint64_t> sceneIdByLocal;
+        std::unordered_map<uint64_t, std::vector<nlohmann::json>> added;
+        std::function<void(const nlohmann::json&)> scan = [&](const nlohmann::json& n) {
+            const uint64_t local = localIdOf(n, "prefabNode");
+            if (local == 0) return;   // an added child: carried whole by its parent below
+            if (const uint64_t id = localIdOf(n, "id"); id != 0) sceneIdByLocal.emplace(local, id);
+            auto kids = n.find("children");
+            if (kids == n.end() || !kids->is_array()) return;
+            for (const auto& c : *kids)
+            {
+                if (localIdOf(c, "prefabNode") == 0) added[local].push_back(c);
+                else                                 scan(c);
+            }
+        };
+        scan(inst);
+
+        // 2. Template + stored overrides. Orphans (node or component no longer in
+        //    the prefab) come back as warnings and are left out of `applied`, which
+        //    is what the rebuilt link stores: they are dropped, not kept dormant.
+        std::vector<std::string> warnings;
+        nlohmann::json tree = prefabMemoryRoot;
+        const std::vector<PrefabOverride> applied =
+            applyPrefabOverrides(tree, instanceRoot->prefabLink->overrides, &warnings);
+
+        // 3. Template ids -> scene ids. A node the instance already had keeps its
+        //    scene id; a node new to the prefab loses "id" so the GameObject
+        //    constructor hands it a fresh one. Prefab-local ids never reach the
+        //    scene id space (spec §7): 99 in a template is not 99 in the scene.
+        std::function<void(nlohmann::json&, bool)> relink = [&](nlohmann::json& n, bool isRoot) {
+            const uint64_t local = localIdOf(n, "id");
+            n.erase("prefab");   // a template carries no link; only the root gets one, below
+            if (local != 0) n["prefabNode"] = local;
+            else            n.erase("prefabNode");
+            // The root ALWAYS keeps the instance's id, even if the template renumbered
+            // its root: the caller's selection and Undo stack point at that id.
+            if (isRoot)                                   n["id"] = instanceRoot->id;
+            else if (auto it = sceneIdByLocal.find(local); local != 0 && it != sceneIdByLocal.end())
+                                                          n["id"] = it->second;
+            else                                          n.erase("id");
+
+            auto kids = n.find("children");
+            if (kids == n.end() || !kids->is_array()) n["children"] = nlohmann::json::array();
+            for (auto& c : n["children"]) if (c.is_object()) relink(c, false);
+            if (local != 0)
+                if (auto it = added.find(local); it != added.end())
+                {
+                    for (auto& c : it->second) n["children"].push_back(std::move(c));
+                    added.erase(it);
+                }
+        };
+        relink(tree, true);
+        // Whatever is left in `added` hung from a node the prefab no longer has.
+        // Losing user objects cannot be silent.
+        for (const auto& [local, kids] : added)
+            for (const auto& c : kids)
+                warnings.push_back("prefab instance '" + instanceRoot->name + "': added child '" +
+                                   c.value("name", std::string()) + "' dropped: its parent (prefab node " +
+                                   std::to_string(local) + ") is no longer in the prefab");
+
+        tree["prefab"] = { {"path", instanceRoot->prefabLink->path}, {"overrides", overridesToJson(applied)} };
+        tree["localTransform"] = mat4ToJson(rebuiltRootTransform(
+            instanceRoot->localTransform,
+            jsonToMat4(tree.value("localTransform", nlohmann::json::array()), &warnings,
+                       "prefab root of '" + instanceRoot->name + "'")));
+
+        // 4. Replace. The old subtree goes FIRST: its ids must not be live when the
+        //    new one is inserted, or the live-id guard of insertSubtree would rename
+        //    exactly the ids this function exists to keep. removeGameObject is also
+        //    what releases its GPU slots (onNodeRemoved) — no other release here.
+        //    Its meshes are kept alive in `cache`: the rebuild shares them instead of
+        //    re-reading the files, and a failed rebuild restores from them too.
+        GameObject* parent = instanceRoot->parent;
+        size_t index = 0;
+        while (index < parent->children.size() && parent->children[index].get() != instanceRoot) ++index;
+        PreloadedMeshCache cache = collectMeshes(instanceRoot);
+        if (meshes)
+            for (const auto& [key, mesh] : *meshes) cache[key] = mesh;   // the caller's are fresher
+        removeGameObject(instanceRoot);
+        instanceRoot = nullptr;   // freed: from here on only ids are valid
+
+        // carryOverrideBaseline = false (unlike insertFromJson): neither the
+        // template nor `inst` carries a baseline, and it has to be re-derived from
+        // the mesh, as a disk load does.
+        GameObject* rebuilt = nullptr;
+        try
+        {
+            rebuilt = insertSubtree(tree, parent, index, physics, audio, &cache, mats, /*carryOverrideBaseline=*/false);
+        }
+        catch (const std::exception&)
+        {
+            // insertSubtree already cleans up after a throw inside nodeFromJson; this
+            // catches what happens before its try (a root "name" of the wrong type).
+            rebuilt = nullptr;
+        }
+        // insertSubtree clears m_warnings: the ones of this operation go in front.
+        m_warnings.insert(m_warnings.begin(), warnings.begin(), warnings.end());
+
+        if (!rebuilt)
+        {
+            // The old subtree comes back where it was, with its ids (they are not
+            // live, the failed build left nothing behind). Warnings of the failed
+            // build are kept: they say WHY it failed.
+            std::vector<std::string> failWarnings = std::move(m_warnings);
+            failWarnings.push_back("prefab instance '" + inst.value("name", std::string()) +
+                                   "': could not be rebuilt from its prefab; left as it was");
+            insertSubtree(inst, parent, index, physics, audio, &cache, mats, /*carryOverrideBaseline=*/false);
+            failWarnings.insert(failWarnings.end(), m_warnings.begin(), m_warnings.end());
+            m_warnings = std::move(failWarnings);
+            collapseWarnings();
+            return nullptr;
+        }
+        collapseWarnings();
+        return rebuilt;
+    }
+
+    bool Scene::recomputePrefabOverrides(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot)
+    {
+        // No template = nothing to compare against. Diffing against a null/failed
+        // template would turn every stored override into "reverted" and wipe the
+        // list the user built (spec §3.3: prefab missing -> overrides untouched).
+        if (!instanceRoot || !instanceRoot->prefabLink || !prefabMemoryRoot.is_object()) return false;
+
+        std::unordered_map<uint64_t, const nlohmann::json*> prefabNodes;
+        std::function<void(const nlohmann::json&)> index = [&](const nlohmann::json& n) {
+            if (const uint64_t id = localIdOf(n, "id"); id != 0) prefabNodes.emplace(id, &n);
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (const auto& c : *kids) if (c.is_object()) index(c);
+        };
+        index(prefabMemoryRoot);
+
+        // Pre-order, so the list comes out in a stable order. Added children are
+        // not overrides (they are recognized by their missing prefabNode) and
+        // nothing below them is walked; a prefab node with no instance counterpart
+        // yields nothing (removing prefab children is blocked in the UI).
+        std::vector<PrefabOverride> fresh;
+        const nlohmann::json inst = subtreeToMemoryJson(instanceRoot);
+        std::function<void(const nlohmann::json&, bool)> walk = [&](const nlohmann::json& n, bool isRoot) {
+            const uint64_t local = localIdOf(n, "prefabNode");
+            if (local == 0) return;
+            if (auto it = prefabNodes.find(local); it != prefabNodes.end())
+            {
+                auto d = diffPrefabNode(local, *it->second, n, isRoot);
+                fresh.insert(fresh.end(), std::make_move_iterator(d.begin()), std::make_move_iterator(d.end()));
+            }
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (const auto& c : *kids) walk(c, false);
+        };
+        walk(inst, true);
+
+        auto& current = instanceRoot->prefabLink->overrides;
+        const bool same = current.size() == fresh.size() &&
+            std::equal(current.begin(), current.end(), fresh.begin(),
+                       [](const PrefabOverride& a, const PrefabOverride& b) {
+                           return a.node == b.node && a.path == b.path && a.value == b.value;
+                       });
+        if (same) return false;
+        current = std::move(fresh);
+        return true;
+    }
+
+    void Scene::unpackPrefab(GameObject* instanceRoot)
+    {
+        if (!instanceRoot) return;
+        instanceRoot->traverse([](GameObject* n) {
+            n->prefabNode = 0;
+            n->prefabLink.reset();
+        });
     }
 
     void Scene::update(float dt)

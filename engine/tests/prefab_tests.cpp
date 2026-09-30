@@ -1,5 +1,6 @@
 // Tests of the prefab system (spec docs/superpowers/specs/2026-09-30-prefabs-design.md).
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Core/LightComponent.h"
 #include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Core/PrefabOverrides.h"
 #include "DonTopo/Core/Scene.h"
@@ -8,11 +9,16 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <nlohmann/json.hpp>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace {
 int g_failures = 0;
@@ -379,6 +385,243 @@ void testMatCacheAvoidsDisk()
         CHECK(fs::path(albedoOf(b)).filename() != "x.png", "without the cache the deleted .mat gives nothing");
     fs::remove_all(dir);
 }
+
+// ---- Propagation, recompute, unpack (Task 5) ----
+
+// The prefab memory root the way the editor gets it: a real subtree serialized by
+// makePrefab (complete node json, prefab-local ids 1..N) and resolved to memory form.
+// Enemy (1) -> Lamp (2, point light intensity 1, range 10). A hand-written json
+// would lack the default fields nodeToJson always writes, and every one of them
+// would show up as a difference against a live instance.
+nlohmann::json enemyPrefab()
+{
+    DonTopo::Scene s;
+    auto* enemy = s.addGameObject("Enemy");
+    auto* lamp  = s.addGameObject("Lamp", enemy);
+    auto light = std::make_shared<DonTopo::LightComponent>();
+    light->setIntensity(1.0f);
+    light->setRange(10.0f);
+    lamp->setLight(light);
+    nlohmann::json root = s.makePrefab(enemy, "Prefabs/Enemy.prefab", /*link=*/false)["root"];
+    DonTopo::resolveStoredPaths(root, s.assetRoot());
+    return root;
+}
+
+// Instantiates prefabMemoryRoot at the end of the scene root: prefabNode = local id,
+// "id" erased so every node gets a fresh scene id, link on the root.
+DonTopo::GameObject* makeInstance(DonTopo::Scene& scene, const nlohmann::json& prefabMemoryRoot)
+{
+    nlohmann::json j = prefabMemoryRoot;
+    std::function<void(nlohmann::json&)> link = [&](nlohmann::json& n) {
+        n["prefabNode"] = n["id"];
+        n.erase("id");
+        for (auto& c : n["children"]) link(c);
+    };
+    link(j);
+    j["prefab"] = { {"path", "Prefabs/Enemy.prefab"}, {"overrides", nlohmann::json::array()} };
+    return scene.insertFromJson(j, nullptr, SIZE_MAX, physics(), audio());
+}
+
+DonTopo::GameObject* childNamed(DonTopo::GameObject* n, const std::string& name)
+{
+    if (!n) return nullptr;
+    for (auto& c : n->children) if (c->name == name) return c.get();
+    return nullptr;
+}
+
+size_t indexInParent(const DonTopo::GameObject* n)
+{
+    const auto& sib = n->parent->children;
+    for (size_t i = 0; i < sib.size(); ++i) if (sib[i].get() == n) return i;
+    return SIZE_MAX;
+}
+
+bool anyWarningContains(const DonTopo::Scene& s, const std::string& text)
+{
+    for (const auto& w : s.lastWarnings()) if (w.find(text) != std::string::npos) return true;
+    return false;
+}
+
+void testPropagationRespectsOverrides()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    auto* a = makeInstance(s, prefab);
+    auto* b = makeInstance(s, prefab);
+    CHECK(a && b, "two instances");
+    if (!a || !b) return;
+    CHECK(!s.recomputePrefabOverrides(a, prefab) && a->prefabLink->overrides.empty(),
+          "a fresh instance has no overrides");
+
+    childNamed(a, "Lamp")->getLight()->setIntensity(5.0f);
+    CHECK(s.recomputePrefabOverrides(a, prefab), "editing the instance changes its list");
+    CHECK(a->prefabLink->overrides.size() == 1 && a->prefabLink->overrides[0].node == 2 &&
+          a->prefabLink->overrides[0].path == "/light/intensity", "one override on the lamp intensity");
+
+    prefab["children"][0]["light"]["range"]     = 20.0;
+    prefab["children"][0]["light"]["intensity"] = 2.0;
+    a = s.rebuildPrefabInstance(a, prefab, physics(), audio());
+    b = s.rebuildPrefabInstance(b, prefab, physics(), audio());
+    CHECK(a && b, "both rebuilt");
+    if (!a || !b) return;
+    auto* la = childNamed(a, "Lamp");
+    auto* lb = childNamed(b, "Lamp");
+    CHECK(la && la->getLight() && la->getLight()->getIntensity() == 5.0f &&
+          la->getLight()->getRange() == 20.0f, "A keeps its intensity override and takes the new range");
+    CHECK(lb && lb->getLight() && lb->getLight()->getIntensity() == 2.0f &&
+          lb->getLight()->getRange() == 20.0f, "B takes both prefab values");
+    CHECK(a->prefabLink && a->prefabLink->overrides.size() == 1, "A still lists its override");
+    CHECK(!s.recomputePrefabOverrides(a, prefab) && !s.recomputePrefabOverrides(b, prefab),
+          "a rebuilt instance diffs to exactly its stored overrides");
+}
+
+void testPropagationKeepsIdsAndAddsNew()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    s.addGameObject("Before");
+    auto* a = makeInstance(s, prefab);
+    s.addGameObject("After");
+    if (!a) { CHECK(false, "instance"); return; }
+    CHECK(indexInParent(a) == 1, "instance sits between two siblings");
+
+    const uint64_t rootId = a->id;
+    const uint64_t lampId = childNamed(a, "Lamp")->id;
+
+    nlohmann::json gun = { {"id", 99}, {"name", "Gun"}, {"localTransform", mat4Json(glm::mat4(1.0f))},
+                           {"children", nlohmann::json::array()} };
+    prefab["children"].push_back(gun);
+    auto* n = s.rebuildPrefabInstance(a, prefab, physics(), audio());
+    CHECK(n != nullptr, "rebuilt");
+    if (!n) return;
+    CHECK(n->id == rootId && s.findById(rootId) == n, "root keeps its id and findById finds the new root");
+    CHECK(indexInParent(n) == 1, "same index in the parent");
+    auto* lamp = childNamed(n, "Lamp");
+    auto* g    = childNamed(n, "Gun");
+    CHECK(lamp && lamp->id == lampId, "lamp keeps its id");
+    CHECK(g && g->id != 99 && g->prefabNode == 99, "new node: fresh id, prefabNode = local id");
+    std::unordered_set<uint64_t> seen;
+    bool unique = true;
+    s.traverse([&](DonTopo::GameObject* x) { if (!seen.insert(x->id).second) unique = false; });
+    CHECK(unique, "every id in the scene is unique");
+}
+
+void testAddedChildSurvivesPropagation()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    auto* a = makeInstance(s, prefab);
+    if (!a) { CHECK(false, "instance"); return; }
+    auto* extra = s.addGameObject("Extra", childNamed(a, "Lamp"));
+    const uint64_t extraId = extra->id;
+    prefab["children"][0]["light"]["range"] = 20.0;
+    a = s.rebuildPrefabInstance(a, prefab, physics(), audio());
+    CHECK(a != nullptr, "rebuilt");
+    auto* e = childNamed(childNamed(a, "Lamp"), "Extra");
+    CHECK(e && e->id == extraId && e->prefabNode == 0, "Extra still under Lamp, same id, still added");
+}
+
+void testOrphanOverrideDropped()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    auto* a = makeInstance(s, prefab);
+    if (!a) { CHECK(false, "instance"); return; }
+    a->prefabLink->overrides = { {1, "/camera/fov", 60.0} };
+    a = s.rebuildPrefabInstance(a, prefab, physics(), audio());
+    CHECK(a && a->prefabLink && a->prefabLink->overrides.empty(), "orphan dropped from the link");
+    CHECK(anyWarningContains(s, "dropped"), "and reported");
+}
+
+void testRecomputeRemovesRevertedValue()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    auto* a = makeInstance(s, prefab);
+    if (!a) { CHECK(false, "instance"); return; }
+    auto light = childNamed(a, "Lamp")->getLight();
+    light->setIntensity(5.0f);
+    s.recomputePrefabOverrides(a, prefab);
+    CHECK(a->prefabLink->overrides.size() == 1, "1 override");
+    light->setIntensity(1.0f);
+    CHECK(s.recomputePrefabOverrides(a, prefab), "reverting changes the list");
+    CHECK(a->prefabLink->overrides.empty(), "0 overrides");
+}
+
+void testUnpack()
+{
+    DonTopo::Scene s;
+    auto* a = makeInstance(s, enemyPrefab());
+    if (!a) { CHECK(false, "instance"); return; }
+    s.unpackPrefab(a);
+    bool linked = false;
+    a->traverse([&](DonTopo::GameObject* n) { if (n->prefabNode != 0 || n->prefabLink) linked = true; });
+    CHECK(!linked, "no node of the subtree keeps prefabNode or prefabLink");
+}
+
+void testTemplateMissingDoesNotWipeOverrides()
+{
+    DonTopo::Scene s;
+    auto* a = makeInstance(s, enemyPrefab());
+    if (!a) { CHECK(false, "instance"); return; }
+    a->prefabLink->overrides = { {2, "/light/intensity", 5.0} };
+    CHECK(!s.recomputePrefabOverrides(a, nlohmann::json()), "null template: no change reported");
+    CHECK(a->prefabLink->overrides.size() == 1, "null template: overrides intact");
+}
+
+void testRebuildFailureRestoresOldSubtree()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    s.addGameObject("Before");
+    auto* a = makeInstance(s, prefab);
+    s.addGameObject("After");
+    if (!a) { CHECK(false, "instance"); return; }
+    s.addGameObject("Extra", childNamed(a, "Lamp"));
+    const size_t index = indexInParent(a);
+    const uint64_t rootId = a->id;
+    const nlohmann::json before = s.subtreeToMemoryJson(a);
+
+    // A root field of the wrong type makes nodeFromJson throw on the ROOT (a child
+    // would only be skipped with a warning), which is what fails the whole build.
+    prefab["ssrEnabled"] = "yes";
+    auto* n = s.rebuildPrefabInstance(a, prefab, physics(), audio());
+    CHECK(n == nullptr, "a failed rebuild returns nullptr");
+    auto* back = s.findById(rootId);
+    CHECK(back && indexInParent(back) == index, "the old subtree is back at the same index");
+    CHECK(back && s.subtreeToMemoryJson(back) == before, "exactly as before, ids included");
+    CHECK(s.getRoot().children.size() == 3, "no leftover partial node");
+}
+
+void testRebuildReleasesOldRootOnce()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    auto* a = makeInstance(s, prefab);
+    if (!a) { CHECK(false, "instance"); return; }
+    std::vector<DonTopo::GameObject*> removed;
+    s.setOnNodeRemoved([&](DonTopo::GameObject* n) { removed.push_back(n); });
+    const DonTopo::GameObject* old = a;
+    auto* n = s.rebuildPrefabInstance(a, prefab, physics(), audio());
+    CHECK(n != nullptr, "rebuilt");
+    CHECK(removed.size() == 1 && removed[0] == old, "onNodeRemoved fires exactly once, for the old root");
+    s.setOnNodeRemoved(nullptr);
+}
+
+void testRootPoseKeptScaleFollowsPrefab()
+{
+    DonTopo::Scene s;
+    nlohmann::json prefab = enemyPrefab();
+    auto* a = makeInstance(s, prefab);
+    if (!a) { CHECK(false, "instance"); return; }
+    a->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 4.0f, 5.0f));
+    prefab["localTransform"] = mat4Json(glm::scale(glm::mat4(1.0f), glm::vec3(2.0f)));
+    a = s.rebuildPrefabInstance(a, prefab, physics(), audio());
+    if (!a) { CHECK(false, "rebuilt"); return; }
+    const glm::mat4& m = a->localTransform;
+    CHECK(glm::vec3(m[3]) == glm::vec3(3.0f, 4.0f, 5.0f), "root position is the instance's");
+    CHECK(std::fabs(glm::length(glm::vec3(m[0])) - 2.0f) < 1e-5f, "root scale is the prefab's");
+}
 } // namespace
 
 int main()
@@ -397,6 +640,16 @@ int main()
     testDiffComponentAddedAndRemoved();
     testApplyRoundTripAndOrphans();
     testOverridesJsonRoundTrip();
+    testPropagationRespectsOverrides();
+    testPropagationKeepsIdsAndAddsNew();
+    testAddedChildSurvivesPropagation();
+    testOrphanOverrideDropped();
+    testRecomputeRemovesRevertedValue();
+    testUnpack();
+    testTemplateMissingDoesNotWipeOverrides();
+    testRebuildFailureRestoresOldSubtree();
+    testRebuildReleasesOldRootOnce();
+    testRootPoseKeptScaleFollowsPrefab();
     if (g_failures) { std::fprintf(stderr, "%d failure(s)\n", g_failures); return 1; }
     std::printf("prefab_tests OK\n");
     return 0;
