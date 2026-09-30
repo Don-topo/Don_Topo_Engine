@@ -1,12 +1,12 @@
 @echo off
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
-rem Consola en UTF-8 ANTES de compilar. Sin esto, ninja NO registra NINGUNA
-rem dependencia de cabecera y cualquier cambio en un .h deja el build stale:
-rem CMake guarda el prefijo de /showIncludes en UTF-8 ("Nota: inclusion del
-rem archivo:", la o acentuada como C3 B3) pero cl.exe lo emite en la codepage
-rem de la consola (CP850, la o como A2). Ninja compara byte a byte, no casa, y
-rem se queda sin deps -- por eso esas lineas se cuelan al log en vez de que las
-rem consuma ninja. VSLANG=1033 no sirve aqui: solo esta instalado el paquete de
-rem idioma 3082 (espanol), asi que cl no puede emitir en ingles.
+rem Console in UTF-8 BEFORE building. Without this, ninja records NO header
+rem dependency at all and any change to a .h leaves the build stale:
+rem CMake stores the /showIncludes prefix in UTF-8 ("Nota: inclusion del
+rem archivo:", with the accented o as C3 B3) but cl.exe emits it in the console's
+rem codepage (CP850, the o as A2). Ninja compares byte by byte, it does not match, and
+rem it ends up with no deps -- which is why those lines leak into the log instead of
+rem being consumed by ninja. VSLANG=1033 does not help here: only the 3082 (Spanish)
+rem language pack is installed, so cl cannot emit in English.
 chcp 65001 >nul
 cmake -S . -B build-ninja-release -G Ninja -DCMAKE_BUILD_TYPE=Release

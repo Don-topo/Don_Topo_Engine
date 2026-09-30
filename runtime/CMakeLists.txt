@@ -1,6 +1,6 @@
 add_executable(DonTopoRuntime main.cpp)
 
-# Solo Core: el runtime no enlaza el editor ni, por tanto, ImGui.
+# Core only: the runtime does not link the editor and therefore not ImGui.
 target_link_libraries(DonTopoRuntime
     PRIVATE
         DonTopoCore
@@ -8,21 +8,21 @@ target_link_libraries(DonTopoRuntime
 
 target_compile_features(DonTopoRuntime PRIVATE cxx_std_20)
 
-# El juego exportado no debe abrir una ventana de consola detras de la del
-# juego, asi que se enlaza contra el subsistema WINDOWS. /ENTRY:mainCRTStartup
-# mantiene el main() estandar de main.cpp (sin el, el linker exigiria WinMain).
-# Contrapartida: sin consola, stdout/stderr no tienen a donde escribir — main()
-# los redirige a game.log y saca los errores fatales por MessageBox.
-# El editor (Sandbox) se queda en consola a proposito: ahi la terminal es util.
+# The exported game must not open a console window behind the game's own,
+# so it links against the WINDOWS subsystem. /ENTRY:mainCRTStartup
+# keeps main.cpp's standard main() (without it, the linker would demand WinMain).
+# The trade-off: without a console, stdout/stderr have nowhere to write, so main()
+# redirects them to game.log and shows fatal errors in a MessageBox.
+# The editor (Sandbox) stays a console app on purpose: there the terminal is useful.
 if(WIN32)
     set_target_properties(DonTopoRuntime PROPERTIES WIN32_EXECUTABLE TRUE)
     target_link_options(DonTopoRuntime PRIVATE /ENTRY:mainCRTStartup)
 endif()
 
-# El exportador del editor copia este binario al paquete, y lo busca en su
-# propio directorio de trabajo (el mismo donde vive Sandbox.exe). Por eso este
-# add_subdirectory va DESPUÉS del de sandbox en el CMakeLists raíz: el
-# generator expression necesita el target Sandbox ya definido.
+# The editor's exporter copies this binary into the package, and looks for it in its
+# own working directory (the same one where Sandbox.exe lives). That is why this
+# add_subdirectory comes AFTER sandbox's in the root CMakeLists: the
+# generator expression needs the Sandbox target to be defined already.
 add_custom_command(TARGET DonTopoRuntime POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:DonTopoRuntime>
@@ -30,19 +30,19 @@ add_custom_command(TARGET DonTopoRuntime POST_BUILD
     COMMENT "Copying ${DT_RUNTIME_FILE_NAME} next to the editor"
 )
 
-# Shaders y assets junto al binario del runtime, para poder EJECUTARLO desde su
-# propio directorio de build (probar una escena sin pasar por Export Game). El
-# runtime los busca relativos a su directorio de trabajo, y sin ellos ni
-# arranca: muere en el primer pipeline que no encuentra su .spv.
+# Shaders and assets next to the runtime binary, so it can be RUN from its
+# own build directory (testing a scene without going through Export Game). The
+# runtime looks for them relative to its working directory, and without them it does
+# not even start: it dies at the first pipeline that cannot find its .spv.
 #
-# El juego exportado no depende de esto — GameExporter copia shaders y assets al
-# paquete por su cuenta — pero el binario recien compilado sí, y hasta ahora no
-# los tenia (el CMakeLists de sandbox sí los copia; este no).
+# The exported game does not depend on this (GameExporter copies shaders and assets
+# into the package on its own), but the freshly built binary does, and until now it
+# did not have them (sandbox's CMakeLists copies them; this one did not).
 #
-# El target Shaders lo define sandbox/CMakeLists.txt y compila a
-# ${CMAKE_BINARY_DIR}/spv; el add_subdirectory de sandbox va antes que el de
-# runtime en el CMakeLists raiz, asi que aqui ya existe. copy_directory (y no
-# copy_if_different) para que un .spv recompilado llegue siempre.
+# The Shaders target is defined by sandbox/CMakeLists.txt and compiles to
+# ${CMAKE_BINARY_DIR}/spv; sandbox's add_subdirectory comes before runtime's
+# in the root CMakeLists, so it already exists here. copy_directory (and not
+# copy_if_different) so that a recompiled .spv always arrives.
 add_dependencies(DonTopoRuntime Shaders)
 
 add_custom_command(TARGET DonTopoRuntime POST_BUILD
@@ -57,8 +57,8 @@ add_custom_command(TARGET DonTopoRuntime POST_BUILD
     COMMENT "Copying shaders and assets next to DonTopoRuntime"
 )
 
-# Mismos shaders, otra representación: el runtime arranca con el backend que
-# diga su configuración, así que necesita los DXIL al lado de los SPIR-V.
+# Same shaders, another representation: the runtime starts with the backend its
+# configuration says, so it needs the DXIL files next to the SPIR-V ones.
 if(DTE_ENABLE_D3D12)
     add_custom_command(TARGET DonTopoRuntime POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -70,14 +70,14 @@ endif()
 
 dt_copy_fmod_runtime(DonTopoRuntime)
 
-# El juego exportado no depende de la libstdc++ del jugador (evita el
-# "GLIBCXX_3.4.xx not found" en distros viejas). glibc sigue siendo dinamica:
-# el exportador avisa de la version minima.
+# The exported game does not depend on the player's libstdc++ (it avoids the
+# "GLIBCXX_3.4.xx not found" on old distros). glibc is still dynamic:
+# the exporter warns about the minimum version.
 if(UNIX AND NOT APPLE)
     target_link_options(DonTopoRuntime PRIVATE -static-libstdc++ -static-libgcc)
-    # Solo $ORIGIN en el rpath: CMake añade por su cuenta la carpeta de FMOD de
-    # la maquina que compila, una ruta absoluta que no pinta nada en un juego
-    # que se reparte.
+    # Only $ORIGIN in the rpath: CMake adds on its own the FMOD folder of
+    # the build machine, an absolute path that has no business in a game
+    # that gets shipped.
     set_target_properties(DonTopoRuntime PROPERTIES
         BUILD_WITH_INSTALL_RPATH ON
         INSTALL_RPATH "\$ORIGIN")
