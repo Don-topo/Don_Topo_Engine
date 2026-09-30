@@ -613,6 +613,39 @@ static void test_clone_keeps_override_path_verbatim_with_root_set(PhysicsManager
         CHECK(clone->materialOverrides[0].albedo == original);
 }
 
+// H15: cloning a procedural mesh shares the live geometry (no per-vertex JSON
+// round trip), and editing the clone's material copies it without touching
+// the source. Checked on a child too, since the memRef travels in the subtree.
+static void test_clone_shares_procedural_mesh(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Sphere");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->name = "sphere";
+    mesh->vertices.resize(3);
+    mesh->indices = { 0, 1, 2 };
+    go->setMesh(std::move(mesh));
+    GameObject* child = go->addChild("Child");
+    auto childMesh = std::make_shared<Mesh>();
+    childMesh->indices = { 0 };
+    childMesh->vertices.resize(1);
+    child->setMesh(std::move(childMesh));
+
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+    CHECK(clone->getMesh() == go->getMesh());
+    CHECK(clone->children.size() == 1);
+    if (clone->children.size() == 1)
+        CHECK(clone->children[0]->getMesh() == child->getMesh());
+    CHECK(scene.lastWarnings().empty());
+
+    clone->editMesh()->material.texturePath = "assets/mine.png";
+    CHECK(clone->getMesh() != go->getMesh());
+    CHECK(go->getMesh()->material.texturePath.empty());
+    CHECK(clone->getMesh()->indices.size() == 3);
+}
+
 // Same guard for the subtreeToJson/insertFromJson pair used by the Undo/Redo of
 // Create/Delete: the full cycle (capture snapshot, delete the original,
 // reinsert from the snapshot) has to return the identical path.
@@ -2082,6 +2115,7 @@ int main()
     test_corrupt_materials_block_warns(pm, am);
     test_materials_entry_without_valid_index_is_discarded(pm, am);
     test_clone_keeps_override_path_verbatim_with_root_set(pm, am);
+    test_clone_shares_procedural_mesh(pm, am);
     test_undo_redo_keeps_override_path_verbatim_with_root_set(pm, am);
     test_overrides_applied_to_incoming_mesh();
     test_scene_load_applies_override_to_material(pm, am);

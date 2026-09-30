@@ -1124,11 +1124,26 @@ namespace
         return (std::filesystem::path(assetRoot) / p).string();
     }
 
+    // Key under which cloneGameObject puts a procedural mesh in its
+    // PreloadedMeshCache. The address is only valid while the source object is
+    // alive, which is exactly the lifetime of that cache (one call). The '#'
+    // prefix can never collide with a real sourcePath key.
+    std::string proceduralMemRef(const DonTopo::Mesh* m)
+    {
+        char buf[40];
+        std::snprintf(buf, sizeof(buf), "#proc=%p", static_cast<const void*>(m));
+        return buf;
+    }
+
     // carryOverrideBaseline: see the big comment next to "baseAlbedo" further
     // below. Default false (disk behavior); the two in-memory callers
     // (cloneGameObject, subtreeToJson) set it to true on purpose.
+    // shareProcedural: only cloneGameObject. A procedural mesh is written as a
+    // proceduralMemRef instead of its vertices, and nodeFromJson shares the live
+    // mesh (copy on edit via editMesh). Serializing every vertex was H15:
+    // 2.36 ms per cloned sphere.
     nlohmann::json nodeToJson(const GameObject& node, const std::string& assetRoot,
-                               bool carryOverrideBaseline = false)
+                               bool carryOverrideBaseline = false, bool shareProcedural = false)
     {
         nlohmann::json j;
         j["id"] = node.id;
@@ -1150,7 +1165,11 @@ namespace
             // Piece 0 does not write the field: scenes from before (without
             // "piece") stay identical byte for byte.
             if (mesh->piece != 0) meshJson["piece"] = mesh->piece;
-            if (mesh->sourcePath.empty())
+            if (mesh->sourcePath.empty() && shareProcedural)
+            {
+                meshJson["memRef"] = proceduralMemRef(mesh.get());
+            }
+            else if (mesh->sourcePath.empty())
             {
                 // Procedural (Cube/Sphere/Plane/Capsule): there is no source file
                 // to reload. Regenerating via the fixed parameters of
@@ -1744,7 +1763,7 @@ namespace
 
         j["children"] = nlohmann::json::array();
         for (const auto& child : node.children)
-            j["children"].push_back(nodeToJson(*child, assetRoot, carryOverrideBaseline));
+            j["children"].push_back(nodeToJson(*child, assetRoot, carryOverrideBaseline, shareProcedural));
 
         return j;
     }
@@ -2344,6 +2363,20 @@ namespace
                         auto mesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load(sourcePath, piece));
                         node->setMesh(std::move(mesh));
                     }
+                }
+                else if (j["mesh"].contains("memRef"))
+                {
+                    // Written only by cloneGameObject, together with the cache
+                    // that holds the mesh: share it, no vertex round trip (H15).
+                    std::shared_ptr<const DonTopo::Mesh> shared;
+                    if (preloaded && j["mesh"]["memRef"].is_string())
+                        if (auto it = preloaded->find(j["mesh"]["memRef"].get<std::string>());
+                            it != preloaded->end())
+                            shared = it->second;
+                    if (shared) node->setMesh(shared);
+                    else if (warnings)
+                        warnings->push_back("mesh of '" + node->name + "': in-memory reference "
+                                             "without its source, the object loads without a mesh");
                 }
                 else if (j["mesh"].contains("vertices") && j["mesh"].contains("indices"))
                 {
@@ -3515,7 +3548,8 @@ namespace DonTopo
         // would capture that already overwritten texture as the "original", and a Clear on
         // the clone would not return the FBX one. See the big comment of
         // nodeToJson next to "baseAlbedo".
-        nlohmann::json j = nodeToJson(*src, std::string(), /*carryOverrideBaseline=*/true);
+        nlohmann::json j = nodeToJson(*src, std::string(), /*carryOverrideBaseline=*/true,
+                                      /*shareProcedural=*/true);
 
         // Remove the "id" from the serialized tree, so that addChild/GameObject
         // keep their freshly generated ones.
@@ -3568,9 +3602,14 @@ namespace DonTopo
         // below — without this, each piece != 0 of a cloned static model
         // probed the file again with Assimp instead of using the cache.
         NodeLoadCache cache;
-        const PreloadedMeshCache mallas = collectMeshes(src);
+        PreloadedMeshCache mallas = collectMeshes(src);
         for (const auto& [ruta, m] : mallas)
             cache.hasBones[m->sourcePath] = dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr;
+        // Procedural meshes, under the key nodeToJson wrote (shareProcedural).
+        src->traverse([&](GameObject* n) {
+            if (n->hasMesh() && n->getMesh()->sourcePath.empty())
+                mallas[proceduralMemRef(n->getMesh().get())] = n->getMesh();
+        });
         try
         {
             // Empty root, counterpart of the one above: j was serialized with an empty root
