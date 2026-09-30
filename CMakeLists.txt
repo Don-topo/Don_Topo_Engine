@@ -7,6 +7,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
+# No incremental linking in Debug. With /INCREMENTAL the linker only appends to
+# the PDB and never compacts it: every engine change relinks all the test
+# executables and their PDBs grew to 3.6 GB each (a fresh link is ~0.5 GB),
+# plus the .ilk files. Full PDBs are kept, so minidump symbolization still works.
+if(MSVC)
+    foreach(dt_linkvar CMAKE_EXE_LINKER_FLAGS_DEBUG CMAKE_SHARED_LINKER_FLAGS_DEBUG)
+        string(REPLACE "/INCREMENTAL" "/INCREMENTAL:NO" ${dt_linkvar} "${${dt_linkvar}}")
+    endforeach()
+endif()
+
 # ─── Dependencies ────────────────────────────────────────────────────────────
 
 include(FetchContent)
