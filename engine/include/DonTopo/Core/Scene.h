@@ -39,6 +39,14 @@ namespace DonTopo
     // mesh to all its children.
     std::string meshCacheKey(const std::string& sourcePath, int piece);
 
+    // Rewrite IN PLACE the stored-path fields of a node tree (mesh.materials[].albedo/
+    // normal/orm/matAsset and base*): exactly the fields nodeToJson writes with
+    // toStoredPath. resolveStoredPaths goes stored -> absolute (what nodeFromJson does on
+    // the disk path), storeRelativePaths the other way. They let a prefab file (disk
+    // form) be compared and instantiated through the memory form (empty root).
+    void resolveStoredPaths(nlohmann::json& nodeTree, const std::string& assetRoot);
+    void storeRelativePaths(nlohmann::json& nodeTree, const std::string& assetRoot);
+
     struct SkinnedMesh;
     // true if the mesh's animation sources (path, builtin and clip
     // names, in order) are exactly those of the "animationSources" block of the
@@ -189,6 +197,18 @@ namespace DonTopo
             // to capture the snapshot of a GameObject without serializing the
             // whole scene.
             nlohmann::json subtreeToJson(const GameObject* node) const;
+
+            // Memory-form JSON of a subtree (empty root, NO override baseline): the
+            // form that prefab diff and propagation compare, so that the baseline of
+            // the material overrides never shows up as a difference.
+            nlohmann::json subtreeToMemoryJson(const GameObject* node) const;
+
+            // Builds the .prefab file JSON ({"version":1,"type":"prefab","root":...})
+            // from node's subtree: disk form (m_assetRoot), prefab-local ids 1..N in
+            // pre-order, no prefab/prefabNode keys. With link == true it also LINKS
+            // the scene subtree: node->prefabLink = {prefabPath, {}} and each node's
+            // prefabNode = its local id. The scene ids are not touched.
+            nlohmann::json makePrefab(GameObject* node, const std::string& prefabPath, bool link);
 
             // Rebuilds a subtree from j as a child of parent (or of the
             // root if parent is nullptr, same criterion as cloneGameObject),

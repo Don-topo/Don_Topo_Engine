@@ -207,10 +207,118 @@ void testCloneKeepsLinkWithFreshIds()
     CHECK(c->prefabNode == a->prefabNode, "prefabNode equal");
     CHECK(c->id != a->id, "ids differ");
 }
+nlohmann::json materialNode(uint64_t id)
+{
+    // A procedural mesh with empty geometry: nodeFromJson keeps "materials" for it
+    // without any disk read (no sourcePath).
+    nlohmann::json entry = { {"index", 0},
+                             {"albedo", "Textures/a.png"}, {"normal", "Textures/n.png"},
+                             {"orm", "Textures/o.png"}, {"matAsset", "Materials/m.mat"},
+                             {"baseAlbedo", "Textures/ba.png"}, {"baseNormal", "Textures/bn.png"},
+                             {"baseOrm", "Textures/bo.png"} };
+    return { {"id", id}, {"name", "Crate"}, {"localTransform", mat4Json(glm::mat4(1.0f))},
+             {"mesh", { {"sourcePath", ""}, {"name", "Cube"},
+                        {"vertices", nlohmann::json::array()}, {"indices", nlohmann::json::array()},
+                        {"materials", nlohmann::json::array({entry})} }},
+             {"children", nlohmann::json::array()} };
+}
+
+void stripIds(nlohmann::json& j)
+{
+    if (j.is_object()) {
+        j.erase("id");
+        for (auto& [k, v] : j.items()) stripIds(v);
+    } else if (j.is_array()) {
+        for (auto& v : j) stripIds(v);
+    }
+}
+
+void testResolveStoreInverse()
+{
+    const std::string root = (std::filesystem::temp_directory_path() / "dt_prefab_root").string();
+    nlohmann::json j = materialNode(1);
+    j["children"].push_back(materialNode(2));
+    const nlohmann::json original = j;
+    DonTopo::resolveStoredPaths(j, root);
+    const auto abs0 = j["mesh"]["materials"][0]["albedo"].get<std::string>();
+    CHECK(std::filesystem::path(abs0).is_absolute(), "resolve makes the path absolute");
+    CHECK(j["children"][0]["mesh"]["materials"][0]["matAsset"].get<std::string>() !=
+          "Materials/m.mat", "resolve walks the children");
+    DonTopo::storeRelativePaths(j, root);
+    CHECK(j == original, "resolve then store gives back the original");
+}
+
+void testResolveMatchesNodeFromJson()
+{
+    const std::string root = (std::filesystem::temp_directory_path() / "dt_prefab_root2").string();
+    const nlohmann::json disk = materialNode(5);
+
+    // Path A: the disk route (Scene::fromJson -> nodeFromJson with the asset root).
+    DonTopo::Scene a;
+    a.setAssetRoot(root);
+    nlohmann::json scene = a.toJson();
+    scene["root"]["children"].push_back(disk);
+    CHECK(a.fromJson(scene, physics(), audio()), "disk form loads");
+    CHECK(!a.getRoot().children.empty(), "disk form produced the node");
+    if (a.getRoot().children.empty()) return;
+    nlohmann::json pathA = a.subtreeToMemoryJson(a.getRoot().children[0].get());
+
+    // Path B: resolveStoredPaths + the memory route (insertFromJson, empty root).
+    nlohmann::json copy = disk;
+    DonTopo::resolveStoredPaths(copy, root);
+    DonTopo::Scene b;
+    auto* n = b.insertFromJson(copy, nullptr, 0, physics(), audio());
+    CHECK(n != nullptr, "memory form loads");
+    if (!n) return;
+    nlohmann::json pathB = b.subtreeToMemoryJson(n);
+
+    CHECK(pathA["mesh"].contains("materials"), "materials survive the load");
+    stripIds(pathA); stripIds(pathB);
+    CHECK(pathA == pathB, "resolveStoredPaths + memory route == nodeFromJson disk route");
+}
+
+void testMakePrefabRenumbersAndLinks()
+{
+    DonTopo::Scene s;
+    auto* enemy = s.addGameObject("Enemy");
+    auto* lamp  = s.addGameObject("Lamp", enemy);
+    auto* gun   = s.addGameObject("Gun", enemy);
+    auto* muzzle = s.addGameObject("Muzzle", gun);
+    const uint64_t ids[4] = { enemy->id, lamp->id, gun->id, muzzle->id };
+
+    nlohmann::json f = s.makePrefab(enemy, "Prefabs/Enemy.prefab", true);
+    CHECK(f.value("type", "") == "prefab" && f.value("version", 0) == 1 && f.contains("root"),
+          "file header");
+    if (!f.contains("root")) return;
+    const auto& r = f["root"];
+    CHECK(r["id"] == 1 && r["children"][0]["id"] == 2 && r["children"][1]["id"] == 3 &&
+          r["children"][1]["children"][0]["id"] == 4, "prefab-local ids 1..4 in pre-order");
+    CHECK(r["children"][1]["name"] == "Gun", "pre-order follows the tree");
+    CHECK(f.dump().find("\"prefab\":") == std::string::npos &&
+          f.dump().find("\"prefabNode\":") == std::string::npos, "no link keys in the file");
+
+    CHECK(enemy->prefabNode == 1 && lamp->prefabNode == 2 && gun->prefabNode == 3 &&
+          muzzle->prefabNode == 4, "scene nodes get prefabNode 1..4");
+    CHECK(enemy->prefabLink && enemy->prefabLink->path == "Prefabs/Enemy.prefab" &&
+          enemy->prefabLink->overrides.empty(), "root linked with no overrides");
+    CHECK(!lamp->prefabLink && !gun->prefabLink && !muzzle->prefabLink, "only the root holds the link");
+    CHECK(enemy->id == ids[0] && lamp->id == ids[1] && gun->id == ids[2] && muzzle->id == ids[3],
+          "scene ids unchanged");
+
+    // link == false leaves the scene alone.
+    DonTopo::Scene t;
+    auto* solo = t.addGameObject("Solo");
+    nlohmann::json g = t.makePrefab(solo, "Prefabs/Solo.prefab", false);
+    CHECK(g["root"]["id"] == 1 && solo->prefabNode == 0 && !solo->prefabLink,
+          "link == false does not touch the scene");
+}
 } // namespace
 
 int main()
 {
+    testResolveStoreInverse();
+    testResolveMatchesNodeFromJson();
+    testMakePrefabRenumbersAndLinks();
     testLinkFieldsRoundTrip();
     testScenesWithoutPrefabsByteIdentical();
     testMalformedPrefabLoadsUnlinked();

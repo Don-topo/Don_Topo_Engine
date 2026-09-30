@@ -3955,6 +3955,81 @@ namespace DonTopo
         return nodeToJson(*node, std::string(), /*carryOverrideBaseline=*/true);
     }
 
+    nlohmann::json Scene::subtreeToMemoryJson(const GameObject* node) const
+    {
+        // Empty root like subtreeToJson, but WITHOUT the override baseline: the
+        // baseline is a snapshot of the editing session, not part of what an object
+        // "is", so prefab diff and propagation must never see it as a difference.
+        return nodeToJson(*node, std::string(), /*carryOverrideBaseline=*/false);
+    }
+
+    namespace
+    {
+        // The keys of a mesh.materials[] entry that nodeToJson writes through
+        // toStoredPath. Keep in sync with nodeToJson / nodeFromJson (a test compares
+        // both routes so a new path field cannot drift silently).
+        constexpr const char* kStoredPathKeys[] = { "albedo", "normal", "orm", "matAsset",
+                                                    "baseAlbedo", "baseNormal", "baseOrm" };
+
+        template <typename Convert>
+        void rewriteStoredPaths(nlohmann::json& node, const Convert& convert)
+        {
+            if (!node.is_object()) return;
+            if (auto mesh = node.find("mesh"); mesh != node.end() && mesh->is_object())
+                if (auto mats = mesh->find("materials"); mats != mesh->end() && mats->is_array())
+                    for (auto& entry : *mats)
+                    {
+                        if (!entry.is_object()) continue;
+                        for (const char* key : kStoredPathKeys)
+                            if (auto it = entry.find(key); it != entry.end() && it->is_string())
+                                *it = convert(it->get<std::string>());
+                    }
+            if (auto kids = node.find("children"); kids != node.end() && kids->is_array())
+                for (auto& child : *kids) rewriteStoredPaths(child, convert);
+        }
+    }
+
+    void resolveStoredPaths(nlohmann::json& nodeTree, const std::string& assetRoot)
+    {
+        rewriteStoredPaths(nodeTree, [&](const std::string& p) { return fromStoredPath(p, assetRoot); });
+    }
+
+    void storeRelativePaths(nlohmann::json& nodeTree, const std::string& assetRoot)
+    {
+        rewriteStoredPaths(nodeTree, [&](const std::string& p) { return toStoredPath(p, assetRoot); });
+    }
+
+    nlohmann::json Scene::makePrefab(GameObject* node, const std::string& prefabPath, bool link)
+    {
+        // Disk form: paths relative to the project, like a .scene. The baseline is not
+        // written (default), a prefab is a definition, not an editing snapshot.
+        nlohmann::json root = nodeToJson(*node, m_assetRoot);
+
+        // Prefab-local ids 1..N in pre-order, and the link keys erased: the file
+        // describes the prefab itself, it is not an instance of anything.
+        uint64_t next = 0;
+        std::function<void(nlohmann::json&)> renumber = [&](nlohmann::json& j) {
+            j["id"] = ++next;
+            j.erase("prefab");
+            j.erase("prefabNode");
+            if (auto kids = j.find("children"); kids != j.end() && kids->is_array())
+                for (auto& child : *kids) renumber(child);
+        };
+        renumber(root);
+
+        if (link)
+        {
+            // Same pre-order as renumber (traverse visits a node and then its
+            // children in order), so the counter lines up with the ids just written.
+            uint64_t local = 0;
+            node->traverse([&](GameObject* n) { n->prefabNode = ++local; });
+            node->prefabLink = std::make_shared<PrefabLink>();
+            node->prefabLink->path = prefabPath;
+        }
+
+        return { {"version", 1}, {"type", "prefab"}, {"root", std::move(root)} };
+    }
+
     bool meshMatchesAnimationConfig(const SkinnedMesh& mesh, const nlohmann::json& animationSources)
     {
         if (!animationSources.is_array()) return false;
