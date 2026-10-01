@@ -83,6 +83,15 @@ namespace DonTopo
 
             void setOnReady(std::function<void(const PrefabTemplate&)> cb) { m_onReady = std::move(cb); }
 
+            // Keep, for the template's whole life, the unconfigured loader copy of
+            // every skinned mesh whose animation sources had to be applied. It
+            // doubles that mesh's RAM, and only pays off for updateFromMemory with
+            // CHANGED sources (rebuilt from RAM instead of re-read by the loader).
+            // Default off: the exported runtime never calls updateFromMemory. The
+            // EDITOR turns it on (Apply edits prefabs). Set it before requesting;
+            // it does not drop or recover raw meshes of templates already loaded.
+            void setKeepRawMeshes(bool keep) { m_keepRawMeshes = keep; }
+
             // Apply/Create: replace a template from a .prefab file JSON already in
             // memory (disk form). The file is not read; meshes and .mat files the
             // previous version already had are reused. If everything is cached the
@@ -138,6 +147,9 @@ namespace DonTopo
                 // animation-source config. updateFromMemory configures a copy of
                 // THESE: applyAnimationSourceConfig only appends, so configuring
                 // the already configured t.meshes again would keep stale clips.
+                // Without setKeepRawMeshes, a raw mesh is dropped as soon as its
+                // configured copy arrives (one that needs no config IS the final
+                // mesh, same object, so it stays at no cost).
                 PreloadedMeshCache rawMeshes;
                 uint64_t       serial      = 0;
                 int            outstanding = 0;   // mesh loads + animation jobs not back yet
@@ -180,5 +192,6 @@ namespace DonTopo
             // Bumped by clear(): finishIfDone compares it around the onReady
             // callback, which may clear the library (or change its root).
             uint64_t                            m_clearCount     = 0;
+            bool                                m_keepRawMeshes  = false;
     };
 }

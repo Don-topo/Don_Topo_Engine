@@ -780,6 +780,20 @@ bool settle(DonTopo::PrefabLibrary& lib, int timeoutMs = 180000)
     return false;
 }
 
+// Pumps (with a zero mesh budget, so nothing is delivered) until the read result
+// has been processed and exactly one mesh request sits in the loader.
+bool pumpUntilMeshRequested(DonTopo::PrefabLibrary& lib, int timeoutMs = 10000)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        lib.pump(audio(), 0.0f);
+        if (lib.meshLoadsPending() == 1) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
 void testLibraryLoadsTemplate()
 {
     namespace fs = std::filesystem;
@@ -1015,12 +1029,12 @@ void testLibraryDestroyedWithJobsInFlight()
     {
         auto lib = std::make_unique<DonTopo::PrefabLibrary>(js, root.str());
         lib->request("Prefabs/P.prefab");
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        while (lib->readCount() < 1 && std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));   // read result posted, worker free
-        lib->pump(audio(), 0.0f);                                      // P's mesh job submitted
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));   // and started (the FBX takes far longer)
+        CHECK(pumpUntilMeshRequested(*lib), "P's mesh job submitted");
+        // Give the worker time to START it (the FBX takes far longer). Not a
+        // correctness wait: if it is still queued, the destructor cancels it and
+        // the assertions below hold just the same; this only makes the
+        // wait-for-a-running-job path the one usually exercised.
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
         CHECK(lib->meshLoadsPending() == 1 && !js.idle(), "the mesh job is in flight before destruction");
     }
     CHECK(js.idle(), "the destructor waited for the running mesh job");
@@ -1042,15 +1056,21 @@ void testLibraryRetainOnlyCancelsMeshLoads()
     js.start(1);
     DonTopo::PrefabLibrary lib(js, root.str());
     lib.request("Prefabs/P.prefab");
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (lib.readCount() < 1 && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    // One worker: it finishes the read job (posting included) before it can take
+    // the blocker, so once the blocker runs the read result is in the mailbox.
+    std::atomic<bool> started{ false };
     std::atomic<bool> release{ false };
-    js.submit([&release] { while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(1)); });
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));   // the blocker holds the worker
-    lib.pump(audio(), 0.0f);                                       // mesh request queued behind it
-    CHECK(lib.meshLoadsPending() == 1, "mesh request queued");
+    js.submit([&started, &release] {
+        started = true;
+        while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    });
+    while (!started && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(started, "the blocker holds the worker");
+    CHECK(pumpUntilMeshRequested(lib), "mesh request queued behind the blocker");
     lib.retainOnly({});
     CHECK(lib.meshLoadsPending() == 0, "retainOnly cancelled the mesh request");
     release = true;
@@ -1184,10 +1204,14 @@ nlohmann::json sourceJson(const DonTopo::AnimationSource& s)
 // configured for the previous version (applyAnimationSourceConfig only appends):
 // otherwise swapped or removed sources leave stale clips, and nodeFromJson sees a
 // mismatch at Instantiate and goes to disk.
-void testLibraryUpdateReconfiguresAnimationSources()
+// keepRaw = true (editor): the raw mesh is in RAM and the new config is built
+// from it on a worker. keepRaw = false (runtime default): the raw one was dropped
+// once configured, so changed sources re-request the mesh from the loader.
+// Either way the template ends with exactly the requested clips.
+void testLibraryUpdateReconfiguresAnimationSources(bool keepRaw)
 {
     namespace fs = std::filesystem;
-    TempRoot root("dt_prefab_lib_anim_update");
+    TempRoot root(keepRaw ? "dt_prefab_lib_anim_update_raw" : "dt_prefab_lib_anim_update");
     const fs::path maw  = root.p / "Models" / "Maw J Laygo.fbx";
     const fs::path idle = root.p / "Models" / "standing idle 01.fbx";
     const fs::path run  = root.p / "Models" / "standing run forward.fbx";
@@ -1205,6 +1229,7 @@ void testLibraryUpdateReconfiguresAnimationSources()
     DonTopo::JobSystem js;
     js.start(2);
     DonTopo::PrefabLibrary lib(js, root.str());
+    lib.setKeepRawMeshes(keepRaw);
 
     // The clip names each source gets, as an editor-saved file would carry them.
     const nlohmann::json all = nlohmann::json::array({ { {"path", maw.string()}, {"builtin", true} },
@@ -1244,8 +1269,17 @@ void testLibraryUpdateReconfiguresAnimationSources()
 
     const nlohmann::json swapped = nlohmann::json::array({ s0, s2 });
     lib.updateFromMemory("Prefabs/P.prefab", file(node(&swapped)), audio());
+    CHECK(lib.meshLoadsPending() == (keepRaw ? 0 : 1),
+          keepRaw ? "raw kept: configured from RAM, no loader request"
+                  : "raw dropped: changed sources re-request the mesh");
     CHECK(settle(lib), "library settles");
     CHECK(exactly(swapped), "[builtin, idle] -> [builtin, run]: no stale idle clips");
+
+    // Same sources again (an Apply that did not touch them): reused as is.
+    const DonTopo::SkinnedMesh* before = meshOf();
+    lib.updateFromMemory("Prefabs/P.prefab", file(node(&swapped)), audio());
+    CHECK(meshOf() != nullptr && meshOf() == before && lib.meshLoadsPending() == 0,
+          "unchanged sources: same configured mesh, Ready at once, nothing requested");
 
     lib.updateFromMemory("Prefabs/P.prefab", file(node(nullptr)), audio());
     CHECK(settle(lib), "library settles");
@@ -1306,7 +1340,8 @@ int main()
     testLibraryRefusedMeshJobFails();
     testLibraryUpdateFromMemoryReuseAndAsync();
     testLibraryWarmsAudio();
-    testLibraryUpdateReconfiguresAnimationSources();
+    testLibraryUpdateReconfiguresAnimationSources(/*keepRaw=*/true);
+    testLibraryUpdateReconfiguresAnimationSources(/*keepRaw=*/false);
     if (g_failures) { std::fprintf(stderr, "%d failure(s)\n", g_failures); return 1; }
     std::printf("prefab_tests OK\n");
     return 0;

@@ -363,6 +363,17 @@ namespace DonTopo
                 configureMesh(e, meshKey, raw, m.animationSources);
                 continue;
             }
+            // No raw mesh (dropped after configuring, setKeepRawMeshes off): the
+            // configured copy is reused only if it already has exactly the sources
+            // asked for; anything else needs a fresh raw mesh from the loader,
+            // since configuring the configured copy would only append.
+            if (const auto it = e.t.meshes.find(meshKey); it != e.t.meshes.end())
+            {
+                const auto* sk = dynamic_cast<const SkinnedMesh*>(it->second.get());
+                if (sk && m.animationSources.is_array() && meshMatchesAnimationConfig(*sk, m.animationSources))
+                    continue;
+                e.t.meshes.erase(it);
+            }
             const uint64_t ticket = m_nextTicket++;
             const JobSystem::JobId job = m_loader->requestMesh(m.sourcePath, ticket, m.piece);
             if (job == 0)
@@ -504,6 +515,9 @@ namespace DonTopo
             --e->outstanding;
             if (!r.error.empty() || !r.mesh) { fail(*e, r.error); continue; }
             e->t.meshes[r.meshKey] = std::move(r.mesh);
+            // The configured copy exists: unless asked to keep it, the raw one
+            // would only double this mesh's RAM for the template's whole life.
+            if (!m_keepRawMeshes) e->rawMeshes.erase(r.meshKey);
             finishIfDone(*e, audio);
         }
 
