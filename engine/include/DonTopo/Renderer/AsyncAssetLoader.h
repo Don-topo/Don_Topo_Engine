@@ -4,6 +4,7 @@
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/TextureImport.h"
 
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -67,6 +68,11 @@ namespace DonTopo
     {
         public:
             explicit AsyncAssetLoader(JobSystem& jobs) : m_jobs(jobs) {}
+            // Cancels what is still queued and WAITS for the jobs already started:
+            // they run runJob() on `this`, so returning earlier would let a worker
+            // lock a destroyed mutex and post into a freed mailbox. A cancelled job
+            // still queued releases its lease when the worker drops it.
+            ~AsyncAssetLoader();
             AsyncAssetLoader(const AsyncAssetLoader&)            = delete;
             AsyncAssetLoader& operator=(const AsyncAssetLoader&) = delete;
 
@@ -155,6 +161,21 @@ namespace DonTopo
             // m_pending negative forever (the loader is long-lived) and
             // would deliver meshes of objects already cancelled. See runJob().
             uint64_t                                      m_epoch = 0;
+
+            // Jobs handed to the JobSystem whose std::function has not been destroyed
+            // yet (queued, running, or about to be dropped as cancelled). Each job
+            // captures a JobLease; its destructor decrements under m_mutex, so the
+            // count reaches 0 only when no worker can touch `this` any more.
+            struct JobLease
+            {
+                explicit JobLease(AsyncAssetLoader* s) : self(s) {}
+                JobLease(const JobLease&)            = delete;   // one lease = one decrement
+                JobLease& operator=(const JobLease&) = delete;
+                ~JobLease();
+                AsyncAssetLoader* self;
+            };
+            int                                           m_liveJobs = 0;
+            std::condition_variable                       m_liveJobsCv;
     };
 
     class Scene;

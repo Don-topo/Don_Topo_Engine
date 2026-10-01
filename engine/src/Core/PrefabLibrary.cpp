@@ -1,0 +1,560 @@
+#include "DonTopo/Core/PrefabLibrary.h"
+
+#include "DonTopo/Audio/AudioBus.h"
+#include "DonTopo/Audio/AudioClipComponent.h"
+#include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Files/FileManager.h"
+#include "DonTopo/Renderer/AsyncAssetLoader.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/SkinnedMeshAnimations.h"
+
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <mutex>
+#include <optional>
+#include <unordered_set>
+
+namespace DonTopo
+{
+    // What workers share with the library. Jobs capture a shared_ptr to this,
+    // never the library: after ~PrefabLibrary sets `closed`, a late job finds
+    // the flag and posts nothing.
+    struct PrefabLibrary::Mailbox
+    {
+        std::mutex              mutex;
+        bool                    closed    = false;
+        int                     readCount = 0;
+        std::vector<LoadResult> loads;
+        std::vector<AnimResult> anims;
+    };
+
+    namespace
+    {
+        namespace fs = std::filesystem;
+
+        bool isPrefabFile(const nlohmann::json& f)
+        {
+            if (!f.is_object()) return false;
+            const auto v = f.find("version");
+            const auto t = f.find("type");
+            const auto r = f.find("root");
+            return v != f.end() && v->is_number_integer() && v->get<int>() == 1 &&
+                   t != f.end() && t->is_string() && t->get<std::string>() == "prefab" &&
+                   r != f.end() && r->is_object();
+        }
+
+        template <typename F>
+        void forEachNode(const nlohmann::json& node, const F& f)
+        {
+            if (!node.is_object()) return;
+            f(node);
+            const auto c = node.find("children");
+            if (c != node.end() && c->is_array())
+                for (const auto& child : *c)
+                    forEachNode(child, f);
+        }
+
+        std::string stringField(const nlohmann::json& j, const char* key)
+        {
+            const auto it = j.find(key);
+            return (it != j.end() && it->is_string()) ? it->get<std::string>() : std::string();
+        }
+
+        bool boolField(const nlohmann::json& j, const char* key, bool fallback)
+        {
+            const auto it = j.find(key);
+            return (it != j.end() && it->is_boolean()) ? it->get<bool>() : fallback;
+        }
+
+        // Every non-empty matAsset of the tree (memory form: absolute paths).
+        std::vector<std::string> matAssetPaths(const nlohmann::json& root)
+        {
+            std::vector<std::string> out;
+            forEachNode(root, [&](const nlohmann::json& node) {
+                const auto mesh = node.find("mesh");
+                if (mesh == node.end() || !mesh->is_object()) return;
+                const auto mats = mesh->find("materials");
+                if (mats == mesh->end() || !mats->is_array()) return;
+                for (const auto& entry : *mats)
+                    if (entry.is_object())
+                        if (std::string p = stringField(entry, "matAsset"); !p.empty())
+                            out.push_back(std::move(p));
+            });
+            return out;
+        }
+
+        // One request per meshCacheKey: two nodes sharing a file and a piece share
+        // the cached mesh. The first node's animationSources wins for a key (two
+        // nodes of the same rig with different source lists: the second one gets a
+        // deep copy at Instantiate, as nodeFromJson does on a mismatch).
+        std::vector<PrefabLibrary::MeshRequest> meshRequests(const nlohmann::json& root)
+        {
+            std::vector<PrefabLibrary::MeshRequest> out;
+            std::unordered_set<std::string> seen;
+            forEachNode(root, [&](const nlohmann::json& node) {
+                const auto mesh = node.find("mesh");
+                if (mesh == node.end() || !mesh->is_object()) return;
+                PrefabLibrary::MeshRequest r;
+                r.sourcePath = stringField(*mesh, "sourcePath");
+                if (r.sourcePath.empty()) return;   // procedural / inline mesh: nothing to load
+                if (const auto p = mesh->find("piece"); p != mesh->end() && p->is_number_integer())
+                    r.piece = std::max(0, p->get<int>());
+                if (!seen.insert(meshCacheKey(r.sourcePath, r.piece)).second) return;
+                if (const auto a = mesh->find("animationSources"); a != mesh->end())
+                    r.animationSources = *a;
+                out.push_back(std::move(r));
+            });
+            return out;
+        }
+
+        // Same parsing as nodeFromJson's, so the configured mesh is what an
+        // instance would have built: a corrupt clip list keeps no names.
+        std::vector<AnimationSourceConfig> animationConfigs(const nlohmann::json& sources)
+        {
+            std::vector<AnimationSourceConfig> out;
+            for (const auto& sj : sources)
+            {
+                if (!sj.is_object()) continue;
+                AnimationSourceConfig cfg;
+                cfg.path    = stringField(sj, "path");
+                cfg.builtin = boolField(sj, "builtin", false);
+                if (const auto cj = sj.find("clips"); cj != sj.end() && cj->is_array())
+                {
+                    bool ok = true;
+                    for (const auto& c : *cj) ok = ok && c.is_string();
+                    if (ok) cfg.clipNames = cj->get<std::vector<std::string>>();
+                }
+                out.push_back(std::move(cfg));
+            }
+            return out;
+        }
+
+        void collectRefs(const nlohmann::json& j, std::vector<std::string>& out,
+                         std::unordered_set<std::string>& seen)
+        {
+            if (j.is_object())
+            {
+                // A serialized PrefabRef is exactly {"prefab": "<path>"}. A prefab
+                // LINK is {"prefab": {"path", "overrides"}} and is not matched.
+                if (j.size() == 1)
+                    if (const auto p = j.find("prefab"); p != j.end() && p->is_string())
+                    {
+                        const std::string path = p->get<std::string>();
+                        if (!path.empty() && seen.insert(path).second) out.push_back(path);
+                        return;
+                    }
+                for (const auto& [k, v] : j.items())
+                    collectRefs(v, out, seen);
+            }
+            else if (j.is_array())
+            {
+                for (const auto& v : j)
+                    collectRefs(v, out, seen);
+            }
+        }
+    }
+
+    PrefabLibrary::PrefabLibrary(JobSystem& jobs, std::string assetRoot)
+        : m_jobs(jobs),
+          m_assetRoot(std::move(assetRoot)),
+          m_loader(std::make_unique<AsyncAssetLoader>(jobs)),
+          m_mailbox(std::make_shared<Mailbox>())
+    {
+    }
+
+    PrefabLibrary::~PrefabLibrary()
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mailbox->mutex);
+            m_mailbox->closed = true;
+            m_mailbox->loads.clear();
+            m_mailbox->anims.clear();
+        }
+        // The loader's own destructor cancels its queue and waits for the mesh
+        // jobs already running: they post into the loader, which is ours.
+        m_loader.reset();
+    }
+
+    void PrefabLibrary::setAssetRoot(std::string root)
+    {
+        clear();
+        m_assetRoot = std::move(root);
+    }
+
+    std::string PrefabLibrary::normalizeKey(const std::string& path) const
+    {
+        if (path.empty()) return {};
+        std::string s = path;
+        std::replace(s.begin(), s.end(), '\\', '/');
+        fs::path p = fs::path(s).lexically_normal();
+        if (p.is_absolute() && !m_assetRoot.empty())
+        {
+            std::string r = m_assetRoot;
+            std::replace(r.begin(), r.end(), '\\', '/');
+            const fs::path rel = p.lexically_relative(fs::path(r).lexically_normal());
+            if (!rel.empty() && *rel.begin() != ".." && rel != ".")
+                p = rel;
+        }
+        return p.generic_string();
+    }
+
+    PrefabLibrary::Entry* PrefabLibrary::liveEntry(const std::string& key, uint64_t serial)
+    {
+        const auto it = m_entries.find(key);
+        if (it == m_entries.end()) return nullptr;
+        Entry& e = it->second;
+        // A result of an older load of this key (re-requested after clear or
+        // retainOnly, or replaced by updateFromMemory), or for a template that
+        // already failed, is dropped.
+        if (e.serial != serial || e.t.state != PrefabTemplate::State::Loading) return nullptr;
+        return &e;
+    }
+
+    void PrefabLibrary::submitLoad(const std::string& key, uint64_t serial,
+                                   const nlohmann::json* inMemoryRoot, MaterialAssetCache knownMats)
+    {
+        std::optional<nlohmann::json> memoryRoot;
+        if (inMemoryRoot) memoryRoot = *inMemoryRoot;
+        const std::shared_ptr<Mailbox> mailbox = m_mailbox;
+        const std::string root = m_assetRoot;
+
+        const JobSystem::JobId id = m_jobs.submit(
+            [mailbox, key, serial, root, memoryRoot = std::move(memoryRoot), knownMats = std::move(knownMats)]() mutable
+            {
+                {
+                    std::lock_guard<std::mutex> lock(mailbox->mutex);
+                    if (mailbox->closed) return;
+                }
+                LoadResult r;
+                r.key    = key;
+                r.serial = serial;
+                try
+                {
+                    nlohmann::json tree;
+                    if (memoryRoot)
+                    {
+                        tree = std::move(*memoryRoot);
+                    }
+                    else
+                    {
+                        const fs::path file = fs::path(key).is_absolute() || root.empty()
+                                            ? fs::path(key) : fs::path(root) / key;
+                        std::optional<nlohmann::json> f = FileManager::readJson(file.string());
+                        {
+                            std::lock_guard<std::mutex> lock(mailbox->mutex);
+                            ++mailbox->readCount;
+                        }
+                        if (!f)
+                            r.error = "cannot read '" + file.generic_string() + "' (missing or not valid JSON)";
+                        else if (!isPrefabFile(*f))
+                            r.error = "not a prefab file";
+                        else
+                        {
+                            tree = std::move((*f)["root"]);
+                            resolveStoredPaths(tree, root);
+                        }
+                    }
+                    if (r.error.empty())
+                    {
+                        r.mats = std::move(knownMats);
+                        for (const std::string& p : matAssetPaths(tree))
+                            if (!r.mats.count(p))
+                                r.mats.emplace(p, loadMaterialAsset(p));
+                        r.meshes = meshRequests(tree);
+                        r.root   = std::move(tree);
+                    }
+                }
+                catch (const std::exception& e)
+                {
+                    r.error = e.what();
+                }
+                catch (...)
+                {
+                    r.error = "unknown error loading the prefab";
+                }
+
+                std::lock_guard<std::mutex> lock(mailbox->mutex);
+                if (mailbox->closed) return;
+                mailbox->loads.push_back(std::move(r));
+            });
+
+        if (id == 0)
+            if (Entry* e = liveEntry(key, serial))
+                fail(*e, "the job system is not running");
+    }
+
+    void PrefabLibrary::request(const std::string& path)
+    {
+        const std::string key = normalizeKey(path);
+        if (key.empty() || m_entries.count(key)) return;
+        Entry& e = m_entries[key];
+        e.t.key   = key;
+        e.t.state = PrefabTemplate::State::Loading;
+        e.serial  = m_nextSerial++;
+        submitLoad(key, e.serial, nullptr, {});
+    }
+
+    void PrefabLibrary::fail(Entry& e, const std::string& error)
+    {
+        e.t.state = PrefabTemplate::State::Failed;
+        e.t.error = error.empty() ? std::string("unknown error") : error;
+        e.t.memoryRoot = nlohmann::json();
+        e.t.meshes.clear();
+        e.t.mats.clear();
+        e.t.warmAudio.clear();
+        e.outstanding = 0;
+    }
+
+    void PrefabLibrary::startMeshes(Entry& e, std::vector<MeshRequest> meshes, MaterialAssetCache mats,
+                                    nlohmann::json root, AudioManager& audio)
+    {
+        e.t.memoryRoot = std::move(root);
+        e.t.mats       = std::move(mats);
+
+        // Meshes kept from a previous version (updateFromMemory) that the new tree
+        // no longer uses are dropped; the ones it still uses are not reloaded.
+        std::unordered_set<std::string> wanted;
+        for (const MeshRequest& m : meshes) wanted.insert(meshCacheKey(m.sourcePath, m.piece));
+        std::erase_if(e.t.meshes, [&](const auto& kv) { return !wanted.count(kv.first); });
+
+        for (MeshRequest& m : meshes)
+        {
+            if (e.t.state != PrefabTemplate::State::Loading) return;   // failed meanwhile
+            const std::string meshKey = meshCacheKey(m.sourcePath, m.piece);
+            if (const auto it = e.t.meshes.find(meshKey); it != e.t.meshes.end())
+            {
+                ensureAnimationConfig(e, meshKey, it->second, m.animationSources);
+                continue;
+            }
+            const uint64_t ticket = m_nextTicket++;
+            m_tickets[ticket] = MeshTicket{ e.t.key, e.serial, meshKey, std::move(m.animationSources) };
+            ++e.outstanding;
+            m_loader->requestMesh(m.sourcePath, ticket, m.piece);
+        }
+        finishIfDone(e, audio);
+    }
+
+    void PrefabLibrary::ensureAnimationConfig(Entry& e, const std::string& meshKey,
+                                              const std::shared_ptr<const Mesh>& mesh,
+                                              const nlohmann::json& animationSources)
+    {
+        // No key: nodeFromJson shares a mesh whose only source is its own builtin
+        // one, which is what the loader returns. Nothing to do.
+        if (!animationSources.is_array()) return;
+        const auto* sk = dynamic_cast<const SkinnedMesh*>(mesh.get());
+        if (!sk || meshMatchesAnimationConfig(*sk, animationSources)) return;
+
+        // applyAnimationSourceConfig reads the external FBX files: a worker job,
+        // on a copy (the cached mesh may already be shared with live instances).
+        std::vector<AnimationSourceConfig> configs = animationConfigs(animationSources);
+        const std::shared_ptr<Mailbox> mailbox = m_mailbox;
+        const std::string key    = e.t.key;
+        const uint64_t    serial = e.serial;
+        ++e.outstanding;
+        const JobSystem::JobId id = m_jobs.submit(
+            [mailbox, key, serial, meshKey, mesh, configs = std::move(configs)]
+            {
+                {
+                    std::lock_guard<std::mutex> lock(mailbox->mutex);
+                    if (mailbox->closed) return;
+                }
+                AnimResult r;
+                r.key     = key;
+                r.serial  = serial;
+                r.meshKey = meshKey;
+                try
+                {
+                    auto copy = std::make_shared<SkinnedMesh>(static_cast<const SkinnedMesh&>(*mesh));
+                    std::vector<std::string> warnings;   // same "warn and continue" as nodeFromJson
+                    applyAnimationSourceConfig(*copy, configs, warnings);
+                    r.mesh = std::move(copy);
+                }
+                catch (const std::exception& ex)
+                {
+                    r.error = ex.what();
+                }
+                catch (...)
+                {
+                    r.error = "unknown error applying the animation sources of '" + meshKey + "'";
+                }
+                std::lock_guard<std::mutex> lock(mailbox->mutex);
+                if (mailbox->closed) return;
+                mailbox->anims.push_back(std::move(r));
+            });
+        if (id == 0) fail(e, "the job system is not running");
+    }
+
+    void PrefabLibrary::finishIfDone(Entry& e, AudioManager& audio)
+    {
+        if (e.t.state != PrefabTemplate::State::Loading || e.outstanding > 0) return;
+
+        // Same calls nodeFromJson makes for an audioClip, so Instantiate hits the
+        // AudioManager's sound cache (and the sidecar is read here, once).
+        std::vector<std::shared_ptr<AudioClipComponent>> warm;
+        forEachNode(e.t.memoryRoot, [&](const nlohmann::json& node) {
+            const auto c = node.find("audioClip");
+            if (c == node.end() || !c->is_object()) return;
+            const std::string path = stringField(*c, "path");
+            if (path.empty()) return;
+            std::string ext = fs::path(path).extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if (!isSupportedAudioExtension(ext)) return;
+            auto clip = audio.createAudioClipComponent(path, boolField(*c, "is3D", false),
+                                                       boolField(*c, "loop", false));
+            if (!clip) return;
+            AudioLoadMode mode = AudioLoadMode::Sample;
+            if (audioLoadModeFromStr(stringField(*c, "loadMode"), mode) && mode != AudioLoadMode::Sample)
+                clip->setLoadMode(mode);
+            warm.push_back(std::move(clip));
+        });
+        e.t.warmAudio  = std::move(warm);   // new ones first: the shared sounds never hit zero refs
+        e.t.state      = PrefabTemplate::State::Ready;
+        e.t.error.clear();
+        e.t.generation = m_nextGeneration++;
+
+        // Copied before the callback: it may clear() or retainOnly() and leave `e`
+        // dangling.
+        const std::vector<std::string> refs = collectReferences(e.t.memoryRoot);
+        if (m_onReady) m_onReady(e.t);
+        for (const std::string& r : refs)
+            request(r);
+    }
+
+    void PrefabLibrary::pump(AudioManager& audio, float budgetMs)
+    {
+        std::vector<LoadResult> loads;
+        std::vector<AnimResult> anims;
+        {
+            std::lock_guard<std::mutex> lock(m_mailbox->mutex);
+            loads.swap(m_mailbox->loads);
+            anims.swap(m_mailbox->anims);
+        }
+
+        for (LoadResult& r : loads)
+        {
+            Entry* e = liveEntry(r.key, r.serial);
+            if (!e) continue;
+            if (!r.error.empty()) { fail(*e, r.error); continue; }
+            startMeshes(*e, std::move(r.meshes), std::move(r.mats), std::move(r.root), audio);
+        }
+
+        for (AnimResult& r : anims)
+        {
+            Entry* e = liveEntry(r.key, r.serial);
+            if (!e) continue;
+            --e->outstanding;
+            if (!r.error.empty() || !r.mesh) { fail(*e, r.error); continue; }
+            e->t.meshes[r.meshKey] = std::move(r.mesh);
+            finishIfDone(*e, audio);
+        }
+
+        for (LoadedMesh& m : m_loader->pumpCompleted(budgetMs))
+        {
+            const auto tk = m_tickets.find(m.targetId);
+            if (tk == m_tickets.end()) continue;   // cleared meanwhile
+            MeshTicket ticket = std::move(tk->second);
+            m_tickets.erase(tk);
+
+            Entry* e = liveEntry(ticket.key, ticket.serial);
+            if (!e) continue;
+            --e->outstanding;
+            if (!m.error.empty() || !m.mesh)
+            {
+                fail(*e, m.error.empty() ? "cannot load mesh '" + m.path + "'" : m.error);
+                continue;
+            }
+            // Multi-piece static model: every piece of the file is already in RAM;
+            // keep them all so sibling pieces need no request of their own.
+            for (size_t i = 0; i < m.pieceMeshes.size(); ++i)
+                e->t.meshes.try_emplace(meshCacheKey(m.path, static_cast<int>(i)), m.pieceMeshes[i]);
+            std::shared_ptr<const Mesh> mesh = std::move(m.mesh);
+            e->t.meshes[ticket.meshKey] = mesh;
+            ensureAnimationConfig(*e, ticket.meshKey, mesh, ticket.animationSources);
+            finishIfDone(*e, audio);
+        }
+    }
+
+    const PrefabTemplate* PrefabLibrary::find(const std::string& path) const
+    {
+        const auto it = m_entries.find(normalizeKey(path));
+        return it == m_entries.end() ? nullptr : &it->second.t;
+    }
+
+    int PrefabLibrary::pending() const
+    {
+        int n = 0;
+        for (const auto& [key, e] : m_entries)
+            if (e.t.state == PrefabTemplate::State::Loading) ++n;
+        return n;
+    }
+
+    void PrefabLibrary::updateFromMemory(const std::string& path, const nlohmann::json& prefabFile,
+                                         AudioManager& audio)
+    {
+        const std::string key = normalizeKey(path);
+        if (key.empty()) return;
+        Entry& e = m_entries[key];
+        e.t.key       = key;
+        e.t.state     = PrefabTemplate::State::Loading;
+        e.t.error.clear();
+        e.serial      = m_nextSerial++;   // any in-flight load of the old version is now stale
+        e.outstanding = 0;
+        if (!isPrefabFile(prefabFile)) { fail(e, "not a prefab file"); return; }
+
+        nlohmann::json root = prefabFile["root"];
+        resolveStoredPaths(root, m_assetRoot);
+
+        MaterialAssetCache mats;
+        bool missingMats = false;
+        for (const std::string& p : matAssetPaths(root))
+        {
+            if (mats.count(p)) continue;
+            if (const auto it = e.t.mats.find(p); it != e.t.mats.end())
+                mats.emplace(p, it->second);
+            else
+                missingMats = true;
+        }
+        // A .mat the old version did not have is read on a worker, never here.
+        if (missingMats)
+        {
+            submitLoad(key, e.serial, &root, std::move(mats));
+            return;
+        }
+        startMeshes(e, meshRequests(root), std::move(mats), std::move(root), audio);
+    }
+
+    void PrefabLibrary::retainOnly(const std::set<std::string>& keys)
+    {
+        std::unordered_set<std::string> keep;
+        for (const std::string& k : keys) keep.insert(normalizeKey(k));
+        std::erase_if(m_entries, [&](const auto& kv) { return !keep.count(kv.first); });
+        // Their in-flight mesh loads come back to a missing ticket and are ignored.
+        std::erase_if(m_tickets, [&](const auto& kv) { return !keep.count(kv.second.key); });
+    }
+
+    void PrefabLibrary::clear()
+    {
+        m_entries.clear();
+        m_tickets.clear();
+        m_loader->cancelAllPending();
+        // The mailbox is NOT emptied: a job can post after any point we pick, so
+        // the per-load serial is the one mechanism that drops stale results
+        // (liveEntry), and the tests exercise exactly that.
+    }
+
+    std::vector<std::string> PrefabLibrary::collectReferences(const nlohmann::json& anyTree)
+    {
+        std::vector<std::string> out;
+        std::unordered_set<std::string> seen;
+        collectRefs(anyTree, out, seen);
+        return out;
+    }
+
+    int PrefabLibrary::readCount() const
+    {
+        std::lock_guard<std::mutex> lock(m_mailbox->mutex);
+        return m_mailbox->readCount;
+    }
+}

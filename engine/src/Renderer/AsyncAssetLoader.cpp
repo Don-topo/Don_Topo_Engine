@@ -92,11 +92,35 @@ namespace DonTopo
 
         if (needsJob)
         {
+            // The lease is counted BEFORE submitting: if submitWithId refuses the
+            // job, the lambda (and the lease) is destroyed right there and the
+            // count goes back down.
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                ++m_liveJobs;
+            }
+            auto lease = std::make_shared<JobLease>(this);
             // path by copy: by reference it would dangle as soon as the caller
             // left scope, and it would not show until the worker started.
-            m_jobs.submitWithId(id, [this, path] { runJob(path); });
+            m_jobs.submitWithId(id, [this, path, lease] { runJob(path); });
         }
         return id;
+    }
+
+    AsyncAssetLoader::JobLease::~JobLease()
+    {
+        // Notify while still holding the lock: the destructor waiting on the cv
+        // cannot return (and destroy the mutex) until this unlock.
+        std::lock_guard<std::mutex> lock(self->m_mutex);
+        if (--self->m_liveJobs == 0)
+            self->m_liveJobsCv.notify_all();
+    }
+
+    AsyncAssetLoader::~AsyncAssetLoader()
+    {
+        cancelAllPending();
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_liveJobsCv.wait(lock, [this] { return m_liveJobs == 0; });
     }
 
     void AsyncAssetLoader::cancel(JobSystem::JobId id)
