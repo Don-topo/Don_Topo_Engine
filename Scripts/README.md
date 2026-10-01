@@ -26,7 +26,7 @@ function Rotator:OnDestroy() end
 
 | Callback | When |
 | --- | --- |
-| `Awake()` | When the instance is created (Play start or `Scene.Instantiate`), before any `Start`/`Update` |
+| `Awake()` | When the instance is created (Play start, `Scene.Instantiate` or `Instantiate(prefab)`), before any `Start`/`Update` |
 | `Start()` | Once, before the first `Update` |
 | `Update(dt)` | Every frame, in Play Mode |
 | `FixedUpdate(dt)` | Fixed step (`1/60`), accumulator capped against the spiral of death |
@@ -113,7 +113,52 @@ scene. In Play, `self.enemy` is a `Prefab` userdata, or `false` while nothing is
 |---|---|
 | `Prefab()` | Class-table default only: marks the field as a prefab slot. |
 | `prefab.path` | Project-relative path of the assigned prefab (read-only). |
-| `prefab:IsLoaded() -> boolean` | Whether the prefab asset is loaded and ready. |
+| `prefab:IsLoaded() -> boolean` | Whether the prefab is loaded, i.e. `Instantiate` would succeed right now. |
+| `Instantiate(prefab, position?, rotation?, parent?) -> Entity` | Builds a new instance of the prefab (see below). |
+
+### Instantiate
+
+`Instantiate` is the Unity-style global that spawns a prefab slot. The prefab is
+preloaded (by the editor when the scene opens, by an exported game during its splash), so
+the call reads nothing from disk: meshes, `.mat` files and audio come from the template
+already in RAM, and a skinned mesh is shared between instances, not copied.
+
+```lua
+Spawner = { enemy = Prefab(), interval = 2 }
+
+function Spawner:Update(dt)
+    self.t = (self.t or 0) + dt
+    if self.t >= self.interval and self.enemy and self.enemy:IsLoaded() then
+        self.t = 0
+        Instantiate(self.enemy, self.entity:GetTransform():GetWorldPosition(), Vec3(0, 90, 0))
+    end
+end
+```
+
+| Call | Result |
+| --- | --- |
+| `Instantiate(prefab)` | At the prefab root's own pose, under the scene root |
+| `Instantiate(prefab, parent)` | As a child of `parent`; the prefab root's pose is taken as **local** to it |
+| `Instantiate(prefab, position, rotation)` | At that **world** position and rotation (Euler degrees, like `Transform`) |
+| `Instantiate(prefab, position, rotation, parent)` | Child of `parent`, still at that **world** pose |
+
+- The new objects get fresh ids, keep their link to the prefab and keep the prefab
+  root's scale. `Awake` of their scripts runs inside the call, `Start` before their first
+  `Update`. An `Awake` may itself call `Instantiate` (it wakes only its own new objects).
+- A trailing `nil` is ignored, so `Instantiate(self.enemy, pos, rot, self.target)` works
+  with an empty `target`.
+- A camera or Audio Listener in the prefab is dropped (with a Log line) when the scene
+  already has one.
+- Errors are raised right away, never a wait:
+  - `Instantiate: no prefab assigned` — the slot is empty (`false`/`nil`).
+  - `Instantiate: prefab 'Prefabs/Enemy.prefab' is not loaded yet (still loading)` — in
+    the editor, Play does not wait for loading; check `:IsLoaded()` first.
+  - `Instantiate: prefab 'Prefabs/Enemy.prefab' failed to load: <reason>` — missing or
+    broken file, or one of its assets.
+  - `Instantiate: prefab '...' was never requested` — not referenced by any loaded
+    scene or prefab.
+  - Wrong argument types name the bad argument and list the four forms.
+- `Scene.Instantiate(entity)` clones an object that is already in the scene instead.
 
 ## Hot reload
 
@@ -445,7 +490,7 @@ go through a solid wall.
 | `Scene.Find(name)` | First GameObject with that name (the root excluded), or `nil` |
 | `Scene.CreateGameObject(name, parent?)` | Creates a new GameObject, optionally a child of `parent` |
 | `Scene.Destroy(entity)` | Queues destruction (processed at the end of the frame). Internal alias of `DestroyGameObject` |
-| `Scene.Instantiate(entity, parent?)` | Clones a GameObject (subtree, components and scripts included); `Awake` is called immediately, `Start` on the next lifecycle update |
+| `Scene.Instantiate(entity, parent?)` | Clones a GameObject (subtree, components and scripts included); `Awake` is called immediately, `Start` on the next lifecycle update. To spawn a prefab use the global `Instantiate(prefab, ...)` (see Serializable props) |
 
 ## Physics
 

@@ -10,6 +10,11 @@
 #include "DonTopo/Core/Platform.h"
 #include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Core/ImportSettings.h"
+#include "DonTopo/Renderer/Cube.h"
+#include "DonTopo/Scripting/ScriptBindings.h"
+#include "DonTopo/Scripting/ScriptComponent.h"
+#include "DonTopo/Scripting/ScriptManager.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -1294,6 +1299,431 @@ void testLibraryUpdateReconfiguresAnimationSources(bool keepRaw)
     CHECK(settle(lib), "library settles");
     CHECK(exactly(onlyBuiltin), "[builtin, idle] -> [builtin]: removed source leaves no clips");
 }
+
+// ---- Scene::instantiatePrefab + Lua Instantiate (Task 8) ----
+
+// Strips what an instance is allowed to differ in: scene ids and the link keys.
+void stripInstanceKeys(nlohmann::json& j)
+{
+    if (j.is_object())
+    {
+        j.erase("id");
+        j.erase("prefab");
+        j.erase("prefabNode");
+        for (auto& [k, v] : j.items()) stripInstanceKeys(v);
+    }
+    else if (j.is_array())
+    {
+        for (auto& v : j) stripInstanceKeys(v);
+    }
+}
+
+std::vector<uint64_t> sceneIds(DonTopo::Scene& s)
+{
+    std::vector<uint64_t> ids;
+    s.traverse([&](DonTopo::GameObject* n) { if (n->parent) ids.push_back(n->id); });
+    return ids;
+}
+
+const DonTopo::PrefabTemplate* readyTemplate(DonTopo::PrefabLibrary& lib, const std::string& key)
+{
+    if (!settle(lib)) { CHECK(false, "library settles"); return nullptr; }
+    const DonTopo::PrefabTemplate* t = lib.find(key);
+    if (!t || t->state != DonTopo::PrefabTemplate::State::Ready)
+    {
+        std::fprintf(stderr, "  template %s not Ready: %s\n", key.c_str(), t ? t->error.c_str() : "never requested");
+        CHECK(false, "template Ready");
+        return nullptr;
+    }
+    return t;
+}
+
+// The Crate prefab of the round-trip and id tests: procedural cube + box collider +
+// script override at the root, a point light child. Written to <root>/Prefabs/Crate.prefab.
+// Returns the memory-form JSON of the source subtree (what an instance must equal).
+nlohmann::json writeCratePrefab(const TempRoot& root, DonTopo::Scene& s)
+{
+    s.setAssetRoot(root.str());
+    auto* crate = s.addGameObject("Crate");
+    crate->localTransform = glm::translate(glm::mat4(1.0f), {2.0f, 3.0f, 4.0f}) *
+                            glm::rotate(glm::mat4(1.0f), 0.5f, {0.0f, 1.0f, 0.0f});
+    crate->updateWorldTransforms(glm::mat4(1.0f));
+    crate->setMesh(std::make_shared<DonTopo::Mesh>(DonTopo::Cube::create(1.0f)));
+    crate->setBoxCollider(physics().createBoxColliderComponent(glm::vec3(0.5f), glm::vec3(0.0f),
+                                                               crate->worldTransform, /*dynamic=*/false));
+    auto script = std::make_unique<DonTopo::ScriptComponent>("Rotator", crate);
+    script->overrides["speed"] = 7.0;
+    crate->addScript(std::move(script));
+    auto* lamp = s.addGameObject("Lamp", crate);
+    auto light = std::make_shared<DonTopo::LightComponent>();
+    light->setIntensity(2.0f);
+    lamp->setLight(light);
+
+    const nlohmann::json original = s.subtreeToMemoryJson(crate);
+    writeFile(root.p / "Prefabs" / "Crate.prefab", s.makePrefab(crate, "Prefabs/Crate.prefab", false).dump(2));
+    s.removeGameObject(crate);
+    return original;
+}
+
+// Spec test 1: subtree -> file -> template -> instance gives the same JSON, except
+// ids and link fields.
+void testInstantiateRoundTrip()
+{
+    TempRoot root("dt_prefab_inst_roundtrip");
+    DonTopo::Scene s;
+    nlohmann::json original = writeCratePrefab(root, s);
+
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::PrefabLibrary lib(js, root.str());
+    lib.request("Prefabs/Crate.prefab");
+    const auto* t = readyTemplate(lib, "Prefabs/Crate.prefab");
+    if (!t) return;
+
+    DonTopo::GameObject* inst = s.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    CHECK(inst != nullptr, "instantiatePrefab returns the root");
+    if (!inst) return;
+    CHECK(inst->parent == &s.getRoot(), "no parent -> child of the scene root");
+    CHECK(inst->prefabLink && inst->prefabLink->path == "Prefabs/Crate.prefab" &&
+          inst->prefabLink->overrides.empty(), "root linked to the template key, no overrides");
+    CHECK(inst->prefabNode == 1 && inst->children.size() == 1 && inst->children[0]->prefabNode == 2 &&
+          !inst->children[0]->prefabLink, "prefabNode = prefab-local ids, only the root holds the link");
+    CHECK(inst->staticRenderIndex == -1 && inst->children[0]->staticRenderIndex == -1,
+          "render indices left at -1 for the caller to register");
+
+    nlohmann::json got = s.subtreeToMemoryJson(inst);
+    stripInstanceKeys(got);
+    stripInstanceKeys(original);
+    CHECK(got == original, "instance equals the source subtree except ids and link fields");
+    if (got != original)
+        std::fprintf(stderr, "  original: %s\n  instance: %s\n", original.dump().c_str(), got.dump().c_str());
+
+    // Pose: position + Euler degrees are WORLD space (Unity), the scale is the prefab's.
+    DonTopo::GameObject* holder = s.addGameObject("Holder");
+    holder->localTransform = glm::translate(glm::mat4(1.0f), {10.0f, 0.0f, 0.0f});
+    holder->updateWorldTransforms(glm::mat4(1.0f));
+    const glm::vec3 pos(1.0f, 2.0f, 3.0f), rot(0.0f, 90.0f, 0.0f);
+    DonTopo::GameObject* posed = s.instantiatePrefab(*t, holder, &pos, &rot, physics(), audio());
+    CHECK(posed && posed->parent == holder, "parented instance");
+    if (posed)
+    {
+        const glm::vec3 world(posed->worldTransform[3]);
+        CHECK(glm::length(world - pos) < 1e-4f, "position is world space");
+        const glm::vec3 local(posed->localTransform[3]);
+        CHECK(glm::length(local - glm::vec3(-9.0f, 2.0f, 3.0f)) < 1e-4f, "local = world relative to the parent");
+        const glm::vec3 fwd = glm::normalize(glm::vec3(posed->worldTransform * glm::vec4(0, 0, -1, 0)));
+        CHECK(glm::length(fwd - glm::vec3(-1.0f, 0.0f, 0.0f)) < 1e-4f, "90 deg yaw turns -Z into -X");
+        CHECK(std::fabs(glm::length(glm::vec3(posed->worldTransform[0])) - 1.0f) < 1e-4f, "prefab scale kept");
+    }
+
+    // Not Ready -> nullptr, scene untouched.
+    DonTopo::PrefabTemplate loading;
+    loading.key = "Prefabs/X.prefab";
+    const size_t before = sceneIds(s).size();
+    CHECK(s.instantiatePrefab(loading, nullptr, nullptr, nullptr, physics(), audio()) == nullptr &&
+          sceneIds(s).size() == before, "a template that is not Ready instantiates nothing");
+}
+
+// Spec test 4: fresh unique ids on the four paths (Instantiate x100, clone, undo of
+// Delete, propagation), and the old ids keep resolving.
+void testInstantiateIdsUniqueAcrossFourPaths()
+{
+    TempRoot root("dt_prefab_inst_ids");
+    DonTopo::Scene s;
+    writeCratePrefab(root, s);
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::PrefabLibrary lib(js, root.str());
+    lib.request("Prefabs/Crate.prefab");
+    const auto* t = readyTemplate(lib, "Prefabs/Crate.prefab");
+    if (!t) return;
+
+    std::vector<DonTopo::GameObject*> insts;
+    for (int i = 0; i < 100; ++i)
+        insts.push_back(s.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio()));
+    CHECK(std::all_of(insts.begin(), insts.end(), [](auto* p) { return p != nullptr; }), "100 instances");
+    if (std::any_of(insts.begin(), insts.end(), [](auto* p) { return p == nullptr; })) return;
+
+    // Clone of an instance.
+    DonTopo::GameObject* clone = s.cloneGameObject(insts[0], nullptr, physics(), audio());
+    CHECK(clone != nullptr, "clone");
+    // Undo of Delete: snapshot, delete, re-insert at the same place.
+    const uint64_t deletedId = insts[1]->id;
+    const nlohmann::json snap = s.subtreeToJson(insts[1]);
+    s.removeGameObject(insts[1]);
+    DonTopo::GameObject* back = s.insertFromJson(snap, nullptr, 1, physics(), audio());
+    CHECK(back && back->id == deletedId, "undo of Delete keeps the original id");
+    // Propagation.
+    const uint64_t propagatedId = insts[2]->id;
+    DonTopo::GameObject* rebuilt = s.rebuildPrefabInstance(insts[2], t->memoryRoot, physics(), audio(),
+                                                           &t->meshes, &t->mats);
+    CHECK(rebuilt && rebuilt->id == propagatedId && s.findById(propagatedId) == rebuilt,
+          "propagation keeps the root id and it resolves");
+
+    const std::vector<uint64_t> ids = sceneIds(s);
+    const std::set<uint64_t> unique(ids.begin(), ids.end());
+    CHECK(ids.size() == 2u * 101u, "every node accounted for (100 instances + 1 clone, 2 nodes each)");
+    CHECK(unique.size() == ids.size(), "no duplicate id across the four paths");
+    CHECK(s.findById(insts[50]->id) == insts[50], "an older instance still resolves");
+}
+
+std::string albedoOf(DonTopo::GameObject* n)
+{
+    const auto mats = n ? DonTopo::materialsOfMesh(*n) : std::vector<const DonTopo::Material*>{};
+    return mats.empty() ? std::string("<no material>") : mats[0]->texturePath;
+}
+
+// Spec test 5: once Ready, Instantiate touches no disk. The temp copies of the
+// .prefab, the FBX, the .mat (and the audio sidecar) are deleted before the last
+// Instantiate; the result must equal the one built while they existed.
+// The skinned FBX is the benchmark subject too (spec test 10, Release only).
+void testInstantiateNoIo()
+{
+    namespace fs = std::filesystem;
+    TempRoot root("dt_prefab_inst_noio");
+    const fs::path maw  = root.p / "Models" / "Maw J Laygo.fbx";
+    const fs::path idle = root.p / "Models" / "standing idle 01.fbx";
+    fs::copy_file("assets/animatedCharacter/Maw J Laygo.fbx", maw);
+    fs::copy_file("assets/animatedCharacter/standing idle 01.fbx", idle);
+    const std::string tri = writeTriangleObj(root.p / "Models" / "tri.obj");
+    fs::create_directories(root.p / "Materials");
+    DonTopo::MaterialAsset matAsset;
+    matAsset.albedo = (root.p / "Textures" / "x.png").string();
+    CHECK(DonTopo::saveMaterialAsset(root.p / "Materials" / "m.mat", matAsset), ".mat written");
+    const fs::path clip = root.p / "audio.mp3";
+    fs::copy_file("assets/audio.mp3", clip);
+    DonTopo::AudioImportSettings sidecar;
+    sidecar.gainDb = 3.0f;
+    CHECK(DonTopo::saveAudioImportSettings(clip, sidecar), "audio sidecar written");
+
+    nlohmann::json character = plainNode(1, "Character");
+    character["mesh"] = { {"sourcePath", maw.string()}, {"name", "Maw"}, {"skinned", true},
+                          {"animationSources", nlohmann::json::array({
+                              { {"path", maw.string()},  {"builtin", true} },
+                              { {"path", idle.string()}, {"builtin", false} } })} };
+    nlohmann::json box = plainNode(2, "Box");
+    box["mesh"] = { {"sourcePath", tri}, {"name", "tri"},
+                    {"materials", nlohmann::json::array({ { {"index", 0}, {"matAsset", "Materials/m.mat"} } })} };
+    nlohmann::json speaker = plainNode(3, "Speaker");
+    // A non-default rolloff: nodeFromJson reloads the sound for it, so the template
+    // must have warmed THAT variant too.
+    speaker["audioClip"] = { {"path", clip.string()}, {"is3D", true}, {"loop", false}, {"rolloff", "linear"} };
+    character["children"].push_back(box);
+    character["children"].push_back(speaker);
+    writePrefabFile(root.p / "Prefabs" / "Character.prefab", character);
+
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::PrefabLibrary lib(js, root.str());
+    lib.request("Prefabs/Character.prefab");
+    const auto* t = readyTemplate(lib, "Prefabs/Character.prefab");
+    if (!t) return;
+    const auto skIt = t->meshes.find(DonTopo::meshCacheKey(maw.string(), 0));
+    if (skIt == t->meshes.end()) { CHECK(false, "skinned mesh in the template"); return; }
+
+    DonTopo::Scene s;
+    DonTopo::GameObject* ref = s.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    CHECK(ref != nullptr, "reference instance");
+    if (!ref) return;
+    const std::string refAlbedo = albedoOf(childNamed(ref, "Box"));
+    CHECK(fs::path(refAlbedo).filename() == "x.png", "reference instance has the .mat albedo");
+    // Nothing but the template may keep the sound alive from here on.
+    s.removeGameObject(ref);
+
+    const int reads = lib.readCount();
+    std::error_code ec;
+    fs::remove(root.p / "Prefabs" / "Character.prefab", ec);
+    fs::remove(maw, ec);
+    fs::remove(idle, ec);
+    fs::remove(root.p / "Models" / "tri.obj", ec);
+    fs::remove(root.p / "Materials" / "m.mat", ec);
+    fs::remove(fs::path(clip.string() + ".json"), ec);
+    fs::remove(clip, ec);   // may be held open by FMOD; the sound count below is the audio proof
+    CHECK(!fs::exists(maw) && !fs::exists(root.p / "Materials" / "m.mat") &&
+          !fs::exists(root.p / "Prefabs" / "Character.prefab"), "temp copies deleted");
+
+    const size_t sounds = audio().loadedSoundCount();
+    DonTopo::GameObject* inst = s.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    CHECK(inst != nullptr, "instance built with the files gone");
+    if (!inst) return;
+    CHECK(inst->getMesh() && inst->getMesh().get() == skIt->second.get(),
+          "the skinned mesh is the template's own object (shared, not copied)");
+    CHECK(fs::path(albedoOf(childNamed(inst, "Box"))).filename() == "x.png" &&
+          albedoOf(childNamed(inst, "Box")) == refAlbedo, "same .mat albedo as the reference");
+    DonTopo::GameObject* speakerGo = childNamed(inst, "Speaker");
+    if (audio().available())
+    {
+        CHECK(speakerGo && speakerGo->hasAudioClip(), "audio clip built");
+        CHECK(audio().loadedSoundCount() == sounds, "no new FMOD sound: the warm clip was reused");
+    }
+    else
+    {
+        std::printf("SKIP audio part of testInstantiateNoIo (FMOD not available)\n");
+    }
+    CHECK(lib.readCount() == reads, "no .prefab read");
+    for (const auto& w : s.lastWarnings()) std::fprintf(stderr, "  warning: %s\n", w.c_str());
+    CHECK(s.lastWarnings().empty(), "no warnings (a disk miss would warn)");
+
+#ifdef NDEBUG
+    // Spec test 10: Core cost of Instantiate of a skinned prefab (GPU registration
+    // is measured separately with the runtime harness).
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < 100; ++i) s.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("prefab_tests: Instantiate skinned prefab: %.3f ms/call\n", ms / 100.0);
+#endif
+}
+
+// Lua side: a ScriptManager on the shared managers, with the library plugged in.
+// The scene is a member declared AFTER the manager, so it dies first: its script
+// instances are Lua references that must be released while the lua_State lives.
+struct LuaFixture
+{
+    DonTopo::ScriptManager sm;
+    DonTopo::Scene s;
+    std::vector<std::string> log;
+    explicit LuaFixture(DonTopo::PrefabLibrary* lib)
+    {
+        sm.init("__prefab_tests_no_scripts_folder__");
+        sm.setScene(&s);
+        sm.setPhysicsManager(&physics());
+        sm.setAudioManager(&audio());
+        sm.setPrefabLibrary(lib);
+        sm.setLogCallback([this](const std::string& m) { log.push_back(m); });
+    }
+    bool load(const TempRoot& root, const char* cls, const std::string& code)
+    {
+        const auto file = root.p / (std::string(cls) + ".lua");
+        writeFile(file, code);
+        return sm.loadScript(file);
+    }
+    // Runs code; returns "" on success or the error message.
+    std::string run(const std::string& code)
+    {
+        auto r = sm.lua().safe_script(code, sol::script_pass_on_error);
+        if (r.valid()) return {};
+        sol::error e = r;
+        return e.what();
+    }
+};
+
+// Review Focus 4: an Awake on an object created by Instantiate calls Instantiate
+// itself, parenting the new object under its own entity (so the outer subtree grows
+// while it is being woken). Collect-first means no iterator is invalidated and the
+// nested object is woken exactly once, by its own Instantiate.
+void testInstantiateAwakeReentrancy()
+{
+    TempRoot root("dt_prefab_inst_awake");
+    nlohmann::json a = plainNode(1, "A");
+    a["scripts"] = nlohmann::json::array({ { {"name", "Spawner"},
+                                             {"overrides", { {"other", { {"prefab", "Prefabs/B.prefab"} }} }} } });
+    nlohmann::json kid = plainNode(2, "Kid");
+    kid["scripts"] = nlohmann::json::array({ { {"name", "Kid"} } });
+    a["children"].push_back(kid);
+    writePrefabFile(root.p / "Prefabs" / "A.prefab", a);
+    nlohmann::json b = plainNode(1, "B");
+    b["scripts"] = nlohmann::json::array({ { {"name", "Bee"} } });
+    writePrefabFile(root.p / "Prefabs" / "B.prefab", b);
+
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::PrefabLibrary lib(js, root.str());
+    lib.request("Prefabs/A.prefab");   // B comes through A's reference (recursion)
+    if (!readyTemplate(lib, "Prefabs/A.prefab") || !readyTemplate(lib, "Prefabs/B.prefab")) return;
+
+    LuaFixture lua(&lib);
+    DonTopo::Scene& s = lua.s;
+    CHECK(lua.load(root, "Spawner",
+                   "Spawner = { other = Prefab() }\n"
+                   "function Spawner:Awake()\n"
+                   "  SpawnerAwakes = (SpawnerAwakes or 0) + 1\n"
+                   "  Nested = Instantiate(self.other, self.entity)\n"
+                   "end\n"), "Spawner loads");
+    CHECK(lua.load(root, "Kid", "Kid = {}\nfunction Kid:Awake() KidAwakes = (KidAwakes or 0) + 1 end\n"),
+          "Kid loads");
+    CHECK(lua.load(root, "Bee", "Bee = {}\nfunction Bee:Awake() BeeAwakes = (BeeAwakes or 0) + 1 end\n"),
+          "Bee loads");
+    lua.sm.lua()["pa"] = DonTopo::LuaPrefab{ "Prefabs/A.prefab" };
+    lua.log.clear();   // the "registered" lines of the three loads
+
+    const std::string err = lua.run("Outer = Instantiate(pa)\nLoaded = pa:IsLoaded()\n");
+    CHECK(err.empty(), "Instantiate from Lua succeeds");
+    if (!err.empty()) std::fprintf(stderr, "  error: %s\n", err.c_str());
+    for (const auto& l : lua.log) std::fprintf(stderr, "  log: %s\n", l.c_str());
+    CHECK(lua.log.empty(), "no Awake error logged");
+    auto num = [&](const char* g) { sol::object o = lua.sm.lua()[g]; return o.is<int>() ? o.as<int>() : -1; };
+    CHECK(num("SpawnerAwakes") == 1 && num("KidAwakes") == 1, "the outer instance woke once");
+    CHECK(num("BeeAwakes") == 1, "the nested instance woke exactly once");
+    CHECK(lua.sm.lua()["Loaded"].get<bool>(), "IsLoaded is true for a Ready template");
+
+    DonTopo::GameObject* outer = nullptr;
+    for (auto& c : s.getRoot().children) if (c->name == "A") outer = c.get();
+    CHECK(outer && outer->children.size() == 2 && childNamed(outer, "B") && childNamed(outer, "Kid"),
+          "B was created under A by A's Awake");
+    CHECK(outer && outer->prefabLink && childNamed(outer, "B") && childNamed(outer, "B")->prefabLink &&
+          childNamed(outer, "B")->prefabLink->path == "Prefabs/B.prefab", "both linked to their prefab");
+    lua.sm.setPrefabLibrary(nullptr);
+}
+
+// The four Lua overloads and the argument errors.
+void testInstantiateLuaOverloads()
+{
+    TempRoot root("dt_prefab_inst_lua");
+    writePrefabFile(root.p / "Prefabs" / "P.prefab", plainNode(1, "P"));
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::PrefabLibrary lib(js, root.str());
+    lib.request("Prefabs/P.prefab");
+    if (!readyTemplate(lib, "Prefabs/P.prefab")) return;
+
+    LuaFixture lua(&lib);
+    DonTopo::Scene& s = lua.s;
+    DonTopo::GameObject* holder = s.addGameObject("Holder");
+    holder->localTransform = glm::translate(glm::mat4(1.0f), {10.0f, 0.0f, 0.0f});
+    holder->updateWorldTransforms(glm::mat4(1.0f));
+    lua.sm.rebuildAliveSet();
+    lua.sm.lua()["p"] = DonTopo::LuaPrefab{ "Prefabs/P.prefab" };
+    lua.sm.lua()["holder"] = DonTopo::LuaEntity{ holder, &lua.sm };
+
+    CHECK(lua.run("e1 = Instantiate(p)\n"
+                  "e2 = Instantiate(p, holder)\n"
+                  "e3 = Instantiate(p, Vec3(1, 2, 3), Vec3(0, 90, 0))\n"
+                  "e4 = Instantiate(p, Vec3(1, 2, 3), Vec3(0, 0, 0), holder)\n"
+                  "e5 = Instantiate(p, nil)\n"
+                  "e6 = Instantiate(p, Vec3(1, 2, 3), Vec3(0, 0, 0), nil)\n").empty(), "the overloads run");
+    auto go = [&](const char* g) -> DonTopo::GameObject* {
+        sol::object o = lua.sm.lua()[g];
+        return o.is<DonTopo::LuaEntity>() ? o.as<DonTopo::LuaEntity>().go : nullptr;
+    };
+    CHECK(go("e1") && go("e1")->parent == &s.getRoot(), "(prefab) -> scene root");
+    CHECK(go("e2") && go("e2")->parent == holder, "(prefab, parent)");
+    CHECK(go("e3") && glm::length(glm::vec3(go("e3")->worldTransform[3]) - glm::vec3(1, 2, 3)) < 1e-4f,
+          "(prefab, position, rotation)");
+    CHECK(go("e4") && go("e4")->parent == holder &&
+          glm::length(glm::vec3(go("e4")->worldTransform[3]) - glm::vec3(1, 2, 3)) < 1e-4f,
+          "(prefab, position, rotation, parent): world position");
+    CHECK(go("e5") && go("e5")->parent == &s.getRoot(), "a trailing nil parent is no parent");
+    CHECK(go("e6") && go("e6")->parent == &s.getRoot(), "a trailing nil parent after a pose is no parent");
+
+    // Wrong types: a clear Lua error, never a crash.
+    auto errOf = [&](const char* call) { return lua.run(std::string("Instantiate(") + call + ")"); };
+    const char* bad[] = { "p, 5", "p, Vec3(1, 2, 3)", "p, holder, Vec3(0, 0, 0)", "p, Vec3(), 'x'",
+                          "p, Vec3(), Vec3(), 7", "p, Vec3(), Vec3(), holder, holder", "holder", "42",
+                          "p, Vec3(0/0, 0, 0), Vec3()" };
+    for (const char* b : bad)
+    {
+        const std::string e = errOf(b);
+        CHECK(e.find("Instantiate: ") != std::string::npos, "bad arguments give an Instantiate error");
+        if (e.find("Instantiate: ") == std::string::npos) std::fprintf(stderr, "  Instantiate(%s): '%s'\n", b, e.c_str());
+    }
+    CHECK(errOf("holder").find("Scene.Instantiate") != std::string::npos,
+          "an Entity as first argument points at Scene.Instantiate");
+
+    // Scene.Instantiate (shares the Awake block) still clones.
+    CHECK(lua.run("c = Scene.Instantiate(e1)").empty() && go("c") && go("c") != go("e1"),
+          "Scene.Instantiate still clones");
+    lua.sm.setPrefabLibrary(nullptr);
+}
 } // namespace
 
 int main()
@@ -1342,6 +1772,11 @@ int main()
     testLibraryWarmsAudio();
     testLibraryUpdateReconfiguresAnimationSources(/*keepRaw=*/true);
     testLibraryUpdateReconfiguresAnimationSources(/*keepRaw=*/false);
+    testInstantiateRoundTrip();
+    testInstantiateIdsUniqueAcrossFourPaths();
+    testInstantiateNoIo();
+    testInstantiateAwakeReentrancy();
+    testInstantiateLuaOverloads();
     if (g_failures) { std::fprintf(stderr, "%d failure(s)\n", g_failures); return 1; }
     std::printf("prefab_tests OK\n");
     return 0;

@@ -466,13 +466,28 @@ namespace DonTopo
             std::transform(ext.begin(), ext.end(), ext.begin(),
                            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
             if (!isSupportedAudioExtension(ext)) return;
-            auto clip = audio.createAudioClipComponent(path, boolField(*c, "is3D", false),
-                                                       boolField(*c, "loop", false));
-            if (!clip) return;
+            const bool is3D = boolField(*c, "is3D", false);
+            const bool loop = boolField(*c, "loop", false);
             AudioLoadMode mode = AudioLoadMode::Sample;
-            if (audioLoadModeFromStr(stringField(*c, "loadMode"), mode) && mode != AudioLoadMode::Sample)
-                clip->setLoadMode(mode);
-            warm.push_back(std::move(clip));
+            if (!audioLoadModeFromStr(stringField(*c, "loadMode"), mode)) mode = AudioLoadMode::Sample;
+            AudioRolloff rolloff = AudioRolloff::Inverse;
+            if (!audioRolloffFromStr(stringField(*c, "rolloff"), rolloff)) rolloff = AudioRolloff::Inverse;
+            // nodeFromJson creates the clip with the defaults and then RELOADS it for
+            // its loadMode and then for its rolloff (setLoadMode / setRolloff). Every
+            // sound key on that path must stay cached, not only the last one: a
+            // step that misses creates the FMOD sound again and reads the sidecar.
+            // One warm clip per step keeps each key alive.
+            auto warmStep = [&](bool withMode, bool withRolloff) {
+                auto clip = audio.createAudioClipComponent(path, is3D, loop);
+                if (!clip) return false;
+                if (withMode) clip->setLoadMode(mode);
+                if (withRolloff) clip->setRolloff(rolloff);
+                warm.push_back(std::move(clip));
+                return true;
+            };
+            if (!warmStep(false, false)) return;
+            if (mode != AudioLoadMode::Sample)    warmStep(true, false);
+            if (rolloff != AudioRolloff::Inverse) warmStep(true, true);
         });
         e.t.warmAudio  = std::move(warm);   // new ones first: the shared sounds never hit zero refs
         e.t.state      = PrefabTemplate::State::Ready;

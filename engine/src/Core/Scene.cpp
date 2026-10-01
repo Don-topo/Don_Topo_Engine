@@ -38,6 +38,8 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/euler_angles.hpp>
+#include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/UiWidgets.h"
@@ -4557,6 +4559,126 @@ namespace DonTopo
             n->prefabNode = 0;
             n->prefabLink.reset();
         });
+    }
+
+    GameObject* Scene::instantiatePrefab(const PrefabTemplate& t, GameObject* parent,
+                                         const glm::vec3* pos, const glm::vec3* eulerDeg,
+                                         PhysicsManager& physics, AudioManager& audio)
+    {
+        m_warnings.clear();
+        if (t.state != PrefabTemplate::State::Ready || !t.memoryRoot.is_object())
+        {
+            m_warnings.push_back("prefab '" + t.key + "': not instantiated (" +
+                                 (t.state == PrefabTemplate::State::Ready ? "its template is empty"
+                                                                          : "it is not loaded") + ")");
+            return nullptr;
+        }
+        GameObject* target = parent ? parent : &m_root;
+
+        // Template -> instance json. Prefab-local ids become prefabNode and leave
+        // "id", so the GameObject constructor hands every node a fresh scene id
+        // (spec §7: local ids never reach the scene id space); the root gets the link.
+        nlohmann::json j = t.memoryRoot;
+        std::function<void(nlohmann::json&)> relink = [&](nlohmann::json& n) {
+            const uint64_t local = localIdOf(n, "id");
+            n.erase("id");
+            n.erase("prefab");
+            if (local != 0) n["prefabNode"] = local;
+            else            n.erase("prefabNode");
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (auto& c : *kids) if (c.is_object()) relink(c);
+        };
+        relink(j);
+        j["prefab"] = { {"path", t.key}, {"overrides", nlohmann::json::array()} };
+
+        // Pose, written into the json BEFORE building: the collider factories take
+        // the initial PhysX pose from the world transform at build time.
+        // position/rotation are world space, the scale is the prefab root's local
+        // one (Unity). Position is exact; the rotation is exact unless the parent
+        // has non-uniform scale (then no local TRS can reproduce it anyway).
+        if (pos || eulerDeg)
+        {
+            const glm::mat4 tmplLocal = jsonToMat4(j.value("localTransform", nlohmann::json::array()),
+                                                   &m_warnings, "prefab root of '" + t.key + "'");
+            glm::vec3 localScale(1.0f), worldPos(0.0f);
+            glm::quat worldRot(1.0f, 0.0f, 0.0f, 0.0f);
+            decomposeTransform(tmplLocal, nullptr, nullptr, &localScale);
+            decomposeTransform(target->worldTransform * tmplLocal, &worldPos, &worldRot, nullptr);
+            if (pos) worldPos = *pos;
+            if (eulerDeg)
+                worldRot = glm::quat_cast(glm::eulerAngleXYZ(glm::radians(eulerDeg->x),
+                                                             glm::radians(eulerDeg->y),
+                                                             glm::radians(eulerDeg->z)));
+            // A singular parent (a 0 scale) has no inverse and no answer: the pose
+            // is then taken as local rather than filling the matrix with inf/NaN.
+            const glm::mat4& parentWorld = target->worldTransform;
+            const glm::mat4 invParent = std::fabs(glm::determinant(parentWorld)) > 1e-12f
+                                      ? glm::inverse(parentWorld) : glm::mat4(1.0f);
+            glm::vec3 localPos(0.0f);
+            glm::quat localRot(1.0f, 0.0f, 0.0f, 0.0f);
+            decomposeTransform(invParent * glm::translate(glm::mat4(1.0f), worldPos) * glm::mat4_cast(worldRot),
+                               &localPos, &localRot, nullptr);
+            j["localTransform"] = mat4ToJson(glm::translate(glm::mat4(1.0f), localPos) *
+                                             glm::mat4_cast(localRot) *
+                                             glm::scale(glm::mat4(1.0f), localScale));
+        }
+
+        // One camera and one Audio Listener per scene, looked at BEFORE inserting
+        // (afterwards the live one cannot be told apart from the new one).
+        bool hasCamera   = findCamera() != nullptr;
+        bool hasListener = findAudioListener() != nullptr;
+
+        const auto nameIt = j.find("name");
+        GameObject* root = target->addChild(nameIt != j.end() && nameIt->is_string()
+                                            ? nameIt->get<std::string>() : std::string());
+        // hasBones answered by the template's meshes, never by an Assimp probe; OR
+        // so a static piece of the same file cannot mask a skinned one.
+        NodeLoadCache cache;
+        for (const auto& [key, m] : t.meshes)
+            if (m) cache.hasBones[m->sourcePath] = cache.hasBones[m->sourcePath] ||
+                                                   (dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr);
+        try
+        {
+            // Empty asset root: memory form, paths are already absolute.
+            // carryOverrideBaseline = false: a template carries no baseline, it is
+            // derived from the mesh as on a disk load.
+            nodeFromJson(j, root, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
+                         /*loader=*/nullptr, &t.meshes, /*carryOverrideBaseline=*/false, &t.mats);
+        }
+        catch (const std::exception& e)
+        {
+            m_warnings.push_back("prefab '" + t.key + "': could not be instantiated (" + e.what() + ")");
+            removeGameObject(root);
+            collapseWarnings();
+            return nullptr;
+        }
+
+        root->traverse([&](GameObject* n) {
+            n->staticRenderIndex  = -1;
+            n->skinnedRenderIndex = -1;
+            if (n->hasCameraComponent())
+            {
+                if (hasCamera)
+                {
+                    n->setCameraComponent(nullptr);
+                    m_warnings.push_back("Instance of '" + t.key + "', node '" + n->name +
+                                         "': the CameraComponent is discarded (there is already a camera in the scene)");
+                }
+                hasCamera = true;
+            }
+            if (n->hasAudioListener())
+            {
+                if (hasListener)
+                {
+                    n->setAudioListener(nullptr);
+                    m_warnings.push_back("Instance of '" + t.key + "', node '" + n->name +
+                                         "': its Audio Listener is discarded (there is already one in the scene)");
+                }
+                hasListener = true;
+            }
+        });
+        collapseWarnings();
+        return root;
     }
 
     void Scene::update(float dt)

@@ -28,6 +28,8 @@
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/JobSystem.h"
+#include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
@@ -58,6 +60,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -66,6 +69,7 @@
 #include <memory>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 #include "DonTopo/Audio/AudioClipComponent.h"
 
@@ -3926,6 +3930,93 @@ static void test_prefab_script_property(ScriptManager& sm, PhysicsManager& pm, A
     CHECK(inst2["speed"].get<int>() == 3);
 }
 
+// Runs Instantiate(<args>) in a pcall; returns the error message ("" if it succeeded).
+static std::string instantiateError(ScriptManager& sm, const std::string& args)
+{
+    sm.lua().script("okInst, errInst = pcall(function() return Instantiate(" + args + ") end)\n"
+                    "errInst = okInst and '' or tostring(errInst)\n");
+    return sm.lua()["errInst"].get<std::string>();
+}
+
+// Spec test 6: a prefab that is not Ready raises a Lua error at once, with the exact
+// message; so do nil, never-requested, failed and "no library".
+static void test_instantiate_prefab_errors(ScriptManager& sm)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "dt_scripting_instantiate_errors";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "Prefabs", ec);
+
+    Scene scene("Test");
+    sm.setScene(&scene);
+    {
+        // The library and its JobSystem live in this block; the manager must not
+        // keep pointing at them after it.
+        JobSystem js;
+        js.start(1);
+        PrefabLibrary lib(js, root.string());
+        sm.setPrefabLibrary(&lib);
+        // The file does not exist and the library is NOT pumped: it stays Loading.
+        lib.request("Prefabs/Enemy.prefab");
+        sm.lua()["pe"] = LuaPrefab{ "Prefabs/Enemy.prefab" };
+
+        // Best of 5, so one scheduler hiccup cannot fail it. The bound is the spec's
+        // 5 ms in Release; 20 ms in Debug (unoptimized sol2 + exception unwinding,
+        // still orders of magnitude below a disk read or a wait for the loader).
+#ifdef NDEBUG
+        const double boundMs = 5.0;
+#else
+        const double boundMs = 20.0;
+#endif
+        double bestMs = 1e9;
+        std::string notReady;
+        for (int i = 0; i < 5; ++i)
+        {
+            const auto t0 = std::chrono::steady_clock::now();
+            notReady = instantiateError(sm, "pe");
+            bestMs = std::min(bestMs, std::chrono::duration<double, std::milli>(
+                                          std::chrono::steady_clock::now() - t0).count());
+        }
+        CHECK(notReady == "Instantiate: prefab 'Prefabs/Enemy.prefab' is not loaded yet (still loading)");
+        if (notReady != "Instantiate: prefab 'Prefabs/Enemy.prefab' is not loaded yet (still loading)")
+            std::printf("  got: '%s'\n", notReady.c_str());
+        CHECK(bestMs < boundMs);
+        CHECK(scene.getRoot().children.empty());   // nothing was built
+        CHECK(sm.lua().safe_script("return pe:IsLoaded()").get<bool>() == false);
+
+        CHECK(instantiateError(sm, "nil") == "Instantiate: no prefab assigned");
+        CHECK(instantiateError(sm, "false") == "Instantiate: no prefab assigned");
+        CHECK(instantiateError(sm, "") == "Instantiate: no prefab assigned");
+        sm.lua()["pn"] = LuaPrefab{ "Prefabs/Never.prefab" };
+        CHECK(instantiateError(sm, "pn") == "Instantiate: prefab 'Prefabs/Never.prefab' was never requested");
+
+        // Now pump until the missing file is reported Failed.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        const PrefabTemplate* t = lib.find("Prefabs/Enemy.prefab");
+        while (t && t->state == PrefabTemplate::State::Loading && std::chrono::steady_clock::now() < deadline)
+        {
+            lib.pump(*sm.audioManager(), 1.0f);
+            std::this_thread::yield();
+        }
+        CHECK(t && t->state == PrefabTemplate::State::Failed && !t->error.empty());
+        if (t)
+        {
+            const std::string failed = instantiateError(sm, "pe");
+            CHECK(failed == "Instantiate: prefab 'Prefabs/Enemy.prefab' failed to load: " + t->error);
+            if (failed != "Instantiate: prefab 'Prefabs/Enemy.prefab' failed to load: " + t->error)
+                std::printf("  got: '%s'\n", failed.c_str());
+        }
+        sm.setPrefabLibrary(nullptr);
+    }
+    // No library: an error, not a null dereference. IsLoaded is just false.
+    const std::string noLib = instantiateError(sm, "pe");
+    CHECK(noLib.rfind("Instantiate: ", 0) == 0 && noLib.find("library") != std::string::npos);
+    CHECK(sm.lua().safe_script("return pe:IsLoaded()").get<bool>() == false);
+    sm.setScene(nullptr);
+    fs::remove_all(root, ec);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -3942,6 +4033,7 @@ int main()
     sm.setAudioManager(&am);
 
     test_prefab_script_property(sm, pm, am);
+    test_instantiate_prefab_errors(sm);
     test_animator_lua_play_crossfade_reset_and_time(sm);
     test_animator_lua_layers(sm);
     test_animator_lua_ik(sm);

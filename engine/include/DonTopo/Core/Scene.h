@@ -22,6 +22,7 @@ namespace DonTopo
     class AudioManager;
     class AsyncAssetLoader;
     struct Mesh;
+    struct PrefabTemplate;   // PrefabLibrary.h (which includes this header)
 
     // Optional cache of meshes already loaded in RAM, indexed by sourcePath. It is
     // queried by scene loading (nodeFromJson) to skip the disk ReadFile of
@@ -288,6 +289,28 @@ namespace DonTopo
             // the root or the reconstruction fails.
             GameObject* cloneGameObject(GameObject* src, GameObject* parent,
                                         PhysicsManager& physics, AudioManager& audio);
+
+            // Builds a new instance of a Ready template as a child of parent (the
+            // scene root if nullptr), at the end of its children. Zero disk IO: the
+            // nodes come from t.memoryRoot, meshes from t.meshes (shared when their
+            // configuration matches, which the library guarantees), .mat files from
+            // t.mats, the hasBones probe seeded from t.meshes, and audio clips hit the
+            // AudioManager sound cache that t.warmAudio keeps alive.
+            //  - Every node gets a fresh scene id; prefabNode = its prefab-local id;
+            //    the root gets the link {t.key, no overrides}.
+            //  - pos / eulerDeg (Euler degrees, eulerAngleXYZ like Lua's Transform) are
+            //    WORLD space, as Unity's Instantiate(original, position, rotation,
+            //    parent); the root's scale stays the prefab's. nullptr keeps the
+            //    prefab root's own value, which is then LOCAL to parent (Unity's
+            //    Instantiate(original, parent)).
+            //  - A Camera or Audio Listener the scene already has wins: the instance's
+            //    one is dropped with a warning (one per scene, like insertFromJson).
+            // Render indices are left at -1: the caller registers the subtree on the
+            // GPU. nullptr (nothing built) if t is not Ready or the build failed;
+            // lastWarnings() says why.
+            GameObject* instantiatePrefab(const PrefabTemplate& t, GameObject* parent,
+                                          const glm::vec3* pos, const glm::vec3* eulerDeg,
+                                          PhysicsManager& physics, AudioManager& audio);
 
             // Collects the scene lights in the format the Renderer
             // consumes (setLights/setLightRadii). Pre-order from the root, and it
