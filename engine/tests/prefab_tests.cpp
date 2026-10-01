@@ -7,8 +7,12 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Renderer/Material.h"
 #include "DonTopo/Core/JobSystem.h"
+#include "DonTopo/Core/Platform.h"
 #include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <chrono>
 #include <set>
 #include <thread>
@@ -938,9 +942,10 @@ void testLibraryStaleResultDropped()
     CHECK(t && t->state == DonTopo::PrefabTemplate::State::Failed, "old-root result did not resurrect the key");
 }
 
-// Mesh results of a template dropped by retainOnly are ignored; a fresh request
-// of the same key loads cleanly.
-void testLibraryRetainOnlyIgnoresLateMeshes()
+// A key dropped by retainOnly while its mesh is loading can be requested again
+// and loads cleanly (the cancel itself is checked by
+// testLibraryRetainOnlyCancelsMeshLoads).
+void testLibraryReRequestAfterRetainOnly()
 {
     TempRoot root("dt_prefab_lib_retain");
     nlohmann::json p = plainNode(1, "P");
@@ -991,8 +996,10 @@ void testLibraryUpdateFromMemory()
     CHECK(readyCalls == 1 && lib.readCount() == 1, "onReady fired, file not read again");
 }
 
-// Destroying the library with reads and mesh loads in flight must not let any
-// worker write into freed memory. The JobSystem outlives it and is drained after.
+// Destroying the library while its mesh job is RUNNING must wait for it: the job
+// runs on the library's AsyncAssetLoader. One worker, nothing else queued, so
+// "the pool is idle right after the destructor" means the destructor waited for
+// the running ReadFile (without the wait the job is still mid-FBX, or crashes).
 void testLibraryDestroyedWithJobsInFlight()
 {
     namespace fs = std::filesystem;
@@ -1002,21 +1009,256 @@ void testLibraryDestroyedWithJobsInFlight()
     nlohmann::json p = plainNode(1, "P");
     p["mesh"] = { {"sourcePath", maw.string()}, {"name", "Maw"} };
     writePrefabFile(root.p / "Prefabs" / "P.prefab", p);
-    writePrefabFile(root.p / "Prefabs" / "Q.prefab", plainNode(1, "Q"));
 
     DonTopo::JobSystem js;
-    js.start(2);
+    js.start(1);
     {
         auto lib = std::make_unique<DonTopo::PrefabLibrary>(js, root.str());
         lib->request("Prefabs/P.prefab");
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         while (lib->readCount() < 1 && std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        lib->pump(audio(), 0.0f);           // P's mesh load is now in flight
-        lib->request("Prefabs/Q.prefab");   // and a read
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));   // read result posted, worker free
+        lib->pump(audio(), 0.0f);                                      // P's mesh job submitted
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));   // and started (the FBX takes far longer)
+        CHECK(lib->meshLoadsPending() == 1 && !js.idle(), "the mesh job is in flight before destruction");
     }
+    CHECK(js.idle(), "the destructor waited for the running mesh job");
     js.shutdown();
-    CHECK(true, "no crash");
+}
+
+// retainOnly cancels the loader requests of the dropped templates. The single
+// worker is held by a blocker, so the mesh job is still queued when retainOnly
+// runs: only a real cancel brings the loader's pending count to 0 (the serial
+// check alone would leave it at 1 until the result is delivered).
+void testLibraryRetainOnlyCancelsMeshLoads()
+{
+    TempRoot root("dt_prefab_lib_retain_cancel");
+    nlohmann::json p = plainNode(1, "P");
+    p["mesh"] = { {"sourcePath", writeTriangleObj(root.p / "Models" / "tri.obj")}, {"name", "tri"} };
+    writePrefabFile(root.p / "Prefabs" / "P.prefab", p);
+
+    DonTopo::JobSystem js;
+    js.start(1);
+    DonTopo::PrefabLibrary lib(js, root.str());
+    lib.request("Prefabs/P.prefab");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (lib.readCount() < 1 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::atomic<bool> release{ false };
+    js.submit([&release] { while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(1)); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));   // the blocker holds the worker
+    lib.pump(audio(), 0.0f);                                       // mesh request queued behind it
+    CHECK(lib.meshLoadsPending() == 1, "mesh request queued");
+    lib.retainOnly({});
+    CHECK(lib.meshLoadsPending() == 0, "retainOnly cancelled the mesh request");
+    release = true;
+    js.shutdown();
+}
+
+// An onReady callback that clears the library must stop the recursive requests
+// of the template that just became Ready.
+void testLibraryClearInOnReadyStopsRecursion()
+{
+    TempRoot root("dt_prefab_lib_clear_onready");
+    nlohmann::json a = plainNode(1, "A");
+    a["scripts"] = scriptRef("other", "Prefabs/B.prefab");
+    writePrefabFile(root.p / "Prefabs" / "A.prefab", a);
+    writePrefabFile(root.p / "Prefabs" / "B.prefab", plainNode(1, "B"));
+
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::PrefabLibrary lib(js, root.str());
+    lib.setOnReady([&](const DonTopo::PrefabTemplate&) { lib.clear(); });
+    lib.request("Prefabs/A.prefab");
+    CHECK(settle(lib), "library settles");
+    CHECK(lib.find("Prefabs/A.prefab") == nullptr && lib.find("Prefabs/B.prefab") == nullptr,
+          "nothing requested after the callback cleared the library");
+    CHECK(lib.readCount() == 1, "B never read");
+}
+
+void testLibraryNormalizeKeyRootCase()
+{
+    if (DonTopo::platform::currentOs() != DonTopo::platform::Os::Windows) return;   // case-sensitive paths
+    TempRoot root("dt_prefab_lib_case");
+    DonTopo::JobSystem js;
+    DonTopo::PrefabLibrary lib(js, root.str());
+    std::string lowerRoot = root.str();
+    std::transform(lowerRoot.begin(), lowerRoot.end(), lowerRoot.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    CHECK(lowerRoot != root.str(), "the temp root has upper-case letters to lower");
+    CHECK(lib.normalizeKey(lowerRoot + "\\Prefabs\\P.prefab") == "Prefabs/P.prefab",
+          "the root prefix is compared case-insensitively on Windows");
+}
+
+// A mesh job the JobSystem refuses must fail the template, not leave it Loading.
+void testLibraryRefusedMeshJobFails()
+{
+    TempRoot root("dt_prefab_lib_refused");
+    DonTopo::JobSystem js;   // never started: every submit is refused
+    DonTopo::PrefabLibrary lib(js, root.str());
+    nlohmann::json p = plainNode(1, "P");
+    p["mesh"] = { {"sourcePath", writeTriangleObj(root.p / "Models" / "tri.obj")}, {"name", "tri"} };
+    lib.updateFromMemory("Prefabs/P.prefab",
+                         nlohmann::json{ {"version", 1}, {"type", "prefab"}, {"root", p} }, audio());
+    const auto* t = lib.find("Prefabs/P.prefab");
+    CHECK(t && t->state == DonTopo::PrefabTemplate::State::Failed &&
+          t->error == "the job system is not running", "refused mesh job -> Failed");
+}
+
+// updateFromMemory reuses what the old version already had (same mesh object,
+// Ready on return) and loads on workers what it did not (a new .mat and mesh).
+void testLibraryUpdateFromMemoryReuseAndAsync()
+{
+    namespace fs = std::filesystem;
+    TempRoot root("dt_prefab_lib_update_meshes");
+    const std::string tri  = writeTriangleObj(root.p / "Models" / "tri.obj");
+    const std::string tri2 = writeTriangleObj(root.p / "Models" / "tri2.obj");
+    fs::create_directories(root.p / "Materials");
+    DonTopo::MaterialAsset mat;
+    mat.metallic = 0.5f;
+    CHECK(DonTopo::saveMaterialAsset(root.p / "Materials" / "n.mat", mat), ".mat written");
+    nlohmann::json p = plainNode(1, "P");
+    p["mesh"] = { {"sourcePath", tri}, {"name", "tri"} };
+    writePrefabFile(root.p / "Prefabs" / "P.prefab", p);
+    auto file = [](const nlohmann::json& r) { return nlohmann::json{ {"version", 1}, {"type", "prefab"}, {"root", r} }; };
+
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::PrefabLibrary lib(js, root.str());
+    lib.request("Prefabs/P.prefab");
+    CHECK(settle(lib), "library settles");
+    const auto* t = lib.find("Prefabs/P.prefab");
+    if (!t || t->state != DonTopo::PrefabTemplate::State::Ready) { CHECK(false, "P Ready"); return; }
+    const DonTopo::Mesh* original = t->meshes.at(tri).get();
+
+    p["name"] = "Renamed";
+    lib.updateFromMemory("Prefabs/P.prefab", file(p), audio());
+    CHECK(t->state == DonTopo::PrefabTemplate::State::Ready && t->memoryRoot["name"] == "Renamed",
+          "reuse path: Ready on return");
+    CHECK(t->meshes.count(tri) && t->meshes.at(tri).get() == original && lib.meshLoadsPending() == 0,
+          "reuse path: same mesh object, nothing requested");
+
+    nlohmann::json child = plainNode(2, "Child");
+    child["mesh"] = { {"sourcePath", tri2}, {"name", "tri2"},
+                      {"materials", nlohmann::json::array({ { {"index", 0}, {"matAsset", "Materials/n.mat"} } })} };
+    p["children"].push_back(child);
+    lib.updateFromMemory("Prefabs/P.prefab", file(p), audio());
+    CHECK(t->state == DonTopo::PrefabTemplate::State::Loading, "async path: Loading on return");
+    CHECK(settle(lib), "library settles");
+    CHECK(t->state == DonTopo::PrefabTemplate::State::Ready, "async path: Ready after pumping");
+    CHECK(t->meshes.count(tri2) == 1 && t->meshes.count(tri) && t->meshes.at(tri).get() == original,
+          "new mesh loaded, old one kept");
+    const std::string matKey = t->memoryRoot["children"][0]["mesh"]["materials"][0]["matAsset"].get<std::string>();
+    CHECK(t->mats.count(matKey) == 1 && t->mats.at(matKey).metallic == 0.5f, "new .mat loaded on a worker");
+    CHECK(lib.readCount() == 1, "the .prefab itself never read again");
+}
+
+void testLibraryWarmsAudio()
+{
+    namespace fs = std::filesystem;
+    if (!audio().available()) { std::printf("SKIP testLibraryWarmsAudio (FMOD not available)\n"); return; }
+    TempRoot root("dt_prefab_lib_audio");
+    const fs::path clip = root.p / "audio.mp3";
+    fs::copy_file("assets/audio.mp3", clip);
+    nlohmann::json p = plainNode(1, "P");
+    p["audioClip"] = { {"path", clip.string()}, {"is3D", false}, {"loop", false} };
+    writePrefabFile(root.p / "Prefabs" / "P.prefab", p);
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::PrefabLibrary lib(js, root.str());
+    lib.request("Prefabs/P.prefab");
+    CHECK(settle(lib), "library settles");
+    const auto* t = lib.find("Prefabs/P.prefab");
+    CHECK(t && t->state == DonTopo::PrefabTemplate::State::Ready && t->warmAudio.size() == 1,
+          "Ready template keeps its audio clip warm");
+}
+
+nlohmann::json sourceJson(const DonTopo::AnimationSource& s)
+{
+    return { {"path", s.path}, {"builtin", s.builtin}, {"clips", s.clipNames} };
+}
+
+// updateFromMemory must configure the RAW loader mesh, not the one already
+// configured for the previous version (applyAnimationSourceConfig only appends):
+// otherwise swapped or removed sources leave stale clips, and nodeFromJson sees a
+// mismatch at Instantiate and goes to disk.
+void testLibraryUpdateReconfiguresAnimationSources()
+{
+    namespace fs = std::filesystem;
+    TempRoot root("dt_prefab_lib_anim_update");
+    const fs::path maw  = root.p / "Models" / "Maw J Laygo.fbx";
+    const fs::path idle = root.p / "Models" / "standing idle 01.fbx";
+    const fs::path run  = root.p / "Models" / "standing run forward.fbx";
+    fs::copy_file("assets/animatedCharacter/Maw J Laygo.fbx", maw);
+    fs::copy_file("assets/animatedCharacter/standing idle 01.fbx", idle);
+    fs::copy_file("assets/animatedCharacter/standing run forward.fbx", run);
+    auto node = [&](const nlohmann::json* sources) {
+        nlohmann::json n = plainNode(1, "C");
+        n["mesh"] = { {"sourcePath", maw.string()}, {"name", "Maw"}, {"skinned", true} };
+        if (sources) n["mesh"]["animationSources"] = *sources;
+        return n;
+    };
+    auto file = [](const nlohmann::json& r) { return nlohmann::json{ {"version", 1}, {"type", "prefab"}, {"root", r} }; };
+
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::PrefabLibrary lib(js, root.str());
+
+    // The clip names each source gets, as an editor-saved file would carry them.
+    const nlohmann::json all = nlohmann::json::array({ { {"path", maw.string()}, {"builtin", true} },
+                                                       { {"path", idle.string()}, {"builtin", false} },
+                                                       { {"path", run.string()}, {"builtin", false} } });
+    writePrefabFile(root.p / "Prefabs" / "All.prefab", node(&all));
+    lib.request("Prefabs/All.prefab");
+    CHECK(settle(lib), "library settles");
+    const auto* tAll = lib.find("Prefabs/All.prefab");
+    const auto* skAll = tAll && tAll->meshes.count(maw.string())
+                      ? dynamic_cast<const DonTopo::SkinnedMesh*>(tAll->meshes.at(maw.string()).get()) : nullptr;
+    if (!skAll || skAll->animationSources.size() != 3) { CHECK(false, "three sources configured"); return; }
+    const nlohmann::json s0 = sourceJson(skAll->animationSources[0]);
+    const nlohmann::json s1 = sourceJson(skAll->animationSources[1]);
+    const nlohmann::json s2 = sourceJson(skAll->animationSources[2]);
+
+    auto meshOf = [&]() -> const DonTopo::SkinnedMesh* {
+        const auto* t = lib.find("Prefabs/P.prefab");
+        if (!t || t->state != DonTopo::PrefabTemplate::State::Ready || !t->meshes.count(maw.string())) return nullptr;
+        return dynamic_cast<const DonTopo::SkinnedMesh*>(t->meshes.at(maw.string()).get());
+    };
+    // Exactly these sources (what nodeFromJson checks to SHARE the mesh) and no
+    // clip that belongs to none of them.
+    auto exactly = [&](const nlohmann::json& sources) {
+        const auto* m = meshOf();
+        if (!m || !DonTopo::meshMatchesAnimationConfig(*m, sources)) return false;
+        size_t named = 0;
+        for (const auto& s : m->animationSources) named += s.clipNames.size();
+        return named == m->animationClips.size();
+    };
+
+    const nlohmann::json first = nlohmann::json::array({ s0, s1 });
+    writePrefabFile(root.p / "Prefabs" / "P.prefab", node(&first));
+    lib.request("Prefabs/P.prefab");
+    CHECK(settle(lib), "library settles");
+    CHECK(exactly(first), "initial [builtin, idle]");
+
+    const nlohmann::json swapped = nlohmann::json::array({ s0, s2 });
+    lib.updateFromMemory("Prefabs/P.prefab", file(node(&swapped)), audio());
+    CHECK(settle(lib), "library settles");
+    CHECK(exactly(swapped), "[builtin, idle] -> [builtin, run]: no stale idle clips");
+
+    lib.updateFromMemory("Prefabs/P.prefab", file(node(nullptr)), audio());
+    CHECK(settle(lib), "library settles");
+    const auto* m = meshOf();
+    CHECK(m && m->animationSources.size() == 1 && m->animationSources[0].builtin,
+          "no animationSources key -> only the builtin source (what nodeFromJson shares)");
+
+    const nlohmann::json onlyBuiltin = nlohmann::json::array({ s0 });
+    lib.updateFromMemory("Prefabs/P.prefab", file(node(&first)), audio());
+    CHECK(settle(lib), "library settles");
+    lib.updateFromMemory("Prefabs/P.prefab", file(node(&onlyBuiltin)), audio());
+    CHECK(settle(lib), "library settles");
+    CHECK(exactly(onlyBuiltin), "[builtin, idle] -> [builtin]: removed source leaves no clips");
 }
 } // namespace
 
@@ -1054,10 +1296,17 @@ int main()
     testLibraryFailedStates();
     testLibraryRecursiveReferences();
     testLibraryStaleResultDropped();
-    testLibraryRetainOnlyIgnoresLateMeshes();
+    testLibraryReRequestAfterRetainOnly();
     testLibraryUpdateFromMemory();
     testLibraryLoadsTemplate();
     testLibraryDestroyedWithJobsInFlight();
+    testLibraryRetainOnlyCancelsMeshLoads();
+    testLibraryClearInOnReadyStopsRecursion();
+    testLibraryNormalizeKeyRootCase();
+    testLibraryRefusedMeshJobFails();
+    testLibraryUpdateFromMemoryReuseAndAsync();
+    testLibraryWarmsAudio();
+    testLibraryUpdateReconfiguresAnimationSources();
     if (g_failures) { std::fprintf(stderr, "%d failure(s)\n", g_failures); return 1; }
     std::printf("prefab_tests OK\n");
     return 0;

@@ -102,7 +102,21 @@ namespace DonTopo
             auto lease = std::make_shared<JobLease>(this);
             // path by copy: by reference it would dangle as soon as the caller
             // left scope, and it would not show until the worker started.
-            m_jobs.submitWithId(id, [this, path, lease] { runJob(path); });
+            if (!m_jobs.submitWithId(id, [this, path, lease] { runJob(path); }))
+            {
+                // Refused (pool not started or stopping): no job will ever serve
+                // this group, so undo it and report 0 instead of leaving a waiter
+                // that never completes. A waiter that joined in between was
+                // waiting on this same job, so it is undone with the group.
+                std::lock_guard<std::mutex> lock(m_mutex);
+                auto it = m_groups.find(path);
+                if (it != m_groups.end() && it->second.jobId == id)
+                {
+                    m_pending -= static_cast<int>(it->second.waiters.size());
+                    m_groups.erase(it);
+                }
+                return 0;
+            }
         }
         return id;
     }

@@ -3,6 +3,7 @@
 #include "DonTopo/Audio/AudioBus.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Core/Platform.h"
 #include "DonTopo/Files/FileManager.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
@@ -187,16 +188,33 @@ namespace DonTopo
         if (path.empty()) return {};
         std::string s = path;
         std::replace(s.begin(), s.end(), '\\', '/');
-        fs::path p = fs::path(s).lexically_normal();
+        const fs::path p = fs::path(s).lexically_normal();
+        const std::string g = p.generic_string();
         if (p.is_absolute() && !m_assetRoot.empty())
         {
             std::string r = m_assetRoot;
             std::replace(r.begin(), r.end(), '\\', '/');
-            const fs::path rel = p.lexically_relative(fs::path(r).lexically_normal());
-            if (!rel.empty() && *rel.begin() != ".." && rel != ".")
-                p = rel;
+            r = fs::path(r).lexically_normal().generic_string();
+            while (!r.empty() && r.back() == '/') r.pop_back();
+            // Plain prefix test on the normalized strings. lexically_relative
+            // compares elements case-sensitively, but on Windows "c:/users" and
+            // "C:/Users" are the same folder, and both spellings reach us (a
+            // dialog, a drop, a stored path).
+            if (!r.empty() && g.size() > r.size() + 1 && g[r.size()] == '/')
+            {
+                const bool caseInsensitive = platform::currentOs() == platform::Os::Windows;
+                bool same = true;
+                for (size_t i = 0; same && i < r.size(); ++i)
+                {
+                    same = caseInsensitive
+                         ? std::tolower(static_cast<unsigned char>(g[i])) ==
+                           std::tolower(static_cast<unsigned char>(r[i]))
+                         : g[i] == r[i];
+                }
+                if (same) return g.substr(r.size() + 1);
+            }
         }
-        return p.generic_string();
+        return g;
     }
 
     PrefabLibrary::Entry* PrefabLibrary::liveEntry(const std::string& key, uint64_t serial)
@@ -295,14 +313,30 @@ namespace DonTopo
         submitLoad(key, e.serial, nullptr, {});
     }
 
+    template <typename Pred>
+    void PrefabLibrary::dropTickets(const Pred& drop)
+    {
+        for (auto it = m_tickets.begin(); it != m_tickets.end();)
+        {
+            if (!drop(it->second)) { ++it; continue; }
+            // Nobody will consume this result: free the loader's work too. A job
+            // already running finishes, and its result finds no ticket.
+            if (it->second.loaderJob != 0) m_loader->cancel(it->second.loaderJob);
+            it = m_tickets.erase(it);
+        }
+    }
+
     void PrefabLibrary::fail(Entry& e, const std::string& error)
     {
+        const std::string key = e.t.key;
+        dropTickets([&](const MeshTicket& t) { return t.key == key; });
         e.t.state = PrefabTemplate::State::Failed;
         e.t.error = error.empty() ? std::string("unknown error") : error;
         e.t.memoryRoot = nlohmann::json();
         e.t.meshes.clear();
         e.t.mats.clear();
         e.t.warmAudio.clear();
+        e.rawMeshes.clear();
         e.outstanding = 0;
     }
 
@@ -316,37 +350,57 @@ namespace DonTopo
         // no longer uses are dropped; the ones it still uses are not reloaded.
         std::unordered_set<std::string> wanted;
         for (const MeshRequest& m : meshes) wanted.insert(meshCacheKey(m.sourcePath, m.piece));
-        std::erase_if(e.t.meshes, [&](const auto& kv) { return !wanted.count(kv.first); });
+        std::erase_if(e.t.meshes,   [&](const auto& kv) { return !wanted.count(kv.first); });
+        std::erase_if(e.rawMeshes,  [&](const auto& kv) { return !wanted.count(kv.first); });
 
         for (MeshRequest& m : meshes)
         {
             if (e.t.state != PrefabTemplate::State::Loading) return;   // failed meanwhile
             const std::string meshKey = meshCacheKey(m.sourcePath, m.piece);
-            if (const auto it = e.t.meshes.find(meshKey); it != e.t.meshes.end())
+            if (const auto it = e.rawMeshes.find(meshKey); it != e.rawMeshes.end())
             {
-                ensureAnimationConfig(e, meshKey, it->second, m.animationSources);
+                const std::shared_ptr<const Mesh> raw = it->second;
+                configureMesh(e, meshKey, raw, m.animationSources);
                 continue;
             }
             const uint64_t ticket = m_nextTicket++;
-            m_tickets[ticket] = MeshTicket{ e.t.key, e.serial, meshKey, std::move(m.animationSources) };
+            const JobSystem::JobId job = m_loader->requestMesh(m.sourcePath, ticket, m.piece);
+            if (job == 0)
+            {
+                fail(e, "the job system is not running");
+                return;
+            }
+            m_tickets[ticket] = MeshTicket{ e.t.key, e.serial, meshKey, std::move(m.animationSources), job };
             ++e.outstanding;
-            m_loader->requestMesh(m.sourcePath, ticket, m.piece);
         }
         finishIfDone(e, audio);
     }
 
-    void PrefabLibrary::ensureAnimationConfig(Entry& e, const std::string& meshKey,
-                                              const std::shared_ptr<const Mesh>& mesh,
-                                              const nlohmann::json& animationSources)
+    void PrefabLibrary::configureMesh(Entry& e, const std::string& meshKey,
+                                      const std::shared_ptr<const Mesh>& raw,
+                                      const nlohmann::json& animationSources)
     {
         // No key: nodeFromJson shares a mesh whose only source is its own builtin
-        // one, which is what the loader returns. Nothing to do.
-        if (!animationSources.is_array()) return;
-        const auto* sk = dynamic_cast<const SkinnedMesh*>(mesh.get());
-        if (!sk || meshMatchesAnimationConfig(*sk, animationSources)) return;
+        // one, which is exactly the raw loader mesh. Same for a static mesh and for
+        // a raw skinned mesh that already matches the requested sources.
+        const auto* sk = dynamic_cast<const SkinnedMesh*>(raw.get());
+        if (!animationSources.is_array() || !sk || meshMatchesAnimationConfig(*sk, animationSources))
+        {
+            e.t.meshes[meshKey] = raw;
+            return;
+        }
+        // The configured mesh of the previous version already matches (an Apply
+        // that did not touch the sources): keep it, it may be shared by instances.
+        if (const auto it = e.t.meshes.find(meshKey); it != e.t.meshes.end())
+            if (const auto* cur = dynamic_cast<const SkinnedMesh*>(it->second.get()))
+                if (meshMatchesAnimationConfig(*cur, animationSources))
+                    return;
+        // Otherwise nothing stale may stay visible while the new config is built.
+        e.t.meshes.erase(meshKey);
+        const std::shared_ptr<const Mesh>& mesh = raw;
 
-        // applyAnimationSourceConfig reads the external FBX files: a worker job,
-        // on a copy (the cached mesh may already be shared with live instances).
+        // applyAnimationSourceConfig reads the external FBX files and only APPENDS
+        // sources: a worker job, on a copy of the RAW mesh.
         std::vector<AnimationSourceConfig> configs = animationConfigs(animationSources);
         const std::shared_ptr<Mailbox> mailbox = m_mailbox;
         const std::string key    = e.t.key;
@@ -415,9 +469,12 @@ namespace DonTopo
         e.t.generation = m_nextGeneration++;
 
         // Copied before the callback: it may clear() or retainOnly() and leave `e`
-        // dangling.
+        // dangling. If it cleared the library (or changed the root), these
+        // references belong to a library state that no longer exists.
         const std::vector<std::string> refs = collectReferences(e.t.memoryRoot);
+        const uint64_t clearsBefore = m_clearCount;
         if (m_onReady) m_onReady(e.t);
+        if (m_clearCount != clearsBefore) return;
         for (const std::string& r : refs)
             request(r);
     }
@@ -467,11 +524,16 @@ namespace DonTopo
             }
             // Multi-piece static model: every piece of the file is already in RAM;
             // keep them all so sibling pieces need no request of their own.
+            // (Static pieces: no animation config, raw == final.)
             for (size_t i = 0; i < m.pieceMeshes.size(); ++i)
-                e->t.meshes.try_emplace(meshCacheKey(m.path, static_cast<int>(i)), m.pieceMeshes[i]);
-            std::shared_ptr<const Mesh> mesh = std::move(m.mesh);
-            e->t.meshes[ticket.meshKey] = mesh;
-            ensureAnimationConfig(*e, ticket.meshKey, mesh, ticket.animationSources);
+            {
+                const std::string pieceKey = meshCacheKey(m.path, static_cast<int>(i));
+                e->rawMeshes.try_emplace(pieceKey, m.pieceMeshes[i]);
+                e->t.meshes.try_emplace(pieceKey, m.pieceMeshes[i]);
+            }
+            const std::shared_ptr<const Mesh> raw = std::move(m.mesh);
+            e->rawMeshes[ticket.meshKey] = raw;
+            configureMesh(*e, ticket.meshKey, raw, ticket.animationSources);
             finishIfDone(*e, audio);
         }
     }
@@ -495,6 +557,9 @@ namespace DonTopo
     {
         const std::string key = normalizeKey(path);
         if (key.empty()) return;
+        // Mesh loads of the old version are no longer wanted under the new serial
+        // (a mesh the new version still uses is requested again below).
+        dropTickets([&](const MeshTicket& t) { return t.key == key; });
         Entry& e = m_entries[key];
         e.t.key       = key;
         e.t.state     = PrefabTemplate::State::Loading;
@@ -522,7 +587,11 @@ namespace DonTopo
             submitLoad(key, e.serial, &root, std::move(mats));
             return;
         }
-        startMeshes(e, meshRequests(root), std::move(mats), std::move(root), audio);
+        // Scanned BEFORE the call: argument evaluation order is unspecified, and
+        // MSVC builds the moved-into `root` parameter first, leaving
+        // meshRequests(root) an empty tree.
+        std::vector<MeshRequest> meshes = meshRequests(root);
+        startMeshes(e, std::move(meshes), std::move(mats), std::move(root), audio);
     }
 
     void PrefabLibrary::retainOnly(const std::set<std::string>& keys)
@@ -530,12 +599,12 @@ namespace DonTopo
         std::unordered_set<std::string> keep;
         for (const std::string& k : keys) keep.insert(normalizeKey(k));
         std::erase_if(m_entries, [&](const auto& kv) { return !keep.count(kv.first); });
-        // Their in-flight mesh loads come back to a missing ticket and are ignored.
-        std::erase_if(m_tickets, [&](const auto& kv) { return !keep.count(kv.second.key); });
+        dropTickets([&](const MeshTicket& t) { return !keep.count(t.key); });
     }
 
     void PrefabLibrary::clear()
     {
+        ++m_clearCount;
         m_entries.clear();
         m_tickets.clear();
         m_loader->cancelAllPending();
@@ -550,6 +619,11 @@ namespace DonTopo
         std::unordered_set<std::string> seen;
         collectRefs(anyTree, out, seen);
         return out;
+    }
+
+    int PrefabLibrary::meshLoadsPending() const
+    {
+        return m_loader->pending();
     }
 
     int PrefabLibrary::readCount() const

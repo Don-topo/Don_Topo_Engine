@@ -72,6 +72,8 @@ namespace DonTopo
             // they run runJob() on `this`, so returning earlier would let a worker
             // lock a destroyed mutex and post into a freed mailbox. A cancelled job
             // still queued releases its lease when the worker drops it.
+            // The JobSystem must OUTLIVE the loader (or be shut down before it):
+            // the wait relies on its workers draining or dropping our jobs.
             ~AsyncAssetLoader();
             AsyncAssetLoader(const AsyncAssetLoader&)            = delete;
             AsyncAssetLoader& operator=(const AsyncAssetLoader&) = delete;
@@ -82,6 +84,8 @@ namespace DonTopo
             // memory. piece is the piece of the file (ModelLoader::load(path,
             // piece) for the synchronous path); 0 = the whole file or its
             // first/only mesh, same as today.
+            // Returns 0 if the JobSystem refused the job (not started or
+            // stopping): the request is undone and nothing will be delivered.
             JobSystem::JobId requestMesh(const std::string& path, uint64_t targetId, int piece = 0);
 
             void cancel(JobSystem::JobId id);

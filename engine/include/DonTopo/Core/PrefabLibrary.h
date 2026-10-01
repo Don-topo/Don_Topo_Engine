@@ -51,7 +51,9 @@ namespace DonTopo
     // result whose serial is not the entry's current one (the key was cleared,
     // retained out, reloaded or already Failed) is dropped. Workers only hold a
     // shared mailbox, never the library, so destroying the library with jobs in
-    // flight is safe.
+    // flight is safe -- PROVIDED the JobSystem outlives the library (declare it
+    // first, or shut it down before): the library's AsyncAssetLoader waits in its
+    // destructor for its running jobs, which needs live workers to finish them.
     class PrefabLibrary
     {
         public:
@@ -98,7 +100,8 @@ namespace DonTopo
             // values inside prefab-link overrides. Unique, in first-seen order.
             static std::vector<std::string> collectReferences(const nlohmann::json& anyTree);
 
-            int readCount() const;   // tests: .prefab files read from disk
+            int readCount() const;          // tests: .prefab files read from disk
+            int meshLoadsPending() const;   // tests: mesh requests the loader has not delivered
 
             // Worker -> main thread messages. Public only so the .cpp's free
             // functions can name them; not part of the API.
@@ -131,27 +134,38 @@ namespace DonTopo
             struct Entry
             {
                 PrefabTemplate t;
+                // The meshes exactly as the loader returned them, before any
+                // animation-source config. updateFromMemory configures a copy of
+                // THESE: applyAnimationSourceConfig only appends, so configuring
+                // the already configured t.meshes again would keep stale clips.
+                PreloadedMeshCache rawMeshes;
                 uint64_t       serial      = 0;
                 int            outstanding = 0;   // mesh loads + animation jobs not back yet
             };
             struct MeshTicket
             {
-                std::string    key;
-                uint64_t       serial = 0;
-                std::string    meshKey;
-                nlohmann::json animationSources;
+                std::string      key;
+                uint64_t         serial = 0;
+                std::string      meshKey;
+                nlohmann::json   animationSources;
+                JobSystem::JobId loaderJob = 0;   // to cancel it when the ticket is dropped
             };
 
             Entry* liveEntry(const std::string& key, uint64_t serial);
             void   startMeshes(Entry& e, std::vector<MeshRequest> meshes, MaterialAssetCache mats,
                                nlohmann::json root, AudioManager& audio);
-            void   ensureAnimationConfig(Entry& e, const std::string& meshKey,
-                                         const std::shared_ptr<const Mesh>& mesh,
-                                         const nlohmann::json& animationSources);
+            // Sets e.t.meshes[meshKey] from the RAW loader mesh: as is when it already
+            // matches the node's animation sources, else from a worker job that
+            // configures a copy.
+            void   configureMesh(Entry& e, const std::string& meshKey,
+                                 const std::shared_ptr<const Mesh>& raw,
+                                 const nlohmann::json& animationSources);
             void   fail(Entry& e, const std::string& error);
             void   finishIfDone(Entry& e, AudioManager& audio);
             void   submitLoad(const std::string& key, uint64_t serial, const nlohmann::json* inMemoryRoot,
                               MaterialAssetCache knownMats);
+            // Erases (and cancels in the loader) every ticket for which drop(ticket) is true.
+            template <typename Pred> void dropTickets(const Pred& drop);
 
             JobSystem&                          m_jobs;
             std::string                         m_assetRoot;
@@ -163,5 +177,8 @@ namespace DonTopo
             uint64_t                            m_nextSerial     = 1;
             uint64_t                            m_nextTicket     = 1;
             uint64_t                            m_nextGeneration = 1;
+            // Bumped by clear(): finishIfDone compares it around the onReady
+            // callback, which may clear the library (or change its root).
+            uint64_t                            m_clearCount     = 0;
     };
 }
