@@ -35,6 +35,9 @@ const std::vector<std::string>& baseSymbols()
         // DestroyGameObject(entity) — destroys the GameObject and its subtree in
         // Play (deferred to end of frame). See Scene / README.
         "DestroyGameObject",
+        // Prefab() — class-table default that declares a prefab slot; the instance
+        // receives a Prefab with .path and :IsLoaded().
+        "Prefab", "Prefab.path", "Prefab:IsLoaded",
 
         // self — script instance (implicit parameter of the
         // Script:Method functions). 'self.entity' is the only field injected by
@@ -583,6 +586,9 @@ const std::unordered_map<std::string, DocEntry>& docTable()
             {"Log.Error", {"(message)", "Writes to the Log Console with an [ERROR] prefix."}},
             {"print", {"(...)", "Lua's print, redirected to the Log Console."}},
             {"DestroyGameObject", {"(entity: Entity)", "Destroys the object and its subtree at the end of the frame."}},
+            {"Prefab", {"() -> Prefab", "Declares a prefab slot in the class table (enemy = Prefab()); assign the .prefab in the Properties panel."}},
+            {"Prefab.path", {"", "Project-relative path of the assigned prefab; read-only."}},
+            {"Prefab:IsLoaded", {"() -> boolean", "true if the prefab asset is loaded and ready."}},
 
             // --- Input ---
             {"Input.IsKeyDown", {"(key) -> boolean", "Key held. Use the Key table."}},

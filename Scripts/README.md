@@ -103,6 +103,18 @@ Any `number`/`boolean`/`string` field in the class table is detected as a prop a
 shows up in Properties (DragInt for Lua integers, DragFloat for floats). Only the values
 edited in the editor (the ones that differ from the default) are serialized in the scene.
 
+A fourth prop type is a **prefab slot**: declare it with `Prefab()` as the default,
+e.g. `Spawner = { enemy = Prefab(), speed = 3 }`. Properties shows the slot with the
+assigned `.prefab` path (or `None (Prefab)`); the path is stored project-relative in the
+scene. In Play, `self.enemy` is a `Prefab` userdata, or `false` while nothing is assigned
+(falsy, so `if self.enemy then` works as with `nil`).
+
+| Method/prop | Description |
+|---|---|
+| `Prefab()` | Class-table default only: marks the field as a prefab slot. |
+| `prefab.path` | Project-relative path of the assigned prefab (read-only). |
+| `prefab:IsLoaded() -> boolean` | Whether the prefab asset is loaded and ready. |
+
 ## Hot reload
 
 Editing a loaded `.lua` while the engine runs reloads it (~1 s polling), keeping the

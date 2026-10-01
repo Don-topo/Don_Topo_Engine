@@ -3838,6 +3838,94 @@ static void test_animation_event_reaches_lua(ScriptManager& sm)
     sm.onPlayStop();
 }
 
+// Prefab() script property: detection, scene round-trip and the Lua instance.
+static void test_prefab_script_property(ScriptManager& sm, PhysicsManager& pm, AudioManager& am)
+{
+    // The class name is the file stem, so the file must be called Spawner.lua.
+    std::error_code ec;
+    const std::filesystem::path dir = "__prefab_prop_scripts";
+    std::filesystem::create_directories(dir, ec);
+    const std::filesystem::path lua = dir / "Spawner.lua";
+    {
+        std::ofstream f(lua);
+        f << "Spawner = { enemy = Prefab(), speed = 3 }\n";
+    }
+    CHECK(sm.loadScript(lua));
+    std::filesystem::remove_all(dir, ec);
+    if (!sm.hasClass("Spawner")) return;
+
+    // Detection: the sentinel becomes a PrefabRef prop, plain numbers stay numbers.
+    const ScriptClass& cls = sm.getRegistry().at("Spawner");
+    bool foundEnemy = false, foundSpeed = false;
+    for (const ScriptProp& p : cls.props)
+    {
+        if (p.name == "enemy")
+        {
+            foundEnemy = true;
+            CHECK(std::holds_alternative<PrefabRef>(p.defaultValue));
+            CHECK(std::get<PrefabRef>(p.defaultValue).path.empty());
+        }
+        if (p.name == "speed")
+        {
+            foundSpeed = true;
+            CHECK(std::holds_alternative<double>(p.defaultValue));
+        }
+    }
+    CHECK(foundEnemy);
+    CHECK(foundSpeed);
+
+    // Scene round-trip.
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Spawn");
+    auto comp = std::make_unique<ScriptComponent>("Spawner", go);
+    comp->overrides["enemy"] = PrefabRef{ "Prefabs/Enemy.prefab" };
+    go->addScript(std::move(comp));
+    nlohmann::json j = scene.toJson();
+    const std::string dumped = j.dump();
+    CHECK(dumped.find("\"prefab\":\"Prefabs/Enemy.prefab\"") != std::string::npos);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool roundTripped = false;
+    loaded.traverse([&](GameObject* g) {
+        for (const auto& s : g->getScripts())
+        {
+            auto it = s->overrides.find("enemy");
+            if (it != s->overrides.end() && std::holds_alternative<PrefabRef>(it->second))
+                roundTripped = std::get<PrefabRef>(it->second).path == "Prefabs/Enemy.prefab";
+        }
+    });
+    CHECK(roundTripped);
+
+    // Instance: LuaPrefab with the path; nil without an override.
+    std::map<std::string, ScriptValue> ov;
+    ov["enemy"] = PrefabRef{ "Prefabs/Enemy.prefab" };
+    sol::table inst = sm.createInstance("Spawner", ov);
+    CHECK(inst.valid());
+    sol::object e = inst["enemy"];
+    CHECK(e.is<LuaPrefab>());
+    if (e.is<LuaPrefab>()) CHECK(e.as<LuaPrefab>().path == "Prefabs/Enemy.prefab");
+    sm.lua()["pinst"] = inst;
+    auto r = sm.lua().safe_script(
+        "return pinst.enemy.path, pinst.enemy:IsLoaded()", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (r.valid())
+    {
+        CHECK(r.get<std::string>(0) == "Prefabs/Enemy.prefab");
+        CHECK(r.get<bool>(1) == false);
+    }
+
+    sol::table inst2 = sm.createInstance("Spawner", {});
+    // An empty slot is falsy (false, not nil: nil would expose the Prefab()
+    // sentinel of the class table through the metatable).
+    CHECK(inst2["enemy"].get_type() == sol::type::boolean);
+    CHECK(inst2["enemy"].get<bool>() == false);
+    sm.lua()["pinst2"] = inst2;
+    auto r2 = sm.lua().safe_script("return (not pinst2.enemy)", sol::script_pass_on_error);
+    CHECK(r2.valid() && r2.get<bool>());
+    CHECK(inst2["speed"].get<int>() == 3);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -3853,6 +3941,7 @@ int main()
     sm.setPhysicsManager(&pm);
     sm.setAudioManager(&am);
 
+    test_prefab_script_property(sm, pm, am);
     test_animator_lua_play_crossfade_reset_and_time(sm);
     test_animator_lua_layers(sm);
     test_animator_lua_ik(sm);

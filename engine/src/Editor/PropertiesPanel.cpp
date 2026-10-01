@@ -20,6 +20,7 @@
 #include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
+#include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include <imgui.h>
@@ -8848,6 +8849,7 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                         if (lv.get_type() == sol::type::number)       value = lv.as<double>();
                         else if (lv.get_type() == sol::type::boolean) value = lv.as<bool>();
                         else if (lv.get_type() == sol::type::string)  value = lv.as<std::string>();
+                        else if (lv.is<LuaPrefab>())                  value = PrefabRef{ lv.as<LuaPrefab>().path };
                     }
 
                     const std::string label = prettyPropLabel(prop.name);
@@ -8872,6 +8874,14 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                         bool b = std::get<bool>(value);
                         if (ImGui::Checkbox(label.c_str(), &b)) { value = b; edited = true; }
                     }
+                    else if (std::holds_alternative<PrefabRef>(value))
+                    {
+                        // Read-only for now (drop target comes later). Plain text has no
+                        // widget ID; the interactive slot must keep a "##" ID suffix.
+                        const std::string& path = std::get<PrefabRef>(value).path;
+                        ImGui::TextDisabled("%s: %s", label.c_str(),
+                            path.empty() ? "None (Prefab)" : path.c_str());
+                    }
                     else
                     {
                         char buf[256] = {};
@@ -8892,6 +8902,12 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                                 {
                                     if (prop.isInteger) comp->instance[prop.name] = static_cast<int64_t>(v);
                                     else                comp->instance[prop.name] = v;
+                                }
+                                else if constexpr (std::is_same_v<T, PrefabRef>)
+                                {
+                                    // false, not nil: see ScriptManager::createInstance.
+                                    if (v.path.empty()) comp->instance[prop.name] = false;
+                                    else comp->instance[prop.name] = LuaPrefab{ v.path };
                                 }
                                 else comp->instance[prop.name] = v;
                             }, value);
@@ -8914,6 +8930,12 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                                 {
                                     if (prop.isInteger) comp->instance[prop.name] = static_cast<int64_t>(v);
                                     else                comp->instance[prop.name] = v;
+                                }
+                                else if constexpr (std::is_same_v<T, PrefabRef>)
+                                {
+                                    // false, not nil: see ScriptManager::createInstance.
+                                    if (v.path.empty()) comp->instance[prop.name] = false;
+                                    else comp->instance[prop.name] = LuaPrefab{ v.path };
                                 }
                                 else comp->instance[prop.name] = v;
                             }, prop.defaultValue);

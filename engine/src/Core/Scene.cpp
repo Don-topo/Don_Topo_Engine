@@ -1756,6 +1756,8 @@ namespace
                             else
                                 ov[key] = v;
                         }
+                        else if constexpr (std::is_same_v<T, DonTopo::PrefabRef>)
+                            ov[key] = nlohmann::json{ {"prefab", v.path} };
                         else
                             ov[key] = v;
                     }, val);
@@ -3431,7 +3433,9 @@ namespace
                 {
                     for (const auto& [key, val] : sj["overrides"].items())
                     {
-                        if (val.is_boolean())     comp->overrides[key] = val.get<bool>();
+                        if (val.is_object() && val.contains("prefab") && val["prefab"].is_string())
+                            comp->overrides[key] = DonTopo::PrefabRef{ val["prefab"].get<std::string>() };
+                        else if (val.is_boolean()) comp->overrides[key] = val.get<bool>();
                         else if (val.is_string()) comp->overrides[key] = val.get<std::string>();
                         else if (val.is_number()) comp->overrides[key] = val.get<double>();
                         // Other types: ignored (they are not serializable props)

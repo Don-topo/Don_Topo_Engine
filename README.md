@@ -1229,7 +1229,9 @@ GameObject via **Properties → Add → Script**; the scripts themselves are `.l
 under `Scripts/`, one global table per file, with a Unity-style lifecycle
 (`Awake`/`Start`/`Update`/`FixedUpdate`/`LateUpdate`/`OnDestroy` plus the trigger,
 collision and animation-event callbacks) and serializable properties that show up in
-Properties on their own. `OnAnimationEvent(name)` fires on every script of a GameObject
+Properties on their own (numbers, booleans, strings, and `Prefab()` slots such as
+`enemy = Prefab()`, which reach the instance as a `Prefab` with `.path` and `:IsLoaded()`).
+`OnAnimationEvent(name)` fires on every script of a GameObject
 whose Animator crosses one of its current state's events: Play only, once per cycle
 (twice if a long frame skips two), and during a cross-fade only the incoming state fires.
 

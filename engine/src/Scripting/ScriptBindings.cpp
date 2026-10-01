@@ -4024,6 +4024,24 @@ namespace DonTopo::ScriptBindings
         time["frameCount"] = 0;
     }
 
+    // Prefab(): sentinel table used only as a class default so detectProps
+    // can tell the prop is a prefab slot; instances receive a LuaPrefab.
+    static void registerPrefab(ScriptManager& mgr)
+    {
+        sol::state& lua = mgr.lua();
+        lua.new_usertype<LuaPrefab>("Prefab",
+            sol::no_constructor,
+            "path", sol::property([](const LuaPrefab& p) { return p.path; }),
+            // Stays false until the PrefabLibrary exists.
+            "IsLoaded", [](const LuaPrefab&) { return false; });
+        lua.set_function("Prefab", [](sol::this_state ts) {
+            sol::state_view sv(ts);
+            sol::table t = sv.create_table();
+            t["__dt_prefab"] = true;
+            return t;
+        });
+    }
+
     void registerAll(ScriptManager& mgr)
     {
         registerVec3(mgr.lua());
@@ -4035,6 +4053,7 @@ namespace DonTopo::ScriptBindings
         registerLighting(mgr); // before Entity: GetLight/GetCamera return these types
         registerUi(mgr);      // before Entity: its getters return these types
         registerEntity(mgr);
+        registerPrefab(mgr);
         registerScene(mgr);   // Task 7
         registerPhysics(mgr);
         registerEngineTable(mgr);
