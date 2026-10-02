@@ -99,7 +99,7 @@ public:
     // FMOD sounds CREATED so far (every createSound that succeeded; a cache hit does
     // not count). Unlike loadedSoundCount it also sees a sound that was created and
     // released again in between, i.e. a throwaway load.
-    int soundCreateCount() const { return m_soundCreateCount; }
+    int soundCreateCount() const;
 
     // Is the sound really streaming? It reads the real FMOD_MODE, not what the
     // component believes. It exists because without this the line that applies

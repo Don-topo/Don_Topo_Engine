@@ -198,6 +198,15 @@ size_t AudioManager::loadedSoundCount() const
 #endif
 }
 
+int AudioManager::soundCreateCount() const
+{
+#ifdef DT_FMOD_ENABLED
+    return m_soundCreateCount;
+#else
+    return 0;
+#endif
+}
+
 size_t AudioManager::soundSlotCount() const
 {
 #ifdef DT_FMOD_ENABLED
