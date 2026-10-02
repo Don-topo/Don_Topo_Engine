@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -117,6 +118,20 @@ namespace DonTopo
             virtual void registerGameObject(GameObject* node)                              = 0;
             virtual void removeGameObject(GameObject* node)                                = 0;
             virtual void removeMeshComponent(GameObject* node)                             = 0;
+
+            // Prefab templates (spec §4.2, step 6): keeps alive, without drawing
+            // anything, the shared GPU resources these meshes would use if
+            // registered (the same cache keys registerGameObject acquires), so the
+            // registration of every instance hits the caches instead of uploading.
+            // Refcounted: the pin holds ONE reference per entry and releases exactly
+            // that one. Pinning a key again replaces its previous pin (the new one
+            // is acquired first, so entries in both never drop to zero in between).
+            // Unpinning an unknown key is a no-op. A backend whose registration
+            // path cannot share a resource without a draw slot does not pin it
+            // (D3D12 static meshes). Pins left at shutdown() are released there.
+            virtual void pinTemplateMeshes(const std::string& key,
+                                           const std::vector<std::shared_ptr<const Mesh>>& meshes) = 0;
+            virtual void unpinTemplateMeshes(const std::string& key) = 0;
 
             // A texture that could not be loaded: it is replaced by the "something is missing"
             // one so that the object stays visible and the failure is noticed.

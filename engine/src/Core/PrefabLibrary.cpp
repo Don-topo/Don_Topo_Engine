@@ -197,6 +197,36 @@ namespace DonTopo
         return "prefab-node:" + std::to_string(prefabLocalId);
     }
 
+    std::vector<std::shared_ptr<const Mesh>> prefabTemplateGpuMeshes(const PrefabTemplate& t)
+    {
+        std::vector<std::shared_ptr<const Mesh>> out;
+        std::function<void(const nlohmann::json&)> walk = [&](const nlohmann::json& n) {
+            if (const auto mesh = n.find("mesh"); mesh != n.end() && mesh->is_object())
+            {
+                std::shared_ptr<const Mesh> m;
+                if (const auto ref = mesh->find("memRef"); ref != mesh->end() && ref->is_string())
+                    if (const auto it = t.instanceMeshes.find(ref->get<std::string>()); it != t.instanceMeshes.end())
+                        m = it->second;
+                if (!m)
+                {
+                    const std::string sourcePath = stringField(*mesh, "sourcePath");
+                    int piece = 0;
+                    if (const auto p = mesh->find("piece"); p != mesh->end() && p->is_number_integer())
+                        piece = std::max(0, p->get<int>());
+                    if (!sourcePath.empty())
+                        if (const auto it = t.meshes.find(meshCacheKey(sourcePath, piece)); it != t.meshes.end())
+                            m = it->second;
+                }
+                if (m && std::find(out.begin(), out.end(), m) == out.end())
+                    out.push_back(std::move(m));
+            }
+            if (const auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (const auto& c : *kids) if (c.is_object()) walk(c);
+        };
+        walk(t.instanceRoot.is_object() ? t.instanceRoot : t.memoryRoot);
+        return out;
+    }
+
     PrefabLibrary::PrefabLibrary(JobSystem& jobs, std::string assetRoot)
         : m_jobs(jobs),
           m_assetRoot(std::move(assetRoot)),
@@ -379,6 +409,7 @@ namespace DonTopo
         e.t.warmAudio.clear();
         e.t.instanceRoot = nlohmann::json();
         e.t.instanceMeshes.clear();
+        e.t.configuredMeshes.clear();
         e.t.warnings.clear();
         e.rawMeshes.clear();
         e.configMeshes.clear();
@@ -541,6 +572,7 @@ namespace DonTopo
         PrefabTemplate& t = e.t;
         t.instanceMeshes = t.meshes;
         t.instanceRoot   = t.memoryRoot;
+        t.configuredMeshes.clear();
         t.warnings.clear();
         for (const auto& [ck, ws] : e.configWarnings)
             for (const std::string& w : ws)
@@ -578,6 +610,8 @@ namespace DonTopo
                 base = it->second;
             }
             if (!base) return;   // not prepared: the instance takes the ordinary path
+            // Before the material overrides: what propagation is seeded with.
+            t.configuredMeshes[prefabNodeMeshRef(local)] = base;
 
             std::shared_ptr<const Mesh> final = base;
             if (const auto mats = mesh->find("materials"); mats != mesh->end())

@@ -173,6 +173,7 @@ add_library(DonTopoEditor STATIC
     src/Editor/UndoManager.cpp
     src/Editor/ScriptEditorPanel.cpp
     src/Editor/GameExporter.cpp
+    src/Editor/PrefabOverrideTracker.cpp
 )
 
 # The exporter looks for the runtime by this name (set by the root CMakeLists).

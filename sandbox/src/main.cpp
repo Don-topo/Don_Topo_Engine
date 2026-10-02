@@ -710,6 +710,10 @@ int main()
             // process dies on close —with a WER dump, but with nothing on
             // screen giving it away, because there is no frame left to draw.
             d3d12.waitIdle();
+            // Prefab library: unhooked from the ScriptManager, unpinned and
+            // destroyed while the scripts, the jobs, the audio and the backend
+            // still live (see EditorUI::releasePrefabLibrary).
+            editor.releasePrefabLibrary();
             editor.shutdownUi();
             // The JobSystem before the backend: a half-done job still touches
             // the loader and the scene, and stopping it afterwards would be using them already
@@ -1254,6 +1258,11 @@ int main()
         // editor. Releasing it here avoids leaving a lambda dangling during the
         // rest of the shutdown.
         editor.setDroppedFilesProvider(nullptr);
+
+        // Prefab library BEFORE the JobSystem, the audio and the renderer go: the
+        // editor is declared before all of them, so its destructor would be too
+        // late (see EditorUI::releasePrefabLibrary).
+        editor.releasePrefabLibrary();
 
         // The JobSystem FIRST: if it were destroyed after the Renderer/Scene, a
         // worker still in flight (a half-done FBX ReadFile) could touch memory

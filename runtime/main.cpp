@@ -6,6 +6,7 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/JobSystem.h"
+#include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/RenderBackend.h"
@@ -254,6 +255,49 @@ int main(int argc, char** argv)
         jobSystem.start();
         DonTopo::AsyncAssetLoader assetLoader(jobSystem);
 
+        // Prefab templates for Lua's Instantiate(prefab) (spec §4.2): preloaded
+        // during the splash, so the first frame finds every one Ready or Failed and
+        // Instantiate never touches disk. Declared AFTER the JobSystem (its
+        // destructor waits on it) and the AudioManager (its warm clips unload
+        // sounds from it); released by hand at the end, before audio.shutdown().
+        // NO setKeepRawMeshes: the runtime never applies prefabs, and keeping the
+        // raw copy would double the RAM of every skinned mesh with extra sources.
+        auto prefabs = std::make_unique<DonTopo::PrefabLibrary>(jobSystem, exeDir.string());
+        // Keys to watch for failures: the scene's references, plus those of every
+        // template that gets Ready (the library requests them itself).
+        std::set<std::string> knownPrefabs;
+        std::set<std::string> reportedPrefabFailures;
+        // Pinned only once the renderer has its scene resources: before
+        // initSceneResources there is nothing to pin into.
+        bool canPinPrefabs = false;
+        std::vector<std::string> readyToPin;
+        prefabs->setOnReady([&](const DonTopo::PrefabTemplate& t) {
+            for (const std::string& w : t.warnings)
+                std::cerr << "Warning (prefab '" << t.key << "'): " << w << std::endl;
+            for (const std::string& ref : DonTopo::PrefabLibrary::collectReferences(t.memoryRoot))
+                knownPrefabs.insert(prefabs->normalizeKey(ref));
+            if (canPinPrefabs) renderer.pinTemplateMeshes(t.key, DonTopo::prefabTemplateGpuMeshes(t));
+            else               readyToPin.push_back(t.key);
+        });
+        auto logFailedPrefabs = [&]() {
+            for (const std::string& k : knownPrefabs)
+            {
+                const DonTopo::PrefabTemplate* t = prefabs->find(k);
+                if (!t || t->state != DonTopo::PrefabTemplate::State::Failed || reportedPrefabFailures.count(k))
+                    continue;
+                reportedPrefabFailures.insert(k);
+                std::cerr << "Error: the prefab '" << k << "' could not be loaded: " << t->error
+                          << " (Instantiate of it will raise a Lua error)" << std::endl;
+            }
+        };
+        auto requestScenePrefabs = [&](const nlohmann::json& sceneJson) {
+            for (const std::string& ref : DonTopo::PrefabLibrary::collectReferences(sceneJson))
+            {
+                knownPrefabs.insert(prefabs->normalizeKey(ref));
+                prefabs->request(ref);
+            }
+        };
+
         // Resolves the logo: in an exported package it is next to the .exe as
         // splash.png; in dev (not exported) it falls back to assets/MainEngineLogo.png.
         std::string logoPath = "splash.png";
@@ -351,12 +395,19 @@ int main(int argc, char** argv)
             for (const auto& p : uniquePaths)
                 assetLoader.requestMesh(p.first, reqId++, p.second);
 
+            // The prefabs the scene's scripts reference load in parallel with its
+            // meshes, on the same workers (the library has its own loader).
+            requestScenePrefabs(*sceneJson);
+
             // Pumps the splash while the workers load, storing each
             // result in the cache by path. An error (moved/broken file)
             // leaves the path out of the cache: scene.load will fall back to a disk ReadFile
-            // for that one, exactly like the usual path.
-            while (assetLoader.pending() > 0)
+            // for that one, exactly like the usual path. The prefab library is
+            // pumped in the same loop: the first frame waits for every template
+            // (and the ones they reference) to be Ready or Failed.
+            while (assetLoader.pending() > 0 || prefabs->pending() > 0)
             {
+                prefabs->pump(audio, 1000.0f);
                 for (auto& r : assetLoader.pumpCompleted(1000.0f))
                 {
                     if (!r.error.empty())
@@ -370,6 +421,7 @@ int main(int argc, char** argv)
                 }
                 pumpSplash(false, 0.0f);
             }
+            logFailedPrefabs();
         }
 
         // Scene load from the cache. loader == nullptr: the per-GameObject
@@ -439,6 +491,17 @@ int main(int argc, char** argv)
             pumpSplash(false, 0.0f);
         }
 
+        // Prefab templates: their GPU resources go up now, in the same batch the
+        // wait below flushes, so the first Instantiate of each one hits the
+        // shared caches instead of uploading mid-game. From here on a template
+        // that becomes Ready later (a scene loaded by Lua) is pinned at once.
+        canPinPrefabs = true;
+        for (const std::string& key : readyToPin)
+            if (const DonTopo::PrefabTemplate* t = prefabs->find(key);
+                t && t->state == DonTopo::PrefabTemplate::State::Ready)
+                renderer.pinTemplateMeshes(t->key, DonTopo::prefabTemplateGpuMeshes(*t));
+        readyToPin.clear();
+
         // --- Wait for uploads before the first game frame (correctness) ---
         // addSkinnedMesh does NOT upload instantly: it puts the upload in m_pendingBatch and
         // marks the object with an uploadTicket > 0, so the mesh stays
@@ -466,6 +529,8 @@ int main(int argc, char** argv)
         scriptManager.setScene(&scene);
         scriptManager.setPhysicsManager(&physics);
         scriptManager.setAudioManager(&audio);
+        // Unhooked again (setPrefabLibrary(nullptr)) before onPlayStop at the end.
+        scriptManager.setPrefabLibrary(prefabs.get());
         scriptManager.setLogCallback([](const std::string& msg) {
             std::cout << msg << std::endl;
         });
@@ -603,6 +668,20 @@ int main(int argc, char** argv)
                 std::cout << (luaLoaded ? "Scene loaded: " : "Error loading scene: ")
                           << luaScenePath << std::endl;
                 if (luaLoaded) logSceneWarnings(scene, luaScenePath);
+                // Its prefabs load in the background (no splash here): until one is
+                // Ready, Instantiate of it raises the "not loaded yet" Lua error,
+                // which Prefab:IsLoaded() lets a script check first.
+                if (luaLoaded)
+                    if (auto loadedJson = DonTopo::FileManager::readJson(luaScenePath))
+                        requestScenePrefabs(*loadedJson);
+            }
+
+            // Templates requested by a scene loaded from Lua (the splash ones are
+            // all settled already, so this is a no-op until then).
+            if (prefabs->pending() > 0)
+            {
+                prefabs->pump(audio, 2.0f);
+                logFailedPrefabs();
             }
 
             auto now = std::chrono::high_resolution_clock::now();
@@ -765,12 +844,22 @@ int main(int argc, char** argv)
             window.pollEvents();
         }
 
+        // Unhooked BEFORE onPlayStop: an OnDestroy calling Instantiate or
+        // IsLoaded must get the "no library" answer, not reach a library that is
+        // about to die.
+        scriptManager.setPrefabLibrary(nullptr);
         scriptManager.onPlayStop();
         // jobSystem.shutdown() BEFORE the scene teardown: it stops and joins all
         // the workers, so none can touch the scene while it is destroyed.
         // (At this point nothing should be pending —the preload was
         // drained entirely before the loop— but the order is respected anyway.)
         jobSystem.shutdown();
+        // The prefab library before audio.shutdown() (its warm clips unload their
+        // sounds from the AudioManager) and before renderer.shutdown() (its pins
+        // go first; an unpin of a key never pinned is a no-op).
+        for (const std::string& key : knownPrefabs)
+            renderer.unpinTemplateMeshes(key);
+        prefabs.reset();
         scene.shutdown();
         audio.shutdown();
         physics.shutdown();

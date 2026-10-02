@@ -18,6 +18,7 @@ class UndoManager;
 class AsyncAssetLoader;
 class ProjectContext;
 class JobSystem;
+class PrefabLibrary;
 
 // File dropped onto the editor window from outside the process (drag
 // from Windows Explorer), with the screen position where it
@@ -133,6 +134,11 @@ struct EditorContext {
     // Content Browser thumbnails to decode images off the main thread.
     // Without it, there are no thumbnails and the grid behaves as usual.
     JobSystem* jobs = nullptr;
+
+    // The editor's prefab library (owned by EditorUI, non-owning here). nullptr
+    // without a project or a JobSystem, and in the headless tests. Assigned by
+    // EditorUI::draw() after building the ctx.
+    PrefabLibrary* prefabs = nullptr;
 };
 
 } // namespace DonTopo

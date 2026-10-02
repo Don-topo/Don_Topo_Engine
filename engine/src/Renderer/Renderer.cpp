@@ -572,6 +572,13 @@ namespace DonTopo {
         if (m_gpu.device() == VK_NULL_HANDLE) return;
         vkDeviceWaitIdle(m_gpu.device());
 
+        // Prefab template pins the host did not release: their references go
+        // now (nobody is drawing after the wait above), before flushAll runs the
+        // static destructions they queue and before the leak checks further down.
+        for (auto& [key, pin] : m_templatePins)
+            releaseTemplatePin(pin, /*deferred=*/false);
+        m_templatePins.clear();
+
         // The vkDeviceWaitIdle above is the precondition of flushAll: without it,
         // this would destroy resources the GPU may still be reading.
         m_deferredDeletes.flushAll(m_gpu.device());
@@ -3857,6 +3864,58 @@ namespace DonTopo {
         return index;
     }
 
+    Renderer::SkinnedGeometry Renderer::acquireSkinnedGeometry(const SkinnedMesh& mesh, const PackedClips& packed,
+                                                               TransferBatch* batch)
+    {
+        return m_skinnedGeometry.acquire(skinnedGeometryKey(mesh, packed), [&] {
+            SkinnedGeometry g;
+            // Half-created (VRAM exhausted): nothing is in obj yet, so without
+            // this the buffers already made would leak.
+            try {
+            m_res.uploadBuffer(packed.pos.data(),   packed.pos.size()   * sizeof(GpuPosKey),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.posBuf,   g.posMem,   batch);
+            m_res.uploadBuffer(packed.rot.data(),   packed.rot.size()   * sizeof(GpuRotKey),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.rotBuf,   g.rotMem,   batch);
+            m_res.uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.scaleBuf, g.scaleMem, batch);
+            m_res.uploadBuffer(packed.boneInfos.data(), packed.boneInfos.size() * sizeof(GpuBoneInfo),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.boneBuf,  g.boneMem,  batch);
+            m_res.uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.vtxBuf,   g.vtxMem,   batch);
+            createIndexBuffer(mesh.indices, g.idxBuf, g.idxMem, batch);
+            } catch (...) {
+                // With a batch, the copies into these buffers are already
+                // recorded: the batch frees them after its fence, not now.
+                if (batch)
+                {
+                    const std::pair<VkBuffer, VkDeviceMemory> pares[] = {
+                        {g.posBuf, g.posMem}, {g.rotBuf, g.rotMem}, {g.scaleBuf, g.scaleMem},
+                        {g.boneBuf, g.boneMem}, {g.vtxBuf, g.vtxMem}, {g.idxBuf, g.idxMem} };
+                    for (const auto& [b, m] : pares)
+                        if (b != VK_NULL_HANDLE || m != VK_NULL_HANDLE) batch->addStaging(b, m);
+                }
+                else
+                    destroySkinnedGeometry(g);
+                throw;
+            }
+            return g;
+        });
+    }
+
+    Renderer::MaterialImage Renderer::acquireSkinnedTexture(const std::string& ruta, const std::vector<uint8_t>& emb,
+                                                            TextureKind tipo, TransferBatch* batch)
+    {
+        return m_skinnedTextures.acquire(
+            makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta)), [&] {
+            MaterialImage nueva;
+            if (tipo == TextureKind::BaseColor)
+                m_res.createTextureImage(ruta, emb, nueva.image, nueva.mem, batch, &nueva.format);
+            else
+                m_res.createNormalMapImage(ruta, emb, nueva.image, nueva.mem, batch, &nueva.format);
+            return nueva;
+        });
+    }
+
     void Renderer::initSkinnedRenderObject(SkinnedRenderObject& obj, const SkinnedMesh& mesh,
                                            TransferBatch* batch,
                                            const std::vector<DecodedImage>* decoded)
@@ -3912,39 +3971,7 @@ namespace DonTopo {
         // --- Read-only SSBOs + index buffer: shared among clones (B6) ---
         // A later character reusing buffers of an earlier batch is safe: its
         // uploadTicket is later, so it is not drawn before that batch lands.
-        const SkinnedGeometry geo = m_skinnedGeometry.acquire(skinnedGeometryKey(mesh, packed), [&] {
-            SkinnedGeometry g;
-            // Half-created (VRAM exhausted): nothing is in obj yet, so without
-            // this the buffers already made would leak.
-            try {
-            m_res.uploadBuffer(packed.pos.data(),   packed.pos.size()   * sizeof(GpuPosKey),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.posBuf,   g.posMem,   batch);
-            m_res.uploadBuffer(packed.rot.data(),   packed.rot.size()   * sizeof(GpuRotKey),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.rotBuf,   g.rotMem,   batch);
-            m_res.uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.scaleBuf, g.scaleMem, batch);
-            m_res.uploadBuffer(packed.boneInfos.data(), packed.boneInfos.size() * sizeof(GpuBoneInfo),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.boneBuf,  g.boneMem,  batch);
-            m_res.uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, g.vtxBuf,   g.vtxMem,   batch);
-            createIndexBuffer(mesh.indices, g.idxBuf, g.idxMem, batch);
-            } catch (...) {
-                // With a batch, the copies into these buffers are already
-                // recorded: the batch frees them after its fence, not now.
-                if (batch)
-                {
-                    const std::pair<VkBuffer, VkDeviceMemory> pares[] = {
-                        {g.posBuf, g.posMem}, {g.rotBuf, g.rotMem}, {g.scaleBuf, g.scaleMem},
-                        {g.boneBuf, g.boneMem}, {g.vtxBuf, g.vtxMem}, {g.idxBuf, g.idxMem} };
-                    for (const auto& [b, m] : pares)
-                        if (b != VK_NULL_HANDLE || m != VK_NULL_HANDLE) batch->addStaging(b, m);
-                }
-                else
-                    destroySkinnedGeometry(g);
-                throw;
-            }
-            return g;
-        });
+        const SkinnedGeometry geo = acquireSkinnedGeometry(mesh, packed, batch);
         obj.keyframePosBuffer   = geo.posBuf;   obj.keyframePosMemory   = geo.posMem;
         obj.keyframeRotBuffer   = geo.rotBuf;   obj.keyframeRotMemory   = geo.rotMem;
         obj.keyframeScaleBuffer = geo.scaleBuf; obj.keyframeScaleMemory = geo.scaleMem;
@@ -4048,15 +4075,7 @@ namespace DonTopo {
             // cache entry: whoever shares it declares the SAME view.
             auto pedir = [&](const std::string& ruta, const std::vector<uint8_t>& emb, TextureKind tipo,
                              VkImage& img, VkDeviceMemory& mem, VkFormat& fmt) {
-                const MaterialImage m = m_skinnedTextures.acquire(
-                    makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta)), [&] {
-                    MaterialImage nueva;
-                    if (tipo == TextureKind::BaseColor)
-                        m_res.createTextureImage(ruta, emb, nueva.image, nueva.mem, batch, &nueva.format);
-                    else
-                        m_res.createNormalMapImage(ruta, emb, nueva.image, nueva.mem, batch, &nueva.format);
-                    return nueva;
-                });
+                const MaterialImage m = acquireSkinnedTexture(ruta, emb, tipo, batch);
                 img = m.image;
                 mem = m.mem;
                 fmt = m.format;
@@ -4423,6 +4442,126 @@ namespace DonTopo {
                 go->staticRenderIndex = addStaticMesh(*go->getMesh());
             }
         });
+    }
+
+    void Renderer::pinTemplateMeshes(const std::string& key,
+                                     const std::vector<std::shared_ptr<const Mesh>>& meshes)
+    {
+        if (key.empty() || m_gpu.device() == VK_NULL_HANDLE) return;
+        if (!m_pendingBatch)
+            m_pendingBatch = std::make_unique<TransferBatch>(m_gpu);
+
+        // The new pin is complete BEFORE the old one is released: an entry both
+        // share keeps a reference throughout and is never destroyed and re-uploaded.
+        TemplatePin pin;
+        try
+        {
+            for (const std::shared_ptr<const Mesh>& mesh : meshes)
+            {
+                if (!mesh) continue;
+                if (const auto* sk = dynamic_cast<const SkinnedMesh*>(mesh.get()))
+                {
+                    // Same validity gate as a registration would hit: a mesh with
+                    // no skin has nothing to share.
+                    if (sk->skinnedVertices.empty() || sk->indices.empty()) continue;
+                    const PackedClips packed = packSkinnedClips(*sk);
+                    pin.geometry.push_back(acquireSkinnedGeometry(*sk, packed, m_pendingBatch.get()));
+                    for (const Material& mat : sk->materials)
+                    {
+                        // Only what the cache stores: without a texture (empty key)
+                        // a registration takes the shared filler, not a cache entry.
+                        const std::pair<const std::string*, const std::vector<uint8_t>*> slots[] = {
+                            {&mat.texturePath, &mat.embeddedTexture},
+                            {&mat.normalMapPath, &mat.embeddedNormalMap},
+                            {&mat.metallicRoughnessPath, &mat.embeddedMetallicRoughness} };
+                        const TextureKind kinds[] = { TextureKind::BaseColor, TextureKind::Normal, TextureKind::Orm };
+                        for (int s = 0; s < 3; ++s)
+                        {
+                            if (makeTextureKey(*slots[s].first, *slots[s].second, kinds[s],
+                                               textureKeySuffix(*slots[s].first)).empty())
+                                continue;
+                            const MaterialImage img = acquireSkinnedTexture(*slots[s].first, *slots[s].second,
+                                                                            kinds[s], m_pendingBatch.get());
+                            // Not stored (it could not be created): nothing to hold.
+                            if (m_skinnedTextures.contains(img)) pin.textures.push_back(img);
+                        }
+                    }
+                    continue;
+                }
+                bool created = false;
+                const int index = m_sharedMeshes.acquire(
+                    makeSharedMeshKey(*mesh),
+                    [&](SharedGpuMesh& gpu) { createSharedGpuMesh(*mesh, gpu, m_pendingBatch.get(), nullptr); },
+                    &created);
+                if (index < 0) continue;
+                if (created)
+                {
+                    SharedGpuMesh& gpu = *m_sharedMeshes.get(index);
+                    allocateObjectDescriptorSet(gpu);
+                    // Not drawn before its batch lands, same as addStaticMesh.
+                    gpu.uploadTicket = m_nextUploadTicket;
+                }
+                pin.staticEntries.push_back(index);
+            }
+        }
+        catch (...)
+        {
+            // Half a pin holds references too: give them back before failing.
+            releaseTemplatePin(pin, /*deferred=*/true);
+            throw;
+        }
+
+        auto it = m_templatePins.find(key);
+        if (it != m_templatePins.end())
+        {
+            releaseTemplatePin(it->second, /*deferred=*/true);
+            it->second = std::move(pin);
+        }
+        else
+        {
+            m_templatePins.emplace(key, std::move(pin));
+        }
+    }
+
+    void Renderer::unpinTemplateMeshes(const std::string& key)
+    {
+        const auto it = m_templatePins.find(key);
+        if (it == m_templatePins.end()) return;   // unknown key: no-op
+        releaseTemplatePin(it->second, /*deferred=*/true);
+        m_templatePins.erase(it);
+    }
+
+    void Renderer::releaseTemplatePin(TemplatePin& pin, bool deferred)
+    {
+        // Static entries: same path as releaseRenderObject (the reference drops
+        // now, the destruction of a last one is queued).
+        for (int index : pin.staticEntries)
+            m_sharedMeshes.release(index, [this](const SharedGpuMesh& gpu) {
+                m_deferredDeletes.push([this, gpu](VkDevice) { destroySharedGpuMesh(gpu); });
+            });
+        pin.staticEntries.clear();
+
+        // Skinned: the reference itself drops later when deferred, so a last one
+        // is destroyed where a frame in flight can no longer read it. Each handle
+        // here is one reference THIS pin acquired; contains() only guards against
+        // a cache already torn down, and nothing outside the cache is destroyed.
+        auto releaseSkinned = [this](std::vector<SkinnedGeometry> geometry, std::vector<MaterialImage> textures) {
+            for (const SkinnedGeometry& g : geometry)
+                if (m_skinnedGeometry.contains(g))
+                    m_skinnedGeometry.release(g, [&](const SkinnedGeometry& h) { destroySkinnedGeometry(h); });
+            for (const MaterialImage& m : textures)
+                if (m_skinnedTextures.contains(m))
+                    m_skinnedTextures.release(m, [&](const MaterialImage& h) { m_res.releaseMaterialImage(h.image, h.mem); });
+        };
+        if (deferred)
+            m_deferredDeletes.push([releaseSkinned, geometry = std::move(pin.geometry),
+                                    textures = std::move(pin.textures)](VkDevice) {
+                releaseSkinned(geometry, textures);
+            });
+        else
+            releaseSkinned(std::move(pin.geometry), std::move(pin.textures));
+        pin.geometry.clear();
+        pin.textures.clear();
     }
 
     void Renderer::removeMeshComponent(GameObject* go)

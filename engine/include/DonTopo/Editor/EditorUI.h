@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <set>
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 #include "DonTopo/Editor/UndoManager.h"
@@ -23,6 +24,7 @@
 #include "DonTopo/Editor/RenderingPanel.h"
 #include "DonTopo/Editor/LoadingModal.h"
 #include "DonTopo/Editor/ProjectContext.h"
+#include "DonTopo/Editor/PrefabOverrideTracker.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/RenderBackend.h"
 #include "DonTopo/Renderer/UiLayer.h"
@@ -41,6 +43,8 @@ class Camera;
 class Scene;
 class ScriptManager;
 class ScriptEditorPanel;
+class PrefabLibrary;
+struct PrefabTemplate;
 
 // The editor owns the Renderer, and not the other way around: this way the engine does not
 // have to know the editor. The relationship is also inverted in drawing: the
@@ -118,8 +122,9 @@ public:
     void focusSelected(Camera& camera);
     // Non-owning pointer, same pattern as m_physics. Needed to
     // trigger the lifecycle when pressing Play/Stop and for the Scripts
-    // section of the Properties panel (Task 10).
-    void setScriptManager(ScriptManager* sm) { m_scriptManager = sm; }
+    // section of the Properties panel (Task 10). Out of line: it also hands the
+    // ScriptManager the prefab library (Lua's Instantiate(prefab)).
+    void setScriptManager(ScriptManager* sm);
     // External entry point to the Log Console (used by ScriptManager via
     // main.cpp's wiring: compilation messages/script errors).
     void pushExternalLog(const std::string& message) { m_logPanel.push(message); }
@@ -146,8 +151,22 @@ public:
     void setDroppedFilesProvider(std::function<std::vector<DroppedFile>()> fn)
     { m_droppedFilesProvider = std::move(fn); }
     // Filled in by main() before the loop, like setAssetLoader. Without it there are no
-    // thumbnails in the Content Browser.
-    void setJobSystem(JobSystem* jobs) { m_jobSystem = jobs; }
+    // thumbnails in the Content Browser, and no prefab library (its loads run on
+    // these workers). Out of line: it may create that library.
+    void setJobSystem(JobSystem* jobs);
+
+    // ── Prefabs (spec 2026-09-30-prefabs-design.md §3.2-§4.2) ────────────────
+    // The editor owns ONE PrefabLibrary, built once a JobSystem and a valid
+    // project are both set, rooted at the project. nullptr until then.
+    PrefabLibrary* prefabLibrary() const { return m_prefabs.get(); }
+    // Host obligation at shutdown, while the ScriptManager, the JobSystem, the
+    // AudioManager and the renderer are all still alive, and BEFORE
+    // jobSystem.shutdown(), audio.shutdown() and renderer.shutdown(): unhooks the
+    // library from the ScriptManager, unpins its templates and destroys it. The
+    // editor cannot do it from its destructor: the Vulkan host declares it
+    // before all of them, so by then they are gone (and the library's warm
+    // audio clips would unload sounds from a dead AudioManager). Idempotent.
+    void releasePrefabLibrary();
 
     // Project selector: first state of the ImGui loop. While a
     // selector is set, draw() gives it the WHOLE frame and draws no menu, toolbar,
@@ -416,6 +435,48 @@ private:
     // See setDroppedFilesProvider. Empty in headless tests.
     std::function<std::vector<DroppedFile>()> m_droppedFilesProvider;
     JobSystem* m_jobSystem = nullptr;
+
+    // ── Prefabs ──────────────────────────────────────────────────────────────
+    // Owned library (see prefabLibrary/releasePrefabLibrary), its single override
+    // detection point, and the host-side bookkeeping around them.
+    std::unique_ptr<PrefabLibrary> m_prefabs;
+    PrefabOverrideTracker          m_prefabTracker;
+    // Last UndoManager revision the tracker saw, and the previous frame's
+    // ImGui::IsAnyItemActive() (its falling edge recomputes the selection).
+    uint64_t                       m_lastPrefabRevision = 0;
+    bool                           m_prefabItemWasActive = false;
+    // A propagation was deferred (an instance still waiting for async meshes):
+    // retried once the asset loader has nothing pending.
+    bool                           m_prefabSyncPending = false;
+    // Template keys pinned in the renderer: what has to be unpinned when a key
+    // is evicted, the project changes or the library is released.
+    std::set<std::string>          m_pinnedPrefabs;
+    // Keys this editor asked for (the scene's references, its instances, and the
+    // references of every Ready template) and the Failed ones already logged.
+    std::set<std::string>          m_knownPrefabs;
+    std::set<std::string>          m_reportedPrefabFailures;
+
+    // Creates the library once a JobSystem and a valid project exist (editor:
+    // keeps raw meshes, Apply reconfigures from RAM), wires onReady and hands
+    // it to the ScriptManager. No-op when it already exists or cannot yet.
+    void ensurePrefabLibrary();
+    // Template became Ready: logs its warnings once, pins its meshes in the
+    // renderer and, in Edit Mode, propagates it to the scene's instances.
+    void onPrefabReady(const PrefabTemplate& t);
+    // Propagation of one Ready template to every instance (spec §3.3): not an
+    // undo command, does not dirty the scene, keeps the selection by id.
+    void propagatePrefab(const PrefabTemplate& t);
+    // After a scene (re)load: evict what the scene no longer references
+    // (Failed keys too, so they are READ AGAIN -- the retry path for a .prefab
+    // that failed and was fixed on disk), request the rest, and propagate the
+    // ones already Ready (their onReady will not fire again).
+    void refreshScenePrefabs(const nlohmann::json& sceneJson);
+    // Per frame, end of draw(): revision change -> sync unsynced instances and
+    // recompute; falling edge of IsAnyItemActive -> recompute the selection.
+    void updatePrefabTracking();
+    void logFailedPrefabs();
+    void unpinPrefab(const std::string& key);
+    void unpinAllPrefabs();
 
     // See setProjectSelector/setProject. Empty/nullptr in the headless tests: without a
     // selector the editor draws as usual, and without a project the path guards

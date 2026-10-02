@@ -48,6 +48,14 @@ namespace DonTopo
         //    no instance reconfigures (Assimp) or copies (editMesh) anything.
         nlohmann::json     instanceRoot;
         PreloadedMeshCache instanceMeshes;
+        // What propagation (rebuildPrefabInstance) is seeded with, by
+        // prefabNodeMeshRef(local id): each file-mesh node's mesh configured with
+        // THAT node's animation sources, material overrides NOT applied (the
+        // rebuild applies the prefab's and the instance's own on top, deriving the
+        // baselines as a disk load does). t.meshes only holds the FIRST source list
+        // of each file+piece, so without these a node with another list re-reads
+        // its external sources (Assimp) on the main thread at every propagation.
+        PreloadedMeshCache configuredMeshes;
 
         // Non-fatal problems found while preparing the template (an external
         // animation source that cannot be read, ...): reported ONCE here, never
@@ -63,6 +71,13 @@ namespace DonTopo
     // memRef in instanceRoot). Cannot clash with a meshCacheKey (a file path) nor
     // with the procedural memRefs of cloneGameObject.
     std::string prefabNodeMeshRef(uint64_t prefabLocalId);
+
+    // The meshes an instance of t registers on the GPU: per node, its prepared
+    // mesh (memRef into instanceMeshes) or, without one, the template's mesh for
+    // its file+piece. Unique, pre-order. Procedural meshes are built per instance
+    // and are in no cache, so they are not listed. What a host pins
+    // (EditorRenderer::pinTemplateMeshes) when the template becomes Ready.
+    std::vector<std::shared_ptr<const Mesh>> prefabTemplateGpuMeshes(const PrefabTemplate& t);
 
     // Preloads prefab templates asynchronously (spec 4.2). One per host.
     //
