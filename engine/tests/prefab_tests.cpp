@@ -12,6 +12,8 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Renderer/Cube.h"
+#include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
 #include "DonTopo/Scripting/ScriptManager.h"
@@ -1416,6 +1418,16 @@ void testInstantiateRoundTrip()
         CHECK(std::fabs(glm::length(glm::vec3(posed->worldTransform[0])) - 1.0f) < 1e-4f, "prefab scale kept");
     }
 
+    // A tiny but perfectly invertible parent (uniform 1e-4, det 1e-12): the pose is
+    // still world space, not mistaken for a singular parent.
+    DonTopo::GameObject* tiny = s.addGameObject("Tiny");
+    tiny->localTransform = glm::translate(glm::mat4(1.0f), {5.0f, 0.0f, 0.0f}) *
+                           glm::scale(glm::mat4(1.0f), glm::vec3(1e-4f));
+    tiny->updateWorldTransforms(glm::mat4(1.0f));
+    DonTopo::GameObject* small = s.instantiatePrefab(*t, tiny, &pos, &rot, physics(), audio());
+    CHECK(small && glm::length(glm::vec3(small->worldTransform[3]) - pos) < 1e-3f,
+          "world position kept under a parent scaled by 1e-4");
+
     // Not Ready -> nullptr, scene untouched.
     DonTopo::PrefabTemplate loading;
     loading.key = "Prefabs/X.prefab";
@@ -1481,9 +1493,9 @@ void testInstantiateNoIo()
 {
     namespace fs = std::filesystem;
     TempRoot root("dt_prefab_inst_noio");
-    const fs::path maw  = root.p / "Models" / "Maw J Laygo.fbx";
-    const fs::path idle = root.p / "Models" / "standing idle 01.fbx";
-    fs::copy_file("assets/animatedCharacter/Maw J Laygo.fbx", maw);
+    const fs::path mawPath = root.p / "Models" / "Maw J Laygo.fbx";
+    const fs::path idle    = root.p / "Models" / "standing idle 01.fbx";
+    fs::copy_file("assets/animatedCharacter/Maw J Laygo.fbx", mawPath);
     fs::copy_file("assets/animatedCharacter/standing idle 01.fbx", idle);
     const std::string tri = writeTriangleObj(root.p / "Models" / "tri.obj");
     fs::create_directories(root.p / "Materials");
@@ -1496,73 +1508,143 @@ void testInstantiateNoIo()
     sidecar.gainDb = 3.0f;
     CHECK(DonTopo::saveAudioImportSettings(clip, sidecar), "audio sidecar written");
 
+    DonTopo::MaterialAsset skinMat;
+    skinMat.albedo = (root.p / "Textures" / "skin.png").string();
+    CHECK(DonTopo::saveMaterialAsset(root.p / "Materials" / "skin.mat", skinMat), "skin .mat written");
+    const std::string missing = (root.p / "Models" / "missing source.fbx").string();
+
+    // Character (1): Maw + [builtin, idle] + a .mat on the SKINNED node.
+    //   Box (2):     static triangle + a .mat.
+    //   Speaker (3): a STREAMED clip with a non-default rolloff (both in the sound key).
+    //   Twin (4):    Maw again with a different source list ([builtin] only).
+    //   Broken (5):  Maw with [builtin, <missing file>]: the library warns once and
+    //                the instance must NOT retry it.
+    auto maw = [&](nlohmann::json sources) {
+        return nlohmann::json{ {"sourcePath", mawPath.string()}, {"name", "Maw"}, {"skinned", true},
+                               {"animationSources", std::move(sources)} };
+    };
+    const nlohmann::json builtin = { {"path", mawPath.string()}, {"builtin", true} };
     nlohmann::json character = plainNode(1, "Character");
-    character["mesh"] = { {"sourcePath", maw.string()}, {"name", "Maw"}, {"skinned", true},
-                          {"animationSources", nlohmann::json::array({
-                              { {"path", maw.string()},  {"builtin", true} },
-                              { {"path", idle.string()}, {"builtin", false} } })} };
+    character["mesh"] = maw(nlohmann::json::array({ builtin, { {"path", idle.string()}, {"builtin", false} } }));
+    character["mesh"]["materials"] = nlohmann::json::array({ { {"index", 0}, {"matAsset", "Materials/skin.mat"} } });
     nlohmann::json box = plainNode(2, "Box");
     box["mesh"] = { {"sourcePath", tri}, {"name", "tri"},
                     {"materials", nlohmann::json::array({ { {"index", 0}, {"matAsset", "Materials/m.mat"} } })} };
     nlohmann::json speaker = plainNode(3, "Speaker");
-    // A non-default rolloff: nodeFromJson reloads the sound for it, so the template
-    // must have warmed THAT variant too.
-    speaker["audioClip"] = { {"path", clip.string()}, {"is3D", true}, {"loop", false}, {"rolloff", "linear"} };
-    character["children"].push_back(box);
-    character["children"].push_back(speaker);
+    speaker["audioClip"] = { {"path", clip.string()}, {"is3D", true}, {"loop", false},
+                             {"loadMode", "stream"}, {"rolloff", "linear"} };
+    nlohmann::json twin = plainNode(4, "Twin");
+    twin["mesh"] = maw(nlohmann::json::array({ builtin }));
+    nlohmann::json broken = plainNode(5, "Broken");
+    broken["mesh"] = maw(nlohmann::json::array({ builtin, { {"path", missing}, {"builtin", false} } }));
+    for (auto* c : { &box, &speaker, &twin, &broken }) character["children"].push_back(*c);
     writePrefabFile(root.p / "Prefabs" / "Character.prefab", character);
 
     DonTopo::JobSystem js;
     js.start(2);
     DonTopo::PrefabLibrary lib(js, root.str());
+    const int soundsCreatedBefore = audio().soundCreateCount();
     lib.request("Prefabs/Character.prefab");
     const auto* t = readyTemplate(lib, "Prefabs/Character.prefab");
     if (!t) return;
-    const auto skIt = t->meshes.find(DonTopo::meshCacheKey(maw.string(), 0));
-    if (skIt == t->meshes.end()) { CHECK(false, "skinned mesh in the template"); return; }
+    if (audio().available())
+    {
+        // Fix 3: one sound, created once with its final key; nothing else pinned.
+        CHECK(audio().soundCreateCount() - soundsCreatedBefore == 1, "the streamed clip creates exactly one sound");
+        CHECK(t->warmAudio.size() == 1 && t->warmAudio[0]->getLoadMode() == DonTopo::AudioLoadMode::Stream &&
+              t->warmAudio[0]->getRolloff() == DonTopo::AudioRolloff::Linear, "one warm clip, stream + linear");
+    }
+    // Fix 1: the missing source is reported by the TEMPLATE, once.
+    const auto missingWarnings = std::count_if(t->warnings.begin(), t->warnings.end(), [&](const std::string& w) {
+        return w.find("missing source.fbx") != std::string::npos; });
+    CHECK(missingWarnings >= 1, "the template reports the missing animation source");
+    for (const auto& w : t->warnings) std::fprintf(stderr, "  template warning: %s\n", w.c_str());
 
+    auto nodeMesh = [&](uint64_t local) -> const DonTopo::Mesh* {
+        const auto it = t->instanceMeshes.find(DonTopo::prefabNodeMeshRef(local));
+        return it == t->instanceMeshes.end() ? nullptr : it->second.get();
+    };
+    CHECK(nodeMesh(1) && nodeMesh(2) && nodeMesh(4) && nodeMesh(5), "every file mesh node has a prepared mesh");
+    CHECK(nodeMesh(4) != nodeMesh(5) && nodeMesh(4) != nodeMesh(1), "one mesh per configuration / override set");
+
+    // Fix 5: with every file still on disk, building an instance reads no model file
+    // (not even the hasBones probe, which on a deleted file would fail silently).
     DonTopo::Scene s;
+    int modelReads = DonTopo::ModelLoader::readFileCount();
     DonTopo::GameObject* ref = s.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    CHECK(DonTopo::ModelLoader::readFileCount() == modelReads, "no model file read with the files present");
     CHECK(ref != nullptr, "reference instance");
     if (!ref) return;
     const std::string refAlbedo = albedoOf(childNamed(ref, "Box"));
     CHECK(fs::path(refAlbedo).filename() == "x.png", "reference instance has the .mat albedo");
+    CHECK(fs::path(albedoOf(ref)).filename() == "skin.png", "the skinned node has its .mat albedo");
+    for (const auto& w : s.lastWarnings()) std::fprintf(stderr, "  warning: %s\n", w.c_str());
+    CHECK(s.lastWarnings().empty(), "no per-instance warning (the missing source is the template's)");
     // Nothing but the template may keep the sound alive from here on.
     s.removeGameObject(ref);
 
     const int reads = lib.readCount();
     std::error_code ec;
     fs::remove(root.p / "Prefabs" / "Character.prefab", ec);
-    fs::remove(maw, ec);
+    fs::remove(mawPath, ec);
     fs::remove(idle, ec);
     fs::remove(root.p / "Models" / "tri.obj", ec);
     fs::remove(root.p / "Materials" / "m.mat", ec);
+    fs::remove(root.p / "Materials" / "skin.mat", ec);
     fs::remove(fs::path(clip.string() + ".json"), ec);
-    fs::remove(clip, ec);   // may be held open by FMOD; the sound count below is the audio proof
-    CHECK(!fs::exists(maw) && !fs::exists(root.p / "Materials" / "m.mat") &&
+    fs::remove(clip, ec);   // a streamed sound keeps it open; the sound counts are the audio proof
+    CHECK(!fs::exists(mawPath) && !fs::exists(root.p / "Materials" / "m.mat") &&
           !fs::exists(root.p / "Prefabs" / "Character.prefab"), "temp copies deleted");
 
     const size_t sounds = audio().loadedSoundCount();
-    DonTopo::GameObject* inst = s.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
-    CHECK(inst != nullptr, "instance built with the files gone");
-    if (!inst) return;
-    CHECK(inst->getMesh() && inst->getMesh().get() == skIt->second.get(),
-          "the skinned mesh is the template's own object (shared, not copied)");
+    const int created = audio().soundCreateCount();
+    modelReads = DonTopo::ModelLoader::readFileCount();
+    DonTopo::GameObject* inst  = s.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    const size_t warningsFirst = s.lastWarnings().size();
+    DonTopo::GameObject* inst2 = s.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    CHECK(inst != nullptr && inst2 != nullptr, "instances built with the files gone");
+    if (!inst || !inst2) return;
+    CHECK(DonTopo::ModelLoader::readFileCount() == modelReads, "no model file read");
+    CHECK(warningsFirst == 0 && s.lastWarnings().empty(), "no warnings per Instantiate (a disk miss would warn)");
+    for (const auto& w : s.lastWarnings()) std::fprintf(stderr, "  warning: %s\n", w.c_str());
+    for (const char* name : { "Box", "Twin", "Broken" })
+    {
+        DonTopo::GameObject* a = childNamed(inst, name);
+        DonTopo::GameObject* b = childNamed(inst2, name);
+        CHECK(a && b && a->getMesh() && a->getMesh() == b->getMesh(), "both instances share the node's mesh");    }
+    CHECK(inst->getMesh() && inst->getMesh() == inst2->getMesh() && inst->getMesh().get() == nodeMesh(1),
+          "the skinned node WITH a .mat shares the template's prepared mesh");
+    CHECK(childNamed(inst, "Box")->getMesh().get() == nodeMesh(2), "static node with a .mat: template's mesh");
+    CHECK(childNamed(inst, "Twin")->getMesh().get() == nodeMesh(4) &&
+          childNamed(inst, "Broken")->getMesh().get() == nodeMesh(5), "per-configuration meshes shared");
     CHECK(fs::path(albedoOf(childNamed(inst, "Box"))).filename() == "x.png" &&
           albedoOf(childNamed(inst, "Box")) == refAlbedo, "same .mat albedo as the reference");
+    CHECK(fs::path(albedoOf(inst)).filename() == "skin.png", "skinned .mat albedo");
     DonTopo::GameObject* speakerGo = childNamed(inst, "Speaker");
     if (audio().available())
     {
         CHECK(speakerGo && speakerGo->hasAudioClip(), "audio clip built");
-        CHECK(audio().loadedSoundCount() == sounds, "no new FMOD sound: the warm clip was reused");
+        CHECK(audio().loadedSoundCount() == sounds && audio().soundCreateCount() == created,
+              "no FMOD sound created, not even a throwaway one: the warm clip was reused");
     }
     else
     {
         std::printf("SKIP audio part of testInstantiateNoIo (FMOD not available)\n");
     }
     CHECK(lib.readCount() == reads, "no .prefab read");
-    for (const auto& w : s.lastWarnings()) std::fprintf(stderr, "  warning: %s\n", w.c_str());
-    CHECK(s.lastWarnings().empty(), "no warnings (a disk miss would warn)");
+
+    // An edit copies only THAT instance's mesh (COW); the baseline that travelled in
+    // the template json is the model's own texture, so clearing the override restores
+    // it rather than keeping the .mat's.
+    DonTopo::GameObject* box2 = childNamed(inst2, "Box");
+    const std::string fbxAlbedo = DonTopo::materialsOfMesh(*box2).empty() ? std::string()
+        : t->meshes.at(DonTopo::meshCacheKey(tri, 0))->material.texturePath;
+    box2->materialOverrides.at(0).matAsset.clear();
+    DonTopo::applyMaterialOverrides(*box2, &t->mats);
+    CHECK(box2->getMesh().get() != nodeMesh(2), "the edited instance got its own copy");
+    CHECK(childNamed(inst, "Box")->getMesh().get() == nodeMesh(2), "the other instance still shares");
+    CHECK(albedoOf(box2) == fbxAlbedo && fs::path(albedoOf(childNamed(inst, "Box"))).filename() == "x.png",
+          "clearing the override restores the model's texture (correct baseline), the template is untouched");
 
 #ifdef NDEBUG
     // Spec test 10: Core cost of Instantiate of a skinned prefab (GPU registration
@@ -1572,6 +1654,73 @@ void testInstantiateNoIo()
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     std::printf("prefab_tests: Instantiate skinned prefab: %.3f ms/call\n", ms / 100.0);
 #endif
+}
+
+// A source saved without "clips" must not end the comparison: the sources after it
+// still decide (they used to be ignored, so [rig, idle] "matched" [rig, other]).
+void testMatchChecksEverySource()
+{
+    DonTopo::SkinnedMesh m;
+    m.animationSources = { { "rig.fbx", true, {} }, { "idle.fbx", false, {} } };
+    const nlohmann::json same  = nlohmann::json::array({ { {"path", "rig.fbx"}, {"builtin", true} },
+                                                         { {"path", "idle.fbx"}, {"builtin", false} } });
+    const nlohmann::json other = nlohmann::json::array({ { {"path", "rig.fbx"}, {"builtin", true} },
+                                                         { {"path", "run.fbx"}, {"builtin", false} } });
+    CHECK(DonTopo::meshMatchesAnimationConfig(m, same), "identical lists match");
+    CHECK(!DonTopo::meshMatchesAnimationConfig(m, other), "a different second source does not match");
+}
+
+// A streamed clip in a scene is created ONCE, with its final key: no throwaway
+// decoded Sample copy first (nodeFromJson used to create the default sound and
+// then reload it for loadMode and rolloff).
+void testSceneStreamClipCreatesOneSound()
+{
+    if (!audio().available()) { std::printf("SKIP testSceneStreamClipCreatesOneSound (FMOD not available)\n"); return; }
+    namespace fs = std::filesystem;
+    TempRoot root("dt_prefab_scene_stream");
+    const fs::path clip = root.p / "music.mp3";
+    fs::copy_file("assets/audio.mp3", clip);
+    nlohmann::json node = plainNode(1, "Music");
+    node["audioClip"] = { {"path", clip.string()}, {"is3D", false}, {"loop", true},
+                          {"loadMode", "stream"}, {"rolloff", "linear"} };
+    const nlohmann::json scene = { {"version", 1}, {"name", "S"},
+                                   {"root", { {"name", "Root"}, {"localTransform", mat4Json(glm::mat4(1.0f))},
+                                              {"children", nlohmann::json::array({ node })} }} };
+    const int before = audio().soundCreateCount();
+    {
+        DonTopo::Scene s;
+        CHECK(s.fromJson(scene, physics(), audio()), "scene with a streamed clip loads");
+        DonTopo::GameObject* n = s.getRoot().children.empty() ? nullptr : s.getRoot().children[0].get();
+        CHECK(n && n->hasAudioClip() && n->getAudioClip()->getLoadMode() == DonTopo::AudioLoadMode::Stream &&
+              n->getAudioClip()->getRolloff() == DonTopo::AudioRolloff::Linear, "clip with its mode and rolloff");
+        CHECK(audio().soundCreateCount() - before == 1, "exactly one FMOD sound created for it");
+        s.shutdown();
+    }
+}
+
+// A clip whose file is missing. FMOD opens sounds NONBLOCKING, so createSound
+// succeeds and the failure arrives later, on the sound itself: the (failed) sound
+// is cached under its key and held by the template, so no Instantiate asks FMOD
+// or the disk for it again. (A SYNCHRONOUS refusal, which no file provokes here,
+// fails the template instead -- PrefabLibrary::finishIfDone.)
+void testLibraryMissingAudioIsNotRetried()
+{
+    if (!audio().available()) { std::printf("SKIP testLibraryMissingAudioIsNotRetried (FMOD not available)\n"); return; }
+    TempRoot root("dt_prefab_lib_audio_missing");
+    nlohmann::json p = plainNode(1, "P");
+    p["audioClip"] = { {"path", (root.p / "nope.mp3").string()}, {"is3D", false}, {"loop", false} };
+    writePrefabFile(root.p / "Prefabs" / "P.prefab", p);
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::PrefabLibrary lib(js, root.str());
+    lib.request("Prefabs/P.prefab");
+    const auto* t = readyTemplate(lib, "Prefabs/P.prefab");
+    if (!t) return;
+    CHECK(t->warmAudio.size() == 1, "the template holds the clip of the missing file");
+    DonTopo::Scene s;
+    const int created = audio().soundCreateCount();
+    for (int i = 0; i < 3; ++i) s.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    CHECK(audio().soundCreateCount() == created, "no Instantiate retries the sound");
 }
 
 // Lua side: a ScriptManager on the shared managers, with the library plugged in.
@@ -1775,6 +1924,9 @@ int main()
     testInstantiateRoundTrip();
     testInstantiateIdsUniqueAcrossFourPaths();
     testInstantiateNoIo();
+    testMatchChecksEverySource();
+    testSceneStreamClipCreatesOneSound();
+    testLibraryMissingAudioIsNotRetried();
     testInstantiateAwakeReentrancy();
     testInstantiateLuaOverloads();
     if (g_failures) { std::fprintf(stderr, "%d failure(s)\n", g_failures); return 1; }

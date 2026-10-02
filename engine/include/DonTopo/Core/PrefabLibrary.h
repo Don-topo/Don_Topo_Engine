@@ -29,14 +29,40 @@ namespace DonTopo
         std::string    key;          // normalized project-relative path, generic separators
         std::string    error;        // not empty only when Failed
         nlohmann::json memoryRoot;   // root node, memory form, prefab-local ids
-        PreloadedMeshCache meshes;   // by meshCacheKey; values may be SkinnedMesh
+        // By meshCacheKey; values may be SkinnedMesh. Configured with the animation
+        // sources of the FIRST node using that file+piece, material overrides NOT
+        // applied: what propagation (rebuildPrefabInstance) is seeded with.
+        PreloadedMeshCache meshes;
         MaterialAssetCache mats;     // by absolute .mat path
         std::vector<std::shared_ptr<AudioClipComponent>> warmAudio;  // keeps FMOD sounds cached
+
+        // What Scene::instantiatePrefab builds from, prepared once when the
+        // template becomes Ready:
+        //  - instanceRoot: memoryRoot with the prefab-local ids moved to prefabNode
+        //    (no "id"), the root link {key, no overrides}, and every node with a
+        //    file mesh pointing at its OWN final mesh by memRef (prefabNodeMeshRef)
+        //    with the baselines of its material overrides written in.
+        //  - instanceMeshes: t.meshes plus those per-node final meshes: the mesh
+        //    configured with THAT node's animation sources and with its material
+        //    overrides already applied. Every instance shares them as they are, so
+        //    no instance reconfigures (Assimp) or copies (editMesh) anything.
+        nlohmann::json     instanceRoot;
+        PreloadedMeshCache instanceMeshes;
+
+        // Non-fatal problems found while preparing the template (an external
+        // animation source that cannot be read, ...): reported ONCE here, never
+        // per instance. The host logs them when the template becomes Ready.
+        std::vector<std::string> warnings;
         // Unique across the whole library (never reused, not even after clear()):
         // assigned every time the template becomes Ready, by a load or by
         // updateFromMemory. A host compares it to know the content changed.
         uint64_t       generation = 0;
     };
+
+    // Key of a node's final mesh in PrefabTemplate::instanceMeshes (and its
+    // memRef in instanceRoot). Cannot clash with a meshCacheKey (a file path) nor
+    // with the procedural memRefs of cloneGameObject.
+    std::string prefabNodeMeshRef(uint64_t prefabLocalId);
 
     // Preloads prefab templates asynchronously (spec 4.2). One per host.
     //
@@ -119,6 +145,9 @@ namespace DonTopo
                 std::string    sourcePath;
                 int            piece = 0;
                 nlohmann::json animationSources;   // null when the node has none
+                // Other nodes on the same file+piece with a DIFFERENT source list
+                // (null = no key): each gets its own configured mesh.
+                std::vector<nlohmann::json> extraSources;
             };
             struct LoadResult
             {
@@ -134,8 +163,13 @@ namespace DonTopo
                 std::string                 key;
                 uint64_t                    serial = 0;
                 std::string                 meshKey;
+                // configKey of this configuration; extra = it is not the primary
+                // (t.meshes) one but goes to Entry::configMeshes under configKey.
+                std::string                 configKey;
+                bool                        extra = false;
                 std::shared_ptr<const Mesh> mesh;
                 std::string                 error;
+                std::vector<std::string>    warnings;   // of applyAnimationSourceConfig
             };
             struct Mailbox;
 
@@ -151,6 +185,13 @@ namespace DonTopo
                 // configured copy arrives (one that needs no config IS the final
                 // mesh, same object, so it stays at no cost).
                 PreloadedMeshCache rawMeshes;
+                // Configured meshes for the source lists that are not the first one
+                // of their file+piece, by configKey(meshKey, sources).
+                PreloadedMeshCache configMeshes;
+                // Warnings of applying each configuration (primary ones included),
+                // by configKey: kept with the configuration they belong to, so a
+                // configured mesh reused by updateFromMemory keeps its warning.
+                std::unordered_map<std::string, std::vector<std::string>> configWarnings;
                 uint64_t       serial      = 0;
                 int            outstanding = 0;   // mesh loads + animation jobs not back yet
             };
@@ -160,6 +201,7 @@ namespace DonTopo
                 uint64_t         serial = 0;
                 std::string      meshKey;
                 nlohmann::json   animationSources;
+                std::vector<nlohmann::json> extraSources;
                 JobSystem::JobId loaderJob = 0;   // to cancel it when the ticket is dropped
             };
 
@@ -172,6 +214,17 @@ namespace DonTopo
             void   configureMesh(Entry& e, const std::string& meshKey,
                                  const std::shared_ptr<const Mesh>& raw,
                                  const nlohmann::json& animationSources);
+            // The same for an extra source list: Entry::configMeshes[configKey].
+            void   configureExtra(Entry& e, const std::string& meshKey,
+                                  const std::shared_ptr<const Mesh>& raw,
+                                  const nlohmann::json& animationSources);
+            // Submits the worker job that configures a copy of raw; the result
+            // comes back as an AnimResult (configKey empty = the t.meshes one).
+            void   submitConfigJob(Entry& e, const std::string& meshKey, const std::string& configKey,
+                                   const std::shared_ptr<const Mesh>& raw,
+                                   const nlohmann::json& animationSources);
+            // Ready-time preparation: instanceRoot + instanceMeshes (see PrefabTemplate).
+            void   prepareInstance(Entry& e);
             void   fail(Entry& e, const std::string& error);
             void   finishIfDone(Entry& e, AudioManager& audio);
             void   submitLoad(const std::string& key, uint64_t serial, const nlohmann::json* inMemoryRoot,

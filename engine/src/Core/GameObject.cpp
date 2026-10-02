@@ -186,13 +186,23 @@ namespace DonTopo
         // the same overrides as its original changes nothing and keeps
         // sharing it. The baselines are captured in `ov` in this pass, just
         // as before, because the copy has the same values as the mesh.
+        // Only the five fields an override can touch are copied, NOT the whole
+        // Material: its embedded textures (FBX with packed images) are megabytes,
+        // and copying them on every call cost ~1.5 ms per skinned Instantiate even
+        // when nothing changed.
+        struct Fields
+        {
+            std::string texturePath, normalMapPath, metallicRoughnessPath;
+            float       metallic = 0.0f, roughness = 0.5f;
+        };
         const std::vector<const Material*> actuales = materialsOfMesh(go);
-        std::vector<Material> copia;
+        std::vector<Fields> copia;
         copia.reserve(actuales.size());
-        for (const Material* m : actuales) copia.push_back(*m);
-        std::vector<Material*> mats;
+        for (const Material* m : actuales)
+            copia.push_back({ m->texturePath, m->normalMapPath, m->metallicRoughnessPath, m->metallic, m->roughness });
+        std::vector<Fields*> mats;
         mats.reserve(copia.size());
-        for (Material& m : copia) mats.push_back(&m);
+        for (Fields& m : copia) mats.push_back(&m);
 
         for (MaterialOverride& ov : go.materialOverrides)
         {
@@ -200,7 +210,7 @@ namespace DonTopo
             // It is silently ignored here; the warning is given by the scene reader,
             // which is the one with a channel to report it.
             if (ov.index < 0 || ov.index >= (int)mats.size()) continue;
-            Material& mat = *mats[(size_t)ov.index];
+            Fields& mat = *mats[(size_t)ov.index];
 
             // The .mat (if any) resolves whatever the object does NOT override: an
             // "effective" value is computed per field and fed to the SAME
@@ -287,7 +297,7 @@ namespace DonTopo
             aplicaFactor(effectiveFactor(ov.roughness, matAsset.roughness), ov.baseRoughness, ov.baseRoughnessTaken, mat.roughness);
         }
 
-        auto distinto = [](const Material& a, const Material& b)
+        auto distinto = [](const Fields& a, const Material& b)
         {
             return a.texturePath != b.texturePath || a.normalMapPath != b.normalMapPath ||
                    a.metallicRoughnessPath != b.metallicRoughnessPath ||

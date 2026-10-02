@@ -2183,8 +2183,20 @@ namespace
             // editor never created skinned — could never have an Animator without
             // reimporting the mesh by hand.
             const bool skinnedFlag = j["mesh"].value("skinned", false);
+            // A mesh handed over by reference (memRef) and found in preloaded is
+            // TRUSTED as is: it is already the final mesh of this node (a prefab
+            // template's per-node mesh, with its animation sources and material
+            // overrides applied once by the library; or a clone's procedural mesh).
+            // Nothing is probed, loaded or configured for it -- the zero-IO
+            // Instantiate depends on that. A memRef that is not found falls through
+            // to the normal paths (sourcePath, or the procedural warning below).
+            std::shared_ptr<const DonTopo::Mesh> provided;
+            if (preloaded)
+                if (const auto ref = j["mesh"].find("memRef"); ref != j["mesh"].end() && ref->is_string())
+                    if (const auto it = preloaded->find(ref->get<std::string>()); it != preloaded->end())
+                        provided = it->second;
             bool skinned = false;
-            if (!sourcePath.empty())
+            if (!sourcePath.empty() && !provided)
             {
                 // Per-load cache (see hasBonesCache below): without it each
                 // node that shares sourcePath with another would repeat the full
@@ -2208,7 +2220,7 @@ namespace
             // before warning, because saying "no longer declares bones" of a
             // file that simply does not exist is worse than not warning: it points
             // to the wrong place and hides that the mesh did not load at all.
-            if (skinnedFlag && !skinned && !sourcePath.empty() && warnings)
+            if (skinnedFlag && !skinned && !sourcePath.empty() && !provided && warnings)
             {
                 // FULL path, not filename(): in the missing file case
                 // this warning and the one in the catch below fire for the same
@@ -2228,7 +2240,11 @@ namespace
             }
             try
             {
-                if (skinned)
+                if (provided)
+                {
+                    node->setMesh(provided);
+                }
+                else if (skinned)
                 {
                     // The skinned load stays SYNCHRONOUS on purpose, even if there
                     // is a loader: it rebuilds the Animator clip config
@@ -2387,15 +2403,11 @@ namespace
                 }
                 else if (j["mesh"].contains("memRef"))
                 {
-                    // Written only by cloneGameObject, together with the cache
-                    // that holds the mesh: share it, no vertex round trip (H15).
-                    std::shared_ptr<const DonTopo::Mesh> shared;
-                    if (preloaded && j["mesh"]["memRef"].is_string())
-                        if (auto it = preloaded->find(j["mesh"]["memRef"].get<std::string>());
-                            it != preloaded->end())
-                            shared = it->second;
-                    if (shared) node->setMesh(shared);
-                    else if (warnings)
+                    // Written by cloneGameObject (procedural meshes) together with
+                    // the cache that holds the mesh; a reference that was found is
+                    // the `provided` branch above (no vertex round trip, H15). Here
+                    // it was not found, and there is no file to fall back on.
+                    if (warnings)
                         warnings->push_back("mesh of '" + node->name + "': in-memory reference "
                                              "without its source, the object loads without a mesh");
                 }
@@ -2465,79 +2477,12 @@ namespace
             // Texture overrides. A block that is not an array, or an entry
             // without a numeric "index", is discarded with a warning: half a configuration
             // is worse than none, same criterion as jsonToMat4 with the matrix.
+            // The parsing lives in materialOverridesFromJson, shared with the
+            // PrefabLibrary, which pre-applies a template's overrides once.
             if (j["mesh"].contains("materials"))
-            {
-                const nlohmann::json& mats = j["mesh"]["materials"];
-                if (!mats.is_array())
-                {
-                    if (warnings)
-                        warnings->push_back("mesh of '" + node->name + "'.materials: not a list, "
-                                            "the hand-assigned textures are discarded");
-                }
-                else
-                {
-                    for (const auto& entry : mats)
-                    {
-                        if (!entry.is_object() || !entry.contains("index")
-                            || !entry["index"].is_number_integer())
-                        {
-                            if (warnings)
-                                warnings->push_back("mesh of '" + node->name + "'.materials: entry without a "
-                                                    "valid index, discarded");
-                            continue;
-                        }
-                        MaterialOverride ov;
-                        ov.index  = entry["index"].get<int>();
-                        ov.albedo   = fromStoredPath(entry.value("albedo", ""), assetRoot);
-                        ov.normal   = fromStoredPath(entry.value("normal", ""), assetRoot);
-                        ov.orm      = fromStoredPath(entry.value("orm",    ""), assetRoot);
-                        ov.matAsset = fromStoredPath(entry.value("matAsset", ""), assetRoot);
-                        // Absent = -1.0f (the "no override" sentinel; see
-                        // MaterialOverride in GameObject.h), same criterion as
-                        // "absent = empty string" of the three paths above.
-                        // Through readFloat and not through a raw entry.value<float>():
-                        // this whole block is NOT inside any try, and a
-                        // "metallic": null or "metallic": "0.5" with .value<float>()
-                        // throws type_error.302 — the exception goes up to
-                        // fromJson(), which returns false, and THE WHOLE SCENE IS LOST
-                        // without saying why. readFloat is the same guard
-                        // the rest of the file already uses for this problem:
-                        // it warns naming the field and falls to the sentinel.
-                        // clamp(-1..1) also cuts a hand-mistyped "metallic": 5.0
-                        // before it reaches the Material and the dedup
-                        // key — the sentinel (negative) is not
-                        // affected, clamp(-1, -1, 1) leaves it the same.
-                        const std::string materialesCtx = "mesh of '" + node->name + "'.materials";
-                        ov.metallic  = std::clamp(readFloat(entry, "metallic",  -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
-                        ov.roughness = std::clamp(readFloat(entry, "roughness", -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
-                        // The baseline is ONLY read on the MEMORY path (see
-                        // the big comment of nodeToJson, next to the same
-                        // flag): on disk these fields, even if they were in the
-                        // JSON, are ignored on purpose — the correct baseline of
-                        // a disk load is the one that applyMaterialOverrides
-                        // captures over the material just derived from the FBX, not a saved one
-                        // that could be from ANOTHER export of the model.
-                        if (carryOverrideBaseline)
-                        {
-                            ov.baseAlbedo      = fromStoredPath(entry.value("baseAlbedo", ""), assetRoot);
-                            ov.baseAlbedoTaken = entry.value("baseAlbedoTaken", false);
-                            ov.baseNormal      = fromStoredPath(entry.value("baseNormal", ""), assetRoot);
-                            ov.baseNormalTaken = entry.value("baseNormalTaken", false);
-                            ov.baseOrm         = fromStoredPath(entry.value("baseOrm", ""), assetRoot);
-                            ov.baseOrmTaken    = entry.value("baseOrmTaken", false);
-                            // Same reason as metallic/roughness above:
-                            // readFloat/readBool instead of a raw entry.value<T>(),
-                            // so that a corrupt field warns and falls to the
-                            // default instead of taking down the whole fromJson().
-                            ov.baseMetallic       = readFloat(entry, "baseMetallic", 0.0f, warnings, materialesCtx);
-                            ov.baseMetallicTaken  = readBool(entry, "baseMetallicTaken", false, warnings, materialesCtx);
-                            ov.baseRoughness      = readFloat(entry, "baseRoughness", 0.0f, warnings, materialesCtx);
-                            ov.baseRoughnessTaken = readBool(entry, "baseRoughnessTaken", false, warnings, materialesCtx);
-                        }
-                        node->materialOverrides.push_back(std::move(ov));
-                    }
-                }
-            }
+                for (MaterialOverride& ov : DonTopo::materialOverridesFromJson(
+                         j["mesh"]["materials"], node->name, assetRoot, carryOverrideBaseline, warnings))
+                    node->materialOverrides.push_back(std::move(ov));
 
             // Overrides applied NOW that the mesh (if there was one: any
             // of the FIVE setMesh of the branches above — skinned; cached
@@ -3293,12 +3238,42 @@ namespace
             // Without a path there is nothing to load: the node is left without audio and the
             // rest of the scene goes on. is3D/loop do have a reasonable default
             // (2D, no loop), which is also what the UI creates clips with.
+            //
+            // loadMode and rolloff are read FIRST and passed to the factory: both are
+            // part of the sound's cache key, and setting them afterwards (setLoadMode /
+            // setRolloff RELOAD) created and decoded a throwaway default sound first --
+            // a whole decompressed copy of a streamed track. Their warnings are kept
+            // apart and only reported when the clip exists, as before.
+            std::vector<std::string> modeWarnings;
+            DonTopo::AudioLoadMode loadMode = DonTopo::AudioLoadMode::Sample;
+            DonTopo::AudioRolloff rolloff = DonTopo::AudioRolloff::Inverse;
+            if (!path.empty())
+            {
+                // Same criterion as the bus below: absent = "sample" (how everything
+                // was loaded before), unknown name = warning.
+                const std::string loadModeName = readString(c, "loadMode", "sample", &modeWarnings, ctx);
+                if (!DonTopo::audioLoadModeFromStr(loadModeName, loadMode))
+                {
+                    loadMode = DonTopo::AudioLoadMode::Sample;
+                    modeWarnings.push_back(ctx + ".loadMode: unknown value '" + loadModeName +
+                                           "', using 'sample'");
+                }
+                // Attenuation curve: same criterion.
+                const std::string rolloffName = readString(c, "rolloff", "inverse", &modeWarnings, ctx);
+                if (!DonTopo::audioRolloffFromStr(rolloffName, rolloff))
+                {
+                    rolloff = DonTopo::AudioRolloff::Inverse;
+                    modeWarnings.push_back(ctx + ".rolloff: unknown value '" + rolloffName +
+                                           "', using 'inverse'");
+                }
+            }
             auto clip = path.empty()
                             ? nullptr
                             : audio.createAudioClipComponent(
                                   path,
                                   readBool(c, "is3D", false, warnings, ctx, /*required=*/true),
-                                  readBool(c, "loop", false, warnings, ctx, /*required=*/true));
+                                  readBool(c, "loop", false, warnings, ctx, /*required=*/true),
+                                  loadMode, rolloff);
             if (clip)
             {
                 // Without required: this field came later, and an earlier scene
@@ -3316,25 +3291,9 @@ namespace
                     warnings->push_back(ctx + ".bus: unknown value '" + busName +
                                          "', using 'sfx'");
                 clip->setBus(bus);
-                // Same criterion as the bus: absent = "sample" (how everything was loaded
-                // before), unknown name = warning. NOTE: setLoadMode
-                // RELOADS the sound, so setting it after creating the clip
-                // costs one extra load; it only happens in scenes whose clip streams,
-                // and it avoids the factory having to know all the
-                // component fields.
-                const std::string loadModeName = readString(c, "loadMode", "sample", warnings, ctx);
-                DonTopo::AudioLoadMode loadMode = DonTopo::AudioLoadMode::Sample;
-                if (!DonTopo::audioLoadModeFromStr(loadModeName, loadMode) && warnings)
-                    warnings->push_back(ctx + ".loadMode: unknown value '" + loadModeName +
-                                         "', using 'sample'");
-                clip->setLoadMode(loadMode);
-                // Attenuation curve: same criterion as bus and loadMode.
-                const std::string rolloffName = readString(c, "rolloff", "inverse", warnings, ctx);
-                DonTopo::AudioRolloff rolloff = DonTopo::AudioRolloff::Inverse;
-                if (!DonTopo::audioRolloffFromStr(rolloffName, rolloff) && warnings)
-                    warnings->push_back(ctx + ".rolloff: unknown value '" + rolloffName +
-                                         "', using 'inverse'");
-                clip->setRolloff(rolloff);
+                // loadMode/rolloff were already passed to the factory (see above).
+                if (warnings)
+                    warnings->insert(warnings->end(), modeWarnings.begin(), modeWarnings.end());
                 // The three voice ones. Neutral defaults: a scene prior to
                 // this feature sounds exactly the same as before.
                 clip->setSpread(readFloat(c, "spread", 0.0f, warnings, ctx));
@@ -4072,7 +4031,15 @@ namespace DonTopo
             if (!sj.is_object()) return false;
             if (sj.value("path", std::string()) != src.path) return false;
             if (sj.value("builtin", false) != src.builtin) return false;
-            if (!sj.contains("clips") || !sj["clips"].is_array()) return src.clipNames.empty();
+            // No clip list saved for this source: it matches only a source with no
+            // names either -- and the REST of the sources still has to be checked
+            // (this used to return here, so two lists that agreed on their first
+            // entry "matched" whatever came after it).
+            if (!sj.contains("clips") || !sj["clips"].is_array())
+            {
+                if (!src.clipNames.empty()) return false;
+                continue;
+            }
             const nlohmann::json& cj = sj["clips"];
             if (cj.size() != src.clipNames.size()) return false;
             for (size_t c = 0; c < cj.size(); c++)
@@ -4084,6 +4051,109 @@ namespace DonTopo
     std::string meshCacheKey(const std::string& sourcePath, int piece)
     {
         return piece == 0 ? sourcePath : sourcePath + "#piece=" + std::to_string(piece);
+    }
+
+    std::vector<MaterialOverride> materialOverridesFromJson(const nlohmann::json& mats, const std::string& nodeName,
+                                                            const std::string& assetRoot, bool carryOverrideBaseline,
+                                                            std::vector<std::string>* warnings)
+    {
+        // Texture overrides. A block that is not an array, or an entry
+        // without a numeric "index", is discarded with a warning: half a configuration
+        // is worse than none, same criterion as jsonToMat4 with the matrix.
+        std::vector<MaterialOverride> out;
+        if (!mats.is_array())
+        {
+            if (warnings)
+                warnings->push_back("mesh of '" + nodeName + "'.materials: not a list, "
+                                    "the hand-assigned textures are discarded");
+            return out;
+        }
+        for (const auto& entry : mats)
+        {
+            if (!entry.is_object() || !entry.contains("index")
+                || !entry["index"].is_number_integer())
+            {
+                if (warnings)
+                    warnings->push_back("mesh of '" + nodeName + "'.materials: entry without a "
+                                        "valid index, discarded");
+                continue;
+            }
+            MaterialOverride ov;
+            ov.index  = entry["index"].get<int>();
+            ov.albedo   = fromStoredPath(entry.value("albedo", ""), assetRoot);
+            ov.normal   = fromStoredPath(entry.value("normal", ""), assetRoot);
+            ov.orm      = fromStoredPath(entry.value("orm",    ""), assetRoot);
+            ov.matAsset = fromStoredPath(entry.value("matAsset", ""), assetRoot);
+            // Absent = -1.0f (the "no override" sentinel; see
+            // MaterialOverride in GameObject.h), same criterion as
+            // "absent = empty string" of the three paths above.
+            // Through readFloat and not through a raw entry.value<float>():
+            // this whole block is NOT inside any try, and a
+            // "metallic": null or "metallic": "0.5" with .value<float>()
+            // throws type_error.302 — the exception goes up to
+            // fromJson(), which returns false, and THE WHOLE SCENE IS LOST
+            // without saying why. readFloat is the same guard
+            // the rest of the file already uses for this problem:
+            // it warns naming the field and falls to the sentinel.
+            // clamp(-1..1) also cuts a hand-mistyped "metallic": 5.0
+            // before it reaches the Material and the dedup
+            // key — the sentinel (negative) is not
+            // affected, clamp(-1, -1, 1) leaves it the same.
+            const std::string materialesCtx = "mesh of '" + nodeName + "'.materials";
+            ov.metallic  = std::clamp(readFloat(entry, "metallic",  -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
+            ov.roughness = std::clamp(readFloat(entry, "roughness", -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
+            // The baseline is ONLY read on the MEMORY path (see
+            // the big comment of nodeToJson, next to the same
+            // flag): on disk these fields, even if they were in the
+            // JSON, are ignored on purpose — the correct baseline of
+            // a disk load is the one that applyMaterialOverrides
+            // captures over the material just derived from the FBX, not a saved one
+            // that could be from ANOTHER export of the model.
+            if (carryOverrideBaseline)
+            {
+                ov.baseAlbedo      = fromStoredPath(entry.value("baseAlbedo", ""), assetRoot);
+                ov.baseAlbedoTaken = entry.value("baseAlbedoTaken", false);
+                ov.baseNormal      = fromStoredPath(entry.value("baseNormal", ""), assetRoot);
+                ov.baseNormalTaken = entry.value("baseNormalTaken", false);
+                ov.baseOrm         = fromStoredPath(entry.value("baseOrm", ""), assetRoot);
+                ov.baseOrmTaken    = entry.value("baseOrmTaken", false);
+                // Same reason as metallic/roughness above:
+                // readFloat/readBool instead of a raw entry.value<T>(),
+                // so that a corrupt field warns and falls to the
+                // default instead of taking down the whole fromJson().
+                ov.baseMetallic       = readFloat(entry, "baseMetallic", 0.0f, warnings, materialesCtx);
+                ov.baseMetallicTaken  = readBool(entry, "baseMetallicTaken", false, warnings, materialesCtx);
+                ov.baseRoughness      = readFloat(entry, "baseRoughness", 0.0f, warnings, materialesCtx);
+                ov.baseRoughnessTaken = readBool(entry, "baseRoughnessTaken", false, warnings, materialesCtx);
+            }
+            out.push_back(std::move(ov));
+        }
+        return out;
+    }
+
+    void writeMaterialOverrideBaselines(nlohmann::json& mats, const std::vector<MaterialOverride>& ovs)
+    {
+        if (!mats.is_array()) return;
+        // Same entry filter as materialOverridesFromJson, so the k-th surviving
+        // entry is the k-th override. Same keys nodeToJson writes with
+        // carryOverrideBaseline (memory form: verbatim paths).
+        size_t k = 0;
+        for (auto& entry : mats)
+        {
+            if (!entry.is_object() || !entry.contains("index") || !entry["index"].is_number_integer()) continue;
+            if (k >= ovs.size()) return;
+            const MaterialOverride& ov = ovs[k++];
+            entry["baseAlbedo"]         = ov.baseAlbedo;
+            entry["baseAlbedoTaken"]    = ov.baseAlbedoTaken;
+            entry["baseNormal"]         = ov.baseNormal;
+            entry["baseNormalTaken"]    = ov.baseNormalTaken;
+            entry["baseOrm"]            = ov.baseOrm;
+            entry["baseOrmTaken"]       = ov.baseOrmTaken;
+            entry["baseMetallic"]       = ov.baseMetallic;
+            entry["baseMetallicTaken"]  = ov.baseMetallicTaken;
+            entry["baseRoughness"]      = ov.baseRoughness;
+            entry["baseRoughnessTaken"] = ov.baseRoughnessTaken;
+        }
     }
 
     PreloadedMeshCache Scene::collectMeshes(GameObject* root)
@@ -4575,21 +4645,29 @@ namespace DonTopo
         }
         GameObject* target = parent ? parent : &m_root;
 
-        // Template -> instance json. Prefab-local ids become prefabNode and leave
-        // "id", so the GameObject constructor hands every node a fresh scene id
-        // (spec §7: local ids never reach the scene id space); the root gets the link.
-        nlohmann::json j = t.memoryRoot;
-        std::function<void(nlohmann::json&)> relink = [&](nlohmann::json& n) {
-            const uint64_t local = localIdOf(n, "id");
-            n.erase("id");
-            n.erase("prefab");
-            if (local != 0) n["prefabNode"] = local;
-            else            n.erase("prefabNode");
-            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
-                for (auto& c : *kids) if (c.is_object()) relink(c);
-        };
-        relink(j);
-        j["prefab"] = { {"path", t.key}, {"overrides", nlohmann::json::array()} };
+        // Template -> instance json: prefab-local ids already turned into
+        // prefabNode with no "id" (the GameObject constructor hands every node a
+        // fresh scene id; spec §7), the root link, and each node's final mesh by
+        // memRef with its override baselines -- all prepared ONCE by the library
+        // (PrefabTemplate::instanceRoot). A template assembled by hand without it
+        // is relinked here from memoryRoot (meshes then from t.meshes).
+        const bool prepared = t.instanceRoot.is_object();
+        nlohmann::json j = prepared ? t.instanceRoot : t.memoryRoot;
+        if (!prepared)
+        {
+            std::function<void(nlohmann::json&)> relink = [&](nlohmann::json& n) {
+                const uint64_t local = localIdOf(n, "id");
+                n.erase("id");
+                n.erase("prefab");
+                if (local != 0) n["prefabNode"] = local;
+                else            n.erase("prefabNode");
+                if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                    for (auto& c : *kids) if (c.is_object()) relink(c);
+            };
+            relink(j);
+            j["prefab"] = { {"path", t.key}, {"overrides", nlohmann::json::array()} };
+        }
+        const PreloadedMeshCache& meshes = prepared ? t.instanceMeshes : t.meshes;
 
         // Pose, written into the json BEFORE building: the collider factories take
         // the initial PhysX pose from the world transform at build time.
@@ -4609,11 +4687,19 @@ namespace DonTopo
                 worldRot = glm::quat_cast(glm::eulerAngleXYZ(glm::radians(eulerDeg->x),
                                                              glm::radians(eulerDeg->y),
                                                              glm::radians(eulerDeg->z)));
-            // A singular parent (a 0 scale) has no inverse and no answer: the pose
-            // is then taken as local rather than filling the matrix with inf/NaN.
+            // A singular parent (an axis at scale 0, or two collapsed onto each
+            // other) has no inverse and no answer: the pose is then taken as local
+            // rather than filling the matrix with inf/NaN. Judged RELATIVE to the
+            // axis lengths, not by |det| alone: a parent uniformly scaled by 1e-4
+            // has det 1e-12 and is perfectly invertible.
             const glm::mat4& parentWorld = target->worldTransform;
-            const glm::mat4 invParent = std::fabs(glm::determinant(parentWorld)) > 1e-12f
-                                      ? glm::inverse(parentWorld) : glm::mat4(1.0f);
+            const float l0 = glm::length(glm::vec3(parentWorld[0]));
+            const float l1 = glm::length(glm::vec3(parentWorld[1]));
+            const float l2 = glm::length(glm::vec3(parentWorld[2]));
+            const float axes = l0 * l1 * l2;
+            const bool invertible = axes > 0.0f && std::isfinite(axes) &&
+                                    std::fabs(glm::determinant(glm::mat3(parentWorld))) > 1e-6f * axes;
+            const glm::mat4 invParent = invertible ? glm::inverse(parentWorld) : glm::mat4(1.0f);
             glm::vec3 localPos(0.0f);
             glm::quat localRot(1.0f, 0.0f, 0.0f, 0.0f);
             decomposeTransform(invParent * glm::translate(glm::mat4(1.0f), worldPos) * glm::mat4_cast(worldRot),
@@ -4632,18 +4718,24 @@ namespace DonTopo
         GameObject* root = target->addChild(nameIt != j.end() && nameIt->is_string()
                                             ? nameIt->get<std::string>() : std::string());
         // hasBones answered by the template's meshes, never by an Assimp probe; OR
-        // so a static piece of the same file cannot mask a skinned one.
+        // so a static piece of the same file cannot mask a skinned one. (A node
+        // with its own prepared mesh is not even probed: memRef.)
         NodeLoadCache cache;
-        for (const auto& [key, m] : t.meshes)
+        for (const auto& [key, m] : meshes)
             if (m) cache.hasBones[m->sourcePath] = cache.hasBones[m->sourcePath] ||
                                                    (dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr);
         try
         {
             // Empty asset root: memory form, paths are already absolute.
-            // carryOverrideBaseline = false: a template carries no baseline, it is
-            // derived from the mesh as on a disk load.
+            // carryOverrideBaseline = true, like cloneGameObject: the prepared json
+            // carries the baselines of the overrides the library already baked into
+            // each node's mesh, so applyMaterialOverrides finds nothing to change and
+            // the mesh stays SHARED (an edit later copies only that instance's).
+            // Without baselines in the json (no overrides, or an unprepared
+            // template) nothing is "taken" and they are derived from the mesh, as on
+            // a disk load.
             nodeFromJson(j, root, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
-                         /*loader=*/nullptr, &t.meshes, /*carryOverrideBaseline=*/false, &t.mats);
+                         /*loader=*/nullptr, &meshes, /*carryOverrideBaseline=*/true, &t.mats);
         }
         catch (const std::exception& e)
         {

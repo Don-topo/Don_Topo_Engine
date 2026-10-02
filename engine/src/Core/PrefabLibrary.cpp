@@ -3,6 +3,7 @@
 #include "DonTopo/Audio/AudioBus.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Platform.h"
 #include "DonTopo/Files/FileManager.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <mutex>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace DonTopo
@@ -85,14 +87,39 @@ namespace DonTopo
             return out;
         }
 
-        // One request per meshCacheKey: two nodes sharing a file and a piece share
-        // the cached mesh. The first node's animationSources wins for a key (two
-        // nodes of the same rig with different source lists: the second one gets a
-        // deep copy at Instantiate, as nodeFromJson does on a mismatch).
+        // The "animationSources" of a node's mesh json; null when absent.
+        nlohmann::json sourcesOf(const nlohmann::json& mesh)
+        {
+            const auto a = mesh.find("animationSources");
+            return a != mesh.end() ? *a : nlohmann::json();
+        }
+
+        // Key of one configuration of a file+piece: Entry::configMeshes and the
+        // per-config warnings.
+        std::string configKey(const std::string& meshKey, const nlohmann::json& sources)
+        {
+            return meshKey + "|" + (sources.is_null() ? std::string() : sources.dump());
+        }
+
+        // Prefab-local id of a node ("id"), 0 when absent or invalid.
+        uint64_t localIdOf(const nlohmann::json& node)
+        {
+            const auto it = node.find("id");
+            if (it == node.end()) return 0;
+            if (it->is_number_unsigned()) return it->get<uint64_t>();
+            if (it->is_number_integer() && it->get<int64_t>() > 0) return static_cast<uint64_t>(it->get<int64_t>());
+            return 0;
+        }
+
+        // One loader request per meshCacheKey: the file is read once. The first
+        // node's animationSources is the PRIMARY configuration (t.meshes); every
+        // other distinct source list of the same file+piece is an extra one with
+        // its own configured mesh, so no instance has to reconfigure (Assimp) or
+        // deep-copy a mesh at Instantiate.
         std::vector<PrefabLibrary::MeshRequest> meshRequests(const nlohmann::json& root)
         {
             std::vector<PrefabLibrary::MeshRequest> out;
-            std::unordered_set<std::string> seen;
+            std::unordered_map<std::string, size_t> byKey;
             forEachNode(root, [&](const nlohmann::json& node) {
                 const auto mesh = node.find("mesh");
                 if (mesh == node.end() || !mesh->is_object()) return;
@@ -101,9 +128,18 @@ namespace DonTopo
                 if (r.sourcePath.empty()) return;   // procedural / inline mesh: nothing to load
                 if (const auto p = mesh->find("piece"); p != mesh->end() && p->is_number_integer())
                     r.piece = std::max(0, p->get<int>());
-                if (!seen.insert(meshCacheKey(r.sourcePath, r.piece)).second) return;
-                if (const auto a = mesh->find("animationSources"); a != mesh->end())
-                    r.animationSources = *a;
+                nlohmann::json sources = sourcesOf(*mesh);
+                const std::string key = meshCacheKey(r.sourcePath, r.piece);
+                if (const auto it = byKey.find(key); it != byKey.end())
+                {
+                    PrefabLibrary::MeshRequest& first = out[it->second];
+                    if (sources == first.animationSources) return;
+                    for (const auto& x : first.extraSources) if (x == sources) return;
+                    first.extraSources.push_back(std::move(sources));
+                    return;
+                }
+                r.animationSources = std::move(sources);
+                byKey.emplace(key, out.size());
                 out.push_back(std::move(r));
             });
             return out;
@@ -154,6 +190,11 @@ namespace DonTopo
                     collectRefs(v, out, seen);
             }
         }
+    }
+
+    std::string prefabNodeMeshRef(uint64_t prefabLocalId)
+    {
+        return "prefab-node:" + std::to_string(prefabLocalId);
     }
 
     PrefabLibrary::PrefabLibrary(JobSystem& jobs, std::string assetRoot)
@@ -336,7 +377,12 @@ namespace DonTopo
         e.t.meshes.clear();
         e.t.mats.clear();
         e.t.warmAudio.clear();
+        e.t.instanceRoot = nlohmann::json();
+        e.t.instanceMeshes.clear();
+        e.t.warnings.clear();
         e.rawMeshes.clear();
+        e.configMeshes.clear();
+        e.configWarnings.clear();
         e.outstanding = 0;
     }
 
@@ -348,10 +394,20 @@ namespace DonTopo
 
         // Meshes kept from a previous version (updateFromMemory) that the new tree
         // no longer uses are dropped; the ones it still uses are not reloaded.
-        std::unordered_set<std::string> wanted;
-        for (const MeshRequest& m : meshes) wanted.insert(meshCacheKey(m.sourcePath, m.piece));
+        std::unordered_set<std::string> wanted, wantedConfigs;
+        for (const MeshRequest& m : meshes)
+        {
+            const std::string meshKey = meshCacheKey(m.sourcePath, m.piece);
+            wanted.insert(meshKey);
+            wantedConfigs.insert(configKey(meshKey, m.animationSources));
+            for (const auto& x : m.extraSources) wantedConfigs.insert(configKey(meshKey, x));
+        }
         std::erase_if(e.t.meshes,   [&](const auto& kv) { return !wanted.count(kv.first); });
         std::erase_if(e.rawMeshes,  [&](const auto& kv) { return !wanted.count(kv.first); });
+        std::erase_if(e.configWarnings, [&](const auto& kv) { return !wantedConfigs.count(kv.first); });
+        // Extra configurations are rebuilt from the raw mesh (they are rare: two
+        // nodes on one rig with different source lists).
+        e.configMeshes.clear();
 
         for (MeshRequest& m : meshes)
         {
@@ -361,18 +417,21 @@ namespace DonTopo
             {
                 const std::shared_ptr<const Mesh> raw = it->second;
                 configureMesh(e, meshKey, raw, m.animationSources);
+                for (const auto& x : m.extraSources) configureExtra(e, meshKey, raw, x);
                 continue;
             }
             // No raw mesh (dropped after configuring, setKeepRawMeshes off): the
             // configured copy is reused only if it already has exactly the sources
-            // asked for; anything else needs a fresh raw mesh from the loader,
-            // since configuring the configured copy would only append.
+            // asked for AND no extra configuration needs the raw one; anything else
+            // needs a fresh raw mesh from the loader, since configuring the
+            // configured copy would only append.
             if (const auto it = e.t.meshes.find(meshKey); it != e.t.meshes.end())
             {
                 const auto* sk = dynamic_cast<const SkinnedMesh*>(it->second.get());
-                if (sk && m.animationSources.is_array() && meshMatchesAnimationConfig(*sk, m.animationSources))
-                    continue;
-                e.t.meshes.erase(it);
+                const bool matches = sk && m.animationSources.is_array() &&
+                                     meshMatchesAnimationConfig(*sk, m.animationSources);
+                if (matches && m.extraSources.empty()) continue;
+                if (!matches) e.t.meshes.erase(it);
             }
             const uint64_t ticket = m_nextTicket++;
             const JobSystem::JobId job = m_loader->requestMesh(m.sourcePath, ticket, m.piece);
@@ -381,7 +440,8 @@ namespace DonTopo
                 fail(e, "the job system is not running");
                 return;
             }
-            m_tickets[ticket] = MeshTicket{ e.t.key, e.serial, meshKey, std::move(m.animationSources), job };
+            m_tickets[ticket] = MeshTicket{ e.t.key, e.serial, meshKey, std::move(m.animationSources),
+                                            std::move(m.extraSources), job };
             ++e.outstanding;
         }
         finishIfDone(e, audio);
@@ -408,31 +468,57 @@ namespace DonTopo
                     return;
         // Otherwise nothing stale may stay visible while the new config is built.
         e.t.meshes.erase(meshKey);
-        const std::shared_ptr<const Mesh>& mesh = raw;
+        submitConfigJob(e, meshKey, std::string(), raw, animationSources);
+    }
 
+    void PrefabLibrary::configureExtra(Entry& e, const std::string& meshKey,
+                                       const std::shared_ptr<const Mesh>& raw,
+                                       const nlohmann::json& animationSources)
+    {
+        const std::string ck = configKey(meshKey, animationSources);
+        const auto* sk = dynamic_cast<const SkinnedMesh*>(raw.get());
+        if (!animationSources.is_array() || !sk || meshMatchesAnimationConfig(*sk, animationSources))
+        {
+            e.configMeshes[ck] = raw;
+            e.configWarnings.erase(ck);
+            return;
+        }
+        submitConfigJob(e, meshKey, ck, raw, animationSources);
+    }
+
+    void PrefabLibrary::submitConfigJob(Entry& e, const std::string& meshKey, const std::string& extraKey,
+                                        const std::shared_ptr<const Mesh>& mesh,
+                                        const nlohmann::json& animationSources)
+    {
         // applyAnimationSourceConfig reads the external FBX files and only APPENDS
         // sources: a worker job, on a copy of the RAW mesh.
         std::vector<AnimationSourceConfig> configs = animationConfigs(animationSources);
         const std::shared_ptr<Mailbox> mailbox = m_mailbox;
         const std::string key    = e.t.key;
         const uint64_t    serial = e.serial;
+        const bool        extra  = !extraKey.empty();
+        const std::string ck     = configKey(meshKey, animationSources);
         ++e.outstanding;
         const JobSystem::JobId id = m_jobs.submit(
-            [mailbox, key, serial, meshKey, mesh, configs = std::move(configs)]
+            [mailbox, key, serial, meshKey, ck, extra, mesh, configs = std::move(configs)]
             {
                 {
                     std::lock_guard<std::mutex> lock(mailbox->mutex);
                     if (mailbox->closed) return;
                 }
                 AnimResult r;
-                r.key     = key;
-                r.serial  = serial;
-                r.meshKey = meshKey;
+                r.key       = key;
+                r.serial    = serial;
+                r.meshKey   = meshKey;
+                r.configKey = ck;
+                r.extra     = extra;
                 try
                 {
                     auto copy = std::make_shared<SkinnedMesh>(static_cast<const SkinnedMesh&>(*mesh));
-                    std::vector<std::string> warnings;   // same "warn and continue" as nodeFromJson
-                    applyAnimationSourceConfig(*copy, configs, warnings);
+                    // Same "warn and continue" as nodeFromJson (a missing or
+                    // other-rig source): the warnings go back with the mesh and
+                    // are reported ONCE by the template, never per instance.
+                    applyAnimationSourceConfig(*copy, configs, r.warnings);
                     r.mesh = std::move(copy);
                 }
                 catch (const std::exception& ex)
@@ -450,6 +536,97 @@ namespace DonTopo
         if (id == 0) fail(e, "the job system is not running");
     }
 
+    void PrefabLibrary::prepareInstance(Entry& e)
+    {
+        PrefabTemplate& t = e.t;
+        t.instanceMeshes = t.meshes;
+        t.instanceRoot   = t.memoryRoot;
+        t.warnings.clear();
+        for (const auto& [ck, ws] : e.configWarnings)
+            for (const std::string& w : ws)
+                if (std::find(t.warnings.begin(), t.warnings.end(), w) == t.warnings.end())
+                    t.warnings.push_back(w);
+        if (!t.instanceRoot.is_object()) return;
+
+        // The primary source list of each file+piece: the one t.meshes holds.
+        std::unordered_map<std::string, nlohmann::json> primary;
+        for (const MeshRequest& r : meshRequests(t.memoryRoot))
+            primary.emplace(meshCacheKey(r.sourcePath, r.piece), r.animationSources);
+
+        // The final mesh of one node: its configuration, then its material
+        // overrides applied ONCE here (on a throwaway GameObject, with the same
+        // parser and the same applyMaterialOverrides nodeFromJson uses). The
+        // baselines that captures go into the json, so an instance built with
+        // carryOverrideBaseline finds its mesh already right and SHARES it.
+        auto bake = [&](nlohmann::json& node, uint64_t local) {
+            const auto mesh = node.find("mesh");
+            if (mesh == node.end() || !mesh->is_object()) return;
+            const std::string sourcePath = stringField(*mesh, "sourcePath");
+            if (sourcePath.empty()) return;   // procedural: built from its json as always
+            int piece = 0;
+            if (const auto p = mesh->find("piece"); p != mesh->end() && p->is_number_integer())
+                piece = std::max(0, p->get<int>());
+            const std::string meshKey = meshCacheKey(sourcePath, piece);
+            const nlohmann::json sources = sourcesOf(*mesh);
+            std::shared_ptr<const Mesh> base;
+            if (const auto p = primary.find(meshKey); p != primary.end() && p->second == sources)
+            {
+                if (const auto it = t.meshes.find(meshKey); it != t.meshes.end()) base = it->second;
+            }
+            else if (const auto it = e.configMeshes.find(configKey(meshKey, sources)); it != e.configMeshes.end())
+            {
+                base = it->second;
+            }
+            if (!base) return;   // not prepared: the instance takes the ordinary path
+
+            std::shared_ptr<const Mesh> final = base;
+            if (const auto mats = mesh->find("materials"); mats != mesh->end())
+            {
+                try
+                {
+                    GameObject tmp(stringField(node, "name"));
+                    tmp.setMesh(base);
+                    tmp.materialOverrides = materialOverridesFromJson(*mats, tmp.name, std::string(),
+                                                                      /*carryOverrideBaseline=*/false, nullptr);
+                    if (!tmp.materialOverrides.empty())
+                    {
+                        applyMaterialOverrides(tmp, &t.mats);
+                        final = tmp.getMesh();
+                        writeMaterialOverrideBaselines(*mats, tmp.materialOverrides);
+                    }
+                }
+                catch (const std::exception&)
+                {
+                    return;   // malformed entry: nodeFromJson reports it per instance
+                }
+            }
+            const std::string ref = prefabNodeMeshRef(local);
+            (*mesh)["memRef"] = ref;
+            t.instanceMeshes[ref] = std::move(final);
+        };
+
+        // Prefab-local ids -> prefabNode, no "id" (each instance node gets a fresh
+        // scene id from the GameObject constructor; spec §7).
+        std::function<void(nlohmann::json&)> walk = [&](nlohmann::json& n) {
+            const uint64_t local = localIdOf(n);
+            n.erase("id");
+            n.erase("prefab");
+            if (local != 0)
+            {
+                n["prefabNode"] = local;
+                bake(n, local);
+            }
+            else
+            {
+                n.erase("prefabNode");
+            }
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (auto& c : *kids) if (c.is_object()) walk(c);
+        };
+        walk(t.instanceRoot);
+        t.instanceRoot["prefab"] = { {"path", t.key}, {"overrides", nlohmann::json::array()} };
+    }
+
     void PrefabLibrary::finishIfDone(Entry& e, AudioManager& audio)
     {
         if (e.t.state != PrefabTemplate::State::Loading || e.outstanding > 0) return;
@@ -457,6 +634,7 @@ namespace DonTopo
         // Same calls nodeFromJson makes for an audioClip, so Instantiate hits the
         // AudioManager's sound cache (and the sidecar is read here, once).
         std::vector<std::shared_ptr<AudioClipComponent>> warm;
+        std::string audioError;
         forEachNode(e.t.memoryRoot, [&](const nlohmann::json& node) {
             const auto c = node.find("audioClip");
             if (c == node.end() || !c->is_object()) return;
@@ -472,23 +650,31 @@ namespace DonTopo
             if (!audioLoadModeFromStr(stringField(*c, "loadMode"), mode)) mode = AudioLoadMode::Sample;
             AudioRolloff rolloff = AudioRolloff::Inverse;
             if (!audioRolloffFromStr(stringField(*c, "rolloff"), rolloff)) rolloff = AudioRolloff::Inverse;
-            // nodeFromJson creates the clip with the defaults and then RELOADS it for
-            // its loadMode and then for its rolloff (setLoadMode / setRolloff). Every
-            // sound key on that path must stay cached, not only the last one: a
-            // step that misses creates the FMOD sound again and reads the sidecar.
-            // One warm clip per step keeps each key alive.
-            auto warmStep = [&](bool withMode, bool withRolloff) {
-                auto clip = audio.createAudioClipComponent(path, is3D, loop);
-                if (!clip) return false;
-                if (withMode) clip->setLoadMode(mode);
-                if (withRolloff) clip->setRolloff(rolloff);
+            // nodeFromJson creates the clip ONCE with its final loadMode and rolloff
+            // (both part of the sound's cache key), so warming that one key is all
+            // an instance needs -- and nothing else is decoded and pinned.
+            auto clip = audio.createAudioClipComponent(path, is3D, loop, mode, rolloff);
+            if (clip)
+            {
                 warm.push_back(std::move(clip));
-                return true;
-            };
-            if (!warmStep(false, false)) return;
-            if (mode != AudioLoadMode::Sample)    warmStep(true, false);
-            if (rolloff != AudioRolloff::Inverse) warmStep(true, true);
+            }
+            else if (audio.available() && audioError.empty())
+            {
+                // FMOD is up and refused the sound. Every Instantiate would ask
+                // FMOD (and the disk) again for it, silently: the template fails
+                // instead, like one whose mesh cannot load -- reported once, through
+                // Prefab:IsLoaded and the Instantiate error. Without FMOD at all
+                // (available() false) nothing is retried from disk, so it is no
+                // failure: the instances simply get no clip, like any scene.
+                audioError = "cannot load audio clip '" + path + "'";
+            }
         });
+        if (!audioError.empty())
+        {
+            fail(e, audioError);
+            return;
+        }
+        prepareInstance(e);
         e.t.warmAudio  = std::move(warm);   // new ones first: the shared sounds never hit zero refs
         e.t.state      = PrefabTemplate::State::Ready;
         e.t.error.clear();
@@ -529,10 +715,20 @@ namespace DonTopo
             if (!e) continue;
             --e->outstanding;
             if (!r.error.empty() || !r.mesh) { fail(*e, r.error); continue; }
-            e->t.meshes[r.meshKey] = std::move(r.mesh);
-            // The configured copy exists: unless asked to keep it, the raw one
-            // would only double this mesh's RAM for the template's whole life.
-            if (!m_keepRawMeshes) e->rawMeshes.erase(r.meshKey);
+            if (r.warnings.empty()) e->configWarnings.erase(r.configKey);
+            else                    e->configWarnings[r.configKey] = std::move(r.warnings);
+            if (r.extra)
+            {
+                e->configMeshes[r.configKey] = std::move(r.mesh);
+            }
+            else
+            {
+                e->t.meshes[r.meshKey] = std::move(r.mesh);
+                // The configured copy exists: unless asked to keep it, the raw one
+                // would only double this mesh's RAM for the template's whole life
+                // (an extra configuration still pending holds its own reference).
+                if (!m_keepRawMeshes) e->rawMeshes.erase(r.meshKey);
+            }
             finishIfDone(*e, audio);
         }
 
@@ -563,6 +759,8 @@ namespace DonTopo
             const std::shared_ptr<const Mesh> raw = std::move(m.mesh);
             e->rawMeshes[ticket.meshKey] = raw;
             configureMesh(*e, ticket.meshKey, raw, ticket.animationSources);
+            for (const auto& x : ticket.extraSources)
+                if (e->t.state == PrefabTemplate::State::Loading) configureExtra(*e, ticket.meshKey, raw, x);
             finishIfDone(*e, audio);
         }
     }

@@ -279,6 +279,7 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
     else if (rolloff == AudioRolloff::LinearSquare) mode |= FMOD_3D_LINEARSQUAREROLLOFF;
     FMOD::Sound* snd;
     if (SYS->createSound(path.c_str(), mode, nullptr, &snd) != FMOD_OK) return -1;
+    ++m_soundCreateCount;
     // Import settings of the file (sidecar): only on CREATING the sound; a
     // cache hit already returned earlier with its own.
     std::string importWarning;
@@ -1242,11 +1243,11 @@ float AudioManager::getBusVolume(AudioBus bus) const
 
 
 std::shared_ptr<AudioClipComponent> AudioManager::createAudioClipComponent(
-    const std::string& path, bool is3D, bool loop, AudioLoadMode loadMode)
+    const std::string& path, bool is3D, bool loop, AudioLoadMode loadMode, AudioRolloff rolloff)
 {
-    int id = loadSound(path, is3D, loop, loadMode);
+    int id = loadSound(path, is3D, loop, loadMode, rolloff);
     if (id < 0) return nullptr;
-    return std::make_shared<AudioClipComponent>(this, path, id, is3D, loop, loadMode);
+    return std::make_shared<AudioClipComponent>(this, path, id, is3D, loop, loadMode, rolloff);
 }
 
 } // namespace DonTopo

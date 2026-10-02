@@ -61,8 +61,14 @@ public:
     void setPhysicsManager(PhysicsManager* p)      { m_physics = p; }
     void setAudioManager(AudioManager* a)          { m_audio = a; }
     // Templates for Lua's Instantiate(prefab) and Prefab:IsLoaded(). Non-owning;
-    // nullptr (the default) makes Instantiate raise a Lua error. The host must
-    // reset it before destroying the library.
+    // nullptr (the default) makes Instantiate raise a Lua error.
+    // Host obligations, in this order at shutdown:
+    //  1. setPrefabLibrary(nullptr) BEFORE the library is destroyed, and before
+    //     onPlayStop at shutdown (an OnDestroy may still call Instantiate or
+    //     IsLoaded, which would reach a dead library);
+    //  2. destroy the library BEFORE the AudioManager: its templates hold warm
+    //     AudioClipComponents whose destructors unload sounds from that manager
+    //     (and the JobSystem must outlive the library too, see PrefabLibrary.h).
     void setPrefabLibrary(PrefabLibrary* lib)      { m_prefabs = lib; }
     void setLogCallback(std::function<void(const std::string&)> cb) { m_log = std::move(cb); }
 

@@ -96,6 +96,11 @@ public:
     // number of live sounds.
     size_t soundSlotCount() const;
 
+    // FMOD sounds CREATED so far (every createSound that succeeded; a cache hit does
+    // not count). Unlike loadedSoundCount it also sees a sound that was created and
+    // released again in between, i.e. a throwaway load.
+    int soundCreateCount() const { return m_soundCreateCount; }
+
     // Is the sound really streaming? It reads the real FMOD_MODE, not what the
     // component believes. It exists because without this the line that applies
     // FMOD_CREATESTREAM has no coverage at all: removing it left everything
@@ -337,9 +342,13 @@ public:
     // wraps the resulting soundId in an AudioClipComponent ready to
     // hang from a GameObject (GameObject::setAudioClip). nullptr if
     // loadSound fails (invalid file / not supported by FMOD).
+    // loadMode and rolloff are part of the sound's cache key: passing the final ones
+    // here (instead of setLoadMode/setRolloff afterwards, which RELOAD) creates the
+    // sound once, with no throwaway decode of the default variant.
     std::shared_ptr<AudioClipComponent> createAudioClipComponent(
         const std::string& path, bool is3D, bool loop,
-        AudioLoadMode loadMode = AudioLoadMode::Sample);
+        AudioLoadMode loadMode = AudioLoadMode::Sample,
+        AudioRolloff rolloff = AudioRolloff::Inverse);
 
 private:
     // OUTSIDE the #ifdef on purpose: outputWarning() is public and is NOT
@@ -398,6 +407,7 @@ private:
     // Free slots, to reuse them instead of growing without a ceiling: each
     // Play->Stop cycle recreates the whole scene and asked for new ids.
     std::vector<int>         m_freeSlots;
+    int                      m_soundCreateCount = 0;
     std::unordered_map<std::string, int> m_soundByKey;
     // Sounds retained by playClipAtPoint/preloadClip. Without this set,
     // each shot would raise the refcount of the same sound again and the counter

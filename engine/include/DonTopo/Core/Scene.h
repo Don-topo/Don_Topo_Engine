@@ -50,6 +50,18 @@ namespace DonTopo
     void resolveStoredPaths(nlohmann::json& nodeTree, const std::string& assetRoot);
     void storeRelativePaths(nlohmann::json& nodeTree, const std::string& assetRoot);
 
+    // mesh.materials[] of a node json -> MaterialOverrides: THE parser nodeFromJson
+    // uses (malformed entries dropped with a warning naming nodeName). Base*
+    // baselines are read only with carryOverrideBaseline (memory form).
+    std::vector<MaterialOverride> materialOverridesFromJson(const nlohmann::json& materials,
+                                                            const std::string& nodeName,
+                                                            const std::string& assetRoot,
+                                                            bool carryOverrideBaseline,
+                                                            std::vector<std::string>* warnings);
+    // Writes the base* / base*Taken of ovs into the entries they were parsed from
+    // (same entry filter), as nodeToJson does with carryOverrideBaseline.
+    void writeMaterialOverrideBaselines(nlohmann::json& materials, const std::vector<MaterialOverride>& ovs);
+
     struct SkinnedMesh;
     // true if the mesh's animation sources (path, builtin and clip
     // names, in order) are exactly those of the "animationSources" block of the

@@ -15,7 +15,8 @@ class AudioManager;
 class AudioClipComponent {
 public:
     AudioClipComponent(AudioManager* audio, std::string path, int soundId, bool is3D, bool loop,
-                        AudioLoadMode loadMode = AudioLoadMode::Sample);
+                        AudioLoadMode loadMode = AudioLoadMode::Sample,
+                        AudioRolloff rolloff = AudioRolloff::Inverse);
     ~AudioClipComponent();
 
     AudioClipComponent(const AudioClipComponent&)            = delete;
