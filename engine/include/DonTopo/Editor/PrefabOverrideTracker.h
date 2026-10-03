@@ -61,7 +61,17 @@ namespace DonTopo
             // before an instance is propagated, every difference between its live
             // subtree and its baseline is folded into its overrides, so the edit
             // survives the rebuild instead of being silently reverted.
-            void captureBaseline(Scene& scene, GameObject* instanceRoot);
+            //
+            // templateRoot: the template the instance currently stands on (memory
+            // form), when one is Ready. With it, a folded value equal to THAT
+            // template's is not an edit but a revert (an override undone while
+            // the template reloaded): it is dropped, and so is the stored override
+            // on that path, so the instance follows the NEW prefab value.
+            // A node whose mesh is still in flight from the async loader has no
+            // "mesh" in its baseline; its mesh paths are never folded (the mesh
+            // landing is not a user edit).
+            void captureBaseline(Scene& scene, GameObject* instanceRoot,
+                                 const nlohmann::json* templateRoot = nullptr);
             bool hasBaseline(uint64_t instanceRootId) const { return m_baseline.count(instanceRootId) != 0; }
             // Folds live-vs-baseline differences into instanceRoot's overrides (a
             // difference on a path already overridden replaces that value). No-op
@@ -86,7 +96,13 @@ namespace DonTopo
         private:
             std::unordered_map<uint64_t, uint64_t> m_syncedGeneration;
             std::unordered_map<uint64_t, uint64_t> m_failedGeneration;
-            std::unordered_map<uint64_t, nlohmann::json> m_baseline;
+            struct Baseline
+            {
+                nlohmann::json live;                    // subtreeToMemoryJson at capture
+                std::vector<uint64_t> meshInFlight;     // prefab-local ids waiting for a live mesh request
+                nlohmann::json templateRoot;            // null when no template was Ready
+            };
+            std::unordered_map<uint64_t, Baseline> m_baseline;
             std::function<bool(uint64_t)> m_meshRequestLive;
     };
 

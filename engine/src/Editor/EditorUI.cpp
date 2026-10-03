@@ -318,13 +318,17 @@ void EditorUI::withPrefabRebuilds(const std::function<void()>& fn)
 {
     // A rebuild frees the old subtree (onNodeRemoved clears m_selected if it was
     // inside); the matched nodes keep their ids, so the selection comes back.
+    // Always by id, not only when something was rebuilt: a rebuild that FAILED
+    // re-inserts the old subtree (new objects, same ids) after onNodeRemoved
+    // already cleared the selection.
     const uint64_t selectedId = m_selected ? m_selected->id : 0;
+    GameObject* const before  = m_selected;
     fn();
-    if (!m_prefabSync || m_prefabSync->takeRebuiltCount() == 0)
-        return;
-    if (m_scene)
-        m_selected = selectedId != 0 ? m_scene->findById(selectedId) : nullptr;
-    m_propertiesPanel.invalidateCaches();
+    const bool rebuilt = m_prefabSync && m_prefabSync->takeRebuiltCount() > 0;
+    if (m_scene && selectedId != 0)
+        m_selected = m_scene->findById(selectedId);
+    if (rebuilt || m_selected != before)
+        m_propertiesPanel.invalidateCaches();
 }
 
 void EditorUI::releasePrefabLibrary()

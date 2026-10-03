@@ -157,7 +157,10 @@ namespace DonTopo
         // Every instance's state as loaded: an edit made before its template
         // is Ready is told apart from it at the first propagation.
         scene.traverse([&](GameObject* n) {
-            if (n->prefabLink && n->parent) m_tracker.captureBaseline(scene, n);
+            if (!n->prefabLink || !n->parent) return;
+            const PrefabTemplate* t = m_lib.find(n->prefabLink->path);
+            m_tracker.captureBaseline(scene, n,
+                (t && t->state == PrefabTemplate::State::Ready) ? &t->memoryRoot : nullptr);
         });
 
         // Templates already Ready (kept across the load) will not call onReady
@@ -202,6 +205,25 @@ namespace DonTopo
                 --m_retryCooldown;
             else if (!m_host.loaderPending || m_host.loaderPending() == 0)
                 retry = true;
+        }
+
+        if (revisionChanged)
+        {
+            // An instance the tracker has never seen (a clone, an editor or Lua
+            // drop, the undo of a Delete) gets its baseline at the revision change
+            // of the command that created it -- before any edit of the user's --
+            // so an edit made while its template loads is folded, not reverted.
+            Scene& scene = *m_host.scene;
+            std::vector<GameObject*> fresh;
+            scene.traverse([&](GameObject* n) {
+                if (n->prefabLink && n->parent && !m_tracker.hasBaseline(n->id)) fresh.push_back(n);
+            });
+            for (GameObject* n : fresh)
+            {
+                const PrefabTemplate* t = m_lib.find(n->prefabLink->path);
+                m_tracker.captureBaseline(scene, n,
+                    (t && t->state == PrefabTemplate::State::Ready) ? &t->memoryRoot : nullptr);
+            }
         }
 
         if (revisionChanged || retry)
