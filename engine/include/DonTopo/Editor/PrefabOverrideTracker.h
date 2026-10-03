@@ -73,6 +73,14 @@ namespace DonTopo
             void captureBaseline(Scene& scene, GameObject* instanceRoot,
                                  const nlohmann::json* templateRoot = nullptr);
             bool hasBaseline(uint64_t instanceRootId) const { return m_baseline.count(instanceRootId) != 0; }
+            // A node recorded as "mesh in flight" whose request is over (the mesh
+            // landed, failed or was cancelled): its baseline "mesh" is patched
+            // from the live node and it leaves the in-flight list, so an edit of
+            // that mesh from now on is folded like any other. Call it at the START
+            // of an editor frame (after the loader results are applied, before
+            // any panel can edit). Cheap when nothing is in flight. Returns how
+            // many nodes it settled.
+            int settleLandedMeshes(Scene& scene);
             // Folds live-vs-baseline differences into instanceRoot's overrides (a
             // difference on a path already overridden replaces that value). No-op
             // without a link or a baseline. Returns how many entries it wrote.

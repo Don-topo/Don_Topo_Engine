@@ -63,6 +63,32 @@ namespace DonTopo
             return true;
         }
 
+        // Whether the live value of a folded edit equals the template node's value
+        // at the SAME path, resolved inside the template node (diffs report at
+        // different depths: a whole "/light" when one side lacks the component,
+        // a leaf "/light/intensity" when both have it). A path the template lacks,
+        // or a removal (null) of something it has, differs. "/transform/*" is
+        // virtual (a decomposition of localTransform): for those, the diff of the
+        // live node against the template already says it (vsTemplate).
+        bool equalsTemplateAt(const nlohmann::json& templateNode, const PrefabOverride& edit,
+                              const std::vector<PrefabOverride>& vsTemplate)
+        {
+            if (edit.path.rfind("/transform/", 0) == 0)
+                return std::none_of(vsTemplate.begin(), vsTemplate.end(),
+                                    [&](const PrefabOverride& v) { return v.path == edit.path; });
+            try
+            {
+                const nlohmann::json::json_pointer ptr(edit.path);
+                if (!templateNode.contains(ptr)) return false;
+                if (edit.value.is_null()) return false;
+                return prefabValuesEqual(templateNode.at(ptr), edit.value);
+            }
+            catch (const std::exception&)
+            {
+                return false;   // a path that is not a valid pointer here: treat as an edit
+            }
+        }
+
         // An override that changes WHICH mesh a node has (its file, piece or
         // animation sources): the template's configured mesh for that node no
         // longer describes it. Materials, visibility and the mesh name do not.
@@ -189,9 +215,7 @@ namespace DonTopo
                     // The mesh landing from the async loader is not an edit.
                     if (meshPath(e.path) && inFlight(local)) continue;
                     const bool differsFromTemplate =
-                        t == tmpl.end() ||
-                        std::any_of(vsTemplate.begin(), vsTemplate.end(),
-                                    [&](const PrefabOverride& v) { return v.path == e.path; });
+                        t == tmpl.end() || !equalsTemplateAt(*t->second, e, vsTemplate);
                     if (differsFromTemplate) edits.push_back(std::move(e));
                     else                     reverts.emplace_back(local, e.path);
                 }
@@ -212,6 +236,48 @@ namespace DonTopo
             else                            overridesRef.push_back(std::move(e));
         }
         return static_cast<int>(edits.size() + reverts.size());
+    }
+
+    int PrefabOverrideTracker::settleLandedMeshes(Scene& scene)
+    {
+        int settled = 0;
+        for (auto& [rootId, b] : m_baseline)
+        {
+            if (b.meshInFlight.empty()) continue;
+            GameObject* root = scene.findById(rootId);
+            if (!root) continue;   // deleted: its baseline goes with the next clear/forget
+            std::unordered_map<uint64_t, GameObject*> byLocal;
+            root->traverse([&](GameObject* n) { if (n->prefabNode != 0) byLocal.emplace(n->prefabNode, n); });
+
+            // The baseline node of each prefab-local id.
+            std::unordered_map<uint64_t, nlohmann::json*> baseNodes;
+            std::function<void(nlohmann::json&)> index = [&](nlohmann::json& n) {
+                if (const uint64_t local = localIdOf(n, "prefabNode"); local != 0) baseNodes.emplace(local, &n);
+                if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                    for (auto& c : *kids) if (c.is_object()) index(c);
+            };
+            index(b.live);
+
+            std::erase_if(b.meshInFlight, [&](uint64_t local) {
+                const auto live = byLocal.find(local);
+                if (live == byLocal.end()) return true;   // node gone: nothing to wait for
+                GameObject* n = live->second;
+                if (n->pendingMeshJob != 0 && (!m_meshRequestLive || m_meshRequestLive(n->pendingMeshJob)))
+                    return false;                          // still on its way
+                if (const auto base = baseNodes.find(local); base != baseNodes.end())
+                {
+                    // Only this node's own "mesh" (its children travel separately).
+                    const nlohmann::json now = scene.subtreeToMemoryJson(n);
+                    if (const auto mesh = now.find("mesh"); mesh != now.end())
+                        (*base->second)["mesh"] = *mesh;
+                    else
+                        base->second->erase("mesh");
+                }
+                ++settled;
+                return true;
+            });
+        }
+        return settled;
     }
 
     bool PrefabOverrideTracker::meshPending(const GameObject* instanceRoot) const

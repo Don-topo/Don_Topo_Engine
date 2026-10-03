@@ -1109,8 +1109,190 @@ void testRevertDuringReloadFollowsNewPrefab()
     CHECK(inst && !hasOverride(inst, "/light/intensity"), "and is no longer an override");
 }
 
+// R1: revert detection must resolve the edited path INSIDE the template node,
+// not look for a template diff entry at exactly the same depth.
+// Shared setup: one synced Enemy instance; then another instance's Apply puts
+// the template in Loading (new mesh) with intensity 2 on the Lamp.
+struct ReloadWindow
+{
+    TempRoot root;
+    DonTopo::JobSystem js;
+    std::unique_ptr<DonTopo::PrefabLibrary> lib;
+    DonTopo::Scene scene;
+    SyncFixture fx;
+    std::unique_ptr<DonTopo::PrefabSceneSync> sync;
+    uint64_t id = 0;
+
+    explicit ReloadWindow(const char* name) : root(name)
+    {
+        writeFile(root.p / kEnemyKey, enemyFile(root.str(), 10.0f, 1.0f).dump(2));
+        writeFile(root.p / "Models" / "tri.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+        js.start(2);
+        lib = std::make_unique<DonTopo::PrefabLibrary>(js, root.str());
+        scene.setAssetRoot(root.str());
+        sync = std::make_unique<DonTopo::PrefabSceneSync>(*lib);
+        sync->setHost(fx.host(scene));
+        lib->request(kEnemyKey);
+        settleSync(*sync, *lib);
+        if (const DonTopo::PrefabTemplate* t = readyTemplate(*lib, kEnemyKey))
+            if (DonTopo::GameObject* inst = scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio()))
+                id = inst->id;
+        sync->sceneLoaded(scene.toJson());
+    }
+    DonTopo::GameObject* inst() { return scene.findById(id); }
+    // The Apply of another instance: Loading until settled.
+    void startReload()
+    {
+        nlohmann::json applied = enemyFile(root.str(), 10.0f, 2.0f);
+        applied["root"]["mesh"] = { {"sourcePath", (root.p / "Models" / "tri.obj").string()}, {"name", "tri"} };
+        lib->updateFromMemory(kEnemyKey, applied, audio());
+    }
+    ~ReloadWindow() { sync.reset(); lib.reset(); js.shutdown(); }
+};
+
+// Case 1: a component the INSTANCE added (stored "/light" override on the
+// root, which has no light in the prefab); its intensity edited during the
+// reload. The template has no "/light" there at all: that is an edit, kept.
+void testRevertDetectionAddedComponentEdit()
+{
+    ReloadWindow w("dt_prefab_editor_r1_added");
+    DonTopo::GameObject* inst = w.inst();
+    if (!inst) { CHECK(false, "instance"); return; }
+    auto light = std::make_shared<DonTopo::LightComponent>();
+    light->setIntensity(3.0f);
+    inst->setLight(light);
+    w.sync->frame(true, nullptr);
+    CHECK(hasOverride(inst, "/light"), "the added light is a stored override");
+
+    w.startReload();
+    inst->getLight()->setIntensity(7.0f);   // edited while the template reloads
+    w.sync->frame(true, nullptr);
+    CHECK(settleSync(*w.sync, *w.lib), "reload settles");
+    inst = w.inst();
+    CHECK(inst && inst->getLight() && inst->getLight()->getIntensity() == 7.0f,
+          "the edit of an instance-added component survives the reload");
+}
+
+// Case 2: a component the instance REMOVED (stored null override), re-added by
+// the user with custom values during the reload: an edit, kept.
+void testRevertDetectionReaddedComponent()
+{
+    ReloadWindow w("dt_prefab_editor_r1_readded");
+    DonTopo::GameObject* inst = w.inst();
+    DonTopo::GameObject* lamp = inst ? childNamed(inst, "Lamp") : nullptr;
+    if (!lamp) { CHECK(false, "lamp"); return; }
+    lamp->setLight(nullptr);
+    w.sync->frame(true, nullptr);
+    CHECK(hasOverride(inst, "/light"), "the removal is a stored override");
+
+    w.startReload();
+    auto light = std::make_shared<DonTopo::LightComponent>();
+    light->setIntensity(1.0f);
+    light->setRange(33.0f);
+    lamp->setLight(light);   // re-added with a custom range while the template reloads
+    w.sync->frame(true, nullptr);
+    CHECK(settleSync(*w.sync, *w.lib), "reload settles");
+    inst = w.inst();
+    CHECK(inst && lampLight(inst) && lampLight(inst)->getRange() == 33.0f,
+          "the re-added component keeps its custom values");
+}
+
+// R2: a mesh that lands after the scene load is part of the baseline from the
+// next frame on, so a material edit made before the template is Ready is
+// folded (and kept), not reverted by the rebuild.
+void testMaterialEditAfterMeshLandsIsKept()
+{
+    namespace fs = std::filesystem;
+    TempRoot root("dt_prefab_editor_r2");
+    const std::string tri = (root.p / "Models" / "box.obj").string();
+    writeFile(tri, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    const fs::path maw = root.p / "Models" / "Maw J Laygo.fbx";
+    fs::copy_file("assets/animatedCharacter/Maw J Laygo.fbx", maw);
+    const nlohmann::json identity = nlohmann::json::array({ 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0 });
+
+    nlohmann::json prefabFile;
+    {
+        DonTopo::Scene s0;
+        s0.setAssetRoot(root.str());
+        // A skinned child keeps the template Loading while its mesh is not
+        // delivered (pump budget 0 below); the .obj child is what lands first.
+        nlohmann::json enemy = { {"name", "Enemy"}, {"localTransform", identity}, {"children", nlohmann::json::array()} };
+        enemy["children"].push_back({ {"name", "Box"}, {"localTransform", identity},
+                                      {"mesh", { {"sourcePath", tri}, {"name", "box"} }},
+                                      {"children", nlohmann::json::array()} });
+        enemy["children"].push_back({ {"name", "Body"}, {"localTransform", identity},
+                                      {"mesh", { {"sourcePath", maw.string()}, {"name", "Maw"}, {"skinned", true} }},
+                                      {"children", nlohmann::json::array()} });
+        DonTopo::GameObject* e = s0.insertFromJson(enemy, nullptr, SIZE_MAX, physics(), audio());
+        if (!e) { CHECK(false, "prefab source"); return; }
+        prefabFile = s0.makePrefab(e, kEnemyKey, /*link=*/false);
+    }
+    writeFile(root.p / kEnemyKey, prefabFile.dump(2));
+    nlohmann::json sceneJson;
+    {
+        DonTopo::Scene s1;
+        s1.setAssetRoot(root.str());
+        if (!makeInstance(s1, memoryRootOf(prefabFile, root.str()))) { CHECK(false, "instance"); return; }
+        sceneJson = s1.toJson();
+    }
+
+    DonTopo::JobSystem js;
+    js.start(2);
+    DonTopo::AsyncAssetLoader loader(js);
+    DonTopo::Scene scene;
+    scene.setAssetRoot(root.str());
+    CHECK(scene.fromJson(sceneJson, physics(), audio(), &loader), "scene loads async");
+    DonTopo::GameObject* inst = firstInstance(scene);
+    if (!inst || !childNamed(inst, "Box")) { CHECK(false, "instance"); return; }
+    const uint64_t rootId = inst->id, boxId = childNamed(inst, "Box")->id;
+
+    DonTopo::PrefabLibrary lib(js, root.str());
+    SyncFixture fx;
+    DonTopo::PrefabSceneSync sync(lib);
+    DonTopo::PrefabSceneSync::Host host = fx.host(scene);
+    host.meshRequestLive = [&](uint64_t job) { return loader.isRequestLive(job); };
+    host.loaderPending   = [&] { return loader.pending(); };
+    sync.setHost(host);
+    sync.sceneLoaded(sceneJson);   // template requested; .obj still in flight
+
+    // The scene's mesh lands (onAssetsLoaded), the template is still Loading.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (loader.pending() > 0 && std::chrono::steady_clock::now() < deadline)
+    {
+        applyLoaded(loader, scene);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    sync.pump(0.0f);   // next editor frame (mesh budget 0: the template stays Loading)
+    CHECK(lib.find(kEnemyKey) && lib.find(kEnemyKey)->state == DonTopo::PrefabTemplate::State::Loading,
+          "the template is still Loading");
+
+    // The user edits the landed mesh's material.
+    DonTopo::GameObject* box = scene.findById(boxId);
+    if (!box || !box->hasMesh()) { CHECK(false, "box mesh landed"); return; }
+    DonTopo::MaterialOverride ov;
+    ov.index = 0;
+    ov.roughness = 0.3f;
+    box->materialOverrides.push_back(ov);
+    DonTopo::applyMaterialOverrides(*box);
+    sync.frame(true, nullptr);
+
+    CHECK(settleSync(sync, lib), "library settles");
+    for (int i = 0; i < DonTopo::PrefabSceneSync::kRetryIntervalFrames + 2; ++i) sync.frame(false, nullptr);
+    inst = scene.findById(rootId);
+    box = inst ? childNamed(inst, "Box") : nullptr;
+    CHECK(inst && sync.tracker().isSynced(inst, lib), "synced");
+    CHECK(box && !box->materialOverrides.empty() && box->materialOverrides[0].roughness == 0.3f,
+          "the material edit made after the mesh landed survives");
+    bool meshOverride = false;
+    if (inst) for (const auto& o : inst->prefabLink->overrides) if (o.path.rfind("/mesh", 0) == 0) meshOverride = true;
+    CHECK(meshOverride, "as a mesh override");
+}
+
 int main()
 {
+    testRevertDetectionAddedComponentEdit();
+    testRevertDetectionReaddedComponent();
+    testMaterialEditAfterMeshLandsIsKept();
     testAsyncLoadAddsNoSpuriousOverride();
     testCloneDuringLoadingKeepsEdit();
     testRevertDuringReloadFollowsNewPrefab();

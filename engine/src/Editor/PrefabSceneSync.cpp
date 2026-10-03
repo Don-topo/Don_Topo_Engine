@@ -30,6 +30,11 @@ namespace DonTopo
     void PrefabSceneSync::pump(float budgetMs)
     {
         if (!m_host.audio) return;
+        // Top of the editor frame: async meshes applied since the last one become
+        // part of their instances' baselines BEFORE any panel can edit them (an
+        // edit of a landed mesh is then folded instead of reverted), and before
+        // onReady below may propagate.
+        if (m_host.scene) m_tracker.settleLandedMeshes(*m_host.scene);
         m_lib.pump(*m_host.audio, budgetMs);
         logFailed();
     }
