@@ -42,33 +42,7 @@ namespace DonTopo
             return out;
         }
 
-        // Numbers within 1e-5 (relative above 1): a value that went through a
-        // float component and back is not a new override. Everything else exact.
-        bool nearlyEqual(const nlohmann::json& a, const nlohmann::json& b)
-        {
-            if (a.is_number() && b.is_number())
-            {
-                const double x = a.get<double>(), y = b.get<double>();
-                return std::fabs(x - y) <= 1e-5 * (std::max)(1.0, (std::max)(std::fabs(x), std::fabs(y)));
-            }
-            if (a.is_array() && b.is_array())
-            {
-                if (a.size() != b.size()) return false;
-                for (size_t i = 0; i < a.size(); ++i) if (!nearlyEqual(a[i], b[i])) return false;
-                return true;
-            }
-            if (a.is_object() && b.is_object())
-            {
-                if (a.size() != b.size()) return false;
-                for (auto it = a.begin(); it != a.end(); ++it)
-                {
-                    const auto other = b.find(it.key());
-                    if (other == b.end() || !nearlyEqual(it.value(), *other)) return false;
-                }
-                return true;
-            }
-            return a == b;
-        }
+        bool nearlyEqual(const nlohmann::json& a, const nlohmann::json& b) { return prefabValuesEqual(a, b); }
 
         // Same multiset of (node, path, value), in any order.
         bool sameOverrides(const std::vector<PrefabOverride>& stored, const std::vector<PrefabOverride>& fresh)
@@ -89,11 +63,6 @@ namespace DonTopo
             return true;
         }
 
-        std::string normalizedLinkPath(const std::string& path)
-        {
-            return std::filesystem::path(path).lexically_normal().generic_string();
-        }
-
         // An override that changes WHICH mesh a node has (its file, piece or
         // animation sources): the template's configured mesh for that node no
         // longer describes it. Materials, visibility and the mesh name do not.
@@ -105,7 +74,111 @@ namespace DonTopo
         }
     }
 
+    bool prefabValuesEqual(const nlohmann::json& a, const nlohmann::json& b)
+    {
+        // A tolerance only where a float is involved: a value that went through a
+        // float component and back is not a new override. Two integers (ids,
+        // masks, counts) compare exactly: 1e-5 relative would make 0xFFFFFFFF
+        // equal to 0xFFFFFFFE and two 64-bit ids indistinguishable.
+        if (a.is_number() && b.is_number())
+        {
+            if (!a.is_number_float() && !b.is_number_float())
+            {
+                if (a.is_number_unsigned() && b.is_number_unsigned()) return a.get<uint64_t>() == b.get<uint64_t>();
+                if (a.is_number_unsigned() || b.is_number_unsigned())
+                {
+                    const nlohmann::json& u = a.is_number_unsigned() ? a : b;
+                    const nlohmann::json& s = a.is_number_unsigned() ? b : a;
+                    return s.get<int64_t>() >= 0 && static_cast<uint64_t>(s.get<int64_t>()) == u.get<uint64_t>();
+                }
+                return a.get<int64_t>() == b.get<int64_t>();
+            }
+            const double x = a.get<double>(), y = b.get<double>();
+            return std::fabs(x - y) <= 1e-5 * (std::max)(1.0, (std::max)(std::fabs(x), std::fabs(y)));
+        }
+        if (a.is_array() && b.is_array())
+        {
+            if (a.size() != b.size()) return false;
+            for (size_t i = 0; i < a.size(); ++i) if (!prefabValuesEqual(a[i], b[i])) return false;
+            return true;
+        }
+        if (a.is_object() && b.is_object())
+        {
+            if (a.size() != b.size()) return false;
+            for (auto it = a.begin(); it != a.end(); ++it)
+            {
+                const auto other = b.find(it.key());
+                if (other == b.end() || !prefabValuesEqual(it.value(), *other)) return false;
+            }
+            return true;
+        }
+        return a == b;
+    }
+
     // ---------------------------------------------------------------- tracker
+
+    void PrefabOverrideTracker::captureBaseline(Scene& scene, GameObject* instanceRoot)
+    {
+        if (!instanceRoot || !instanceRoot->prefabLink) return;
+        m_baseline[instanceRoot->id] = scene.subtreeToMemoryJson(instanceRoot);
+    }
+
+    int PrefabOverrideTracker::foldUnrecordedEdits(Scene& scene, GameObject* instanceRoot)
+    {
+        if (!instanceRoot || !instanceRoot->prefabLink) return 0;
+        const auto base = m_baseline.find(instanceRoot->id);
+        if (base == m_baseline.end()) return 0;
+
+        // Linked nodes of the baseline, by prefab-local id.
+        std::unordered_map<uint64_t, const nlohmann::json*> before;
+        std::function<void(const nlohmann::json&)> index = [&](const nlohmann::json& n) {
+            const uint64_t local = localIdOf(n, "prefabNode");
+            if (local == 0) return;   // added children travel whole; not overrides
+            before.emplace(local, &n);
+            if (const auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (const auto& c : *kids) if (c.is_object()) index(c);
+        };
+        index(base->second);
+
+        // The same diff the tracker records, only against the baseline: what
+        // changed since, as overrides (value = the live value; null = removed).
+        std::vector<PrefabOverride> edits;
+        const nlohmann::json live = scene.subtreeToMemoryJson(instanceRoot);
+        std::function<void(const nlohmann::json&, bool)> walk = [&](const nlohmann::json& n, bool isRoot) {
+            const uint64_t local = localIdOf(n, "prefabNode");
+            if (local == 0) return;
+            if (const auto it = before.find(local); it != before.end())
+            {
+                auto d = diffPrefabNode(local, *it->second, n, isRoot);
+                edits.insert(edits.end(), std::make_move_iterator(d.begin()), std::make_move_iterator(d.end()));
+            }
+            if (const auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (const auto& c : *kids) if (c.is_object()) walk(c, false);
+        };
+        walk(live, true);
+
+        auto& overrides = instanceRoot->prefabLink->overrides;
+        for (PrefabOverride& e : edits)
+        {
+            auto same = std::find_if(overrides.begin(), overrides.end(), [&](const PrefabOverride& o) {
+                return o.node == e.node && o.path == e.path;
+            });
+            if (same != overrides.end()) same->value = std::move(e.value);
+            else                         overrides.push_back(std::move(e));
+        }
+        return static_cast<int>(edits.size());
+    }
+
+    bool PrefabOverrideTracker::meshPending(const GameObject* instanceRoot) const
+    {
+        if (!instanceRoot) return false;
+        bool pending = false;
+        const_cast<GameObject*>(instanceRoot)->traverse([&](GameObject* n) {
+            if (n->pendingMeshJob != 0 && (!m_meshRequestLive || m_meshRequestLive(n->pendingMeshJob)))
+                pending = true;
+        });
+        return pending;
+    }
 
     bool PrefabOverrideTracker::isSynced(const GameObject* instanceRoot, const PrefabLibrary& lib) const
     {
@@ -122,6 +195,8 @@ namespace DonTopo
         {
             if (!isSynced(root, lib)) continue;
             if (scene.recomputePrefabOverrides(root, readyTemplateOf(lib, root)->memoryRoot)) ++changed;
+            // Recorded: from here on only NEWER edits are unrecorded.
+            captureBaseline(scene, root);
         }
         return changed;
     }
@@ -132,7 +207,9 @@ namespace DonTopo
         GameObject* root = selected;
         while (root && root->parent && !root->prefabLink) root = root->parent;
         if (!root || !root->parent || !root->prefabLink || !isSynced(root, lib)) return 0;
-        return scene.recomputePrefabOverrides(root, readyTemplateOf(lib, root)->memoryRoot) ? 1 : 0;
+        const bool changed = scene.recomputePrefabOverrides(root, readyTemplateOf(lib, root)->memoryRoot);
+        captureBaseline(scene, root);
+        return changed ? 1 : 0;
     }
 
     void PrefabOverrideTracker::markSynced(uint64_t instanceRootId, uint64_t generation)
@@ -151,6 +228,7 @@ namespace DonTopo
     {
         m_syncedGeneration.erase(instanceRootId);
         m_failedGeneration.erase(instanceRootId);
+        m_baseline.erase(instanceRootId);
     }
 
     std::vector<GameObject*> PrefabOverrideTracker::unsyncedInstances(Scene& scene, const PrefabLibrary& lib) const
@@ -245,18 +323,22 @@ namespace DonTopo
             return instanceRoot;
 
         const uint64_t id = instanceRoot->id;
-        bool meshPending = false;
-        instanceRoot->traverse([&](GameObject* n) { if (n->pendingMeshJob != 0) meshPending = true; });
-        if (meshPending)
+        if (tracker.meshPending(instanceRoot))
         {
             if (result) ++result->deferred;
             return instanceRoot;
         }
+        // Edits made while the instance could not be diffed (template loading,
+        // not synced yet) become overrides BEFORE anything is compared or
+        // rebuilt: otherwise the rebuild would re-derive the subtree without them.
+        tracker.foldUnrecordedEdits(scene, instanceRoot);
+
         // Equal already: nothing is rebuilt (same objects, same GPU slots, and an
         // unchanged scene stays byte for byte the same).
         if (prefabInstanceMatchesTemplate(scene, instanceRoot, t.memoryRoot))
         {
             tracker.markSynced(id, t.generation);
+            tracker.captureBaseline(scene, instanceRoot);
             if (result) ++result->upToDate;
             return instanceRoot;
         }
@@ -296,13 +378,16 @@ namespace DonTopo
         if (live && rebuilt)
         {
             tracker.markSynced(id, t.generation);
+            tracker.captureBaseline(scene, live);
             if (result) ++result->rebuilt;
         }
         else if (live)
         {
             // Restored as it was: it does NOT match the template, so it must not
             // be diffed against it either (and is not retried for this generation).
+            // Its overrides already hold the folded edits, so its baseline moves on.
             tracker.markFailed(id, t.generation);
+            tracker.captureBaseline(scene, live);
         }
         else
         {
@@ -311,7 +396,7 @@ namespace DonTopo
         return live;
     }
 
-    PropagationResult propagateReadyTemplate(Scene& scene, const PrefabTemplate& t,
+    PropagationResult propagateReadyTemplate(Scene& scene, const PrefabLibrary& lib, const PrefabTemplate& t,
                                              PrefabOverrideTracker& tracker, PhysicsManager& physics,
                                              AudioManager& audio, const RegisterSubtreeFn& registerGpu)
     {
@@ -321,7 +406,7 @@ namespace DonTopo
         // so no pointer collected before it can be trusted afterwards.
         std::vector<uint64_t> ids;
         for (GameObject* root : instanceRoots(scene))
-            if (normalizedLinkPath(root->prefabLink->path) == t.key) ids.push_back(root->id);
+            if (lib.normalizeKey(root->prefabLink->path) == t.key) ids.push_back(root->id);
         for (uint64_t id : ids)
             if (GameObject* root = scene.findById(id))
                 if (root->prefabLink) propagateInstance(scene, root, t, tracker, physics, audio, registerGpu, &result);

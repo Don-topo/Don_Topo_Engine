@@ -24,7 +24,7 @@
 #include "DonTopo/Editor/RenderingPanel.h"
 #include "DonTopo/Editor/LoadingModal.h"
 #include "DonTopo/Editor/ProjectContext.h"
-#include "DonTopo/Editor/PrefabOverrideTracker.h"
+#include "DonTopo/Editor/PrefabSceneSync.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/RenderBackend.h"
 #include "DonTopo/Renderer/UiLayer.h"
@@ -437,46 +437,32 @@ private:
     JobSystem* m_jobSystem = nullptr;
 
     // ── Prefabs ──────────────────────────────────────────────────────────────
-    // Owned library (see prefabLibrary/releasePrefabLibrary), its single override
-    // detection point, and the host-side bookkeeping around them.
-    std::unique_ptr<PrefabLibrary> m_prefabs;
-    PrefabOverrideTracker          m_prefabTracker;
+    // Owned library (see prefabLibrary/releasePrefabLibrary) and the logic
+    // around it (PrefabSceneSync: pins, load/propagation, tracker). The sync is
+    // declared AFTER the library so it is destroyed first (it unhooks onReady).
+    std::unique_ptr<PrefabLibrary>   m_prefabs;
+    std::unique_ptr<PrefabSceneSync> m_prefabSync;
+    // releasePrefabLibrary() is final: nothing re-creates the library after it
+    // (a scene reload or a setProject during the shutdown sequence).
+    bool                             m_prefabsReleased = false;
     // Last UndoManager revision the tracker saw, and the previous frame's
     // ImGui::IsAnyItemActive() (its falling edge recomputes the selection).
-    uint64_t                       m_lastPrefabRevision = 0;
-    bool                           m_prefabItemWasActive = false;
-    // A propagation was deferred (an instance still waiting for async meshes):
-    // retried once the asset loader has nothing pending.
-    bool                           m_prefabSyncPending = false;
-    // Template keys pinned in the renderer: what has to be unpinned when a key
-    // is evicted, the project changes or the library is released.
-    std::set<std::string>          m_pinnedPrefabs;
-    // Keys this editor asked for (the scene's references, its instances, and the
-    // references of every Ready template) and the Failed ones already logged.
-    std::set<std::string>          m_knownPrefabs;
-    std::set<std::string>          m_reportedPrefabFailures;
+    uint64_t                         m_lastPrefabRevision = 0;
+    bool                             m_prefabItemWasActive = false;
 
-    // Creates the library once a JobSystem and a valid project exist (editor:
-    // keeps raw meshes, Apply reconfigures from RAM), wires onReady and hands
-    // it to the ScriptManager. No-op when it already exists or cannot yet.
+    // Creates the library + sync once a JobSystem and a valid project exist
+    // (editor: keeps raw meshes, Apply reconfigures from RAM) and hands the
+    // library to the ScriptManager. No-op when it exists, cannot exist yet, or
+    // was released.
     void ensurePrefabLibrary();
-    // Template became Ready: logs its warnings once, pins its meshes in the
-    // renderer and, in Edit Mode, propagates it to the scene's instances.
-    void onPrefabReady(const PrefabTemplate& t);
-    // Propagation of one Ready template to every instance (spec §3.3): not an
-    // undo command, does not dirty the scene, keeps the selection by id.
-    void propagatePrefab(const PrefabTemplate& t);
-    // After a scene (re)load: evict what the scene no longer references
-    // (Failed keys too, so they are READ AGAIN -- the retry path for a .prefab
-    // that failed and was fixed on disk), request the rest, and propagate the
-    // ones already Ready (their onReady will not fire again).
-    void refreshScenePrefabs(const nlohmann::json& sceneJson);
-    // Per frame, end of draw(): revision change -> sync unsynced instances and
-    // recompute; falling edge of IsAnyItemActive -> recompute the selection.
+    // Fills the sync's host callbacks (scene, renderer pins, log, loader).
+    void configurePrefabSync();
+    // Runs fn (which may rebuild prefab instances) and then re-resolves the
+    // selection by id and drops the Properties caches if anything was rebuilt.
+    void withPrefabRebuilds(const std::function<void()>& fn);
+    // Per frame, end of draw(): revision change and falling edge of
+    // IsAnyItemActive, forwarded to PrefabSceneSync::frame.
     void updatePrefabTracking();
-    void logFailedPrefabs();
-    void unpinPrefab(const std::string& key);
-    void unpinAllPrefabs();
 
     // See setProjectSelector/setProject. Empty/nullptr in the headless tests: without a
     // selector the editor draws as usual, and without a project the path guards

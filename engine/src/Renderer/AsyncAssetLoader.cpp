@@ -88,6 +88,7 @@ namespace DonTopo
             if (needsJob)
                 group.jobId = id;
             group.waiters.push_back({ id, targetId, piece });
+            m_liveRequests.insert(id);
         }
 
         if (needsJob)
@@ -113,8 +114,10 @@ namespace DonTopo
                 if (it != m_groups.end() && it->second.jobId == id)
                 {
                     m_pending -= static_cast<int>(it->second.waiters.size());
+                    for (const Waiter& w : it->second.waiters) m_liveRequests.erase(w.job);
                     m_groups.erase(it);
                 }
+                m_liveRequests.erase(id);
                 return 0;
             }
         }
@@ -171,6 +174,7 @@ namespace DonTopo
 
                 group.waiters.erase(w);
                 --m_pending;
+                m_liveRequests.erase(id);
 
                 if (group.waiters.empty())
                 {
@@ -431,8 +435,16 @@ namespace DonTopo
             // reach 'out'. No tombstones: the group-vs-result exclusion
             // under m_mutex guarantees there is no double counting (see cancel()).
             m_pending -= static_cast<int>(out.size());
+            for (const LoadedMesh& r : out) m_liveRequests.erase(r.job);
         }
         return out;
+    }
+
+    bool AsyncAssetLoader::isRequestLive(JobSystem::JobId id) const
+    {
+        if (id == 0) return false;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_liveRequests.count(id) != 0;
     }
 
     int AsyncAssetLoader::pending() const
@@ -560,6 +572,7 @@ namespace DonTopo
             m_groups.clear();
             m_inbox.clear();
             m_pending = 0;
+            m_liveRequests.clear();
         }
 
         // cancel() takes the JobSystem's lock, not ours. Calling it inside

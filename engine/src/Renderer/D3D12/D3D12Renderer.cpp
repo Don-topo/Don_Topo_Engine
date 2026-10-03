@@ -3835,14 +3835,23 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
     // prefab pin still holds entries on purpose (clearSkinnedMeshes with
     // templates loaded; shutdown releases the pins before calling this). If not,
     // someone skipped the release; a warning is given and nothing is freed blindly.
-    if (templatePins.empty()) {
-        if (skinnedTextures.size() != 0)
-            diagLog("[D3D12] " + std::to_string(skinnedTextures.size()) +
-                    " character textures not released at shutdown");
-        if (skinnedGeometry.size() != 0)
-            diagLog("[D3D12] " + std::to_string(skinnedGeometry.size()) +
-                    " character geometries not released at shutdown");
+    // Entries the pins hold are expected; anything beyond them is a leak.
+    std::vector<D3D12MA::Allocation*> pinnedTextures;
+    std::vector<SkinnedGeometry>      pinnedGeometry;
+    for (const auto& [key, pin] : templatePins) {
+        for (D3D12MA::Allocation* a : pin.textures)
+            if (std::find(pinnedTextures.begin(), pinnedTextures.end(), a) == pinnedTextures.end())
+                pinnedTextures.push_back(a);
+        for (const SkinnedGeometry& g : pin.geometry)
+            if (std::find(pinnedGeometry.begin(), pinnedGeometry.end(), g) == pinnedGeometry.end())
+                pinnedGeometry.push_back(g);
     }
+    if (skinnedTextures.size() > pinnedTextures.size())
+        diagLog("[D3D12] " + std::to_string(skinnedTextures.size() - pinnedTextures.size()) +
+                " character textures not released at shutdown");
+    if (skinnedGeometry.size() > pinnedGeometry.size())
+        diagLog("[D3D12] " + std::to_string(skinnedGeometry.size() - pinnedGeometry.size()) +
+                " character geometries not released at shutdown");
     skinnedSlots.clear();
     freeSkinnedSrv.clear();
     nextSkinnedSlot = 0;
@@ -10910,7 +10919,24 @@ void D3D12Renderer::pinTemplateMeshes(const std::string& key,
                 continue;
             pin.geometry.push_back(d.acquireSkinnedGeometry(*sk, packed));
 
-            for (const Material& mat : sk->materials) {
+            // The SAME materials createSkinnedObject takes: one per submesh range
+            // (out-of-range index -> the mesh's own material), or, without
+            // ranges (single-piece FBX), the mesh's own material only.
+            std::vector<const Material*> used;
+            if (!sk->subMeshRanges.empty()) {
+                for (const SubMeshRange& range : sk->subMeshRanges) {
+                    const Material* m = range.materialIndex < sk->materials.size()
+                                            ? &sk->materials[range.materialIndex]
+                                            : &sk->material;
+                    if (std::find(used.begin(), used.end(), m) == used.end())
+                        used.push_back(m);
+                }
+            } else {
+                used.push_back(&sk->material);
+            }
+
+            for (const Material* matPtr : used) {
+                const Material& mat = *matPtr;
                 const std::pair<const std::string*, const std::vector<uint8_t>*> slots[] = {
                     {&mat.texturePath, &mat.embeddedTexture},
                     {&mat.normalMapPath, &mat.embeddedNormalMap},

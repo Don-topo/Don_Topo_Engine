@@ -4494,14 +4494,16 @@ namespace DonTopo {
                     [&](SharedGpuMesh& gpu) { createSharedGpuMesh(*mesh, gpu, m_pendingBatch.get(), nullptr); },
                     &created);
                 if (index < 0) continue;
+                // Held BEFORE anything else can throw: the catch below releases
+                // exactly what the pin lists, so the reference must be listed.
+                pin.staticEntries.push_back(index);
                 if (created)
                 {
                     SharedGpuMesh& gpu = *m_sharedMeshes.get(index);
-                    allocateObjectDescriptorSet(gpu);
                     // Not drawn before its batch lands, same as addStaticMesh.
                     gpu.uploadTicket = m_nextUploadTicket;
+                    allocateObjectDescriptorSet(gpu);
                 }
-                pin.staticEntries.push_back(index);
             }
         }
         catch (...)

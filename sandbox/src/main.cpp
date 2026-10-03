@@ -984,6 +984,16 @@ int main()
         // Renderer/Scene) — see the shutdown block.
         DonTopo::JobSystem        jobSystem;
         jobSystem.start();
+        // The editor is declared BEFORE the audio, the scripts and this JobSystem,
+        // so its destructor would free the prefab library after all of them. On
+        // the normal path releasePrefabLibrary() is called explicitly below; this
+        // guard, destroyed BEFORE the JobSystem (declared after it), covers an
+        // exception unwinding past that call. The release is idempotent.
+        struct PrefabLibraryGuard
+        {
+            DonTopo::EditorUI& editor;
+            ~PrefabLibraryGuard() { editor.releasePrefabLibrary(); }
+        } prefabLibraryGuard{ editor };
         DonTopo::AsyncAssetLoader assetLoader(jobSystem);
         editor.setAssetLoader(&assetLoader);
         editor.setDroppedFilesProvider([&ctx]() {

@@ -257,10 +257,7 @@ void EditorUI::setProject(const ProjectContext* project)
     if (m_prefabs && project && project->valid() &&
         m_prefabs->assetRoot() != project->root().string())
     {
-        unpinAllPrefabs();
-        m_prefabTracker.clear();
-        m_knownPrefabs.clear();
-        m_reportedPrefabFailures.clear();
+        if (m_prefabSync) m_prefabSync->resetForNewRoot();
         m_prefabs->setAssetRoot(project->root().string());
     }
     ensurePrefabLibrary();
@@ -284,168 +281,66 @@ void EditorUI::setScriptManager(ScriptManager* sm)
 
 void EditorUI::ensurePrefabLibrary()
 {
-    if (m_prefabs || !m_jobSystem || !m_project || !m_project->valid())
+    if (m_prefabs || m_prefabsReleased || !m_jobSystem || !m_project || !m_project->valid())
         return;
     m_prefabs = std::make_unique<PrefabLibrary>(*m_jobSystem, m_project->root().string());
     // The editor applies prefabs (Apply/Create -> updateFromMemory): keeping the
     // raw loader meshes lets a changed animation-source list be rebuilt from RAM
     // instead of re-read. Before any request(). The runtime does NOT do this.
     m_prefabs->setKeepRawMeshes(true);
-    m_prefabs->setOnReady([this](const PrefabTemplate& t) { onPrefabReady(t); });
+    // The sync installs itself as the library's onReady.
+    m_prefabSync = std::make_unique<PrefabSceneSync>(*m_prefabs);
+    configurePrefabSync();
     if (m_scriptManager)
         m_scriptManager->setPrefabLibrary(m_prefabs.get());
 }
 
+void EditorUI::configurePrefabSync()
+{
+    if (!m_prefabSync) return;
+    PrefabSceneSync::Host host;
+    host.scene     = m_scene;
+    host.physics   = m_physics;
+    host.audio     = m_audio;
+    host.isPlaying = [this] { return m_isPlaying; };
+    host.registerGpu = [this](GameObject* root) { if (m_renderer) m_renderer->registerGameObject(root); };
+    host.pin = [this](const std::string& key, const std::vector<std::shared_ptr<const Mesh>>& meshes) {
+        if (m_renderer) m_renderer->pinTemplateMeshes(key, meshes);
+    };
+    host.unpin = [this](const std::string& key) { if (m_renderer) m_renderer->unpinTemplateMeshes(key); };
+    host.log   = [this](const std::string& msg) { m_logPanel.push(msg); };
+    host.meshRequestLive = [this](uint64_t job) { return m_assetLoader && m_assetLoader->isRequestLive(job); };
+    host.loaderPending   = [this] { return m_assetLoader ? m_assetLoader->pending() : 0; };
+    m_prefabSync->setHost(std::move(host));
+}
+
+void EditorUI::withPrefabRebuilds(const std::function<void()>& fn)
+{
+    // A rebuild frees the old subtree (onNodeRemoved clears m_selected if it was
+    // inside); the matched nodes keep their ids, so the selection comes back.
+    const uint64_t selectedId = m_selected ? m_selected->id : 0;
+    fn();
+    if (!m_prefabSync || m_prefabSync->takeRebuiltCount() == 0)
+        return;
+    if (m_scene)
+        m_selected = selectedId != 0 ? m_scene->findById(selectedId) : nullptr;
+    m_propertiesPanel.invalidateCaches();
+}
+
 void EditorUI::releasePrefabLibrary()
 {
+    // Final: nothing re-creates the library afterwards (ensurePrefabLibrary).
+    m_prefabsReleased = true;
     // Order: nobody may reach the library once it starts dying (an OnDestroy
     // calling Instantiate/IsLoaded), then the renderer's references to its
     // meshes, then the library itself (cancels its jobs, drops its warm audio
     // clips while the AudioManager is still alive).
     if (m_scriptManager)
         m_scriptManager->setPrefabLibrary(nullptr);
-    unpinAllPrefabs();
-    m_prefabTracker.clear();
-    m_knownPrefabs.clear();
-    m_reportedPrefabFailures.clear();
+    if (m_prefabSync)
+        m_prefabSync->unpinAll();
+    m_prefabSync.reset();
     m_prefabs.reset();
-}
-
-void EditorUI::unpinPrefab(const std::string& key)
-{
-    if (m_pinnedPrefabs.erase(key) && m_renderer)
-        m_renderer->unpinTemplateMeshes(key);
-}
-
-void EditorUI::unpinAllPrefabs()
-{
-    if (m_renderer)
-        for (const std::string& key : m_pinnedPrefabs)
-            m_renderer->unpinTemplateMeshes(key);
-    m_pinnedPrefabs.clear();
-}
-
-void EditorUI::onPrefabReady(const PrefabTemplate& t)
-{
-    // Non-fatal problems of the template (an external animation source that
-    // cannot be read...): reported once here, never per instance.
-    for (const std::string& w : t.warnings)
-        m_logPanel.push("[Prefab] " + t.key + ": " + w);
-    m_reportedPrefabFailures.erase(t.key);
-    m_knownPrefabs.insert(t.key);
-    if (m_prefabs)
-        for (const std::string& ref : PrefabLibrary::collectReferences(t.memoryRoot))
-            m_knownPrefabs.insert(m_prefabs->normalizeKey(ref));
-
-    // GPU: every Instantiate of this template hits the shared caches. A key
-    // pinned again (Apply) replaces its previous pin inside the renderer.
-    if (m_renderer)
-    {
-        m_renderer->pinTemplateMeshes(t.key, prefabTemplateGpuMeshes(t));
-        m_pinnedPrefabs.insert(t.key);
-    }
-
-    // Play Mode: no propagation (spec §3.3); the Stop restore re-checks.
-    if (!m_isPlaying)
-        propagatePrefab(t);
-}
-
-void EditorUI::propagatePrefab(const PrefabTemplate& t)
-{
-    if (!m_scene || !m_physics || !m_audio || !m_renderer)
-        return;
-    // The rebuild frees the old subtree (onNodeRemoved clears m_selected if it
-    // was inside); the matched nodes keep their ids, so the selection comes back.
-    const uint64_t selectedId = m_selected ? m_selected->id : 0;
-    const PropagationResult r = propagateReadyTemplate(
-        *m_scene, t, m_prefabTracker, *m_physics, *m_audio,
-        [this](GameObject* root) { m_renderer->registerGameObject(root); });
-    if (selectedId != 0)
-        m_selected = m_scene->findById(selectedId);
-    for (const std::string& w : r.warnings)
-        m_logPanel.push("[Prefab] " + w);
-    if (r.deferred > 0)
-        m_prefabSyncPending = true;
-    if (r.rebuilt > 0)
-    {
-        m_propertiesPanel.invalidateCaches();
-        m_logPanel.push("[Prefab] " + t.key + ": " + std::to_string(r.rebuilt) +
-                        " instance(s) updated from the prefab");
-    }
-}
-
-void EditorUI::refreshScenePrefabs(const nlohmann::json& sceneJson)
-{
-    ensurePrefabLibrary();
-    if (!m_prefabs || !m_scene)
-        return;
-
-    // What the scene needs: the prefabs its scripts reference, the ones its
-    // instances link to, and (transitively) what Ready templates reference --
-    // a template's own references are requested by the library when it gets
-    // Ready, so evicting them here would orphan Enemy -> Bullet.
-    std::set<std::string> keys;
-    for (const std::string& ref : PrefabLibrary::collectReferences(sceneJson))
-        keys.insert(m_prefabs->normalizeKey(ref));
-    m_scene->traverse([&](GameObject* n) {
-        if (n->prefabLink && !n->prefabLink->path.empty())
-            keys.insert(m_prefabs->normalizeKey(n->prefabLink->path));
-    });
-    std::vector<std::string> frontier(keys.begin(), keys.end());
-    while (!frontier.empty())
-    {
-        const std::string k = frontier.back();
-        frontier.pop_back();
-        const PrefabTemplate* t = m_prefabs->find(k);
-        if (!t || t->state != PrefabTemplate::State::Ready) continue;
-        for (const std::string& ref : PrefabLibrary::collectReferences(t->memoryRoot))
-        {
-            const std::string nk = m_prefabs->normalizeKey(ref);
-            if (keys.insert(nk).second) frontier.push_back(nk);
-        }
-    }
-
-    // Failed keys are dropped too, so the request() below reads them again:
-    // a .prefab that was missing or broken and got fixed on disk loads on the
-    // next scene load (request() alone never retries a Failed key).
-    std::set<std::string> retained;
-    for (const std::string& k : keys)
-    {
-        const PrefabTemplate* t = m_prefabs->find(k);
-        if (!t || t->state != PrefabTemplate::State::Failed)
-            retained.insert(k);
-    }
-    m_prefabs->retainOnly(retained);
-    for (const std::string& k : std::set<std::string>(m_pinnedPrefabs))
-        if (!retained.count(k))
-            unpinPrefab(k);
-
-    m_knownPrefabs = keys;
-    m_reportedPrefabFailures.clear();   // a retried key that fails again is logged again
-    for (const std::string& k : keys)
-        m_prefabs->request(k);
-
-    // Templates that were already Ready (kept across the load) will not call
-    // onReady again: the new scene's instances are checked against them now.
-    if (!m_isPlaying)
-        for (const std::string& k : keys)
-            if (const PrefabTemplate* t = m_prefabs->find(k); t && t->state == PrefabTemplate::State::Ready)
-                propagatePrefab(*t);
-}
-
-void EditorUI::logFailedPrefabs()
-{
-    if (!m_prefabs)
-        return;
-    for (const std::string& k : m_knownPrefabs)
-    {
-        const PrefabTemplate* t = m_prefabs->find(k);
-        if (!t || t->state != PrefabTemplate::State::Failed || m_reportedPrefabFailures.count(k))
-            continue;
-        m_reportedPrefabFailures.insert(k);
-        m_logPanel.push("[Prefab] Could not load '" + k + "': " + t->error +
-                        " (its instances keep their stored state; reload the scene to retry)");
-    }
 }
 
 void EditorUI::updatePrefabTracking()
@@ -456,41 +351,12 @@ void EditorUI::updatePrefabTracking()
     const bool     itemDeactivated = m_prefabItemWasActive && !active;
     m_lastPrefabRevision  = revision;
     m_prefabItemWasActive = active;
-    // Edit Mode only (spec §3.2): in Play nothing is detected or propagated.
-    if (!m_prefabs || !m_scene || !m_physics || !m_audio || !m_renderer || m_isPlaying)
+    if (!m_prefabSync)
         return;
-
-    const bool retryDeferred = m_prefabSyncPending && (!m_assetLoader || m_assetLoader->pending() == 0);
-    if (revisionChanged || retryDeferred)
-    {
-        // Instances the tracker has never checked against their (Ready)
-        // template -- a clone, the undo of a Delete, one whose propagation waited
-        // for its async meshes -- are brought to it first: only then is
-        // diffing them meaningful.
-        m_prefabSyncPending = false;
-        std::vector<uint64_t> ids;
-        for (GameObject* root : m_prefabTracker.unsyncedInstances(*m_scene, *m_prefabs))
-            ids.push_back(root->id);
-        for (uint64_t id : ids)
-        {
-            GameObject* root = m_scene->findById(id);
-            if (!root || !root->prefabLink) continue;
-            const PrefabTemplate* t = m_prefabs->find(root->prefabLink->path);
-            if (!t) continue;
-            const uint64_t selectedId = m_selected ? m_selected->id : 0;
-            PropagationResult r;
-            propagateInstance(*m_scene, root, *t, m_prefabTracker, *m_physics, *m_audio,
-                              [this](GameObject* g) { m_renderer->registerGameObject(g); }, &r);
-            if (selectedId != 0) m_selected = m_scene->findById(selectedId);
-            for (const std::string& w : r.warnings) m_logPanel.push("[Prefab] " + w);
-            if (r.rebuilt > 0) m_propertiesPanel.invalidateCaches();
-            if (r.deferred > 0) m_prefabSyncPending = true;
-        }
-        if (revisionChanged)
-            m_prefabTracker.onRevisionChanged(*m_scene, *m_prefabs);
-    }
-    if (itemDeactivated)
-        m_prefabTracker.onItemDeactivated(*m_scene, *m_prefabs, m_selected);
+    // Edit Mode only: PrefabSceneSync::frame checks isPlaying itself.
+    withPrefabRebuilds([&] {
+        m_prefabSync->frame(revisionChanged, itemDeactivated ? m_selected : nullptr);
+    });
 }
 
 void EditorUI::setScene(Scene* scene)
@@ -505,6 +371,7 @@ void EditorUI::setScene(Scene* scene)
     // when its turn comes.
     if (m_scene && m_project && m_project->valid())
         m_scene->setAssetRoot(m_project->root().string());
+    configurePrefabSync();
 }
 
 EditorRenderer& EditorUI::renderer() { return *m_renderer; }
@@ -1196,10 +1063,13 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
     // Prefab templates, Edit and Play alike: finished loads become Ready here
     // (onPrefabReady pins them and, in Edit Mode, propagates them). Before the
     // panels, so none of them draws a subtree a propagation is about to replace.
-    if (m_prefabs && m_audio)
+    if (m_prefabSync)
     {
-        m_prefabs->pump(*m_audio, 2.0f);
-        logFailedPrefabs();
+        // The world pointers may have been set after the library was created.
+        const PrefabSceneSync::Host& h = m_prefabSync->host();
+        if (h.scene != m_scene || h.physics != m_physics || h.audio != m_audio)
+            configurePrefabSync();
+        withPrefabRebuilds([&] { m_prefabSync->pump(2.0f); });
     }
 
     // Drain of the DonTopo.loadScene mailbox: here, at the start of the UI
@@ -1350,7 +1220,18 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
     // scene stays with what was already applied (valid, saveable state).
     m_loadingModal.update(m_assetLoader ? m_assetLoader->pending() : 0);
     if (m_loadingModal.draw() && m_assetLoader)
+    {
         m_assetLoader->cancelAllPending();
+        // The loader cannot reach the scene: the objects it will never serve
+        // stop waiting here (they stay without a mesh, as before). Whatever
+        // still reads a stale pendingMeshJob is covered anyway by
+        // AsyncAssetLoader::isRequestLive (the prefab tracker asks it).
+        if (m_scene)
+            m_scene->traverse([&](GameObject* n) {
+                if (n->pendingMeshJob != 0 && !m_assetLoader->isRequestLive(n->pendingMeshJob))
+                    n->pendingMeshJob = 0;
+            });
+    }
 
     // The single override detection point (spec §3.2), after every panel had its
     // chance to push a command or finish an edit this frame.
@@ -1976,10 +1857,15 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
         if (m_renderer)
             m_renderer->refitCameraRange();
 
-        // Prefabs of the new scene: its ids may repeat the old scene's, but none
-        // of its instances has been checked against a template yet.
-        m_prefabTracker.clear();
-        refreshScenePrefabs(j);
+        // Prefabs of the new scene: request/evict, baselines, and propagation of
+        // the templates already Ready (Edit Mode; a Lua load in Play evicts
+        // nothing). See PrefabSceneSync::sceneLoaded.
+        ensurePrefabLibrary();
+        if (m_prefabSync)
+        {
+            configurePrefabSync();
+            withPrefabRebuilds([&] { m_prefabSync->sceneLoaded(j); });
+        }
     }
     m_undoHistory.clear();
     // The clear above moves the revision: the tracker must not take it for an

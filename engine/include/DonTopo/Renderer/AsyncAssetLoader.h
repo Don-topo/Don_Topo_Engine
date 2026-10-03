@@ -10,6 +10,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace DonTopo
@@ -110,7 +111,17 @@ namespace DonTopo
             // results are discarded.
             void cancelAllPending();
 
+            // True while the request `id` (what requestMesh returned) can still
+            // deliver a result: queued, in flight, or in the mailbox. False once
+            // pumpCompleted handed its result out, after cancel/cancelAllPending,
+            // and for 0 or an id this loader never issued. A GameObject whose
+            // pendingMeshJob is not live is NOT waiting for anything, whoever
+            // forgot to clear its field (cancelAllPending cannot: it has no scene).
+            bool isRequestLive(JobSystem::JobId id) const;
+
         private:
+            // Ids of the requests isRequestLive answers true for. Under m_mutex.
+            std::unordered_set<JobSystem::JobId> m_liveRequests;
             // Requests grouped by path while the job is in flight. The
             // first one to ask for a path starts ONE job (jobId); those that arrive
             // while it is still in flight are recorded as waiters of the same one. When
