@@ -143,6 +143,12 @@ namespace DonTopo
 
             // Drops every template whose key is not in keys (keys are normalized).
             void retainOnly(const std::set<std::string>& keys);
+            // Drops one template (its in-flight loads are cancelled and their late
+            // results ignored, as with retainOnly) and tells onEvicted, so the
+            // host releases what it holds for it (its GPU pin). The undo of a
+            // Create whose .prefab was deleted. No-op for an unknown key.
+            void evict(const std::string& path);
+            void setOnEvicted(std::function<void(const std::string&)> cb) { m_onEvicted = std::move(cb); }
             void clear();
 
             // Every {"prefab": "<path>"} value (a serialized PrefabRef) inside a
@@ -254,6 +260,7 @@ namespace DonTopo
             std::unordered_map<std::string, Entry>    m_entries;   // node-based: find() pointers stay valid
             std::unordered_map<uint64_t, MeshTicket>  m_tickets;   // by loader targetId
             std::function<void(const PrefabTemplate&)> m_onReady;
+            std::function<void(const std::string&)>    m_onEvicted;
             uint64_t                            m_nextSerial     = 1;
             uint64_t                            m_nextTicket     = 1;
             uint64_t                            m_nextGeneration = 1;

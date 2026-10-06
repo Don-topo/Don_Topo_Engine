@@ -12,6 +12,7 @@ namespace DonTopo
     PrefabSceneSync::PrefabSceneSync(PrefabLibrary& lib) : m_lib(lib)
     {
         m_lib.setOnReady([this](const PrefabTemplate& t) { onTemplateReady(t); });
+        m_lib.setOnEvicted([this](const std::string& key) { onTemplateEvicted(key); });
     }
 
     PrefabSceneSync::~PrefabSceneSync()
@@ -19,6 +20,16 @@ namespace DonTopo
         // The library may outlive this object by a few lines (EditorUI releases
         // them in order): it must not call back into a dead one.
         m_lib.setOnReady(nullptr);
+        m_lib.setOnEvicted(nullptr);
+    }
+
+    void PrefabSceneSync::onTemplateEvicted(const std::string& key)
+    {
+        // The template is gone from the library: its meshes must not stay
+        // pinned in the renderer, and it is no longer one the scene knows.
+        if (m_pinned.erase(key) && m_host.unpin) m_host.unpin(key);
+        m_known.erase(key);
+        m_reportedFailures.erase(key);
     }
 
     void PrefabSceneSync::setHost(Host host)

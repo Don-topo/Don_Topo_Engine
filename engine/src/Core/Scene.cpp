@@ -4385,7 +4385,8 @@ namespace DonTopo
     GameObject* Scene::rebuildPrefabInstance(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot,
                                              PhysicsManager& physics, AudioManager& audio,
                                              const PreloadedMeshCache* meshes, const MaterialAssetCache* mats,
-                                             bool* rebuiltOut)
+                                             bool* rebuiltOut,
+                                             const std::unordered_map<uint64_t, uint64_t>* idHints)
     {
         m_warnings.clear();
         if (rebuiltOut) *rebuiltOut = false;
@@ -4474,6 +4475,12 @@ namespace DonTopo
         //    scene id; a node new to the prefab loses "id" so the GameObject
         //    constructor hands it a fresh one. Prefab-local ids never reach the
         //    scene id space (spec §7): 99 in a template is not 99 in the scene.
+        //    A new node with an id hint gets that scene id instead (0 = none).
+        auto hintFor = [&](uint64_t local) -> uint64_t {
+            if (!idHints || local == 0) return 0;
+            const auto h = idHints->find(local);
+            return h != idHints->end() ? h->second : 0;
+        };
         std::function<void(nlohmann::json&, bool)> relink = [&](nlohmann::json& n, bool isRoot) {
             const uint64_t local = localIdOf(n, "id");
             n.erase("prefab");   // a template carries no link; only the root gets one, below
@@ -4484,6 +4491,8 @@ namespace DonTopo
             if (isRoot)                                   n["id"] = instanceRoot->id;
             else if (auto it = sceneIdByLocal.find(local); local != 0 && it != sceneIdByLocal.end())
                                                           n["id"] = it->second;
+            else if (const uint64_t hinted = hintFor(local); hinted != 0)
+                                                          n["id"] = hinted;   // the live-id guard still applies
             else                                          n.erase("id");
 
             auto kids = n.find("children");

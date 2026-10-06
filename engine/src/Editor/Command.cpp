@@ -16,6 +16,7 @@
 #include <optional>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <glm/gtc/type_ptr.hpp>
 #include "DonTopo/Renderer/EditorRenderer.h"
 
@@ -1058,6 +1059,26 @@ std::string stemOf(const std::string& path)
     return fs::path(path).stem().string();
 }
 
+// Undo merge: each entry of `back` goes into `list` unless the list already
+// has one on the same node + path (recorded after the command: it wins).
+void addMissing(std::vector<PrefabOverride>& list, const std::vector<PrefabOverride>& back)
+{
+    for (const PrefabOverride& b : back)
+        if (std::none_of(list.begin(), list.end(), [&](const PrefabOverride& o) { return sameTarget(o, b); }))
+            list.push_back(b);
+}
+
+// Entries of `before` with no entry on the same node + path in `after`.
+std::vector<PrefabOverride> missingFrom(const std::vector<PrefabOverride>& before,
+                                        const std::vector<PrefabOverride>& after)
+{
+    std::vector<PrefabOverride> out;
+    for (const PrefabOverride& b : before)
+        if (std::none_of(after.begin(), after.end(), [&](const PrefabOverride& a) { return sameTarget(a, b); }))
+            out.push_back(b);
+    return out;
+}
+
 } // namespace
 
 std::vector<uint64_t> PrefabCommand::instancesOf(const std::string& key) const
@@ -1152,10 +1173,19 @@ void CreatePrefabCommand::execute()
         m_message = "Create Prefab: invalid path '" + m_path.string() + "'";
         return;
     }
+    // Links are project-relative (Global Constraints): normalizeKey leaves a
+    // path outside the project root absolute.
+    if (fs::path(m_key).is_absolute() || fs::path(m_key).has_root_name())
+    {
+        m_message = "Create Prefab: '" + m_path.string() + "' is outside the project; "
+                    "prefabs must be saved inside it";
+        return;
+    }
     // Never over someone else's file. The one exception is a redo finding the
     // exact bytes this command wrote (nothing deleted them in between).
     std::error_code ec;
-    if (fs::exists(m_path, ec))
+    const bool existed = fs::exists(m_path, ec);
+    if (existed)
     {
         const std::optional<std::string> current = readFileBytes(m_path);
         if (!m_hasWritten || !current || *current != m_written)
@@ -1169,6 +1199,9 @@ void CreatePrefabCommand::execute()
     if (!FileManager::writeJson(m_path.string(), file))
     {
         m_ctx.scene.unpackPrefab(node);
+        // A write that failed half way may have left a truncated file. It is
+        // removed only if THIS execute created it (there was none before).
+        if (!existed && fs::exists(m_path, ec)) fs::remove(m_path, ec);
         m_message = "Create Prefab: could not write '" + m_path.string() + "'";
         return;
     }
@@ -1203,6 +1236,7 @@ void CreatePrefabCommand::undo()
     const std::string shown = "'" + m_path.string() + "'";
     if (!fs::exists(m_path, ec))
     {
+        m_ctx.library.evict(m_key);
         m_message = "Prefab file " + shown + " was already gone";
         return;
     }
@@ -1222,6 +1256,10 @@ void CreatePrefabCommand::undo()
         m_message = "Prefab file " + shown + " could not be removed: kept";
         return;
     }
+    // No file, no template: Instantiate in Play must not keep working on a
+    // prefab that does not exist, nor the renderer keep its meshes pinned (the
+    // host unpins through the library's onEvicted). A redo registers it again.
+    m_ctx.library.evict(m_key);
     m_message = "Prefab file " + shown + " deleted";
 }
 
@@ -1298,11 +1336,64 @@ ApplyPrefabOverridesCommand::ApplyPrefabOverridesCommand(PrefabCommandContext ct
         m_label = "Apply to Prefab '" + stemOf(root->prefabLink->path) + "'";
 }
 
+void ApplyPrefabOverridesCommand::rebuildInstances(const std::vector<uint64_t>& instances,
+                                                   const nlohmann::json& tmpl, bool recordNewIds,
+                                                   bool recordOrphans)
+{
+    // Rebuilt from the command's own template, now: it may still be loading in
+    // the library. Seeded with the template's meshes and every instance's live
+    // ones (an applied child's mesh is in the applying instance), so no file is
+    // read for what is already in RAM.
+    PreloadedMeshCache cache;
+    MaterialAssetCache mats;
+    if (const PrefabTemplate* t = m_ctx.library.find(m_key))
+    {
+        cache = t->meshes;
+        mats  = t->mats;
+    }
+    for (uint64_t id : instances)
+        if (GameObject* r = m_ctx.scene.findById(id))
+            for (const auto& [key, mesh] : Scene::collectMeshes(r)) cache.emplace(key, mesh);
+
+    for (uint64_t id : instances)
+    {
+        GameObject* r = m_ctx.scene.findById(id);
+        if (!r || !r->prefabLink) continue;
+        if (!prefabInstanceMatchesTemplate(m_ctx.scene, r, tmpl))
+        {
+            const std::vector<PrefabOverride> before = r->prefabLink->overrides;
+            std::unordered_set<uint64_t> had;
+            r->traverse([&](GameObject* n) { had.insert(n->id); });
+            const auto hints = m_createdIds.find(id);
+            bool rebuilt = false;
+            GameObject* live = m_ctx.scene.rebuildPrefabInstance(
+                r, tmpl, m_ctx.physics, m_ctx.audio, &cache, &mats, &rebuilt,
+                hints != m_createdIds.end() ? &hints->second : nullptr);
+            if (live && m_ctx.registerGpu) m_ctx.registerGpu(live);
+            if (live && rebuilt && recordNewIds)
+                live->traverse([&](GameObject* n) {
+                    if (n->prefabNode != 0 && !had.count(n->id)) m_createdIds[id][n->prefabNode] = n->id;
+                });
+            if (live && rebuilt && recordOrphans && live->prefabLink)
+            {
+                // What the new template orphaned (a component applied as removed):
+                // the undo gives these back, and only these.
+                std::vector<PrefabOverride> lost = missingFrom(before, live->prefabLink->overrides);
+                if (!lost.empty()) m_orphaned[id] = std::move(lost);
+            }
+        }
+        // Stands on tmpl from here on, also while the library still loads it.
+        m_ctx.tracker.forget(id);
+        if (GameObject* live = m_ctx.scene.findById(id))
+            m_ctx.tracker.captureBaseline(m_ctx.scene, live, &tmpl);
+    }
+}
+
 void ApplyPrefabOverridesCommand::execute()
 {
     m_done = false;
     m_message.clear();
-    m_before.clear();
+    m_applied.clear();
     m_linkedAdded.clear();
     GameObject* root = m_ctx.scene.findById(m_rootId);
     if (!root || !root->prefabLink || !root->parent)
@@ -1311,6 +1402,37 @@ void ApplyPrefabOverridesCommand::execute()
         return;
     }
     m_key = m_ctx.library.normalizeKey(root->prefabLink->path);
+    const PrefabTemplate* loaded = readyTemplate(m_ctx.library, m_key);
+    if (!loaded)
+    {
+        m_message = "Apply: the prefab '" + m_key + "' is not loaded";
+        return;
+    }
+    m_path = fs::path(m_ctx.library.assetRoot()) / fs::path(m_key);
+    const std::optional<std::string> previous = readFileBytes(m_path);
+    if (!previous)
+    {
+        m_message = "Apply: could not read '" + m_path.string() + "'";
+        return;
+    }
+    nlohmann::json file = nlohmann::json::parse(*previous, nullptr, /*allow_exceptions=*/false);
+    if (!file.is_object() || !file.contains("root") || !file["root"].is_object())
+    {
+        m_message = "Apply: '" + m_path.string() + "' is not a valid prefab file";
+        return;
+    }
+    // The new file is built from the template in memory: if the file is no
+    // longer what was loaded (edited outside the editor), that would silently
+    // erase the outside change.
+    {
+        nlohmann::json onDisk = file["root"];
+        resolveStoredPaths(onDisk, m_ctx.library.assetRoot());
+        if (!prefabValuesEqual(onDisk, loaded->memoryRoot))
+        {
+            m_message = "Apply: '" + m_key + "' changed on disk; reload the scene first";
+            return;
+        }
+    }
     if (!ensureSynced(m_rootId))
     {
         m_message = "Apply: '" + root->name + "' is not up to date with its prefab yet (still loading); try again";
@@ -1326,19 +1448,6 @@ void ApplyPrefabOverridesCommand::execute()
     if (!root || !t)
     {
         m_message = "Apply: the prefab is not loaded";
-        return;
-    }
-    m_path = fs::path(m_ctx.library.assetRoot()) / fs::path(m_key);
-    const std::optional<std::string> previous = readFileBytes(m_path);
-    if (!previous)
-    {
-        m_message = "Apply: could not read '" + m_path.string() + "'";
-        return;
-    }
-    nlohmann::json file = nlohmann::json::parse(*previous, nullptr, /*allow_exceptions=*/false);
-    if (!file.is_object())
-    {
-        m_message = "Apply: '" + m_path.string() + "' is not a valid prefab file";
         return;
     }
 
@@ -1420,12 +1529,6 @@ void ApplyPrefabOverridesCommand::execute()
         return;
     }
 
-    // Undo state: every instance's overrides (a removed component applied
-    // drops the others' overrides on it at their rebuild) and the file bytes.
-    for (uint64_t id : instances)
-        if (GameObject* r = m_ctx.scene.findById(id); r && r->prefabLink)
-            m_before.push_back({ id, r->prefabLink->overrides });
-
     nlohmann::json disk = tmpl;
     storeRelativePaths(disk, m_ctx.library.assetRoot());
     file["root"] = std::move(disk);
@@ -1434,7 +1537,6 @@ void ApplyPrefabOverridesCommand::execute()
         // A failed write may have truncated it: the previous bytes go back.
         writeFileBytes(m_path, *previous);
         m_message = "Apply: could not write '" + m_path.string() + "'";
-        m_before.clear();
         return;
     }
     m_previous = *previous;
@@ -1447,21 +1549,23 @@ void ApplyPrefabOverridesCommand::execute()
     std::erase_if(root->prefabLink->overrides, [&](const PrefabOverride& o) {
         return std::any_of(chosen.begin(), chosen.end(), [&](const PrefabOverride& c) { return sameTarget(c, o); });
     });
+    m_applied = chosen;
     for (const auto& [sceneId, local] : toLink)
         if (GameObject* n = m_ctx.scene.findById(sceneId))
         {
             n->prefabNode = local;
             m_linkedAdded.push_back(sceneId);
         }
+    // Every instance rebuilt from the new template now, with the ids of the
+    // first execute on a redo; the library's onReady then finds them matching.
+    m_orphaned.clear();
+    rebuildInstances(instances, tmpl, /*recordNewIds=*/!m_idsRecorded, /*recordOrphans=*/true);
+    m_idsRecorded = true;
     m_ctx.library.updateFromMemory(m_key, file, m_ctx.audio);
-
-    // The applying instance stands on the NEW template even while it loads (an
-    // edit meanwhile is told apart from it); the others are propagated now when
-    // it is Ready, otherwise by the host's onReady, from their own baselines.
-    resyncInstance(m_rootId, &tmpl);
+    // Ready at once: synced now. Still loading: each one's baseline stands on
+    // the new template, and the host's onReady syncs them.
     if (readyTemplate(m_ctx.library, m_key))
-        for (uint64_t id : instances)
-            if (id != m_rootId) resyncInstance(id);
+        for (uint64_t id : instances) resyncInstance(id);
 
     m_done = true;
     m_message = "Applied " + std::to_string(chosen.size()) + " override(s)" +
@@ -1474,37 +1578,46 @@ void ApplyPrefabOverridesCommand::undo()
 {
     if (!m_done) return;
     m_done = false;
-    // Links first: a template Ready at once propagates every instance from them.
-    for (const InstanceOverrides& s : m_before)
-        if (GameObject* r = m_ctx.scene.findById(s.rootId); r && r->prefabLink)
-            r->prefabLink->overrides = s.overrides;
-    for (uint64_t id : m_linkedAdded)
+    // Decided FIRST, before anything is touched: the previous bytes go back
+    // only over the bytes Apply wrote. A file changed since (outside the
+    // editor) is kept, and then the scene is left exactly as Apply left it too
+    // -- rolling the links back over a template that still has the applied
+    // content would duplicate the applied children and pin applied values as
+    // overrides.
+    const std::optional<std::string> current = readFileBytes(m_path);
+    const nlohmann::json prev = nlohmann::json::parse(m_previous, nullptr, /*allow_exceptions=*/false);
+    if (!current || *current != m_written || !prev.is_object() || !prev.contains("root") ||
+        !prev["root"].is_object())
+    {
+        m_message = "'" + m_path.string() + "' changed on disk after the Apply: kept as it is "
+                    "(nothing was undone)";
+        return;
+    }
+    if (!writeFileBytes(m_path, m_previous))
+    {
+        m_message = "'" + m_path.string() + "' could not be written: nothing was undone";
+        return;
+    }
+    nlohmann::json standsOn = prev["root"];
+    resolveStoredPaths(standsOn, m_ctx.library.assetRoot());
+
+    // Edits recorded since the Apply stay; only what Apply changed goes back.
+    const std::vector<uint64_t> instances = instancesOf(m_key);
+    for (uint64_t id : instances) recordPendingEdits(id);
+    if (GameObject* r = m_ctx.scene.findById(m_rootId); r && r->prefabLink)
+        addMissing(r->prefabLink->overrides, m_applied);
+    for (const auto& [id, lost] : m_orphaned)
+        if (GameObject* r = m_ctx.scene.findById(id); r && r->prefabLink)
+            addMissing(r->prefabLink->overrides, lost);    for (uint64_t id : m_linkedAdded)
         if (GameObject* n = m_ctx.scene.findById(id)) n->prefabNode = 0;
 
-    // The previous bytes go back only over the bytes Apply wrote: a file
-    // changed since then (outside the editor) is not overwritten.
-    nlohmann::json standsOn;
-    bool restored = false;
-    const std::optional<std::string> current = readFileBytes(m_path);
-    if (current && *current == m_written && writeFileBytes(m_path, m_previous))
-    {
-        const nlohmann::json prev = nlohmann::json::parse(m_previous, nullptr, /*allow_exceptions=*/false);
-        if (prev.is_object() && prev.contains("root"))
-        {
-            m_ctx.library.updateFromMemory(m_key, prev, m_ctx.audio);
-            standsOn = prev["root"];
-            resolveStoredPaths(standsOn, m_ctx.library.assetRoot());
-            restored = true;
-        }
-    }
-    m_message = restored ? "Restored '" + m_path.string() + "'"
-                         : "'" + m_path.string() + "' changed on disk after the Apply: kept as it is "
-                           "(the prefab was not restored)";
-
-    resyncInstance(m_rootId, restored ? &standsOn : nullptr);
+    // Links first, then the library: a template Ready at once propagates every
+    // instance from them in its onReady (and finds them matching).
+    rebuildInstances(instances, standsOn, /*recordNewIds=*/false, /*recordOrphans=*/false);
+    m_ctx.library.updateFromMemory(m_key, prev, m_ctx.audio);
     if (readyTemplate(m_ctx.library, m_key))
-        for (const InstanceOverrides& s : m_before)
-            if (s.rootId != m_rootId) resyncInstance(s.rootId);
+        for (uint64_t id : instances) resyncInstance(id);
+    m_message = "Restored '" + m_path.string() + "'";
 }
 
 // ---- Revert ----
@@ -1552,11 +1665,14 @@ void RevertPrefabOverridesCommand::execute()
         return;
     }
 
-    // The whole instance as it is now (ids, link, added children, meshes).
-    m_snapshot = m_ctx.scene.subtreeToJson(root);
-    m_meshes   = Scene::collectMeshes(root);
-    m_parentId = root->parent == &m_ctx.scene.getRoot() ? 0 : root->parent->id;
-    m_index    = indexInParent(root);
+    // Only what is reverted is kept for the undo: the overrides (with their
+    // values) and each deleted child whole (ids, meshes), where it hung.
+    m_reverted = chosen;
+    m_deleted.clear();
+    for (uint64_t id : addedIds)
+        if (GameObject* n = m_ctx.scene.findById(id))
+            m_deleted.push_back({ n->parent->id, indexInParent(n), m_ctx.scene.subtreeToJson(n),
+                                  Scene::collectMeshes(n) });
 
     std::erase_if(root->prefabLink->overrides, [&](const PrefabOverride& o) {
         return std::any_of(chosen.begin(), chosen.end(), [&](const PrefabOverride& c) { return sameTarget(c, o); });
@@ -1572,18 +1688,34 @@ void RevertPrefabOverridesCommand::undo()
 {
     if (!m_done) return;
     m_done = false;
-    if (GameObject* current = m_ctx.scene.findById(m_rootId))
-        m_ctx.scene.removeGameObject(current);
-    GameObject* parent = m_parentId != 0 ? m_ctx.scene.findById(m_parentId) : nullptr;
-    GameObject* node = m_ctx.scene.insertFromJson(m_snapshot, parent, m_index, m_ctx.physics, m_ctx.audio,
-                                                  m_meshes.empty() ? nullptr : &m_meshes);
-    if (!node)
+    m_message.clear();
+    GameObject* root = m_ctx.scene.findById(m_rootId);
+    if (!root || !root->prefabLink)
     {
-        m_ctx.tracker.forget(m_rootId);
-        m_message = "Revert: could not restore the instance";
+        m_message = "Revert: the instance no longer exists; nothing was undone";
         return;
     }
-    if (m_ctx.registerGpu) m_ctx.registerGpu(node);
+    // What was recorded since the Revert stays: the reverted overrides come
+    // back only where the instance has no newer entry on the same path.
+    recordPendingEdits(m_rootId);
+    root = m_ctx.scene.findById(m_rootId);
+    addMissing(root->prefabLink->overrides, m_reverted);
+    // In the order they were deleted, so each index is the one it had.
+    for (DeletedChild& d : m_deleted)
+    {
+        GameObject* parent = m_ctx.scene.findById(d.parentId);
+        if (!parent)
+        {
+            m_message += (m_message.empty() ? "" : "\n") + std::string("Revert: the parent of a deleted object "
+                                                                       "no longer exists; it was not restored");
+            continue;
+        }
+        GameObject* node = m_ctx.scene.insertFromJson(d.snapshot, parent, d.index, m_ctx.physics, m_ctx.audio,
+                                                      d.meshes.empty() ? nullptr : &d.meshes);
+        if (node && m_ctx.registerGpu) m_ctx.registerGpu(node);
+    }
+    // Re-derived from the CURRENT template with the restored overrides (added
+    // children are carried as they are, ids kept).
     resyncInstance(m_rootId);
 }
 
@@ -1610,6 +1742,9 @@ void UnpackPrefabCommand::execute()
     // resync (it re-derives the instance from its stored overrides).
     recordPendingEdits(m_rootId);
     root = m_ctx.scene.findById(m_rootId);
+    // The objects as they are now, linked: the undo tells the edits made to
+    // them while unpacked apart from this.
+    m_atUnpack = m_ctx.scene.subtreeToMemoryJson(root);
     m_nodes.clear();
     root->traverse([&](GameObject* n) {
         if (n->prefabNode == 0 && !n->prefabLink) return;
@@ -1632,6 +1767,41 @@ void UnpackPrefabCommand::undo()
             node->prefabNode = n.prefabNode;
             node->prefabLink = n.link ? std::make_shared<PrefabLink>(*n.link) : nullptr;
         }
+
+    // Edits made to the objects while they were plain objects: each linked
+    // node is diffed against itself at Unpack time, and the differences are
+    // merged into the restored overrides (a newer value wins). Without this
+    // the resync below would re-derive the instance and silently drop them.
+    if (GameObject* root = m_ctx.scene.findById(m_rootId); root && root->prefabLink && m_atUnpack.is_object())
+    {
+        // Linked nodes by prefab-local id; a nested instance's subtree is its own.
+        auto index = [](const nlohmann::json& tree) {
+            std::unordered_map<uint64_t, std::pair<const nlohmann::json*, bool>> out;   // local -> (node, isRoot)
+            std::function<void(const nlohmann::json&, bool)> walk = [&](const nlohmann::json& n, bool isRoot) {
+                const uint64_t local = localIdOf(n, "prefabNode");
+                if (local == 0 || (!isRoot && n.contains("prefab"))) return;
+                out.emplace(local, std::make_pair(&n, isRoot));
+                if (const auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                    for (const auto& c : *kids) if (c.is_object()) walk(c, false);
+            };
+            walk(tree, true);
+            return out;
+        };
+        const nlohmann::json live = m_ctx.scene.subtreeToMemoryJson(root);
+        const auto before = index(m_atUnpack);
+        std::vector<PrefabOverride>& list = root->prefabLink->overrides;
+        for (const auto& [local, node] : index(live))
+        {
+            const auto b = before.find(local);
+            if (b == before.end()) continue;
+            for (PrefabOverride& e : diffPrefabNode(local, *b->second.first, *node.first, node.second))
+            {
+                auto same = std::find_if(list.begin(), list.end(), [&](const PrefabOverride& o) { return sameTarget(o, e); });
+                if (same != list.end()) same->value = std::move(e.value);
+                else                    list.push_back(std::move(e));
+            }
+        }
+    }
     for (const NodeLink& n : m_nodes)
         if (n.link) resyncInstance(n.id);
 }

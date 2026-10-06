@@ -1085,10 +1085,19 @@ private:
 // Writes overrides of one instance into its .prefab (which: empty = all of
 // them) and, with includeAddedChildren, its added children (onlyAddedChildIds:
 // empty = all of them) with new prefab-local ids. Removes them from the
-// instance and propagates the template to every instance of it: the others
-// keep their own overrides, also on the same paths (Unity). Undo writes back
-// the exact previous bytes -- only while the file still holds the ones Apply
-// wrote -- and restores every instance's overrides and links.
+// instance and rebuilds every instance of the prefab from the new template
+// right away (so a node it adds to another instance has an id later commands
+// can hold; a redo gives it the same id again): the others keep their own
+// overrides, also on the same paths (Unity). Refused when the .prefab on disk
+// is no longer what the library loaded (building on it would erase that
+// change).
+//
+// Undo restores ONLY what execute changed, and only while the file still holds
+// the bytes Apply wrote: the previous bytes go back, the applying instance gets
+// its applied overrides back and its applied children unlinked, every instance
+// gets back the overrides the new template orphaned -- an override recorded
+// after the Apply (without a command) stays. If the file changed on disk in
+// between, nothing at all is undone (scene and file stay as Apply left them).
 class ApplyPrefabOverridesCommand : public PrefabCommand {
 public:
     ApplyPrefabOverridesCommand(PrefabCommandContext ctx, uint64_t instanceRootId,
@@ -1098,26 +1107,36 @@ public:
     void undo() override;
 
 private:
-    struct InstanceOverrides
-    {
-        uint64_t                    rootId = 0;
-        std::vector<PrefabOverride> overrides;
-    };
-    uint64_t                       m_rootId;
-    std::vector<PrefabOverride>    m_which;
-    bool                           m_includeAdded;
-    std::vector<uint64_t>          m_onlyAdded;
-    std::string                    m_key;
-    std::filesystem::path          m_path;
-    std::string                    m_previous;   // file bytes before execute
-    std::string                    m_written;    // file bytes right after it
-    std::vector<InstanceOverrides> m_before;     // every instance of the key
-    std::vector<uint64_t>          m_linkedAdded;   // scene ids that got a prefabNode
+    // Rebuilds every instance of m_key that does not match tmpl (memory form)
+    // and re-baselines all of them on it. recordNewIds: remember the scene ids
+    // of the nodes the rebuilds created (first execute), used as id hints after.
+    // recordOrphans: remember the overrides each rebuild dropped (execute).
+    void rebuildInstances(const std::vector<uint64_t>& instances, const nlohmann::json& tmpl,
+                          bool recordNewIds, bool recordOrphans);
+
+    uint64_t                    m_rootId;
+    std::vector<PrefabOverride> m_which;
+    bool                        m_includeAdded;
+    std::vector<uint64_t>       m_onlyAdded;
+    std::string                 m_key;
+    std::filesystem::path       m_path;
+    std::string                 m_previous;   // file bytes before execute
+    std::string                 m_written;    // file bytes right after it
+    std::vector<PrefabOverride> m_applied;    // removed from the applying instance
+    // Per instance root id: the overrides the new template orphaned (dropped by its rebuild).
+    std::unordered_map<uint64_t, std::vector<PrefabOverride>> m_orphaned;
+    std::vector<uint64_t>       m_linkedAdded;   // scene ids that got a prefabNode
+    // Per instance root id: prefab-local id -> scene id of the nodes the first
+    // execute's rebuilds created; a redo creates them with the same ids.
+    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> m_createdIds;
+    bool                        m_idsRecorded = false;
 };
 
 // Drops overrides of one instance (which: empty = all) and, with
 // includeAddedChildren, deletes its added children; then rebuilds it from the
-// template. Undo restores the snapshot of the whole instance subtree (same ids).
+// template. Undo puts back ONLY those: the reverted overrides (unless the
+// instance has a newer entry on the same path) and each deleted child from its
+// own snapshot (same ids); anything recorded since stays.
 class RevertPrefabOverridesCommand : public PrefabCommand {
 public:
     RevertPrefabOverridesCommand(PrefabCommandContext ctx, uint64_t instanceRootId,
@@ -1126,17 +1145,23 @@ public:
     void undo() override;
 
 private:
+    struct DeletedChild
+    {
+        uint64_t           parentId = 0;
+        size_t             index    = SIZE_MAX;
+        nlohmann::json     snapshot;
+        PreloadedMeshCache meshes;
+    };
     uint64_t                    m_rootId;
     std::vector<PrefabOverride> m_which;
     bool                        m_includeAdded;
-    uint64_t                    m_parentId = 0;
-    size_t                      m_index    = SIZE_MAX;
-    nlohmann::json              m_snapshot;
-    PreloadedMeshCache          m_meshes;
+    std::vector<PrefabOverride> m_reverted;
+    std::vector<DeletedChild>   m_deleted;
 };
 
 // Strips the link from an instance (the objects stay as they are). Undo puts
-// the link (with its overrides) and every prefabNode back by node id.
+// the link (with its overrides) and every prefabNode back by node id, merged
+// with the edits made to the objects while they were unpacked.
 class UnpackPrefabCommand : public PrefabCommand {
 public:
     UnpackPrefabCommand(PrefabCommandContext ctx, uint64_t instanceRootId);
@@ -1152,6 +1177,7 @@ private:
     };
     uint64_t              m_rootId;
     std::vector<NodeLink> m_nodes;
+    nlohmann::json        m_atUnpack;   // memory form of the instance when it was unpacked
 };
 
 } // namespace DonTopo

@@ -1846,8 +1846,256 @@ void testInstantiatePrefabCommand()
     CHECK(idsUnique(w.scene), "ids unique after redo");
 }
 
+// ---- Review of 2ada0e0: undo restores only what the command changed ----
+
+int countChildren(DonTopo::GameObject* n, const std::string& name)
+{
+    int count = 0;
+    if (n) for (auto& c : n->children) if (c->name == name) ++count;
+    return count;
+}
+
+// The falling edge of an active item on the selection: an edit recorded by the
+// tracker WITHOUT any command (script properties, spec §3.2).
+void commandlessEdit(CommandWorld& w, DonTopo::GameObject* selected)
+{
+    w.sync->frame(/*revisionChanged=*/false, selected);
+}
+
+// T1: the .prefab changed on disk after Apply -> undo leaves the scene exactly
+// as Apply left it (no unlinked copy beside a linked one, no override restored
+// on top of a template that still has the applied value).
+void testApplyUndoKeptLeavesSceneAsApplied()
+{
+    ThreeInstances w("dt_prefab_cmd_t1");
+    if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+    lampLight(w.get(w.b))->setIntensity(3.0f);
+    w.pass();
+    const uint64_t extraId = w.scene.addGameObject("Extra", w.get(w.b))->id;
+    w.pass();
+    auto* apply = w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), w.b, std::vector<DonTopo::PrefabOverride>{}, true));
+    CHECK(apply->succeeded(), "apply succeeded");
+    CHECK(w.get(extraId) && w.get(extraId)->prefabNode == 3, "the added child is linked");
+    const std::string external = readBytes(w.prefabFile()) + "\n";
+    writeFile(w.prefabFile(), external);
+
+    w.doUndo();
+    auto expectAsApplied = [&](const char* when) {
+        const std::string m = std::string(when) + ": ";
+        CHECK(readBytes(w.prefabFile()) == external, (m + "the file is kept").c_str());
+        CHECK(w.get(extraId) && w.get(extraId)->prefabNode == 3, (m + "the applied child stays linked").c_str());
+        CHECK(countChildren(w.get(w.b), "Extra") == 1 && countChildren(w.get(w.c), "Extra") == 1,
+              (m + "no duplicated child").c_str());
+        CHECK(overrideCount(w.get(w.b)) == 0 && overrideCount(w.get(w.c)) == 0 && overrideCount(w.get(w.a)) == 0,
+              (m + "overrides unchanged").c_str());
+        CHECK(w.intensity(w.b) == 3.0f && w.intensity(w.c) == 3.0f, (m + "values unchanged").c_str());
+    };
+    CHECK(contains(apply->lastMessage(), "kept"), "lastMessage says the file was kept");
+    expectAsApplied("after undo");
+    w.pass();
+    expectAsApplied("after another pass");
+    CHECK(idsUnique(w.scene), "ids unique");
+}
+
+// T2: an edit recorded by the tracker after the command, without a command,
+// survives the command's undo (Apply, Revert, Unpack).
+void testUndoKeepsCommandlessEdits()
+{
+    {
+        ThreeInstances w("dt_prefab_cmd_t2_apply");
+        if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+        lampLight(w.get(w.b))->setIntensity(3.0f);
+        w.pass();
+        w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+            w.ctx(), w.b, std::vector<DonTopo::PrefabOverride>{ {2, "/light/intensity", 3.0} }, false));
+        lampLight(w.get(w.c))->setRange(55.0f);
+        commandlessEdit(w, childNamed(w.get(w.c), "Lamp"));
+        CHECK(overrideIs(w.get(w.c), "/light/range", 55.0), "C's edit recorded");
+        w.doUndo();
+        CHECK(w.range(w.c) == 55.0f && overrideIs(w.get(w.c), "/light/range", 55.0) &&
+              overrideCount(w.get(w.c)) == 1, "Apply undo: C's later edit survives");
+        CHECK(w.intensity(w.c) == 1.0f, "Apply undo: C back to the old prefab value");
+        CHECK(w.intensity(w.b) == 3.0f && overrideIs(w.get(w.b), "/light/intensity", 3.0), "B's override back");
+    }
+    {
+        ThreeInstances w("dt_prefab_cmd_t2_revert");
+        if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+        lampLight(w.get(w.b))->setIntensity(5.0f);
+        const uint64_t extraId = w.scene.addGameObject("Extra", w.get(w.b))->id;
+        const uint64_t lampB = childNamed(w.get(w.b), "Lamp")->id;
+        w.pass();
+        w.run(std::make_unique<DonTopo::RevertPrefabOverridesCommand>(
+            w.ctx(), w.b, std::vector<DonTopo::PrefabOverride>{}, true));
+        CHECK(!w.get(extraId) && w.intensity(w.b) == 1.0f, "reverted");
+        lampLight(w.get(w.b))->setRange(44.0f);
+        commandlessEdit(w, w.get(lampB));
+        CHECK(overrideIs(w.get(w.b), "/light/range", 44.0), "B's edit recorded");
+        w.doUndo();
+        CHECK(w.intensity(w.b) == 5.0f && overrideIs(w.get(w.b), "/light/intensity", 5.0), "Revert undo: override back");
+        CHECK(w.range(w.b) == 44.0f && overrideIs(w.get(w.b), "/light/range", 44.0) && overrideCount(w.get(w.b)) == 2,
+              "Revert undo: the later edit survives");
+        CHECK(w.get(extraId) && w.get(extraId)->parent == w.get(w.b), "Revert undo: deleted child back, same id");
+        CHECK(w.get(lampB) && w.get(lampB)->parent == w.get(w.b), "Revert undo: lamp keeps its id");
+        w.pass();
+        CHECK(overrideCount(w.get(w.b)) == 2 && w.synced(w.b), "stable after another pass");
+    }
+    {
+        ThreeInstances w("dt_prefab_cmd_t2_unpack");
+        if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+        lampLight(w.get(w.b))->setIntensity(5.0f);
+        w.pass();
+        w.run(std::make_unique<DonTopo::UnpackPrefabCommand>(w.ctx(), w.b));
+        lampLight(w.get(w.b))->setRange(33.0f);   // plain objects now: no tracker
+        w.pass();
+        w.doUndo();
+        CHECK(overrideIs(w.get(w.b), "/light/intensity", 5.0) && overrideIs(w.get(w.b), "/light/range", 33.0) &&
+              overrideCount(w.get(w.b)) == 2, "Unpack undo: the edit made while unpacked is merged");
+        CHECK(w.range(w.b) == 33.0f && w.intensity(w.b) == 5.0f, "Unpack undo: values kept");
+        w.pass();
+        CHECK(overrideCount(w.get(w.b)) == 2 && w.synced(w.b), "stable after another pass");
+    }
+}
+
+// T3: a later command addressing a node Apply's propagation created in ANOTHER
+// instance still resolves after undo/redo (the redo reuses its id).
+void testApplyRedoReusesPropagatedIds()
+{
+    ThreeInstances w("dt_prefab_cmd_t3");
+    if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+    w.scene.addGameObject("Extra", w.get(w.b));
+    w.pass();
+    w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), w.b, std::vector<DonTopo::PrefabOverride>{}, true));
+    DonTopo::GameObject* copy = childNamed(w.get(w.c), "Extra");
+    if (!copy) { CHECK(false, "C received the child"); return; }
+    const uint64_t copyId = copy->id;
+    auto rename = [&](const std::string& v) { if (DonTopo::GameObject* n = w.get(copyId)) n->name = v; };
+    rename("Renamed");
+    w.undo.push(std::make_unique<DonTopo::PropertyCommand<std::string>>("Name", "Extra", "Renamed", rename));
+    w.pass();
+    CHECK(hasOverride(w.get(w.c), "/name"), "the rename is an override of C");
+
+    w.doUndo(); w.doUndo();
+    CHECK(!w.get(copyId), "undo of Apply removes C's copy");
+    w.doRedo();
+    CHECK(w.get(copyId) && w.get(copyId)->parent == w.get(w.c), "redo of Apply gives C's copy the same id");
+    w.doRedo();
+    CHECK(w.get(copyId) && w.get(copyId)->name == "Renamed", "the later rename lands on C's copy");
+    CHECK(hasOverride(w.get(w.c), "/name"), "and is C's override again");
+    CHECK(idsUnique(w.scene), "ids unique");
+}
+
+// T4: the .prefab changed on disk since it was loaded -> Apply refuses and
+// touches nothing (building on the stale template would erase that change).
+void testApplyRefusesPrefabChangedOnDisk()
+{
+    ThreeInstances w("dt_prefab_cmd_t4");
+    if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+    lampLight(w.get(w.b))->setIntensity(3.0f);
+    w.pass();
+    const std::string external = enemyFile(w.root.str(), 99.0f).dump(2);
+    writeFile(w.prefabFile(), external);
+    DonTopo::ApplyPrefabOverridesCommand apply(w.ctx(), w.b, std::vector<DonTopo::PrefabOverride>{}, false);
+    apply.execute();
+    CHECK(!apply.succeeded() && contains(apply.lastMessage(), "changed on disk"), "refused, with the reason");
+    CHECK(readBytes(w.prefabFile()) == external, "the file is untouched");
+    CHECK(overrideIs(w.get(w.b), "/light/intensity", 3.0) && w.intensity(w.c) == 1.0f && w.range(w.c) == 10.0f,
+          "the scene is untouched");
+}
+
+// T5: a path outside the project root is refused (paths are project-relative),
+// and a failed write leaves no file behind.
+void testCreateRefusesOutsideRootAndFailedWrite()
+{
+    CommandWorld w("dt_prefab_cmd_t5");
+    TempRoot outside("dt_prefab_cmd_t5_outside");
+    DonTopo::GameObject* enemy = w.scene.addGameObject("Enemy");
+    const std::filesystem::path out = outside.p / "Prefabs" / "Enemy.prefab";
+    DonTopo::CreatePrefabCommand c1(w.ctx(), enemy->id, out);
+    c1.execute();
+    CHECK(!c1.succeeded() && !std::filesystem::exists(out), "outside the project: refused, no file");
+    CHECK(contains(c1.lastMessage(), "outside the project"), "with the reason");
+    CHECK(!enemy->prefabLink && enemy->prefabNode == 0, "nothing linked");
+
+    const std::filesystem::path missing = w.root.p / "NoSuchFolder" / "Enemy.prefab";
+    DonTopo::CreatePrefabCommand c2(w.ctx(), enemy->id, missing);
+    c2.execute();
+    CHECK(!c2.succeeded() && !std::filesystem::exists(missing), "failed write: refused, no file");
+    CHECK(!enemy->prefabLink && enemy->prefabNode == 0, "nothing linked after a failed write");
+}
+
+// T6: undo of Create drops the template from the library (and its GPU pin);
+// redo registers it again.
+void testCreateUndoEvictsTemplate()
+{
+    CommandWorld w("dt_prefab_cmd_t6");
+    DonTopo::GameObject* enemy = w.scene.addGameObject("Enemy");
+    w.scene.addGameObject("Lamp", enemy)->setLight(std::make_shared<DonTopo::LightComponent>());
+    w.run(std::make_unique<DonTopo::CreatePrefabCommand>(w.ctx(), enemy->id, w.prefabFile()));
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    CHECK(readyTemplate(*w.lib, kEnemyKey) && w.sync->pinned().count(kEnemyKey), "Ready and pinned");
+    w.doUndo();
+    CHECK(!std::filesystem::exists(w.prefabFile()), "file deleted");
+    CHECK(w.lib->find(kEnemyKey) == nullptr, "the template is evicted");
+    CHECK(!w.sync->pinned().count(kEnemyKey) && w.fx.count(w.fx.unpins, kEnemyKey) == 1, "and unpinned");
+    w.doRedo();
+    CHECK(settleSync(*w.sync, *w.lib), "settles after redo");
+    CHECK(readyTemplate(*w.lib, kEnemyKey) != nullptr, "redo registers it again");
+}
+
+// T8: the template changed between a Revert/Unpack and its undo (an Apply of
+// another instance): the instance is re-derived from the CURRENT template with
+// its restored overrides, ids kept.
+void testUndoAfterTemplateChanged()
+{
+    ThreeInstances w("dt_prefab_cmd_t8");
+    if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+    lampLight(w.get(w.b))->setIntensity(5.0f);
+    lampLight(w.get(w.a))->setRange(50.0f);
+    w.pass();
+    const uint64_t lampB = childNamed(w.get(w.b), "Lamp")->id;
+    w.run(std::make_unique<DonTopo::RevertPrefabOverridesCommand>(
+        w.ctx(), w.b, std::vector<DonTopo::PrefabOverride>{}, false));
+    // Applied outside the stack: the template changes under the Revert.
+    DonTopo::ApplyPrefabOverridesCommand applyRange(
+        w.ctx(), w.a, std::vector<DonTopo::PrefabOverride>{ {2, "/light/range", 50.0} }, false);
+    applyRange.execute();
+    w.pass();
+    CHECK(applyRange.succeeded() && w.range(w.b) == 50.0f, "B follows the new template");
+    w.doUndo();   // the Revert
+    CHECK(w.intensity(w.b) == 5.0f && overrideIs(w.get(w.b), "/light/intensity", 5.0) &&
+          overrideCount(w.get(w.b)) == 1, "Revert undo: its override back");
+    CHECK(w.range(w.b) == 50.0f, "Revert undo: the rest follows the current template");
+    CHECK(w.get(lampB) && w.get(lampB)->parent == w.get(w.b) && w.synced(w.b), "ids kept, synced");
+    w.pass();
+    CHECK(overrideCount(w.get(w.b)) == 1, "stable after another pass");
+
+    const uint64_t lampC = childNamed(w.get(w.c), "Lamp")->id;
+    w.run(std::make_unique<DonTopo::UnpackPrefabCommand>(w.ctx(), w.c));
+    lampLight(w.get(w.a))->setIntensity(8.0f);
+    w.pass();
+    DonTopo::ApplyPrefabOverridesCommand applyIntensity(
+        w.ctx(), w.a, std::vector<DonTopo::PrefabOverride>{ {2, "/light/intensity", 8.0} }, false);
+    applyIntensity.execute();
+    w.pass();
+    CHECK(applyIntensity.succeeded() && w.intensity(w.c) == 1.0f, "the unpacked C does not follow");
+    w.doUndo();   // the Unpack
+    CHECK(w.get(w.c) && w.get(w.c)->prefabLink && overrideCount(w.get(w.c)) == 0, "Unpack undo: linked, no override");
+    CHECK(w.intensity(w.c) == 8.0f && w.range(w.c) == 50.0f, "Unpack undo: re-derived from the current template");
+    CHECK(w.get(lampC) && w.get(lampC)->parent == w.get(w.c) && w.synced(w.c), "ids kept, synced");
+    CHECK(idsUnique(w.scene), "ids unique");
+}
+
 int main()
 {
+    testApplyUndoKeptLeavesSceneAsApplied();
+    testUndoKeepsCommandlessEdits();
+    testApplyRedoReusesPropagatedIds();
+    testApplyRefusesPrefabChangedOnDisk();
+    testCreateRefusesOutsideRootAndFailedWrite();
+    testCreateUndoEvictsTemplate();
+    testUndoAfterTemplateChanged();
     testCreatePrefabCommand();
     testCreateUndoKeepsModifiedFile();
     testApplyKeepsOtherInstanceOverride();

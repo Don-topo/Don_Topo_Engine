@@ -65,6 +65,8 @@ namespace DonTopo
             // Pumps the library (onReady fires from here) and logs Failed keys.
             void pump(float budgetMs);
             void onTemplateReady(const PrefabTemplate& t);
+            // PrefabLibrary::evict (installed as its onEvicted): unpins the key.
+            void onTemplateEvicted(const std::string& key);
             void sceneLoaded(const nlohmann::json& sceneJson);
             // End of an editor frame. deactivatedSelection: the selection on the
             // frame an active item was released, else nullptr.

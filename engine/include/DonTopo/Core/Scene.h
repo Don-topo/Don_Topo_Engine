@@ -273,11 +273,16 @@ namespace DonTopo
             // (null root, the scene root, no link, prefabMemoryRoot not an object; the
             // instance is still live and registered), or even the restore failed and
             // the instance was lost. lastWarnings() says which.
+            // idHints (prefab-local id -> scene id): the id a node NEW to this
+            // instance gets instead of a fresh one (the redo of an Apply rebuilds
+            // the nodes it created with their first ids, so later Undo commands
+            // still resolve). Still subject to the live-id guard.
             GameObject* rebuildPrefabInstance(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot,
                                               PhysicsManager& physics, AudioManager& audio,
                                               const PreloadedMeshCache* meshes = nullptr,
                                               const MaterialAssetCache* mats = nullptr,
-                                              bool* rebuilt = nullptr);
+                                              bool* rebuilt = nullptr,
+                                              const std::unordered_map<uint64_t, uint64_t>* idHints = nullptr);
 
             // Replaces instanceRoot->prefabLink->overrides with the diff of the live
             // subtree against prefabMemoryRoot (matched by prefabNode). Returns true if

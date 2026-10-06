@@ -863,6 +863,16 @@ namespace DonTopo
         dropTickets([&](const MeshTicket& t) { return !keep.count(t.key); });
     }
 
+    void PrefabLibrary::evict(const std::string& path)
+    {
+        const std::string key = normalizeKey(path);
+        // Erasing the entry is what makes a late worker result stale: liveEntry
+        // finds no entry (or, after a later request, one with a new serial).
+        if (m_entries.erase(key) == 0) return;
+        dropTickets([&](const MeshTicket& t) { return t.key == key; });
+        if (m_onEvicted) m_onEvicted(key);
+    }
+
     void PrefabLibrary::clear()
     {
         ++m_clearCount;
