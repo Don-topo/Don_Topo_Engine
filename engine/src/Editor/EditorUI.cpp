@@ -1384,8 +1384,13 @@ void EditorUI::handleUndoRedoShortcut()
         m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
         m_propertiesPanel.invalidateCaches();
         // A refused undo stays where it was (UndoManager): say so, with why.
-        m_logPanel.push((m_undoHistory.lastRefused() ? "Undo refused: " : "Undo: ") + m_undoHistory.lastLabel() +
-                        (m_undoHistory.lastMessage().empty() ? std::string() : " (" + m_undoHistory.lastMessage() + ")"));
+        // One that can never be undone took the history below it away: the
+        // manager's message is the whole Log line.
+        if (m_undoHistory.lastDiscardedHistory())
+            m_logPanel.push(m_undoHistory.lastMessage());
+        else
+            m_logPanel.push((m_undoHistory.lastRefused() ? "Undo refused: " : "Undo: ") + m_undoHistory.lastLabel() +
+                            (m_undoHistory.lastMessage().empty() ? std::string() : " (" + m_undoHistory.lastMessage() + ")"));
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Y) && m_undoHistory.canRedo())
     {

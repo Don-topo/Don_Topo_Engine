@@ -37,13 +37,21 @@ public:
     // No-op if the undo stack is empty. A command that refuses its undo()
     // (a prefab command while a mesh is still loading, a file changed on disk)
     // stays on the undo stack and the revision does not move: undoing what lies
-    // below it would leave the scene inconsistent. lastRefused() tells.
+    // below it would leave the scene inconsistent. lastRefused() tells. A
+    // refusal that can never turn into an undo (lastStepDiscardsHistory) drops
+    // the command and everything below it instead: lastDiscardedHistory().
     void undo();
     // No-op if the redo stack is empty. Same rule: a refused redo stays on the
-    // redo stack.
+    // redo stack. No redo refusal discards anything: a stuck redo blocks
+    // nothing else, and the next push clears the redo stack anyway.
     void redo();
     // Whether the last undo()/redo() that found a command was refused by it.
     bool lastRefused() const { return m_lastRefused; }
+    // Whether the last undo() met a command that can NEVER be undone
+    // (ICommand::lastStepDiscardsHistory): it and everything below it were
+    // dropped from the undo stack. The redo stack is kept and the revision does
+    // not move (the scene did not change). lastMessage() has the Log line.
+    bool lastDiscardedHistory() const { return m_lastDiscarded; }
     // What that command had to say about it (ICommand::lastStepMessage), for the Log.
     const std::string& lastMessage() const { return m_lastMessage; }
     // Empties both stacks. Called on Load Scene and when entering/leaving Play Mode.
@@ -74,6 +82,7 @@ private:
     std::string m_lastLabel;
     bool m_sceneDirty = false;
     bool m_lastRefused = false;
+    bool m_lastDiscarded = false;
     std::string m_lastMessage;
     uint64_t m_revision = 0;
 };

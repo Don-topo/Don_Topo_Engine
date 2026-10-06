@@ -1638,7 +1638,9 @@ void testApplyKeepsOtherInstanceOverride()
     writeFile(w.prefabFile(), external);
     w.doUndo();
     CHECK(readBytes(w.prefabFile()) == external, "an externally changed file is not overwritten by undo");
-    CHECK(contains(apply->lastMessage(), "kept"), "and lastMessage says so");
+    // The command is gone (history discarded): only the manager can tell.
+    CHECK(w.undo.lastDiscardedHistory() && contains(w.undo.lastMessage(), "changed outside the editor"),
+          "and the manager says why the history went");
 }
 
 // Apply of B's override AND its added child with a new mesh: the template goes
@@ -1891,9 +1893,10 @@ void testApplyUndoKeptLeavesSceneAsApplied()
               (m + "overrides unchanged").c_str());
         CHECK(w.intensity(w.b) == 3.0f && w.intensity(w.c) == 3.0f, (m + "values unchanged").c_str());
     };
-    CHECK(contains(apply->lastMessage(), "kept"), "lastMessage says the file was kept");
-    CHECK(w.undo.lastRefused() && w.undo.canUndo() && !w.undo.canRedo() && apply->succeeded(),
-          "the refused undo leaves Apply applied, on the undo stack");
+    // W1: a permanent refusal discards the history (the command is gone: no
+    // pointer to it is used from here on).
+    CHECK(w.undo.lastDiscardedHistory() && !w.undo.lastRefused() && !w.undo.canUndo() && !w.undo.canRedo(),
+          "the undo history under the unrevertable Apply is discarded");
     expectAsApplied("after undo");
     w.pass();
     expectAsApplied("after another pass");
@@ -2342,6 +2345,7 @@ void testUndoManagerKeepsRefusedCommands()
     w.undo.undo();
     CHECK(w.undo.canUndo() && !w.undo.canRedo(), "a refused undo stays on the undo stack");
     CHECK(w.undo.revision() == rev && w.undo.lastRefused(), "no revision change, reported as refused");
+    CHECK(!w.undo.lastDiscardedHistory(), "a transient refusal keeps the history");
     CHECK(readBytes(w.prefabFile()) == applied && w.intensity(w.c) == 3.0f && overrideCount(w.get(w.b)) == 0,
           "file and scene unchanged");
     w.get(lampC)->pendingMeshJob = 0;
@@ -2386,8 +2390,51 @@ void testCreateRedoRefusedThroughManager()
     CHECK(w.undo.canUndo() && !w.undo.canRedo() && w.get(enemyId)->prefabLink, "it goes through once the path is free");
 }
 
+// W1: Apply's undo refused for good (the .prefab changed outside the editor)
+// drops that command and everything below it; the redo stack, the revision,
+// the scene and the file stay as they were.
+void testUnrevertableApplyDiscardsHistory()
+{
+    ThreeInstances w("dt_prefab_cmd_w1");
+    if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+    // Older history: an Unpack of C.
+    w.run(std::make_unique<DonTopo::UnpackPrefabCommand>(w.ctx(), w.c));
+    lampLight(w.get(w.b))->setIntensity(3.0f);
+    w.pass();
+    w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), w.b, std::vector<DonTopo::PrefabOverride>{}, false));
+    // A later command, undone: it waits on the redo stack.
+    const uint64_t aId = w.a;
+    auto rename = [&](const std::string& v) { if (DonTopo::GameObject* n = w.get(aId)) n->name = v; };
+    const std::string oldName = w.get(aId)->name;
+    rename("Renamed");
+    w.undo.push(std::make_unique<DonTopo::PropertyCommand<std::string>>("Name", oldName, "Renamed", rename));
+    w.pass();
+    w.doUndo();
+    CHECK(w.undo.canRedo() && w.get(aId)->name == oldName, "the rename is on the redo stack");
+
+    const std::string external = readBytes(w.prefabFile()) + "\n";
+    writeFile(w.prefabFile(), external);
+    const uint64_t rev = w.undo.revision();
+    w.undo.undo();
+    CHECK(w.undo.lastDiscardedHistory() && !w.undo.lastRefused(), "reported as history discarded");
+    CHECK(w.undo.lastMessage() ==
+              "Undo history before 'Apply to Prefab 'Enemy'' discarded: the .prefab changed outside the editor",
+          "the exact Log message");
+    CHECK(!w.undo.canUndo(), "the Apply and everything below it are gone");
+    CHECK(w.undo.canRedo(), "the redo stack is kept");
+    CHECK(w.undo.revision() == rev, "the revision does not move (the scene did not change)");
+    CHECK(readBytes(w.prefabFile()) == external, "the file is untouched");
+    CHECK(w.intensity(w.b) == 3.0f && overrideCount(w.get(w.b)) == 0 && w.intensity(w.a) == 3.0f,
+          "the scene stays as Apply left it");
+    CHECK(w.get(w.c) && !w.get(w.c)->prefabLink, "the older Unpack was not undone");
+    w.undo.redo();
+    CHECK(w.get(aId)->name == "Renamed" && w.undo.canUndo(), "the redo stack still works");
+}
+
 int main()
 {
+    testUnrevertableApplyDiscardsHistory();
     testUndoManagerKeepsRefusedCommands();
     testCreateRedoRefusedThroughManager();
     testApplySeedsConfiguredMeshes();

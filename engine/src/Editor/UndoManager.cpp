@@ -26,10 +26,21 @@ void UndoManager::undo()
     cmd.undo();
     m_lastLabel   = cmd.label();
     m_lastMessage = cmd.lastStepMessage();
-    m_lastRefused = !cmd.lastStepSucceeded();
+    m_lastRefused   = !cmd.lastStepSucceeded();
+    m_lastDiscarded = false;
     // Refused: it is still applied, so it stays on top of the undo stack and
     // nothing moved (no revision). Undoing what lies below it now would leave
     // the scene inconsistent.
+    if (m_lastRefused && cmd.lastStepDiscardsHistory())
+    {
+        // ...and it never will be undone: kept on top it would block the whole
+        // history for good. It and everything below it go; the redo stack
+        // stays, and the scene did not change, so neither does the revision.
+        m_lastRefused   = false;
+        m_lastDiscarded = true;
+        m_lastMessage   = "Undo history before '" + m_lastLabel + "' discarded: " + m_lastMessage;
+        m_undoStack.clear();        return;
+    }
     if (m_lastRefused) return;
     m_redoStack.push_back(std::move(m_undoStack.back()));
     m_undoStack.pop_back();
@@ -41,9 +52,10 @@ void UndoManager::redo()
     if (m_redoStack.empty()) return;
     ICommand& cmd = *m_redoStack.back();
     cmd.execute();
-    m_lastLabel   = cmd.label();
-    m_lastMessage = cmd.lastStepMessage();
-    m_lastRefused = !cmd.lastStepSucceeded();
+    m_lastLabel     = cmd.label();
+    m_lastMessage   = cmd.lastStepMessage();
+    m_lastRefused   = !cmd.lastStepSucceeded();
+    m_lastDiscarded = false;
     if (m_lastRefused) return;   // still undone: stays on the redo stack
     m_undoStack.push_back(std::move(m_redoStack.back()));
     m_redoStack.pop_back();

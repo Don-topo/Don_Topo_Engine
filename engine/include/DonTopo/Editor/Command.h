@@ -57,6 +57,11 @@ public:
     virtual bool lastStepSucceeded() const { return true; }
     // Why the last step was refused (for the Log); empty if there is nothing to say.
     virtual std::string lastStepMessage() const { return {}; }
+    // A refused undo() that can NEVER succeed (an Apply whose .prefab changed
+    // outside the editor): UndoManager drops the command and everything below
+    // it instead of keeping it on top forever. Only meaningful when
+    // lastStepSucceeded() is false; lastStepMessage() then says why.
+    virtual bool lastStepDiscardsHistory() const { return false; }
 };
 
 // Several commands as ONE undo step: execute in order, undo in reverse
@@ -1034,6 +1039,7 @@ public:
     void undo() final;
     bool lastStepSucceeded() const override { return m_lastStepOk; }
     std::string lastStepMessage() const override { return m_message; }
+    bool lastStepDiscardsHistory() const override { return !m_lastStepOk && m_refusedForGood; }
 
 protected:
     PrefabCommand(PrefabCommandContext ctx, std::string label)
@@ -1067,6 +1073,8 @@ protected:
     std::string          m_message;
     bool                 m_done = false;
     bool                 m_lastStepOk = false;   // never executed: not pushable
+    // Set by a doUndo that refuses and can never succeed (cleared before each step).
+    bool                 m_refusedForGood = false;
 };
 
 // Makes the subtree of nodeId a prefab: writes absPrefabPath, links the
@@ -1122,7 +1130,9 @@ private:
 // its applied overrides back and its applied children unlinked, every instance
 // gets back the overrides the new template orphaned -- an override recorded
 // after the Apply (without a command) stays. If the file changed on disk in
-// between, nothing at all is undone (scene and file stay as Apply left them).
+// between, nothing at all is undone (scene and file stay as Apply left them),
+// and since that can never change, the UndoManager discards the history under
+// it (lastStepDiscardsHistory).
 class ApplyPrefabOverridesCommand : public PrefabCommand {
 public:
     ApplyPrefabOverridesCommand(PrefabCommandContext ctx, uint64_t instanceRootId,

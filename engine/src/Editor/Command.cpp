@@ -1150,6 +1150,7 @@ void PrefabCommand::execute()
         m_lastStepOk = false;
         return;
     }
+    m_refusedForGood = false;
     doExecute();
     m_lastStepOk = m_done;
 }
@@ -1162,6 +1163,7 @@ void PrefabCommand::undo()
         m_lastStepOk = false;
         return;
     }
+    m_refusedForGood = false;
     doUndo();
     // Refused (a mesh still loading, a file changed on disk): still applied.
     m_lastStepOk = !m_done;
@@ -1639,20 +1641,23 @@ void ApplyPrefabOverridesCommand::doUndo()
     if (!m_done) return;
     // A mesh still loading: nothing is touched, and the command stays done
     // (an undo once it has landed works).
-    if (refuseWhileMeshPending(instancesOf(m_key))) return;    // Decided FIRST, before anything is touched: the previous bytes go back
+    if (refuseWhileMeshPending(instancesOf(m_key))) return;
+
+    // Decided FIRST, before anything is touched: the previous bytes go back
     // only over the bytes Apply wrote. A file changed since (outside the
     // editor) is kept, and then the scene is left exactly as Apply left it too
     // -- rolling the links back over a template that still has the applied
     // content would duplicate the applied children and pin applied values as
-    // overrides. Both refusals leave the command applied (m_done), so the
-    // UndoManager keeps it on the undo stack.
+    // overrides. Every refusal leaves the command applied (m_done). This one
+    // can never succeed: it asks the UndoManager to discard the history under
+    // it (the transient ones -- a mesh loading, a failed write -- keep it).
     const std::optional<std::string> current = readFileBytes(m_path);
     const nlohmann::json prev = nlohmann::json::parse(m_previous, nullptr, /*allow_exceptions=*/false);
     if (!current || *current != m_written || !prev.is_object() || !prev.contains("root") ||
         !prev["root"].is_object())
     {
-        m_message = "'" + m_path.string() + "' changed on disk after the Apply: kept as it is "
-                    "(nothing was undone)";
+        m_message        = "the .prefab changed outside the editor";
+        m_refusedForGood = true;
         return;
     }
     if (!writeFileBytes(m_path, m_previous))
