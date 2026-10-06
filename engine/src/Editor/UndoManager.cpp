@@ -39,7 +39,8 @@ void UndoManager::undo()
         m_lastRefused   = false;
         m_lastDiscarded = true;
         m_lastMessage   = "Undo history before '" + m_lastLabel + "' discarded: " + m_lastMessage;
-        m_undoStack.clear();        return;
+        m_undoStack.clear();
+        return;
     }
     if (m_lastRefused) return;
     m_redoStack.push_back(std::move(m_undoStack.back()));

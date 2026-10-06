@@ -1142,6 +1142,8 @@ void PrefabCommand::resyncInstance(uint64_t rootId, const nlohmann::json* stands
 
 void PrefabCommand::execute()
 {
+    // Reset before the guard too: a guard refusal is never a permanent one.
+    m_refusedForGood = false;
     // Already applied (a desync between the command and the stack it sits
     // on): never applied twice.
     if (m_done)
@@ -1150,20 +1152,19 @@ void PrefabCommand::execute()
         m_lastStepOk = false;
         return;
     }
-    m_refusedForGood = false;
     doExecute();
     m_lastStepOk = m_done;
 }
 
 void PrefabCommand::undo()
 {
+    m_refusedForGood = false;
     if (!m_done)
     {
         m_message    = label() + ": not applied, nothing to undo";
         m_lastStepOk = false;
         return;
     }
-    m_refusedForGood = false;
     doUndo();
     // Refused (a mesh still loading, a file changed on disk): still applied.
     m_lastStepOk = !m_done;
