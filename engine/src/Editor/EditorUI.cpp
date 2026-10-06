@@ -1383,7 +1383,9 @@ void EditorUI::handleUndoRedoShortcut()
         m_undoHistory.undo();
         m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
         m_propertiesPanel.invalidateCaches();
-        m_logPanel.push("Undo: " + m_undoHistory.lastLabel());
+        // A refused undo stays where it was (UndoManager): say so, with why.
+        m_logPanel.push((m_undoHistory.lastRefused() ? "Undo refused: " : "Undo: ") + m_undoHistory.lastLabel() +
+                        (m_undoHistory.lastMessage().empty() ? std::string() : " (" + m_undoHistory.lastMessage() + ")"));
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Y) && m_undoHistory.canRedo())
     {
@@ -1391,7 +1393,8 @@ void EditorUI::handleUndoRedoShortcut()
         m_undoHistory.redo();
         m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
         m_propertiesPanel.invalidateCaches();
-        m_logPanel.push("Redo: " + m_undoHistory.lastLabel());
+        m_logPanel.push((m_undoHistory.lastRefused() ? "Redo refused: " : "Redo: ") + m_undoHistory.lastLabel() +
+                        (m_undoHistory.lastMessage().empty() ? std::string() : " (" + m_undoHistory.lastMessage() + ")"));
     }
     if (ImGui::IsKeyPressed(ImGuiKey_D))
         duplicateSelection();

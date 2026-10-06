@@ -1892,6 +1892,8 @@ void testApplyUndoKeptLeavesSceneAsApplied()
         CHECK(w.intensity(w.b) == 3.0f && w.intensity(w.c) == 3.0f, (m + "values unchanged").c_str());
     };
     CHECK(contains(apply->lastMessage(), "kept"), "lastMessage says the file was kept");
+    CHECK(w.undo.lastRefused() && w.undo.canUndo() && !w.undo.canRedo() && apply->succeeded(),
+          "the refused undo leaves Apply applied, on the undo stack");
     expectAsApplied("after undo");
     w.pass();
     expectAsApplied("after another pass");
@@ -2302,8 +2304,92 @@ void testUnpackUndoRevertToTemplate()
     CHECK(overrideCount(w.get(w.b)) == 1 && w.synced(w.b), "stable after a pass");
 }
 
+// V1: a refused undo/redo leaves the command where it was (no move, no
+// revision), and a command refused on its first execute is not pushed.
+void testUndoManagerKeepsRefusedCommands()
+{
+    ThreeInstances w("dt_prefab_cmd_v1");
+    if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+    lampLight(w.get(w.b))->setIntensity(3.0f);
+    w.pass();
+    const std::string original = readBytes(w.prefabFile());
+    const uint64_t lampC = childNamed(w.get(w.c), "Lamp")->id;
+
+    // Refused on its first execute: not pushed.
+    w.get(lampC)->pendingMeshJob = 777;
+    {
+        auto refused = std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+            w.ctx(), w.b, std::vector<DonTopo::PrefabOverride>{}, false);
+        refused->execute();
+        const uint64_t rev = w.undo.revision();
+        CHECK(!w.undo.push(std::move(refused)), "a refused command is not pushed");
+        CHECK(!w.undo.canUndo() && w.undo.revision() == rev, "the history is untouched");
+    }
+    w.get(lampC)->pendingMeshJob = 0;
+
+    auto* apply = w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), w.b, std::vector<DonTopo::PrefabOverride>{}, false));
+    const std::string applied = readBytes(w.prefabFile());
+    CHECK(applied != original && w.intensity(w.c) == 3.0f, "applied");
+    // A desync calling execute() on an applied command: refused, nothing re-applied.
+    apply->execute();
+    CHECK(!apply->lastStepSucceeded() && apply->succeeded() && readBytes(w.prefabFile()) == applied,
+          "execute on an applied command is refused");
+
+    // Refused undo: stays on the undo stack, revision unchanged, nothing touched.
+    w.get(lampC)->pendingMeshJob = 777;
+    uint64_t rev = w.undo.revision();
+    w.undo.undo();
+    CHECK(w.undo.canUndo() && !w.undo.canRedo(), "a refused undo stays on the undo stack");
+    CHECK(w.undo.revision() == rev && w.undo.lastRefused(), "no revision change, reported as refused");
+    CHECK(readBytes(w.prefabFile()) == applied && w.intensity(w.c) == 3.0f && overrideCount(w.get(w.b)) == 0,
+          "file and scene unchanged");
+    w.get(lampC)->pendingMeshJob = 0;
+    w.undo.undo();
+    w.pass();
+    CHECK(!w.undo.canUndo() && w.undo.canRedo() && !w.undo.lastRefused(), "the undo goes through once the mesh landed");
+    CHECK(readBytes(w.prefabFile()) == original && w.intensity(w.c) == 1.0f &&
+          overrideIs(w.get(w.b), "/light/intensity", 3.0), "file and scene restored");
+
+    // Refused redo: stays on the redo stack.
+    w.get(lampC)->pendingMeshJob = 777;
+    rev = w.undo.revision();
+    w.undo.redo();
+    CHECK(w.undo.canRedo() && !w.undo.canUndo(), "a refused redo stays on the redo stack");
+    CHECK(w.undo.revision() == rev && w.undo.lastRefused(), "no revision change");
+    CHECK(readBytes(w.prefabFile()) == original && w.intensity(w.c) == 1.0f, "nothing re-applied");
+    w.get(lampC)->pendingMeshJob = 0;
+    w.undo.redo();
+    w.pass();
+    CHECK(w.undo.canUndo() && !w.undo.canRedo(), "the redo goes through once the mesh landed");
+    CHECK(readBytes(w.prefabFile()) == applied && w.intensity(w.c) == 3.0f, "re-applied");
+}
+
+// V1, Create: a redo refused because someone else's file now sits at the path
+// stays on the redo stack; the file is untouched.
+void testCreateRedoRefusedThroughManager()
+{
+    CommandWorld w("dt_prefab_cmd_v1_create");
+    const uint64_t enemyId = w.scene.addGameObject("Enemy")->id;
+    w.run(std::make_unique<DonTopo::CreatePrefabCommand>(w.ctx(), enemyId, w.prefabFile()));
+    w.doUndo();
+    CHECK(!std::filesystem::exists(w.prefabFile()), "undo deleted the file");
+    const std::string other = "{\"someone\": \"else\"}";
+    writeFile(w.prefabFile(), other);
+    const uint64_t rev = w.undo.revision();
+    w.undo.redo();
+    CHECK(w.undo.canRedo() && !w.undo.canUndo() && w.undo.revision() == rev && w.undo.lastRefused(),
+          "a refused Create redo stays on the redo stack");
+    CHECK(readBytes(w.prefabFile()) == other && !w.get(enemyId)->prefabLink, "file untouched, nothing linked");
+    std::filesystem::remove(w.prefabFile());
+    w.undo.redo();
+    CHECK(w.undo.canUndo() && !w.undo.canRedo() && w.get(enemyId)->prefabLink, "it goes through once the path is free");
+}
+
 int main()
 {
+    testUndoManagerKeepsRefusedCommands();
+    testCreateRedoRefusedThroughManager();
     testApplySeedsConfiguredMeshes();
     testApplyRefusedWhileMeshPending();
     testApplyRedoWhileTemplateReloads();

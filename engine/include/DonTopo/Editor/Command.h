@@ -49,6 +49,14 @@ public:
     virtual void execute() = 0;   // applies "after" (redo)
     virtual void undo() = 0;      // applies "before"
     virtual std::string label() const = 0;   // pa Log Console
+    // Whether the last execute()/undo() did its work. A command that can refuse
+    // (the prefab commands: a mesh still loading, a file changed on disk)
+    // overrides it; UndoManager then keeps it where it is instead of moving it
+    // to the other stack, and does not push one refused on its first execute.
+    // Every other command always succeeds: the default.
+    virtual bool lastStepSucceeded() const { return true; }
+    // Why the last step was refused (for the Log); empty if there is nothing to say.
+    virtual std::string lastStepMessage() const { return {}; }
 };
 
 // Several commands as ONE undo step: execute in order, undo in reverse
@@ -1014,12 +1022,28 @@ public:
     std::string label() const override { return m_label; }
     // For the Log: why it was refused, or what happened to the file.
     const std::string& lastMessage() const { return m_message; }
-    // Whether the last execute() did its work.
+    // Whether the command is applied now (its last execute() did its work and
+    // no undo() has taken it back since).
     bool succeeded() const { return m_done; }
+
+    // The guards every prefab command shares, so no subclass can forget them:
+    // execute() on an applied command and undo() on an unapplied one do nothing
+    // and are refused (a desync can never apply twice); otherwise the step
+    // succeeded when it changed the applied state.
+    void execute() final;
+    void undo() final;
+    bool lastStepSucceeded() const override { return m_lastStepOk; }
+    std::string lastStepMessage() const override { return m_message; }
 
 protected:
     PrefabCommand(PrefabCommandContext ctx, std::string label)
         : m_ctx(std::move(ctx)), m_label(std::move(label)) {}
+
+    // The work of execute()/undo(). doExecute leaves m_done true when it applied
+    // the command; doUndo leaves it false when it took it back, and leaves it
+    // true when it refused (nothing touched).
+    virtual void doExecute() = 0;
+    virtual void doUndo() = 0;
 
     // Instance roots linked to key (normalized like PrefabLibrary keys), by id.
     std::vector<uint64_t> instancesOf(const std::string& key) const;
@@ -1042,6 +1066,7 @@ protected:
     std::string          m_label;
     std::string          m_message;
     bool                 m_done = false;
+    bool                 m_lastStepOk = false;   // never executed: not pushable
 };
 
 // Makes the subtree of nodeId a prefab: writes absPrefabPath, links the
@@ -1052,10 +1077,10 @@ protected:
 class CreatePrefabCommand : public PrefabCommand {
 public:
     CreatePrefabCommand(PrefabCommandContext ctx, uint64_t nodeId, std::filesystem::path absPrefabPath);
-    void execute() override;
-    void undo() override;
 
 private:
+    void doExecute() override;
+    void doUndo() override;
     uint64_t              m_nodeId;
     std::filesystem::path m_path;
     std::string           m_key;
@@ -1069,11 +1094,11 @@ private:
 class InstantiatePrefabCommand : public PrefabCommand {
 public:
     InstantiatePrefabCommand(PrefabCommandContext ctx, std::string key, uint64_t parentId);
-    void execute() override;
-    void undo() override;
     uint64_t instanceRootId() const { return m_rootId; }
 
 private:
+    void doExecute() override;
+    void doUndo() override;
     std::string        m_key;
     uint64_t           m_parentId;
     uint64_t           m_rootId = 0;
@@ -1103,10 +1128,10 @@ public:
     ApplyPrefabOverridesCommand(PrefabCommandContext ctx, uint64_t instanceRootId,
                                 std::vector<PrefabOverride> which, bool includeAddedChildren,
                                 std::vector<uint64_t> onlyAddedChildIds = {});
-    void execute() override;
-    void undo() override;
 
 private:
+    void doExecute() override;
+    void doUndo() override;
     // Rebuilds every instance of m_key that does not match tmpl (memory form)
     // and re-baselines all of them on it. recordNewIds: remember the scene ids
     // of the nodes the rebuilds created (first execute), used as id hints after.
@@ -1157,10 +1182,10 @@ class RevertPrefabOverridesCommand : public PrefabCommand {
 public:
     RevertPrefabOverridesCommand(PrefabCommandContext ctx, uint64_t instanceRootId,
                                  std::vector<PrefabOverride> which, bool includeAddedChildren);
-    void execute() override;
-    void undo() override;
 
 private:
+    void doExecute() override;
+    void doUndo() override;
     struct DeletedChild
     {
         uint64_t           parentId = 0;
@@ -1181,10 +1206,10 @@ private:
 class UnpackPrefabCommand : public PrefabCommand {
 public:
     UnpackPrefabCommand(PrefabCommandContext ctx, uint64_t instanceRootId);
-    void execute() override;
-    void undo() override;
 
 private:
+    void doExecute() override;
+    void doUndo() override;
     struct NodeLink
     {
         uint64_t                    id = 0;           // scene id

@@ -29,11 +29,23 @@ public:
     //
     // The flag never CLEARS the dirty state: a render setting behind a scene
     // edit does not turn that edit into a saved one.
-    void push(std::unique_ptr<ICommand> cmd, bool dirtiesScene = true);
-    // No-op if the undo stack is empty.
+    //
+    // A command whose execute() was refused (ICommand::lastStepSucceeded()
+    // false) is NOT pushed: nothing happened, so there is nothing to undo.
+    // Returns whether it was pushed.
+    bool push(std::unique_ptr<ICommand> cmd, bool dirtiesScene = true);
+    // No-op if the undo stack is empty. A command that refuses its undo()
+    // (a prefab command while a mesh is still loading, a file changed on disk)
+    // stays on the undo stack and the revision does not move: undoing what lies
+    // below it would leave the scene inconsistent. lastRefused() tells.
     void undo();
-    // No-op if the redo stack is empty.
+    // No-op if the redo stack is empty. Same rule: a refused redo stays on the
+    // redo stack.
     void redo();
+    // Whether the last undo()/redo() that found a command was refused by it.
+    bool lastRefused() const { return m_lastRefused; }
+    // What that command had to say about it (ICommand::lastStepMessage), for the Log.
+    const std::string& lastMessage() const { return m_lastMessage; }
     // Empties both stacks. Called on Load Scene and when entering/leaving Play Mode.
     void clear();
     // Scene with unsaved changes. Set in push(), the only point that
@@ -61,6 +73,8 @@ private:
     std::deque<std::unique_ptr<ICommand>> m_redoStack;
     std::string m_lastLabel;
     bool m_sceneDirty = false;
+    bool m_lastRefused = false;
+    std::string m_lastMessage;
     uint64_t m_revision = 0;
 };
 

@@ -1140,6 +1140,33 @@ void PrefabCommand::resyncInstance(uint64_t rootId, const nlohmann::json* stands
         propagateInstance(m_ctx.scene, root, *t, m_ctx.tracker, m_ctx.physics, m_ctx.audio, m_ctx.registerGpu);
 }
 
+void PrefabCommand::execute()
+{
+    // Already applied (a desync between the command and the stack it sits
+    // on): never applied twice.
+    if (m_done)
+    {
+        m_message    = label() + ": already applied";
+        m_lastStepOk = false;
+        return;
+    }
+    doExecute();
+    m_lastStepOk = m_done;
+}
+
+void PrefabCommand::undo()
+{
+    if (!m_done)
+    {
+        m_message    = label() + ": not applied, nothing to undo";
+        m_lastStepOk = false;
+        return;
+    }
+    doUndo();
+    // Refused (a mesh still loading, a file changed on disk): still applied.
+    m_lastStepOk = !m_done;
+}
+
 // ---- Create ----
 
 CreatePrefabCommand::CreatePrefabCommand(PrefabCommandContext ctx, uint64_t nodeId, std::filesystem::path absPrefabPath)
@@ -1149,7 +1176,7 @@ CreatePrefabCommand::CreatePrefabCommand(PrefabCommandContext ctx, uint64_t node
     m_key = m_ctx.library.normalizeKey(m_path.string());
 }
 
-void CreatePrefabCommand::execute()
+void CreatePrefabCommand::doExecute()
 {
     m_done = false;
     m_message.clear();
@@ -1219,7 +1246,7 @@ void CreatePrefabCommand::execute()
     m_message = "Created prefab '" + m_path.string() + "'";
 }
 
-void CreatePrefabCommand::undo()
+void CreatePrefabCommand::doUndo()
 {
     if (!m_done) return;
     m_done = false;
@@ -1269,7 +1296,7 @@ InstantiatePrefabCommand::InstantiatePrefabCommand(PrefabCommandContext ctx, std
     : PrefabCommand(std::move(ctx), "Instantiate '" + stemOf(key) + "'"),
       m_key(std::move(key)), m_parentId(parentId) {}
 
-void InstantiatePrefabCommand::execute()
+void InstantiatePrefabCommand::doExecute()
 {
     m_done = false;
     m_message.clear();
@@ -1315,7 +1342,7 @@ void InstantiatePrefabCommand::execute()
     m_done = true;
 }
 
-void InstantiatePrefabCommand::undo()
+void InstantiatePrefabCommand::doUndo()
 {
     if (!m_done) return;
     m_done = false;
@@ -1364,7 +1391,8 @@ void ApplyPrefabOverridesCommand::rebuildInstances(const std::vector<uint64_t>& 
             const auto hints = m_createdIds.find(id);
             // Each file-mesh node whose mesh did not change points at the mesh
             // the library configured for it (the same seeding as propagation).
-            const nlohmann::json tree = seedConfiguredMeshes(tmpl, m_seedRoot, m_seedConfigured, before);            bool rebuilt = false;
+            const nlohmann::json tree = seedConfiguredMeshes(tmpl, m_seedRoot, m_seedConfigured, before);
+            bool rebuilt = false;
             GameObject* live = m_ctx.scene.rebuildPrefabInstance(
                 r, tree, m_ctx.physics, m_ctx.audio, &cache, mats, &rebuilt,
                 hints != m_createdIds.end() ? &hints->second : nullptr);
@@ -1403,7 +1431,7 @@ bool ApplyPrefabOverridesCommand::refuseWhileMeshPending(const std::vector<uint6
     return false;
 }
 
-void ApplyPrefabOverridesCommand::execute()
+void ApplyPrefabOverridesCommand::doExecute()
 {
     if (m_idsRecorded)
     {
@@ -1606,19 +1634,18 @@ void ApplyPrefabOverridesCommand::execute()
     for (const std::string& w : warnings) m_message += "\n" + w;
 }
 
-void ApplyPrefabOverridesCommand::undo()
+void ApplyPrefabOverridesCommand::doUndo()
 {
     if (!m_done) return;
     // A mesh still loading: nothing is touched, and the command stays done
     // (an undo once it has landed works).
-    if (refuseWhileMeshPending(instancesOf(m_key))) return;
-    m_done = false;
-    // Decided FIRST, before anything is touched: the previous bytes go back
+    if (refuseWhileMeshPending(instancesOf(m_key))) return;    // Decided FIRST, before anything is touched: the previous bytes go back
     // only over the bytes Apply wrote. A file changed since (outside the
     // editor) is kept, and then the scene is left exactly as Apply left it too
     // -- rolling the links back over a template that still has the applied
     // content would duplicate the applied children and pin applied values as
-    // overrides.
+    // overrides. Both refusals leave the command applied (m_done), so the
+    // UndoManager keeps it on the undo stack.
     const std::optional<std::string> current = readFileBytes(m_path);
     const nlohmann::json prev = nlohmann::json::parse(m_previous, nullptr, /*allow_exceptions=*/false);
     if (!current || *current != m_written || !prev.is_object() || !prev.contains("root") ||
@@ -1633,6 +1660,7 @@ void ApplyPrefabOverridesCommand::undo()
         m_message = "'" + m_path.string() + "' could not be written: nothing was undone";
         return;
     }
+    m_done = false;
     nlohmann::json standsOn = prev["root"];
     resolveStoredPaths(standsOn, m_ctx.library.assetRoot());
 
@@ -1722,7 +1750,7 @@ RevertPrefabOverridesCommand::RevertPrefabOverridesCommand(PrefabCommandContext 
         m_label = "Revert Prefab Overrides '" + stemOf(root->prefabLink->path) + "'";
 }
 
-void RevertPrefabOverridesCommand::execute()
+void RevertPrefabOverridesCommand::doExecute()
 {
     m_done = false;
     m_message.clear();
@@ -1775,7 +1803,7 @@ void RevertPrefabOverridesCommand::execute()
     m_done = true;
 }
 
-void RevertPrefabOverridesCommand::undo()
+void RevertPrefabOverridesCommand::doUndo()
 {
     if (!m_done) return;
     m_done = false;
@@ -1819,7 +1847,7 @@ UnpackPrefabCommand::UnpackPrefabCommand(PrefabCommandContext ctx, uint64_t inst
         m_label = "Unpack Prefab '" + root->name + "'";
 }
 
-void UnpackPrefabCommand::execute()
+void UnpackPrefabCommand::doExecute()
 {
     m_done = false;
     m_message.clear();
@@ -1848,7 +1876,7 @@ void UnpackPrefabCommand::execute()
     m_done = true;
 }
 
-void UnpackPrefabCommand::undo()
+void UnpackPrefabCommand::doUndo()
 {
     if (!m_done) return;
     m_done = false;
