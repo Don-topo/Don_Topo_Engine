@@ -44,7 +44,7 @@ std::vector<AssetImportOutcome> importDroppedFilesInto(
 
 // Type of an asset for the Content Browser: shared by the grid icon and the
 // type filter, so that they cannot disagree.
-enum class AssetKind { Folder, Model3D, Audio, Image, Font, Scene, Script, Shader, Material, Other };
+enum class AssetKind { Folder, Model3D, Audio, Image, Font, Scene, Script, Shader, Material, Prefab, Other };
 
 // ext with the dot and in any combination of case ("" if it has none). A
 // folder is always Folder, even if it is called "a.png".
@@ -266,6 +266,10 @@ public:
 
     void draw(EditorContext& ctx, GameObject* sceneRoot);
     bool* GetOpenPtr() { return &m_open; }
+    // Opens the folder of `asset` (absolute), reveals it in the tree and
+    // selects it in the grid ("Select Prefab Asset"). Ignored outside the
+    // project root.
+    void revealAsset(const std::filesystem::path& asset);
 
 private:
     // Sets up the "Rename Asset" modal popup preloaded with the current name of
@@ -295,6 +299,25 @@ private:
         std::filesystem::path              destDir;
     };
     std::optional<PendingMove> m_pendingMove;
+
+    // A hierarchy node (DT_GAMEOBJECT) dropped onto a folder of the tree, a
+    // folder of the grid or the grid's background: made into a prefab in that
+    // folder (CreatePrefabCommand) once the tree and grid are drawn. By id: the
+    // payload's pointer is only trusted on the frame it is accepted.
+    struct PendingPrefab {
+        uint64_t              nodeId = 0;
+        std::string           name;
+        std::filesystem::path destDir;
+    };
+    std::optional<PendingPrefab> m_pendingPrefab;
+    // Same as acceptAssetDropOnFolder, for DT_GAMEOBJECT (call it right after
+    // the item, the same way).
+    void acceptPrefabDropOnFolder(const std::filesystem::path& destDir);
+    void applyPendingPrefab(EditorContext& ctx);
+    // Asset to select once the grid lists it (revealAsset), and bring the
+    // window to the front on the next draw.
+    std::filesystem::path m_revealSelect;
+    bool                  m_focusOnReveal = false;
 
     // Grid selection (see AssetSelection). It is pruned against what is visible every
     // frame, so changing folder, filtering or rescanning leaves no ghosts.

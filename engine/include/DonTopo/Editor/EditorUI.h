@@ -463,6 +463,15 @@ private:
     // Per frame, end of draw(): revision change and falling edge of
     // IsAnyItemActive, forwarded to PrefabSceneSync::frame.
     void updatePrefabTracking();
+    // Prefab commands the panels asked for this frame (EditorContext::
+    // runPrefabCommand / instantiatePrefab), run in order once every panel has
+    // drawn: a command may rebuild instances and free objects a panel still
+    // pointed at mid-draw.
+    std::vector<std::function<void()>> m_pendingPrefabJobs;
+    void runPendingPrefabJobs();
+    // Runs one through pushPrefabCommand (execute once, push if applied, Log).
+    // Refused in Play Mode and without a library.
+    void execPrefabCommand(const EditorContext::PrefabCommandFactory& make);
 
     // See setProjectSelector/setProject. Empty/nullptr in the headless tests: without a
     // selector the editor draws as usual, and without a project the path guards

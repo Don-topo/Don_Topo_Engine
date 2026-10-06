@@ -363,6 +363,42 @@ void EditorUI::updatePrefabTracking()
     });
 }
 
+void EditorUI::execPrefabCommand(const EditorContext::PrefabCommandFactory& make)
+{
+    auto log = [this](const std::string& msg) { m_logPanel.push("[Prefab] " + msg); };
+    // Play Mode: Stop restores the scene from its snapshot and clears the
+    // history, but a .prefab written meanwhile would stay -- out of step with
+    // the scene the user returns to.
+    if (m_isPlaying)
+    {
+        log("Prefab commands are not available in Play Mode; stop it first");
+        return;
+    }
+    if (!m_prefabs || !m_prefabSync || !m_scene || !m_physics || !m_audio)
+    {
+        log("Prefabs need an open project");
+        return;
+    }
+    PrefabCommandContext pc{ *m_scene, *m_prefabs, m_prefabSync->tracker(), *m_physics, *m_audio,
+                             [this](GameObject* root) { if (m_renderer) m_renderer->registerGameObject(root); } };
+    // Rebuilds re-resolve the selection by id and drop the Properties caches.
+    withPrefabRebuilds([&] {
+        pushPrefabCommand(m_undoHistory, make(pc), log);
+    });
+    m_propertiesPanel.invalidateCaches();
+}
+
+void EditorUI::runPendingPrefabJobs()
+{
+    // A job may queue another one (it does not today): run until empty, in order.
+    while (!m_pendingPrefabJobs.empty())
+    {
+        std::vector<std::function<void()>> jobs;
+        jobs.swap(m_pendingPrefabJobs);
+        for (auto& job : jobs) job();
+    }
+}
+
 void EditorUI::setScene(Scene* scene)
 {
     m_scene = scene;
@@ -1179,6 +1215,35 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
         m_jobSystem,
     };
     ctx.prefabs = m_prefabs.get();
+    // Prefab commands from the panels: queued, run after every panel drew
+    // (runPendingPrefabJobs, below).
+    ctx.runPrefabCommand = [this](EditorContext::PrefabCommandFactory make) {
+        m_pendingPrefabJobs.push_back([this, make = std::move(make)] { execPrefabCommand(make); });
+    };
+    ctx.instantiatePrefab = [this](const std::string& key, uint64_t parentId) {
+        m_pendingPrefabJobs.push_back([this, key, parentId] {
+            if (m_isPlaying)
+            {
+                m_logPanel.push("[Prefab] Prefab commands are not available in Play Mode; stop it first");
+                return;
+            }
+            if (!m_prefabSync) { m_logPanel.push("[Prefab] Prefabs need an open project"); return; }
+            // Edit Mode: a template not loaded yet is waited for (spec §5.2).
+            // The pump may propagate other templates: same selection guard.
+            std::string error;
+            bool ready = false;
+            withPrefabRebuilds([&] { ready = m_prefabSync->waitForTemplate(key, 30000, &error); });
+            if (!ready)
+            {
+                m_logPanel.push("[Prefab] Instantiate: " + error);
+                return;
+            }
+            execPrefabCommand([key, parentId](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+                return std::make_unique<InstantiatePrefabCommand>(pc, key, parentId);
+            });
+        });
+    };
+    ctx.revealAsset = [this](const std::filesystem::path& asset) { m_contentBrowserPanel.revealAsset(asset); };
 
     m_scenePanel.draw(ctx, sceneRoot);
     // ScenePanel deleted the selected GameObject: invalidates the Properties edit
@@ -1236,6 +1301,10 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
                     n->pendingMeshJob = 0;
             });
     }
+
+    // Prefab commands the panels queued this frame, now that none of them is
+    // drawing; before the tracker pass, which sees their revision change.
+    runPendingPrefabJobs();
 
     // The single override detection point (spec §3.2), after every panel had its
     // chance to push a command or finish an edit this frame.

@@ -1,5 +1,7 @@
 #pragma once
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <filesystem>
 #include <vector>
@@ -19,6 +21,8 @@ class AsyncAssetLoader;
 class ProjectContext;
 class JobSystem;
 class PrefabLibrary;
+class PrefabCommand;
+struct PrefabCommandContext;
 
 // File dropped onto the editor window from outside the process (drag
 // from Windows Explorer), with the screen position where it
@@ -139,6 +143,24 @@ struct EditorContext {
     // without a project or a JobSystem, and in the headless tests. Assigned by
     // EditorUI::draw() after building the ctx.
     PrefabLibrary* prefabs = nullptr;
+
+    // ── Prefab commands from a panel (spec §5) ──────────────────────────────
+    // The factory builds the command from the editor's PrefabCommandContext,
+    // and it runs at the END of the frame, after every panel drew (a rebuild
+    // frees objects a panel may still hold a pointer to), through
+    // pushPrefabCommand: executed once, pushed only if it applied, its message
+    // in the Log. Refused in Play Mode (the scene is restored on Stop; a file
+    // written meanwhile would stay). Capture ids in the factory, never
+    // pointers. Empty in the headless tests; assigned by EditorUI::draw().
+    using PrefabCommandFactory = std::function<std::unique_ptr<PrefabCommand>(const PrefabCommandContext&)>;
+    std::function<void(PrefabCommandFactory)> runPrefabCommand;
+    // Drop of a .prefab (key) on the hierarchy: at the end of the frame,
+    // waits for a template still loading (Edit Mode, spec §5.2) and pushes an
+    // InstantiatePrefabCommand under parentId (0 = scene root).
+    std::function<void(const std::string& key, uint64_t parentId)> instantiatePrefab;
+    // Shows an asset in the Content Browser: opens its folder and selects it
+    // ("Select Prefab Asset"). Empty by default.
+    std::function<void(const std::filesystem::path&)> revealAsset;
 };
 
 } // namespace DonTopo

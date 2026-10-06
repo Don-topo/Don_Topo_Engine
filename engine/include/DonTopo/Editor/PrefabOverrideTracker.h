@@ -1,10 +1,15 @@
 #pragma once
+#include "DonTopo/Core/PrefabOverrides.h"   // PrefabOverride (overridesUnder returns them)
+
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -195,4 +200,55 @@ namespace DonTopo
     PropagationResult propagateReadyTemplate(Scene& scene, const PrefabLibrary& lib, const PrefabTemplate& t,
                                              PrefabOverrideTracker& tracker, PhysicsManager& physics,
                                              AudioManager& audio, const RegisterSubtreeFn& registerGpu);
+
+    // ── Decisions behind the editor's prefab UI (spec §5), kept out of ImGui
+    // so they can be tested ──────────────────────────────────────────────────
+
+    // Hierarchy color of a node. None: not a prefab node (a plain node, an
+    // added child of an instance or anything under one, the scene root).
+    // Instance: a linked node whose template is Ready or still loading (or
+    // there is no library to ask). Missing: a linked node whose template Failed
+    // or is unknown to the library (never requested, evicted).
+    enum class PrefabNodeState { None, Instance, Missing };
+    PrefabNodeState prefabNodeState(const GameObject& node, const PrefabLibrary* lib);
+
+    // The instance root node is inside of (itself for a root; any node under an
+    // added child counts as inside), nullptr when it is in no instance.
+    GameObject* prefabInstanceRoot(GameObject* node);
+    const GameObject* prefabInstanceRoot(const GameObject* node);
+
+    // Whether instRoot's link stores an override of node prefabNode at
+    // pathPrefix or inside it, matched by JSON-pointer segments ("/light"
+    // covers "/light/range", "/nam" does not cover "/name"). An override on an
+    // ANCESTOR path covers it too (a script edit stores the whole "/scripts"
+    // array): with templateNode (that node's json in the template, memory form)
+    // it counts only when the value at pathPrefix differs from the template's;
+    // without it, always.
+    bool isOverridden(const GameObject& instRoot, uint64_t prefabNode, std::string_view pathPrefix,
+                      const nlohmann::json* templateNode = nullptr);
+    // The overrides isOverridden matches (at, inside or covering pathPrefix):
+    // what a right click on that label applies or reverts.
+    std::vector<PrefabOverride> overridesUnder(const GameObject& instRoot, uint64_t prefabNode,
+                                               std::string_view pathPrefix);
+
+    // dir / "<name>.prefab", or "<name> 1.prefab", "<name> 2.prefab"... the
+    // first that does not exist. Characters a file name cannot hold become
+    // '_'; an empty name (or "." / "..") becomes "Prefab".
+    std::filesystem::path uniquePrefabPath(const std::filesystem::path& dir, const std::string& name);
+
+    // False for a node that comes from the prefab and is not its instance root
+    // ("Unpack the prefab to delete this object"), and for the scene root.
+    bool canDeleteNode(const GameObject& node);
+
+    // Why the hierarchy may not move `dragged` under `newParent` (empty =
+    // allowed): a linked node of an instance never leaves its place (the
+    // structure is the prefab's), and nothing carrying an instance goes inside
+    // another instance (nested prefabs are not supported: the outer template's
+    // readers would take the inner nodes for their own).
+    std::string prefabMoveRefusal(const GameObject& dragged, const GameObject& newParent);
+
+    // A dropped asset path (absolute, from the Content Browser) as a prefab key:
+    // project-relative, normalized like the library's keys. nullopt when it is
+    // not a .prefab or lies outside the project.
+    std::optional<std::string> prefabKeyForAsset(const std::string& assetPath, const PrefabLibrary& lib);
 }

@@ -1081,6 +1081,16 @@ std::vector<PrefabOverride> missingFrom(const std::vector<PrefabOverride>& befor
 
 } // namespace
 
+bool CompositeCommand::add(std::unique_ptr<ICommand> cmd)
+{
+    // See the class comment: a composite cannot carry a prefab command's
+    // refusals nor its history discard.
+    if (!cmd || dynamic_cast<PrefabCommand*>(cmd.get()))
+        return false;
+    m_cmds.push_back(std::move(cmd));
+    return true;
+}
+
 std::vector<uint64_t> PrefabCommand::instancesOf(const std::string& key) const
 {
     std::vector<uint64_t> ids;
@@ -1307,6 +1317,14 @@ void InstantiatePrefabCommand::doExecute()
     if (m_parentId != 0 && !parent)
     {
         m_message = "Instantiate: the parent object no longer exists";
+        return;
+    }
+    // No nesting: an instance inside another one would be read by the outer
+    // template's readers (rebuild, match, recompute) as nodes of their own.
+    if (parent && prefabInstanceRoot(parent))
+    {
+        m_message = "Instantiate: '" + parent->name + "' is part of a prefab instance "
+                    "(nested prefabs are not supported)";
         return;
     }
     GameObject* node = nullptr;
@@ -1748,9 +1766,10 @@ void ApplyPrefabOverridesCommand::redo()
 // ---- Revert ----
 
 RevertPrefabOverridesCommand::RevertPrefabOverridesCommand(PrefabCommandContext ctx, uint64_t instanceRootId,
-                                                           std::vector<PrefabOverride> which, bool includeAddedChildren)
+                                                           std::vector<PrefabOverride> which, bool includeAddedChildren,
+                                                           std::vector<uint64_t> onlyAddedChildIds)
     : PrefabCommand(std::move(ctx), "Revert Prefab Overrides"), m_rootId(instanceRootId),
-      m_which(std::move(which)), m_includeAdded(includeAddedChildren)
+      m_which(std::move(which)), m_includeAdded(includeAddedChildren), m_onlyAdded(std::move(onlyAddedChildIds))
 {
     if (GameObject* root = m_ctx.scene.findById(m_rootId); root && root->prefabLink)
         m_label = "Revert Prefab Overrides '" + stemOf(root->prefabLink->path) + "'";
@@ -1782,7 +1801,9 @@ void RevertPrefabOverridesCommand::doExecute()
     {
         std::vector<GameObject*> added;
         collectAddedRoots(root, added);
-        for (GameObject* a : added) addedIds.push_back(a->id);
+        for (GameObject* a : added)
+            if (m_onlyAdded.empty() || std::find(m_onlyAdded.begin(), m_onlyAdded.end(), a->id) != m_onlyAdded.end())
+                addedIds.push_back(a->id);
     }
     if (chosen.empty() && addedIds.empty())
     {

@@ -68,10 +68,16 @@ public:
 // order. It was born for "Add Mesh" of a multi-piece model (one
 // CreateGameObjectCommand per child created), but does not depend on that: it groups
 // any list of ICommand.
+//
+// It does not take a PrefabCommand (add() returns false and drops it): a
+// composite neither reports a child's refused step (lastStepSucceeded) nor
+// one that discards the history (lastStepDiscardsHistory), so a refused
+// prefab command inside one would be pushed as done, and an unrevertable
+// Apply would block nothing. Prefab commands are pushed one by one.
 class CompositeCommand : public ICommand {
 public:
     explicit CompositeCommand(std::string label) : m_label(std::move(label)) {}
-    void add(std::unique_ptr<ICommand> cmd) { m_cmds.push_back(std::move(cmd)); }
+    bool add(std::unique_ptr<ICommand> cmd);
     bool empty() const { return m_cmds.empty(); }
     void execute() override { for (auto& c : m_cmds) c->execute(); }
     void undo() override { for (auto it = m_cmds.rbegin(); it != m_cmds.rend(); ++it) (*it)->undo(); }
@@ -1077,6 +1083,12 @@ protected:
     bool                 m_refusedForGood = false;
 };
 
+// The `which` of Apply / Revert that selects NO override (an empty `which`
+// means all of them): for acting on added children only. Its single entry is
+// on prefab-local node 0, which no prefab node ever has (makePrefab numbers
+// from 1), so it matches nothing.
+inline std::vector<PrefabOverride> prefabNoOverrides() { return { PrefabOverride{ 0, std::string(), nullptr } }; }
+
 // Makes the subtree of nodeId a prefab: writes absPrefabPath, links the
 // subtree (link path = the project-relative key) and registers the template.
 // Undo unlinks and deletes the file ONLY while it holds exactly the bytes this
@@ -1184,14 +1196,16 @@ private:
 };
 
 // Drops overrides of one instance (which: empty = all) and, with
-// includeAddedChildren, deletes its added children; then rebuilds it from the
-// template. Undo puts back ONLY those: the reverted overrides (unless the
-// instance has a newer entry on the same path) and each deleted child from its
-// own snapshot (same ids); anything recorded since stays.
+// includeAddedChildren, deletes its added children (onlyAddedChildIds: empty =
+// all of them); then rebuilds it from the template. Undo puts back ONLY those:
+// the reverted overrides (unless the instance has a newer entry on the same
+// path) and each deleted child from its own snapshot (same ids); anything
+// recorded since stays.
 class RevertPrefabOverridesCommand : public PrefabCommand {
 public:
     RevertPrefabOverridesCommand(PrefabCommandContext ctx, uint64_t instanceRootId,
-                                 std::vector<PrefabOverride> which, bool includeAddedChildren);
+                                 std::vector<PrefabOverride> which, bool includeAddedChildren,
+                                 std::vector<uint64_t> onlyAddedChildIds = {});
 
 private:
     void doExecute() override;
@@ -1206,6 +1220,7 @@ private:
     uint64_t                    m_rootId;
     std::vector<PrefabOverride> m_which;
     bool                        m_includeAdded;
+    std::vector<uint64_t>       m_onlyAdded;
     std::vector<PrefabOverride> m_reverted;
     std::vector<DeletedChild>   m_deleted;
 };

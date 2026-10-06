@@ -4,10 +4,12 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace DonTopo
@@ -53,6 +55,10 @@ namespace DonTopo
             // Frames between two retries of a deferred propagation. A retry walks
             // the whole scene; it must not run every frame while an instance waits.
             static constexpr int kRetryIntervalFrames = 30;
+            // Pumps between two looks at the .prefab files of Failed templates.
+            // One that changed on disk since it failed (restored, recreated,
+            // moved back) is loaded again; its instances stop being Missing.
+            static constexpr int kFailedPollFrames = 30;
 
             explicit PrefabSceneSync(PrefabLibrary& lib);
             ~PrefabSceneSync();
@@ -62,8 +68,14 @@ namespace DonTopo
             void setHost(Host host);
             const Host& host() const { return m_host; }
 
-            // Pumps the library (onReady fires from here) and logs Failed keys.
+            // Pumps the library (onReady fires from here), logs Failed keys and,
+            // every kFailedPollFrames calls, reloads the Failed ones whose file
+            // changed on disk.
             void pump(float budgetMs);
+            // Edit Mode drop of a .prefab (spec §5.2): requests key and pumps
+            // until it is no longer Loading or timeoutMs pass. True when it is
+            // Ready; otherwise *error (if given) says why. Blocks the caller.
+            bool waitForTemplate(const std::string& key, int timeoutMs, std::string* error = nullptr);
             void onTemplateReady(const PrefabTemplate& t);
             // PrefabLibrary::evict (installed as its onEvicted): unpins the key.
             void onTemplateEvicted(const std::string& key);
@@ -90,7 +102,20 @@ namespace DonTopo
             void propagate(const PrefabTemplate& t);
             void syncUnsynced();
             void logFailed();
+            void retryChangedFailures();
             void absorb(PropagationResult& r);
+
+            // What the .prefab of a Failed key looked like when it failed.
+            struct FileStamp
+            {
+                bool                            exists = false;
+                std::uintmax_t                  size   = 0;
+                std::filesystem::file_time_type time{};
+                bool operator==(const FileStamp&) const = default;
+            };
+            FileStamp stampOf(const std::string& key) const;
+            std::unordered_map<std::string, FileStamp> m_failedStamps;
+            int m_failedPollCountdown = kFailedPollFrames;
 
             PrefabLibrary&        m_lib;
             Host                  m_host;

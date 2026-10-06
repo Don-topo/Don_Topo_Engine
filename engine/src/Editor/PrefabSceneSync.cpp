@@ -5,7 +5,9 @@
 #include "DonTopo/Core/PrefabOverrides.h"
 #include "DonTopo/Core/Scene.h"
 
+#include <chrono>
 #include <exception>
+#include <thread>
 
 namespace DonTopo
 {
@@ -30,6 +32,7 @@ namespace DonTopo
         if (m_pinned.erase(key) && m_host.unpin) m_host.unpin(key);
         m_known.erase(key);
         m_reportedFailures.erase(key);
+        m_failedStamps.erase(key);
     }
 
     void PrefabSceneSync::setHost(Host host)
@@ -48,6 +51,84 @@ namespace DonTopo
         if (m_host.scene) m_tracker.settleLandedMeshes(*m_host.scene);
         m_lib.pump(*m_host.audio, budgetMs);
         logFailed();
+        if (--m_failedPollCountdown <= 0)
+        {
+            m_failedPollCountdown = kFailedPollFrames;
+            retryChangedFailures();
+        }
+    }
+
+    PrefabSceneSync::FileStamp PrefabSceneSync::stampOf(const std::string& key) const
+    {
+        namespace fs = std::filesystem;
+        FileStamp s;
+        std::error_code ec;
+        // A key outside the root stays absolute; operator/ then takes it whole.
+        const fs::path file = fs::path(m_lib.assetRoot()) / fs::path(key);
+        s.exists = fs::is_regular_file(file, ec) && !ec;
+        if (!s.exists) return s;
+        s.size = fs::file_size(file, ec);
+        if (ec) s.size = 0;
+        s.time = fs::last_write_time(file, ec);
+        if (ec) s.time = {};
+        return s;
+    }
+
+    void PrefabSceneSync::retryChangedFailures()
+    {
+        // Only Failed keys the scene knows of are watched (a handful of stats
+        // every kFailedPollFrames pumps); a Ready template is never re-read.
+        std::vector<std::string> retry;
+        for (const std::string& k : m_known)
+        {
+            const PrefabTemplate* t = m_lib.find(k);
+            if (!t || t->state != PrefabTemplate::State::Failed) continue;
+            const FileStamp now = stampOf(k);
+            auto it = m_failedStamps.find(k);
+            if (it == m_failedStamps.end()) { m_failedStamps.emplace(k, now); continue; }
+            if (now.exists && !(now == it->second)) retry.push_back(k);
+            else it->second = now;   // gone again, or unchanged
+        }
+        for (const std::string& k : retry)
+        {
+            m_failedStamps.erase(k);
+            // request() never retries a Failed key: it is dropped first.
+            // onEvicted forgets it (pin, known, reported); it is known again.
+            m_lib.evict(k);
+            m_known.insert(k);
+            if (m_host.log) m_host.log("[Prefab] '" + k + "' changed on disk: reloading it");
+            m_lib.request(k);
+        }
+    }
+
+    bool PrefabSceneSync::waitForTemplate(const std::string& key, int timeoutMs, std::string* error)
+    {
+        const std::string k = m_lib.normalizeKey(key);
+        m_known.insert(k);
+        m_lib.request(k);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        for (;;)
+        {
+            const PrefabTemplate* t = m_lib.find(k);
+            if (!t)
+            {
+                if (error) *error = "prefab '" + k + "' could not be requested";
+                return false;
+            }
+            if (t->state == PrefabTemplate::State::Ready) return true;
+            if (t->state == PrefabTemplate::State::Failed)
+            {
+                if (error) *error = "prefab '" + k + "' could not be loaded: " + t->error;
+                return false;
+            }
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                if (error) *error = "prefab '" + k + "' is still loading; try again";
+                return false;
+            }
+            pump(1000.0f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
 
     void PrefabSceneSync::onTemplateReady(const PrefabTemplate& t)
@@ -159,6 +240,7 @@ namespace DonTopo
                 }
             m_known = keys;
             m_reportedFailures.clear();   // a retried key that fails again is logged again
+            m_failedStamps.clear();       // and stamped again
         }
         else
         {
@@ -266,9 +348,13 @@ namespace DonTopo
             if (!t || t->state != PrefabTemplate::State::Failed || m_reportedFailures.count(k))
                 continue;
             m_reportedFailures.insert(k);
+            // The file as it was when the load failed: retryChangedFailures
+            // reloads the key once this changes (restored, recreated, fixed).
+            m_failedStamps[k] = stampOf(k);
             if (m_host.log)
                 m_host.log("[Prefab] Could not load '" + k + "': " + t->error +
-                           " (its instances keep their stored state; reload the scene to retry)");
+                           " (its instances keep their stored state; it is loaded again when its "
+                           "file changes on disk)");
         }
     }
 
@@ -285,6 +371,7 @@ namespace DonTopo
         m_tracker.clear();
         m_known.clear();
         m_reportedFailures.clear();
+        m_failedStamps.clear();
         m_syncPending = false;
         m_retryCooldown = 0;
     }

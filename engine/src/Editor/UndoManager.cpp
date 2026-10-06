@@ -63,6 +63,26 @@ void UndoManager::redo()
     ++m_revision;
 }
 
+bool pushPrefabCommand(UndoManager& undo, std::unique_ptr<PrefabCommand> cmd,
+                       const std::function<void(const std::string&)>& log)
+{
+    if (!cmd) return false;
+    PrefabCommand& c = *cmd;
+    c.execute();
+    // Read before the push: the stack owns the command afterwards.
+    const std::string label   = c.label();
+    const std::string message = c.lastMessage();
+    const bool        applied = c.lastStepSucceeded();
+    const bool        pushed  = undo.push(std::move(cmd));
+    if (log)
+    {
+        if (!message.empty())  log(message);
+        else if (applied)      log(label);
+        else                   log(label + ": refused");
+    }
+    return pushed;
+}
+
 void UndoManager::clear()
 {
     m_undoStack.clear();

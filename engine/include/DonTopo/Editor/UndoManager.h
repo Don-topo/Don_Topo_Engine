@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <string>
 #include "DonTopo/Editor/Command.h"
@@ -86,5 +87,14 @@ private:
     std::string m_lastMessage;
     uint64_t m_revision = 0;
 };
+
+// The one way the editor runs a prefab command (Task 11): it executes cmd ONCE
+// and pushes it only when that execute applied it (UndoManager::push refuses
+// a refused one), then logs what happened -- the command's lastMessage(), or
+// its label when it has nothing to say. Returns whether it was pushed. Never
+// push a prefab command that was executed elsewhere, and never put one inside
+// a CompositeCommand (it refuses them).
+bool pushPrefabCommand(UndoManager& undo, std::unique_ptr<PrefabCommand> cmd,
+                       const std::function<void(const std::string&)>& log);
 
 } // namespace DonTopo

@@ -6,6 +6,7 @@
 #include "DonTopo/Core/Scene.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -607,5 +608,158 @@ namespace DonTopo
             if (GameObject* root = scene.findById(id))
                 if (root->prefabLink) propagateInstance(scene, root, t, tracker, physics, audio, registerGpu, &result);
         return result;
+    }
+
+    // ── Editor UI decisions ──────────────────────────────────────────────────
+
+    const GameObject* prefabInstanceRoot(const GameObject* node)
+    {
+        // The scene root (no parent) never carries a link; an instance root
+        // always has a parent.
+        for (const GameObject* n = node; n && n->parent; n = n->parent)
+            if (n->prefabLink) return n;
+        return nullptr;
+    }
+
+    GameObject* prefabInstanceRoot(GameObject* node)
+    {
+        return const_cast<GameObject*>(prefabInstanceRoot(static_cast<const GameObject*>(node)));
+    }
+
+    PrefabNodeState prefabNodeState(const GameObject& node, const PrefabLibrary* lib)
+    {
+        // Only nodes that come from the prefab are colored: an added child has
+        // no prefabNode, and neither has anything under it.
+        if (node.prefabNode == 0 && !node.prefabLink) return PrefabNodeState::None;
+        const GameObject* root = prefabInstanceRoot(&node);
+        if (!root) return PrefabNodeState::None;   // a stale prefabNode outside any instance
+        if (!lib) return PrefabNodeState::Instance;
+        const PrefabTemplate* t = lib->find(root->prefabLink->path);
+        if (!t || t->state == PrefabTemplate::State::Failed) return PrefabNodeState::Missing;
+        return PrefabNodeState::Instance;
+    }
+
+    namespace
+    {
+        // a == b, or b lies inside a, by JSON-pointer segments.
+        bool pathCovers(std::string_view a, std::string_view b)
+        {
+            if (a.size() > b.size() || b.compare(0, a.size(), a) != 0) return false;
+            return a.size() == b.size() || b[a.size()] == '/';
+        }
+
+        // The value at `pointer` inside j, nullptr when absent (or not a valid pointer).
+        const nlohmann::json* valueAt(const nlohmann::json& j, std::string_view pointer)
+        {
+            if (pointer.empty()) return &j;
+            try
+            {
+                const nlohmann::json::json_pointer p{std::string(pointer)};
+                if (!j.contains(p)) return nullptr;
+                return &j.at(p);
+            }
+            catch (const std::exception&)
+            {
+                return nullptr;
+            }
+        }
+
+        enum class Coverage { None, AtOrInside, Ancestor };
+        Coverage coverage(const PrefabOverride& o, uint64_t prefabNode, std::string_view prefix)
+        {
+            if (o.node != prefabNode) return Coverage::None;
+            if (pathCovers(prefix, o.path)) return Coverage::AtOrInside;
+            if (pathCovers(o.path, prefix)) return Coverage::Ancestor;
+            return Coverage::None;
+        }
+    }
+
+    bool isOverridden(const GameObject& instRoot, uint64_t prefabNode, std::string_view pathPrefix,
+                      const nlohmann::json* templateNode)
+    {
+        if (!instRoot.prefabLink || prefabNode == 0) return false;
+        for (const PrefabOverride& o : instRoot.prefabLink->overrides)
+        {
+            const Coverage c = coverage(o, prefabNode, pathPrefix);
+            if (c == Coverage::AtOrInside) return true;
+            if (c != Coverage::Ancestor) continue;
+            if (!templateNode) return true;
+            // The override holds the whole value at o.path: compare what lies
+            // at pathPrefix inside it with the template's.
+            const nlohmann::json* mine   = valueAt(o.value, pathPrefix.substr(o.path.size()));
+            const nlohmann::json* theirs = valueAt(*templateNode, pathPrefix);
+            if (!mine && !theirs) continue;
+            if (!mine || !theirs || !prefabValuesEqual(*mine, *theirs)) return true;
+        }
+        return false;
+    }
+
+    std::vector<PrefabOverride> overridesUnder(const GameObject& instRoot, uint64_t prefabNode,
+                                               std::string_view pathPrefix)
+    {
+        std::vector<PrefabOverride> out;
+        if (!instRoot.prefabLink || prefabNode == 0) return out;
+        for (const PrefabOverride& o : instRoot.prefabLink->overrides)
+            if (coverage(o, prefabNode, pathPrefix) != Coverage::None) out.push_back(o);
+        return out;
+    }
+
+    std::filesystem::path uniquePrefabPath(const std::filesystem::path& dir, const std::string& name)
+    {
+        std::string base;
+        base.reserve(name.size());
+        for (const char ch : name)
+        {
+            const unsigned char c = static_cast<unsigned char>(ch);
+            const bool bad = c < 32 || ch == '<' || ch == '>' || ch == ':' || ch == '"' || ch == '/' ||
+                             ch == '\\' || ch == '|' || ch == '?' || ch == '*';
+            base.push_back(bad ? '_' : ch);
+        }
+        // Windows drops trailing spaces and dots from a file name: trimmed here
+        // so the name on disk is the one the editor shows.
+        const size_t first = base.find_first_not_of(' ');
+        const size_t last  = base.find_last_not_of(" .");
+        base = (first == std::string::npos || last == std::string::npos || last < first)
+                   ? std::string() : base.substr(first, last - first + 1);
+        if (base.empty()) base = "Prefab";
+
+        std::error_code ec;
+        std::filesystem::path candidate = dir / (base + ".prefab");
+        for (int i = 1; std::filesystem::exists(candidate, ec); ++i)
+            candidate = dir / (base + " " + std::to_string(i) + ".prefab");
+        return candidate;
+    }
+
+    bool canDeleteNode(const GameObject& node)
+    {
+        if (!node.parent) return false;
+        if (node.prefabLink || node.prefabNode == 0) return true;
+        return prefabInstanceRoot(&node) == nullptr;
+    }
+
+    std::string prefabMoveRefusal(const GameObject& dragged, const GameObject& newParent)
+    {
+        if (!canDeleteNode(dragged) && dragged.parent)
+            return "'" + dragged.name + "' comes from a prefab: Unpack the prefab to move this object";
+        bool carriesInstance = false;
+        const_cast<GameObject&>(dragged).traverse([&](GameObject* n) { if (n->prefabLink) carriesInstance = true; });
+        if (carriesInstance && prefabInstanceRoot(&newParent) != nullptr)
+            return "'" + dragged.name + "' contains a prefab instance and cannot go inside another one "
+                   "(nested prefabs are not supported)";
+        return {};
+    }
+
+    std::optional<std::string> prefabKeyForAsset(const std::string& assetPath, const PrefabLibrary& lib)
+    {
+        if (assetPath.empty()) return std::nullopt;
+        std::string ext = std::filesystem::path(assetPath).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext != ".prefab") return std::nullopt;
+        const std::string key = lib.normalizeKey(assetPath);
+        // normalizeKey leaves a path outside the asset root absolute.
+        const std::filesystem::path k(key);
+        if (key.empty() || k.is_absolute() || k.has_root_name() || key.rfind("..", 0) == 0) return std::nullopt;
+        return key;
     }
 }

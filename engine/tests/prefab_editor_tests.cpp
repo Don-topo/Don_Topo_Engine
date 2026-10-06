@@ -2432,8 +2432,394 @@ void testUnrevertableApplyDiscardsHistory()
     CHECK(w.get(aId)->name == "Renamed" && w.undo.canUndo(), "the redo stack still works");
 }
 
+// ---- Task 11: the pure helpers behind the editor UI ----
+
+// "<name>.prefab", then "<name> 1.prefab", "<name> 2.prefab"... never an
+// existing file; a name that cannot be a file name is made into one.
+void testUniquePrefabPath()
+{
+    TempRoot root("dt_prefab_ui_unique");
+    const std::filesystem::path dir = root.p / "Prefabs";
+    CHECK(DonTopo::uniquePrefabPath(dir, "Enemy") == dir / "Enemy.prefab", "a free name is used as is");
+    writeFile(dir / "Enemy.prefab", "{}");
+    CHECK(DonTopo::uniquePrefabPath(dir, "Enemy") == dir / "Enemy 1.prefab", "taken -> ' 1'");
+    writeFile(dir / "Enemy 1.prefab", "{}");
+    CHECK(DonTopo::uniquePrefabPath(dir, "Enemy") == dir / "Enemy 2.prefab", "both taken -> ' 2'");
+    CHECK(DonTopo::uniquePrefabPath(dir, "Boss") == dir / "Boss.prefab", "another name is free");
+    CHECK(DonTopo::uniquePrefabPath(dir, "a:b/c*d?") == dir / "a_b_c_d_.prefab",
+          "characters a file name cannot hold become '_'");
+    CHECK(DonTopo::uniquePrefabPath(dir, "  ") == dir / "Prefab.prefab", "an empty name falls back to 'Prefab'");
+    CHECK(DonTopo::uniquePrefabPath(dir, "..") == dir / "Prefab.prefab", "'..' is not a file name either");
+}
+
+// A hand-built Enemy instance (Enemy 1 -> Lamp 2) plus an added child under the
+// root, with the link path kEnemyKey.
+struct UiInstance
+{
+    DonTopo::Scene scene;
+    DonTopo::GameObject* root  = nullptr;
+    DonTopo::GameObject* lamp  = nullptr;
+    DonTopo::GameObject* added = nullptr;
+    DonTopo::GameObject* addedKid = nullptr;
+    DonTopo::GameObject* plain = nullptr;
+    explicit UiInstance(const std::string& assetRoot)
+    {
+        root  = makeInstance(scene, memoryRootOf(enemyFile(assetRoot, 10.0f), assetRoot));
+        lamp  = childNamed(root, "Lamp");
+        added = scene.addGameObject("Added", root);
+        addedKid = scene.addGameObject("AddedKid", added);
+        plain = scene.addGameObject("Plain");
+    }
+    bool ok() const { return root && lamp && root->prefabLink && lamp->prefabNode == 2 && root->prefabNode == 1; }
+};
+
+// Hierarchy color: linked nodes blue (Instance), red when the template Failed
+// or is unknown to the library (Missing); added children and plain nodes None.
+void testPrefabNodeState()
+{
+    TempRoot root("dt_prefab_ui_state");
+    UiInstance u(root.str());
+    if (!u.ok()) { CHECK(false, "instance built"); return; }
+    using S = DonTopo::PrefabNodeState;
+    CHECK(DonTopo::prefabNodeState(*u.root, nullptr) == S::Instance, "no library: linked = Instance");
+    CHECK(DonTopo::prefabNodeState(*u.lamp, nullptr) == S::Instance, "a linked child too");
+    CHECK(DonTopo::prefabNodeState(*u.added, nullptr) == S::None, "an added child is not colored");
+    CHECK(DonTopo::prefabNodeState(*u.addedKid, nullptr) == S::None, "nor anything under it");
+    CHECK(DonTopo::prefabNodeState(*u.plain, nullptr) == S::None, "a plain node is not colored");
+    CHECK(DonTopo::prefabNodeState(u.scene.getRoot(), nullptr) == S::None, "nor the scene root");
+
+    DonTopo::JobSystem js;
+    js.start(2);
+    {
+        DonTopo::PrefabLibrary lib(js, root.str());
+        CHECK(DonTopo::prefabNodeState(*u.root, &lib) == S::Missing, "never requested: Missing");
+        lib.request(kEnemyKey);   // no file on disk
+        CHECK(DonTopo::prefabNodeState(*u.lamp, &lib) == S::Instance, "Loading is not Missing");
+        CHECK(settle(lib), "settles");
+        CHECK(lib.find(kEnemyKey) && lib.find(kEnemyKey)->state == DonTopo::PrefabTemplate::State::Failed, "Failed");
+        CHECK(DonTopo::prefabNodeState(*u.root, &lib) == S::Missing, "Failed template: the root is Missing");
+        CHECK(DonTopo::prefabNodeState(*u.lamp, &lib) == S::Missing, "and its linked children");
+        CHECK(DonTopo::prefabNodeState(*u.added, &lib) == S::None, "added children keep the normal color");
+    }
+    writeFile(root.p / kEnemyKey, enemyFile(root.str(), 10.0f).dump(2));
+    {
+        DonTopo::PrefabLibrary lib(js, root.str());
+        lib.request(kEnemyKey);
+        CHECK(settle(lib), "settles");
+        CHECK(DonTopo::prefabNodeState(*u.lamp, &lib) == S::Instance, "Ready: Instance");
+    }
+    js.shutdown();
+}
+
+void testPrefabInstanceRoot()
+{
+    TempRoot root("dt_prefab_ui_root");
+    UiInstance u(root.str());
+    if (!u.ok()) { CHECK(false, "instance built"); return; }
+    CHECK(DonTopo::prefabInstanceRoot(u.root) == u.root, "the root is its own instance root");
+    CHECK(DonTopo::prefabInstanceRoot(u.lamp) == u.root, "a linked child");
+    CHECK(DonTopo::prefabInstanceRoot(u.addedKid) == u.root, "anything under an added child is inside the instance");
+    CHECK(DonTopo::prefabInstanceRoot(u.plain) == nullptr, "a plain node is in no instance");
+    CHECK(DonTopo::prefabInstanceRoot(&u.scene.getRoot()) == nullptr, "nor the scene root");
+    CHECK(DonTopo::prefabInstanceRoot(static_cast<DonTopo::GameObject*>(nullptr)) == nullptr, "null in, null out");
+}
+
+// Bold labels: an override at the path or inside it, matched by JSON-pointer
+// segments; an override on an ANCESTOR path (a script edit stores the whole
+// "/scripts" array) counts only where its value differs from the template's.
+void testIsOverridden()
+{
+    TempRoot root("dt_prefab_ui_overridden");
+    UiInstance u(root.str());
+    if (!u.ok()) { CHECK(false, "instance built"); return; }
+    const nlohmann::json scripts = nlohmann::json::array({
+        { {"name", "Mover"}, {"overrides", { {"speed", 9}, {"label", "a"} }} } });
+    u.root->prefabLink->overrides = {
+        {2, "/light/intensity", 5.0},
+        {1, "/name", "Boss"},
+        {1, "/transform/scale", nlohmann::json::array({2.0, 2.0, 2.0})},
+        {2, "/scripts", scripts},
+    };
+    CHECK(DonTopo::isOverridden(*u.root, 2, "/light"), "an override inside the component");
+    CHECK(DonTopo::isOverridden(*u.root, 2, "/light/intensity"), "exactly at the path");
+    CHECK(!DonTopo::isOverridden(*u.root, 2, "/light/range"), "a sibling field is not");
+    CHECK(!DonTopo::isOverridden(*u.root, 1, "/light"), "another node is not");
+    CHECK(DonTopo::isOverridden(*u.root, 1, "/name"), "the name");
+    CHECK(!DonTopo::isOverridden(*u.root, 1, "/nam"), "a prefix of a segment is not a match");
+    CHECK(!DonTopo::isOverridden(*u.root, 2, "/lig"), "nor inside a segment");
+    CHECK(DonTopo::isOverridden(*u.root, 1, "/transform/scale"), "transform part");
+    CHECK(!DonTopo::isOverridden(*u.root, 1, "/transform/position"), "another transform part");
+
+    // Ancestor override: without the template, conservative (overridden).
+    CHECK(DonTopo::isOverridden(*u.root, 2, "/scripts/0/overrides/speed"), "covered by /scripts");
+    // With the template node: only the props whose value differs.
+    nlohmann::json tmplLamp = { {"scripts", nlohmann::json::array({
+        { {"name", "Mover"}, {"overrides", { {"speed", 3}, {"label", "a"} }} } })} };
+    CHECK(DonTopo::isOverridden(*u.root, 2, "/scripts/0/overrides/speed", &tmplLamp), "speed differs");
+    CHECK(!DonTopo::isOverridden(*u.root, 2, "/scripts/0/overrides/label", &tmplLamp), "label equals the template's");
+    CHECK(!DonTopo::isOverridden(*u.root, 2, "/scripts/0/overrides/missing", &tmplLamp), "absent on both sides");
+    nlohmann::json tmplNoScripts = nlohmann::json::object();
+    CHECK(DonTopo::isOverridden(*u.root, 2, "/scripts/0/overrides/label", &tmplNoScripts),
+          "absent in the template, present in the instance");
+    CHECK(DonTopo::isOverridden(*u.root, 2, "/scripts", &tmplLamp), "the header of the scripts");
+
+    // What a right click on such a label applies or reverts.
+    const auto under = DonTopo::overridesUnder(*u.root, 2, "/scripts/0/overrides/speed");
+    CHECK(under.size() == 1 && under[0].path == "/scripts", "the covering override");
+    const auto light = DonTopo::overridesUnder(*u.root, 2, "/light");
+    CHECK(light.size() == 1 && light[0].path == "/light/intensity", "the overrides inside the component");
+    CHECK(DonTopo::overridesUnder(*u.root, 2, "/mesh").empty(), "none");
+    CHECK(!DonTopo::isOverridden(*u.plain, 1, "/name"), "a node with no link has nothing overridden");
+}
+
+// Deleting a prefab node from an instance is blocked (Unpack first); the
+// instance root, added children and plain nodes can go.
+void testCanDeleteNode()
+{
+    TempRoot root("dt_prefab_ui_delete");
+    UiInstance u(root.str());
+    if (!u.ok()) { CHECK(false, "instance built"); return; }
+    CHECK(!DonTopo::canDeleteNode(*u.lamp), "a linked child cannot be deleted");
+    CHECK(DonTopo::canDeleteNode(*u.root), "the instance root can");
+    CHECK(DonTopo::canDeleteNode(*u.added), "an added child can");
+    CHECK(DonTopo::canDeleteNode(*u.addedKid), "and what hangs from it");
+    CHECK(DonTopo::canDeleteNode(*u.plain), "a plain node can");
+    CHECK(!DonTopo::canDeleteNode(u.scene.getRoot()), "the scene root cannot");
+    // A stale prefabNode outside any instance (e.g. a hand-edited file) does not
+    // lock the object forever.
+    u.plain->prefabNode = 7;
+    CHECK(DonTopo::canDeleteNode(*u.plain), "an orphan prefabNode outside an instance can");
+}
+
+// Hierarchy drag: no nesting (an instance under another instance would be
+// read as nodes of the outer template), and the structure of an instance is
+// the prefab's (moving a linked node is like deleting it from the instance).
+void testPrefabMoveRefusal()
+{
+    TempRoot root("dt_prefab_ui_move");
+    UiInstance u(root.str());
+    if (!u.ok()) { CHECK(false, "instance built"); return; }
+    DonTopo::GameObject* other = makeInstance(u.scene, memoryRootOf(enemyFile(root.str(), 10.0f), root.str()));
+    DonTopo::GameObject* holder = u.scene.addGameObject("Holder");
+    DonTopo::GameObject* holderKid = u.scene.addGameObject("HolderKid", holder);
+    if (!other) { CHECK(false, "second instance"); return; }
+    DonTopo::GameObject* sceneRoot = &u.scene.getRoot();
+
+    CHECK(!DonTopo::prefabMoveRefusal(*u.lamp, *u.plain).empty(), "a linked child cannot leave its instance");
+    CHECK(!DonTopo::prefabMoveRefusal(*u.lamp, *u.root).empty(), "nor be reordered inside it");
+    CHECK(!DonTopo::prefabMoveRefusal(*other, *u.lamp).empty(), "an instance under a linked node: nested");
+    CHECK(!DonTopo::prefabMoveRefusal(*other, *u.root).empty(), "under an instance root: nested");
+    CHECK(!DonTopo::prefabMoveRefusal(*other, *u.added).empty(), "under an added child: still inside");
+    CHECK(DonTopo::prefabMoveRefusal(*other, *holder).empty(), "an instance under a plain node is fine");
+    CHECK(DonTopo::prefabMoveRefusal(*other, *sceneRoot).empty(), "or at the scene root");
+    CHECK(DonTopo::prefabMoveRefusal(*u.root, *sceneRoot).empty(), "the instance root itself moves freely");
+    CHECK(DonTopo::prefabMoveRefusal(*u.added, *holder).empty(), "an added child can leave");
+    CHECK(DonTopo::prefabMoveRefusal(*holderKid, *u.lamp).empty(), "a plain node can become an added child");
+    u.scene.reparent(other, holder);   // holder now contains an instance
+    CHECK(!DonTopo::prefabMoveRefusal(*holder, *u.lamp).empty(),
+          "a plain node carrying an instance cannot go inside another instance");
+    const std::string why = DonTopo::prefabMoveRefusal(*u.lamp, *u.plain);
+    CHECK(contains(why, "Unpack"), "the message says how to do it");
+}
+
+// A dropped asset path -> the key of a script's Prefab slot / a hierarchy drop:
+// project-relative, only .prefab files inside the project.
+void testPrefabKeyForAsset()
+{
+    TempRoot root("dt_prefab_ui_key");
+    DonTopo::JobSystem js;
+    js.start(1);
+    {
+        DonTopo::PrefabLibrary lib(js, root.str());
+        const auto k = DonTopo::prefabKeyForAsset((root.p / "Prefabs" / "Enemy.prefab").string(), lib);
+        CHECK(k && *k == kEnemyKey, "absolute inside the project -> project-relative key");
+        const auto upper = DonTopo::prefabKeyForAsset((root.p / "Prefabs" / "Big.PREFAB").string(), lib);
+        CHECK(upper && *upper == "Prefabs/Big.PREFAB", "the extension in any case");
+        CHECK(!DonTopo::prefabKeyForAsset((root.p / "Models" / "tri.obj").string(), lib), "not a prefab");
+        const std::filesystem::path outside = std::filesystem::temp_directory_path() / "elsewhere" / "Out.prefab";
+        CHECK(!DonTopo::prefabKeyForAsset(outside.string(), lib), "outside the project");
+        CHECK(!DonTopo::prefabKeyForAsset("", lib), "empty");
+    }
+    js.shutdown();
+}
+
+// No nesting through the command either (any caller, not only the hierarchy).
+void testInstantiateRefusesNestedParent()
+{
+    CommandWorld w("dt_prefab_ui_nested");
+    writeFile(w.prefabFile(), enemyFile(w.root.str(), 10.0f).dump(2));
+    w.lib->request(kEnemyKey);
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    auto* first = w.run(std::make_unique<DonTopo::InstantiatePrefabCommand>(w.ctx(), kEnemyKey, 0));
+    if (!first->succeeded()) { CHECK(false, "first instance"); return; }
+    const uint64_t lampId = childNamed(w.get(first->instanceRootId()), "Lamp")->id;
+    const uint64_t addedId = w.scene.addGameObject("Added", w.get(first->instanceRootId()))->id;
+
+    for (uint64_t parent : { first->instanceRootId(), lampId, addedId })
+    {
+        DonTopo::InstantiatePrefabCommand nested(w.ctx(), kEnemyKey, parent);
+        nested.execute();
+        CHECK(!nested.succeeded() && contains(nested.lastMessage(), "nested"), "refused under an instance");
+    }
+    int instances = 0;
+    w.scene.traverse([&](DonTopo::GameObject* n) { if (n->prefabLink) ++instances; });
+    CHECK(instances == 1, "nothing was built");
+}
+
+// Prefab commands cannot ride inside a CompositeCommand: it would neither
+// report their refusals nor discard the history under an unrevertable Apply.
+void testCompositeRefusesPrefabCommands()
+{
+    CommandWorld w("dt_prefab_ui_composite");
+    DonTopo::CompositeCommand group("Group");
+    const uint64_t id = w.scene.addGameObject("Enemy")->id;
+    CHECK(!group.add(std::make_unique<DonTopo::CreatePrefabCommand>(w.ctx(), id, w.prefabFile())),
+          "a prefab command is refused");
+    CHECK(group.empty(), "and not added");
+    CHECK(group.add(std::make_unique<DonTopo::PropertyCommand<int>>("x", 0, 1, [](const int&) {})),
+          "any other command is added");
+    CHECK(!group.empty(), "added");
+}
+
+// The one way the editor runs a prefab command: execute, push only if it was
+// applied, and log its message either way.
+void testPushPrefabCommand()
+{
+    CommandWorld w("dt_prefab_ui_push");
+    std::vector<std::string> log;
+    auto logFn = [&](const std::string& m) { log.push_back(m); };
+
+    const uint64_t id = w.scene.addGameObject("Enemy")->id;
+    CHECK(DonTopo::pushPrefabCommand(w.undo,
+              std::make_unique<DonTopo::CreatePrefabCommand>(w.ctx(), id, w.prefabFile()), logFn),
+          "an applied command is pushed");
+    CHECK(w.undo.canUndo() && std::filesystem::exists(w.prefabFile()), "executed once and on the stack");
+    CHECK(log.size() == 1 && contains(log[0], "Created prefab"), "its message is logged");
+
+    const uint64_t rev = w.undo.revision();
+    const uint64_t other = w.scene.addGameObject("Other")->id;
+    CHECK(!DonTopo::pushPrefabCommand(w.undo,
+              std::make_unique<DonTopo::CreatePrefabCommand>(w.ctx(), other, w.prefabFile()), logFn),
+          "a refused command is not pushed");
+    CHECK(w.undo.revision() == rev, "the history did not move");
+    CHECK(log.size() == 2 && contains(log[1], "already exists"), "the refusal is logged");
+    CHECK(!DonTopo::pushPrefabCommand(w.undo, nullptr, logFn), "null: nothing");
+}
+
+// Per-row Apply / Revert of ONE added child in the Overrides popup: the
+// instance's overrides stay where they are (prefabNoOverrides()).
+void testApplyRevertSingleAddedChild()
+{
+    ThreeInstances w("dt_prefab_ui_added_rows");
+    if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+    lampLight(w.get(w.b))->setIntensity(5.0f);
+    const uint64_t x = w.scene.addGameObject("ExtraX", w.get(w.b))->id;
+    const uint64_t y = w.scene.addGameObject("ExtraY", w.get(w.b))->id;
+    w.pass();
+    CHECK(overrideIs(w.get(w.b), "/light/intensity", 5.0), "B overrides the intensity");
+
+    // Revert only X.
+    auto* rx = w.run(std::make_unique<DonTopo::RevertPrefabOverridesCommand>(
+        w.ctx(), w.b, DonTopo::prefabNoOverrides(), true, std::vector<uint64_t>{ x }));
+    CHECK(rx->succeeded(), "revert of one added child");
+    CHECK(!w.get(x) && w.get(y), "only X is deleted");
+    CHECK(overrideIs(w.get(w.b), "/light/intensity", 5.0) && w.intensity(w.b) == 5.0f, "the override stays");
+    w.doUndo();
+    CHECK(w.get(x) && w.get(x)->parent == w.get(w.b), "undo: X is back with its id");
+
+    // Apply only Y.
+    auto* ay = w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), w.b, DonTopo::prefabNoOverrides(), true, std::vector<uint64_t>{ y }));
+    CHECK(ay->succeeded(), "apply of one added child");
+    CHECK(contains(readBytes(w.prefabFile()), "ExtraY") && !contains(readBytes(w.prefabFile()), "ExtraX"),
+          "only Y is written into the prefab");
+    CHECK(overrideIs(w.get(w.b), "/light/intensity", 5.0) && w.intensity(w.a) == 1.0f,
+          "the override is not applied");
+    CHECK(countChildren(w.get(w.a), "ExtraY") == 1 && countChildren(w.get(w.a), "ExtraX") == 0,
+          "the other instances get Y only");
+
+    // Nothing selected and no children: nothing to do, refused.
+    DonTopo::RevertPrefabOverridesCommand none(w.ctx(), w.a, DonTopo::prefabNoOverrides(), false);
+    none.execute();
+    CHECK(!none.succeeded(), "an empty selection is refused");
+}
+
+// A template that Failed (file missing) loads again once its .prefab shows
+// up on disk -- restored, recreated, moved back -- without a scene reload,
+// and its instances turn from Missing to Instance.
+void testFailedTemplateRetriedWhenFileReturns()
+{
+    CommandWorld w("dt_prefab_ui_retry");
+    const nlohmann::json file = enemyFile(w.root.str(), 20.0f);
+    DonTopo::GameObject* inst = makeInstance(w.scene, memoryRootOf(enemyFile(w.root.str(), 10.0f), w.root.str()));
+    if (!inst) { CHECK(false, "instance"); return; }
+    const uint64_t id = inst->id;
+    w.sync->sceneLoaded(w.scene.toJson());
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    const DonTopo::PrefabTemplate* t = w.lib->find(kEnemyKey);
+    CHECK(t && t->state == DonTopo::PrefabTemplate::State::Failed, "no file: Failed");
+    CHECK(DonTopo::prefabNodeState(*w.get(id), w.lib.get()) == DonTopo::PrefabNodeState::Missing, "Missing");
+
+    // Unchanged file: no retry, however many frames.
+    for (int i = 0; i < 3 * DonTopo::PrefabSceneSync::kFailedPollFrames; ++i) w.sync->pump(1.0f);
+    CHECK(w.lib->find(kEnemyKey) && w.lib->find(kEnemyKey)->state == DonTopo::PrefabTemplate::State::Failed,
+          "still Failed while nothing changed on disk");
+    const int readsBefore = w.lib->readCount();
+
+    writeFile(w.prefabFile(), file.dump(2));
+    bool ready = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!ready && std::chrono::steady_clock::now() < deadline)
+    {
+        w.sync->pump(1000.0f);
+        const DonTopo::PrefabTemplate* now = w.lib->find(kEnemyKey);
+        ready = now && now->state == DonTopo::PrefabTemplate::State::Ready;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(ready, "the restored file is loaded");
+    CHECK(w.lib->readCount() == readsBefore + 1, "read once");
+    CHECK(w.fx.logged("reloading"), "the Log says it is reloading");
+    CHECK(DonTopo::prefabNodeState(*w.get(id), w.lib.get()) == DonTopo::PrefabNodeState::Instance,
+          "the instance is no longer Missing");
+    CHECK(lampLight(w.get(id)) && lampLight(w.get(id))->getRange() == 20.0f,
+          "and was propagated from the restored prefab");
+
+    // Gone again and back with other content: the Ready template is not
+    // touched by the poll (only Failed keys are watched).
+    const int readsReady = w.lib->readCount();
+    for (int i = 0; i < 3 * DonTopo::PrefabSceneSync::kFailedPollFrames; ++i) w.sync->pump(1.0f);
+    CHECK(w.lib->readCount() == readsReady, "a Ready template is never re-read by the poll");
+}
+
+// Drop of a .prefab in Edit Mode: a template not loaded yet is waited for
+// synchronously (spec §5.2); a missing one fails at once with its error.
+void testWaitForTemplate()
+{
+    CommandWorld w("dt_prefab_ui_wait");
+    writeFile(w.prefabFile(), enemyFile(w.root.str(), 10.0f).dump(2));
+    std::string error;
+    CHECK(w.sync->waitForTemplate(kEnemyKey, 60000, &error), "a loadable prefab is waited for");
+    CHECK(error.empty(), "no error");
+    CHECK(readyTemplate(*w.lib, kEnemyKey) != nullptr, "Ready on return");
+    CHECK(!w.sync->waitForTemplate("Prefabs/Nope.prefab", 60000, &error), "a missing one is not");
+    CHECK(!error.empty(), "and says why");
+}
+
 int main()
 {
+    testUniquePrefabPath();
+    testPrefabNodeState();
+    testPrefabInstanceRoot();
+    testIsOverridden();
+    testCanDeleteNode();
+    testPrefabMoveRefusal();
+    testPrefabKeyForAsset();
+    testInstantiateRefusesNestedParent();
+    testCompositeRefusesPrefabCommands();
+    testPushPrefabCommand();
+    testApplyRevertSingleAddedChild();
+    testFailedTemplateRetriedWhenFileReturns();
+    testWaitForTemplate();
     testUnrevertableApplyDiscardsHistory();
     testUndoManagerKeepsRefusedCommands();
     testCreateRedoRefusedThroughManager();

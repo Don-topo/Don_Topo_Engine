@@ -426,6 +426,8 @@ static void test_classify_asset()
     CHECK(classifyAsset(".json", false) == AssetKind::Scene);
     CHECK(classifyAsset(".lua",  false) == AssetKind::Script);
     CHECK(classifyAsset(".spv",  false) == AssetKind::Shader);
+    CHECK(classifyAsset(".prefab", false) == AssetKind::Prefab);
+    CHECK(classifyAsset(".PREFAB", false) == AssetKind::Prefab);
     CHECK(classifyAsset(".xyz",  false) == AssetKind::Other);
     CHECK(classifyAsset("",      false) == AssetKind::Other);
     CHECK(classifyAsset(".png",  true)  == AssetKind::Folder);
@@ -1085,6 +1087,10 @@ static void test_material_is_draggable()
 {
     CHECK(isAssetDraggable(".mat", /*isDir=*/false, /*inMultiSelection=*/false));
     CHECK(isAssetDraggable(".MAT", false, false));
+    // A .prefab is dragged onto the hierarchy (Instantiate) and onto a
+    // script's Prefab slot.
+    CHECK(isAssetDraggable(".prefab", false, false));
+    CHECK(isAssetDraggable(".Prefab", false, false));
     CHECK(!isAssetDraggable(".unknownext", false, false));
     CHECK(isAssetDraggable(".unknownext", false, /*inMultiSelection=*/true));
     CHECK(isAssetDraggable("", /*isDir=*/true, false));
