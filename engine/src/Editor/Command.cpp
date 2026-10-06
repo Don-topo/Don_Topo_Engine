@@ -1341,19 +1341,16 @@ void ApplyPrefabOverridesCommand::rebuildInstances(const std::vector<uint64_t>& 
                                                    bool recordOrphans)
 {
     // Rebuilt from the command's own template, now: it may still be loading in
-    // the library. Seeded with the template's meshes and every instance's live
-    // ones (an applied child's mesh is in the applying instance), so no file is
-    // read for what is already in RAM.
-    PreloadedMeshCache cache;
-    MaterialAssetCache mats;
-    if (const PrefabTemplate* t = m_ctx.library.find(m_key))
-    {
-        cache = t->meshes;
-        mats  = t->mats;
-    }
+    // the library. Seeded with what the first execute took (the template's
+    // configured meshes by node, its meshes, every instance's live meshes) plus
+    // the instances' current ones (an applied child's mesh is in the applying
+    // instance), so no model file is read on the main thread.
+    PreloadedMeshCache cache = m_seedMeshes;
+    for (const auto& [key, mesh] : m_seedConfigured) cache.emplace(key, mesh);
     for (uint64_t id : instances)
         if (GameObject* r = m_ctx.scene.findById(id))
             for (const auto& [key, mesh] : Scene::collectMeshes(r)) cache.emplace(key, mesh);
+    const MaterialAssetCache* mats = m_seedMats ? m_seedMats.get() : nullptr;
 
     for (uint64_t id : instances)
     {
@@ -1365,9 +1362,11 @@ void ApplyPrefabOverridesCommand::rebuildInstances(const std::vector<uint64_t>& 
             std::unordered_set<uint64_t> had;
             r->traverse([&](GameObject* n) { had.insert(n->id); });
             const auto hints = m_createdIds.find(id);
-            bool rebuilt = false;
+            // Each file-mesh node whose mesh did not change points at the mesh
+            // the library configured for it (the same seeding as propagation).
+            const nlohmann::json tree = seedConfiguredMeshes(tmpl, m_seedRoot, m_seedConfigured, before);            bool rebuilt = false;
             GameObject* live = m_ctx.scene.rebuildPrefabInstance(
-                r, tmpl, m_ctx.physics, m_ctx.audio, &cache, &mats, &rebuilt,
+                r, tree, m_ctx.physics, m_ctx.audio, &cache, mats, &rebuilt,
                 hints != m_createdIds.end() ? &hints->second : nullptr);
             if (live && m_ctx.registerGpu) m_ctx.registerGpu(live);
             if (live && rebuilt && recordNewIds)
@@ -1389,8 +1388,28 @@ void ApplyPrefabOverridesCommand::rebuildInstances(const std::vector<uint64_t>& 
     }
 }
 
+bool ApplyPrefabOverridesCommand::refuseWhileMeshPending(const std::vector<uint64_t>& instances)
+{
+    // A mesh still on its way from the async loader lands on its node id: if
+    // that node was rebuilt meanwhile, the load overwrites the rebuild's render
+    // slot without releasing it (leaked slot, ghost draw). Same rule as the
+    // tracker's deferral: nothing is rebuilt until it lands.
+    for (uint64_t id : instances)
+        if (GameObject* r = m_ctx.scene.findById(id); r && m_ctx.tracker.meshPending(r))
+        {
+            m_message = "Apply: a mesh of '" + r->name + "' is still loading; try again when it has loaded";
+            return true;
+        }
+    return false;
+}
+
 void ApplyPrefabOverridesCommand::execute()
 {
+    if (m_idsRecorded)
+    {
+        redo();
+        return;
+    }
     m_done = false;
     m_message.clear();
     m_applied.clear();
@@ -1438,9 +1457,10 @@ void ApplyPrefabOverridesCommand::execute()
         m_message = "Apply: '" + root->name + "' is not up to date with its prefab yet (still loading); try again";
         return;
     }
+    const std::vector<uint64_t> instances = instancesOf(m_key);
+    if (refuseWhileMeshPending(instances)) return;
     // Edits of any instance of this prefab the tracker has not recorded yet:
     // the rebuilds below derive each instance from its stored overrides.
-    const std::vector<uint64_t> instances = instancesOf(m_key);
     for (uint64_t id : instances) recordPendingEdits(id);
 
     root = m_ctx.scene.findById(m_rootId);
@@ -1450,6 +1470,16 @@ void ApplyPrefabOverridesCommand::execute()
         m_message = "Apply: the prefab is not loaded";
         return;
     }
+    // What every rebuild of this command (execute, undo, redo) is seeded with:
+    // the Ready template's meshes as configured per node (valid for every node
+    // whose "mesh" stays as in t->memoryRoot) and every mesh in RAM now.
+    m_seedRoot       = t->memoryRoot;
+    m_seedConfigured = t->configuredMeshes;
+    m_seedMeshes     = t->meshes;
+    for (uint64_t id : instances)
+        if (GameObject* r = m_ctx.scene.findById(id))
+            for (const auto& [key, mesh] : Scene::collectMeshes(r)) m_seedMeshes.emplace(key, mesh);
+    m_seedMats = std::make_shared<MaterialAssetCache>(t->mats);
 
     // The new template: the chosen overrides applied to the current one...
     nlohmann::json tmpl = t->memoryRoot;
@@ -1550,16 +1580,18 @@ void ApplyPrefabOverridesCommand::execute()
         return std::any_of(chosen.begin(), chosen.end(), [&](const PrefabOverride& c) { return sameTarget(c, o); });
     });
     m_applied = chosen;
+    m_toLink  = toLink;
     for (const auto& [sceneId, local] : toLink)
         if (GameObject* n = m_ctx.scene.findById(sceneId))
         {
             n->prefabNode = local;
             m_linkedAdded.push_back(sceneId);
         }
-    // Every instance rebuilt from the new template now, with the ids of the
-    // first execute on a redo; the library's onReady then finds them matching.
+    // Every instance rebuilt from the new template now; the ids of the nodes
+    // this creates are remembered for the redo. The library's onReady then
+    // finds them matching.
     m_orphaned.clear();
-    rebuildInstances(instances, tmpl, /*recordNewIds=*/!m_idsRecorded, /*recordOrphans=*/true);
+    rebuildInstances(instances, tmpl, /*recordNewIds=*/true, /*recordOrphans=*/true);
     m_idsRecorded = true;
     m_ctx.library.updateFromMemory(m_key, file, m_ctx.audio);
     // Ready at once: synced now. Still loading: each one's baseline stands on
@@ -1577,6 +1609,9 @@ void ApplyPrefabOverridesCommand::execute()
 void ApplyPrefabOverridesCommand::undo()
 {
     if (!m_done) return;
+    // A mesh still loading: nothing is touched, and the command stays done
+    // (an undo once it has landed works).
+    if (refuseWhileMeshPending(instancesOf(m_key))) return;
     m_done = false;
     // Decided FIRST, before anything is touched: the previous bytes go back
     // only over the bytes Apply wrote. A file changed since (outside the
@@ -1608,7 +1643,8 @@ void ApplyPrefabOverridesCommand::undo()
         addMissing(r->prefabLink->overrides, m_applied);
     for (const auto& [id, lost] : m_orphaned)
         if (GameObject* r = m_ctx.scene.findById(id); r && r->prefabLink)
-            addMissing(r->prefabLink->overrides, lost);    for (uint64_t id : m_linkedAdded)
+            addMissing(r->prefabLink->overrides, lost);
+    for (uint64_t id : m_linkedAdded)
         if (GameObject* n = m_ctx.scene.findById(id)) n->prefabNode = 0;
 
     // Links first, then the library: a template Ready at once propagates every
@@ -1618,6 +1654,61 @@ void ApplyPrefabOverridesCommand::undo()
     if (readyTemplate(m_ctx.library, m_key))
         for (uint64_t id : instances) resyncInstance(id);
     m_message = "Restored '" + m_path.string() + "'";
+}
+
+void ApplyPrefabOverridesCommand::redo()
+{
+    m_done = false;
+    m_message.clear();
+    // The undo put the previous bytes back; anything else there now is a
+    // change made outside the editor, which a redo must not overwrite.
+    const std::optional<std::string> current = readFileBytes(m_path);
+    const nlohmann::json file = nlohmann::json::parse(m_written, nullptr, /*allow_exceptions=*/false);
+    if (!current || *current != m_previous || !file.is_object() || !file.contains("root") ||
+        !file["root"].is_object())
+    {
+        m_message = "Apply: '" + m_key + "' changed on disk; reload the scene first";
+        return;
+    }
+    const std::vector<uint64_t> instances = instancesOf(m_key);
+    if (refuseWhileMeshPending(instances)) return;
+    GameObject* root = m_ctx.scene.findById(m_rootId);
+    if (!root || !root->prefabLink)
+    {
+        m_message = "Apply: the object is not a prefab instance";
+        return;
+    }
+    if (!writeFileBytes(m_path, m_written))
+    {
+        writeFileBytes(m_path, *current);
+        m_message = "Apply: could not write '" + m_path.string() + "'";
+        return;
+    }
+    // The template the first execute built, from its own bytes: no Ready
+    // template needed (the library may still be reloading the undo's version).
+    nlohmann::json tmpl = file["root"];
+    resolveStoredPaths(tmpl, m_ctx.library.assetRoot());
+
+    for (uint64_t id : instances) recordPendingEdits(id);
+    root = m_ctx.scene.findById(m_rootId);
+    std::erase_if(root->prefabLink->overrides, [&](const PrefabOverride& o) {
+        return std::any_of(m_applied.begin(), m_applied.end(), [&](const PrefabOverride& a) { return sameTarget(a, o); });
+    });
+    m_linkedAdded.clear();
+    for (const auto& [sceneId, local] : m_toLink)
+        if (GameObject* n = m_ctx.scene.findById(sceneId))
+        {
+            n->prefabNode = local;
+            m_linkedAdded.push_back(sceneId);
+        }
+    // Same rebuild as the first execute, the nodes it created get their ids back.
+    m_orphaned.clear();
+    rebuildInstances(instances, tmpl, /*recordNewIds=*/false, /*recordOrphans=*/true);
+    m_ctx.library.updateFromMemory(m_key, file, m_ctx.audio);
+    if (readyTemplate(m_ctx.library, m_key))
+        for (uint64_t id : instances) resyncInstance(id);
+    m_done = true;
+    m_message = "Applied again to '" + m_key + "'";
 }
 
 // ---- Revert ----
@@ -1789,14 +1880,34 @@ void UnpackPrefabCommand::undo()
         };
         const nlohmann::json live = m_ctx.scene.subtreeToMemoryJson(root);
         const auto before = index(m_atUnpack);
+        // The template the instance stands on, by prefab-local id ("id" there):
+        // an edit back to its value is a revert (the stored override goes), the
+        // same check the tracker's fold makes. Not Ready: every edit is kept
+        // (the tracker's next recompute drops what equals the template).
+        std::unordered_map<uint64_t, const nlohmann::json*> tmplNodes;
+        if (const PrefabTemplate* t = readyTemplate(m_ctx.library, root->prefabLink->path))
+        {
+            std::function<void(const nlohmann::json&)> indexTmpl = [&](const nlohmann::json& n) {
+                if (const uint64_t id = localIdOf(n, "id"); id != 0) tmplNodes.emplace(id, &n);
+                if (const auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                    for (const auto& c : *kids) if (c.is_object()) indexTmpl(c);
+            };
+            indexTmpl(t->memoryRoot);
+        }
         std::vector<PrefabOverride>& list = root->prefabLink->overrides;
         for (const auto& [local, node] : index(live))
         {
             const auto b = before.find(local);
             if (b == before.end()) continue;
+            const auto tn = tmplNodes.find(local);
             for (PrefabOverride& e : diffPrefabNode(local, *b->second.first, *node.first, node.second))
             {
                 auto same = std::find_if(list.begin(), list.end(), [&](const PrefabOverride& o) { return sameTarget(o, e); });
+                if (tn != tmplNodes.end() && prefabEditIsRevert(*tn->second, *node.first, e, node.second))
+                {
+                    if (same != list.end()) list.erase(same);
+                    continue;
+                }
                 if (same != list.end()) same->value = std::move(e.value);
                 else                    list.push_back(std::move(e));
             }

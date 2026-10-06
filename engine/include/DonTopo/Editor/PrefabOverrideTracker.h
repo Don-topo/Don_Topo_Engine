@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -14,6 +15,8 @@ namespace DonTopo
     class PhysicsManager;
     class PrefabLibrary;
     class Scene;
+    struct Mesh;
+    struct PrefabOverride;
     struct PrefabTemplate;
 
     // The single point where the editor detects prefab overrides (spec §3.2).
@@ -117,6 +120,28 @@ namespace DonTopo
             std::function<bool(uint64_t)> m_meshRequestLive;
             int m_settleScans = 0;
     };
+
+    // Folding an edit (a diff of liveNode against an EARLIER state of it, value =
+    // the live value): true when it takes the node back to templateNode's value
+    // at edit.path -- a revert of an override, not a new one -- or removes
+    // something templateNode does not have either. Both nodes: one node json
+    // each, memory form (children ignored). Shared by the tracker's fold and the
+    // undo of Unpack, so the two cannot tell reverts apart differently.
+    bool prefabEditIsRevert(const nlohmann::json& templateNode, const nlohmann::json& liveNode,
+                            const PrefabOverride& edit, bool isRoot);
+
+    // The tree an instance is rebuilt from: tmpl (memory form) with each
+    // file-mesh node pointing (memRef = prefabNodeMeshRef(local)) at the mesh the
+    // library configured for that node in `configured` -- only where the node's
+    // "mesh" equals its "mesh" in configuredFor (the template those meshes were
+    // configured for; pass tmpl itself when they belong to it) and the instance
+    // does not override the mesh's identity. The rebuild's cache must hold
+    // `configured` too. Without it, a node whose animation sources are not the
+    // first list of its file reconfigures them from disk (Assimp) on the main
+    // thread. Shared by propagation and Apply so the two cannot drift.
+    nlohmann::json seedConfiguredMeshes(const nlohmann::json& tmpl, const nlohmann::json& configuredFor,
+                                        const std::unordered_map<std::string, std::shared_ptr<const Mesh>>& configured,
+                                        const std::vector<PrefabOverride>& instanceOverrides);
 
     // Value comparison of the override model: a number that went through a float
     // is compared within 1e-5 (relative above 1); integers on both sides, and

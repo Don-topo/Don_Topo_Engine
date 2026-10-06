@@ -2087,8 +2087,227 @@ void testUndoAfterTemplateChanged()
     CHECK(idsUnique(w.scene), "ids unique");
 }
 
+// ---- Re-review of 2203a28 ----
+
+const char* kGroupKey = "Prefabs/Group.prefab";
+
+// Group (1) -> A (2), B (3): two skinned nodes on the same FBX with DIFFERENT
+// animation-source lists (B adds an external clip file). Only the first list
+// is in t.meshes; B's mesh is in t.configuredMeshes.
+void writeGroupPrefab(const TempRoot& root)
+{
+    namespace fs = std::filesystem;
+    const fs::path maw  = root.p / "Models" / "Maw J Laygo.fbx";
+    const fs::path idle = root.p / "Models" / "standing idle 01.fbx";
+    fs::copy_file("assets/animatedCharacter/Maw J Laygo.fbx", maw);
+    fs::copy_file("assets/animatedCharacter/standing idle 01.fbx", idle);
+    auto node = [](uint64_t id, const char* name) {
+        nlohmann::json n = { {"id", id}, {"name", name}, {"children", nlohmann::json::array()} };
+        nlohmann::json m = nlohmann::json::array();
+        const glm::mat4 identity(1.0f);
+        for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) m.push_back(identity[c][r]);
+        n["localTransform"] = m;
+        return n;
+    };
+    nlohmann::json group = node(1, "Group");
+    nlohmann::json a = node(2, "A");
+    a["mesh"] = { {"sourcePath", maw.string()}, {"name", "Maw"}, {"skinned", true},
+                  {"animationSources", nlohmann::json::array({ { {"path", maw.string()}, {"builtin", true} } })} };
+    nlohmann::json b = node(3, "B");
+    b["mesh"] = { {"sourcePath", maw.string()}, {"name", "Maw"}, {"skinned", true},
+                  {"animationSources", nlohmann::json::array({
+                      { {"path", maw.string()},  {"builtin", true} },
+                      { {"path", idle.string()}, {"builtin", false} } })} };
+    group["children"].push_back(a);
+    group["children"].push_back(b);
+    writeFile(root.p / kGroupKey, nlohmann::json{ {"version", 1}, {"type", "prefab"}, {"root", group} }.dump(2));
+}
+
+// U1: Apply/undo/redo rebuild the other instances seeded with the template's
+// configured meshes: the main thread reads no FBX (no Assimp reconfiguration
+// of B's second source list per instance).
+void testApplySeedsConfiguredMeshes()
+{
+    CommandWorld w("dt_prefab_cmd_u1");
+    writeGroupPrefab(w.root);
+    w.lib->request(kGroupKey);
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    const DonTopo::PrefabTemplate* t = readyTemplate(*w.lib, kGroupKey);
+    if (!t) { CHECK(false, "template Ready"); return; }
+    {
+        // The hand-written file is not in nodeToJson's canonical form (no
+        // clip lists, no defaults), so every instance would differ from it
+        // everywhere. Re-saved as the editor writes a prefab (makePrefab).
+        DonTopo::GameObject* tmp = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+        if (!tmp) { CHECK(false, "temporary instance"); return; }
+        const nlohmann::json canonical = w.scene.makePrefab(tmp, kGroupKey, /*link=*/false);
+        w.scene.removeGameObject(tmp);
+        writeFile(w.root.p / kGroupKey, canonical.dump(2));
+        w.lib->updateFromMemory(kGroupKey, canonical, audio());
+        CHECK(settleSync(*w.sync, *w.lib), "canonical template settles");
+        t = readyTemplate(*w.lib, kGroupKey);
+        if (!t) { CHECK(false, "canonical template Ready"); return; }
+    }
+    DonTopo::GameObject* i1 = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    DonTopo::GameObject* i2 = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    DonTopo::GameObject* i3 = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    if (!i1 || !i2 || !i3) { CHECK(false, "instances"); return; }
+    const uint64_t id1 = i1->id, id2 = i2->id, id3 = i3->id;
+    w.sync->sceneLoaded(w.scene.toJson());
+    childNamed(i1, "A")->name = "Renamed";
+    w.pass();
+    CHECK(hasOverride(w.get(id1), "/name"), "the rename is an override");
+
+    auto mainReads = [] { return DonTopo::ModelLoader::readFileCountOnThisThread(); };
+    auto bSources = [&](uint64_t id) {
+        DonTopo::GameObject* b = childNamed(w.get(id), "B");
+        const DonTopo::SkinnedMesh* sk = b ? b->getSkinnedMesh() : nullptr;
+        return sk ? sk->animationSources.size() : size_t(0);
+    };
+    int before = mainReads();
+    auto* apply = w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), id1, std::vector<DonTopo::PrefabOverride>{}, false));
+    CHECK(apply->succeeded(), "apply succeeded");
+    CHECK(mainReads() - before == 0, "execute: no FBX read on the main thread");
+    CHECK(childNamed(w.get(id2), "Renamed") && childNamed(w.get(id3), "Renamed"), "the others took the rename");
+    CHECK(bSources(id2) == 2 && bSources(id3) == 2, "B keeps its two animation sources");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+
+    before = mainReads();
+    w.doUndo();
+    CHECK(mainReads() - before == 0, "undo: no FBX read on the main thread");
+    CHECK(childNamed(w.get(id2), "A") && hasOverride(w.get(id1), "/name"), "undo restored");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    before = mainReads();
+    w.doRedo();
+    CHECK(mainReads() - before == 0, "redo: no FBX read on the main thread");
+    CHECK(childNamed(w.get(id2), "Renamed") && bSources(id2) == 2, "redo applied");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+}
+
+// U2: Apply (execute and undo) refuses, touching nothing, while a mesh of an
+// instance is still on its way from the async loader (its result would land on
+// a rebuilt node and leak the rebuild's GPU slot).
+void testApplyRefusedWhileMeshPending()
+{
+    ThreeInstances w("dt_prefab_cmd_u2");
+    if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+    lampLight(w.get(w.b))->setIntensity(3.0f);
+    w.pass();
+    const uint64_t lampC = childNamed(w.get(w.c), "Lamp")->id;
+    const std::string original = readBytes(w.prefabFile());
+    w.get(lampC)->pendingMeshJob = 777;   // live (the fixture's loader says every request is)
+
+    DonTopo::ApplyPrefabOverridesCommand apply(w.ctx(), w.b, std::vector<DonTopo::PrefabOverride>{}, false);
+    apply.execute();
+    CHECK(!apply.succeeded() && contains(apply.lastMessage(), "still loading"), "execute refused");
+    CHECK(readBytes(w.prefabFile()) == original && overrideIs(w.get(w.b), "/light/intensity", 3.0) &&
+          w.intensity(w.c) == 1.0f, "nothing touched");
+
+    w.get(lampC)->pendingMeshJob = 0;
+    apply.execute();
+    CHECK(apply.succeeded() && w.intensity(w.c) == 3.0f, "executes once nothing is pending");
+    const std::string applied = readBytes(w.prefabFile());
+    w.get(lampC)->pendingMeshJob = 777;
+    apply.undo();
+    CHECK(contains(apply.lastMessage(), "still loading"), "undo refused");
+    CHECK(readBytes(w.prefabFile()) == applied && overrideCount(w.get(w.b)) == 0 && w.intensity(w.c) == 3.0f,
+          "undo touched nothing");
+    w.get(lampC)->pendingMeshJob = 0;
+    apply.undo();
+    CHECK(readBytes(w.prefabFile()) == original && overrideIs(w.get(w.b), "/light/intensity", 3.0) &&
+          w.intensity(w.c) == 1.0f, "undo works once nothing is pending");
+}
+
+// U3: redo of Apply while the template is still reloading from the undo: the
+// redo rebuilds from the bytes it wrote (no Ready template needed), recreates
+// the same ids, and reads no model file on the main thread.
+void testApplyRedoWhileTemplateReloads()
+{
+    CommandWorld w("dt_prefab_cmd_u3");
+    const std::string tri = (w.root.p / "Models" / "tri.obj").string();
+    writeFile(tri, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    nlohmann::json file = enemyFile(w.root.str(), 10.0f);
+    file["root"]["children"][0]["mesh"] = { {"sourcePath", tri}, {"name", "tri"} };
+    writeFile(w.prefabFile(), file.dump(2));
+    w.lib->request(kEnemyKey);
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    const DonTopo::PrefabTemplate* t = readyTemplate(*w.lib, kEnemyKey);
+    if (!t) { CHECK(false, "template Ready"); return; }
+    uint64_t ids[3] = {};
+    for (uint64_t& id : ids)
+    {
+        DonTopo::GameObject* inst = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+        if (!inst) { CHECK(false, "instance"); return; }
+        id = inst->id;
+    }
+    const uint64_t a = ids[0], b = ids[1], c = ids[2];
+    w.sync->sceneLoaded(w.scene.toJson());
+    CHECK(childNamed(w.get(a), "Lamp")->hasMesh(), "the lamp has the prefab's mesh");
+
+    // B drops the lamp's mesh and adds a child; Apply all -> the template no
+    // longer has the mesh (the library drops it).
+    childNamed(w.get(b), "Lamp")->setMesh(nullptr);
+    w.scene.addGameObject("Extra", w.get(b));
+    w.pass();
+    CHECK(hasOverride(w.get(b), "/mesh"), "mesh removal is an override");
+    auto* apply = w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), b, std::vector<DonTopo::PrefabOverride>{}, true));
+    CHECK(apply->succeeded(), "apply succeeded");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    DonTopo::GameObject* copy = childNamed(w.get(c), "Extra");
+    if (!copy) { CHECK(false, "C received the child"); return; }
+    const uint64_t copyId = copy->id;
+    auto rename = [&](const std::string& v) { if (DonTopo::GameObject* n = w.get(copyId)) n->name = v; };
+    rename("Renamed");
+    w.undo.push(std::make_unique<DonTopo::PropertyCommand<std::string>>("Name", "Extra", "Renamed", rename));
+    w.pass();
+
+    const int before = DonTopo::ModelLoader::readFileCountOnThisThread();
+    w.doUndo(); w.doUndo();
+    CHECK(w.lib->find(kEnemyKey) && w.lib->find(kEnemyKey)->state == DonTopo::PrefabTemplate::State::Loading,
+          "undo reloads the template (its mesh is needed again)");
+    CHECK(childNamed(w.get(a), "Lamp")->hasMesh() && childNamed(w.get(c), "Lamp")->hasMesh(),
+          "undo gives A and C their mesh back");
+    CHECK(!w.get(copyId), "undo removed C's copy");
+    w.doRedo();
+    CHECK(apply->succeeded(), "redo while the template reloads succeeds");
+    CHECK(w.get(copyId) && w.get(copyId)->parent == w.get(c), "redo recreates C's copy with the same id");
+    w.doRedo();
+    CHECK(w.get(copyId) && w.get(copyId)->name == "Renamed", "the later rename lands");
+    CHECK(DonTopo::ModelLoader::readFileCountOnThisThread() - before == 0, "no model file read on the main thread");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    w.pass();
+    CHECK(!childNamed(w.get(a), "Lamp")->hasMesh() && overrideCount(w.get(b)) == 0 &&
+          hasOverride(w.get(c), "/name") && overrideCount(w.get(c)) == 1, "consistent after the reload");
+    CHECK(idsUnique(w.scene), "ids unique");
+}
+
+// U4: an edit made while unpacked that takes a field back to the prefab value
+// is a revert: the stored override goes, no redundant entry is merged.
+void testUnpackUndoRevertToTemplate()
+{
+    ThreeInstances w("dt_prefab_cmd_u4");
+    if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+    lampLight(w.get(w.b))->setIntensity(5.0f);
+    lampLight(w.get(w.b))->setRange(40.0f);
+    w.pass();
+    w.run(std::make_unique<DonTopo::UnpackPrefabCommand>(w.ctx(), w.b));
+    lampLight(w.get(w.b))->setIntensity(1.0f);   // the prefab's value
+    w.undo.undo();                                // no pass yet: what the undo itself leaves
+    CHECK(!overrideAt(w.get(w.b), "/light/intensity"), "the revert removes the stored override");
+    CHECK(overrideIs(w.get(w.b), "/light/range", 40.0) && overrideCount(w.get(w.b)) == 1, "the rest kept");
+    CHECK(w.intensity(w.b) == 1.0f && w.range(w.b) == 40.0f, "values kept");
+    w.pass();
+    CHECK(overrideCount(w.get(w.b)) == 1 && w.synced(w.b), "stable after a pass");
+}
+
 int main()
 {
+    testApplySeedsConfiguredMeshes();
+    testApplyRefusedWhileMeshPending();
+    testApplyRedoWhileTemplateReloads();
+    testUnpackUndoRevertToTemplate();
     testApplyUndoKeptLeavesSceneAsApplied();
     testUndoKeepsCommandlessEdits();
     testApplyRedoReusesPropagatedIds();

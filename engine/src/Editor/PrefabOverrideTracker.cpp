@@ -114,6 +114,59 @@ namespace DonTopo
         }
     }
 
+    bool prefabEditIsRevert(const nlohmann::json& templateNode, const nlohmann::json& liveNode,
+                            const PrefabOverride& edit, bool isRoot)
+    {
+        // Removing something the template does not have either (a component
+        // the instance itself had added): back to the template there.
+        if (edit.value.is_null() && !templateHas(templateNode, edit.path)) return true;
+        const std::vector<PrefabOverride> vsTemplate = diffPrefabNode(edit.node, templateNode, liveNode, isRoot);
+        return equalsTemplateAt(templateNode, edit, vsTemplate);
+    }
+
+    nlohmann::json seedConfiguredMeshes(const nlohmann::json& tmpl, const nlohmann::json& configuredFor,
+                                        const std::unordered_map<std::string, std::shared_ptr<const Mesh>>& configured,
+                                        const std::vector<PrefabOverride>& instanceOverrides)
+    {
+        std::unordered_set<uint64_t> meshOverridden;
+        for (const PrefabOverride& ov : instanceOverrides)
+            if (touchesMeshIdentity(ov.path)) meshOverridden.insert(ov.node);
+        // The "mesh" of each node of the template the meshes were configured for.
+        const bool sameTemplate = &tmpl == &configuredFor;
+        std::unordered_map<uint64_t, const nlohmann::json*> configuredMesh;
+        if (!sameTemplate)
+        {
+            std::function<void(const nlohmann::json&)> index = [&](const nlohmann::json& n) {
+                if (const uint64_t id = localIdOf(n, "id"); id != 0)
+                    if (const auto m = n.find("mesh"); m != n.end()) configuredMesh.emplace(id, &*m);
+                if (const auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                    for (const auto& c : *kids) if (c.is_object()) index(c);
+            };
+            index(configuredFor);
+        }
+        nlohmann::json tree = tmpl;
+        std::function<void(nlohmann::json&)> seed = [&](nlohmann::json& n) {
+            const uint64_t local = localIdOf(n, "id");
+            if (const auto mesh = n.find("mesh"); local != 0 && mesh != n.end() && mesh->is_object() &&
+                                                  !meshOverridden.count(local))
+            {
+                const auto src = mesh->find("sourcePath");
+                const std::string ref = prefabNodeMeshRef(local);
+                bool sameMesh = sameTemplate;
+                if (!sameMesh)
+                    if (const auto c = configuredMesh.find(local); c != configuredMesh.end())
+                        sameMesh = *c->second == *mesh;
+                if (sameMesh && src != mesh->end() && src->is_string() && !src->get<std::string>().empty() &&
+                    configured.count(ref))
+                    (*mesh)["memRef"] = ref;
+            }
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (auto& c : *kids) if (c.is_object()) seed(c);
+        };
+        seed(tree);
+        return tree;
+    }
+
     bool prefabValuesEqual(const nlohmann::json& a, const nlohmann::json& b)
     {
         // A tolerance only where a float is involved: a value that went through a
@@ -221,27 +274,20 @@ namespace DonTopo
             if (local == 0) return;
             if (const auto it = before.find(local); it != before.end())
             {
-                std::vector<PrefabOverride> vsTemplate;
                 const auto t = tmpl.find(local);
-                if (t != tmpl.end()) vsTemplate = diffPrefabNode(local, *t->second, n, isRoot);
                 for (PrefabOverride& e : diffPrefabNode(local, *it->second, n, isRoot))
                 {
                     // The mesh landing from the async loader is not an edit.
                     if (meshPath(e.path) && inFlight(local)) continue;
-                    // Removing something the template does not have either (a
-                    // component the instance itself had added): the instance is
-                    // back to the template there, so the stored add-override goes;
-                    // folding a null over it would leave an orphan removal that
-                    // the rebuild reports as "no longer in the prefab".
-                    if (e.value.is_null() && t != tmpl.end() && !templateHas(*t->second, e.path))
-                    {
+                    // Back to the template's value, or removing something the
+                    // template does not have either (a component the instance
+                    // itself had added): the stored override goes; folding a
+                    // null over it would leave an orphan removal that the
+                    // rebuild reports as "no longer in the prefab".
+                    if (t != tmpl.end() && prefabEditIsRevert(*t->second, n, e, isRoot))
                         reverts.emplace_back(local, e.path);
-                        continue;
-                    }
-                    const bool differsFromTemplate =
-                        t == tmpl.end() || !equalsTemplateAt(*t->second, e, vsTemplate);
-                    if (differsFromTemplate) edits.push_back(std::move(e));
-                    else                     reverts.emplace_back(local, e.path);
+                    else
+                        edits.push_back(std::move(e));
                 }
             }
             if (const auto kids = n.find("children"); kids != n.end() && kids->is_array())
@@ -515,25 +561,8 @@ namespace DonTopo
         // node reconfigures its animation sources from disk. The material
         // overrides are applied on top by the rebuild, as on a disk load. A node
         // whose mesh identity the instance overrides goes the ordinary way.
-        std::unordered_set<uint64_t> meshOverridden;
-        for (const PrefabOverride& ov : instanceRoot->prefabLink->overrides)
-            if (touchesMeshIdentity(ov.path)) meshOverridden.insert(ov.node);
-        nlohmann::json tree = t.memoryRoot;
-        std::function<void(nlohmann::json&)> seed = [&](nlohmann::json& n) {
-            const uint64_t local = localIdOf(n, "id");
-            if (const auto mesh = n.find("mesh"); local != 0 && mesh != n.end() && mesh->is_object() &&
-                                                  !meshOverridden.count(local))
-            {
-                const auto src = mesh->find("sourcePath");
-                const std::string ref = prefabNodeMeshRef(local);
-                if (src != mesh->end() && src->is_string() && !src->get<std::string>().empty() &&
-                    t.configuredMeshes.count(ref))
-                    (*mesh)["memRef"] = ref;
-            }
-            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
-                for (auto& c : *kids) if (c.is_object()) seed(c);
-        };
-        seed(tree);
+        const nlohmann::json tree = seedConfiguredMeshes(t.memoryRoot, t.memoryRoot, t.configuredMeshes,
+                                                         instanceRoot->prefabLink->overrides);
         PreloadedMeshCache cache = t.meshes;
         for (const auto& [ref, mesh] : t.configuredMeshes) cache[ref] = mesh;
 

@@ -27,15 +27,22 @@ namespace DonTopo
     // Every Assimp ReadFile of this file goes through here, so readFileCount()
     // sees all of them (tests: "this path touched no model file").
     static std::atomic<int> g_readFileCount{0};
+    static thread_local int t_readFileCount = 0;
     static const aiScene* readFileCounted(Assimp::Importer& importer, const std::string& path, unsigned flags)
     {
         g_readFileCount.fetch_add(1, std::memory_order_relaxed);
+        ++t_readFileCount;
         return importer.ReadFile(path, flags);
     }
 
     int ModelLoader::readFileCount()
     {
         return g_readFileCount.load(std::memory_order_relaxed);
+    }
+
+    int ModelLoader::readFileCountOnThisThread()
+    {
+        return t_readFileCount;
     }
 
     static glm::mat4 aiToGlm(const aiMatrix4x4& m)

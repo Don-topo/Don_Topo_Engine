@@ -108,6 +108,9 @@ namespace DonTopo
             // thread (hasBones, load, loadSkinned, animation clips, previews...).
             // Diagnostic for tests that must prove a path reads no model file.
             static int readFileCount();
+            // The same, only the reads made on the calling thread: lets a test
+            // prove the MAIN thread read nothing while workers may be loading.
+            static int readFileCountOnThisThread();
 
             // Decides static vs skinned by looking at the file, not the caller. An
             // FBX with bones always comes in as SkinnedMesh, even if it brings not

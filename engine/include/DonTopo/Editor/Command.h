@@ -1113,6 +1113,13 @@ private:
     // recordOrphans: remember the overrides each rebuild dropped (execute).
     void rebuildInstances(const std::vector<uint64_t>& instances, const nlohmann::json& tmpl,
                           bool recordNewIds, bool recordOrphans);
+    // True (with lastMessage) while a mesh of an instance of m_key is still on
+    // its way from the async loader: nothing may be rebuilt then.
+    bool refuseWhileMeshPending(const std::vector<uint64_t>& instances);
+    // Every execute after the first one: rebuilds from the bytes the first one
+    // wrote, which needs no Ready template (the library may still be reloading
+    // the previous version restored by the undo).
+    void redo();
 
     uint64_t                    m_rootId;
     std::vector<PrefabOverride> m_which;
@@ -1130,6 +1137,15 @@ private:
     // execute's rebuilds created; a redo creates them with the same ids.
     std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> m_createdIds;
     bool                        m_idsRecorded = false;
+    // Redo: the scene ids the first execute linked, with their new local ids.
+    std::vector<std::pair<uint64_t, uint64_t>> m_toLink;
+    // Taken at the first execute, from the Ready template and the instances:
+    // every rebuild (execute, undo, redo) is seeded with them, so none reads a
+    // model file on the main thread -- not even while the library reloads.
+    nlohmann::json              m_seedRoot;         // the template the configured meshes belong to
+    PreloadedMeshCache          m_seedConfigured;   // PrefabTemplate::configuredMeshes
+    PreloadedMeshCache          m_seedMeshes;       // PrefabTemplate::meshes + the instances' live meshes
+    std::shared_ptr<MaterialAssetCache> m_seedMats;   // PrefabTemplate::mats (MaterialAsset is incomplete here)
 };
 
 // Drops overrides of one instance (which: empty = all) and, with
