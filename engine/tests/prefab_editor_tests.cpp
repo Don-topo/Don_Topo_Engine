@@ -1288,8 +1288,64 @@ void testMaterialEditAfterMeshLandsIsKept()
     CHECK(meshOverride, "as a mesh override");
 }
 
+// S1: settling landed meshes is bounded: nothing in flight = no scene walk at
+// all, and an instance deleted while its mesh was in flight stops being waited
+// for (the undo of Delete restores it without mesh and without request).
+void testSettleLandedMeshesBounded()
+{
+    TempRoot root("dt_prefab_editor_settle");
+    const nlohmann::json file = enemyFile(root.str(), 10.0f);
+    DonTopo::Scene scene;
+    DonTopo::GameObject* inst = makeInstance(scene, memoryRootOf(file, root.str()));
+    if (!inst || !childNamed(inst, "Lamp")) { CHECK(false, "instance"); return; }
+    DonTopo::PrefabOverrideTracker tracker;
+    tracker.setMeshRequestLive([](uint64_t) { return true; });
+
+    CHECK(tracker.settleLandedMeshes(scene) == 0 && tracker.settleScans() == 0,
+          "nothing in flight: no scene walk");
+    childNamed(inst, "Lamp")->pendingMeshJob = 9;   // a live request
+    tracker.captureBaseline(scene, inst);
+    CHECK(tracker.meshInFlightCount() == 1, "one node in flight");
+    tracker.settleLandedMeshes(scene);
+    CHECK(tracker.meshInFlightCount() == 1 && tracker.settleScans() == 1, "still waiting: one walk per call");
+
+    scene.removeGameObject(inst);   // deleted while in flight
+    tracker.settleLandedMeshes(scene);
+    CHECK(tracker.meshInFlightCount() == 0, "a deleted instance is no longer waited for");
+    const int scans = tracker.settleScans();
+    for (int i = 0; i < 10; ++i) tracker.settleLandedMeshes(scene);
+    CHECK(tracker.settleScans() == scans, "and costs no further scene walks");
+}
+
+// S2: removing an instance-ADDED component during the reload window erases the
+// stored add-override instead of folding a null over it (which the rebuild then
+// reported as "component no longer in the prefab").
+void testRemovingAddedComponentDuringReload()
+{
+    ReloadWindow w("dt_prefab_editor_s2");
+    DonTopo::GameObject* inst = w.inst();
+    if (!inst) { CHECK(false, "instance"); return; }
+    auto light = std::make_shared<DonTopo::LightComponent>();
+    light->setIntensity(3.0f);
+    inst->setLight(light);
+    w.sync->frame(true, nullptr);
+    CHECK(hasOverride(inst, "/light"), "the added light is a stored override");
+
+    w.startReload();
+    inst->setLight(nullptr);   // removed again while the template reloads
+    w.sync->frame(true, nullptr);
+    w.fx.log.clear();
+    CHECK(settleSync(*w.sync, *w.lib), "reload settles");
+    inst = w.inst();
+    CHECK(inst && !inst->getLight(), "no light");
+    CHECK(inst && !hasOverride(inst, "/light"), "no override left for it");
+    CHECK(!w.fx.logged("no longer in the prefab") && !w.fx.logged("dropped"), "no misleading warning");
+}
+
 int main()
 {
+    testSettleLandedMeshesBounded();
+    testRemovingAddedComponentDuringReload();
     testRevertDetectionAddedComponentEdit();
     testRevertDetectionReaddedComponent();
     testMaterialEditAfterMeshLandsIsKept();

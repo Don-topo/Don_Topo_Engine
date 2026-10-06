@@ -81,6 +81,9 @@ namespace DonTopo
             // any panel can edit). Cheap when nothing is in flight. Returns how
             // many nodes it settled.
             int settleLandedMeshes(Scene& scene);
+            // Tests: linked nodes still waited for, and scene walks settleLandedMeshes made.
+            int meshInFlightCount() const;
+            int settleScans() const { return m_settleScans; }
             // Folds live-vs-baseline differences into instanceRoot's overrides (a
             // difference on a path already overridden replaces that value). No-op
             // without a link or a baseline. Returns how many entries it wrote.
@@ -112,6 +115,7 @@ namespace DonTopo
             };
             std::unordered_map<uint64_t, Baseline> m_baseline;
             std::function<bool(uint64_t)> m_meshRequestLive;
+            int m_settleScans = 0;
     };
 
     // Value comparison of the override model: a number that went through a float

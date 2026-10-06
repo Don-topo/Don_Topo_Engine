@@ -70,6 +70,20 @@ namespace DonTopo
         // or a removal (null) of something it has, differs. "/transform/*" is
         // virtual (a decomposition of localTransform): for those, the diff of the
         // live node against the template already says it (vsTemplate).
+        // Whether the template node has anything at path ("/transform/*" always exists).
+        bool templateHas(const nlohmann::json& templateNode, const std::string& path)
+        {
+            if (path.rfind("/transform/", 0) == 0) return true;
+            try
+            {
+                return templateNode.contains(nlohmann::json::json_pointer(path));
+            }
+            catch (const std::exception&)
+            {
+                return true;   // not a pointer we can resolve: assume it exists (keep the removal)
+            }
+        }
+
         bool equalsTemplateAt(const nlohmann::json& templateNode, const PrefabOverride& edit,
                               const std::vector<PrefabOverride>& vsTemplate)
         {
@@ -214,6 +228,16 @@ namespace DonTopo
                 {
                     // The mesh landing from the async loader is not an edit.
                     if (meshPath(e.path) && inFlight(local)) continue;
+                    // Removing something the template does not have either (a
+                    // component the instance itself had added): the instance is
+                    // back to the template there, so the stored add-override goes;
+                    // folding a null over it would leave an orphan removal that
+                    // the rebuild reports as "no longer in the prefab".
+                    if (e.value.is_null() && t != tmpl.end() && !templateHas(*t->second, e.path))
+                    {
+                        reverts.emplace_back(local, e.path);
+                        continue;
+                    }
                     const bool differsFromTemplate =
                         t == tmpl.end() || !equalsTemplateAt(*t->second, e, vsTemplate);
                     if (differsFromTemplate) edits.push_back(std::move(e));
@@ -238,14 +262,44 @@ namespace DonTopo
         return static_cast<int>(edits.size() + reverts.size());
     }
 
+    int PrefabOverrideTracker::meshInFlightCount() const
+    {
+        int n = 0;
+        for (const auto& [id, b] : m_baseline) n += static_cast<int>(b.meshInFlight.size());
+        return n;
+    }
+
     int PrefabOverrideTracker::settleLandedMeshes(Scene& scene)
     {
         int settled = 0;
+        // Nothing waited for (the steady state): no scene walk at all.
+        bool anyInFlight = false;
+        for (const auto& [rootId, b] : m_baseline)
+            if (!b.meshInFlight.empty()) { anyInFlight = true; break; }
+        if (!anyInFlight) return 0;
+
+        // ONE walk for every waiting instance, not a findById (a full walk) each.
+        ++m_settleScans;
+        std::unordered_map<uint64_t, GameObject*> rootsById;
+        for (const auto& [rootId, b] : m_baseline)
+            if (!b.meshInFlight.empty()) rootsById.emplace(rootId, nullptr);
+        scene.traverse([&](GameObject* n) {
+            if (auto it = rootsById.find(n->id); it != rootsById.end()) it->second = n;
+        });
+
         for (auto& [rootId, b] : m_baseline)
         {
             if (b.meshInFlight.empty()) continue;
-            GameObject* root = scene.findById(rootId);
-            if (!root) continue;   // deleted: its baseline goes with the next clear/forget
+            GameObject* root = rootsById[rootId];
+            if (!root)
+            {
+                // Deleted while its mesh was in flight. The undo of Delete brings
+                // it back without a mesh and without a request: nothing to wait
+                // for, and waiting would cost a scene walk every frame.
+                settled += static_cast<int>(b.meshInFlight.size());
+                b.meshInFlight.clear();
+                continue;
+            }
             std::unordered_map<uint64_t, GameObject*> byLocal;
             root->traverse([&](GameObject* n) { if (n->prefabNode != 0) byLocal.emplace(n->prefabNode, n); });
 
