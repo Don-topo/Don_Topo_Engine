@@ -677,15 +677,11 @@ void PropertiesPanel::prefabFieldMenu(EditorContext& ctx, const std::string& pop
             break;
         }
         case PrefabFieldTarget::Kind::AddedScript:
-        {
-            // Scripts are stored as one list per object: an added script can
-            // only travel with every other script change of this object.
-            const std::string obj = m_prefabView.root ? prefabNodeObjectName(node) : std::string();
-            which       = { PrefabOverride{ node, "/scripts", nullptr } };
-            applyLabel  = "Apply all script changes of '" + obj + "' to " + prefab;
-            revertLabel = "Revert all script changes of '" + obj + "' (removes added script '" + target.name + "')";
+            // The script the instance added, as a whole (its own entry).
+            which       = { target.wide };
+            applyLabel  = "Apply added script '" + target.name + "' to " + prefab;
+            revertLabel = "Remove added script '" + target.name + "'";
             break;
-        }
         case PrefabFieldTarget::Kind::None:
             applyLabel  = "Apply to " + prefab;
             revertLabel = "Revert";
@@ -703,14 +699,6 @@ void PropertiesPanel::prefabFieldMenu(EditorContext& ctx, const std::string& pop
             return std::make_unique<RevertPrefabOverridesCommand>(pc, rootId, which, false);
         });
     ImGui::EndPopup();
-}
-
-std::string PropertiesPanel::prefabNodeObjectName(uint64_t node) const
-{
-    std::string name;
-    if (m_prefabView.root)
-        m_prefabView.root->traverse([&](GameObject* n) { if (name.empty() && n->prefabNode == node) name = n->name; });
-    return name;
 }
 
 bool PropertiesPanel::prefabSectionHeader(EditorContext& ctx, const char* label, int flags,
@@ -9158,15 +9146,16 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
 
     ScriptComponent* toRemove = nullptr;
 
+    // Prefab override paths of the scripts: keyed by name + occurrence
+    // ("/scripts/Mover#0/overrides/<prop>", spec §3.2), never by position.
+    std::vector<std::string> scriptNames;
+    for (const auto& s : ctx.selected->getScripts()) scriptNames.push_back(s->scriptName);
     size_t scriptIndex = 0;
     for (auto& compPtr : ctx.selected->getScripts())
     {
         ScriptComponent* comp = compPtr.get();
         ImGui::PushID(comp);
-        // Prefab override paths of this script: "/scripts/<i>/overrides/<prop>"
-        // (spec §5.4). An edit stores the whole "/scripts" array, so a prop is
-        // bold only where its value differs from the template's (isOverridden).
-        const std::string scriptPath = "/scripts/" + std::to_string(scriptIndex++);
+        const std::string scriptPath = prefabScriptPath(scriptNames, scriptIndex++);
 
         // TreeNodeEx (narrow label) not CollapsingHeader (full-width frame): the header would
         // overlap the "x" button and eat its click. Same pattern as collider sections.

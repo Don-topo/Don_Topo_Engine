@@ -220,9 +220,10 @@ namespace DonTopo
     // Whether instRoot's link stores an override of node prefabNode at
     // pathPrefix or inside it, matched by JSON-pointer segments ("/light"
     // covers "/light/range", "/nam" does not cover "/name"). An override on an
-    // ANCESTOR path covers it too (a script edit stores the whole "/scripts"
-    // array): with templateNode (that node's json in the template, memory form)
-    // it counts only when the value at pathPrefix differs from the template's;
+    // ANCESTOR path covers it too (an added component or script, a whole-value
+    // array like a color): with templateNode (that node's json in the
+    // template, memory form) it counts only when the value at pathPrefix
+    // differs from the template's (prefabValueAt: keyed segments resolved);
     // without it, always.
     bool isOverridden(const GameObject& instRoot, uint64_t prefabNode, std::string_view pathPrefix,
                       const nlohmann::json* templateNode = nullptr);
@@ -230,22 +231,19 @@ namespace DonTopo
     std::vector<PrefabOverride> overridesUnder(const GameObject& instRoot, uint64_t prefabNode,
                                                std::string_view pathPrefix);
 
-    // An instance path of node `node` as the same place in the TEMPLATE node.
-    // Identical except under "/scripts/<i>": scripts are matched by name and
-    // occurrence (the k-th "Mover" of the instance is the k-th "Mover" of the
-    // template), read from the stored {node, "/scripts"} override -- so an
-    // added or removed script earlier in the array does not shift the others.
-    // nullopt when that script has no counterpart in the template (added).
-    std::optional<std::string> prefabTemplatePath(const std::vector<PrefabOverride>& stored, uint64_t node,
-                                                  std::string_view instPath, const nlohmann::json& templateNode);
+    // The override path of the index-th script of a node whose scripts are
+    // named scriptNames, in order: "/scripts/<name>#<k>" (keyed by name and
+    // occurrence, see PrefabOverrides.h). What the Properties panel bolds and
+    // applies for that script.
+    std::string prefabScriptPath(const std::vector<std::string>& scriptNames, size_t index);
 
     // What a right click on a field or header of node `node` can act on.
-    //  Field: the label's own path (the commands narrow a covering override,
-    //         like the whole "/scripts" array, to it).
+    //  Field: the label's own path (the commands narrow a covering
+    //         whole-value override, like a color array, to it).
     //  AddedComponent / AddedScript: the label lies inside something the
     //         prefab does not have, so only the whole `wide` override (the
-    //         added component, or every script change of the node) can be
-    //         applied or removed; `name` is what the menu calls it.
+    //         added component, or the added script element "/scripts/<key>")
+    //         can be applied or removed; `name` is what the menu calls it.
     struct PrefabFieldTarget
     {
         enum class Kind { None, Field, AddedComponent, AddedScript };
@@ -260,17 +258,18 @@ namespace DonTopo
     // The overrides of `stored` a `which` selection (Apply/Revert) acts on,
     // all entries for one node at a time in the result:
     //  - every stored entry at or inside a wanted path, as stored;
-    //  - when none is, but a stored entry COVERS the wanted path (the whole
-    //    "/scripts" array): a narrow override {node, template path, the value
-    //    at that sub-path inside the covering entry (null when absent)} --
-    //    `narrowed` true. Skipped when the path has no template counterpart.
+    //  - when none is, but a stored entry COVERS the wanted path (a whole-value
+    //    array): a narrow override {node, path, the value at that sub-path
+    //    inside the covering entry (null when absent)} -- `narrowed` true.
+    //    Skipped when the template lacks what the path lives in (an added
+    //    component or script: only the whole entry can go).
     // templateRoot: the template (memory form, prefab-local "id"s); null = no
     // narrowing (only stored entries are selected).
     struct PrefabSelection
     {
         PrefabOverride override;
         bool           narrowed = false;
-        std::string    instancePath;   // narrowed: the path inside the instance
+        std::string    instancePath;   // narrowed: the wanted path it was narrowed to
     };
     std::vector<PrefabSelection> resolvePrefabSelection(const std::vector<PrefabOverride>& stored,
                                                         const std::vector<PrefabOverride>& which,
@@ -289,6 +288,13 @@ namespace DonTopo
     PrefabRevertPlan revertPrefabSelection(std::vector<PrefabOverride>& stored,
                                            const std::vector<PrefabOverride>& which,
                                            const nlohmann::json& templateRoot);
+    // The undo of such a Revert, for its rewritten entries: an entry goes back
+    // to its value before the Revert only while it still holds what the Revert
+    // wrote (prefabValuesEqual: float noise of a recompute is not an edit).
+    // Changed since, or gone (the user set the live value back to the
+    // template's, so the recompute dropped it): the newer state wins.
+    void restoreRewrittenOverrides(std::vector<PrefabOverride>& list,
+                                   const std::vector<std::pair<PrefabOverride, PrefabOverride>>& rewritten);
 
     // dir / "<name>.prefab", or "<name> 1.prefab", "<name> 2.prefab"... the
     // first that does not exist. Characters a file name cannot hold become

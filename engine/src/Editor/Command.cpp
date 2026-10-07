@@ -1867,14 +1867,9 @@ void RevertPrefabOverridesCommand::doUndo()
     recordPendingEdits(m_rootId);
     root = m_ctx.scene.findById(m_rootId);
     // A rewritten entry goes back to its value before the Revert only while it
-    // still holds what the Revert wrote (a newer edit wins); gone, it comes back.
-    for (const auto& [before, after] : m_rewritten)
-    {
-        auto& list = root->prefabLink->overrides;
-        auto it = std::find_if(list.begin(), list.end(), [&](const PrefabOverride& o) { return sameTarget(o, before); });
-        if (it == list.end())                 list.push_back(before);
-        else if (it->value == after.value)    it->value = before.value;
-    }
+    // still holds what the Revert wrote; a newer edit wins, also one that set
+    // the value back to the template's (the entry is gone then).
+    restoreRewrittenOverrides(root->prefabLink->overrides, m_rewritten);
     addMissing(root->prefabLink->overrides, m_reverted);
     // In the order they were deleted, so each index is the one it had.
     for (DeletedChild& d : m_deleted)

@@ -1873,10 +1873,234 @@ void testInstantiateLuaOverloads()
           "Scene.Instantiate still clones");
     lua.sm.setPrefabLibrary(nullptr);
 }
+
+// ---- Keyed arrays (Z1): scripts and materials recorded per element ----
+
+// ov {} (null in an initializer list) = no overrides: an empty object, as nodeToJson writes it.
+nlohmann::json script(const std::string& name, const nlohmann::json& ov)
+{
+    return { {"name", name}, {"overrides", ov.is_null() ? nlohmann::json::object() : ov} };
+}
+
+nlohmann::json nodeWith(const nlohmann::json& scripts, const nlohmann::json& materials = nullptr)
+{
+    nlohmann::json n = { {"id", 2}, {"name", "Lamp"}, {"children", nlohmann::json::array()} };
+    if (!scripts.is_null()) n["scripts"] = scripts;
+    if (!materials.is_null())
+    {
+        n["mesh"] = { {"sourcePath", "m.fbx"}, {"name", "m"} };
+        if (!materials.empty()) n["mesh"]["materials"] = materials;
+    }
+    return n;
+}
+
+bool hasOv(const std::vector<DonTopo::PrefabOverride>& ovs, const std::string& path, const nlohmann::json& value)
+{
+    for (const auto& o : ovs) if (o.path == path && o.value == value) return true;
+    return false;
+}
+
+void dumpOvs(const std::vector<DonTopo::PrefabOverride>& ovs)
+{
+    for (const auto& o : ovs) std::fprintf(stderr, "    %s = %s\n", o.path.c_str(), o.value.dump().c_str());
+}
+
+void testKeyedArrayKeysAndValueAt()
+{
+    using DonTopo::prefabArrayElementKey;
+    const nlohmann::json s = nlohmann::json::array({ script("Mover", {}), script("Spin", {}), script("Mover", {}) });
+    CHECK(DonTopo::isKeyedArrayPath("/scripts") && DonTopo::isKeyedArrayPath("/mesh/materials"), "keyed roots");
+    CHECK(!DonTopo::isKeyedArrayPath("/mesh/animationSources") && !DonTopo::isKeyedArrayPath("/light/color"),
+          "other arrays are whole");
+    CHECK(prefabArrayElementKey("/scripts", s, 0) == "Mover#0" && prefabArrayElementKey("/scripts", s, 1) == "Spin#0" &&
+          prefabArrayElementKey("/scripts", s, 2) == "Mover#1", "scripts: name + occurrence");
+    const nlohmann::json m = nlohmann::json::array({ { {"index", 3}, {"metallic", 0.5} } });
+    CHECK(prefabArrayElementKey("/mesh/materials", m, 0) == "3", "materials: the submesh index");
+
+    const nlohmann::json n = nodeWith(nlohmann::json::array({ script("Mover", { {"speed", 3} }), script("Spin", {}) }),
+                                      m);
+    auto v = DonTopo::prefabValueAt(n, "/scripts/Mover#0/overrides/speed");
+    CHECK(v && *v == 3, "a script property by key");
+    CHECK(!DonTopo::prefabValueAt(n, "/scripts/Mover#1"), "a missing occurrence");
+    v = DonTopo::prefabValueAt(n, "/scripts/#order");
+    CHECK(v && *v == nlohmann::json::array({ "Mover#0", "Spin#0" }), "#order: the keys in order");
+    v = DonTopo::prefabValueAt(n, "/mesh/materials/3/metallic");
+    CHECK(v && *v == 0.5, "a material field by submesh index");
+    CHECK(!DonTopo::prefabValueAt(n, "/mesh/materials/0/metallic"), "a slot with no entry has no field");
+    v = DonTopo::prefabValueAt(nodeWith(nullptr), "/scripts");
+    CHECK(v && v->is_array() && v->empty(), "an absent keyed array reads as []");
+    v = DonTopo::prefabValueAt(n, "/name");
+    CHECK(v && *v == "Lamp", "plain paths as before");
+}
+
+// Z1 at the model level: one element / one field per entry.
+void testKeyedDiff()
+{
+    const nlohmann::json tmpl = nodeWith(nlohmann::json::array({
+        script("Mover", { {"speed", 3}, {"label", "a"} }), script("Spin", { {"rate", 1} }) }));
+
+    // One property changed: one entry, not the whole array.
+    auto d = DonTopo::diffPrefabNode(2, tmpl, nodeWith(nlohmann::json::array({
+        script("Mover", { {"speed", 3}, {"label", "b"} }), script("Spin", { {"rate", 1} }) })), false);
+    CHECK(d.size() == 1 && hasOv(d, "/scripts/Mover#0/overrides/label", "b"), "a script property: one leaf entry");
+    if (d.size() != 1) dumpOvs(d);
+
+    // A property back to its default (absent): a removal of that property.
+    d = DonTopo::diffPrefabNode(2, tmpl, nodeWith(nlohmann::json::array({
+        script("Mover", { {"speed", 3} }), script("Spin", { {"rate", 1} }) })), false);
+    CHECK(d.size() == 1 && hasOv(d, "/scripts/Mover#0/overrides/label", nullptr), "a property removed");
+
+    // Added script in front, template script removed: no positional noise.
+    d = DonTopo::diffPrefabNode(2, tmpl, nodeWith(nlohmann::json::array({
+        script("Extra", { {"x", 1} }), script("Mover", { {"speed", 3}, {"label", "a"} }) })), false);
+    CHECK(hasOv(d, "/scripts/Extra#0", script("Extra", { {"x", 1} })), "an added script: the whole element");
+    CHECK(hasOv(d, "/scripts/Spin#0", nullptr), "a removed template script: null");
+    CHECK(hasOv(d, "/scripts/#order", nlohmann::json::array({ "Extra#0", "Mover#0" })),
+          "added in front: the order is recorded");
+    CHECK(d.size() == 3, "and nothing else");
+    if (d.size() != 3) dumpOvs(d);
+
+    // Added at the end: the natural order, no #order.
+    d = DonTopo::diffPrefabNode(2, tmpl, nodeWith(nlohmann::json::array({
+        script("Mover", { {"speed", 3}, {"label", "a"} }), script("Spin", { {"rate", 1} }), script("Extra", {}) })), false);
+    CHECK(d.size() == 1 && hasOv(d, "/scripts/Extra#0", script("Extra", {})), "appended: no order entry");
+
+    // Reordered only.
+    d = DonTopo::diffPrefabNode(2, tmpl, nodeWith(nlohmann::json::array({
+        script("Spin", { {"rate", 1} }), script("Mover", { {"speed", 3}, {"label", "a"} }) })), false);
+    CHECK(d.size() == 1 && hasOv(d, "/scripts/#order", nlohmann::json::array({ "Spin#0", "Mover#0" })),
+          "a reorder is one #order entry");
+
+    // No scripts on either side, or the same: nothing.
+    CHECK(DonTopo::diffPrefabNode(2, tmpl, tmpl, false).empty(), "equal: nothing");
+    CHECK(DonTopo::diffPrefabNode(2, nodeWith(nullptr), nodeWith(nullptr), false).empty(), "none: nothing");
+    // All scripts removed (the key absent on the instance).
+    d = DonTopo::diffPrefabNode(2, tmpl, nodeWith(nullptr), false);
+    CHECK(d.size() == 2 && hasOv(d, "/scripts/Mover#0", nullptr) && hasOv(d, "/scripts/Spin#0", nullptr),
+          "no scripts key: each template script removed");
+
+    // Materials: sparse, keyed by submesh index, field-level.
+    const nlohmann::json mt = nodeWith(nullptr, nlohmann::json::array({ { {"index", 0}, {"metallic", 0.5} } }));
+    d = DonTopo::diffPrefabNode(2, mt, nodeWith(nullptr, nlohmann::json::array({
+        { {"index", 0}, {"metallic", 0.5}, {"roughness", 0.25} }, { {"index", 1}, {"roughness", 0.75} } })), false);
+    CHECK(d.size() == 2 && hasOv(d, "/mesh/materials/0/roughness", 0.25) && hasOv(d, "/mesh/materials/1/roughness", 0.75),
+          "materials: one entry per field, keyed by slot (a new slot needs no whole entry)");
+    if (d.size() != 2) dumpOvs(d);
+    d = DonTopo::diffPrefabNode(2, mt, nodeWith(nullptr, nlohmann::json::array()), false);
+    CHECK(d.size() == 1 && hasOv(d, "/mesh/materials/0/metallic", nullptr), "no materials key: the field removed");
+    // Order of the sparse entries is irrelevant.
+    const nlohmann::json two = nodeWith(nullptr, nlohmann::json::array({ { {"index", 0}, {"metallic", 0.5} },
+                                                                          { {"index", 1}, {"roughness", 0.5} } }));
+    const nlohmann::json swapped = nodeWith(nullptr, nlohmann::json::array({ { {"index", 1}, {"roughness", 0.5} },
+                                                                              { {"index", 0}, {"metallic", 0.5} } }));
+    CHECK(DonTopo::diffPrefabNode(2, two, swapped, false).empty(), "materials in another order: nothing");
+}
+
+// Applying keyed entries reproduces the instance; per-element entries leave
+// every other element following the template.
+void testKeyedApply()
+{
+    auto root = [](const nlohmann::json& node) {
+        nlohmann::json r = { {"id", 1}, {"name", "Enemy"}, {"children", nlohmann::json::array({ node })} };
+        return r;
+    };
+    const nlohmann::json tmplNode = nodeWith(nlohmann::json::array({
+        script("Mover", { {"speed", 3}, {"label", "a"} }), script("Spin", { {"rate", 1} }) }),
+        nlohmann::json::array({ { {"index", 0}, {"metallic", 0.5} } }));
+    const std::vector<nlohmann::json> instances = {
+        nodeWith(nlohmann::json::array({ script("Mover", { {"speed", 3}, {"label", "b"} }), script("Spin", { {"rate", 1} }) }),
+                 nlohmann::json::array({ { {"index", 0}, {"metallic", 0.5} }, { {"index", 1}, {"roughness", 0.25} } })),
+        nodeWith(nlohmann::json::array({ script("Extra", { {"x", 1} }), script("Mover", { {"speed", 3}, {"label", "a"} }) }),
+                 nlohmann::json::array()),
+        nodeWith(nlohmann::json::array({ script("Spin", { {"rate", 2} }), script("Mover", {}), script("Mover", { {"q", 1} }) }),
+                 nlohmann::json::array({ { {"index", 0}, {"metallic", 0.75} } })),
+        nodeWith(nullptr, nlohmann::json::array({ { {"index", 0}, {"metallic", 0.5} } })),
+    };
+    for (size_t k = 0; k < instances.size(); ++k)
+    {
+        const auto d = DonTopo::diffPrefabNode(2, tmplNode, instances[k], false);
+        nlohmann::json tree = root(tmplNode);
+        std::vector<std::string> warnings;
+        const auto applied = DonTopo::applyPrefabOverrides(tree, d, &warnings);
+        CHECK(applied.size() == d.size() && warnings.empty(), "every entry applies");
+        CHECK(DonTopo::diffPrefabNode(2, tree["children"][0], instances[k], false).empty(),
+              "the patched template equals the instance (round trip)");
+        if (!DonTopo::diffPrefabNode(2, tree["children"][0], instances[k], false).empty())
+            std::fprintf(stderr, "  instance %zu: %s\n", k, tree["children"][0].dump().c_str());
+    }
+
+    // Review Focus 2 for arrays: the template changes speed; an instance that
+    // overrides only the label gets the new speed.
+    nlohmann::json newTmpl = tmplNode;
+    newTmpl["scripts"][0]["overrides"]["speed"] = 9;
+    newTmpl["mesh"]["materials"] = nlohmann::json::array({ { {"index", 0}, {"metallic", 0.5} },
+                                                           { {"index", 1}, {"roughness", 0.9} } });
+    const auto labelOnly = DonTopo::diffPrefabNode(2, tmplNode, instances[0], false);
+    nlohmann::json tree = root(newTmpl);
+    DonTopo::applyPrefabOverrides(tree, labelOnly, nullptr);
+    const nlohmann::json& mover = tree["children"][0]["scripts"][0];
+    CHECK(mover["overrides"]["speed"] == 9 && mover["overrides"]["label"] == "b", "new speed, own label");
+
+    // Keys are resolved against the template array BEFORE the entries: the
+    // removal of Mover#0 does not turn Mover#1 into Mover#0.
+    nlohmann::json twoMovers = root(nodeWith(nlohmann::json::array({ script("Mover", { {"n", 0} }),
+                                                                     script("Mover", { {"n", 1} }) })));
+    DonTopo::applyPrefabOverrides(twoMovers, { {2, "/scripts/Mover#0", nullptr}, {2, "/scripts/Mover#1/overrides/n", 7} },
+                                  nullptr);
+    CHECK(twoMovers["children"][0]["scripts"].size() == 1 &&
+          twoMovers["children"][0]["scripts"][0]["overrides"]["n"] == 7, "keys do not shift mid-way");
+
+    // Orphans: a property of a script the prefab no longer has.
+    nlohmann::json t2 = root(tmplNode);
+    std::vector<std::string> w;
+    const auto a = DonTopo::applyPrefabOverrides(t2, { {2, "/scripts/Gone#0/overrides/x", 1} }, &w);
+    CHECK(a.empty() && w.size() == 1, "an orphan script property is dropped with a warning");
+    // A material field on a node without a mesh: orphan too.
+    nlohmann::json t3 = root(nodeWith(nlohmann::json::array()));
+    w.clear();
+    CHECK(DonTopo::applyPrefabOverrides(t3, { {2, "/mesh/materials/0/metallic", 0.1} }, &w).empty() && w.size() == 1,
+          "a material field without a mesh is an orphan");
+    // Removing the last field of a slot removes the slot, and the empty array
+    // is not written (as nodeToJson).
+    nlohmann::json t4 = root(tmplNode);
+    DonTopo::applyPrefabOverrides(t4, { {2, "/mesh/materials/0/metallic", nullptr} }, nullptr);
+    CHECK(!t4["children"][0]["mesh"].contains("materials"), "no slot left: no materials key");
+}
+
+// Backward compatibility: a whole-array override of the old format applies
+// as before, and comes back converted to per-element entries.
+void testLegacyWholeArrayOverride()
+{
+    nlohmann::json tmplNode = nodeWith(nlohmann::json::array({
+        script("Mover", { {"speed", 3}, {"label", "a"} }), script("Spin", { {"rate", 1} }) }),
+        nlohmann::json::array({ { {"index", 0}, {"metallic", 0.5} } }));
+    nlohmann::json tree = { {"id", 1}, {"name", "Enemy"}, {"children", nlohmann::json::array({ tmplNode })} };
+    const nlohmann::json legacyScripts = nlohmann::json::array({ script("Mover", { {"speed", 9}, {"label", "a"} }),
+                                                                 script("Spin", { {"rate", 1} }) });
+    const nlohmann::json legacyMats = nlohmann::json::array({ { {"index", 0}, {"metallic", 0.5}, {"roughness", 0.2} } });
+    std::vector<std::string> w;
+    const auto applied = DonTopo::applyPrefabOverrides(tree, { {2, "/scripts", legacyScripts},
+                                                                {2, "/mesh/materials", legacyMats} }, &w);
+    const nlohmann::json& n = tree["children"][0];
+    CHECK(n["scripts"] == legacyScripts && n["mesh"]["materials"] == legacyMats, "applied exactly as before");
+    CHECK(applied.size() == 2 && hasOv(applied, "/scripts/Mover#0/overrides/speed", 9) &&
+          hasOv(applied, "/mesh/materials/0/roughness", 0.2), "returned as per-element entries");
+    if (applied.size() != 2) dumpOvs(applied);
+    CHECK(w.empty(), "no warning");
+    // Old null = the instance had no scripts at all.
+    nlohmann::json tree2 = { {"id", 1}, {"name", "Enemy"}, {"children", nlohmann::json::array({ tmplNode })} };
+    const auto removed = DonTopo::applyPrefabOverrides(tree2, { {2, "/scripts", nullptr} }, nullptr);
+    CHECK(!tree2["children"][0].contains("scripts") && removed.size() == 2 &&
+          hasOv(removed, "/scripts/Mover#0", nullptr), "an old whole removal becomes per-script removals");
+}
 } // namespace
 
 int main()
 {
+    testKeyedArrayKeysAndValueAt();
+    testKeyedDiff();
+    testKeyedApply();
+    testLegacyWholeArrayOverride();
     testMatCacheAvoidsDisk();
     testResolveStoreInverse();
     testResolveMatchesNodeFromJson();

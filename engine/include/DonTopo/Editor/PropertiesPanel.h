@@ -315,7 +315,6 @@ private:
     // (prefabFieldTarget). popupId unique per label.
     void prefabFieldMenu(EditorContext& ctx, const std::string& popupId,
                          const std::vector<std::string>& paths, const std::string& headerName = {});
-    std::string prefabNodeObjectName(uint64_t node) const;
     // A component header: TreeNodeEx with the same label (same id), drawn bold
     // when the component has an override, with the right-click menu.
     bool prefabSectionHeader(EditorContext& ctx, const char* label, int flags,

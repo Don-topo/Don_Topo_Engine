@@ -72,36 +72,34 @@ namespace DonTopo
         // virtual (a decomposition of localTransform): for those, the diff of the
         // live node against the template already says it (vsTemplate).
         // Whether the template node has anything at path ("/transform/*" always exists).
+        // Virtual paths: not a value stored in the node but derived from it
+        // ("/transform/*" from localTransform, "/scripts/#order" from the order
+        // of the scripts). For those the diff of the live node against the
+        // template (vsTemplate) is what says whether the live state is the template's.
+        bool isVirtualPath(const std::string& path)
+        {
+            static const std::string kOrderSuffix = "/#order";
+            return path.rfind("/transform/", 0) == 0 ||
+                   (path.size() >= kOrderSuffix.size() &&
+                    path.compare(path.size() - kOrderSuffix.size(), kOrderSuffix.size(), kOrderSuffix) == 0);
+        }
+
         bool templateHas(const nlohmann::json& templateNode, const std::string& path)
         {
-            if (path.rfind("/transform/", 0) == 0) return true;
-            try
-            {
-                return templateNode.contains(nlohmann::json::json_pointer(path));
-            }
-            catch (const std::exception&)
-            {
-                return true;   // not a pointer we can resolve: assume it exists (keep the removal)
-            }
+            if (isVirtualPath(path)) return true;
+            // Keyed segments (scripts by name, material slots by index) resolved.
+            return prefabValueAt(templateNode, path).has_value();
         }
 
         bool equalsTemplateAt(const nlohmann::json& templateNode, const PrefabOverride& edit,
                               const std::vector<PrefabOverride>& vsTemplate)
         {
-            if (edit.path.rfind("/transform/", 0) == 0)
+            if (isVirtualPath(edit.path))
                 return std::none_of(vsTemplate.begin(), vsTemplate.end(),
                                     [&](const PrefabOverride& v) { return v.path == edit.path; });
-            try
-            {
-                const nlohmann::json::json_pointer ptr(edit.path);
-                if (!templateNode.contains(ptr)) return false;
-                if (edit.value.is_null()) return false;
-                return prefabValuesEqual(templateNode.at(ptr), edit.value);
-            }
-            catch (const std::exception&)
-            {
-                return false;   // a path that is not a valid pointer here: treat as an edit
-            }
+            const std::optional<nlohmann::json> theirs = prefabValueAt(templateNode, edit.path);
+            if (!theirs || edit.value.is_null()) return false;
+            return prefabValuesEqual(*theirs, edit.value);
         }
 
         // An override that changes WHICH mesh a node has (its file, piece or
@@ -684,16 +682,12 @@ namespace DonTopo
             if (c == Coverage::AtOrInside) return true;
             if (c != Coverage::Ancestor) continue;
             if (!templateNode) return true;
-            // The override holds the whole value at o.path: compare what lies
-            // at pathPrefix inside it with the template's.
-            // The same place in the template: scripts by name + occurrence, so
-            // an added script earlier in the array does not shift the others.
-            // No counterpart (an added script) = bold.
-            const std::optional<std::string> tp =
-                prefabTemplatePath(instRoot.prefabLink->overrides, prefabNode, pathPrefix, *templateNode);
-            if (!tp) return true;
-            const nlohmann::json* mine   = valueAt(o.value, pathPrefix.substr(o.path.size()));
-            const nlohmann::json* theirs = valueAt(*templateNode, *tp);
+            // The override holds the whole value at o.path (an added component
+            // or script, a whole-value array): compare what lies at pathPrefix
+            // inside it with the template's at the same path (keyed segments
+            // resolved: scripts by name + occurrence, material slots by index).
+            const nlohmann::json* mine = valueAt(o.value, pathPrefix.substr(o.path.size()));
+            const std::optional<nlohmann::json> theirs = prefabValueAt(*templateNode, pathPrefix);
             if (!mine && !theirs) continue;
             if (!mine || !theirs || !prefabValuesEqual(*mine, *theirs)) return true;
         }
@@ -712,36 +706,6 @@ namespace DonTopo
 
     namespace
     {
-        const std::string kScripts = "/scripts";
-
-        // "/scripts/<i>..." -> i and the rest ("" or "/overrides/speed").
-        bool splitScriptPath(std::string_view path, size_t& index, std::string_view& rest)
-        {
-            if (path.size() <= kScripts.size() + 1 || path.compare(0, kScripts.size(), kScripts) != 0 ||
-                path[kScripts.size()] != '/')
-                return false;
-            const size_t start = kScripts.size() + 1;
-            size_t end = path.find('/', start);
-            if (end == std::string_view::npos) end = path.size();
-            if (end == start) return false;
-            size_t i = 0;
-            for (size_t k = start; k < end; ++k)
-            {
-                if (path[k] < '0' || path[k] > '9') return false;
-                i = i * 10 + static_cast<size_t>(path[k] - '0');
-            }
-            index = i;
-            rest  = path.substr(end);
-            return true;
-        }
-
-        const PrefabOverride* storedAt(const std::vector<PrefabOverride>& stored, uint64_t node, std::string_view path)
-        {
-            for (const PrefabOverride& o : stored)
-                if (o.node == node && o.path == path) return &o;
-            return nullptr;
-        }
-
         const nlohmann::json* findTemplateNodeById(const nlohmann::json& n, uint64_t local)
         {
             if (!n.is_object()) return nullptr;
@@ -752,32 +716,23 @@ namespace DonTopo
                     if (const nlohmann::json* f = findTemplateNodeById(c, local)) return f;
             return nullptr;
         }
+
+        // "/scripts/<key>": one whole script element (keyed array).
+        bool isScriptElementPath(const std::string& path)
+        {
+            static const std::string kPrefix = "/scripts/";
+            return path.size() > kPrefix.size() && path.compare(0, kPrefix.size(), kPrefix) == 0 &&
+                   path.find('/', kPrefix.size()) == std::string::npos && path != "/scripts/#order";
+        }
     }
 
-    std::optional<std::string> prefabTemplatePath(const std::vector<PrefabOverride>& stored, uint64_t node,
-                                                  std::string_view instPath, const nlohmann::json& templateNode)
+    std::string prefabScriptPath(const std::vector<std::string>& scriptNames, size_t index)
     {
-        size_t index = 0;
-        std::string_view rest;
-        const PrefabOverride* scripts = storedAt(stored, node, kScripts);
-        // Without a stored scripts array the instance's scripts ARE the template's.
-        if (!splitScriptPath(instPath, index, rest) || !scripts || !scripts->value.is_array())
-            return std::string(instPath);
-        const nlohmann::json& inst = scripts->value;
-        if (index >= inst.size() || !inst[index].is_object()) return std::nullopt;
-        const std::string name = inst[index].value("name", std::string());
+        if (index >= scriptNames.size()) return {};
         size_t occurrence = 0;
         for (size_t k = 0; k < index; ++k)
-            if (inst[k].is_object() && inst[k].value("name", std::string()) == name) ++occurrence;
-        const auto tmpl = templateNode.find("scripts");
-        if (tmpl == templateNode.end() || !tmpl->is_array()) return std::nullopt;
-        for (size_t j = 0; j < tmpl->size(); ++j)
-        {
-            const nlohmann::json& s = (*tmpl)[j];
-            if (!s.is_object() || s.value("name", std::string()) != name) continue;
-            if (occurrence-- == 0) return kScripts + "/" + std::to_string(j) + std::string(rest);
-        }
-        return std::nullopt;
+            if (scriptNames[k] == scriptNames[index]) ++occurrence;
+        return (nlohmann::json::json_pointer("/scripts") / prefabScriptKey(scriptNames[index], occurrence)).to_string();
     }
 
     PrefabFieldTarget prefabFieldTarget(const GameObject& instRoot, uint64_t node, std::string_view path,
@@ -792,29 +747,22 @@ namespace DonTopo
             const Coverage c = coverage(o, node, path);
             if (c == Coverage::None) continue;
             any = true;
-            if (!templateNode) continue;
+            if (!templateNode || o.value.is_null() || prefabValueAt(*templateNode, o.path)) continue;
             // At or inside something the template does not have: an added
-            // component (a single-segment path absent in the template)...
-            if (o.path != kScripts && o.path.find('/', 1) == std::string::npos && !o.value.is_null() &&
-                !valueAt(*templateNode, o.path))
+            // script (one keyed element of "/scripts")...
+            if (isScriptElementPath(o.path))
+            {
+                out.kind = PrefabFieldTarget::Kind::AddedScript;
+                out.wide = o;
+                out.name = o.value.is_object() ? o.value.value("name", std::string()) : std::string();
+                return out;
+            }
+            // ...or an added component (a single-segment path).
+            if (o.path.find('/', 1) == std::string::npos)
             {
                 out.kind = PrefabFieldTarget::Kind::AddedComponent;
                 out.wide = o;
                 out.name = o.path.substr(1);
-                return out;
-            }
-        }
-        // ...or an added script.
-        size_t index = 0;
-        std::string_view rest;
-        if (templateNode && splitScriptPath(path, index, rest) && !prefabTemplatePath(stored, node, path, *templateNode))
-        {
-            if (const PrefabOverride* scripts = storedAt(stored, node, kScripts))
-            {
-                out.kind = PrefabFieldTarget::Kind::AddedScript;
-                out.wide = *scripts;
-                out.name = scripts->value.is_array() && index < scripts->value.size() && scripts->value[index].is_object()
-                    ? scripts->value[index].value("name", std::string()) : std::string();
                 return out;
             }
         }
@@ -842,16 +790,19 @@ namespace DonTopo
                     if (!has(o.node, o.path)) out.push_back({ o, false, {} });
                 }
             if (found || !templateRoot) continue;
-            // A covering entry (the whole "/scripts" array): narrowed to w.path.
+            // A covering entry (a whole-value array like a color or the mesh's
+            // animation sources): narrowed to w.path -- only where the template
+            // has what w.path lives in (inside an added component or script
+            // there is nothing to narrow into).
             for (const PrefabOverride& o : stored)
             {
                 if (coverage(o, w.node, w.path) != Coverage::Ancestor) continue;
                 const nlohmann::json* tmplNode = findTemplateNodeById(*templateRoot, w.node);
-                if (!tmplNode) break;
-                const std::optional<std::string> tp = prefabTemplatePath(stored, w.node, w.path, *tmplNode);
-                if (!tp || has(w.node, *tp)) break;
+                if (!tmplNode || has(w.node, w.path)) break;
+                const size_t slash = w.path.rfind('/');
+                if (slash != std::string::npos && slash > 0 && !prefabValueAt(*tmplNode, w.path.substr(0, slash))) break;
                 const nlohmann::json* v = valueAt(o.value, std::string_view(w.path).substr(o.path.size()));
-                out.push_back({ PrefabOverride{ w.node, *tp, v ? *v : nlohmann::json(nullptr) }, true, w.path });
+                out.push_back({ PrefabOverride{ w.node, w.path, v ? *v : nlohmann::json(nullptr) }, true, w.path });
                 break;
             }
         }
@@ -881,12 +832,13 @@ namespace DonTopo
             for (auto it = stored.begin(); it != stored.end(); ++it)
             {
                 if (coverage(*it, w.node, w.path) != Coverage::Ancestor) continue;
-                const std::optional<std::string> tp = prefabTemplatePath(stored, w.node, w.path, *tmplNode);
-                if (!tp) break;   // added script: nothing to revert to
+                // Inside something the template does not have (an added script
+                // or component): nothing to revert the field to.
+                if (!prefabValueAt(*tmplNode, it->path)) break;
                 const PrefabOverride before = *it;
                 nlohmann::json value = it->value;
                 const nlohmann::json::json_pointer sub{ w.path.substr(it->path.size()) };
-                const nlohmann::json* theirs = valueAt(*tmplNode, *tp);
+                const std::optional<nlohmann::json> theirs = prefabValueAt(*tmplNode, w.path);
                 try
                 {
                     if (theirs) value[sub] = *theirs;
@@ -903,7 +855,7 @@ namespace DonTopo
                 }
                 if (value == before.value) break;
                 // Equal to the template at its own path now: no override left.
-                const nlohmann::json* own = valueAt(*tmplNode, before.path);
+                const std::optional<nlohmann::json> own = prefabValueAt(*tmplNode, before.path);
                 if (own && prefabValuesEqual(*own, value))
                 {
                     plan.removed.push_back(before);
@@ -918,6 +870,18 @@ namespace DonTopo
             }
         }
         return plan;
+    }
+
+    void restoreRewrittenOverrides(std::vector<PrefabOverride>& list,
+                                   const std::vector<std::pair<PrefabOverride, PrefabOverride>>& rewritten)
+    {
+        for (const auto& [before, after] : rewritten)
+        {
+            const auto it = std::find_if(list.begin(), list.end(), [&](const PrefabOverride& o) {
+                return o.node == before.node && o.path == before.path;
+            });
+            if (it != list.end() && prefabValuesEqual(it->value, after.value)) it->value = before.value;
+        }
     }
 
     std::filesystem::path uniquePrefabPath(const std::filesystem::path& dir, const std::string& name)

@@ -79,6 +79,8 @@ Only on instance nodes. A scene without prefabs is serialized **byte for byte** 
   `/transform/scale` (decomposed), so moving an object does not override its scale.
 - `value: null` = component removed on the instance. An object value on a component key the prefab
   does not have = component added.
+- `/scripts` and `/mesh/materials` are addressed per element by key (`/scripts/Mover#0/...`,
+  `/mesh/materials/1/...`), never whole: see §3.5.
 
 ### 2.3 Script `Prefab` property
 
@@ -160,6 +162,45 @@ Edge cases (Unity):
 - **Revert** (per field, per component, or all): drop the overrides and re-propagate that instance.
   Reverting an added child deletes it; reverting a removed component restores it.
 - **Unpack**: strip `prefab` / `prefabNode` from the subtree. The objects stay as they are.
+
+### 3.5 Arrays: keyed per element (added after review Z1)
+
+A JSON Pointer diff compares arrays whole, so one edited script property used to store the whole
+`/scripts` array as a single override, which then shadowed every script field of the template (an
+instance overriding `label` never received a new `speed` applied from another instance). Review
+Focus 2 must hold for arrays too, so two arrays are recorded **per element, by a stable key**:
+
+| Array | Key of an element | Paths |
+|---|---|---|
+| `/scripts` | `<name>#<k>`: the k-th script with that name (k from 0) | `/scripts/Mover#0/overrides/speed` (one property), `/scripts/Extra#0` with an object (a script the instance added) or `null` (a template script it removed), `/scripts/#order` (see below) |
+| `/mesh/materials` | `<index>`: the entry's submesh index | `/mesh/materials/1/roughness`. The array is sparse (only slots with something to say), so a missing entry equals `{"index": k}`: per-field entries work whether or not either side has the slot |
+
+- Keys, never positions: an added or removed element does not shift the others.
+- **Order.** Material entries are unordered (keyed by slot). Script order matters (execution
+  order), so the instance's order is recorded as `/scripts/#order` = its keys in order, **only**
+  when it differs from "the template's order, then the instance's added scripts in its own order".
+  Applying it sorts the listed keys first; anything not listed keeps its relative order after them.
+  A pure reorder is therefore one entry, and adding a script at the end needs none.
+- **Apply** of keyed entries happens per (node, array), after the node's other entries, against
+  the keys the template array had *before* any of them (removing `Mover#0` never turns `Mover#1`
+  into `Mover#0` mid-way). A removal that leaves a material slot empty removes the slot, and an
+  empty array is not written (as `nodeToJson`).
+- **Occurrence ambiguity (accepted).** With two scripts of the same name, removing the first one
+  on the instance reads as "`Mover#1` removed" plus the first one's differences.
+- **Whole values.** Every other array is a single value and recorded whole: numeric vectors
+  (positions, colors, anchors), `mesh/animationSources` (an ordered list that defines the mesh's
+  clip configuration and identity), procedural `vertices`/`indices`, the animator graph (states,
+  transitions and parameters refer to each other by name; a partial merge could leave dangling
+  transitions) and dropdown `options` (the selected index points into it).
+- **Backward compatibility.** A stored entry on `/scripts` or `/mesh/materials` with an array (or
+  `null`) value is the format before keyed arrays. `applyPrefabOverrides` turns it into the
+  per-element entries of its difference with the template array, applies those (same result as
+  replacing the array) and returns them, so the rebuild stores the converted list. Every instance
+  that carries one is rebuilt once when its template is first Ready (it does not match the template
+  in the new format), and is saved in the new format afterwards. The conversion is made against the
+  template as it is *now*: a field the prefab changed since the scene was saved, and the instance
+  never touched, stays at the old value (exactly what the old whole array did) — from then on it
+  follows the prefab. Scenes without prefabs, or without such entries, are not affected.
 
 ## 4. Preload and `Instantiate`
 
