@@ -2093,10 +2093,78 @@ void testLegacyWholeArrayOverride()
     CHECK(!tree2["children"][0].contains("scripts") && removed.size() == 2 &&
           hasOv(removed, "/scripts/Mover#0", nullptr), "an old whole removal becomes per-script removals");
 }
+// AA3: the KNOWN limitation of same-named scripts (spec 3.5), pinned so that
+// changing it is a deliberate decision. Keys are the occurrence numbering of
+// each side, not a stable per-script id.
+void testDuplicateScriptNamesLimitation()
+{
+    auto root = [](const nlohmann::json& scripts) {
+        return nlohmann::json{ {"id", 1}, {"name", "Enemy"}, {"children", nlohmann::json::array({ nodeWith(scripts) })} };
+    };
+    // 1. Removing the FIRST of two "Mover"s reads as "Mover#1 removed" plus
+    //    Mover#0 taking the second one's fields.
+    const nlohmann::json two = nodeWith(nlohmann::json::array({ script("Mover", { {"n", 0} }), script("Mover", { {"n", 1} }) }));
+    auto d = DonTopo::diffPrefabNode(2, two, nodeWith(nlohmann::json::array({ script("Mover", { {"n", 1} }) })), false);
+    CHECK(d.size() == 2 && hasOv(d, "/scripts/Mover#0/overrides/n", 1) && hasOv(d, "/scripts/Mover#1", nullptr),
+          "removing the first of two: Mover#1 removed + Mover#0 = the second one's fields");
+
+    // 2. The template inserts a same-named script in front: the instance's
+    //    "Mover#0" entry now lands on the INSERTED script.
+    nlohmann::json tree = root(nlohmann::json::array({ script("Mover", { {"n", 9} }), script("Mover", { {"n", 0} }) }));
+    DonTopo::applyPrefabOverrides(tree, { {2, "/scripts/Mover#0/overrides/n", 5} }, nullptr);
+    CHECK(tree["children"][0]["scripts"][0]["overrides"]["n"] == 5 && tree["children"][0]["scripts"][1]["overrides"]["n"] == 0,
+          "keys shift with a template insert: the entry lands on the first Mover");
+
+    // 3. An added "Extra#0" meets a later template "Extra": the instance's
+    //    whole element replaces the template's (its fields are not merged).
+    tree = root(nlohmann::json::array({ script("Extra", { {"y", 2} }) }));
+    DonTopo::applyPrefabOverrides(tree, { {2, "/scripts/Extra#0", script("Extra", { {"x", 1} })} }, nullptr);
+    CHECK(tree["children"][0]["scripts"].size() == 1 &&
+          tree["children"][0]["scripts"][0]["overrides"] == nlohmann::json({ {"x", 1} }),
+          "an added Extra#0 replaces a later template Extra whole");
+
+    // 4. The template removes a same-named script: the entry for the second
+    //    one becomes an orphan (dropped with a warning).
+    tree = root(nlohmann::json::array({ script("Mover", { {"n", 0} }) }));
+    std::vector<std::string> w;
+    CHECK(DonTopo::applyPrefabOverrides(tree, { {2, "/scripts/Mover#1/overrides/n", 3} }, &w).empty() && w.size() == 1,
+          "Mover#1 gone from the template: an orphan, warned");
+}
+
+// AA2 at the model level: an old whole-array entry and an explicit entry on
+// a path it also covers (a fold while the template loaded) come back as ONE
+// entry per path, the explicit value winning -- and a whole-element entry
+// plus a field inside it come back as one canonical entry.
+void testKeyedGroupReturnsCanonicalEntries()
+{
+    const nlohmann::json tmplNode = nodeWith(nlohmann::json::array({ script("Mover", { {"speed", 3}, {"label", "a"} }) }));
+    auto fresh = [&] { return nlohmann::json{ {"id", 1}, {"name", "Enemy"}, {"children", nlohmann::json::array({ tmplNode })} }; };
+    const nlohmann::json legacy = nlohmann::json::array({ script("Mover", { {"speed", 9}, {"label", "a"} }) });
+
+    nlohmann::json tree = fresh();
+    auto a = DonTopo::applyPrefabOverrides(tree, { {2, "/scripts", legacy}, {2, "/scripts/Mover#0/overrides/speed", 12} }, nullptr);
+    CHECK(a.size() == 1 && hasOv(a, "/scripts/Mover#0/overrides/speed", 12), "one entry per path, the explicit value");
+    if (a.size() != 1) dumpOvs(a);
+    CHECK(tree["children"][0]["scripts"][0]["overrides"]["speed"] == 12, "and that is what is applied");
+
+    tree = fresh();
+    a = DonTopo::applyPrefabOverrides(tree, { {2, "/scripts/Extra#0", script("Extra", { {"x", 1} })},
+                                              {2, "/scripts/Extra#0/overrides/x", 2} }, nullptr);
+    CHECK(a.size() == 1 && hasOv(a, "/scripts/Extra#0", script("Extra", { {"x", 2} })),
+          "a whole element and a field inside it: one entry, the merged element");
+    if (a.size() != 1) dumpOvs(a);
+
+    // An entry equal to the template is not an override: not returned.
+    tree = fresh();
+    a = DonTopo::applyPrefabOverrides(tree, { {2, "/scripts/Mover#0/overrides/speed", 3} }, nullptr);
+    CHECK(a.empty(), "an entry equal to the template is dropped");
+}
 } // namespace
 
 int main()
 {
+    testDuplicateScriptNamesLimitation();
+    testKeyedGroupReturnsCanonicalEntries();
     testKeyedArrayKeysAndValueAt();
     testKeyedDiff();
     testKeyedApply();

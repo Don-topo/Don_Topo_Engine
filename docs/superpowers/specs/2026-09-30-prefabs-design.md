@@ -185,8 +185,25 @@ Focus 2 must hold for arrays too, so two arrays are recorded **per element, by a
   the keys the template array had *before* any of them (removing `Mover#0` never turns `Mover#1`
   into `Mover#0` mid-way). A removal that leaves a material slot empty removes the slot, and an
   empty array is not written (as `nodeToJson`).
-- **Occurrence ambiguity (accepted).** With two scripts of the same name, removing the first one
-  on the instance reads as "`Mover#1` removed" plus the first one's differences.
+- **Known limitation: scripts with the same name (accepted, pinned by
+  `testDuplicateScriptNamesLimitation`).** A key is each side's own occurrence numbering, not a
+  stable identity of the script, so with two or more scripts of one name:
+  - removing the *first* of two `Mover`s on an instance records "`Mover#1` removed" plus
+    "`Mover#0` = the second one's fields";
+  - the template inserting or removing a same-named script shifts the keys: an instance's
+    `Mover#0` entry then lands on another `Mover`, or (the key no longer exists) becomes an
+    orphan, dropped with one warning;
+  - a script the instance added as `Extra#0` meets a later template `Extra` on the same key: the
+    instance's whole element replaces the template's (their fields are not merged).
+  The real fix is a stable per-script id written in the script JSON (like `prefabNode` for
+  nodes); it changes the scene format and is left for later. Scripts with distinct names (the
+  common case) are not affected.
+- **A stable stored list.** For a keyed array, `applyPrefabOverrides` returns the difference the
+  group made in the diff's own form (one entry per path, a field merged into the whole added
+  element it lies in, nothing for an entry equal to the template), not the entries it was given.
+  `recomputePrefabOverrides` compares lists as multisets and keeps the stored order when only the
+  order differs. Together: a rebuild stores what the next recompute finds, and consecutive saves
+  of an unedited scene are byte-identical (also for a converted old scene).
 - **Whole values.** Every other array is a single value and recorded whole: numeric vectors
   (positions, colors, anchors), `mesh/animationSources` (an ordered list that defines the mesh's
   clip configuration and identity), procedural `vertices`/`indices`, the animator graph (states,

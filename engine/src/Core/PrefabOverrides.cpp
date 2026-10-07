@@ -517,7 +517,9 @@ namespace
         const char* field = scripts ? "scripts" : "materials";
         static const json kEmpty = json::array();
         const auto arrIt = holder->find(field);
-        const json& arr = (arrIt != holder->end() && arrIt->is_array()) ? *arrIt : kEmpty;
+        // A copy: the array is replaced at the end, and what the group returns
+        // is the difference between this one and that one.
+        const json arr = (arrIt != holder->end() && arrIt->is_array()) ? *arrIt : kEmpty;
 
         // The elements with the keys they had BEFORE any entry.
         struct Element { std::string key; json value; bool removed = false; };
@@ -551,7 +553,7 @@ namespace
             const std::string& key = segs[0];
             if (key == kOrder)
             {
-                if (scripts && o.value.is_array()) { order = o.value; applied.push_back(o); }
+                if (scripts && o.value.is_array()) order = o.value;
                 else warn(warnings, orphanOf(o));
                 continue;
             }
@@ -566,7 +568,6 @@ namespace
                 }
                 else if (e) e->value = o.value;
                 else        added.push_back({ key, o.value });
-                applied.push_back(o);
                 continue;
             }
             // A field inside an element. A material slot without an entry is
@@ -587,7 +588,6 @@ namespace
             e->value = std::move(wrapped["e"]);
             // A material slot with nothing left to say is not written (nodeToJson).
             if (!scripts && e->value.is_object() && e->value.size() <= 1) e->removed = true;
-            applied.push_back(o);
         }
 
         json result = json::array();
@@ -605,6 +605,14 @@ namespace
             for (size_t i = 0; i < keys.size(); ++i) if (!used[i]) sorted.push_back(result[i]);
             result = std::move(sorted);
         }
+        // What the group returns is not the entries it was given but the
+        // difference it made, in the diff's own form: one entry per path even
+        // when an old whole-array entry and an explicit one (a fold made while
+        // the template loaded) both cover it, a field merged into the whole
+        // element it lies in, nothing for an entry equal to the template. The
+        // stored list a rebuild writes from it is then exactly what the next
+        // recompute finds (no rebuild at every propagation, no duplicate saved).
+        diffKeyed(ops.front().node, root, arr, result, applied);
         if (result.empty()) holder->erase(field);
         else                (*holder)[field] = std::move(result);
     }

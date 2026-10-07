@@ -84,8 +84,12 @@ namespace DonTopo
     // entries, against the keys the template array had BEFORE any of them
     // (removing "Mover#0" never turns "Mover#1" into "Mover#0" mid-way);
     // "#order" last. A whole-array entry of the old format is replaced by the
-    // per-element entries of its difference with the template array, and it
-    // is THOSE that are returned (so a rebuild stores the converted list).
+    // per-element entries of its difference with the template array. For a
+    // keyed array what is returned is not the entries given but the
+    // difference the group made, in the diff's own form (diffPrefabNode): one
+    // entry per path, a field merged into a whole added element, nothing for
+    // an entry equal to the template. So a rebuild stores exactly what the
+    // next recompute finds -- the old format converted, no duplicates.
     std::vector<PrefabOverride> applyPrefabOverrides(nlohmann::json& prefabRoot,
                                                      const std::vector<PrefabOverride>& ovs,
                                                      std::vector<std::string>* warnings);

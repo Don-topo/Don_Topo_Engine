@@ -3433,6 +3433,112 @@ void testLegacyWholeArraySceneLoads()
     CHECK(!contains(w.scene.toJson().dump(), "\"path\":\"/scripts\""), "saved in the new format");
 }
 
+// ---- AA1 / AA2: a stable stored list ----
+
+// AA1: a rebuild stores its entries in apply order (plain, then keyed
+// groups), the diff in JSON key order ("/scripts..." before "/ssrEnabled").
+// An edit-free revision pass must not reorder the list: the bytes of the
+// scene only change when its content does.
+void testOverrideListStableAcrossPasses()
+{
+    InstancesOf w("dt_prefab_aa1", enemyWithTwoScriptsFile(TempRoot("dt_prefab_aa1_src").str()));
+    if (!w.ok()) { CHECK(false, "three synced instances"); return; }
+    scriptNamed(w.lamp(w.a), "Mover")->overrides["label"] = std::string("z");
+    w.lamp(w.a)->ssrEnabled = true;
+    scriptNamed(w.lamp(w.c), "Mover")->overrides["speed"] = 9.0;
+    w.pass();
+    // C applies its speed: A is rebuilt from the new template (no pass yet).
+    auto apply = std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), w.c, std::vector<DonTopo::PrefabOverride>{}, false);
+    apply->execute();
+    CHECK(apply->succeeded(), "C applies");
+    w.undo.push(std::move(apply));
+    CHECK(scriptNumber(w.lamp(w.a), "Mover", "speed") == 9.0, "A was rebuilt with the new speed");
+    const std::string s1 = w.scene.toJson().dump();
+    w.pass();                                   // the revision pass of that push
+    const std::string s2 = w.scene.toJson().dump();
+    w.pass();
+    const std::string s3 = w.scene.toJson().dump();
+    CHECK(s1 == s2, "an edit-free revision pass does not change the saved bytes");
+    CHECK(s2 == s3, "nor does the next one");
+    CHECK(overrideCount(w.get(w.a)) == 2, "A: label + ssr");
+}
+
+// AA1 for converted scenes, AA2 for the fold: an old whole-array scene,
+// edited while its template still loads. At Ready: one entry per path, the
+// edit kept, the instance matching its template (no rebuild at every
+// propagation), and save -> load -> save gives the same bytes.
+void testLegacySceneEditedWhileLoading()
+{
+    CommandWorld w("dt_prefab_aa2");
+    const nlohmann::json file = enemyWithScriptFile(w.root.str());
+    writeFile(w.prefabFile(), file.dump(2));
+    nlohmann::json inst = memoryRootOf(file, w.root.str());
+    std::function<void(nlohmann::json&)> link = [&](nlohmann::json& n) {
+        n["prefabNode"] = n["id"];
+        n.erase("id");
+        for (auto& c : n["children"]) link(c);
+    };
+    link(inst);
+    inst["children"][0]["scripts"][0]["overrides"]["speed"] = 9;
+    inst["children"][0]["ssrEnabled"] = true;
+    const nlohmann::json legacy = inst["children"][0]["scripts"];
+    inst["prefab"] = { {"path", kEnemyKey}, {"overrides", nlohmann::json::array({
+        { {"node", uint64_t{2}}, {"path", "/scripts"}, {"value", legacy} },
+        { {"node", uint64_t{2}}, {"path", "/ssrEnabled"}, {"value", true} } })} };
+    DonTopo::GameObject* old = w.scene.insertFromJson(inst, nullptr, SIZE_MAX, physics(), audio());
+    if (!old) { CHECK(false, "old instance built"); return; }
+    const uint64_t id = old->id;
+    w.sync->sceneLoaded(w.scene.toJson());
+    CHECK(w.lib->pending() == 1, "the template is loading");
+
+    // Edited while it loads: the speed the old entry also covers.
+    scriptNamed(childNamed(w.get(id), "Lamp"), "Mover")->overrides["speed"] = 12.0;
+    w.pass();
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+
+    DonTopo::GameObject* o = w.get(id);
+    const DonTopo::PrefabTemplate* t = readyTemplate(*w.lib, kEnemyKey);
+    if (!o || !t) { CHECK(false, "instance and template"); return; }
+    size_t speedEntries = 0;
+    for (const auto& ov : o->prefabLink->overrides)
+        if (ov.path == "/scripts/Mover#0/overrides/speed") ++speedEntries;
+    CHECK(speedEntries == 1 && overrideIs(o, "/scripts/Mover#0/overrides/speed", 12.0), "one entry, the edit's value");
+    CHECK(!overrideAt(o, "/scripts") && overrideCount(o) == 2, "converted, nothing duplicated");
+    CHECK(scriptNumber(childNamed(o, "Lamp"), "Mover", "speed") == 12.0, "the edit is kept live");
+    CHECK(DonTopo::prefabInstanceMatchesTemplate(w.scene, o, t->memoryRoot),
+          "it matches its template: the next propagation rebuilds nothing");
+
+    // save -> load -> save.
+    const nlohmann::json saved = w.scene.toJson();
+    w.pass();
+    CHECK(w.scene.toJson().dump() == saved.dump(), "a revision pass changes nothing");
+    CHECK(w.scene.fromJson(saved, physics(), audio()), "reloads");
+    w.sync->sceneLoaded(saved);
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    w.pass();
+    CHECK(w.scene.toJson().dump() == saved.dump(), "save -> load -> save: the same bytes");
+}
+
+// AA2 guard: Apply/Revert narrowing never reads a whole-array entry of the
+// old format as a covering value (converted before any command can run).
+void testNarrowingIgnoresLegacyEntries()
+{
+    ScriptCase c;
+    std::vector<DonTopo::PrefabOverride> legacy = { {2, "/scripts", nlohmann::json::array({
+        scriptJson("Mover", { {"speed", 9}, {"label", "a"} }) })} };
+    CHECK(DonTopo::resolvePrefabSelection(legacy, { {2, "/scripts/Mover#0/overrides/speed", nullptr} }, &c.tmplRoot).empty(),
+          "not narrowed out of an old whole array");
+    std::vector<DonTopo::PrefabOverride> copy = legacy;
+    CHECK(DonTopo::revertPrefabSelection(copy, { {2, "/scripts/Mover#0/overrides/speed", nullptr} }, c.tmplRoot).empty() &&
+          copy.size() == 1 && copy[0].value == legacy[0].value, "not rewritten either");
+    // A positional path WOULD resolve inside the old array: still refused.
+    CHECK(DonTopo::resolvePrefabSelection(legacy, { {2, "/scripts/0/overrides/speed", nullptr} }, &c.tmplRoot).empty(),
+          "a positional path is not narrowed out of it");
+    CHECK(DonTopo::revertPrefabSelection(copy, { {2, "/scripts/0/overrides/speed", nullptr} }, c.tmplRoot).empty() &&
+          copy.size() == 1 && copy[0].value == legacy[0].value, "nor rewritten");
+}
+
 // Z2 end to end: a field Revert rewrote a covering entry; the user then set
 // the value back to the template's (the entry vanished). Undo of the Revert
 // does not bring the old value back over that newer edit.
@@ -3532,6 +3638,9 @@ int main()
     testEditIsRevertKeyedPaths();
     testFoldScriptOrderWhileLoading();
     testLegacyWholeArraySceneLoads();
+    testOverrideListStableAcrossPasses();
+    testLegacySceneEditedWhileLoading();
+    testNarrowingIgnoresLegacyEntries();
     testRevertUndoNewerEditWins();
     testQueuedInstantiate();
     testUniquePrefabPath();

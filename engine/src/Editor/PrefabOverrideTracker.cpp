@@ -797,6 +797,11 @@ namespace DonTopo
             for (const PrefabOverride& o : stored)
             {
                 if (coverage(o, w.node, w.path) != Coverage::Ancestor) continue;
+                // Guard: an old-format whole "/scripts" or "/mesh/materials"
+                // entry is converted at the instance's first propagation, before
+                // any command can run (they all sync first). Should one still be
+                // here, its value is not addressable by keyed paths: no narrowing.
+                if (isKeyedArrayPath(o.path)) break;
                 const nlohmann::json* tmplNode = findTemplateNodeById(*templateRoot, w.node);
                 if (!tmplNode || has(w.node, w.path)) break;
                 const size_t slash = w.path.rfind('/');
@@ -832,6 +837,7 @@ namespace DonTopo
             for (auto it = stored.begin(); it != stored.end(); ++it)
             {
                 if (coverage(*it, w.node, w.path) != Coverage::Ancestor) continue;
+                if (isKeyedArrayPath(it->path)) break;   // old format: see resolvePrefabSelection
                 // Inside something the template does not have (an added script
                 // or component): nothing to revert the field to.
                 if (!prefabValueAt(*tmplNode, it->path)) break;

@@ -4620,12 +4620,22 @@ namespace DonTopo
         };
         walk(inst, true);
 
+        // The same entries in another order are the same list: kept as stored.
+        // A rebuild stores them in apply order (plain entries, then each keyed
+        // array), the diff in JSON key order; replacing one with the other on
+        // an edit-free revision pass would change the saved bytes for nothing.
         auto& current = instanceRoot->prefabLink->overrides;
-        const bool same = current.size() == fresh.size() &&
-            std::equal(current.begin(), current.end(), fresh.begin(),
-                       [](const PrefabOverride& a, const PrefabOverride& b) {
-                           return a.node == b.node && a.path == b.path && a.value == b.value;
-                       });
+        bool same = current.size() == fresh.size();
+        std::vector<bool> used(current.size(), false);
+        for (size_t f = 0; same && f < fresh.size(); ++f)
+        {
+            bool found = false;
+            for (size_t c = 0; c < current.size() && !found; ++c)
+                if (!used[c] && current[c].node == fresh[f].node && current[c].path == fresh[f].path &&
+                    current[c].value == fresh[f].value)
+                    used[c] = found = true;
+            same = found;
+        }
         if (same) return false;
         current = std::move(fresh);
         return true;
