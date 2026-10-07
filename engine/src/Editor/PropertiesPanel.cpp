@@ -548,6 +548,11 @@ const char* visibleLabelEnd(const char* label)
     return hashes ? hashes : label + std::strlen(label);
 }
 
+std::string visibleLabelText(const char* label)
+{
+    return std::string(label, visibleLabelEnd(label));
+}
+
 // Simulated bold (the default font has no bold face, and no new fonts): the
 // same text drawn again 1 px to the right of where ImGui put it.
 void overlayBold(ImVec2 textPos, const char* label)
@@ -635,30 +640,77 @@ bool PropertiesPanel::prefabBold(std::initializer_list<const char*> paths) const
 }
 
 void PropertiesPanel::prefabFieldMenu(EditorContext& ctx, const std::string& popupId,
-                                      const std::vector<std::string>& paths)
+                                      const std::vector<std::string>& paths, const std::string& headerName)
 {
     if (!ImGui::BeginPopupContextItem(popupId.c_str()))
         return;
-    // What the label covers: overrides at, inside or above its paths. An
-    // empty `which` would mean ALL of the instance's, so nothing is sent then.
-    std::vector<PrefabOverride> which;
-    if (m_prefabView.root && m_prefabView.node != 0)
+    GameObject* root = m_prefabView.root;
+    const uint64_t node = m_prefabView.node;
+    const uint64_t rootId = root ? root->id : 0;
+    // What a right click can act on, decided once (prefabFieldTarget): the
+    // label's own paths (the commands narrow a wider entry, like the whole
+    // "/scripts" array, to them), or -- inside something the prefab does not
+    // have -- only that whole thing, and then the menu says so.
+    PrefabFieldTarget target;
+    if (root && node != 0)
         for (const std::string& p : paths)
-            for (PrefabOverride& o : overridesUnder(*m_prefabView.root, m_prefabView.node, p))
-                if (std::none_of(which.begin(), which.end(),
-                                 [&](const PrefabOverride& w) { return w.node == o.node && w.path == o.path; }))
-                    which.push_back(std::move(o));
-    const uint64_t rootId = m_prefabView.root ? m_prefabView.root->id : 0;
+        {
+            target = prefabFieldTarget(*root, node, p, m_prefabView.tmplNode);
+            if (target.kind != PrefabFieldTarget::Kind::None) break;
+        }
+    std::vector<PrefabOverride> which;
+    std::string applyLabel, revertLabel;
+    const std::string prefab = "Prefab '" + m_prefabView.name + "'";
+    switch (target.kind)
+    {
+        case PrefabFieldTarget::Kind::Field:
+            for (const std::string& p : paths) which.push_back({ node, p, nullptr });
+            applyLabel  = headerName.empty() ? "Apply to " + prefab : "Apply '" + headerName + "' changes to " + prefab;
+            revertLabel = headerName.empty() ? std::string("Revert") : "Revert '" + headerName + "' changes";
+            break;
+        case PrefabFieldTarget::Kind::AddedComponent:
+        {
+            const std::string name = headerName.empty() ? target.name : headerName;
+            which       = { target.wide };
+            applyLabel  = "Apply added component '" + name + "' to " + prefab;
+            revertLabel = "Remove added component '" + name + "'";
+            break;
+        }
+        case PrefabFieldTarget::Kind::AddedScript:
+        {
+            // Scripts are stored as one list per object: an added script can
+            // only travel with every other script change of this object.
+            const std::string obj = m_prefabView.root ? prefabNodeObjectName(node) : std::string();
+            which       = { PrefabOverride{ node, "/scripts", nullptr } };
+            applyLabel  = "Apply all script changes of '" + obj + "' to " + prefab;
+            revertLabel = "Revert all script changes of '" + obj + "' (removes added script '" + target.name + "')";
+            break;
+        }
+        case PrefabFieldTarget::Kind::None:
+            applyLabel  = "Apply to " + prefab;
+            revertLabel = "Revert";
+            break;
+    }
+    // An empty `which` would mean ALL of the instance's overrides: never sent.
     const bool can = !which.empty() && rootId != 0 && ctx.runPrefabCommand;
-    if (ImGui::MenuItem(("Apply to Prefab '" + m_prefabView.name + "'").c_str(), nullptr, false, can))
+    // "##apply"/"##revert": the visible text changes with the target, the ids do not.
+    if (ImGui::MenuItem((applyLabel + "##prefabApply").c_str(), nullptr, false, can))
         ctx.runPrefabCommand([rootId, which](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
             return std::make_unique<ApplyPrefabOverridesCommand>(pc, rootId, which, false);
         });
-    if (ImGui::MenuItem("Revert", nullptr, false, can))
+    if (ImGui::MenuItem((revertLabel + "##prefabRevert").c_str(), nullptr, false, can))
         ctx.runPrefabCommand([rootId, which](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
             return std::make_unique<RevertPrefabOverridesCommand>(pc, rootId, which, false);
         });
     ImGui::EndPopup();
+}
+
+std::string PropertiesPanel::prefabNodeObjectName(uint64_t node) const
+{
+    std::string name;
+    if (m_prefabView.root)
+        m_prefabView.root->traverse([&](GameObject* n) { if (name.empty() && n->prefabNode == node) name = n->name; });
+    return name;
 }
 
 bool PropertiesPanel::prefabSectionHeader(EditorContext& ctx, const char* label, int flags,
@@ -675,7 +727,7 @@ bool PropertiesPanel::prefabSectionHeader(EditorContext& ctx, const char* label,
             overlayBold(ImVec2(cursor.x + ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 2.0f, cursor.y),
                         label);
         std::vector<std::string> v(paths.begin(), paths.end());
-        prefabFieldMenu(ctx, std::string("##prefabHeaderMenu_") + label, v);
+        prefabFieldMenu(ctx, std::string("##prefabHeaderMenu_") + label, v, visibleLabelText(label));
     }
     return open;
 }
@@ -8328,7 +8380,7 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
         if (ImGui::IsItemVisible())
             overlayBold(ImVec2(materialCursor.x + ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 3.0f,
                                materialCursor.y + ImGui::GetStyle().FramePadding.y), "Material");
-        prefabFieldMenu(ctx, "##prefabHeaderMenu_Material", { "/mesh/materials" });
+        prefabFieldMenu(ctx, "##prefabHeaderMenu_Material", { "/mesh/materials" }, "Material");
     }
     if (!materialOpen) return;
 

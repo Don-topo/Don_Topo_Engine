@@ -7,7 +7,6 @@
 
 #include <chrono>
 #include <exception>
-#include <thread>
 
 namespace DonTopo
 {
@@ -101,34 +100,48 @@ namespace DonTopo
         }
     }
 
-    bool PrefabSceneSync::waitForTemplate(const std::string& key, int timeoutMs, std::string* error)
+    void PrefabSceneSync::queueInstantiate(const std::string& key, uint64_t parentId,
+                                           std::chrono::milliseconds timeout)
     {
         const std::string k = m_lib.normalizeKey(key);
+        if (k.empty()) return;
         m_known.insert(k);
         m_lib.request(k);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-        for (;;)
+        const PrefabTemplate* t = m_lib.find(k);
+        if (m_host.log && !(t && t->state == PrefabTemplate::State::Ready))
+            m_host.log("[Prefab] Loading prefab '" + k + "'... it is instantiated when it is ready");
+        m_queuedInstantiates.push_back({ k, parentId, std::chrono::steady_clock::now() + timeout });
+    }
+
+    std::vector<PrefabSceneSync::QueuedInstantiate>
+    PrefabSceneSync::takeReadyInstantiates(std::chrono::steady_clock::time_point now)
+    {
+        std::vector<QueuedInstantiate> ready;
+        std::vector<QueuedInstantiate> waiting;
+        for (QueuedInstantiate& q : m_queuedInstantiates)
         {
-            const PrefabTemplate* t = m_lib.find(k);
-            if (!t)
+            const PrefabTemplate* t = m_lib.find(q.key);
+            if (t && t->state == PrefabTemplate::State::Ready)
+                ready.push_back(std::move(q));
+            else if (!t)
             {
-                if (error) *error = "prefab '" + k + "' could not be requested";
-                return false;
+                if (m_host.log) m_host.log("[Prefab] Instantiate: prefab '" + q.key + "' is no longer loaded; dropped");
             }
-            if (t->state == PrefabTemplate::State::Ready) return true;
-            if (t->state == PrefabTemplate::State::Failed)
+            else if (t->state == PrefabTemplate::State::Failed)
             {
-                if (error) *error = "prefab '" + k + "' could not be loaded: " + t->error;
-                return false;
+                if (m_host.log)
+                    m_host.log("[Prefab] Instantiate: prefab '" + q.key + "' could not be loaded: " + t->error);
             }
-            if (std::chrono::steady_clock::now() >= deadline)
+            else if (now >= q.deadline)
             {
-                if (error) *error = "prefab '" + k + "' is still loading; try again";
-                return false;
+                if (m_host.log)
+                    m_host.log("[Prefab] Instantiate: loading prefab '" + q.key + "' timed out; drop it again");
             }
-            pump(1000.0f);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            else
+                waiting.push_back(std::move(q));
         }
+        m_queuedInstantiates = std::move(waiting);
+        return ready;
     }
 
     void PrefabSceneSync::onTemplateReady(const PrefabTemplate& t)
@@ -188,6 +201,8 @@ namespace DonTopo
 
     void PrefabSceneSync::sceneLoaded(const nlohmann::json& sceneJson)
     {
+        // Queued drops name parents of the scene that was replaced.
+        clearQueuedInstantiates();
         if (!m_host.scene) return;
         Scene& scene = *m_host.scene;
         // The new scene's ids may repeat the old ones; none of its instances has
@@ -368,6 +383,7 @@ namespace DonTopo
     void PrefabSceneSync::resetForNewRoot()
     {
         unpinAll();
+        clearQueuedInstantiates();
         m_tracker.clear();
         m_known.clear();
         m_reportedFailures.clear();

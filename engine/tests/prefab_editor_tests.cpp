@@ -20,6 +20,7 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Scripting/ScriptComponent.h"
 
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
@@ -2791,22 +2792,351 @@ void testFailedTemplateRetriedWhenFileReturns()
     CHECK(w.lib->readCount() == readsReady, "a Ready template is never re-read by the poll");
 }
 
-// Drop of a .prefab in Edit Mode: a template not loaded yet is waited for
-// synchronously (spec §5.2); a missing one fails at once with its error.
-void testWaitForTemplate()
+// ---- Review of f32e063 ----
+
+nlohmann::json scriptJson(const std::string& name, const nlohmann::json& overrides)
 {
-    CommandWorld w("dt_prefab_ui_wait");
+    return { {"name", name}, {"overrides", overrides} };
+}
+
+// A Lamp template node (local id 2) with one "Mover" script, and the stored
+// whole-array override of an instance that ADDED a script "Extra" in front of
+// it and changed Mover's speed: index 1 of the instance is index 0 of the
+// template.
+struct ScriptCase
+{
+    nlohmann::json tmplRoot;
+    nlohmann::json* tmplLamp = nullptr;
+    std::vector<DonTopo::PrefabOverride> stored;
+    ScriptCase()
+    {
+        tmplRoot = { {"id", 1}, {"name", "Enemy"}, {"children", nlohmann::json::array({
+            { {"id", 2}, {"name", "Lamp"}, {"light", { {"range", 10.0}, {"intensity", 1.0} }},
+              {"scripts", nlohmann::json::array({ scriptJson("Mover", { {"speed", 3}, {"label", "a"} }) })},
+              {"children", nlohmann::json::array()} } })} };
+        tmplLamp = &tmplRoot["children"][0];
+        stored = { {2, "/scripts", nlohmann::json::array({
+                        scriptJson("Extra", { {"x", 1} }),
+                        scriptJson("Mover", { {"speed", 9}, {"label", "a"} }) })} };
+    }
+};
+
+// Y2: scripts are matched by name + occurrence, not by index.
+void testPrefabTemplatePath()
+{
+    ScriptCase c;
+    using DonTopo::prefabTemplatePath;
+    auto p = prefabTemplatePath(c.stored, 2, "/scripts/1/overrides/speed", *c.tmplLamp);
+    CHECK(p && *p == "/scripts/0/overrides/speed", "the instance's 2nd script is the template's 1st Mover");
+    CHECK(!prefabTemplatePath(c.stored, 2, "/scripts/0/overrides/x", *c.tmplLamp), "an added script has none");
+    p = prefabTemplatePath(c.stored, 2, "/scripts/1", *c.tmplLamp);
+    CHECK(p && *p == "/scripts/0", "the script entry itself");
+    p = prefabTemplatePath(c.stored, 2, "/light/range", *c.tmplLamp);
+    CHECK(p && *p == "/light/range", "other paths are unchanged");
+    p = prefabTemplatePath(c.stored, 2, "/scripts", *c.tmplLamp);
+    CHECK(p && *p == "/scripts", "the array itself");
+    // A second Mover in the instance has no 2nd Mover in the template.
+    std::vector<DonTopo::PrefabOverride> two = { {2, "/scripts", nlohmann::json::array({
+        scriptJson("Mover", nlohmann::json::object()), scriptJson("Mover", nlohmann::json::object()) })} };
+    CHECK(!prefabTemplatePath(two, 2, "/scripts/1/overrides/speed", *c.tmplLamp), "2nd occurrence: added");
+    p = prefabTemplatePath(two, 2, "/scripts/0/overrides/speed", *c.tmplLamp);
+    CHECK(p && *p == "/scripts/0/overrides/speed", "1st occurrence matches");
+    // No stored scripts override: the instance's scripts ARE the template's.
+    p = prefabTemplatePath({}, 2, "/scripts/0/overrides/speed", *c.tmplLamp);
+    CHECK(p && *p == "/scripts/0/overrides/speed", "no override: identity");
+}
+
+// Y2: bold on a script prop with an added script in front of it.
+void testIsOverriddenAlignsScripts()
+{
+    TempRoot root("dt_prefab_ui_y2");
+    UiInstance u(root.str());
+    if (!u.ok()) { CHECK(false, "instance built"); return; }
+    ScriptCase c;
+    c.stored[0].value[1]["overrides"]["speed"] = 3;   // Mover equal to the template's
+    u.root->prefabLink->overrides = c.stored;
+    CHECK(!DonTopo::isOverridden(*u.root, 2, "/scripts/1/overrides/speed", c.tmplLamp),
+          "Mover's speed equals the template's Mover: not bold");
+    CHECK(!DonTopo::isOverridden(*u.root, 2, "/scripts/1/overrides/label", c.tmplLamp), "nor its label");
+    CHECK(DonTopo::isOverridden(*u.root, 2, "/scripts/0/overrides/x", c.tmplLamp), "the added script is bold");
+    CHECK(DonTopo::isOverridden(*u.root, 2, "/scripts/0", c.tmplLamp), "its header too");
+    CHECK(!DonTopo::isOverridden(*u.root, 2, "/scripts/1", c.tmplLamp), "Mover's header is not");
+    u.root->prefabLink->overrides[0].value[1]["overrides"]["speed"] = 9;
+    CHECK(DonTopo::isOverridden(*u.root, 2, "/scripts/1/overrides/speed", c.tmplLamp), "a changed speed is");
+}
+
+// Y1: what a right click acts on.
+void testPrefabFieldTarget()
+{
+    TempRoot root("dt_prefab_ui_target");
+    UiInstance u(root.str());
+    if (!u.ok()) { CHECK(false, "instance built"); return; }
+    ScriptCase c;
+    using K = DonTopo::PrefabFieldTarget::Kind;
+    u.root->prefabLink->overrides = c.stored;
+    u.root->prefabLink->overrides.push_back({2, "/light/range", 30.0});
+    u.root->prefabLink->overrides.push_back({2, "/reverbZone", { {"preset", 3}, {"radius", 5.0} }});
+
+    auto t = DonTopo::prefabFieldTarget(*u.root, 2, "/light/range", c.tmplLamp);
+    CHECK(t.kind == K::Field, "a field of a prefab component");
+    t = DonTopo::prefabFieldTarget(*u.root, 2, "/light", c.tmplLamp);
+    CHECK(t.kind == K::Field, "a prefab component's header");
+    CHECK(DonTopo::prefabFieldTarget(*u.root, 2, "/light/intensity", c.tmplLamp).kind == K::None, "not overridden");
+    t = DonTopo::prefabFieldTarget(*u.root, 2, "/reverbZone/radius", c.tmplLamp);
+    CHECK(t.kind == K::AddedComponent && t.wide.path == "/reverbZone" && t.name == "reverbZone",
+          "a field of an added component: only the whole component");
+    t = DonTopo::prefabFieldTarget(*u.root, 2, "/reverbZone", c.tmplLamp);
+    CHECK(t.kind == K::AddedComponent, "its header too");
+    t = DonTopo::prefabFieldTarget(*u.root, 2, "/scripts/1/overrides/speed", c.tmplLamp);
+    CHECK(t.kind == K::Field, "a prop of a prefab script");
+    t = DonTopo::prefabFieldTarget(*u.root, 2, "/scripts/0/overrides/x", c.tmplLamp);
+    CHECK(t.kind == K::AddedScript && t.wide.path == "/scripts" && t.name == "Extra",
+          "a prop of an added script: every script change of the node");
+    CHECK(DonTopo::prefabFieldTarget(*u.root, 2, "/light/range", nullptr).kind == K::Field,
+          "no template: Field when overridden");
+}
+
+// Y1: Apply narrows a covering override to the label's path.
+void testResolvePrefabSelection()
+{
+    ScriptCase c;
+    std::vector<DonTopo::PrefabOverride> stored = c.stored;
+    stored.push_back({2, "/light/intensity", 5.0});
+    using DonTopo::resolvePrefabSelection;
+
+    auto s = resolvePrefabSelection(stored, { {2, "/light", nullptr} }, &c.tmplRoot);
+    CHECK(s.size() == 1 && s[0].override.path == "/light/intensity" && !s[0].narrowed, "inside: as stored");
+    s = resolvePrefabSelection(stored, { {2, "/scripts/1/overrides/speed", nullptr} }, &c.tmplRoot);
+    CHECK(s.size() == 1 && s[0].narrowed && s[0].override.path == "/scripts/0/overrides/speed" &&
+          s[0].override.value == 9 && s[0].instancePath == "/scripts/1/overrides/speed",
+          "covered: narrowed to the template path, the instance's value");
+    s = resolvePrefabSelection(stored, { {2, "/scripts/1/overrides/gone", nullptr} }, &c.tmplRoot);
+    CHECK(s.size() == 1 && s[0].narrowed && s[0].override.value.is_null(), "absent in the instance: null");
+    CHECK(resolvePrefabSelection(stored, { {2, "/scripts/0/overrides/x", nullptr} }, &c.tmplRoot).empty(),
+          "an added script's prop is not narrowed");
+    s = resolvePrefabSelection(stored, { {2, "/scripts", nullptr} }, &c.tmplRoot);
+    CHECK(s.size() == 1 && !s[0].narrowed && s[0].override.value.is_array(), "the whole array when asked");
+    CHECK(resolvePrefabSelection(stored, DonTopo::prefabNoOverrides(), &c.tmplRoot).empty(), "none selects none");
+    CHECK(resolvePrefabSelection(stored, { {2, "/scripts/1/overrides/speed", nullptr} }, nullptr).empty(),
+          "no template: nothing narrowed");
+}
+
+// Y1: Revert rewrites the covering override instead of dropping it.
+void testRevertPrefabSelection()
+{
+    ScriptCase c;
+    std::vector<DonTopo::PrefabOverride> stored = c.stored;
+    stored[0].value[1]["overrides"]["label"] = "b";
+    stored.push_back({2, "/light/intensity", 5.0});
+    using DonTopo::revertPrefabSelection;
+
+    auto plan = revertPrefabSelection(stored, { {2, "/scripts/1/overrides/speed", nullptr} }, c.tmplRoot);
+    CHECK(plan.rewritten.size() == 1 && plan.removed.empty(), "the covering entry is rewritten");
+    if (stored.size() != 2 || plan.rewritten.size() != 1 || stored[0].path != "/scripts")
+    {
+        CHECK(false, "the covering entry is still there");
+        return;
+    }
+    CHECK(stored[0].value[1]["overrides"]["speed"] == 3, "speed back to the template's");
+    CHECK(stored[0].value[1]["overrides"]["label"] == "b" && stored[0].value[0]["name"] == "Extra",
+          "the other prop and the added script stay");
+    CHECK(plan.rewritten[0].first.value[1]["overrides"]["speed"] == 9, "the plan keeps the value before");
+
+    CHECK(revertPrefabSelection(stored, { {2, "/scripts/0/overrides/x", nullptr} }, c.tmplRoot).empty(),
+          "a prop of an added script has nothing to revert to");
+
+    plan = revertPrefabSelection(stored, { {2, "/light/intensity", nullptr} }, c.tmplRoot);
+    CHECK(plan.removed.size() == 1 && stored.size() == 1, "an exact entry is removed");
+
+    // Without the added script, reverting the last difference drops the entry.
+    std::vector<DonTopo::PrefabOverride> one = { {2, "/scripts", nlohmann::json::array({
+        scriptJson("Mover", { {"speed", 9}, {"label", "a"} }) })} };
+    plan = revertPrefabSelection(one, { {2, "/scripts/0/overrides/speed", nullptr} }, c.tmplRoot);
+    CHECK(one.empty() && plan.removed.size() == 1 && plan.rewritten.empty(),
+          "equal to the template afterwards: dropped");
+    // A key the template does not have is erased.
+    std::vector<DonTopo::PrefabOverride> extra = { {2, "/scripts", nlohmann::json::array({
+        scriptJson("Mover", { {"speed", 3}, {"label", "a"}, {"bonus", 2} }) })} };
+    plan = revertPrefabSelection(extra, { {2, "/scripts/0/overrides/bonus", nullptr} }, c.tmplRoot);
+    CHECK(extra.empty() && plan.removed.size() == 1, "an extra key is erased (and then equal: dropped)");
+}
+
+// Enemy (1) -> Lamp (2) with a light and a "Mover" script {speed 3, label "a"}.
+nlohmann::json enemyWithScriptFile(const std::string& assetRoot)
+{
+    DonTopo::Scene s;
+    s.setAssetRoot(assetRoot);
+    auto* enemy = s.addGameObject("Enemy");
+    auto* lamp  = s.addGameObject("Lamp", enemy);
+    lamp->setLight(std::make_shared<DonTopo::LightComponent>());
+    auto mover = std::make_unique<DonTopo::ScriptComponent>("Mover", lamp);
+    mover->overrides["speed"] = 3.0;
+    mover->overrides["label"] = std::string("a");
+    lamp->addScript(std::move(mover));
+    return s.makePrefab(enemy, kEnemyKey, /*link=*/false);
+}
+
+DonTopo::ScriptComponent* scriptNamed(DonTopo::GameObject* n, const std::string& name)
+{
+    if (!n) return nullptr;
+    for (auto& s : n->getScripts()) if (s->scriptName == name) return s.get();
+    return nullptr;
+}
+
+double scriptNumber(DonTopo::GameObject* n, const std::string& script, const std::string& prop)
+{
+    DonTopo::ScriptComponent* s = scriptNamed(n, script);
+    if (!s) return -1.0;
+    auto it = s->overrides.find(prop);
+    return it != s->overrides.end() && std::holds_alternative<double>(it->second) ? std::get<double>(it->second) : -1.0;
+}
+
+std::string scriptText(DonTopo::GameObject* n, const std::string& script, const std::string& prop)
+{
+    DonTopo::ScriptComponent* s = scriptNamed(n, script);
+    if (!s) return "<none>";
+    auto it = s->overrides.find(prop);
+    return it != s->overrides.end() && std::holds_alternative<std::string>(it->second)
+        ? std::get<std::string>(it->second) : "<none>";
+}
+
+// Y1 end to end: field-level Apply / Revert of one script prop, with an added
+// script in front of it, through the commands and undo.
+void testFieldLevelScriptApplyRevert()
+{
+    CommandWorld w("dt_prefab_ui_y1");
+    writeFile(w.prefabFile(), enemyWithScriptFile(w.root.str()).dump(2));
+    w.lib->request(kEnemyKey);
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    const DonTopo::PrefabTemplate* t = readyTemplate(*w.lib, kEnemyKey);
+    if (!t) { CHECK(false, "template Ready"); return; }
+    DonTopo::GameObject* ia = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    DonTopo::GameObject* ib = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+    if (!ia || !ib) { CHECK(false, "two instances"); return; }
+    const uint64_t a = ia->id, b = ib->id;
+    w.sync->sceneLoaded(w.scene.toJson());
+    DonTopo::GameObject* lampB = childNamed(w.get(b), "Lamp");
+    if (!scriptNamed(lampB, "Mover")) { CHECK(false, "the script survived the template"); return; }
+    // B: an added script in FRONT of Mover, and Mover's speed and label changed.
+    auto extra = std::make_unique<DonTopo::ScriptComponent>("Extra", lampB);
+    lampB->getScripts().insert(lampB->getScripts().begin(), std::move(extra));
+    scriptNamed(lampB, "Mover")->overrides["speed"] = 9.0;
+    scriptNamed(lampB, "Mover")->overrides["label"] = std::string("b");
+    w.pass();
+    CHECK(overrideAt(w.get(b), "/scripts"), "B stores the whole scripts array");
+    const std::string original = readBytes(w.prefabFile());
+
+    // Checked before the push: a refused command is destroyed by it (so not w.run).
+    auto runChecked = [&](std::unique_ptr<DonTopo::PrefabCommand> cmd, const char* what) {
+        cmd->execute();
+        const bool ok = cmd->succeeded();
+        if (!ok) std::fprintf(stderr, "  %s: %s\n", what, cmd->lastMessage().c_str());
+        CHECK(ok, what);
+        w.undo.push(std::move(cmd));
+        w.pass();
+        return ok;
+    };
+
+    // Apply ONLY speed (instance index 1).
+    runChecked(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), b, std::vector<DonTopo::PrefabOverride>{ {2, "/scripts/1/overrides/speed", nullptr} }, false),
+        "field apply succeeded");
+    const std::string file = readBytes(w.prefabFile());
+    CHECK(!contains(file, "Extra"), "the added script is not written");
+    CHECK(scriptNumber(childNamed(w.get(a), "Lamp"), "Mover", "speed") == 9.0, "A gets the new speed");
+    CHECK(scriptText(childNamed(w.get(a), "Lamp"), "Mover", "label") == "a", "but not B's label");
+    lampB = childNamed(w.get(b), "Lamp");
+    CHECK(scriptNamed(lampB, "Extra") && scriptText(lampB, "Mover", "label") == "b" &&
+          scriptNumber(lampB, "Mover", "speed") == 9.0, "B keeps its added script and label");
+    w.doUndo();
+    CHECK(readBytes(w.prefabFile()) == original, "undo: the file as before");
+    CHECK(scriptNumber(childNamed(w.get(a), "Lamp"), "Mover", "speed") == 3.0, "undo: A back to 3");
+    lampB = childNamed(w.get(b), "Lamp");
+    CHECK(scriptNumber(lampB, "Mover", "speed") == 9.0 && scriptNamed(lampB, "Extra"), "undo: B intact");
+
+    // Revert ONLY the label.
+    runChecked(std::make_unique<DonTopo::RevertPrefabOverridesCommand>(
+        w.ctx(), b, std::vector<DonTopo::PrefabOverride>{ {2, "/scripts/1/overrides/label", nullptr} }, false),
+        "field revert succeeded");
+    lampB = childNamed(w.get(b), "Lamp");
+    CHECK(scriptText(lampB, "Mover", "label") == "a", "the label is back to the prefab's");
+    CHECK(scriptNumber(lampB, "Mover", "speed") == 9.0 && scriptNamed(lampB, "Extra"),
+          "the speed and the added script stay");
+    w.doUndo();
+    lampB = childNamed(w.get(b), "Lamp");
+    CHECK(scriptText(lampB, "Mover", "label") == "b" && scriptNumber(lampB, "Mover", "speed") == 9.0 &&
+          scriptNamed(lampB, "Extra"), "undo: the label is back");
+    w.pass();
+    CHECK(scriptText(childNamed(w.get(b), "Lamp"), "Mover", "label") == "b", "stable after a pass");
+}
+
+// Y3: a dropped prefab that is still loading is queued, not waited for.
+void testQueuedInstantiate()
+{
+    using clock = std::chrono::steady_clock;
+    CommandWorld w("dt_prefab_ui_queue");
     writeFile(w.prefabFile(), enemyFile(w.root.str(), 10.0f).dump(2));
-    std::string error;
-    CHECK(w.sync->waitForTemplate(kEnemyKey, 60000, &error), "a loadable prefab is waited for");
-    CHECK(error.empty(), "no error");
-    CHECK(readyTemplate(*w.lib, kEnemyKey) != nullptr, "Ready on return");
-    CHECK(!w.sync->waitForTemplate("Prefabs/Nope.prefab", 60000, &error), "a missing one is not");
-    CHECK(!error.empty(), "and says why");
+
+    w.sync->queueInstantiate(kEnemyKey, 0, std::chrono::seconds(60));
+    CHECK(w.fx.logged("Loading prefab 'Prefabs/Enemy.prefab'"), "the Log says it is loading");
+    CHECK(w.sync->queuedInstantiateCount() == 1, "queued");
+    CHECK(w.sync->takeReadyInstantiates(clock::now()).empty(), "not Ready yet: nothing to run");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    auto ready = w.sync->takeReadyInstantiates(clock::now());
+    CHECK(ready.size() == 1 && ready[0].key == kEnemyKey && ready[0].parentId == 0, "Ready: handed out once");
+    CHECK(w.sync->queuedInstantiateCount() == 0 && w.sync->takeReadyInstantiates(clock::now()).empty(),
+          "and gone from the queue");
+
+    // Failed: dropped with its error.
+    w.sync->queueInstantiate("Prefabs/Nope.prefab", 0, std::chrono::seconds(60));
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    CHECK(w.sync->takeReadyInstantiates(clock::now()).empty() && w.sync->queuedInstantiateCount() == 0,
+          "a Failed prefab is dropped");
+    CHECK(w.fx.logged("could not be loaded"), "with a message");
+
+    // Timed out while loading.
+    writeFile(w.root.p / "Prefabs" / "Slow.prefab", enemyFile(w.root.str(), 10.0f).dump(2));
+    w.sync->queueInstantiate("Prefabs/Slow.prefab", 0, std::chrono::milliseconds(0));
+    CHECK(w.sync->takeReadyInstantiates(clock::now() + std::chrono::seconds(1)).empty() &&
+          w.sync->queuedInstantiateCount() == 0, "a timed out drop is dropped");
+    CHECK(w.fx.logged("timed out"), "with a message");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+
+    // The parent refusals still apply when it finally runs.
+    const uint64_t holder = w.scene.addGameObject("Holder")->id;
+    w.sync->queueInstantiate(kEnemyKey, holder, std::chrono::seconds(60));
+    w.scene.removeGameObject(w.get(holder));
+    ready = w.sync->takeReadyInstantiates(clock::now());
+    CHECK(ready.size() == 1, "handed out");
+    std::vector<std::string> log;
+    for (const auto& q : ready)
+        CHECK(!DonTopo::pushPrefabCommand(w.undo, std::make_unique<DonTopo::InstantiatePrefabCommand>(
+                  w.ctx(), q.key, q.parentId), [&](const std::string& m) { log.push_back(m); }),
+              "the parent is gone: refused");
+    CHECK(log.size() == 1 && contains(log[0], "no longer exists"), "and logged");
+
+    // Y4: a scene reload or a project switch drops what is queued (its ids
+    // belong to the old scene).
+    w.sync->queueInstantiate(kEnemyKey, 0, std::chrono::seconds(60));
+    w.sync->sceneLoaded(w.scene.toJson());
+    CHECK(w.sync->queuedInstantiateCount() == 0, "scene reload clears the queue");
+    w.sync->queueInstantiate(kEnemyKey, 0, std::chrono::seconds(60));
+    w.sync->resetForNewRoot();
+    CHECK(w.sync->queuedInstantiateCount() == 0, "project switch clears it");
+    w.sync->queueInstantiate(kEnemyKey, 0, std::chrono::seconds(60));
+    w.sync->clearQueuedInstantiates();
+    CHECK(w.sync->queuedInstantiateCount() == 0, "Play transitions clear it");
 }
 
 int main()
 {
+    testPrefabTemplatePath();
+    testIsOverriddenAlignsScripts();
+    testPrefabFieldTarget();
+    testResolvePrefabSelection();
+    testRevertPrefabSelection();
+    testFieldLevelScriptApplyRevert();
+    testQueuedInstantiate();
     testUniquePrefabPath();
     testPrefabNodeState();
     testPrefabInstanceRoot();
@@ -2819,7 +3149,6 @@ int main()
     testPushPrefabCommand();
     testApplyRevertSingleAddedChild();
     testFailedTemplateRetriedWhenFileReturns();
-    testWaitForTemplate();
     testUnrevertableApplyDiscardsHistory();
     testUndoManagerKeepsRefusedCommands();
     testCreateRedoRefusedThroughManager();

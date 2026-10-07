@@ -1018,13 +1018,6 @@ bool sameTarget(const PrefabOverride& a, const PrefabOverride& b)
     return a.node == b.node && a.path == b.path;
 }
 
-// which empty = every override.
-bool selected(const std::vector<PrefabOverride>& which, const PrefabOverride& o)
-{
-    return which.empty() ||
-           std::any_of(which.begin(), which.end(), [&](const PrefabOverride& w) { return sameTarget(w, o); });
-}
-
 const PrefabTemplate* readyTemplate(const PrefabLibrary& lib, const std::string& path)
 {
     const PrefabTemplate* t = lib.find(path);
@@ -1532,9 +1525,22 @@ void ApplyPrefabOverridesCommand::doExecute()
 
     // The new template: the chosen overrides applied to the current one...
     nlohmann::json tmpl = t->memoryRoot;
+    // chosen: what goes into the template. A wanted path covered by a wider
+    // stored entry (the whole "/scripts" array) is narrowed to that path, so a
+    // field-level Apply writes that field only; the wider entry stays on the
+    // instance (it equals the new template there). appliedStored: the stored
+    // entries applied whole, which leave the instance.
     std::vector<PrefabOverride> chosen;
-    for (const PrefabOverride& o : root->prefabLink->overrides)
-        if (selected(m_which, o)) chosen.push_back(o);
+    std::vector<PrefabOverride> appliedStored;
+    if (m_which.empty())
+        chosen = root->prefabLink->overrides;
+    else
+        for (const PrefabSelection& s : resolvePrefabSelection(root->prefabLink->overrides, m_which, &t->memoryRoot))
+            chosen.push_back(s.override);
+    for (const PrefabOverride& c : chosen)
+        if (std::any_of(root->prefabLink->overrides.begin(), root->prefabLink->overrides.end(),
+                        [&](const PrefabOverride& o) { return sameTarget(o, c) && o.value == c.value; }))
+            appliedStored.push_back(c);
     std::vector<std::string> warnings;
     applyPrefabOverrides(tmpl, chosen, &warnings);
 
@@ -1626,9 +1632,12 @@ void ApplyPrefabOverridesCommand::doExecute()
     // Ready at once, its onReady propagates every instance from these links.
     root = m_ctx.scene.findById(m_rootId);
     std::erase_if(root->prefabLink->overrides, [&](const PrefabOverride& o) {
-        return std::any_of(chosen.begin(), chosen.end(), [&](const PrefabOverride& c) { return sameTarget(c, o); });
+        return std::any_of(appliedStored.begin(), appliedStored.end(),
+                           [&](const PrefabOverride& c) { return sameTarget(c, o); });
     });
-    m_applied = chosen;
+    // Only what left the instance comes back on undo (a narrowed field never
+    // left it: its wider entry stayed).
+    m_applied = appliedStored;
     m_toLink  = toLink;
     for (const auto& [sceneId, local] : toLink)
         if (GameObject* n = m_ctx.scene.findById(sceneId))
@@ -1793,9 +1802,21 @@ void RevertPrefabOverridesCommand::doExecute()
     recordPendingEdits(m_rootId);
     root = m_ctx.scene.findById(m_rootId);
 
-    std::vector<PrefabOverride> chosen;
-    for (const PrefabOverride& o : root->prefabLink->overrides)
-        if (selected(m_which, o)) chosen.push_back(o);
+    // Which entries go (all, or those at/inside the wanted paths) and which
+    // wider entries (the whole "/scripts" array) are rewritten at a wanted
+    // sub-path to the template's value instead of being dropped whole: a
+    // field-level Revert reverts that field only.
+    std::vector<PrefabOverride> list = root->prefabLink->overrides;
+    PrefabRevertPlan plan;
+    if (m_which.empty())
+    {
+        plan.removed = list;
+        list.clear();
+    }
+    else if (const PrefabTemplate* t = readyTemplate(m_ctx.library, root->prefabLink->path))
+    {
+        plan = revertPrefabSelection(list, m_which, t->memoryRoot);
+    }
     std::vector<uint64_t> addedIds;
     if (m_includeAdded)
     {
@@ -1805,24 +1826,24 @@ void RevertPrefabOverridesCommand::doExecute()
             if (m_onlyAdded.empty() || std::find(m_onlyAdded.begin(), m_onlyAdded.end(), a->id) != m_onlyAdded.end())
                 addedIds.push_back(a->id);
     }
-    if (chosen.empty() && addedIds.empty())
+    if (plan.empty() && addedIds.empty())
     {
         m_message = "Revert: nothing to revert";
         return;
     }
 
     // Only what is reverted is kept for the undo: the overrides (with their
-    // values) and each deleted child whole (ids, meshes), where it hung.
-    m_reverted = chosen;
+    // values), the rewritten ones (before/after) and each deleted child whole
+    // (ids, meshes), where it hung.
+    m_reverted  = plan.removed;
+    m_rewritten = plan.rewritten;
     m_deleted.clear();
     for (uint64_t id : addedIds)
         if (GameObject* n = m_ctx.scene.findById(id))
             m_deleted.push_back({ n->parent->id, indexInParent(n), m_ctx.scene.subtreeToJson(n),
                                   Scene::collectMeshes(n) });
 
-    std::erase_if(root->prefabLink->overrides, [&](const PrefabOverride& o) {
-        return std::any_of(chosen.begin(), chosen.end(), [&](const PrefabOverride& c) { return sameTarget(c, o); });
-    });
+    root->prefabLink->overrides = std::move(list);
     for (uint64_t id : addedIds)
         if (GameObject* n = m_ctx.scene.findById(id)) m_ctx.scene.removeGameObject(n);
     // Rebuilt from the template with what is left (synced, fresh baseline).
@@ -1845,6 +1866,15 @@ void RevertPrefabOverridesCommand::doUndo()
     // back only where the instance has no newer entry on the same path.
     recordPendingEdits(m_rootId);
     root = m_ctx.scene.findById(m_rootId);
+    // A rewritten entry goes back to its value before the Revert only while it
+    // still holds what the Revert wrote (a newer edit wins); gone, it comes back.
+    for (const auto& [before, after] : m_rewritten)
+    {
+        auto& list = root->prefabLink->overrides;
+        auto it = std::find_if(list.begin(), list.end(), [&](const PrefabOverride& o) { return sameTarget(o, before); });
+        if (it == list.end())                 list.push_back(before);
+        else if (it->value == after.value)    it->value = before.value;
+    }
     addMissing(root->prefabLink->overrides, m_reverted);
     // In the order they were deleted, so each index is the one it had.
     for (DeletedChild& d : m_deleted)

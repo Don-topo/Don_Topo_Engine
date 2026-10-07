@@ -308,10 +308,14 @@ private:
     // Whether the selection overrides any of paths (bold).
     bool prefabBold(std::initializer_list<const char*> paths) const;
     bool prefabBold(const std::string& path) const;
-    // Right click on the last item, when bold: "Apply to Prefab '<name>'" /
-    // "Revert" over the overrides under paths. popupId unique per label.
+    // Right click on the last item, when bold. A field (headerName empty):
+    // "Apply to Prefab '<name>'" / "Revert" of exactly its paths; a header:
+    // "Apply '<headerName>' changes..." / "Revert '<headerName>' changes".
+    // Inside an added component or script the items name the wider action
+    // (prefabFieldTarget). popupId unique per label.
     void prefabFieldMenu(EditorContext& ctx, const std::string& popupId,
-                         const std::vector<std::string>& paths);
+                         const std::vector<std::string>& paths, const std::string& headerName = {});
+    std::string prefabNodeObjectName(uint64_t node) const;
     // A component header: TreeNodeEx with the same label (same id), drawn bold
     // when the component has an override, with the right-click menu.
     bool prefabSectionHeader(EditorContext& ctx, const char* label, int flags,

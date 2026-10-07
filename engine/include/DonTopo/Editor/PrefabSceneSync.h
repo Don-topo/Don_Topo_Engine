@@ -3,6 +3,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -72,10 +73,26 @@ namespace DonTopo
             // every kFailedPollFrames calls, reloads the Failed ones whose file
             // changed on disk.
             void pump(float budgetMs);
-            // Edit Mode drop of a .prefab (spec §5.2): requests key and pumps
-            // until it is no longer Loading or timeoutMs pass. True when it is
-            // Ready; otherwise *error (if given) says why. Blocks the caller.
-            bool waitForTemplate(const std::string& key, int timeoutMs, std::string* error = nullptr);
+            // ── Drops of a .prefab whose template is not Ready yet (spec §5.2) ──
+            // Never waited for on the main thread: the drop is queued and the
+            // host instantiates it once the template is Ready (takeReady...).
+            struct QueuedInstantiate
+            {
+                std::string key;            // normalized
+                uint64_t    parentId = 0;   // 0 = scene root; resolved when it runs
+                std::chrono::steady_clock::time_point deadline;
+            };
+            // Requests key, logs "Loading prefab '<key>'...".
+            void queueInstantiate(const std::string& key, uint64_t parentId, std::chrono::milliseconds timeout);
+            // The queued drops whose template is Ready, in order, removed from
+            // the queue. Failed / evicted / past their deadline: dropped with a
+            // Log line. The caller runs an InstantiatePrefabCommand per item
+            // (which refuses a parent that is gone or now inside an instance).
+            std::vector<QueuedInstantiate> takeReadyInstantiates(std::chrono::steady_clock::time_point now);
+            // Scene reload, project switch, Play/Stop: queued ids belong to a
+            // scene that is gone. sceneLoaded and resetForNewRoot call it.
+            void clearQueuedInstantiates() { m_queuedInstantiates.clear(); }
+            size_t queuedInstantiateCount() const { return m_queuedInstantiates.size(); }
             void onTemplateReady(const PrefabTemplate& t);
             // PrefabLibrary::evict (installed as its onEvicted): unpins the key.
             void onTemplateEvicted(const std::string& key);
@@ -115,6 +132,7 @@ namespace DonTopo
             };
             FileStamp stampOf(const std::string& key) const;
             std::unordered_map<std::string, FileStamp> m_failedStamps;
+            std::vector<QueuedInstantiate> m_queuedInstantiates;
             int m_failedPollCountdown = kFailedPollFrames;
 
             PrefabLibrary&        m_lib;

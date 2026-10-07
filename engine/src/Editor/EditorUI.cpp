@@ -225,6 +225,8 @@ void EditorUI::setRenderer(std::unique_ptr<EditorRenderer> renderer)
 void EditorUI::setProject(const ProjectContext* project)
 {
     m_project = project;
+    // Work queued against the previous project's scene.
+    dropPendingPrefabWork();
 
     // Root against which Scene relativizes/resolves the hand-assigned texture
     // paths (Task 6). It has to be set HERE, before
@@ -397,6 +399,27 @@ void EditorUI::runPendingPrefabJobs()
         jobs.swap(m_pendingPrefabJobs);
         for (auto& job : jobs) job();
     }
+    // Dropped prefabs whose template became Ready (Edit Mode only: Play
+    // clears the queue). Each one is an InstantiatePrefabCommand, which
+    // refuses a parent that is gone or now inside an instance.
+    if (!m_prefabSync || m_isPlaying) return;
+    for (const PrefabSceneSync::QueuedInstantiate& q :
+         m_prefabSync->takeReadyInstantiates(std::chrono::steady_clock::now()))
+    {
+        const std::string key = q.key;
+        const uint64_t parentId = q.parentId;
+        execPrefabCommand([key, parentId](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+            return std::make_unique<InstantiatePrefabCommand>(pc, key, parentId);
+        });
+    }
+}
+
+void EditorUI::dropPendingPrefabWork()
+{
+    // Ids in these belong to the scene (or project) being replaced: in the new
+    // one they may name other objects.
+    m_pendingPrefabJobs.clear();
+    if (m_prefabSync) m_prefabSync->clearQueuedInstantiates();
 }
 
 void EditorUI::setScene(Scene* scene)
@@ -1228,19 +1251,10 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
                 return;
             }
             if (!m_prefabSync) { m_logPanel.push("[Prefab] Prefabs need an open project"); return; }
-            // Edit Mode: a template not loaded yet is waited for (spec §5.2).
-            // The pump may propagate other templates: same selection guard.
-            std::string error;
-            bool ready = false;
-            withPrefabRebuilds([&] { ready = m_prefabSync->waitForTemplate(key, 30000, &error); });
-            if (!ready)
-            {
-                m_logPanel.push("[Prefab] Instantiate: " + error);
-                return;
-            }
-            execPrefabCommand([key, parentId](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
-                return std::make_unique<InstantiatePrefabCommand>(pc, key, parentId);
-            });
+            // Never waited for here (spec §5.2 allows it, but a slow load froze
+            // the window): queued, and instantiated by runPendingPrefabJobs on
+            // the frame its template is Ready -- this same one if it already is.
+            m_prefabSync->queueInstantiate(key, parentId, std::chrono::seconds(60));
         });
     };
     ctx.revealAsset = [this](const std::filesystem::path& asset) { m_contentBrowserPanel.revealAsset(asset); };
@@ -1669,6 +1683,9 @@ void EditorUI::drawToolbar()
         {
             m_playSnapshot = m_scene->toJson();
             m_undoHistory.clear();
+            // A prefab drop still waiting for its template is not instantiated
+            // in Play (Stop clears it again through reloadSceneFromJson).
+            dropPendingPrefabWork();
             // Warning only once when Play starts (not every frame: the Renderer
             // queries findCamera() in all of them, and logging there would flood the
             // console). Without a camera, Play starts anyway with the editor's, since
@@ -1872,6 +1889,10 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
 {
     if (!m_scene || !m_renderer || !m_physics || !m_audio)
         return false;
+    // Prefab commands queued this frame (a panel drew before the Content
+    // Browser asked for this load) and drops waiting for a template name
+    // objects of the scene being replaced.
+    dropPendingPrefabWork();
 
     // Releases GPU resources of the current scene, and with them its indices: if
     // fromJson fails further down due to nested malformation, m_root is still

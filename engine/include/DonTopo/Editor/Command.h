@@ -1128,7 +1128,10 @@ private:
 };
 
 // Writes overrides of one instance into its .prefab (which: empty = all of
-// them) and, with includeAddedChildren, its added children (onlyAddedChildIds:
+// them; otherwise paths, resolved by resolvePrefabSelection -- the stored
+// entries at or inside each, or a field narrowed out of a wider entry like
+// the whole "/scripts" array, which then stays on the instance) and, with
+// includeAddedChildren, its added children (onlyAddedChildIds:
 // empty = all of them) with new prefab-local ids. Removes them from the
 // instance and rebuilds every instance of the prefab from the new template
 // right away (so a node it adds to another instance has an id later commands
@@ -1195,7 +1198,9 @@ private:
     std::shared_ptr<MaterialAssetCache> m_seedMats;   // PrefabTemplate::mats (MaterialAsset is incomplete here)
 };
 
-// Drops overrides of one instance (which: empty = all) and, with
+// Drops overrides of one instance (which: empty = all; otherwise paths, by
+// revertPrefabSelection -- a field inside a wider entry rewrites that entry
+// at the field instead of dropping it whole) and, with
 // includeAddedChildren, deletes its added children (onlyAddedChildIds: empty =
 // all of them); then rebuilds it from the template. Undo puts back ONLY those:
 // the reverted overrides (unless the instance has a newer entry on the same
@@ -1222,6 +1227,8 @@ private:
     bool                        m_includeAdded;
     std::vector<uint64_t>       m_onlyAdded;
     std::vector<PrefabOverride> m_reverted;
+    // Wider entries rewritten at a wanted sub-path: (before, after).
+    std::vector<std::pair<PrefabOverride, PrefabOverride>> m_rewritten;
     std::vector<DeletedChild>   m_deleted;
 };
 

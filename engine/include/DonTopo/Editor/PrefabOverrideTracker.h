@@ -226,10 +226,69 @@ namespace DonTopo
     // without it, always.
     bool isOverridden(const GameObject& instRoot, uint64_t prefabNode, std::string_view pathPrefix,
                       const nlohmann::json* templateNode = nullptr);
-    // The overrides isOverridden matches (at, inside or covering pathPrefix):
-    // what a right click on that label applies or reverts.
+    // The overrides isOverridden matches (at, inside or covering pathPrefix).
     std::vector<PrefabOverride> overridesUnder(const GameObject& instRoot, uint64_t prefabNode,
                                                std::string_view pathPrefix);
+
+    // An instance path of node `node` as the same place in the TEMPLATE node.
+    // Identical except under "/scripts/<i>": scripts are matched by name and
+    // occurrence (the k-th "Mover" of the instance is the k-th "Mover" of the
+    // template), read from the stored {node, "/scripts"} override -- so an
+    // added or removed script earlier in the array does not shift the others.
+    // nullopt when that script has no counterpart in the template (added).
+    std::optional<std::string> prefabTemplatePath(const std::vector<PrefabOverride>& stored, uint64_t node,
+                                                  std::string_view instPath, const nlohmann::json& templateNode);
+
+    // What a right click on a field or header of node `node` can act on.
+    //  Field: the label's own path (the commands narrow a covering override,
+    //         like the whole "/scripts" array, to it).
+    //  AddedComponent / AddedScript: the label lies inside something the
+    //         prefab does not have, so only the whole `wide` override (the
+    //         added component, or every script change of the node) can be
+    //         applied or removed; `name` is what the menu calls it.
+    struct PrefabFieldTarget
+    {
+        enum class Kind { None, Field, AddedComponent, AddedScript };
+        Kind           kind = Kind::None;
+        PrefabOverride wide;
+        std::string    name;
+    };
+    // templateNode null (template not Ready): Field when anything is overridden.
+    PrefabFieldTarget prefabFieldTarget(const GameObject& instRoot, uint64_t node, std::string_view path,
+                                        const nlohmann::json* templateNode);
+
+    // The overrides of `stored` a `which` selection (Apply/Revert) acts on,
+    // all entries for one node at a time in the result:
+    //  - every stored entry at or inside a wanted path, as stored;
+    //  - when none is, but a stored entry COVERS the wanted path (the whole
+    //    "/scripts" array): a narrow override {node, template path, the value
+    //    at that sub-path inside the covering entry (null when absent)} --
+    //    `narrowed` true. Skipped when the path has no template counterpart.
+    // templateRoot: the template (memory form, prefab-local "id"s); null = no
+    // narrowing (only stored entries are selected).
+    struct PrefabSelection
+    {
+        PrefabOverride override;
+        bool           narrowed = false;
+        std::string    instancePath;   // narrowed: the path inside the instance
+    };
+    std::vector<PrefabSelection> resolvePrefabSelection(const std::vector<PrefabOverride>& stored,
+                                                        const std::vector<PrefabOverride>& which,
+                                                        const nlohmann::json* templateRoot);
+
+    // Revert of a selection on the stored list, in place: stored entries at or
+    // inside a wanted path are removed; a covering entry is REWRITTEN at the
+    // wanted sub-path to the template's value (erased where the template has
+    // none), and dropped only if it then equals the template at its own path.
+    struct PrefabRevertPlan
+    {
+        std::vector<PrefabOverride> removed;                                // as they were
+        std::vector<std::pair<PrefabOverride, PrefabOverride>> rewritten;   // (before, after)
+        bool empty() const { return removed.empty() && rewritten.empty(); }
+    };
+    PrefabRevertPlan revertPrefabSelection(std::vector<PrefabOverride>& stored,
+                                           const std::vector<PrefabOverride>& which,
+                                           const nlohmann::json& templateRoot);
 
     // dir / "<name>.prefab", or "<name> 1.prefab", "<name> 2.prefab"... the
     // first that does not exist. Characters a file name cannot hold become

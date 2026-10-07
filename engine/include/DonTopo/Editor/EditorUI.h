@@ -469,6 +469,9 @@ private:
     // pointed at mid-draw.
     std::vector<std::function<void()>> m_pendingPrefabJobs;
     void runPendingPrefabJobs();
+    // Scene reload, project switch, Play/Stop: drops the queued jobs and the
+    // queued drops (PrefabSceneSync), whose ids belong to the old scene.
+    void dropPendingPrefabWork();
     // Runs one through pushPrefabCommand (execute once, push if applied, Log).
     // Refused in Play Mode and without a library.
     void execPrefabCommand(const EditorContext::PrefabCommandFactory& make);
