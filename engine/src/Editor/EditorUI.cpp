@@ -2302,7 +2302,14 @@ void EditorUI::runExport()
     const RenderBackend exportBackend = (m_exportBackend == (int)RenderBackend::D3D12)
                                             ? RenderBackend::D3D12
                                             : RenderBackend::Vulkan;
-    ExportResult result = exportGame(*m_scene, scriptPaths, m_exportDestDir,
+    // The referenced prefabs are loaded into temporary scenes to collect their
+    // assets, which needs both managers.
+    if (!m_physics || !m_audio)
+    {
+        m_logPanel.push("Export cancelled: the physics or audio manager is not available");
+        return;
+    }
+    ExportResult result = exportGame(*m_scene, *m_physics, *m_audio, scriptPaths, m_exportDestDir,
                                      m_exportNameBuffer, projectRoot, scriptsDir, runtimeExe,
                                      exportBackend, m_skyboxFolder);
     for (const std::string& msg : result.messages)

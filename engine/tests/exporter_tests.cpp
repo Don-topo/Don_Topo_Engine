@@ -2,8 +2,9 @@
 // Lua). Plain main + asserts, same pattern as content_browser_tests.cpp.
 //
 // The Meshes are built by hand instead of via ModelLoader: the test does not
-// need real geometry, only the path fields. And no collider is created, so
-// PhysicsManager is not instantiated: the engine only supports one
+// need real geometry, only the path fields. exportGame loads the referenced
+// prefabs into a temporary Scene, which needs a PhysicsManager: there is ONE
+// for the whole binary (physics() below), since the engine only supports one
 // PxFoundation per process.
 #include "DonTopo/Editor/GameExporter.h"
 #include "DonTopo/Core/Scene.h"
@@ -16,10 +17,16 @@
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Core/JobSystem.h"
+#include "DonTopo/Core/PrefabLibrary.h"
+#include "DonTopo/Physics/PhysicsManager.h"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -33,6 +40,23 @@ namespace fs = std::filesystem;
 
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
+
+// A single PhysicsManager for the whole binary: PxFoundation is unique per process.
+static PhysicsManager& physics()
+{
+    static PhysicsManager p;
+    static bool inited = (p.init(), true);
+    (void)inited;
+    return p;
+}
+
+static AudioManager& audio()
+{
+    static AudioManager a;
+    static bool inited = (a.init(), true);
+    (void)inited;
+    return a;
+}
 
 // Creates a fake project on disk with the files that the test scene
 // will reference. Returns the canonicalized root.
@@ -1081,7 +1105,7 @@ static void test_exportGame_aborts_without_camera(const fs::path& root)
     fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_nocam_out";
     fs::remove_all(dest, ec);
 
-    ExportResult r = exportGame(scene, {}, dest, "MiJuego", root,
+    ExportResult r = exportGame(scene, physics(), audio(), {}, dest, "MiJuego", root,
                                 root / "Scripts", root / "DonTopoRuntime.exe");
     CHECK(!r.ok);
     CHECK(!r.messages.empty());
@@ -1107,7 +1131,7 @@ static void test_exportGame_aborts_missing_asset(const fs::path& root)
     fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_missingasset_out";
     fs::remove_all(dest, ec);
 
-    ExportResult r = exportGame(scene, {}, dest, "MiJuego", root,
+    ExportResult r = exportGame(scene, physics(), audio(), {}, dest, "MiJuego", root,
                                 root / "Scripts", root / "DonTopoRuntime.exe");
     CHECK(!r.ok);
     CHECK(!r.messages.empty());
@@ -1462,6 +1486,321 @@ static void test_companion_sidecar_travels_next_to_it(const fs::path& root)
     fs::remove_all(outside, ec);
 }
 
+// ---- Prefabs (spec section 6) ----
+
+static void writeTextFile(const fs::path& file, const std::string& text)
+{
+    std::error_code ec;
+    fs::create_directories(file.parent_path(), ec);
+    std::ofstream(file, std::ios::binary) << text;
+}
+
+static std::string readTextFile(const fs::path& file)
+{
+    std::ifstream in(file, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+static nlohmann::json readJsonFile(const fs::path& file)
+{
+    try { return nlohmann::json::parse(readTextFile(file)); }
+    catch (const std::exception&) { return nlohmann::json(); }
+}
+
+// One triangle: a static model Assimp can read without a tracked file.
+static std::string writeTriangleObj(const fs::path& file)
+{
+    writeTextFile(file, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    return file.string();
+}
+
+static nlohmann::json prefabNode(uint64_t id, const char* name)
+{
+    nlohmann::json t = nlohmann::json::array();
+    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) t.push_back(c == r ? 1.0 : 0.0);
+    return { {"id", id}, {"name", name}, {"localTransform", t}, {"children", nlohmann::json::array()} };
+}
+
+static void writePrefab(const fs::path& file, const nlohmann::json& root)
+{
+    writeTextFile(file, nlohmann::json{ {"version", 1}, {"type", "prefab"}, {"root", root} }.dump(2));
+}
+
+// A script entry with one PrefabRef property, as Scene::nodeToJson writes it.
+static nlohmann::json scriptWithPrefabRef(const char* script, const char* var, const std::string& prefab)
+{
+    return nlohmann::json::array({ { {"name", script},
+                                     {"overrides", { {var, { {"prefab", prefab} }} }} } });
+}
+
+// The runtime's rules for the editor-side fixture: the export root (editor dir)
+// holds the runtime, shaders and skybox; the user's project is projects/<name>.
+static void ensureExportRootFiles(const fs::path& root)
+{
+    std::error_code ec;
+    fs::create_directories(root / "assets" / "skybox", ec);
+    for (const char* face : { "px", "nx", "py", "ny", "pz", "nz" })
+        if (!fs::exists(root / "assets" / "skybox" / (std::string(face) + ".png"), ec))
+            std::ofstream(root / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
+    fs::create_directories(root / "shaders", ec);
+    if (!fs::exists(root / "shaders" / "triangle.vert.spv", ec))
+        std::ofstream(root / "shaders" / "triangle.vert.spv") << "spv";
+    if (!fs::exists(root / "DonTopoRuntime.exe", ec))
+        std::ofstream(root / "DonTopoRuntime.exe") << "MZ";
+}
+
+// Every text file of the package that could carry a path: the scene, the
+// prefabs, the .mat files and game.cfg.
+static std::vector<fs::path> packageJsonFiles(const fs::path& pkg)
+{
+    std::vector<fs::path> out;
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(pkg, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if (!it->is_regular_file()) continue;
+        const std::string ext = it->path().extension().string();
+        if (ext == ".scene" || ext == ".prefab" || ext == ".mat" || ext == ".cfg" || ext == ".json")
+            out.push_back(it->path());
+    }
+    return out;
+}
+
+static bool containsNoCase(std::string hay, std::string needle)
+{
+    auto lower = [](std::string& s) {
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    };
+    lower(hay); lower(needle);
+    return !needle.empty() && hay.find(needle) != std::string::npos;
+}
+
+// Task 12 + the Task 9 obligation: the referenced prefabs travel with the
+// package (transitively, cycle included), every asset path inside them is a
+// package path, and a PrefabLibrary rooted at the package loads them -- with
+// the source project GONE and the cwd at the package, as the runtime runs.
+static void test_export_packages_referenced_prefabs(const fs::path& root)
+{
+    std::error_code ec;
+    ensureExportRootFiles(root);
+    const fs::path project = root / "projects" / "PrefabGame";
+    fs::remove_all(project, ec);
+
+    const std::string tri    = writeTriangleObj(project / "Models" / "tri.obj");
+    const std::string bullet = writeTriangleObj(project / "Models" / "bullet.obj");
+    MaterialAsset red;
+    red.roughness = 0.25f;
+    std::string err;
+    fs::create_directories(project / "Materials", ec);
+    CHECK(saveMaterialAsset(project / "Materials" / "red.mat", red, &err));
+
+    // Enemy -> Bullet -> Enemy: a cycle the BFS must close.
+    nlohmann::json enemy = prefabNode(1, "Enemy");
+    enemy["mesh"] = { {"sourcePath", tri}, {"name", "tri"},
+                      {"materials", nlohmann::json::array({ { {"index", 0}, {"matAsset", "Materials/red.mat"} } })} };
+    enemy["scripts"] = scriptWithPrefabRef("Shooter", "bullet", "Prefabs/Bullet.prefab");
+    writePrefab(project / "Prefabs" / "Enemy.prefab", enemy);
+    nlohmann::json bulletNode = prefabNode(1, "Bullet");
+    bulletNode["mesh"] = { {"sourcePath", bullet}, {"name", "bullet"} };
+    bulletNode["scripts"] = scriptWithPrefabRef("Shooter", "back", "Prefabs/Enemy.prefab");
+    writePrefab(project / "Prefabs" / "Bullet.prefab", bulletNode);
+    // Referenced ONLY by an instance link (and by a value inside its overrides):
+    // the runtime never reads it, so it must not be packaged.
+    writePrefab(project / "Prefabs" / "OnlyLinked.prefab", prefabNode(1, "OnlyLinked"));
+
+    nlohmann::json cam = prefabNode(1, "Camera");
+    cam["camera"] = nlohmann::json::object();
+    nlohmann::json spawner = prefabNode(2, "Spawner");
+    spawner["scripts"] = scriptWithPrefabRef("Spawner", "enemy", "Prefabs/Enemy.prefab");
+    // A linked instance of Enemy: full subtree in the scene, plus the link with
+    // overrides whose values carry a dev-machine path and a PrefabRef.
+    // Its script is removed in the instance, so the ONLY path to Bullet.prefab
+    // is Enemy.prefab's own reference (the transitive step).
+    nlohmann::json instance = enemy;
+    instance.erase("scripts");
+    // Unsigned on purpose: the loader only accepts unsigned ids and drops the rest.
+    instance["id"] = 3u;
+    instance["prefabNode"] = 1u;
+    instance["prefab"] = { {"path", "Prefabs/OnlyLinked.prefab"},
+                           {"overrides", nlohmann::json::array({
+                               { {"node", 1u}, {"path", "/mesh/materials/0/matAsset"},
+                                 {"value", (project / "Materials" / "red.mat").string()} },
+                               { {"node", 1u}, {"path", "/scripts/0/overrides/bullet"},
+                                 {"value", { {"prefab", "Prefabs/OnlyLinked.prefab"} }} } })} };
+    nlohmann::json sceneJson = { {"version", 1},
+                                 {"root", { {"id", 100}, {"name", "root"},
+                                            {"children", nlohmann::json::array({ cam, spawner, instance })} }} };
+
+    Scene scene;
+    scene.setAssetRoot(project.string());
+    CHECK(scene.fromJson(sceneJson, physics(), audio()));
+    // The fixture really carries the link into the scene (both overrides kept):
+    // otherwise the stripping below would be checked against nothing.
+    {
+        const nlohmann::json loaded = scene.toJson();
+        bool linked = false;
+        try
+        {
+            const nlohmann::json& link = loaded.at("root").at("children").at(2).at("prefab");
+            linked = link.at("path") == "Prefabs/OnlyLinked.prefab" && link.at("overrides").size() == 2 &&
+                     loaded.at("root").at("children").at(2).contains("prefabNode");
+        }
+        catch (const std::exception&) {}
+        CHECK(linked);
+    }
+
+    const fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_prefab_out";
+    fs::remove_all(dest, ec);
+    ExportResult r = exportGame(scene, physics(), audio(), {}, dest, "PrefabGame", root,
+                                project / "Scripts", root / "DonTopoRuntime.exe");
+    for (const std::string& m : r.messages) if (!r.ok) std::printf("  export: %s\n", m.c_str());
+    scene.shutdown();
+    CHECK(r.ok);
+
+    const fs::path pkg = dest / "PrefabGame";
+    const std::string prefix = "projects/PrefabGame/";
+    CHECK(fs::exists(pkg / prefix / "Prefabs" / "Enemy.prefab"));
+    CHECK(fs::exists(pkg / prefix / "Prefabs" / "Bullet.prefab"));     // transitive
+    CHECK(!fs::exists(pkg / prefix / "Prefabs" / "OnlyLinked.prefab")); // link-only
+    CHECK(fs::exists(pkg / prefix / "Models" / "tri.obj"));
+    CHECK(fs::exists(pkg / prefix / "Models" / "bullet.obj"));          // only the transitive prefab uses it
+    CHECK(fs::exists(pkg / prefix / "Materials" / "red.mat"));
+
+    // Paths inside the packaged prefabs are package paths.
+    const nlohmann::json enemyPkg  = readJsonFile(pkg / prefix / "Prefabs" / "Enemy.prefab");
+    const nlohmann::json bulletPkg = readJsonFile(pkg / prefix / "Prefabs" / "Bullet.prefab");
+    try
+    {
+        CHECK(enemyPkg.at("type") == "prefab");
+        CHECK(enemyPkg.at("root").at("mesh").at("sourcePath") == prefix + "Models/tri.obj");
+        CHECK(enemyPkg.at("root").at("mesh").at("materials").at(0).at("matAsset") == prefix + "Materials/red.mat");
+        CHECK(enemyPkg.at("root").at("scripts").at(0).at("overrides").at("bullet").at("prefab") ==
+              prefix + "Prefabs/Bullet.prefab");
+        CHECK(bulletPkg.at("root").at("mesh").at("sourcePath") == prefix + "Models/bullet.obj");
+        CHECK(bulletPkg.at("root").at("scripts").at(0).at("overrides").at("back").at("prefab") ==
+              prefix + "Prefabs/Enemy.prefab");
+    }
+    catch (const std::exception& e) { std::printf("  prefab json: %s\n", e.what()); CHECK(false); }
+
+    // game.scene: the script override points at the packaged prefab; the
+    // instance is unlinked (the runtime never propagates, and the link would
+    // carry editor paths and a reference to an unpackaged prefab).
+    const nlohmann::json game = readJsonFile(pkg / "game.scene");
+    try
+    {
+        const nlohmann::json& kids = game.at("root").at("children");
+        CHECK(kids.at(1).at("scripts").at(0).at("overrides").at("enemy").at("prefab") ==
+              prefix + "Prefabs/Enemy.prefab");
+        CHECK(!kids.at(2).contains("prefab"));
+        CHECK(!kids.at(2).contains("prefabNode"));
+        CHECK(kids.at(2).at("mesh").at("sourcePath") == prefix + "Models/tri.obj");
+    }
+    catch (const std::exception& e) { std::printf("  game.scene: %s\n", e.what()); CHECK(false); }
+    const std::vector<std::string> refs = PrefabLibrary::collectReferences(game);
+    // Only the spawner's: nothing from the stripped link, and Bullet is reached
+    // through Enemy alone (the instance's subtree has no script).
+    CHECK(refs.size() == 1 && refs[0] == prefix + "Prefabs/Enemy.prefab");
+
+    // No dev-machine path anywhere in the package's text files.
+    const std::vector<fs::path> texts = packageJsonFiles(pkg);
+    CHECK(texts.size() >= 5);   // game.scene, game.cfg, 2 .prefab, 1 .mat
+    for (const fs::path& f : texts)
+    {
+        const std::string body = readTextFile(f);
+        for (const std::string& leak : { root.string(), root.generic_string(), project.string(),
+                                         project.generic_string(), dest.string(), dest.generic_string() })
+        {
+            // Also as it would appear inside a JSON string (backslashes escaped).
+            const std::string quoted  = nlohmann::json(leak).dump();
+            const std::string escaped = quoted.substr(1, quoted.size() - 2);
+            const bool leaked = containsNoCase(body, leak) || containsNoCase(body, escaped);
+            if (leaked) std::printf("  leak of '%s' in %s\n", leak.c_str(), f.string().c_str());
+            CHECK(!leaked);
+        }
+    }
+
+    // The runtime's view: the source project is gone, the cwd is the package
+    // (runtime/main.cpp sets it to the executable's folder), the library is
+    // rooted at the package.
+    fs::remove_all(project, ec);
+    CHECK(!fs::exists(project));
+    const fs::path oldCwd = fs::current_path(ec);
+    fs::current_path(pkg, ec);
+    CHECK(!ec);
+    {
+        JobSystem js;
+        js.start(2);
+        PrefabLibrary lib(js, pkg.string());
+        for (const std::string& ref : refs) lib.request(ref);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        while (lib.pending() > 0 && std::chrono::steady_clock::now() < deadline)
+        {
+            lib.pump(audio(), 1000.0f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        const PrefabTemplate* te = lib.find(prefix + "Prefabs/Enemy.prefab");
+        const PrefabTemplate* tb = lib.find(prefix + "Prefabs/Bullet.prefab");
+        CHECK(te && te->state == PrefabTemplate::State::Ready);
+        CHECK(tb && tb->state == PrefabTemplate::State::Ready);
+        if (te && te->state == PrefabTemplate::State::Failed) std::printf("  Enemy: %s\n", te->error.c_str());
+        if (tb && tb->state == PrefabTemplate::State::Failed) std::printf("  Bullet: %s\n", tb->error.c_str());
+        if (te && te->state == PrefabTemplate::State::Ready)
+        {
+            Scene s;
+            s.setAssetRoot(pkg.string());
+            GameObject* inst = s.instantiatePrefab(*te, nullptr, nullptr, nullptr, physics(), audio());
+            CHECK(inst != nullptr);
+            CHECK(inst && inst->hasMesh() && !inst->getMesh()->vertices.empty());
+            CHECK(inst && inst->materialOverrides.size() == 1 &&
+                  exportPathKey(inst->materialOverrides[0].matAsset) ==
+                      exportPathKey((pkg / prefix / "Materials" / "red.mat").string()));
+            s.shutdown();
+        }
+    }
+    fs::current_path(oldCwd, ec);
+    CHECK(!ec);
+    fs::remove_all(dest, ec);
+    fs::remove_all(root / "projects", ec);
+}
+
+// A referenced prefab that is missing or not a prefab fails the export, the
+// same way a missing mesh does, before anything is written.
+static void test_export_fails_on_missing_or_invalid_prefab(const fs::path& root)
+{
+    std::error_code ec;
+    ensureExportRootFiles(root);
+    const fs::path project = root / "projects" / "BrokenRefs";
+    fs::remove_all(project, ec);
+    writeTextFile(project / "Prefabs" / "NotAPrefab.prefab", "{\"version\":1,\"type\":\"scene\",\"root\":{}}");
+
+    for (const char* ref : { "Prefabs/Missing.prefab", "Prefabs/NotAPrefab.prefab" })
+    {
+        nlohmann::json cam = prefabNode(1, "Camera");
+        cam["camera"] = nlohmann::json::object();
+        nlohmann::json spawner = prefabNode(2, "Spawner");
+        spawner["scripts"] = scriptWithPrefabRef("Spawner", "enemy", ref);
+        nlohmann::json sceneJson = { {"version", 1},
+                                     {"root", { {"id", 100}, {"name", "root"},
+                                                {"children", nlohmann::json::array({ cam, spawner })} }} };
+        Scene scene;
+        scene.setAssetRoot(project.string());
+        CHECK(scene.fromJson(sceneJson, physics(), audio()));
+
+        const fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_badprefab_out";
+        fs::remove_all(dest, ec);
+        ExportResult r = exportGame(scene, physics(), audio(), {}, dest, "Broken", root,
+                                    project / "Scripts", root / "DonTopoRuntime.exe");
+        scene.shutdown();
+        CHECK(!r.ok);
+        bool named = false;
+        for (const std::string& m : r.messages)
+            named = named || m.find(fs::path(ref).filename().string()) != std::string::npos;
+        CHECK(named);
+        CHECK(!fs::exists(dest / "Broken"));
+        fs::remove_all(dest, ec);
+    }
+    fs::remove_all(root / "projects", ec);
+}
+
 int main()
 {
     fs::path root = makeProjectFixture();
@@ -1504,6 +1843,8 @@ int main()
     test_exportGame_aborts_without_camera(root);
     test_exportGame_aborts_missing_asset(root);
     test_linux_package(root);
+    test_export_packages_referenced_prefabs(root);
+    test_export_fails_on_missing_or_invalid_prefab(root);
 
     std::error_code ec;
     fs::remove_all(root, ec);

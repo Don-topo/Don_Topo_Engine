@@ -12,6 +12,8 @@
 namespace DonTopo {
 
 class Scene;
+class PhysicsManager;
+class AudioManager;
 
 // An asset that the exported package must contain.
 struct ExportAsset {
@@ -60,6 +62,17 @@ std::vector<ExportAsset> collectSceneAssets(
     const std::filesystem::path& projectRoot,
     const std::map<std::string, std::filesystem::path>& scriptPaths);
 
+// The same over several scenes at once (the game scene plus one temporary
+// Scene per packaged prefab), plus extraFiles: plain files that travel as they
+// are (the .prefab files themselves). ONE pass with one dedup and one
+// assets/_external/N numbering: collecting each scene separately and merging
+// would hand the same _external/N to two different source folders.
+std::vector<ExportAsset> collectSceneAssets(
+    const std::vector<Scene*>& scenes,
+    const std::filesystem::path& projectRoot,
+    const std::map<std::string, std::filesystem::path>& scriptPaths,
+    const std::vector<std::string>& extraFiles);
+
 // Rewrites in place mesh.sourcePath, mesh.animationSources[].path and
 // audioClip.path of the whole tree to their packagePath. sourceToPackage is
 // keyed by exportPathKey(sourcePath). Returns how many paths were
@@ -70,9 +83,20 @@ std::vector<ExportAsset> collectSceneAssets(
 // to it (matAsset, texture overrides) are resolved against it before the lookup,
 // not against the working directory. Empty = look them up as stored. No
 // default on purpose: a caller that forgets it silently breaks the package.
+//
+// It also rewrites every serialized PrefabRef ({"prefab": "<path>"}, the values
+// PrefabLibrary::collectReferences finds) stored relative to assetRoot. Used
+// for game.scene AND for every packaged .prefab file (same rules).
 int rewriteScenePaths(nlohmann::json& sceneJson,
                       const std::map<std::string, std::string>& sourceToPackage,
                       const std::string& assetRoot);
+
+// Erases the prefab link ("prefab" object) and "prefabNode" of every node of a
+// scene/prefab document or loose node. The exported runtime never propagates (the
+// scene already stores each instance's full subtree), and the link's path and
+// override values are editor data: dev-machine paths and references to prefabs
+// that are not packaged. game.scene and every packaged .prefab go through it.
+void stripPrefabLinks(nlohmann::json& sceneOrNode);
 
 // Validates that 'name' is a safe path component to build
 // destDir / name. Fills 'reason' with the cause when it returns false.
@@ -155,7 +179,13 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 // Which platform the package is for. By default, that of
                                 // the exporting editor; the tests write that of
                                 // another to cover both rows from any OS.
-                                const ExportPlatform& plat = exportPlatformFor(platform::currentOs()));
+                                const ExportPlatform& plat = exportPlatformFor(platform::currentOs()),
+                                // packagePath -> content of each .prefab in `assets`,
+                                // already rewritten (stripPrefabLinks + rewriteScenePaths).
+                                // A .prefab asset is written from here, never copied
+                                // verbatim: one missing from this map fails the export
+                                // instead of leaking the editor's paths into the package.
+                                const std::map<std::string, nlohmann::json>& rewrittenPrefabs = {});
 
 // Full export: validates, collects, rewrites and writes the package.
 // User messages go in ExportResult::messages; the caller
@@ -164,7 +194,17 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
 // It is here and not in EditorUI because it draws nothing: it is export orchestration
 // and path arithmetic. Living in the module is what lets
 // exporter_tests exercise the destructive paths without opening a window.
+//
+// Prefabs: every .prefab the scene's PrefabRefs name is packaged, and the ones
+// THEY name, transitively (cycles end). Each one is loaded into a temporary
+// Scene (hence physics/audio, which must be alive and are left as found) so
+// collectSceneAssets sees its models, materials, clips and scripts exactly as
+// it sees the scene's. A referenced prefab that is missing or not a prefab
+// cancels the export, like any missing asset. Instance links are stripped
+// (stripPrefabLinks): a prefab referenced ONLY by a link is not packaged.
 ExportResult exportGame(Scene& scene,
+                        PhysicsManager& physics,
+                        AudioManager& audio,
                         const std::map<std::string, std::filesystem::path>& scriptPaths,
                         const std::filesystem::path& destDir,
                         const std::string& gameName,
