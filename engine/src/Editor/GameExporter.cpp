@@ -537,6 +537,17 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
     return n;
 }
 
+// A stored prefab reference in the form PrefabLibrary::normalizeKey gives it:
+// '\' -> '/', lexically normalized, generic separators. Without the first step
+// a hand-edited "Prefabs\\Enemy.prefab" resolves on Windows but is ONE filename
+// on Linux, and the export reports it missing. (normalizeKey itself needs a
+// library instance; its asset-root stripping does not apply to stored values.)
+std::string normalizePrefabRef(std::string ref)
+{
+    std::replace(ref.begin(), ref.end(), '\\', '/');
+    return fs::path(ref).lexically_normal().generic_string();
+}
+
 // Every serialized PrefabRef: exactly {"prefab": "<path>"}, wherever it sits
 // (script overrides today). The same shape PrefabLibrary::collectReferences
 // matches, so whatever the runtime requests is what gets rewritten. Its paths
@@ -549,7 +560,14 @@ int rewritePrefabRefs(nlohmann::json& j, const std::map<std::string, std::string
     {
         if (j.size() == 1)
             if (const auto p = j.find("prefab"); p != j.end() && p->is_string())
-                return rewriteField(j, "prefab", sourceToPackage, assetRoot);
+            {
+                // Looked up in normalized form (the one the BFS packaged it under);
+                // an unknown value is left exactly as stored.
+                nlohmann::json normalized = { {"prefab", normalizePrefabRef(p->get<std::string>())} };
+                if (!rewriteField(normalized, "prefab", sourceToPackage, assetRoot)) return 0;
+                j = std::move(normalized);
+                return 1;
+            }
         for (auto& [key, value] : j.items())
             n += rewritePrefabRefs(value, sourceToPackage, assetRoot);
     }
@@ -1169,7 +1187,7 @@ ExportResult exportGame(Scene& scene,
             queue.pop_front();
             // Stored relative to the project (PrefabLibrary key form), the same
             // resolution rewriteField applies when rewriting it.
-            const fs::path refPath(ref);
+            const fs::path refPath(normalizePrefabRef(ref));
             const std::string source = (refPath.is_absolute() || assetRoot.empty())
                                      ? refPath.string() : (fs::path(assetRoot) / refPath).string();
             if (!visited.insert(exportPathKey(source)).second) continue;
@@ -1238,6 +1256,7 @@ ExportResult exportGame(Scene& scene,
     }
 
     std::vector<ExportAsset> assets = collectSceneAssets(scenes, projectRoot, scriptPaths, prefabFiles);
+    r.packagedAssets = assets;
     // Nothing else needs the temporary scenes: free their meshes before copying.
     scenes.resize(1);
     for (auto& s : prefabScenes) s->shutdown();
@@ -1307,9 +1326,11 @@ ExportResult exportGame(Scene& scene,
         return r;
     }
 
-    return writeExportPackage(assets, sceneJson, destDir, gameName, projectRoot, scriptsDir,
-                              runtimeExe, backend, skyboxFolder,
-                              exportPlatformFor(platform::currentOs()), rewrittenPrefabs);
+    ExportResult written = writeExportPackage(assets, sceneJson, destDir, gameName, projectRoot, scriptsDir,
+                                              runtimeExe, backend, skyboxFolder,
+                                              exportPlatformFor(platform::currentOs()), rewrittenPrefabs);
+    written.packagedAssets = std::move(assets);
+    return written;
 }
 
 } // namespace DonTopo

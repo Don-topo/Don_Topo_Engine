@@ -36,6 +36,12 @@ struct ExportResult {
     int                      fileCount  = 0;
     std::uintmax_t           totalBytes = 0;
     std::vector<std::string> messages;
+    // exportGame: every asset it collected for the package -- the scene's AND the
+    // ones reached only through packaged prefabs (the .prefab files included).
+    // Filled once collection succeeds, even if writing fails later. The editor's
+    // "asset outside the project" warning reads this list instead of re-scanning
+    // the scene, which cannot see what only a prefab references.
+    std::vector<ExportAsset> packagedAssets;
 };
 
 // Canonical key of a path to compare and deduplicate: weakly_canonical +

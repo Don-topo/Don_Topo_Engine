@@ -2280,25 +2280,6 @@ void EditorUI::runExport()
         for (const auto& [name, cls] : m_scriptManager->getRegistry())
             scriptPaths[name] = cls.path;
 
-    // Warning, NOT a block: the package is assembled from what the scene references, and
-    // that may fall outside the project. The repo's shared assets are
-    // legitimate and travel as always; what is worth flagging is an asset of
-    // ANOTHER project, which is a leak. It warns and exports anyway: leaving it
-    // out of the package would give a game without that asset, which is worse.
-    if (m_project && m_project->valid())
-    {
-        const ProjectContext workspace(ProjectContext::workspaceDir());
-        for (const ExportAsset& a : collectSceneAssets(*m_scene, projectRoot, scriptPaths))
-        {
-            const fs::path src(a.sourcePath);
-            if (m_project->contains(src))
-                continue;
-            m_logPanel.push(std::string("[Project] Warning: the export includes an asset from ") +
-                            (workspace.contains(src) ? "ANOTHER project: " : "outside the project: ") +
-                            a.sourcePath);
-        }
-    }
-
     const RenderBackend exportBackend = (m_exportBackend == (int)RenderBackend::D3D12)
                                             ? RenderBackend::D3D12
                                             : RenderBackend::Vulkan;
@@ -2312,6 +2293,28 @@ void EditorUI::runExport()
     ExportResult result = exportGame(*m_scene, *m_physics, *m_audio, scriptPaths, m_exportDestDir,
                                      m_exportNameBuffer, projectRoot, scriptsDir, runtimeExe,
                                      exportBackend, m_skyboxFolder);
+
+    // Warning, NOT a block: the package is assembled from what the scene references, and
+    // that may fall outside the project. The repo's shared assets are
+    // legitimate and travel as always; what is worth flagging is an asset of
+    // ANOTHER project, which is a leak. It warns and exports anyway: leaving it
+    // out of the package would give a game without that asset, which is worse.
+    // It reads the list exportGame actually packaged, not a re-scan of the scene:
+    // an asset reached only through a referenced prefab is invisible to the scene.
+    if (m_project && m_project->valid())
+    {
+        const ProjectContext workspace(ProjectContext::workspaceDir());
+        for (const ExportAsset& a : result.packagedAssets)
+        {
+            const fs::path src(a.sourcePath);
+            if (m_project->contains(src))
+                continue;
+            m_logPanel.push(std::string("[Project] Warning: the export includes an asset from ") +
+                            (workspace.contains(src) ? "ANOTHER project: " : "outside the project: ") +
+                            a.sourcePath);
+        }
+    }
+
     for (const std::string& msg : result.messages)
         m_logPanel.push(msg);
     if (!result.ok)

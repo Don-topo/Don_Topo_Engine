@@ -1577,7 +1577,8 @@ static bool containsNoCase(std::string hay, std::string needle)
 // Task 12 + the Task 9 obligation: the referenced prefabs travel with the
 // package (transitively, cycle included), every asset path inside them is a
 // package path, and a PrefabLibrary rooted at the package loads them -- with
-// the source project GONE and the cwd at the package, as the runtime runs.
+// the source project GONE and the cwd set to the package, as runtime/main.cpp
+// does (packaged mesh paths are cwd-relative; see the comment at the load).
 static void test_export_packages_referenced_prefabs(const fs::path& root)
 {
     std::error_code ec;
@@ -1718,9 +1719,13 @@ static void test_export_packages_referenced_prefabs(const fs::path& root)
         }
     }
 
-    // The runtime's view: the source project is gone, the cwd is the package
-    // (runtime/main.cpp sets it to the executable's folder), the library is
-    // rooted at the package.
+    // The runtime's view: the source project is gone, the library is rooted at
+    // the package AND the cwd is the package. The cwd matters, not just the
+    // root: the library resolves .prefab keys and matAsset against its root,
+    // but a mesh sourcePath is resolved as stored, i.e. against the cwd. The
+    // packaged "projects/.../tri.obj" therefore loads only because
+    // runtime/main.cpp chdirs to the executable's folder (the package) first;
+    // that chdir is part of the guarantee this test checks.
     fs::remove_all(project, ec);
     CHECK(!fs::exists(project));
     const fs::path oldCwd = fs::current_path(ec);
@@ -1759,6 +1764,72 @@ static void test_export_packages_referenced_prefabs(const fs::path& root)
     fs::current_path(oldCwd, ec);
     CHECK(!ec);
     fs::remove_all(dest, ec);
+    fs::remove_all(root / "projects", ec);
+}
+
+// ExportResult lists what was packaged, so the editor's "asset outside the
+// project" warning sees assets reached ONLY through a prefab (a re-scan of the
+// scene cannot). And a hand-edited reference with '\' separators resolves like
+// PrefabLibrary::normalizeKey does: on Linux fs::path keeps '\' as a filename
+// character and the prefab would be reported missing.
+static void test_export_reports_prefab_only_assets_and_normalizes_refs(const fs::path& root)
+{
+    std::error_code ec;
+    ensureExportRootFiles(root);
+    const fs::path project  = root / "projects" / "RefStyles";
+    const fs::path outside  = fs::temp_directory_path(ec) / "dt_exporter_outside_models";
+    fs::remove_all(project, ec);
+    fs::remove_all(outside, ec);
+    const std::string far = writeTriangleObj(outside / "far.obj");   // outside root AND project
+
+    nlohmann::json enemy = prefabNode(1, "Enemy");
+    enemy["mesh"] = { {"sourcePath", far}, {"name", "far"} };
+    writePrefab(project / "Prefabs" / "Enemy.prefab", enemy);
+
+    nlohmann::json cam = prefabNode(1, "Camera");
+    cam["camera"] = nlohmann::json::object();
+    nlohmann::json spawner = prefabNode(2, "Spawner");
+    spawner["scripts"] = scriptWithPrefabRef("Spawner", "enemy", "Prefabs\\Enemy.prefab");
+    nlohmann::json sceneJson = { {"version", 1},
+                                 {"root", { {"id", 100}, {"name", "root"},
+                                            {"children", nlohmann::json::array({ cam, spawner })} }} };
+    Scene scene;
+    scene.setAssetRoot(project.string());
+    CHECK(scene.fromJson(sceneJson, physics(), audio()));
+
+    const fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_refstyles_out";
+    fs::remove_all(dest, ec);
+    ExportResult r = exportGame(scene, physics(), audio(), {}, dest, "RefStyles", root,
+                                project / "Scripts", root / "DonTopoRuntime.exe");
+    for (const std::string& m : r.messages) if (!r.ok) std::printf("  export: %s\n", m.c_str());
+    scene.shutdown();
+    CHECK(r.ok);
+
+    const std::string prefix = "projects/RefStyles/";
+    const fs::path pkg = dest / "RefStyles";
+    CHECK(fs::exists(pkg / prefix / "Prefabs" / "Enemy.prefab"));
+    const nlohmann::json game = readJsonFile(pkg / "game.scene");
+    try
+    {
+        CHECK(game.at("root").at("children").at(1).at("scripts").at(0).at("overrides").at("enemy").at("prefab") ==
+              prefix + "Prefabs/Enemy.prefab");
+    }
+    catch (const std::exception& e) { std::printf("  game.scene: %s\n", e.what()); CHECK(false); }
+
+    // The prefab-only external model is in the reported list, under _external.
+    bool reported = false;
+    for (const ExportAsset& a : r.packagedAssets)
+        reported = reported || (exportPathKey(a.sourcePath) == exportPathKey(far) &&
+                                a.packagePath.rfind("assets/_external/", 0) == 0);
+    CHECK(reported);
+    // And the list is the whole package's: the prefab itself is in it too.
+    bool prefabListed = false;
+    for (const ExportAsset& a : r.packagedAssets)
+        prefabListed = prefabListed || a.packagePath == prefix + "Prefabs/Enemy.prefab";
+    CHECK(prefabListed);
+
+    fs::remove_all(dest, ec);
+    fs::remove_all(outside, ec);
     fs::remove_all(root / "projects", ec);
 }
 
@@ -1845,6 +1916,7 @@ int main()
     test_linux_package(root);
     test_export_packages_referenced_prefabs(root);
     test_export_fails_on_missing_or_invalid_prefab(root);
+    test_export_reports_prefab_only_assets_and_normalizes_refs(root);
 
     std::error_code ec;
     fs::remove_all(root, ec);

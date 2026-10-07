@@ -132,6 +132,7 @@ int main(int argc, char** argv)
         const std::filesystem::path exeDir = executableDir();
         std::error_code ec;
         std::filesystem::current_path(exeDir, ec);
+        // Packaged prefab mesh paths (mesh.sourcePath / animationSources) are package-relative and resolved against this cwd, not the library root.
         // After current_path: game.log is created next to the executable, not in
         // the directory from which the game was launched.
         redirectStdioToLogFile();
