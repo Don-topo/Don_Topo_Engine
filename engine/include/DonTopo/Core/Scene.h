@@ -39,6 +39,13 @@ namespace DonTopo
     // in the key, the undo of Delete of a multi-piece model would give the same
     // mesh to all its children.
     std::string meshCacheKey(const std::string& sourcePath, int piece);
+    // Key of the n-th (n >= 1) EXTRA skinned mesh of the same file+piece as
+    // baseKey (a meshCacheKey) with ANOTHER animation-source configuration:
+    // Scene::collectMeshes keeps one entry per configuration, and a skinned load
+    // looks at the base entry and then at variants 1, 2, ... until one is missing.
+    // Without them two nodes on the same FBX with different source lists shared
+    // ONE seed, and the undo of a Delete or a clone gave one node the other's clips.
+    std::string meshCacheVariantKey(const std::string& baseKey, int n);
 
     // Rewrite IN PLACE the stored-path fields of a node tree (mesh.materials[].albedo/
     // normal/orm/matAsset): the disk-form fields nodeToJson writes with toStoredPath.

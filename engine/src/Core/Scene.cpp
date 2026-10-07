@@ -2268,37 +2268,50 @@ namespace
                     // configuration the JSON asks for (the case of the clone and of the undo of
                     // Delete, which seed the cache with the live mesh), it is
                     // SHARED without touching it: neither a 12 MB copy nor re-applying
-                    // sources, which duplicated its clips. If it does not match (a freshly
-                    // preloaded FBX with another configuration), it is copied and
-                    // configured as always.
+                    // sources, which duplicated its clips. If none matches, an
+                    // unconfigured one (a freshly preloaded FBX) is copied and
+                    // configured as always; a configured one never is (see below).
                     std::shared_ptr<const DonTopo::Mesh> compartida;
                     std::shared_ptr<DonTopo::SkinnedMesh> mesh;
                     if (preloaded)
                     {
-                        auto it = preloaded->find(sourcePath);
-                        if (it != preloaded->end())
-                            if (const auto* sk = dynamic_cast<const DonTopo::SkinnedMesh*>(it->second.get()))
-                            {
-                                // Without the key (scene saved before it
-                                // existed) the scene asks only for the
-                                // animations of the FBX itself, which is exactly
-                                // what a preloaded one with a single builtin
-                                // source of that file brings. Without this equivalence
-                                // each node took its own copy (~80 MB with
-                                // modelAnimation.fbx). If it brings more sources, it is
-                                // copied and configured as before.
-                                const bool conClave = j["mesh"].contains("animationSources");
-                                const bool soloBuiltin = sk->animationSources.size() == 1 &&
-                                                         sk->animationSources[0].builtin &&
-                                                         sk->animationSources[0].path == sourcePath;
-                                const nlohmann::json fuentesPedidas = conClave
-                                    ? j["mesh"]["animationSources"] : nlohmann::json::array();
-                                if (conClave ? DonTopo::meshMatchesAnimationConfig(*sk, fuentesPedidas)
-                                             : soloBuiltin)
-                                    compartida = it->second;
-                                else
-                                    mesh = std::make_shared<DonTopo::SkinnedMesh>(*sk);
-                            }
+                        // Without the key (scene saved before it existed) the
+                        // scene asks only for the animations of the FBX itself,
+                        // which is exactly what a preloaded one with a single
+                        // builtin source of that file brings. Without this
+                        // equivalence each node took its own copy (~80 MB with
+                        // modelAnimation.fbx).
+                        const bool conClave = j["mesh"].contains("animationSources");
+                        const nlohmann::json fuentesPedidas = conClave
+                            ? j["mesh"]["animationSources"] : nlohmann::json::array();
+                        auto onlyBuiltin = [&](const DonTopo::SkinnedMesh& sk) {
+                            return sk.animationSources.size() == 1 && sk.animationSources[0].builtin &&
+                                   sk.animationSources[0].path == sourcePath;
+                        };
+                        // The base entry and then every configuration variant
+                        // collectMeshes added (meshCacheVariantKey). The one
+                        // configured exactly as the JSON asks is shared. Otherwise
+                        // only an UNCONFIGURED one (no source, or just the file's
+                        // own) may be copied and configured: applyAnimationSourceConfig
+                        // only appends, so configuring a copy of a mesh that
+                        // already carries another list would keep that list's
+                        // clips -- the wrong animations. Without such a candidate
+                        // it is read from disk, as on a miss.
+                        const DonTopo::SkinnedMesh* unconfigured = nullptr;
+                        for (int v = 0; !compartida; ++v)
+                        {
+                            const auto it = preloaded->find(v == 0 ? sourcePath
+                                                                   : DonTopo::meshCacheVariantKey(sourcePath, v));
+                            if (it == preloaded->end()) break;
+                            const auto* sk = dynamic_cast<const DonTopo::SkinnedMesh*>(it->second.get());
+                            if (!sk) continue;
+                            if (conClave ? DonTopo::meshMatchesAnimationConfig(*sk, fuentesPedidas) : onlyBuiltin(*sk))
+                                compartida = it->second;
+                            else if (!unconfigured && (sk->animationSources.empty() || onlyBuiltin(*sk)))
+                                unconfigured = sk;
+                        }
+                        if (!compartida && unconfigured)
+                            mesh = std::make_shared<DonTopo::SkinnedMesh>(*unconfigured);
                     }
                     if (!mesh && !compartida)
                         mesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(sourcePath));
@@ -4053,6 +4066,11 @@ namespace DonTopo
         return piece == 0 ? sourcePath : sourcePath + "#piece=" + std::to_string(piece);
     }
 
+    std::string meshCacheVariantKey(const std::string& baseKey, int n)
+    {
+        return baseKey + "#config=" + std::to_string(n);
+    }
+
     std::vector<MaterialOverride> materialOverridesFromJson(const nlohmann::json& mats, const std::string& nodeName,
                                                             const std::string& assetRoot, bool carryOverrideBaseline,
                                                             std::vector<std::string>* warnings)
@@ -4160,11 +4178,41 @@ namespace DonTopo
     {
         PreloadedMeshCache out;
         if (!root) return out;
+        // Same animation sources (path, builtin, clip names, in order): one entry
+        // serves both, a skinned load shares it.
+        auto sameSources = [](const SkinnedMesh& a, const SkinnedMesh& b) {
+            if (a.animationSources.size() != b.animationSources.size()) return false;
+            for (size_t i = 0; i < a.animationSources.size(); ++i)
+            {
+                const AnimationSource& x = a.animationSources[i];
+                const AnimationSource& y = b.animationSources[i];
+                if (x.path != y.path || x.builtin != y.builtin || x.clipNames != y.clipNames) return false;
+            }
+            return true;
+        };
+        std::unordered_map<std::string, int> variants;   // extra entries per base key
         root->traverse([&](GameObject* n) {
             if (!n->hasMesh()) return;
-            const std::string& ruta = n->getMesh()->sourcePath;
+            const std::shared_ptr<const Mesh>& mesh = n->getMesh();
+            const std::string& ruta = mesh->sourcePath;
             if (ruta.empty()) return;   // procedural: there is no file to avoid
-            out[meshCacheKey(ruta, n->getMesh()->piece)] = n->getMesh();
+            const std::string key = meshCacheKey(ruta, mesh->piece);
+            const auto it = out.find(key);
+            if (it == out.end()) { out.emplace(key, mesh); return; }
+            const auto* sk = dynamic_cast<const SkinnedMesh*>(mesh.get());
+            if (!sk) { it->second = mesh; return; }   // static: one per file+piece, as always
+            // Skinned: one entry per animation-source configuration. A node whose
+            // configuration is already listed is served by that entry.
+            auto served = [&](const std::shared_ptr<const Mesh>& other) {
+                if (other == mesh) return true;
+                const auto* o = dynamic_cast<const SkinnedMesh*>(other.get());
+                return o && sameSources(*o, *sk);
+            };
+            if (served(it->second)) return;
+            int& count = variants[key];
+            for (int v = 1; v <= count; ++v)
+                if (served(out.at(meshCacheVariantKey(key, v)))) return;
+            out.emplace(meshCacheVariantKey(key, ++count), mesh);
         });
         return out;
     }
