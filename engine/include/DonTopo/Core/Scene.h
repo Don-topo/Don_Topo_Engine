@@ -46,6 +46,16 @@ namespace DonTopo
     // Without them two nodes on the same FBX with different source lists shared
     // ONE seed, and the undo of a Delete or a clone gave one node the other's clips.
     std::string meshCacheVariantKey(const std::string& baseKey, int n);
+    // Adds src's meshes to dst WITHOUT losing configurations: variants are
+    // numbered per cache (collectMeshes of one root), so merging two caches by
+    // plain key dropped (emplace) or overwrote ([]) the other's skinned
+    // configurations, and that node then reconfigured from disk on the main
+    // thread. Each skinned mesh of src whose animation-source configuration dst
+    // does not serve yet is appended at the next free variant of its base key.
+    // srcWins: on a plain key holding another mesh, src's takes the base entry
+    // (the caller's are fresher) and dst's is kept as a variant if it serves
+    // another configuration. Non-skinned entries: one per key, as before.
+    void mergeMeshCaches(PreloadedMeshCache& dst, const PreloadedMeshCache& src, bool srcWins = false);
 
     // Rewrite IN PLACE the stored-path fields of a node tree (mesh.materials[].albedo/
     // normal/orm/matAsset): the disk-form fields nodeToJson writes with toStoredPath.

@@ -4211,6 +4211,78 @@ namespace DonTopo
         return baseKey + "#config=" + std::to_string(n);
     }
 
+    namespace
+    {
+        // Same animation sources (path, builtin, clip names, in order): one cache
+        // entry serves both, a skinned load shares it.
+        bool sameAnimationSources(const SkinnedMesh& a, const SkinnedMesh& b)
+        {
+            if (a.animationSources.size() != b.animationSources.size()) return false;
+            for (size_t i = 0; i < a.animationSources.size(); ++i)
+            {
+                const AnimationSource& x = a.animationSources[i];
+                const AnimationSource& y = b.animationSources[i];
+                if (x.path != y.path || x.builtin != y.builtin || x.clipNames != y.clipNames) return false;
+            }
+            return true;
+        }
+
+        // Puts a skinned mesh at base or at the next free variant of base, unless
+        // an entry there already serves its configuration.
+        void addSkinnedVariant(PreloadedMeshCache& cache, const std::string& base,
+                               const std::shared_ptr<const Mesh>& mesh)
+        {
+            const auto* sk = dynamic_cast<const SkinnedMesh*>(mesh.get());
+            auto served = [&](const std::shared_ptr<const Mesh>& other) {
+                if (other == mesh) return true;
+                const auto* o = dynamic_cast<const SkinnedMesh*>(other.get());
+                return sk && o && sameAnimationSources(*o, *sk);
+            };
+            const auto b = cache.find(base);
+            if (b == cache.end()) { cache.emplace(base, mesh); return; }
+            if (served(b->second)) return;
+            for (int v = 1;; ++v)
+            {
+                const std::string key = meshCacheVariantKey(base, v);
+                const auto it = cache.find(key);
+                if (it == cache.end()) { cache.emplace(key, mesh); return; }
+                if (served(it->second)) return;
+            }
+        }
+    }
+
+    void mergeMeshCaches(PreloadedMeshCache& dst, const PreloadedMeshCache& src, bool srcWins)
+    {
+        for (const auto& [key, mesh] : src)
+        {
+            if (!mesh) continue;
+            const size_t at = key.find("#config=");
+            const std::string base = at == std::string::npos ? key : key.substr(0, at);
+            const auto it = dst.find(base);
+            const bool skinned = dynamic_cast<const SkinnedMesh*>(mesh.get()) != nullptr;
+            if (it == dst.end() || it->second == mesh)
+            {
+                if (it == dst.end()) dst.emplace(base, mesh);
+                continue;
+            }
+            const bool baseSkinned = dynamic_cast<const SkinnedMesh*>(it->second.get()) != nullptr;
+            if (!skinned || !baseSkinned)
+            {
+                if (srcWins && at == std::string::npos) it->second = mesh;   // one per key, as before
+                continue;
+            }
+            if (srcWins && at == std::string::npos)
+            {
+                // src's mesh takes the base entry; dst's goes on as a variant.
+                const std::shared_ptr<const Mesh> displaced = it->second;
+                it->second = mesh;
+                addSkinnedVariant(dst, base, displaced);
+                continue;
+            }
+            addSkinnedVariant(dst, base, mesh);
+        }
+    }
+
     std::vector<MaterialOverride> materialOverridesFromJson(const nlohmann::json& mats, const std::string& nodeName,
                                                             const std::string& assetRoot, bool carryOverrideBaseline,
                                                             std::vector<std::string>* warnings)
@@ -4318,19 +4390,6 @@ namespace DonTopo
     {
         PreloadedMeshCache out;
         if (!root) return out;
-        // Same animation sources (path, builtin, clip names, in order): one entry
-        // serves both, a skinned load shares it.
-        auto sameSources = [](const SkinnedMesh& a, const SkinnedMesh& b) {
-            if (a.animationSources.size() != b.animationSources.size()) return false;
-            for (size_t i = 0; i < a.animationSources.size(); ++i)
-            {
-                const AnimationSource& x = a.animationSources[i];
-                const AnimationSource& y = b.animationSources[i];
-                if (x.path != y.path || x.builtin != y.builtin || x.clipNames != y.clipNames) return false;
-            }
-            return true;
-        };
-        std::unordered_map<std::string, int> variants;   // extra entries per base key
         root->traverse([&](GameObject* n) {
             if (!n->hasMesh()) return;
             const std::shared_ptr<const Mesh>& mesh = n->getMesh();
@@ -4339,20 +4398,10 @@ namespace DonTopo
             const std::string key = meshCacheKey(ruta, mesh->piece);
             const auto it = out.find(key);
             if (it == out.end()) { out.emplace(key, mesh); return; }
-            const auto* sk = dynamic_cast<const SkinnedMesh*>(mesh.get());
-            if (!sk) { it->second = mesh; return; }   // static: one per file+piece, as always
+            if (!dynamic_cast<const SkinnedMesh*>(mesh.get())) { it->second = mesh; return; }   // static: one per file+piece, as always
             // Skinned: one entry per animation-source configuration. A node whose
             // configuration is already listed is served by that entry.
-            auto served = [&](const std::shared_ptr<const Mesh>& other) {
-                if (other == mesh) return true;
-                const auto* o = dynamic_cast<const SkinnedMesh*>(other.get());
-                return o && sameSources(*o, *sk);
-            };
-            if (served(it->second)) return;
-            int& count = variants[key];
-            for (int v = 1; v <= count; ++v)
-                if (served(out.at(meshCacheVariantKey(key, v)))) return;
-            out.emplace(meshCacheVariantKey(key, ++count), mesh);
+            addSkinnedVariant(out, key, mesh);
         });
         return out;
     }
@@ -4763,8 +4812,7 @@ namespace DonTopo
         size_t index = 0;
         while (index < parent->children.size() && parent->children[index].get() != instanceRoot) ++index;
         PreloadedMeshCache cache = collectMeshes(instanceRoot);
-        if (meshes)
-            for (const auto& [key, mesh] : *meshes) cache[key] = mesh;   // the caller's are fresher
+        if (meshes) mergeMeshCaches(cache, *meshes, /*srcWins=*/true);   // the caller's are fresher
         removeGameObject(instanceRoot);
         instanceRoot = nullptr;   // freed: from here on only ids are valid
 

@@ -21,6 +21,7 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
 
 #include <glm/glm.hpp>
@@ -2371,6 +2372,134 @@ void testApplyAfterMissingMeshReturnsAppliesOnlyTheEdit()
     CHECK(childNamed(w.get(ids[0]), "Lamp")->hasMesh() && w.get(ids[0])->children.size() == 1, "A intact after redo");
 }
 
+// A script Prefab slot assigned AFTER Create (the Properties drop is not an
+// undo command) still names the .prefab when the Create is undone: deleting the
+// file would break Play (Lua error) and the export. The undo keeps it, like the
+// other "kept" cases: the object is unlinked, the file stays, the message says
+// why. Without the reference, the file goes as before.
+void testCreateUndoKeepsFileStillReferenced()
+{
+    CommandWorld w("dt_prefab_cmd_create_ref");
+    DonTopo::GameObject* enemy = w.scene.addGameObject("Enemy");
+    w.scene.addGameObject("Lamp", enemy);
+    const uint64_t enemyId = enemy->id;
+    auto* create = w.run(std::make_unique<DonTopo::CreatePrefabCommand>(w.ctx(), enemyId, w.prefabFile()));
+    CHECK(create->succeeded(), "create succeeded");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+
+    DonTopo::GameObject* spawner = w.scene.addGameObject("Spawner");
+    auto script = std::make_unique<DonTopo::ScriptComponent>("Spawner", spawner);
+    script->overrides["enemy"] = DonTopo::PrefabRef{ kEnemyKey };
+    spawner->addScript(std::move(script));
+
+    w.doUndo();
+    CHECK(std::filesystem::exists(w.prefabFile()), "undo keeps a .prefab a script slot still names");
+    CHECK(contains(create->lastMessage(), "kept") && contains(create->lastMessage(), "Spawner"),
+          "and says why (naming the referencing object)");
+    CHECK(w.get(enemyId) && !w.get(enemyId)->prefabLink, "the object is unlinked all the same");
+    CHECK(w.lib->find(kEnemyKey) != nullptr, "the template stays for the slot");
+
+    // Without the reference the same undo deletes it.
+    w.doRedo();
+    CHECK(create->succeeded(), "redo finds its own bytes and links again");
+    spawner->getScripts().clear();
+    w.pass();
+    w.doUndo();
+    CHECK(!std::filesystem::exists(w.prefabFile()), "with no reference the undo deletes it");
+}
+
+// Two instances override node A's animation sources with DIFFERENT lists. Their
+// seed caches are merged by Apply (and by the rebuild with the caller's
+// meshes); merging by plain key kept only one configuration per file, so the
+// other instance's node reconfigured from disk on the main thread at every
+// Apply, undo and redo. Every configuration must survive the merge.
+void testApplyKeepsEveryInstanceSourceConfig()
+{
+    namespace fs = std::filesystem;
+    CommandWorld w("dt_prefab_cmd_merge_cfg");
+    writeGroupPrefab(w.root);
+    const fs::path run  = w.root.p / "Models" / "standing run forward.fbx";
+    const fs::path walk = w.root.p / "Models" / "standing walk forward.fbx";
+    fs::copy_file("assets/animatedCharacter/standing run forward.fbx", run);
+    fs::copy_file("assets/animatedCharacter/standing walk forward.fbx", walk);
+    w.lib->request(kGroupKey);
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    const DonTopo::PrefabTemplate* t = readyTemplate(*w.lib, kGroupKey);
+    if (!t) { CHECK(false, "template Ready"); return; }
+    {
+        DonTopo::GameObject* tmp = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+        if (!tmp) { CHECK(false, "temporary instance"); return; }
+        const nlohmann::json canonical = w.scene.makePrefab(tmp, kGroupKey, /*link=*/false);
+        w.scene.removeGameObject(tmp);
+        writeFile(w.root.p / kGroupKey, canonical.dump(2));
+        w.lib->updateFromMemory(kGroupKey, canonical, audio());
+        CHECK(settleSync(*w.sync, *w.lib), "canonical template settles");
+        t = readyTemplate(*w.lib, kGroupKey);
+        if (!t) { CHECK(false, "canonical template Ready"); return; }
+    }
+    uint64_t ids[3] = {};
+    for (uint64_t& id : ids)
+    {
+        DonTopo::GameObject* g = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+        if (!g) { CHECK(false, "instance"); return; }
+        id = g->id;
+    }
+    w.sync->sceneLoaded(w.scene.toJson());
+    const std::string maw = (w.root.p / "Models" / "Maw J Laygo.fbx").string();
+    // A user override of A's sources: A reconfigured with [builtin, extra].
+    auto reconfigure = [&](uint64_t inst, const fs::path& extra) {
+        auto sk = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(maw));
+        std::vector<std::string> warn;
+        DonTopo::applyAnimationSourceConfig(*sk, { { maw, true, {} }, { extra.string(), false, {} } }, warn);
+        childNamed(w.get(inst), "A")->setMesh(sk);
+    };
+    reconfigure(ids[0], run);
+    reconfigure(ids[1], walk);
+    w.pass();
+    CHECK(hasOverride(w.get(ids[0]), "/mesh/animationSources") && hasOverride(w.get(ids[1]), "/mesh/animationSources"),
+          "both source lists are overrides");
+    auto aSecond = [&](uint64_t inst) {
+        const DonTopo::GameObject* a = childNamed(w.get(inst), "A");
+        const DonTopo::SkinnedMesh* sk = a ? a->getSkinnedMesh() : nullptr;
+        return sk && sk->animationSources.size() == 2 ? fs::path(sk->animationSources[1].path).filename().string()
+                                                      : std::string("?");
+    };
+    childNamed(w.get(ids[2]), "B")->name = "Bee";   // the edit the third instance applies
+    w.pass();
+    auto mainReads = [] { return DonTopo::ModelLoader::readFileCountOnThisThread(); };
+    int before = mainReads();
+    auto* apply = w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), ids[2], std::vector<DonTopo::PrefabOverride>{}, false));
+    CHECK(apply->succeeded(), "apply succeeded");
+    CHECK(mainReads() - before == 0, "Apply: no model file read on the main thread");
+    CHECK(aSecond(ids[0]) == run.filename().string() && aSecond(ids[1]) == walk.filename().string(),
+          "Apply: each instance keeps its own source list");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    before = mainReads();
+    w.doUndo();
+    CHECK(mainReads() - before == 0, "undo: no model file read on the main thread");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    before = mainReads();
+    w.doRedo();
+    CHECK(mainReads() - before == 0, "redo: no model file read on the main thread");
+    CHECK(aSecond(ids[0]) == run.filename().string() && aSecond(ids[1]) == walk.filename().string(),
+          "redo: each instance keeps its own source list");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+
+    // A propagation rebuild seeded the way the tracker seeds it (the template's
+    // meshes, fresher than the instance's): the instance's own configuration
+    // must survive that merge too.
+    const DonTopo::PrefabTemplate* now = readyTemplate(*w.lib, kGroupKey);
+    if (!now) { CHECK(false, "template Ready"); return; }
+    DonTopo::PreloadedMeshCache seeds = now->meshes;
+    for (const auto& [k, m] : now->configuredMeshes) seeds[k] = m;
+    before = mainReads();
+    DonTopo::GameObject* rebuilt = w.scene.rebuildPrefabInstance(w.get(ids[0]), now->memoryRoot, physics(), audio(),
+                                                                 &seeds, &now->mats);
+    CHECK(rebuilt && mainReads() - before == 0, "propagation rebuild: no model file read on the main thread");
+    CHECK(aSecond(ids[0]) == run.filename().string(), "propagation rebuild: the instance keeps its source list");
+}
+
 // ---- Node references (Animator IK target/pole) across prefab paths ----
 //
 // IK constraints store the SCENE id of the node they aim at. A prefab must
@@ -4058,6 +4187,8 @@ int main()
     testDeleteUndoAndDuplicateKeepNodeAnimationSources();
     testApplyAfterMissingMeshReturnsAppliesOnlyTheEdit();
     testIkReferencesFollowTheInstance();
+    testApplyKeepsEveryInstanceSourceConfig();
+    testCreateUndoKeepsFileStillReferenced();
     testApplyRefusedWhileMeshPending();
     testApplyRedoWhileTemplateReloads();
     testUnpackUndoRevertToTemplate();

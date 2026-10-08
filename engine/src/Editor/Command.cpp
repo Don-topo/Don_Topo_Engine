@@ -9,6 +9,7 @@
 #include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Editor/PrefabOverrideTracker.h"
 #include "DonTopo/Files/FileManager.h"
+#include "DonTopo/Scripting/ScriptComponent.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -1288,6 +1289,26 @@ void CreatePrefabCommand::doUndo()
         m_message = "Prefab file " + shown + " was modified after it was created: kept";
         return;
     }
+    // A script Prefab slot assigned after the Create (not an undo command) may
+    // still name it: deleting it would break Play and the export. Kept, and the
+    // template with it (the slot is served from it).
+    std::string referencedBy;
+    m_ctx.scene.traverse([&](GameObject* n) {
+        if (!referencedBy.empty()) return;
+        for (const auto& s : n->getScripts())
+            for (const auto& [prop, value] : s->overrides)
+                if (const auto* ref = std::get_if<PrefabRef>(&value);
+                    ref && !ref->path.empty() && m_ctx.library.normalizeKey(ref->path) == m_key)
+                {
+                    referencedBy = n->name;
+                    return;
+                }
+    });
+    if (!referencedBy.empty())
+    {
+        m_message = "Prefab file " + shown + " is still used by a script Prefab slot on '" + referencedBy + "': kept";
+        return;
+    }
     if (!fs::remove(m_path, ec) || ec)
     {
         m_message = "Prefab file " + shown + " could not be removed: kept";
@@ -1394,7 +1415,7 @@ void ApplyPrefabOverridesCommand::rebuildInstances(const std::vector<uint64_t>& 
     for (const auto& [key, mesh] : m_seedConfigured) cache.emplace(key, mesh);
     for (uint64_t id : instances)
         if (GameObject* r = m_ctx.scene.findById(id))
-            for (const auto& [key, mesh] : Scene::collectMeshes(r)) cache.emplace(key, mesh);
+            mergeMeshCaches(cache, Scene::collectMeshes(r));   // every instance's configurations
     const MaterialAssetCache* mats = m_seedMats ? m_seedMats.get() : nullptr;
 
     for (uint64_t id : instances)
@@ -1524,7 +1545,7 @@ void ApplyPrefabOverridesCommand::doExecute()
     m_seedMeshes     = t->meshes;
     for (uint64_t id : instances)
         if (GameObject* r = m_ctx.scene.findById(id))
-            for (const auto& [key, mesh] : Scene::collectMeshes(r)) m_seedMeshes.emplace(key, mesh);
+            mergeMeshCaches(m_seedMeshes, Scene::collectMeshes(r));   // every instance's configurations
     m_seedMats = std::make_shared<MaterialAssetCache>(t->mats);
 
     // The new template: the chosen overrides applied to the current one...
