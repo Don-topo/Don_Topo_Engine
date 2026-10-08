@@ -2,6 +2,7 @@
 // the override tracker (§3.2, Review Focus 1) and load-time propagation (§3.3,
 // spec test 2), against a real PrefabLibrary.
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Core/LightComponent.h"
@@ -2370,6 +2371,231 @@ void testApplyAfterMissingMeshReturnsAppliesOnlyTheEdit()
     CHECK(childNamed(w.get(ids[0]), "Lamp")->hasMesh() && w.get(ids[0])->children.size() == 1, "A intact after redo");
 }
 
+// ---- Node references (Animator IK target/pole) across prefab paths ----
+//
+// IK constraints store the SCENE id of the node they aim at. A prefab must
+// carry prefab-local ids instead (a scene id means nothing in another scene or
+// in the exported game), and every instance, clone or reinsertion must aim at
+// ITS OWN copy of the node -- never at the node of the instance it came from.
+
+const char* kAimKey = "Prefabs/Aimer.prefab";
+
+uint64_t ikTarget(DonTopo::GameObject* n, size_t i)
+{
+    const auto& a = n ? n->getAnimator() : nullptr;
+    return a && i < a->ikConstraints().size() ? a->ikConstraints()[i].targetId : uint64_t(~0ull);
+}
+
+uint64_t ikPole(DonTopo::GameObject* n, size_t i)
+{
+    const auto& a = n ? n->getAnimator() : nullptr;
+    return a && i < a->ikConstraints().size() ? a->ikConstraints()[i].poleId : uint64_t(~0ull);
+}
+
+uint64_t idOf(DonTopo::GameObject* n) { return n ? n->id : 0; }
+
+void testIkReferencesFollowTheInstance()
+{
+    CommandWorld w("dt_prefab_cmd_ik_refs");
+    // Character (animator: "aim" -> its child AimTarget, pole -> its child Pole;
+    // "ext" -> Outside, a node that is NOT part of the prefab).
+    DonTopo::GameObject* outside = w.scene.addGameObject("Outside");
+    DonTopo::GameObject* ch  = w.scene.addGameObject("Character");
+    DonTopo::GameObject* aim = w.scene.addGameObject("AimTarget", ch);
+    DonTopo::GameObject* pole = w.scene.addGameObject("Pole", ch);
+    auto anim = std::make_shared<DonTopo::AnimatorComponent>();
+    DonTopo::AnimatorComponent::IkConstraint c;
+    c.name = "aim"; c.type = DonTopo::AnimatorComponent::IkType::TwoBone; c.boneName = "Head";
+    c.targetId = aim->id; c.poleId = pole->id;
+    anim->addIkConstraint(c);
+    c.name = "ext"; c.type = DonTopo::AnimatorComponent::IkType::LookAt; c.targetId = outside->id; c.poleId = 0;
+    anim->addIkConstraint(c);
+    ch->setAnimator(anim);
+
+    // makePrefab: local ids only; a target outside the subtree becomes 0 and warns.
+    const nlohmann::json file = w.scene.makePrefab(ch, kAimKey, /*link=*/false);
+    const nlohmann::json& ik = file["root"]["animator"]["ik"];
+    CHECK(ik.size() == 2 && ik[0]["target"] == 2 && ik[0]["pole"] == 3, "makePrefab: targets inside are prefab-local ids");
+    CHECK(ik.size() == 2 && ik[1]["target"] == 0, "makePrefab: a target outside the prefab is dropped (0)");
+    bool warned = false;
+    for (const auto& wmsg : w.scene.lastWarnings()) if (contains(wmsg, "Outside") || contains(wmsg, "outside")) warned = true;
+    CHECK(warned, "makePrefab: the dropped outside target is reported");
+    w.scene.removeGameObject(ch);
+    writeFile(w.root.p / kAimKey, file.dump(2));
+    w.lib->request(kAimKey);
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    if (!readyTemplate(*w.lib, kAimKey)) { CHECK(false, "template Ready"); return; }
+
+    // Two instances: each aims at its own children.
+    auto* c1 = w.run(std::make_unique<DonTopo::InstantiatePrefabCommand>(w.ctx(), kAimKey, 0));
+    auto* c2 = w.run(std::make_unique<DonTopo::InstantiatePrefabCommand>(w.ctx(), kAimKey, 0));
+    const uint64_t i1 = c1->instanceRootId(), i2 = c2->instanceRootId();
+    auto own = [&](uint64_t inst, const char* child) { return idOf(childNamed(w.get(inst), child)); };
+    auto aimsOwn = [&](uint64_t inst) {
+        return own(inst, "AimTarget") != 0 && ikTarget(w.get(inst), 0) == own(inst, "AimTarget") &&
+               ikPole(w.get(inst), 0) == own(inst, "Pole") && ikTarget(w.get(inst), 1) == 0;
+    };
+    CHECK(aimsOwn(i1) && aimsOwn(i2), "Instantiate: each instance aims at its own children");
+    w.pass();
+    CHECK(overrideCount(w.get(i1)) == 0 && overrideCount(w.get(i2)) == 0, "Instantiate: no spurious override");
+    // The load-time check that leaves a matching instance untouched (no rebuild).
+    CHECK(DonTopo::prefabInstanceMatchesTemplate(w.scene, w.get(i1), readyTemplate(*w.lib, kAimKey)->memoryRoot),
+          "an instance aiming at its own children matches its template");
+    // The tracker's fold (edits made while a template reloads) compares the same form.
+    w.sync->tracker().captureBaseline(w.scene, w.get(i1), &readyTemplate(*w.lib, kAimKey)->memoryRoot);
+    CHECK(w.sync->tracker().foldUnrecordedEdits(w.scene, w.get(i1)) == 0 && overrideCount(w.get(i1)) == 0,
+          "fold: an untouched instance folds no IK edit");
+    // Unpack + undo diffs the instance against itself at Unpack time: same form.
+    {
+        auto* c5 = w.run(std::make_unique<DonTopo::InstantiatePrefabCommand>(w.ctx(), kAimKey, 0));
+        const uint64_t i5 = c5->instanceRootId();
+        auto* unpack = w.run(std::make_unique<DonTopo::UnpackPrefabCommand>(w.ctx(), i5));
+        CHECK(unpack->succeeded() && !w.get(i5)->prefabLink, "unpacked");
+        w.doUndo();
+        CHECK(w.get(i5)->prefabLink && overrideCount(w.get(i5)) == 0 && aimsOwn(i5),
+              "Unpack undo: no spurious IK override, aims at its own children");
+        w.doUndo();   // the Instantiate
+        CHECK(!w.get(i5), "i5 gone");
+    }
+
+    // Delete + undo (ids kept), then the other instance still aims at its own.
+    {
+        const nlohmann::json snap = w.scene.subtreeToJson(w.get(i1));
+        const DonTopo::PreloadedMeshCache meshes = DonTopo::Scene::collectMeshes(w.get(i1));
+        w.scene.removeGameObject(w.get(i1));
+        CHECK(aimsOwn(i2), "deleting one instance does not touch the other's IK");
+        w.scene.insertFromJson(snap, nullptr, SIZE_MAX, physics(), audio(), &meshes);
+        CHECK(aimsOwn(i1), "Delete undo: aims at its own children again");
+        // The same snapshot inserted while its ids are alive: the live-id guard
+        // renames the copy's ids, and its IK must follow the copy.
+        DonTopo::GameObject* copy = w.scene.insertFromJson(snap, nullptr, SIZE_MAX, physics(), audio(), &meshes);
+        CHECK(copy && copy->id != i1 && aimsOwn(copy->id), "reinsertion with renamed ids: IK follows the copy");
+        if (copy) w.scene.removeGameObject(copy);
+        w.pass();
+    }
+
+    // Duplicate: the clone aims at its own children; an outside target stays.
+    w.get(i2)->getAnimator()->setIkTarget("ext", idOf(w.scene.getRoot().children.front().get()));
+    const uint64_t outsideId = idOf(w.scene.getRoot().children.front().get());
+    CHECK(outsideId == outside->id, "Outside is the first root child");
+    w.pass();
+    // The ik list is one override value (the whole array, in prefab form): "aim"
+    // keeps its prefab-local target in it, "ext" the outside node as {"scene"}.
+    CHECK(overrideCount(w.get(i2)) == 1, "an IK target set to an outside node is an override");
+    DonTopo::GameObject* clone = w.scene.cloneGameObject(w.get(i2), nullptr, physics(), audio());
+    if (!clone) { CHECK(false, "clone"); return; }
+    const uint64_t i3 = clone->id;
+    CHECK(ikTarget(w.get(i3), 0) == own(i3, "AimTarget") && ikPole(w.get(i3), 0) == own(i3, "Pole") &&
+          own(i3, "AimTarget") != own(i2, "AimTarget"), "Duplicate: the clone aims at its own children");
+    CHECK(ikTarget(w.get(i3), 1) == outsideId, "Duplicate: an outside target is kept");
+    w.pass();
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    w.pass();
+    CHECK(overrideCount(w.get(i3)) == 1 && overrideCount(w.get(i1)) == 0, "Duplicate: no spurious override");
+    CHECK(ikTarget(w.get(i3), 0) == own(i3, "AimTarget") && ikTarget(w.get(i3), 1) == outsideId,
+          "Duplicate: still right after the sync");
+
+    // Apply round trip: instance 1 aims "aim" at a NEW child of its own, applied
+    // with it. The prefab gets that child's local id; instance 1 and a new
+    // instance aim at their own copy. i2/i3 override the whole ik list: rebuilt,
+    // they keep it -- "aim" at THEIR OWN AimTarget (the override's local id
+    // resolved per instance), "ext" at the outside node.
+    DonTopo::GameObject* added = w.scene.addGameObject("NewTarget", w.get(i1));
+    w.get(i1)->getAnimator()->setIkTarget("aim", added->id);
+    {
+        // The applied child carries a reference of its own, to a linked node.
+        auto look = std::make_shared<DonTopo::AnimatorComponent>();
+        DonTopo::AnimatorComponent::IkConstraint lc;
+        lc.name = "look"; lc.boneName = "Head"; lc.targetId = own(i1, "Pole");
+        look->addIkConstraint(lc);
+        added->setAnimator(look);
+    }
+    w.pass();
+    auto* apply = w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), i1, std::vector<DonTopo::PrefabOverride>{}, true));
+    CHECK(apply->succeeded(), "apply succeeded");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    w.pass();
+    const nlohmann::json applied = nlohmann::json::parse(readBytes(w.root.p / kAimKey));
+    uint64_t newLocal = 0;
+    nlohmann::json newNode;
+    for (const auto& k : applied["root"]["children"])
+        if (k.value("name", "") == "NewTarget") { newLocal = k.value("id", uint64_t(0)); newNode = k; }
+    CHECK(newNode.contains("animator") && newNode["animator"]["ik"][0]["target"] == 3,
+          "Apply: the applied child's own reference to a linked node is its local id");
+    CHECK(newLocal != 0 && applied["root"]["animator"]["ik"][0]["target"] == newLocal,
+          "Apply: the prefab aims at the applied child's LOCAL id");
+    CHECK(applied["root"]["animator"]["ik"][1]["target"] == 0, "Apply: no scene id leaks into the prefab");
+    auto* c4 = w.run(std::make_unique<DonTopo::InstantiatePrefabCommand>(w.ctx(), kAimKey, 0));
+    const uint64_t i4 = c4->instanceRootId();
+    for (uint64_t inst : { i1, i4 })
+        CHECK(own(inst, "NewTarget") != 0 && ikTarget(w.get(inst), 0) == own(inst, "NewTarget"),
+              "Apply: the applying and a new instance aim at their own NewTarget");
+    for (uint64_t inst : { i1, i2, i3, i4 })
+        CHECK(ikTarget(childNamed(w.get(inst), "NewTarget"), 0) == own(inst, "Pole"),
+              "Apply: every instance's NewTarget looks at its own Pole");
+    for (uint64_t inst : { i2, i3 })
+        CHECK(own(inst, "NewTarget") != 0 && ikTarget(w.get(inst), 0) == own(inst, "AimTarget") &&
+              ikPole(w.get(inst), 0) == own(inst, "Pole") && ikTarget(w.get(inst), 1) == outsideId,
+              "Apply: an overridden ik list is kept, resolved to the instance's own nodes");
+    w.pass();
+    CHECK(overrideCount(w.get(i1)) == 0 && overrideCount(w.get(i4)) == 0 && overrideCount(w.get(i2)) == 1 &&
+          overrideCount(w.get(i3)) == 1, "Apply: no spurious override");
+    w.doUndo();   // the Instantiate of i4
+    w.doUndo();   // the Apply
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    w.pass();
+    CHECK(!w.get(i4), "undo removed i4");
+    CHECK(ikTarget(w.get(i2), 0) == own(i2, "AimTarget") && ikTarget(w.get(i3), 0) == own(i3, "AimTarget"),
+          "Apply undo: i2/i3 still aim at their own AimTarget");
+    CHECK(w.get(i1) && ikTarget(w.get(i1), 0) == own(i1, "NewTarget") && overrideCount(w.get(i1)) == 1,
+          "Apply undo: i1 aims at its own (again added) NewTarget through its override");
+    w.doRedo();
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    w.doRedo();
+    w.pass();
+    CHECK(w.get(i4) && ikTarget(w.get(i4), 0) == own(i4, "NewTarget") && ikTarget(w.get(i1), 0) == own(i1, "NewTarget"),
+          "Apply redo: i1 and i4 aim at their own NewTarget");
+    CHECK(ikTarget(w.get(i2), 0) == own(i2, "AimTarget") && ikTarget(w.get(i3), 1) == outsideId,
+          "Apply redo: the overridden lists are still resolved per instance");
+    CHECK(overrideCount(w.get(i1)) == 0 && overrideCount(w.get(i4)) == 0, "Apply redo: no spurious override");
+
+    // An override aiming at an ADDED child of the instance is {"scene": id} in
+    // the link; a Duplicate's link must name the clone's copy of that child, or
+    // the clone's first rebuild re-aims it at the original's.
+    {
+        DonTopo::GameObject* helper = w.scene.addGameObject("Helper", w.get(i3));
+        w.get(i3)->getAnimator()->setIkTarget("ext", helper->id);
+        w.pass();
+        DonTopo::GameObject* dup = w.scene.cloneGameObject(w.get(i3), nullptr, physics(), audio());
+        if (!dup) { CHECK(false, "clone of i3"); return; }
+        const uint64_t i6 = dup->id;
+        w.pass();
+        CHECK(settleSync(*w.sync, *w.lib), "settles");
+        w.pass();
+        CHECK(own(i6, "Helper") != 0 && own(i6, "Helper") != own(i3, "Helper") &&
+              ikTarget(w.get(i6), 1) == own(i6, "Helper") && ikTarget(w.get(i3), 1) == own(i3, "Helper"),
+              "Duplicate: an override aiming at an added child follows the clone's copy");
+    }
+
+    // The exported game: another library, another scene, the same file.
+    DonTopo::JobSystem js;
+    js.start(2);
+    {
+        DonTopo::PrefabLibrary rtLib(js, w.root.str());
+        rtLib.request(kAimKey);
+        CHECK(settle(rtLib), "runtime library settles");
+        const DonTopo::PrefabTemplate* t = readyTemplate(rtLib, kAimKey);
+        DonTopo::Scene game;
+        DonTopo::GameObject* g1 = t ? game.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio()) : nullptr;
+        DonTopo::GameObject* g2 = t ? game.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio()) : nullptr;
+        CHECK(g1 && g2 && ikTarget(g1, 0) == idOf(childNamed(g1, "NewTarget")) &&
+              ikTarget(g2, 0) == idOf(childNamed(g2, "NewTarget")) && ikPole(g1, 0) == idOf(childNamed(g1, "Pole")),
+              "runtime: each instance aims at its own children");
+    }
+    js.shutdown();
+}
+
 // U2: Apply (execute and undo) refuses, touching nothing, while a mesh of an
 // instance is still on its way from the async loader (its result would land on
 // a rebuilt node and leak the rebuild's GPU slot).
@@ -3831,6 +4057,7 @@ int main()
     testApplySeedsConfiguredMeshes();
     testDeleteUndoAndDuplicateKeepNodeAnimationSources();
     testApplyAfterMissingMeshReturnsAppliesOnlyTheEdit();
+    testIkReferencesFollowTheInstance();
     testApplyRefusedWhileMeshPending();
     testApplyRedoWhileTemplateReloads();
     testUnpackUndoRevertToTemplate();

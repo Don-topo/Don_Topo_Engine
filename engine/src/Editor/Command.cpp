@@ -1229,6 +1229,9 @@ void CreatePrefabCommand::doExecute()
     }
 
     const nlohmann::json file = m_ctx.scene.makePrefab(node, m_key, /*link=*/true);
+    // What makePrefab left out (an IK target outside the subtree), reported with
+    // the result below.
+    const std::vector<std::string> makeWarnings = m_ctx.scene.lastWarnings();
     if (!FileManager::writeJson(m_path.string(), file))
     {
         m_ctx.scene.unpackPrefab(node);
@@ -1250,6 +1253,7 @@ void CreatePrefabCommand::doExecute()
     resyncInstance(m_nodeId, &standsOn);
     m_done = true;
     m_message = "Created prefab '" + m_path.string() + "'";
+    for (const std::string& w : makeWarnings) m_message += "\n" + w;
 }
 
 void CreatePrefabCommand::doUndo()
@@ -1583,6 +1587,23 @@ void ApplyPrefabOverridesCommand::doExecute()
                 else if (const auto it = newLocal.find(c->id); it != newLocal.end()) after = it->second;
             }
             nlohmann::json sub = m_ctx.scene.subtreeToMemoryJson(a);
+            // Its node references in prefab form: a linked node of the instance by
+            // its local id, anything else as {"scene": id} -- resolved below, once
+            // every applied child has its new local id.
+            std::function<void(nlohmann::json&)> toPrefabRefs = [&](nlohmann::json& j) {
+                forEachNodeReference(j, [&](nlohmann::json& ref) {
+                    const uint64_t id = ref.is_number_integer() ? ref.get<uint64_t>() : 0;
+                    if (id == 0) return;
+                    const GameObject* target = m_ctx.scene.findById(id);
+                    if (target && target->prefabNode != 0 && prefabInstanceRoot(target) == root)
+                        ref = target->prefabNode;
+                    else
+                        ref = nlohmann::json{ { "scene", id } };
+                });
+                if (auto kids = j.find("children"); kids != j.end() && kids->is_array())
+                    for (auto& k : *kids) toPrefabRefs(k);
+            };
+            toPrefabRefs(sub);
             std::vector<GameObject*> order;
             a->traverse([&](GameObject* n) { order.push_back(n); });
             const uint64_t first = next + 1;
@@ -1606,6 +1627,31 @@ void ApplyPrefabOverridesCommand::doExecute()
                     if (localIdOf(kids[i], "id") == after) { pos = i + 1; break; }
             kids.insert(kids.begin() + static_cast<std::ptrdiff_t>(pos), std::move(sub));
         }
+    }
+    // A .prefab holds prefab-local ids only. A reference in {"scene": id} form
+    // (from an override value or an applied child) names a node of the new
+    // template if it is one of the children applied now; anything else is outside
+    // the prefab: 0, reported.
+    {
+        std::unordered_map<uint64_t, uint64_t> appliedLocal(toLink.begin(), toLink.end());
+        std::function<void(nlohmann::json&)> localize = [&](nlohmann::json& j) {
+            forEachNodeReference(j, [&](nlohmann::json& ref) {
+                if (!ref.is_object()) return;
+                const auto s = ref.find("scene");
+                const uint64_t id = s != ref.end() && s->is_number_integer() ? s->get<uint64_t>() : 0;
+                if (const auto it = appliedLocal.find(id); id != 0 && it != appliedLocal.end())
+                {
+                    ref = it->second;
+                    return;
+                }
+                ref = 0;
+                warnings.push_back("'" + j.value("name", std::string()) + "': an IK target points outside "
+                                   "the prefab; it is not applied (the prefab keeps no target there)");
+            });
+            if (auto kids = j.find("children"); kids != j.end() && kids->is_array())
+                for (auto& k : *kids) localize(k);
+        };
+        localize(tmpl);
     }
     if (chosen.empty() && toLink.empty())
     {
@@ -1915,7 +1961,7 @@ void UnpackPrefabCommand::doExecute()
     root = m_ctx.scene.findById(m_rootId);
     // The objects as they are now, linked: the undo tells the edits made to
     // them while unpacked apart from this.
-    m_atUnpack = m_ctx.scene.subtreeToMemoryJson(root);
+    m_atUnpack = m_ctx.scene.instanceToPrefabJson(root);   // prefab form, as the undo diffs it
     m_nodes.clear();
     root->traverse([&](GameObject* n) {
         if (n->prefabNode == 0 && !n->prefabLink) return;
@@ -1958,7 +2004,7 @@ void UnpackPrefabCommand::doUndo()
             walk(tree, true);
             return out;
         };
-        const nlohmann::json live = m_ctx.scene.subtreeToMemoryJson(root);
+        const nlohmann::json live = m_ctx.scene.instanceToPrefabJson(root);
         const auto before = index(m_atUnpack);
         // The template the instance stands on, by prefab-local id ("id" there):
         // an edit back to its value is a revert (the stored override goes), the

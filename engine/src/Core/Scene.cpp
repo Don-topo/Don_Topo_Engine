@@ -3580,13 +3580,53 @@ namespace DonTopo
         // nodes with the same id; findById returns the last of the traversal —the
         // clone—, and any undo command resolved by id ended up
         // writing into the wrong object.
-        std::function<void(nlohmann::json&)> stripIds = [&](nlohmann::json& node) {
-            node.erase("id");
+        //
+        // Fresh ids are handed out HERE rather than left to the GameObject
+        // constructor, so the clone's node references (IK targets) can follow
+        // them: one that pointed at a node of the cloned subtree points at the
+        // clone's copy; one pointing outside it is kept as is.
+        std::unordered_map<uint64_t, uint64_t> freshId;   // original id -> clone id
+        std::function<void(nlohmann::json&)> renewIds = [&](nlohmann::json& node) {
+            if (const auto id = node.find("id"); id != node.end() && id->is_number_integer())
+            {
+                const uint64_t fresh = GameObject::allocateId();
+                freshId.emplace(id->get<uint64_t>(), fresh);
+                *id = fresh;
+            }
+            else
+            {
+                node.erase("id");
+            }
             if (auto it = node.find("children"); it != node.end() && it->is_array())
                 for (nlohmann::json& child : *it)
-                    stripIds(child);
+                    renewIds(child);
         };
-        stripIds(j);
+        renewIds(j);
+        // Scene form (the node's own data): a scene id.
+        auto follow = [&](nlohmann::json& ref) {
+            if (ref.is_number_integer())
+                if (const auto it = freshId.find(ref.get<uint64_t>()); it != freshId.end()) ref = it->second;
+        };
+        // Prefab form (a link's override values): a number is a prefab-local id
+        // and stays; {"scene": id} is a scene id.
+        auto followScene = [&](nlohmann::json& ref) {
+            if (!ref.is_object()) return;
+            const auto s = ref.find("scene");
+            if (s != ref.end() && s->is_number_integer())
+                if (const auto it = freshId.find(s->get<uint64_t>()); it != freshId.end()) *s = it->second;
+        };
+        std::function<void(nlohmann::json&)> followRefs = [&](nlohmann::json& node) {
+            forEachNodeReference(node, follow);
+            if (auto link = node.find("prefab"); link != node.end() && link->is_object())
+                if (auto ovs = link->find("overrides"); ovs != link->end() && ovs->is_array())
+                    for (auto& o : *ovs)
+                        if (o.is_object() && o.contains("path") && o["path"].is_string() && o.contains("value"))
+                            forEachNodeReferenceInOverride(o["path"].get<std::string>(), o["value"], followScene);
+            if (auto it = node.find("children"); it != node.end() && it->is_array())
+                for (nlohmann::json& child : *it)
+                    followRefs(child);
+        };
+        followRefs(j);
 
         // A clone of a NON-root node of a prefab instance (it has prefabNode but no
         // link of its own) becomes an ADDED child, like Unity: without this the
@@ -3965,6 +4005,85 @@ namespace DonTopo
         return nodeToJson(*node, std::string(), /*carryOverrideBaseline=*/false);
     }
 
+    // ---- Node references (see Scene.h) ----
+
+    void forEachNodeReference(nlohmann::json& node, const std::function<void(nlohmann::json&)>& fn)
+    {
+        const auto anim = node.find("animator");
+        if (anim == node.end() || !anim->is_object()) return;
+        const auto ik = anim->find("ik");
+        if (ik == anim->end() || !ik->is_array()) return;
+        for (auto& c : *ik)
+            if (c.is_object())
+                for (const char* key : { "target", "pole" })
+                    if (auto it = c.find(key); it != c.end()) fn(*it);
+    }
+
+    void forEachNodeReference(GameObject& node, const std::function<void(uint64_t&)>& fn)
+    {
+        if (const auto& a = node.getAnimator())
+            for (auto& c : a->ikConstraintsMutable())
+            {
+                fn(c.targetId);
+                fn(c.poleId);
+            }
+    }
+
+    void forEachNodeReferenceInOverride(const std::string& path, nlohmann::json& value,
+                                        const std::function<void(nlohmann::json&)>& fn)
+    {
+        auto entry = [&](nlohmann::json& e) {
+            if (!e.is_object()) return;
+            for (const char* key : { "target", "pole" })
+                if (auto it = e.find(key); it != e.end()) fn(*it);
+        };
+        auto list = [&](nlohmann::json& a) {
+            if (a.is_array()) for (auto& e : a) entry(e);
+        };
+        if (path == "/animator")
+        {
+            if (value.is_object())
+                if (auto ik = value.find("ik"); ik != value.end()) list(*ik);
+            return;
+        }
+        const std::string prefix = "/animator/ik";
+        if (path.compare(0, prefix.size(), prefix) != 0) return;
+        const std::string rest = path.substr(prefix.size());   // "", "/<n>", "/<n>/<field>"
+        if (rest.empty()) { list(value); return; }
+        const size_t slash = rest.find('/', 1);
+        if (slash == std::string::npos) { entry(value); return; }
+        const std::string field = rest.substr(slash + 1);
+        if (field == "target" || field == "pole") fn(value);
+    }
+
+    nlohmann::json Scene::instanceToPrefabJson(const GameObject* instanceRoot) const
+    {
+        nlohmann::json j = subtreeToMemoryJson(instanceRoot);
+        // Scene id -> prefab-local id of the linked nodes of THIS instance (a
+        // nested instance's nodes belong to another prefab).
+        std::unordered_map<uint64_t, uint64_t> localOf;
+        std::function<void(const GameObject*, bool)> index = [&](const GameObject* n, bool isRoot) {
+            if (!isRoot && n->prefabLink) return;
+            if (n->prefabNode != 0) localOf.emplace(n->id, n->prefabNode);
+            for (const auto& c : n->children) index(c.get(), false);
+        };
+        index(instanceRoot, true);
+        std::function<void(nlohmann::json&)> walk = [&](nlohmann::json& n) {
+            forEachNodeReference(n, [&](nlohmann::json& ref) {
+                if (!ref.is_number_integer()) return;
+                const uint64_t id = ref.get<uint64_t>();
+                if (id == 0) return;
+                const auto it = localOf.find(id);
+                if (it != localOf.end()) ref = it->second;
+                else                     ref = nlohmann::json{ { "scene", id } };
+            });
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (auto& c : *kids) if (c.is_object()) walk(c);
+        };
+        walk(j);
+        return j;
+    }
+
     namespace
     {
         // The keys of a mesh.materials[] entry that the DISK form stores through
@@ -4011,7 +4130,10 @@ namespace DonTopo
         // Prefab-local ids 1..N in pre-order, and the link keys erased: the file
         // describes the prefab itself, it is not an instance of anything.
         uint64_t next = 0;
+        std::unordered_map<uint64_t, uint64_t> localOf;   // scene id -> prefab-local id
         std::function<void(nlohmann::json&)> renumber = [&](nlohmann::json& j) {
+            if (const auto id = j.find("id"); id != j.end() && id->is_number_integer())
+                localOf.emplace(id->get<uint64_t>(), next + 1);
             j["id"] = ++next;
             j.erase("prefab");
             j.erase("prefabNode");
@@ -4019,6 +4141,24 @@ namespace DonTopo
                 for (auto& child : *kids) renumber(child);
         };
         renumber(root);
+
+        // Node references (IK targets) in prefab form: a node of the prefab by its
+        // local id; one outside it means nothing in another scene, so it is
+        // dropped (0) and reported rather than leaking a scene id into the file.
+        m_warnings.clear();
+        std::function<void(nlohmann::json&)> localize = [&](nlohmann::json& j) {
+            forEachNodeReference(j, [&](nlohmann::json& ref) {
+                const uint64_t id = ref.is_number_integer() ? ref.get<uint64_t>() : 0;
+                if (id == 0) { ref = 0; return; }
+                if (const auto it = localOf.find(id); it != localOf.end()) { ref = it->second; return; }
+                ref = 0;
+                m_warnings.push_back("prefab '" + prefabPath + "', node '" + j.value("name", std::string()) +
+                                     "': an IK target points outside the prefab; it is not saved in it");
+            });
+            if (auto kids = j.find("children"); kids != j.end() && kids->is_array())
+                for (auto& child : *kids) localize(child);
+        };
+        localize(root);
 
         if (link)
         {
@@ -4326,6 +4466,7 @@ namespace DonTopo
         // the command becomes useless. Fixing it fully requires invalidating the
         // Undo/Redo history on scene reload; it is a separate audit
         // of the id system, not this specific patch.
+        std::unordered_map<uint64_t, uint64_t> renamed;   // snapshot id -> new id
         node->traverse([&](GameObject* n) {
             n->staticRenderIndex  = -1;
             n->skinnedRenderIndex = -1;
@@ -4333,6 +4474,7 @@ namespace DonTopo
             {
                 const uint64_t idViejo = n->id;
                 n->id = GameObject::allocateId();
+                renamed.emplace(idViejo, n->id);
                 m_warnings.push_back("node '" + n->name + "': id " + std::to_string(idViejo) +
                                       " from the snapshot was already in use in the scene; reassigned to " +
                                       std::to_string(n->id) + " to avoid clashing with the live object");
@@ -4382,6 +4524,14 @@ namespace DonTopo
                 }
             }
         });
+        // A node reference inside the subtree to a node that was just renamed
+        // meant THAT node (the snapshot's own), not the live one keeping the id.
+        if (!renamed.empty())
+            node->traverse([&](GameObject* n) {
+                forEachNodeReference(*n, [&](uint64_t& id) {
+                    if (const auto it = renamed.find(id); it != renamed.end()) id = it->second;
+                });
+            });
 
         // addChild() inserted at the end; reposition to index if it is not already there.
         auto& siblings = target->children;
@@ -4541,7 +4691,9 @@ namespace DonTopo
                                                           n["id"] = it->second;
             else if (const uint64_t hinted = hintFor(local); hinted != 0)
                                                           n["id"] = hinted;   // the live-id guard still applies
-            else                                          n.erase("id");
+            // A fresh scene id NOW (what the GameObject constructor would hand
+            // out): node references of the template are resolved to it below.
+            else                                          n["id"] = GameObject::allocateId();
 
             auto kids = n.find("children");
             if (kids == n.end() || !kids->is_array()) n["children"] = nlohmann::json::array();
@@ -4554,6 +4706,39 @@ namespace DonTopo
                 }
         };
         relink(tree, true);
+        // Node references of the template-derived nodes, prefab form -> scene form:
+        // a local id names that node of THIS instance (0 if the prefab no longer
+        // has it); {"scene": id} (an override aiming outside the linked nodes)
+        // is that scene id. The added children travel in scene form already and
+        // are left alone (they have no prefabNode).
+        {
+            std::unordered_map<uint64_t, uint64_t> sceneOf;   // prefab-local id -> scene id
+            std::function<void(const nlohmann::json&)> index = [&](const nlohmann::json& n) {
+                const uint64_t local = localIdOf(n, "prefabNode");
+                if (local == 0) return;
+                sceneOf.emplace(local, localIdOf(n, "id"));
+                if (const auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                    for (const auto& c : *kids) if (c.is_object()) index(c);
+            };
+            index(tree);
+            std::function<void(nlohmann::json&)> resolve = [&](nlohmann::json& n) {
+                if (localIdOf(n, "prefabNode") == 0) return;
+                forEachNodeReference(n, [&](nlohmann::json& ref) {
+                    if (ref.is_object())
+                    {
+                        const auto s = ref.find("scene");
+                        ref = s != ref.end() && s->is_number_integer() ? s->get<uint64_t>() : uint64_t(0);
+                        return;
+                    }
+                    const uint64_t local = ref.is_number_integer() ? ref.get<uint64_t>() : 0;
+                    const auto it = local != 0 ? sceneOf.find(local) : sceneOf.end();
+                    ref = it != sceneOf.end() ? it->second : uint64_t(0);
+                });
+                if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                    for (auto& c : *kids) if (c.is_object()) resolve(c);
+            };
+            resolve(tree);
+        }
         // Whatever is left in `added` hung from a node the prefab no longer has.
         // Losing user objects cannot be silent.
         for (const auto& [local, kids] : added)
@@ -4654,7 +4839,8 @@ namespace DonTopo
         // nothing below them is walked; a prefab node with no instance counterpart
         // yields nothing (removing prefab children is blocked in the UI).
         std::vector<PrefabOverride> fresh;
-        const nlohmann::json inst = subtreeToMemoryJson(instanceRoot);
+        // Prefab form: node references compared as prefab-local ids.
+        const nlohmann::json inst = instanceToPrefabJson(instanceRoot);
         std::function<void(const nlohmann::json&, bool)> walk = [&](const nlohmann::json& n, bool isRoot) {
             const uint64_t local = localIdOf(n, "prefabNode");
             if (local == 0) return;
@@ -4835,6 +5021,17 @@ namespace DonTopo
                 }
                 hasListener = true;
             }
+        });
+        // Node references came in prefab form (local ids; a template never holds
+        // {"scene": ...}): each one now names THIS instance's node.
+        std::unordered_map<uint64_t, uint64_t> sceneOf;   // prefab-local id -> scene id
+        root->traverse([&](GameObject* n) { if (n->prefabNode != 0) sceneOf.emplace(n->prefabNode, n->id); });
+        root->traverse([&](GameObject* n) {
+            forEachNodeReference(*n, [&](uint64_t& id) {
+                if (id == 0) return;
+                const auto it = sceneOf.find(id);
+                id = it != sceneOf.end() ? it->second : 0;
+            });
         });
         collapseWarnings();
         return root;

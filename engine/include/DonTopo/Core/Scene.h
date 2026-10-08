@@ -69,6 +69,27 @@ namespace DonTopo
     // (same entry filter), as nodeToJson does with carryOverrideBaseline.
     void writeMaterialOverrideBaselines(nlohmann::json& materials, const std::vector<MaterialOverride>& ovs);
 
+    // ── Node references ──────────────────────────────────────────────────────
+    // Fields of a node that hold the id of ANOTHER node. Today only the
+    // Animator's IK constraints ("animator": {"ik": [{"target", "pole"}]}); a new
+    // field of this kind must be listed HERE (both overloads), or prefabs, clones
+    // and reinsertions leave it pointing at the node it was copied from.
+    //
+    // Three id spaces meet in them:
+    //  - scene form (a .scene, the live objects): a scene id;
+    //  - prefab form (a .prefab, a template, a prefab override value): the
+    //    prefab-local id of a node of the same prefab, or {"scene": <id>} for a
+    //    node outside it (only in an instance's override values, never in a
+    //    .prefab: makePrefab and Apply turn those into 0 with a warning).
+    //  0 is "no node" in every space.
+    // Calls fn on each reference of this node only (not its children).
+    void forEachNodeReference(nlohmann::json& node, const std::function<void(nlohmann::json& ref)>& fn);
+    void forEachNodeReference(GameObject& node, const std::function<void(uint64_t& id)>& fn);
+    // The references inside an override value at `path` (the value of the
+    // whole "/animator", the "/animator/ik" array, one entry, or one field).
+    void forEachNodeReferenceInOverride(const std::string& path, nlohmann::json& value,
+                                        const std::function<void(nlohmann::json& ref)>& fn);
+
     struct SkinnedMesh;
     // true if the mesh's animation sources (path, builtin and clip
     // names, in order) are exactly those of the "animationSources" block of the
@@ -224,6 +245,13 @@ namespace DonTopo
             // form that prefab diff and propagation compare, so that the baseline of
             // the material overrides never shows up as a difference.
             nlohmann::json subtreeToMemoryJson(const GameObject* node) const;
+            // subtreeToMemoryJson of a prefab instance with its node references in
+            // PREFAB form (see forEachNodeReference): a reference to a linked node
+            // of this instance becomes that node's prefab-local id, any other one
+            // {"scene": id}. What every diff against the template reads (recompute,
+            // tracker baselines and folds, match, Unpack): with scene ids each
+            // instance would differ from its template on every reference.
+            nlohmann::json instanceToPrefabJson(const GameObject* instanceRoot) const;
 
             // Builds the .prefab file JSON ({"version":1,"type":"prefab","root":...})
             // from node's subtree: disk form (m_assetRoot), prefab-local ids 1..N in

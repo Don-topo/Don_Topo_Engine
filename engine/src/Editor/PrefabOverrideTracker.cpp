@@ -214,7 +214,7 @@ namespace DonTopo
     {
         if (!instanceRoot || !instanceRoot->prefabLink) return;
         Baseline b;
-        b.live = scene.subtreeToMemoryJson(instanceRoot);
+        b.live = scene.instanceToPrefabJson(instanceRoot);   // prefab form, as the fold diffs it
         // Nodes whose file mesh is still on its way (Load Scene): nodeToJson
         // writes no "mesh" for them, so the mesh landing later would read as an
         // edit of the whole mesh. Only linked nodes matter (the fold walks those).
@@ -267,7 +267,7 @@ namespace DonTopo
         std::vector<PrefabOverride> edits;
         std::vector<std::pair<uint64_t, std::string>> reverts;
         auto& overridesRef = instanceRoot->prefabLink->overrides;
-        const nlohmann::json live = scene.subtreeToMemoryJson(instanceRoot);
+        const nlohmann::json live = scene.instanceToPrefabJson(instanceRoot);
         std::function<void(const nlohmann::json&, bool)> walk = [&](const nlohmann::json& n, bool isRoot) {
             const uint64_t local = localIdOf(n, "prefabNode");
             if (local == 0) return;
@@ -491,8 +491,9 @@ namespace DonTopo
         index(prefabMemoryRoot, 0);
         if (!ok) return false;
 
-        // Memory form, no baseline: the form the template is in.
-        const nlohmann::json inst = scene.subtreeToMemoryJson(instanceRoot);
+        // Memory form, no baseline, node references in prefab form: the form the
+        // template is in.
+        const nlohmann::json inst = scene.instanceToPrefabJson(instanceRoot);
         std::vector<PrefabOverride> fresh;
         std::unordered_set<uint64_t> seen;
         std::function<void(const nlohmann::json&, uint64_t, bool)> walk =
