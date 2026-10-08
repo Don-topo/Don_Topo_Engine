@@ -1179,8 +1179,9 @@ namespace DonTopo {
                                                    TransferBatch* batch);
             // One reference more on a shared material texture, uploading it on a
             // miss. An empty key (no texture) is never cached: the caller decides.
+            // embeddedHash: the Material's embedded*Hash of that slot (0 = hash here).
             MaterialImage acquireSkinnedTexture(const std::string& path, const std::vector<uint8_t>& embedded,
-                                                TextureKind kind, TransferBatch* batch);
+                                                uint64_t embeddedHash, TextureKind kind, TransferBatch* batch);
 
             // Prefab template pins: one reference held per entry, released by
             // the SAME count (never by asking a handle whether it is still

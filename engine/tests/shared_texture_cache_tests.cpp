@@ -95,14 +95,56 @@ static void test_failed_create_is_not_cached()
     CHECK(g_creadas == 2);
 }
 
+// The loader fills path OR embedded bytes, never both: an embedded texture has no
+// path, and two FBX with the same bytes inside share one image.
 static void test_embedded_key_by_content()
 {
     const std::vector<uint8_t> a = { 1, 2, 3, 4 };
     const std::vector<uint8_t> b = { 1, 2, 3, 4 };
     const std::vector<uint8_t> d = { 1, 2, 3, 5 };
-    CHECK(makeTextureKey("x.fbx", a, TextureKind::BaseColor) == makeTextureKey("y.fbx", b, TextureKind::BaseColor));
-    CHECK(makeTextureKey("x.fbx", a, TextureKind::BaseColor) != makeTextureKey("x.fbx", d, TextureKind::BaseColor));
-    CHECK(makeTextureKey("x.fbx", a, TextureKind::BaseColor) != makeTextureKey("x.fbx", a, TextureKind::Normal));
+    CHECK(makeTextureKey("", a, TextureKind::BaseColor) == makeTextureKey("", b, TextureKind::BaseColor));
+    CHECK(makeTextureKey("", a, TextureKind::BaseColor) != makeTextureKey("", d, TextureKind::BaseColor));
+    CHECK(makeTextureKey("", a, TextureKind::BaseColor) != makeTextureKey("", a, TextureKind::Normal));
+}
+
+// Both fields filled happens after an override: a .mat (or a texture override)
+// sets a path on a material whose FBX carries the texture embedded. The upload
+// decodes the PATH (decodeMaterialTexture, chooseTextureSource), so the key must
+// name the path too. It used to name the embedded bytes: the overridden material
+// and the plain FBX shared one cache entry, and whichever was registered first
+// was on screen for both.
+static void test_path_wins_over_embedded_as_in_decode()
+{
+    const std::vector<uint8_t> emb = { 9, 8, 7, 6 };
+    CHECK(makeTextureKey("over.png", emb, TextureKind::BaseColor) != makeTextureKey("", emb, TextureKind::BaseColor));
+    CHECK(makeTextureKey("over.png", emb, TextureKind::BaseColor) == makeTextureKey("over.png", {}, TextureKind::BaseColor));
+    CHECK(makeTextureKey("over.png", emb, TextureKind::BaseColor, "#lm") ==
+          makeTextureKey("over.png", {}, TextureKind::BaseColor, "#lm"));
+
+    reiniciar();
+    SharedTextureCache<int> c;
+    const int plain      = c.acquire(makeTextureKey("", emb, TextureKind::BaseColor), crear);
+    const int overridden = c.acquire(makeTextureKey("over.png", emb, TextureKind::BaseColor), crear);
+    CHECK(plain != overridden);
+    CHECK(g_creadas == 2);
+}
+
+// The hash of the embedded bytes is computed once where they are produced
+// (ModelLoader, Material::embedded*Hash) and passed in: the key is the same as
+// hashing them, and registering one more instance does not hash megabytes again.
+static void test_precomputed_embedded_hash()
+{
+    const std::vector<uint8_t> emb = { 1, 2, 3, 4, 5 };
+    const uint64_t h = hashEmbeddedTexture(emb);
+    CHECK(h != 0);
+    CHECK(makeTextureKey("", emb, TextureKind::Normal, {}, h) == makeTextureKey("", emb, TextureKind::Normal));
+    // With a path the bytes are not decoded, so neither they nor their hash count.
+    CHECK(makeTextureKey("n.png", emb, TextureKind::Normal, {}, h) == makeTextureKey("n.png", {}, TextureKind::Normal));
+#ifdef NDEBUG
+    // Release trusts the hash it is given (Debug asserts it matches the bytes):
+    // another value gives another key, so the bytes were really not hashed again.
+    CHECK(makeTextureKey("", emb, TextureKind::Normal, {}, h ^ 1) != makeTextureKey("", emb, TextureKind::Normal));
+#endif
 }
 
 static void test_suffix_separates_same_file_same_kind()
@@ -124,6 +166,8 @@ int main()
     test_empty_key_is_not_cached();
     test_failed_create_is_not_cached();
     test_embedded_key_by_content();
+    test_path_wins_over_embedded_as_in_decode();
+    test_precomputed_embedded_hash();
     if (g_failures == 0) std::printf("shared_texture_cache_tests OK\n");
     else                 std::printf("shared_texture_cache_tests FAILED: %d checks\n", g_failures);
     return g_failures == 0 ? 0 : 1;

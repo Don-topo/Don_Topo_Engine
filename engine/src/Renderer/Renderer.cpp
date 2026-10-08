@@ -3903,10 +3903,11 @@ namespace DonTopo {
     }
 
     Renderer::MaterialImage Renderer::acquireSkinnedTexture(const std::string& ruta, const std::vector<uint8_t>& emb,
-                                                            TextureKind tipo, TransferBatch* batch)
+                                                            uint64_t embeddedHash, TextureKind tipo,
+                                                            TransferBatch* batch)
     {
         return m_skinnedTextures.acquire(
-            makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta)), [&] {
+            makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta), embeddedHash), [&] {
             MaterialImage nueva;
             if (tipo == TextureKind::BaseColor)
                 m_res.createTextureImage(ruta, emb, nueva.image, nueva.mem, batch, &nueva.format);
@@ -4073,9 +4074,9 @@ namespace DonTopo {
             // which does not go into the cache.
             // The format the image was created with (resolveSrgb) travels in the
             // cache entry: whoever shares it declares the SAME view.
-            auto pedir = [&](const std::string& ruta, const std::vector<uint8_t>& emb, TextureKind tipo,
-                             VkImage& img, VkDeviceMemory& mem, VkFormat& fmt) {
-                const MaterialImage m = acquireSkinnedTexture(ruta, emb, tipo, batch);
+            auto pedir = [&](const std::string& ruta, const std::vector<uint8_t>& emb, uint64_t embHash,
+                             TextureKind tipo, VkImage& img, VkDeviceMemory& mem, VkFormat& fmt) {
+                const MaterialImage m = acquireSkinnedTexture(ruta, emb, embHash, tipo, batch);
                 img = m.image;
                 mem = m.mem;
                 fmt = m.format;
@@ -4083,13 +4084,15 @@ namespace DonTopo {
 
             // Diffuse
             VkFormat albedoFmt = VK_FORMAT_R8G8B8A8_SRGB;
-            pedir(smat.texturePath, smat.embeddedTexture, TextureKind::BaseColor, mgfx.textureImage, mgfx.textureMem, albedoFmt);
+            pedir(smat.texturePath, smat.embeddedTexture, smat.embeddedTextureHash, TextureKind::BaseColor,
+                  mgfx.textureImage, mgfx.textureMem, albedoFmt);
             m_res.createTextureImageView(mgfx.textureImage, mgfx.textureView, albedoFmt);
             mgfx.sampler = m_res.sharedMaterialSampler();
 
             // Normal map
             VkFormat normalFmt = VK_FORMAT_R8G8B8A8_UNORM;
-            pedir(smat.normalMapPath, smat.embeddedNormalMap, TextureKind::Normal, mgfx.normalImage, mgfx.normalMem, normalFmt);
+            pedir(smat.normalMapPath, smat.embeddedNormalMap, smat.embeddedNormalMapHash, TextureKind::Normal,
+                  mgfx.normalImage, mgfx.normalMem, normalFmt);
             m_res.createTextureImageView(mgfx.normalImage, mgfx.normalView, normalFmt);
             mgfx.normalSampler = m_res.sharedMaterialSampler();
 
@@ -4097,8 +4100,8 @@ namespace DonTopo {
             VkFormat ormFmt = VK_FORMAT_R8G8B8A8_UNORM;
             if (!smat.metallicRoughnessPath.empty() || !smat.embeddedMetallicRoughness.empty())
             {
-                pedir(smat.metallicRoughnessPath, smat.embeddedMetallicRoughness, TextureKind::Orm,
-                      mgfx.ormImage, mgfx.ormMem, ormFmt);
+                pedir(smat.metallicRoughnessPath, smat.embeddedMetallicRoughness, smat.embeddedMetallicRoughnessHash,
+                      TextureKind::Orm, mgfx.ormImage, mgfx.ormMem, ormFmt);
                 mgfx.metallic  = 1.0f;
                 mgfx.roughness = 1.0f;
             }
@@ -4475,12 +4478,14 @@ namespace DonTopo {
                             {&mat.normalMapPath, &mat.embeddedNormalMap},
                             {&mat.metallicRoughnessPath, &mat.embeddedMetallicRoughness} };
                         const TextureKind kinds[] = { TextureKind::BaseColor, TextureKind::Normal, TextureKind::Orm };
+                        const uint64_t hashes[] = { mat.embeddedTextureHash, mat.embeddedNormalMapHash,
+                                                    mat.embeddedMetallicRoughnessHash };
                         for (int s = 0; s < 3; ++s)
                         {
-                            if (makeTextureKey(*slots[s].first, *slots[s].second, kinds[s],
-                                               textureKeySuffix(*slots[s].first)).empty())
+                            // makeTextureKey's empty key, without building it.
+                            if (slots[s].first->empty() && slots[s].second->empty())
                                 continue;
-                            const MaterialImage img = acquireSkinnedTexture(*slots[s].first, *slots[s].second,
+                            const MaterialImage img = acquireSkinnedTexture(*slots[s].first, *slots[s].second, hashes[s],
                                                                             kinds[s], m_pendingBatch.get());
                             // Not stored (it could not be created): nothing to hold.
                             if (m_skinnedTextures.contains(img)) pin.textures.push_back(img);

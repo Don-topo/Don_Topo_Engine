@@ -3680,11 +3680,12 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
             // writes this character's view over the already uploaded image, with
             // the same format. nullptr = no texture: the caller puts its
             // filler, and the cache does not store it.
-            auto pedirTextura = [&](const std::string& ruta, const std::vector<uint8_t>& emb,
+            // embHash: the Material's embedded*Hash of that slot (0 = hash here).
+            auto pedirTextura = [&](const std::string& ruta, const std::vector<uint8_t>& emb, uint64_t embHash,
                                     TextureKind tipo, UINT srvIndex) -> D3D12MA::Allocation* {
                 bool creada = false;
                 D3D12MA::Allocation* a = skinnedTextures.acquire(
-                    makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta)),
+                    makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta), embHash),
                     [&] { return uploadMaterialTexture(ruta, emb, tipo, srvIndex); }, &creada);
                 // On a hit, the format is that of the already uploaded resource (resolveSrgb
                 // decided it when it was created), not an assumption by slot.
@@ -3694,7 +3695,8 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
             };
 
             D3D12MA::Allocation* base = pedirTextura(
-                range.material->texturePath, range.material->embeddedTexture, TextureKind::BaseColor, slot);
+                range.material->texturePath, range.material->embeddedTexture,
+                range.material->embeddedTextureHash, TextureKind::BaseColor, slot);
             if (base)
                 object.textures.push_back(base);
             else
@@ -3702,7 +3704,8 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
                                    DXGI_FORMAT_R8G8B8A8_UNORM, slot);
 
             D3D12MA::Allocation* normal = pedirTextura(
-                range.material->normalMapPath, range.material->embeddedNormalMap, TextureKind::Normal, slot + 1);
+                range.material->normalMapPath, range.material->embeddedNormalMap,
+                range.material->embeddedNormalMapHash, TextureKind::Normal, slot + 1);
             if (normal)
                 object.textures.push_back(normal);
             else
@@ -3713,7 +3716,8 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
 
             if (D3D12MA::Allocation* orm =
                     pedirTextura(range.material->metallicRoughnessPath,
-                                 range.material->embeddedMetallicRoughness, TextureKind::Orm,
+                                 range.material->embeddedMetallicRoughness,
+                                 range.material->embeddedMetallicRoughnessHash, TextureKind::Orm,
                                  slot + 3))
                 object.textures.push_back(orm);
         }
@@ -10942,9 +10946,11 @@ void D3D12Renderer::pinTemplateMeshes(const std::string& key,
                     {&mat.normalMapPath, &mat.embeddedNormalMap},
                     {&mat.metallicRoughnessPath, &mat.embeddedMetallicRoughness}};
                 const TextureKind kinds[] = {TextureKind::BaseColor, TextureKind::Normal, TextureKind::Orm};
+                const uint64_t hashes[] = {mat.embeddedTextureHash, mat.embeddedNormalMapHash,
+                                           mat.embeddedMetallicRoughnessHash};
                 for (int s = 0; s < 3; ++s) {
                     const std::string texKey = makeTextureKey(*slots[s].first, *slots[s].second, kinds[s],
-                                                              textureKeySuffix(*slots[s].first));
+                                                              textureKeySuffix(*slots[s].first), hashes[s]);
                     if (texKey.empty())
                         continue;   // no texture: a registration takes the global filler
                     bool created = false;

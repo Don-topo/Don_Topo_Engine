@@ -1,5 +1,6 @@
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
+#include "DonTopo/Renderer/SharedTextureCache.h"
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
@@ -244,6 +245,7 @@ namespace DonTopo
                 loadTex(aiTextureType_HEIGHT, mesh.material.embeddedNormalMap, mesh.material.normalMapPath);
             // ORM (glTF metallic-roughness packed: R=AO, G=roughness, B=metallic)
             loadTex(aiTextureType_UNKNOWN, mesh.material.embeddedMetallicRoughness, mesh.material.metallicRoughnessPath);
+            hashEmbeddedTextures(mesh.material);   // once here, not per registration
         }
 
         return mesh;
@@ -599,6 +601,7 @@ namespace DonTopo
                     if (smat.embeddedNormalMap.empty() && smat.normalMapPath.empty())
                         loadTexFromMat(mat, aiTextureType_HEIGHT, smat.embeddedNormalMap,     smat.normalMapPath);
                     loadTexFromMat(mat, aiTextureType_UNKNOWN, smat.embeddedMetallicRoughness, smat.metallicRoughnessPath);
+                    hashEmbeddedTextures(smat);   // once here, not per registration
                 }
             }
 

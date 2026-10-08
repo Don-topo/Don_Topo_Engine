@@ -1,4 +1,7 @@
 #pragma once
+#include "DonTopo/Renderer/Material.h"
+
+#include <cassert>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -10,27 +13,53 @@ namespace DonTopo
     // (linear) are different images.
     enum class TextureKind : uint8_t { BaseColor, Normal, Orm };
 
-    // Content key of a material texture. From a file: the path. Embedded
-    // in the FBX: size + FNV-1a of the bytes, so two FBX with the same
-    // texture inside share an image, and the path does not count. Empty if there is no
+    // FNV-1a 64 of embedded texture bytes: what the key of an embedded texture is
+    // made of. ModelLoader stores it in Material::embedded*Hash when it fills the
+    // bytes, so the key does not hash them again per registration.
+    inline uint64_t hashEmbeddedTexture(const std::vector<uint8_t>& bytes)
+    {
+        uint64_t h = 1469598103934665603ull;
+        for (uint8_t b : bytes) { h ^= b; h *= 1099511628211ull; }
+        return h;
+    }
+
+    // Sets the three Material::embedded*Hash from the bytes (0 where there are
+    // none). Whoever fills embedded bytes calls it right after.
+    inline void hashEmbeddedTextures(Material& m)
+    {
+        m.embeddedTextureHash           = m.embeddedTexture.empty() ? 0 : hashEmbeddedTexture(m.embeddedTexture);
+        m.embeddedNormalMapHash         = m.embeddedNormalMap.empty() ? 0 : hashEmbeddedTexture(m.embeddedNormalMap);
+        m.embeddedMetallicRoughnessHash = m.embeddedMetallicRoughness.empty()
+                                              ? 0 : hashEmbeddedTexture(m.embeddedMetallicRoughness);
+    }
+
+    // Content key of a material texture: it names what the upload DECODES, which
+    // is the path when there is one, else the embedded bytes -- the same choice
+    // as chooseTextureSource / decodeMaterialTexture (material_texture_tests ties
+    // the two). From a file: the path (+ its import-settings suffix). Embedded in
+    // the FBX: size + FNV-1a of the bytes, so two FBX with the same texture inside
+    // share an image. Both set happens after an override (a .mat path on an FBX
+    // with the texture embedded): the path decodes, so the path is the key; with
+    // the bytes as key it shared one image with the plain FBX. Empty if there is no
     // texture: those materials use the white filler, which is already lent out on
     // its own (GpuResources::releaseMaterialImage) and must NOT go in here.
+    // embeddedHash: hashEmbeddedTexture(embedded) when the caller has it
+    // (Material::embedded*Hash); 0 = hash the bytes here.
     inline std::string makeTextureKey(const std::string& path, const std::vector<uint8_t>& embedded,
-                                      TextureKind kind, const std::string& settingsSuffix = {})
+                                      TextureKind kind, const std::string& settingsSuffix = {},
+                                      uint64_t embeddedHash = 0)
     {
         if (path.empty() && embedded.empty()) return {};
         const char tipo = kind == TextureKind::BaseColor ? 'c' : (kind == TextureKind::Normal ? 'n' : 'o');
-        // Import settings belong to a FILE: without a path there is no sidecar.
-        // By value on purpose: a reference bound to a ternary that mixes
-        // a temporary and an lvalue would depend on the temporary's lifetime extension.
-        const std::string sufijo = path.empty() ? std::string() : settingsSuffix;
-        if (!embedded.empty())
+        if (path.empty())
         {
-            uint64_t h = 1469598103934665603ull;
-            for (uint8_t b : embedded) { h ^= b; h *= 1099511628211ull; }
-            return std::string(1, tipo) + ":emb:" + std::to_string(embedded.size()) + ":" + std::to_string(h) + sufijo;
+            // A stale hash would silently share the wrong image: Debug checks it.
+            assert(embeddedHash == 0 || embeddedHash == hashEmbeddedTexture(embedded));
+            const uint64_t h = embeddedHash != 0 ? embeddedHash : hashEmbeddedTexture(embedded);
+            // Import settings belong to a FILE: without a path there is no sidecar.
+            return std::string(1, tipo) + ":emb:" + std::to_string(embedded.size()) + ":" + std::to_string(h);
         }
-        return std::string(1, tipo) + ":" + path + sufijo;
+        return std::string(1, tipo) + ":" + path + settingsSuffix;
     }
 
     // Reference-counted shared material textures. It knows nothing about the GPU:
