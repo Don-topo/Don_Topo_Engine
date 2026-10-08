@@ -2500,6 +2500,78 @@ void testApplyKeepsEveryInstanceSourceConfig()
     CHECK(aSecond(ids[0]) == run.filename().string(), "propagation rebuild: the instance keeps its source list");
 }
 
+// The configuration a redo needs may exist ONLY in the Apply's seeds: X applies
+// its own source list ([builtin, run]) to the prefab; after the undo X is
+// re-pointed at another list ([builtin, walk], an edit with no command), so at
+// the redo no live mesh holds "run" any more -- yet Y and Z must be rebuilt with
+// it (the template the redo writes). The meshes captured at the first execute
+// (merged per configuration) serve it with no main-thread model read.
+void testApplyRedoServedBySeeds()
+{
+    namespace fs = std::filesystem;
+    CommandWorld w("dt_prefab_cmd_seed_cfg");
+    writeGroupPrefab(w.root);
+    const fs::path run  = w.root.p / "Models" / "standing run forward.fbx";
+    const fs::path walk = w.root.p / "Models" / "standing walk forward.fbx";
+    fs::copy_file("assets/animatedCharacter/standing run forward.fbx", run);
+    fs::copy_file("assets/animatedCharacter/standing walk forward.fbx", walk);
+    w.lib->request(kGroupKey);
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    const DonTopo::PrefabTemplate* t = readyTemplate(*w.lib, kGroupKey);
+    if (!t) { CHECK(false, "template Ready"); return; }
+    {
+        DonTopo::GameObject* tmp = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+        if (!tmp) { CHECK(false, "temporary instance"); return; }
+        const nlohmann::json canonical = w.scene.makePrefab(tmp, kGroupKey, /*link=*/false);
+        w.scene.removeGameObject(tmp);
+        writeFile(w.root.p / kGroupKey, canonical.dump(2));
+        w.lib->updateFromMemory(kGroupKey, canonical, audio());
+        CHECK(settleSync(*w.sync, *w.lib), "canonical template settles");
+        t = readyTemplate(*w.lib, kGroupKey);
+        if (!t) { CHECK(false, "canonical template Ready"); return; }
+    }
+    uint64_t ids[3] = {};
+    for (uint64_t& id : ids)
+    {
+        DonTopo::GameObject* g = w.scene.instantiatePrefab(*t, nullptr, nullptr, nullptr, physics(), audio());
+        if (!g) { CHECK(false, "instance"); return; }
+        id = g->id;
+    }
+    w.sync->sceneLoaded(w.scene.toJson());
+    const std::string maw = (w.root.p / "Models" / "Maw J Laygo.fbx").string();
+    auto reconfigure = [&](uint64_t inst, const fs::path& extra) {
+        auto sk = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(maw));
+        std::vector<std::string> warn;
+        DonTopo::applyAnimationSourceConfig(*sk, { { maw, true, {} }, { extra.string(), false, {} } }, warn);
+        childNamed(w.get(inst), "A")->setMesh(sk);
+    };
+    auto aSecond = [&](uint64_t inst) {
+        const DonTopo::GameObject* a = childNamed(w.get(inst), "A");
+        const DonTopo::SkinnedMesh* sk = a ? a->getSkinnedMesh() : nullptr;
+        return sk && sk->animationSources.size() == 2 ? fs::path(sk->animationSources[1].path).filename().string()
+                                                      : std::string("?");
+    };
+    reconfigure(ids[0], run);
+    w.pass();
+    auto* apply = w.run(std::make_unique<DonTopo::ApplyPrefabOverridesCommand>(
+        w.ctx(), ids[0], std::vector<DonTopo::PrefabOverride>{}, false));
+    CHECK(apply->succeeded(), "X applies its source list");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    CHECK(aSecond(ids[1]) == run.filename().string(), "Y took X's list");
+    w.doUndo();
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+    reconfigure(ids[0], walk);   // no live mesh holds "run" from here on
+    w.pass();
+    for (uint64_t id : ids) CHECK(aSecond(id) != run.filename().string(), "no live mesh is configured with run");
+    const int before = DonTopo::ModelLoader::readFileCountOnThisThread();
+    w.doRedo();
+    CHECK(DonTopo::ModelLoader::readFileCountOnThisThread() - before == 0,
+          "redo: served by the Apply's seeds, no model file read on the main thread");
+    CHECK(aSecond(ids[1]) == run.filename().string() && aSecond(ids[2]) == run.filename().string(),
+          "redo: Y and Z rebuilt with the applied list");
+    CHECK(settleSync(*w.sync, *w.lib), "settles");
+}
+
 // ---- Node references (Animator IK target/pole) across prefab paths ----
 //
 // IK constraints store the SCENE id of the node they aim at. A prefab must
@@ -2705,6 +2777,25 @@ void testIkReferencesFollowTheInstance()
         CHECK(own(i6, "Helper") != 0 && own(i6, "Helper") != own(i3, "Helper") &&
               ikTarget(w.get(i6), 1) == own(i6, "Helper") && ikTarget(w.get(i3), 1) == own(i3, "Helper"),
               "Duplicate: an override aiming at an added child follows the clone's copy");
+
+        // The same instance reinserted while its ids are alive: the live-id guard
+        // renames the copy's nodes, and the copy's override ({"scene": Helper})
+        // must follow the copy's Helper -- checked after the next frames, when
+        // the unsynced copy is propagated (rebuilt from its overrides if it no
+        // longer matches).
+        const nlohmann::json snap = w.scene.subtreeToJson(w.get(i3));
+        const DonTopo::PreloadedMeshCache meshes = DonTopo::Scene::collectMeshes(w.get(i3));
+        DonTopo::GameObject* copy = w.scene.insertFromJson(snap, nullptr, SIZE_MAX, physics(), audio(), &meshes);
+        if (!copy) { CHECK(false, "reinserted copy"); return; }
+        const uint64_t i7 = copy->id;
+        CHECK(i7 != i3 && own(i7, "Helper") != own(i3, "Helper"), "the copy got renamed ids");
+        w.pass();
+        CHECK(settleSync(*w.sync, *w.lib), "settles");
+        w.pass();
+        CHECK(ikTarget(w.get(i7), 1) == own(i7, "Helper") && ikTarget(w.get(i3), 1) == own(i3, "Helper"),
+              "reinsertion with renamed ids: an override aiming at an added child follows the copy");
+        w.scene.removeGameObject(w.get(i7));
+        w.pass();
     }
 
     // The exported game: another library, another scene, the same file.
@@ -4188,6 +4279,7 @@ int main()
     testApplyAfterMissingMeshReturnsAppliesOnlyTheEdit();
     testIkReferencesFollowTheInstance();
     testApplyKeepsEveryInstanceSourceConfig();
+    testApplyRedoServedBySeeds();
     testCreateUndoKeepsFileStillReferenced();
     testApplyRefusedWhileMeshPending();
     testApplyRedoWhileTemplateReloads();

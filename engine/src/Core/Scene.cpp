@@ -4575,11 +4575,23 @@ namespace DonTopo
         });
         // A node reference inside the subtree to a node that was just renamed
         // meant THAT node (the snapshot's own), not the live one keeping the id.
+        // The same in a reinserted instance's override values, where a node outside
+        // the linked ones (an added child) is {"scene": id}: without it the
+        // instance's next rebuild would re-aim at the live node keeping the id.
         if (!renamed.empty())
             node->traverse([&](GameObject* n) {
                 forEachNodeReference(*n, [&](uint64_t& id) {
                     if (const auto it = renamed.find(id); it != renamed.end()) id = it->second;
                 });
+                if (n->prefabLink)
+                    for (PrefabOverride& o : n->prefabLink->overrides)
+                        forEachNodeReferenceInOverride(o.path, o.value, [&](nlohmann::json& ref) {
+                            if (!ref.is_object()) return;   // a prefab-local id: not a scene id
+                            const auto s = ref.find("scene");
+                            if (s == ref.end() || !s->is_number_integer()) return;
+                            if (const auto it = renamed.find(s->get<uint64_t>()); it != renamed.end())
+                                *s = it->second;
+                        });
             });
 
         // addChild() inserted at the end; reposition to index if it is not already there.

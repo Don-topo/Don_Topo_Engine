@@ -209,6 +209,13 @@ Focus 2 must hold for arrays too, so two arrays are recorded **per element, by a
   clip configuration and identity), procedural `vertices`/`indices`, the animator graph (states,
   transitions and parameters refer to each other by name; a partial merge could leave dangling
   transitions) and dropdown `options` (the selected index points into it).
+- **Known limitation: `/animator/ik` is one whole-array override.** Changing one IK target (or
+  any field of one constraint) on an instance stores the whole constraint list; that instance
+  then pins every constraint, so later template changes to its *other* IK fields (another
+  constraint's target, a weight, a new constraint) no longer reach it until the override is
+  reverted. The stored list is in prefab form (a node of the prefab by its prefab-local id, a node
+  outside it as `{"scene": id}`), so it still resolves to each instance's own nodes. Keying the
+  list per constraint (by name, as `/scripts`) is the fix, left for later.
 - **Backward compatibility.** A stored entry on `/scripts` or `/mesh/materials` with an array (or
   `null`) value is the format before keyed arrays. `applyPrefabOverrides` turns it into the
   per-element entries of its difference with the template array, applies those (same result as

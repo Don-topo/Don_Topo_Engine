@@ -1408,14 +1408,17 @@ void ApplyPrefabOverridesCommand::rebuildInstances(const std::vector<uint64_t>& 
 {
     // Rebuilt from the command's own template, now: it may still be loading in
     // the library. Seeded with what the first execute took (the template's
-    // configured meshes by node, its meshes, every instance's live meshes) plus
-    // the instances' current ones (an applied child's mesh is in the applying
-    // instance), so no model file is read on the main thread.
+    // configured meshes by node, its meshes, every instance's live meshes -- an
+    // applied child's mesh included, it was in the applying instance), so no
+    // model file is read on the main thread. The instances' CURRENT meshes are
+    // not merged here: what a rebuilt node needs is either a configuration of
+    // the template before or after this Apply (both made of the meshes live at
+    // the first execute, i.e. the seeds) or its own instance's override, which
+    // rebuildPrefabInstance takes from that instance's own meshes itself.
+    // testApplyRedoServedBySeeds needs the seeds alone; merging the current
+    // meshes as well never changed a test.
     PreloadedMeshCache cache = m_seedMeshes;
     for (const auto& [key, mesh] : m_seedConfigured) cache.emplace(key, mesh);
-    for (uint64_t id : instances)
-        if (GameObject* r = m_ctx.scene.findById(id))
-            mergeMeshCaches(cache, Scene::collectMeshes(r));   // every instance's configurations
     const MaterialAssetCache* mats = m_seedMats ? m_seedMats.get() : nullptr;
 
     for (uint64_t id : instances)
