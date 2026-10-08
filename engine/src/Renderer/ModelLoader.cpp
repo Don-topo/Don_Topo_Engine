@@ -1,5 +1,6 @@
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
+#include "DonTopo/Renderer/SharedTextureCache.h"
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
@@ -20,9 +21,31 @@
 #include <functional>
 #include <array>
 #include <memory>
+#include <atomic>
 
-namespace DonTopo 
+namespace DonTopo
 {
+    // Every Assimp ReadFile of this file goes through here, so readFileCount()
+    // sees all of them (tests: "this path touched no model file").
+    static std::atomic<int> g_readFileCount{0};
+    static thread_local int t_readFileCount = 0;
+    static const aiScene* readFileCounted(Assimp::Importer& importer, const std::string& path, unsigned flags)
+    {
+        g_readFileCount.fetch_add(1, std::memory_order_relaxed);
+        ++t_readFileCount;
+        return importer.ReadFile(path, flags);
+    }
+
+    int ModelLoader::readFileCount()
+    {
+        return g_readFileCount.load(std::memory_order_relaxed);
+    }
+
+    int ModelLoader::readFileCountOnThisThread()
+    {
+        return t_readFileCount;
+    }
+
     static glm::mat4 aiToGlm(const aiMatrix4x4& m)
     {
         // aiMatrix4x4 es row-major; glm::mat4 es column-major
@@ -222,6 +245,7 @@ namespace DonTopo
                 loadTex(aiTextureType_HEIGHT, mesh.material.embeddedNormalMap, mesh.material.normalMapPath);
             // ORM (glTF metallic-roughness packed: R=AO, G=roughness, B=metallic)
             loadTex(aiTextureType_UNKNOWN, mesh.material.embeddedMetallicRoughness, mesh.material.metallicRoughnessPath);
+            hashEmbeddedTextures(mesh.material);   // once here, not per registration
         }
 
         return mesh;
@@ -286,7 +310,7 @@ namespace DonTopo
         const ModelImportSettings settings = readModelSettings(path);
         Assimp::Importer importer;
         configureImporter(importer, settings);
-        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
+        const aiScene* scene = readFileCounted(importer, path, assimpFlags(settings));
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
             throw std::runtime_error("Assimp: " + std::string(importer.GetErrorString()));
         if (piece < 0 || static_cast<uint32_t>(piece) >= scene->mNumMeshes)
@@ -302,7 +326,7 @@ namespace DonTopo
         const ModelImportSettings settings = readModelSettings(path);
         Assimp::Importer importer;
         configureImporter(importer, settings);
-        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
+        const aiScene* scene = readFileCounted(importer, path, assimpFlags(settings));
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
             throw std::runtime_error("Assimp: " + std::string(importer.GetErrorString()));
         StaticModel out;
@@ -321,7 +345,7 @@ namespace DonTopo
         const ModelImportSettings settings = readModelSettings(path);
         Assimp::Importer importer;
         configureImporter(importer, settings);
-        const aiScene* scene = importer.ReadFile(path, assimpFlags(settings));
+        const aiScene* scene = readFileCounted(importer, path, assimpFlags(settings));
 
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
         {
@@ -577,6 +601,7 @@ namespace DonTopo
                     if (smat.embeddedNormalMap.empty() && smat.normalMapPath.empty())
                         loadTexFromMat(mat, aiTextureType_HEIGHT, smat.embeddedNormalMap,     smat.normalMapPath);
                     loadTexFromMat(mat, aiTextureType_UNKNOWN, smat.embeddedMetallicRoughness, smat.metallicRoughnessPath);
+                    hashEmbeddedTextures(smat);   // once here, not per registration
                 }
             }
 
@@ -600,7 +625,7 @@ namespace DonTopo
         // Minimal flags: no geometry is built here, so triangulate,
         // normals and tangents would be wasted work. Assimp reads the
         // animations all the same.
-        const aiScene* scene = importer.ReadFile(path, 0);
+        const aiScene* scene = readFileCounted(importer, path, 0);
 
         const std::string file = std::filesystem::path(path).filename().string();
 
@@ -670,7 +695,7 @@ namespace DonTopo
         // Flags at zero, same as loadAnimationClips: no geometry is built here,
         // so triangulate, normals and tangents would be wasted work.
         // mNumBones is read all the same.
-        const aiScene* scene = importer.ReadFile(path, 0);
+        const aiScene* scene = readFileCounted(importer, path, 0);
         if (!scene || !scene->mRootNode) return false;
 
         for (uint32_t i = 0; i < scene->mNumMeshes; i++)
@@ -846,7 +871,7 @@ namespace DonTopo
             Assimp::Importer importer;
             configureImporter(importer, settings);
             // No tangents: the thumbnail does not use a normal map.
-            const aiScene* scene = importer.ReadFile(path, assimpFlags(settings) & ~aiProcess_CalcTangentSpace);
+            const aiScene* scene = readFileCounted(importer, path, assimpFlags(settings) & ~aiProcess_CalcTangentSpace);
             if (!scene || !scene->mRootNode) return out;
             if (scene->mNumMeshes == 0)
             {

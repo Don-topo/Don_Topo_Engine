@@ -29,6 +29,14 @@ private:
     // stack just like createBasicShape. The caller checks that there is no
     // camera yet (Scene::findCamera) before offering the action.
     void createCamera(EditorContext& ctx, GameObject* parent);
+    // Delete/F2 entry points: a node that comes from a prefab (not its
+    // instance root) is refused with a Log line instead (spec §5.4), in Edit Mode.
+    void requestDelete(EditorContext& ctx, GameObject* node);
+    // A .prefab dropped on the hierarchy (assetPath absolute): instantiated
+    // under parent (nullptr = scene root) at the end of the frame.
+    void dropPrefab(EditorContext& ctx, const std::string& assetPath, GameObject* parent);
+    // Context menu entries of an instance root (Unpack / Select Prefab Asset).
+    void drawPrefabMenuItems(EditorContext& ctx, GameObject* node);
 
     bool m_open = true;
 

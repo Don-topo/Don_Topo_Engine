@@ -15,6 +15,12 @@ struct LuaEntity {
     ScriptManager* mgr = nullptr;
 };
 
+// Prefab asset handed to Lua for a PrefabRef script prop (usertype "Prefab").
+// ScriptManager::createInstance builds it, so it lives here.
+struct LuaPrefab {
+    std::string path;
+};
+
 namespace ScriptBindings {
     // Registers the whole API (Vec3, Log, Input/Key, Entity, Transform,
     // components, Scene) in mgr's VM. Called once from

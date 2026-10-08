@@ -1229,7 +1229,28 @@ GameObject via **Properties → Add → Script**; the scripts themselves are `.l
 under `Scripts/`, one global table per file, with a Unity-style lifecycle
 (`Awake`/`Start`/`Update`/`FixedUpdate`/`LateUpdate`/`OnDestroy` plus the trigger,
 collision and animation-event callbacks) and serializable properties that show up in
-Properties on their own. `OnAnimationEvent(name)` fires on every script of a GameObject
+Properties on their own (numbers, booleans, strings, and `Prefab()` slots such as
+`enemy = Prefab()`, which reach the instance as a `Prefab` with `.path` and `:IsLoaded()`).
+A prefab slot is spawned with the Unity-style global `Instantiate`, which builds the object
+from a template preloaded in RAM — no disk read in Play — and raises a Lua error at once if
+the prefab is not loaded yet:
+
+```lua
+Spawner = { enemy = Prefab(), interval = 2 }
+
+function Spawner:Update(dt)
+    self.t = (self.t or 0) + dt
+    if self.t >= self.interval and self.enemy and self.enemy:IsLoaded() then
+        self.t = 0
+        -- also Instantiate(prefab), (prefab, parent) and (prefab, position, rotation, parent);
+        -- position/rotation are world space, rotation in Euler degrees
+        Instantiate(self.enemy, self.entity:GetTransform():GetWorldPosition(), Vec3(0, 90, 0))
+    end
+end
+```
+
+`Scene.Instantiate(entity)` still clones an object that is already in the scene.
+`OnAnimationEvent(name)` fires on every script of a GameObject
 whose Animator crosses one of its current state's events: Play only, once per cycle
 (twice if a long frame skips two), and during a cross-fade only the incoming state fires.
 

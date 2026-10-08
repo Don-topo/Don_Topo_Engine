@@ -4,11 +4,13 @@
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/TextureImport.h"
 
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace DonTopo
@@ -67,6 +69,13 @@ namespace DonTopo
     {
         public:
             explicit AsyncAssetLoader(JobSystem& jobs) : m_jobs(jobs) {}
+            // Cancels what is still queued and WAITS for the jobs already started:
+            // they run runJob() on `this`, so returning earlier would let a worker
+            // lock a destroyed mutex and post into a freed mailbox. A cancelled job
+            // still queued releases its lease when the worker drops it.
+            // The JobSystem must OUTLIVE the loader (or be shut down before it):
+            // the wait relies on its workers draining or dropping our jobs.
+            ~AsyncAssetLoader();
             AsyncAssetLoader(const AsyncAssetLoader&)            = delete;
             AsyncAssetLoader& operator=(const AsyncAssetLoader&) = delete;
 
@@ -76,6 +85,8 @@ namespace DonTopo
             // memory. piece is the piece of the file (ModelLoader::load(path,
             // piece) for the synchronous path); 0 = the whole file or its
             // first/only mesh, same as today.
+            // Returns 0 if the JobSystem refused the job (not started or
+            // stopping): the request is undone and nothing will be delivered.
             JobSystem::JobId requestMesh(const std::string& path, uint64_t targetId, int piece = 0);
 
             void cancel(JobSystem::JobId id);
@@ -100,7 +111,17 @@ namespace DonTopo
             // results are discarded.
             void cancelAllPending();
 
+            // True while the request `id` (what requestMesh returned) can still
+            // deliver a result: queued, in flight, or in the mailbox. False once
+            // pumpCompleted handed its result out, after cancel/cancelAllPending,
+            // and for 0 or an id this loader never issued. A GameObject whose
+            // pendingMeshJob is not live is NOT waiting for anything, whoever
+            // forgot to clear its field (cancelAllPending cannot: it has no scene).
+            bool isRequestLive(JobSystem::JobId id) const;
+
         private:
+            // Ids of the requests isRequestLive answers true for. Under m_mutex.
+            std::unordered_set<JobSystem::JobId> m_liveRequests;
             // Requests grouped by path while the job is in flight. The
             // first one to ask for a path starts ONE job (jobId); those that arrive
             // while it is still in flight are recorded as waiters of the same one. When
@@ -155,6 +176,21 @@ namespace DonTopo
             // m_pending negative forever (the loader is long-lived) and
             // would deliver meshes of objects already cancelled. See runJob().
             uint64_t                                      m_epoch = 0;
+
+            // Jobs handed to the JobSystem whose std::function has not been destroyed
+            // yet (queued, running, or about to be dropped as cancelled). Each job
+            // captures a JobLease; its destructor decrements under m_mutex, so the
+            // count reaches 0 only when no worker can touch `this` any more.
+            struct JobLease
+            {
+                explicit JobLease(AsyncAssetLoader* s) : self(s) {}
+                JobLease(const JobLease&)            = delete;   // one lease = one decrement
+                JobLease& operator=(const JobLease&) = delete;
+                ~JobLease();
+                AsyncAssetLoader* self;
+            };
+            int                                           m_liveJobs = 0;
+            std::condition_variable                       m_liveJobsCv;
     };
 
     class Scene;

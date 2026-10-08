@@ -1037,6 +1037,22 @@ struct D3D12Renderer::Impl {
         }
     };
     SharedTextureCache<SkinnedGeometry> skinnedGeometry;
+    // The shared B6 buffers of mesh (one reference more), uploaded on a miss.
+    // Used by createSkinnedObject and the prefab pins.
+    SkinnedGeometry acquireSkinnedGeometry(const SkinnedMesh& mesh, const PackedClips& packed);
+
+    // Prefab template pins (EditorRenderer::pinTemplateMeshes): the character
+    // geometry and textures a template's skinned meshes would share. Static
+    // meshes are NOT pinned here: their buffers and textures belong to a draw
+    // slot (StaticObject::ownsGpu), so there is nothing to hold without one.
+    // Each handle is ONE reference this pin acquired and releases.
+    struct TemplatePin {
+        std::vector<SkinnedGeometry>      geometry;
+        std::vector<D3D12MA::Allocation*> textures;
+    };
+    std::unordered_map<std::string, TemplatePin> templatePins;
+    // Does NOT wait for the GPU: the callers do (unpin, shutdown).
+    void releaseTemplatePin(TemplatePin& pin);
     // Everything a character holds: shared geometry and textures through their
     // caches, its own buffers, and its SRV triplets back to the pool. The ONLY
     // release path: three hand-written copies had drifted (the rebuild one
@@ -1793,8 +1809,13 @@ struct D3D12Renderer::Impl {
     void createGizmoPipeline();
     void createGridGeometry();
 
+    // srvIndex for an upload that writes no view: a prefab pin keeps the
+    // texture in the cache with no slot of its own; whoever registers a mesh
+    // later writes its view on the cache hit, as every hit already does.
+    static constexpr UINT kNoSrv = UINT(-1);
+
     // Uploads a 2D texture (or an array of 1x1 slices) and creates its SRV in the
-    // `srvIndex` slot of the heap.
+    // `srvIndex` slot of the heap (none with kNoSrv).
     // `mips` are levels 1..N-1 of a 2D texture (arraySize == 1); with
     // arraySize > 1 they are not used.
     D3D12MA::Allocation* uploadTexture(const void* pixels, UINT width, UINT height,
@@ -2657,9 +2678,11 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
         srvDesc.Texture2D.MipLevels = mipLevels;
     }
 
-    D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
-    handle.ptr += static_cast<SIZE_T>(srvIndex) * srvSize;
-    device->CreateShaderResourceView(destination->GetResource(), &srvDesc, handle);
+    if (srvIndex != kNoSrv) {
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(srvIndex) * srvSize;
+        device->CreateShaderResourceView(destination->GetResource(), &srvDesc, handle);
+    }
 
     return destination;
 }
@@ -3448,30 +3471,10 @@ void D3D12Renderer::Impl::createSkinningPipelines()
     }
 }
 
-int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
+D3D12Renderer::Impl::SkinnedGeometry D3D12Renderer::Impl::acquireSkinnedGeometry(const SkinnedMesh& mesh,
+                                                                                const PackedClips& packed)
 {
-    if (mesh.skinnedVertices.empty() || mesh.skeleton.names.empty() || mesh.indices.empty())
-        return -1;
-
-    const PackedClips packed = packSkinnedClips(mesh);
-    if (packed.boneInfos.empty())
-        return -1;
-
-    SkinnedObject object;
-    object.boneCount    = static_cast<uint32_t>(mesh.skeleton.names.size());
-    object.clipCount    = skinnedClipCount(mesh);
-    object.vertexCount  = static_cast<uint32_t>(mesh.skinnedVertices.size());
-    object.clipBase     = 0;
-    object.animDuration = mesh.animationClips.empty() ? 0.0f : mesh.animationClips[0].duration;
-    // Same default as Vulkan: an FBX without mTicksPerSecond plays at 24.
-    object.ticksPerSecond = mesh.animationClips.empty()
-                                ? 0.0f
-                                : (mesh.animationClips[0].ticksPerSecond > 0.0f
-                                       ? mesh.animationClips[0].ticksPerSecond
-                                       : 24.0f);
-
-    // Read-only buffers, shared among clones (B6).
-    const SkinnedGeometry geo = skinnedGeometry.acquire(skinnedGeometryKey(mesh, packed), [&] {
+    return skinnedGeometry.acquire(skinnedGeometryKey(mesh, packed), [&] {
         SkinnedGeometry g;
         // Half-created (VRAM exhausted): the uploads are synchronous, so what
         // was already made can be released right away.
@@ -3496,8 +3499,47 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
                     a->Release();
             throw;
         }
+        // Shared entries outlive the character that uploaded them (and a prefab
+        // pin holds them with no character at all): named, so a leak report
+        // says what it is instead of "Unnamed ID3D12Resource Object".
+        const std::pair<D3D12MA::Allocation*, const wchar_t*> names[] = {
+            {g.posKeys, L"shared character keyframes (position)"},
+            {g.rotKeys, L"shared character keyframes (rotation)"},
+            {g.scaleKeys, L"shared character keyframes (scale)"},
+            {g.boneInfos, L"shared character bone infos"},
+            {g.inputVerts, L"shared character input vertices"},
+            {g.indices, L"shared character indices"} };
+        for (const auto& [a, name] : names)
+            if (a && a->GetResource())
+                a->GetResource()->SetName(name);
         return g;
     });
+}
+
+int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
+{
+    if (mesh.skinnedVertices.empty() || mesh.skeleton.names.empty() || mesh.indices.empty())
+        return -1;
+
+    const PackedClips packed = packSkinnedClips(mesh);
+    if (packed.boneInfos.empty())
+        return -1;
+
+    SkinnedObject object;
+    object.boneCount    = static_cast<uint32_t>(mesh.skeleton.names.size());
+    object.clipCount    = skinnedClipCount(mesh);
+    object.vertexCount  = static_cast<uint32_t>(mesh.skinnedVertices.size());
+    object.clipBase     = 0;
+    object.animDuration = mesh.animationClips.empty() ? 0.0f : mesh.animationClips[0].duration;
+    // Same default as Vulkan: an FBX without mTicksPerSecond plays at 24.
+    object.ticksPerSecond = mesh.animationClips.empty()
+                                ? 0.0f
+                                : (mesh.animationClips[0].ticksPerSecond > 0.0f
+                                       ? mesh.animationClips[0].ticksPerSecond
+                                       : 24.0f);
+
+    // Read-only buffers, shared among clones (B6).
+    const SkinnedGeometry geo = acquireSkinnedGeometry(mesh, packed);
     // From here on `object` holds cache references (geometry, then textures
     // and SRV triplets): a throw before it is stored must give them back, or
     // the shared entry stays pinned for the rest of the process.
@@ -3638,11 +3680,12 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
             // writes this character's view over the already uploaded image, with
             // the same format. nullptr = no texture: the caller puts its
             // filler, and the cache does not store it.
-            auto pedirTextura = [&](const std::string& ruta, const std::vector<uint8_t>& emb,
+            // embHash: the Material's embedded*Hash of that slot (0 = hash here).
+            auto pedirTextura = [&](const std::string& ruta, const std::vector<uint8_t>& emb, uint64_t embHash,
                                     TextureKind tipo, UINT srvIndex) -> D3D12MA::Allocation* {
                 bool creada = false;
                 D3D12MA::Allocation* a = skinnedTextures.acquire(
-                    makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta)),
+                    makeTextureKey(ruta, emb, tipo, textureKeySuffix(ruta), embHash),
                     [&] { return uploadMaterialTexture(ruta, emb, tipo, srvIndex); }, &creada);
                 // On a hit, the format is that of the already uploaded resource (resolveSrgb
                 // decided it when it was created), not an assumption by slot.
@@ -3652,7 +3695,8 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
             };
 
             D3D12MA::Allocation* base = pedirTextura(
-                range.material->texturePath, range.material->embeddedTexture, TextureKind::BaseColor, slot);
+                range.material->texturePath, range.material->embeddedTexture,
+                range.material->embeddedTextureHash, TextureKind::BaseColor, slot);
             if (base)
                 object.textures.push_back(base);
             else
@@ -3660,7 +3704,8 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
                                    DXGI_FORMAT_R8G8B8A8_UNORM, slot);
 
             D3D12MA::Allocation* normal = pedirTextura(
-                range.material->normalMapPath, range.material->embeddedNormalMap, TextureKind::Normal, slot + 1);
+                range.material->normalMapPath, range.material->embeddedNormalMap,
+                range.material->embeddedNormalMapHash, TextureKind::Normal, slot + 1);
             if (normal)
                 object.textures.push_back(normal);
             else
@@ -3671,7 +3716,8 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
 
             if (D3D12MA::Allocation* orm =
                     pedirTextura(range.material->metallicRoughnessPath,
-                                 range.material->embeddedMetallicRoughness, TextureKind::Orm,
+                                 range.material->embeddedMetallicRoughness,
+                                 range.material->embeddedMetallicRoughnessHash, TextureKind::Orm,
                                  slot + 3))
                 object.textures.push_back(orm);
         }
@@ -3789,13 +3835,26 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
     for (SkinnedObject& character : skinnedObjects)
         releaseSkinnedResources(character);
     skinnedObjects.clear();
-    // All characters were released: the caches have to be empty. If not,
+    // All characters were released: the caches have to be empty -- unless a
+    // prefab pin still holds entries on purpose (clearSkinnedMeshes with
+    // templates loaded; shutdown releases the pins before calling this). If not,
     // someone skipped the release; a warning is given and nothing is freed blindly.
-    if (skinnedTextures.size() != 0)
-        diagLog("[D3D12] " + std::to_string(skinnedTextures.size()) +
+    // Entries the pins hold are expected; anything beyond them is a leak.
+    std::vector<D3D12MA::Allocation*> pinnedTextures;
+    std::vector<SkinnedGeometry>      pinnedGeometry;
+    for (const auto& [key, pin] : templatePins) {
+        for (D3D12MA::Allocation* a : pin.textures)
+            if (std::find(pinnedTextures.begin(), pinnedTextures.end(), a) == pinnedTextures.end())
+                pinnedTextures.push_back(a);
+        for (const SkinnedGeometry& g : pin.geometry)
+            if (std::find(pinnedGeometry.begin(), pinnedGeometry.end(), g) == pinnedGeometry.end())
+                pinnedGeometry.push_back(g);
+    }
+    if (skinnedTextures.size() > pinnedTextures.size())
+        diagLog("[D3D12] " + std::to_string(skinnedTextures.size() - pinnedTextures.size()) +
                 " character textures not released at shutdown");
-    if (skinnedGeometry.size() != 0)
-        diagLog("[D3D12] " + std::to_string(skinnedGeometry.size()) +
+    if (skinnedGeometry.size() > pinnedGeometry.size())
+        diagLog("[D3D12] " + std::to_string(skinnedGeometry.size() - pinnedGeometry.size()) +
                 " character geometries not released at shutdown");
     skinnedSlots.clear();
     freeSkinnedSrv.clear();
@@ -10842,6 +10901,124 @@ void D3D12Renderer::registerGameObject(GameObject* node)
     });
 }
 
+void D3D12Renderer::pinTemplateMeshes(const std::string& key,
+                                      const std::vector<std::shared_ptr<const Mesh>>& meshes)
+{
+    Impl& d = *m_impl;
+    if (key.empty() || !d.initialized)
+        return;
+
+    // Complete BEFORE the old pin of the key is released: an entry both share
+    // keeps a reference throughout and is never released and re-uploaded.
+    Impl::TemplatePin pin;
+    try {
+        for (const std::shared_ptr<const Mesh>& mesh : meshes) {
+            const auto* sk = dynamic_cast<const SkinnedMesh*>(mesh.get());
+            // Same validity gate as createSkinnedObject: what it would refuse
+            // shares nothing.
+            if (!sk || sk->skinnedVertices.empty() || sk->skeleton.names.empty() || sk->indices.empty())
+                continue;
+            const PackedClips packed = packSkinnedClips(*sk);
+            if (packed.boneInfos.empty())
+                continue;
+            pin.geometry.push_back(d.acquireSkinnedGeometry(*sk, packed));
+
+            // The SAME materials createSkinnedObject takes: one per submesh range
+            // (out-of-range index -> the mesh's own material), or, without
+            // ranges (single-piece FBX), the mesh's own material only.
+            std::vector<const Material*> used;
+            if (!sk->subMeshRanges.empty()) {
+                for (const SubMeshRange& range : sk->subMeshRanges) {
+                    const Material* m = range.materialIndex < sk->materials.size()
+                                            ? &sk->materials[range.materialIndex]
+                                            : &sk->material;
+                    if (std::find(used.begin(), used.end(), m) == used.end())
+                        used.push_back(m);
+                }
+            } else {
+                used.push_back(&sk->material);
+            }
+
+            for (const Material* matPtr : used) {
+                const Material& mat = *matPtr;
+                const std::pair<const std::string*, const std::vector<uint8_t>*> slots[] = {
+                    {&mat.texturePath, &mat.embeddedTexture},
+                    {&mat.normalMapPath, &mat.embeddedNormalMap},
+                    {&mat.metallicRoughnessPath, &mat.embeddedMetallicRoughness}};
+                const TextureKind kinds[] = {TextureKind::BaseColor, TextureKind::Normal, TextureKind::Orm};
+                const uint64_t hashes[] = {mat.embeddedTextureHash, mat.embeddedNormalMapHash,
+                                           mat.embeddedMetallicRoughnessHash};
+                for (int s = 0; s < 3; ++s) {
+                    const std::string texKey = makeTextureKey(*slots[s].first, *slots[s].second, kinds[s],
+                                                              textureKeySuffix(*slots[s].first), hashes[s]);
+                    if (texKey.empty())
+                        continue;   // no texture: a registration takes the global filler
+                    bool created = false;
+                    D3D12MA::Allocation* a = d.skinnedTextures.acquire(
+                        texKey,
+                        [&] {
+                            return d.uploadMaterialTexture(*slots[s].first, *slots[s].second, kinds[s],
+                                                           Impl::kNoSrv);
+                        },
+                        &created);
+                    if (!a)
+                        continue;   // unreadable: nothing was cached
+                    if (created && a->GetResource())
+                        a->GetResource()->SetName(L"shared character material texture (prefab pin)");
+                    pin.textures.push_back(a);
+                }
+            }
+        }
+    } catch (...) {
+        d.waitForGpu();
+        d.releaseTemplatePin(pin);
+        throw;
+    }
+
+    auto it = d.templatePins.find(key);
+    if (it != d.templatePins.end()) {
+        d.waitForGpu();
+        d.releaseTemplatePin(it->second);
+        it->second = std::move(pin);
+    } else {
+        d.templatePins.emplace(key, std::move(pin));
+    }
+}
+
+void D3D12Renderer::unpinTemplateMeshes(const std::string& key)
+{
+    Impl& d = *m_impl;
+    const auto it = d.templatePins.find(key);
+    if (it == d.templatePins.end())
+        return;   // unknown key: no-op
+    // The pin may hold the LAST reference of an entry the previous frame still
+    // drew (an instance removed this frame): same wait as removeGameObject.
+    d.waitForGpu();
+    d.releaseTemplatePin(it->second);
+    d.templatePins.erase(it);
+}
+
+void D3D12Renderer::Impl::releaseTemplatePin(TemplatePin& pin)
+{
+    // Exactly the references this pin acquired, through the caches: a last
+    // reference releases the resource, any other only lowers the count.
+    // contains() only guards against a cache already torn down; nothing
+    // outside the cache is ever released here.
+    const auto releaseGeo = [](const SkinnedGeometry& g) {
+        for (D3D12MA::Allocation* a : {g.posKeys, g.rotKeys, g.scaleKeys, g.boneInfos, g.inputVerts, g.indices})
+            if (a)
+                a->Release();
+    };
+    for (const SkinnedGeometry& g : pin.geometry)
+        if (skinnedGeometry.contains(g))
+            skinnedGeometry.release(g, releaseGeo);
+    for (D3D12MA::Allocation* texture : pin.textures)
+        if (texture && skinnedTextures.contains(texture))
+            skinnedTextures.release(texture, [](D3D12MA::Allocation* const& a) { a->Release(); });
+    pin.geometry.clear();
+    pin.textures.clear();
+}
+
 void D3D12Renderer::removeGameObject(GameObject* node)
 {
     if (!node)
@@ -11924,6 +12101,12 @@ void D3D12Renderer::shutdown()
     // Nothing is released with work in flight: releasing a render target that the GPU
     // is still reading is silent corruption, not an API error.
     d.waitForGpu();
+
+    // Prefab template pins the host did not release: their references go now,
+    // before the characters and the caches' leak check (releaseSkinnedObjects).
+    for (auto& [key, pin] : d.templatePins)
+        d.releaseTemplatePin(pin);
+    d.templatePins.clear();
 
     if (d.fenceEvent != nullptr) {
         CloseHandle(d.fenceEvent);

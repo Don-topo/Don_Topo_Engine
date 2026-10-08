@@ -52,6 +52,7 @@
 namespace DonTopo {
 
     class Window;
+    struct PackedClips;
     class GameObject;
     class PhysicsManager;
     class AudioManager;
@@ -245,6 +246,13 @@ namespace DonTopo {
             // Removes only the Mesh component of go (it does not delete the GameObject nor its
             // other components). No-op if go is nullptr or has no mesh.
             void removeMeshComponent(GameObject* go);
+            // Prefab templates (contract in EditorRenderer). Vulkan pins all three
+            // shared caches: static entries of m_sharedMeshes (geometry + textures,
+            // with their descriptor sets), and B6 geometry + material textures of
+            // skinned meshes. No draw slot is created.
+            void pinTemplateMeshes(const std::string& key,
+                                   const std::vector<std::shared_ptr<const Mesh>>& meshes) override;
+            void unpinTemplateMeshes(const std::string& key) override;
             // Replaces the texture of the indicated slot with the "missing"
             // checkerboard (same generator that createTextureImage uses when there is
             // no path/bytes). No-op if renderIndex is out of range.
@@ -1165,6 +1173,30 @@ namespace DonTopo {
             };
             SharedTextureCache<SkinnedGeometry> m_skinnedGeometry;
             void destroySkinnedGeometry(const SkinnedGeometry& g);
+            // The shared B6 buffers of mesh (one reference more), uploading them
+            // into batch on a miss. Used by initSkinnedRenderObject and the pins.
+            SkinnedGeometry acquireSkinnedGeometry(const SkinnedMesh& mesh, const PackedClips& packed,
+                                                   TransferBatch* batch);
+            // One reference more on a shared material texture, uploading it on a
+            // miss. An empty key (no texture) is never cached: the caller decides.
+            // embeddedHash: the Material's embedded*Hash of that slot (0 = hash here).
+            MaterialImage acquireSkinnedTexture(const std::string& path, const std::vector<uint8_t>& embedded,
+                                                uint64_t embeddedHash, TextureKind kind, TransferBatch* batch);
+
+            // Prefab template pins: one reference held per entry, released by
+            // the SAME count (never by asking a handle whether it is still
+            // borrowed). Keyed by template key.
+            struct TemplatePin
+            {
+                std::vector<int>             staticEntries;   // m_sharedMeshes indices
+                std::vector<SkinnedGeometry> geometry;
+                std::vector<MaterialImage>   textures;
+            };
+            std::unordered_map<std::string, TemplatePin> m_templatePins;
+            // deferred: destruction kDelayFrames later (a frame in flight may still
+            // read an entry whose last reference is the pin). false only from
+            // shutdown, after vkDeviceWaitIdle.
+            void releaseTemplatePin(TemplatePin& pin, bool deferred);
 
             // Open batch where the current pump's uploads land. It is sent in
             // flushPendingUploads() and moves to m_inFlightBatches.

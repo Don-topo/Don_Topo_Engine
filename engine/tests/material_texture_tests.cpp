@@ -8,6 +8,8 @@
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Renderer/SharedTextureCache.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/DeferredSlider.h"
@@ -20,6 +22,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -1725,6 +1728,94 @@ static void test_no_uploader_decodes_embedded_on_its_own()
     CHECK(culpables.empty());
 }
 
+// The texture cache key names what the upload decodes: for every combination of
+// path / embedded bytes, the key equals the key of the source chooseTextureSource
+// picks alone. Otherwise two materials that decode DIFFERENT images (a .mat path
+// over an FBX's embedded texture, and the plain FBX) can share one cache entry.
+static void test_texture_key_follows_decode_choice()
+{
+    const std::vector<uint8_t> emb = { 1, 2, 3 };
+    for (const std::string& path : { std::string(), std::string("over.png") })
+        for (const std::vector<uint8_t>& bytes : { std::vector<uint8_t>(), emb })
+            for (TextureKind kind : { TextureKind::BaseColor, TextureKind::Normal, TextureKind::Orm })
+            {
+                const std::string key = makeTextureKey(path, bytes, kind, "#m");
+                switch (chooseTextureSource(path, bytes))
+                {
+                    case TextureSource::Path:     CHECK(key == makeTextureKey(path, {}, kind, "#m")); break;
+                    case TextureSource::Embedded: CHECK(key == makeTextureKey("", bytes, kind, "#m")); break;
+                    case TextureSource::None:     CHECK(key.empty()); break;
+                }
+            }
+}
+
+// --- The hash of embedded texture bytes, computed once by the loader ---
+//
+// The texture cache key of an embedded texture is built from
+// Material::embedded*Hash instead of hashing megabytes per registration (~7 ms
+// per skinned instance with Maw). That only holds if every Material the loader
+// produces carries the hash of ITS bytes...
+static void test_loader_hashes_embedded_textures()
+{
+    int embedded = 0;
+    auto check = [&](const Material& m) {
+        const std::pair<const std::vector<uint8_t>*, uint64_t> slots[] = {
+            { &m.embeddedTexture, m.embeddedTextureHash },
+            { &m.embeddedNormalMap, m.embeddedNormalMapHash },
+            { &m.embeddedMetallicRoughness, m.embeddedMetallicRoughnessHash } };
+        for (const auto& [bytes, hash] : slots)
+        {
+            if (bytes->empty()) { CHECK(hash == 0); continue; }
+            ++embedded;
+            CHECK(hash == hashEmbeddedTexture(*bytes));
+        }
+    };
+    // Launched from another cwd it does not find the asset: it FAILS, it does not pass.
+    const std::string maw = "assets/animatedCharacter/Maw J Laygo.fbx";
+    CHECK(std::filesystem::exists(maw));
+    const SkinnedMesh sk = ModelLoader::loadSkinned(maw);
+    check(sk.material);
+    for (const Material& m : sk.materials) check(m);
+    CHECK(embedded > 0);   // the asset really has embedded textures
+
+    // The static path fills its Material in another place of the loader.
+    embedded = 0;
+    const Mesh st = ModelLoader::load(maw);
+    check(st.material);
+    CHECK(embedded > 0);
+}
+
+// ...and only if nothing rewrites the bytes after the loader hashed them (a copy
+// of a Material copies bytes and hashes together, which stays right). Same
+// approach as the stbi test above: no write to an embedded* vector outside
+// ModelLoader.cpp. Debug builds also assert the hash at every key built from it.
+static void test_embedded_bytes_written_only_by_the_loader()
+{
+    const std::regex write(R"(embedded(Texture|NormalMap|MetallicRoughness)\s*(=[^=]|\.(assign|resize|clear|push_back|emplace_back|insert|swap|erase)\s*\(|\[))");
+    int files = 0;
+    std::vector<std::string> offenders;
+    for (const char* dir : { "engine/src", "engine/include", "runtime", "sandbox/src" })
+    {
+        CHECK(std::filesystem::is_directory(dir));
+        if (!std::filesystem::is_directory(dir)) continue;
+        for (const auto& e : std::filesystem::recursive_directory_iterator(dir))
+        {
+            if (!e.is_regular_file()) continue;
+            const std::string ext = e.path().extension().string();
+            if (ext != ".cpp" && ext != ".h") continue;
+            ++files;
+            if (e.path().stem() == "ModelLoader") continue;   // the producer: it hashes what it writes
+            const std::vector<uint8_t> bytes = leeFichero(e.path().string());
+            const std::string text(bytes.begin(), bytes.end());
+            if (std::regex_search(text, write)) offenders.push_back(e.path().generic_string());
+        }
+    }
+    for (const std::string& o : offenders)
+        std::printf("  embedded texture bytes written outside ModelLoader: %s\n", o.c_str());
+    CHECK(files > 100);
+    CHECK(offenders.empty());
+}
+
 // --- Metallic/Roughness sliders against a REAL ImGui, without a window ---
 //
 // The bug that these tests cover was not in any command or in the Material:
@@ -2152,6 +2243,9 @@ int main()
 
     test_decode_material_texture_path_beats_embedded();
     test_no_uploader_decodes_embedded_on_its_own();
+    test_texture_key_follows_decode_choice();
+    test_loader_hashes_embedded_textures();
+    test_embedded_bytes_written_only_by_the_loader();
 
     test_remove_mesh_undo_restores_mesh_and_overrides();
     test_remove_mesh_undo_does_not_overwrite_newer_mesh();

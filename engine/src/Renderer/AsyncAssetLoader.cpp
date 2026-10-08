@@ -88,15 +88,56 @@ namespace DonTopo
             if (needsJob)
                 group.jobId = id;
             group.waiters.push_back({ id, targetId, piece });
+            m_liveRequests.insert(id);
         }
 
         if (needsJob)
         {
+            // The lease is counted BEFORE submitting: if submitWithId refuses the
+            // job, the lambda (and the lease) is destroyed right there and the
+            // count goes back down.
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                ++m_liveJobs;
+            }
+            auto lease = std::make_shared<JobLease>(this);
             // path by copy: by reference it would dangle as soon as the caller
             // left scope, and it would not show until the worker started.
-            m_jobs.submitWithId(id, [this, path] { runJob(path); });
+            if (!m_jobs.submitWithId(id, [this, path, lease] { runJob(path); }))
+            {
+                // Refused (pool not started or stopping): no job will ever serve
+                // this group, so undo it and report 0 instead of leaving a waiter
+                // that never completes. A waiter that joined in between was
+                // waiting on this same job, so it is undone with the group.
+                std::lock_guard<std::mutex> lock(m_mutex);
+                auto it = m_groups.find(path);
+                if (it != m_groups.end() && it->second.jobId == id)
+                {
+                    m_pending -= static_cast<int>(it->second.waiters.size());
+                    for (const Waiter& w : it->second.waiters) m_liveRequests.erase(w.job);
+                    m_groups.erase(it);
+                }
+                m_liveRequests.erase(id);
+                return 0;
+            }
         }
         return id;
+    }
+
+    AsyncAssetLoader::JobLease::~JobLease()
+    {
+        // Notify while still holding the lock: the destructor waiting on the cv
+        // cannot return (and destroy the mutex) until this unlock.
+        std::lock_guard<std::mutex> lock(self->m_mutex);
+        if (--self->m_liveJobs == 0)
+            self->m_liveJobsCv.notify_all();
+    }
+
+    AsyncAssetLoader::~AsyncAssetLoader()
+    {
+        cancelAllPending();
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_liveJobsCv.wait(lock, [this] { return m_liveJobs == 0; });
     }
 
     void AsyncAssetLoader::cancel(JobSystem::JobId id)
@@ -133,6 +174,7 @@ namespace DonTopo
 
                 group.waiters.erase(w);
                 --m_pending;
+                m_liveRequests.erase(id);
 
                 if (group.waiters.empty())
                 {
@@ -393,8 +435,16 @@ namespace DonTopo
             // reach 'out'. No tombstones: the group-vs-result exclusion
             // under m_mutex guarantees there is no double counting (see cancel()).
             m_pending -= static_cast<int>(out.size());
+            for (const LoadedMesh& r : out) m_liveRequests.erase(r.job);
         }
         return out;
+    }
+
+    bool AsyncAssetLoader::isRequestLive(JobSystem::JobId id) const
+    {
+        if (id == 0) return false;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_liveRequests.count(id) != 0;
     }
 
     int AsyncAssetLoader::pending() const
@@ -522,6 +572,7 @@ namespace DonTopo
             m_groups.clear();
             m_inbox.clear();
             m_pending = 0;
+            m_liveRequests.clear();
         }
 
         // cancel() takes the JobSystem's lock, not ours. Calling it inside

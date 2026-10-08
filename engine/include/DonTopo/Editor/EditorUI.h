@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <set>
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 #include "DonTopo/Editor/UndoManager.h"
@@ -23,6 +24,7 @@
 #include "DonTopo/Editor/RenderingPanel.h"
 #include "DonTopo/Editor/LoadingModal.h"
 #include "DonTopo/Editor/ProjectContext.h"
+#include "DonTopo/Editor/PrefabSceneSync.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/RenderBackend.h"
 #include "DonTopo/Renderer/UiLayer.h"
@@ -41,6 +43,8 @@ class Camera;
 class Scene;
 class ScriptManager;
 class ScriptEditorPanel;
+class PrefabLibrary;
+struct PrefabTemplate;
 
 // The editor owns the Renderer, and not the other way around: this way the engine does not
 // have to know the editor. The relationship is also inverted in drawing: the
@@ -118,8 +122,9 @@ public:
     void focusSelected(Camera& camera);
     // Non-owning pointer, same pattern as m_physics. Needed to
     // trigger the lifecycle when pressing Play/Stop and for the Scripts
-    // section of the Properties panel (Task 10).
-    void setScriptManager(ScriptManager* sm) { m_scriptManager = sm; }
+    // section of the Properties panel (Task 10). Out of line: it also hands the
+    // ScriptManager the prefab library (Lua's Instantiate(prefab)).
+    void setScriptManager(ScriptManager* sm);
     // External entry point to the Log Console (used by ScriptManager via
     // main.cpp's wiring: compilation messages/script errors).
     void pushExternalLog(const std::string& message) { m_logPanel.push(message); }
@@ -146,8 +151,22 @@ public:
     void setDroppedFilesProvider(std::function<std::vector<DroppedFile>()> fn)
     { m_droppedFilesProvider = std::move(fn); }
     // Filled in by main() before the loop, like setAssetLoader. Without it there are no
-    // thumbnails in the Content Browser.
-    void setJobSystem(JobSystem* jobs) { m_jobSystem = jobs; }
+    // thumbnails in the Content Browser, and no prefab library (its loads run on
+    // these workers). Out of line: it may create that library.
+    void setJobSystem(JobSystem* jobs);
+
+    // ── Prefabs (spec 2026-09-30-prefabs-design.md §3.2-§4.2) ────────────────
+    // The editor owns ONE PrefabLibrary, built once a JobSystem and a valid
+    // project are both set, rooted at the project. nullptr until then.
+    PrefabLibrary* prefabLibrary() const { return m_prefabs.get(); }
+    // Host obligation at shutdown, while the ScriptManager, the JobSystem, the
+    // AudioManager and the renderer are all still alive, and BEFORE
+    // jobSystem.shutdown(), audio.shutdown() and renderer.shutdown(): unhooks the
+    // library from the ScriptManager, unpins its templates and destroys it. The
+    // editor cannot do it from its destructor: the Vulkan host declares it
+    // before all of them, so by then they are gone (and the library's warm
+    // audio clips would unload sounds from a dead AudioManager). Idempotent.
+    void releasePrefabLibrary();
 
     // Project selector: first state of the ImGui loop. While a
     // selector is set, draw() gives it the WHOLE frame and draws no menu, toolbar,
@@ -416,6 +435,46 @@ private:
     // See setDroppedFilesProvider. Empty in headless tests.
     std::function<std::vector<DroppedFile>()> m_droppedFilesProvider;
     JobSystem* m_jobSystem = nullptr;
+
+    // ── Prefabs ──────────────────────────────────────────────────────────────
+    // Owned library (see prefabLibrary/releasePrefabLibrary) and the logic
+    // around it (PrefabSceneSync: pins, load/propagation, tracker). The sync is
+    // declared AFTER the library so it is destroyed first (it unhooks onReady).
+    std::unique_ptr<PrefabLibrary>   m_prefabs;
+    std::unique_ptr<PrefabSceneSync> m_prefabSync;
+    // releasePrefabLibrary() is final: nothing re-creates the library after it
+    // (a scene reload or a setProject during the shutdown sequence).
+    bool                             m_prefabsReleased = false;
+    // Last UndoManager revision the tracker saw, and the previous frame's
+    // ImGui::IsAnyItemActive() (its falling edge recomputes the selection).
+    uint64_t                         m_lastPrefabRevision = 0;
+    bool                             m_prefabItemWasActive = false;
+
+    // Creates the library + sync once a JobSystem and a valid project exist
+    // (editor: keeps raw meshes, Apply reconfigures from RAM) and hands the
+    // library to the ScriptManager. No-op when it exists, cannot exist yet, or
+    // was released.
+    void ensurePrefabLibrary();
+    // Fills the sync's host callbacks (scene, renderer pins, log, loader).
+    void configurePrefabSync();
+    // Runs fn (which may rebuild prefab instances) and then re-resolves the
+    // selection by id and drops the Properties caches if anything was rebuilt.
+    void withPrefabRebuilds(const std::function<void()>& fn);
+    // Per frame, end of draw(): revision change and falling edge of
+    // IsAnyItemActive, forwarded to PrefabSceneSync::frame.
+    void updatePrefabTracking();
+    // Prefab commands the panels asked for this frame (EditorContext::
+    // runPrefabCommand / instantiatePrefab), run in order once every panel has
+    // drawn: a command may rebuild instances and free objects a panel still
+    // pointed at mid-draw.
+    std::vector<std::function<void()>> m_pendingPrefabJobs;
+    void runPendingPrefabJobs();
+    // Scene reload, project switch, Play/Stop: drops the queued jobs and the
+    // queued drops (PrefabSceneSync), whose ids belong to the old scene.
+    void dropPendingPrefabWork();
+    // Runs one through pushPrefabCommand (execute once, push if applied, Log).
+    // Refused in Play Mode and without a library.
+    void execPrefabCommand(const EditorContext::PrefabCommandFactory& make);
 
     // See setProjectSelector/setProject. Empty/nullptr in the headless tests: without a
     // selector the editor draws as usual, and without a project the path guards

@@ -4,6 +4,7 @@
 #include "DonTopo/Core/Input.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
@@ -3905,6 +3906,45 @@ namespace DonTopo::ScriptBindings
             };
         }
 
+        // Instantiates and wakes (Awake) the scripts of a freshly created subtree;
+        // Start is fired by the lifecycle before their first Update (started ==
+        // false). Shared by Scene.Instantiate and Instantiate(prefab).
+        //
+        // The components are COLLECTED FIRST and woken after (Review Focus 4): an
+        // Awake may call Instantiate with this very subtree as parent, or
+        // AddComponent("Script:..."), which grows the children/scripts vectors a
+        // live traverse would be iterating. The pointers in the list stay valid:
+        // nothing an Awake can do frees a ScriptComponent synchronously
+        // (DestroyGameObject/Scene.Destroy are queued to the end of the frame,
+        // RemoveComponent("Script:X") only flags pendingRemove). Objects added by an
+        // Awake are not in the list: a nested Instantiate wakes its own subtree,
+        // and an AddComponent'ed script is woken by the lifecycle (invalid instance).
+        // A component an earlier Awake flagged for removal is still woken, exactly
+        // as the lifecycle does with pendingRemove ones; it gets its OnDestroy when
+        // the removal is processed.
+        void awakeSubtree(DonTopo::ScriptManager& mgr, GameObject* root)
+        {
+            std::vector<ScriptComponent*> comps;
+            root->traverse([&](GameObject* n) {
+                for (auto& s : n->getScripts()) comps.push_back(s.get());
+            });
+            for (ScriptComponent* s : comps)
+            {
+                mgr.instantiateComponent(*s);
+                if (s->instance.valid() && s->hasAwake)
+                {
+                    sol::protected_function f = s->instance["Awake"];
+                    auto r = f(s->instance);
+                    if (!r.valid())
+                    {
+                        sol::error err = r;
+                        mgr.log("Script '" + s->scriptName + "' Awake: " + std::string(err.what()));
+                        s->hasError = true;
+                    }
+                }
+            }
+        }
+
         void registerScene(DonTopo::ScriptManager& mgr)
         {
             sol::state& lua = mgr.lua();
@@ -3956,27 +3996,102 @@ namespace DonTopo::ScriptBindings
 
                 if (mgr.onInstantiated()) mgr.onInstantiated()(clone);
                 mgr.rebuildAliveSet();
-                // The clone's scripts are instantiated right away; Awake immediately,
-                // Start is fired by the lifecycle before its first Update
-                // (started == false).
-                clone->traverse([&mgr](GameObject* n) {
-                    for (auto& s : n->getScripts())
-                    {
-                        mgr.instantiateComponent(*s);
-                        if (s->instance.valid() && s->hasAwake)
-                        {
-                            sol::protected_function f = s->instance["Awake"];
-                            auto r = f(s->instance);
-                            if (!r.valid())
-                            {
-                                sol::error err = r;
-                                mgr.log("Script '" + s->scriptName + "' Awake: " + std::string(err.what()));
-                                s->hasError = true;
-                            }
-                        }
-                    }
-                });
+                awakeSubtree(mgr, clone);
                 return sol::make_object(mgr.lua(), LuaEntity{clone, &mgr});
+            };
+
+            // Unity-style global Instantiate(prefab, ...) from a preloaded template:
+            //   (prefab) (prefab, parent) (prefab, position, rotation)
+            //   (prefab, position, rotation, parent)
+            // position/rotation are world space, rotation in Euler degrees (same
+            // convention as Transform). Trailing nils are dropped, so a nil parent
+            // means "no parent". Never reads disk: a prefab that is not Ready is a
+            // Lua error right away, never a wait.
+            lua["Instantiate"] = [&mgr](sol::variadic_args va) -> sol::object {
+                std::vector<sol::object> args(va.begin(), va.end());
+                auto absent = [](const sol::object& o) {
+                    return o.get_type() == sol::type::lua_nil || o.get_type() == sol::type::none;
+                };
+                while (!args.empty() && absent(args.back())) args.pop_back();
+
+                if (args.empty() || absent(args[0]) ||
+                    (args[0].get_type() == sol::type::boolean && !args[0].as<bool>()))
+                    throw std::runtime_error("Instantiate: no prefab assigned");
+                if (!args[0].is<LuaPrefab>())
+                {
+                    if (args[0].is<LuaEntity>())
+                        throw std::runtime_error("Instantiate: argument 1 must be a Prefab, got an Entity "
+                                                 "(use Scene.Instantiate to clone an Entity)");
+                    throw std::runtime_error("Instantiate: argument 1 must be a Prefab, got a " +
+                                             std::string(lua_typename(va.lua_state(), (int)args[0].get_type())));
+                }
+                const std::string path = args[0].as<LuaPrefab>().path;
+                if (path.empty()) throw std::runtime_error("Instantiate: no prefab assigned");
+
+                // Overload resolution, before any lookup: bad arguments are a bug in
+                // the script whatever the state of the prefab.
+                static const char* kUsage = "expected (prefab), (prefab, parent), (prefab, position, rotation) "
+                                            "or (prefab, position, rotation, parent)";
+                GameObject* parent = nullptr;
+                glm::vec3 pos(0.0f), rot(0.0f);
+                bool posed = false;
+                if (args.size() == 2)
+                {
+                    if (!args[1].is<LuaEntity>())
+                        throw std::runtime_error(std::string("Instantiate: argument 2 must be an Entity (parent); ") + kUsage);
+                    parent = deref(args[1].as<LuaEntity>());
+                }
+                else if (args.size() == 3 || args.size() == 4)
+                {
+                    if (!args[1].is<glm::vec3>() || !args[2].is<glm::vec3>())
+                        throw std::runtime_error(std::string("Instantiate: position and rotation must be Vec3; ") + kUsage);
+                    if (args.size() == 4)
+                    {
+                        if (!args[3].is<LuaEntity>())
+                            throw std::runtime_error(std::string("Instantiate: argument 4 must be an Entity (parent); ") + kUsage);
+                        parent = deref(args[3].as<LuaEntity>());
+                    }
+                    pos = args[1].as<glm::vec3>();
+                    rot = args[2].as<glm::vec3>();
+                    if (!finite3(pos) || !finite3(rot))
+                        throw std::runtime_error("Instantiate: position and rotation must be finite");
+                    posed = true;
+                }
+                else if (args.size() > 4)
+                {
+                    throw std::runtime_error(std::string("Instantiate: too many arguments; ") + kUsage);
+                }
+
+                PrefabLibrary* lib = mgr.prefabLibrary();
+                if (!lib)
+                    throw std::runtime_error("Instantiate: no prefab library is available (prefabs are loaded by "
+                                             "the editor or the exported game)");
+                const PrefabTemplate* t = lib->find(path);
+                if (!t)
+                    throw std::runtime_error("Instantiate: prefab '" + lib->normalizeKey(path) + "' was never requested");
+                if (t->state == PrefabTemplate::State::Loading)
+                    throw std::runtime_error("Instantiate: prefab '" + t->key + "' is not loaded yet (still loading)");
+                if (t->state == PrefabTemplate::State::Failed)
+                    throw std::runtime_error("Instantiate: prefab '" + t->key + "' failed to load: " + t->error);
+                if (!mgr.scene() || !mgr.physics() || !mgr.audioManager())
+                    throw std::runtime_error("Instantiate: no scene is running");
+
+                GameObject* root = mgr.scene()->instantiatePrefab(*t, parent, posed ? &pos : nullptr,
+                                                                  posed ? &rot : nullptr,
+                                                                  *mgr.physics(), *mgr.audioManager());
+                if (!root)
+                {
+                    const auto& w = mgr.scene()->lastWarnings();
+                    throw std::runtime_error("Instantiate: prefab '" + t->key + "' could not be instantiated" +
+                                             (w.empty() ? std::string() : ": " + w.back()));
+                }
+                // Non-fatal ones (a camera the scene already had, ...). Before the
+                // Awakes: a nested Instantiate clears the list.
+                for (const std::string& w : mgr.scene()->lastWarnings()) mgr.log("Instantiate: " + w);
+                if (mgr.onInstantiated()) mgr.onInstantiated()(root);
+                mgr.rebuildAliveSet();
+                awakeSubtree(mgr, root);
+                return sol::make_object(mgr.lua(), LuaEntity{root, &mgr});
             };
         }
     } // namespace (anonymous)
@@ -4024,6 +4139,29 @@ namespace DonTopo::ScriptBindings
         time["frameCount"] = 0;
     }
 
+    // Prefab(): sentinel table used only as a class default so detectProps
+    // can tell the prop is a prefab slot; instances receive a LuaPrefab.
+    static void registerPrefab(ScriptManager& mgr)
+    {
+        sol::state& lua = mgr.lua();
+        lua.new_usertype<LuaPrefab>("Prefab",
+            sol::no_constructor,
+            "path", sol::property([](const LuaPrefab& p) { return p.path; }),
+            // true when Instantiate would succeed right now (template Ready). No
+            // library (setPrefabLibrary(nullptr)) = nothing is ever loaded.
+            "IsLoaded", [&mgr](const LuaPrefab& p) {
+                const PrefabLibrary* lib = mgr.prefabLibrary();
+                const PrefabTemplate* t = lib && !p.path.empty() ? lib->find(p.path) : nullptr;
+                return t != nullptr && t->state == PrefabTemplate::State::Ready;
+            });
+        lua.set_function("Prefab", [](sol::this_state ts) {
+            sol::state_view sv(ts);
+            sol::table t = sv.create_table();
+            t["__dt_prefab"] = true;
+            return t;
+        });
+    }
+
     void registerAll(ScriptManager& mgr)
     {
         registerVec3(mgr.lua());
@@ -4035,6 +4173,7 @@ namespace DonTopo::ScriptBindings
         registerLighting(mgr); // before Entity: GetLight/GetCamera return these types
         registerUi(mgr);      // before Entity: its getters return these types
         registerEntity(mgr);
+        registerPrefab(mgr);
         registerScene(mgr);   // Task 7
         registerPhysics(mgr);
         registerEngineTable(mgr);

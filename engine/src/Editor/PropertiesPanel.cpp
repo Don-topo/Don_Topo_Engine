@@ -5,6 +5,8 @@
 #include "DonTopo/Editor/AssetImport.h"
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/Command.h"
+#include "DonTopo/Editor/PrefabOverrideTracker.h"
+#include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
@@ -20,6 +22,7 @@
 #include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
+#include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include <imgui.h>
@@ -534,11 +537,309 @@ void PropertiesPanel::drawAssetDropBox(EditorContext& ctx, const char* idSuffix,
     ImGui::EndChild();
 }
 
+// ── Prefab instance UI (spec §5.4) ──────────────────────────────────────────
+
+namespace {
+
+// The end of what ImGui draws of a label: up to a "##" (the id part).
+const char* visibleLabelEnd(const char* label)
+{
+    const char* hashes = std::strstr(label, "##");
+    return hashes ? hashes : label + std::strlen(label);
+}
+
+std::string visibleLabelText(const char* label)
+{
+    return std::string(label, visibleLabelEnd(label));
+}
+
+// Simulated bold (the default font has no bold face, and no new fonts): the
+// same text drawn again 1 px to the right of where ImGui put it.
+void overlayBold(ImVec2 textPos, const char* label)
+{
+    ImGui::GetWindowDrawList()->AddText(ImVec2(textPos.x + 1.0f, textPos.y), ImGui::GetColorU32(ImGuiCol_Text),
+                                        label, visibleLabelEnd(label));
+}
+
+// A text label in simulated bold. A plain Text item (no id): BeginPopupContextItem
+// with an explicit str_id still works on it.
+void boldLabel(const char* text)
+{
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::TextUnformatted(text);
+    ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + 1, p.y), ImGui::GetColorU32(ImGuiCol_Text), text);
+}
+
+// Where a widget with an inline label (DragFloat, InputText, Checkbox...) draws
+// that label: right of its frame of width frameWidth, at the frame's text line.
+void overlayBoldWidgetLabel(ImVec2 itemPos, float frameWidth, const char* label)
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    overlayBold(ImVec2(itemPos.x + frameWidth + style.ItemInnerSpacing.x, itemPos.y + style.FramePadding.y), label);
+}
+
+// The json of prefab-local node `local` inside a template root (memory form).
+const nlohmann::json* findTemplateNodeJson(const nlohmann::json& n, uint64_t local)
+{
+    if (!n.is_object()) return nullptr;
+    if (const auto it = n.find("id"); it != n.end() && it->is_number_integer() && it->get<uint64_t>() == local)
+        return &n;
+    if (const auto kids = n.find("children"); kids != n.end() && kids->is_array())
+        for (const auto& c : *kids)
+            if (const nlohmann::json* found = findTemplateNodeJson(c, local)) return found;
+    return nullptr;
+}
+
+// Added children of an instance (children of a linked node that are not
+// linked), their roots only, pre-order: the rows of the Overrides popup.
+void collectAddedChildren(GameObject* node, std::vector<GameObject*>& out)
+{
+    for (auto& c : node->children)
+    {
+        GameObject* k = c.get();
+        if (k->prefabNode != 0 && !k->prefabLink) collectAddedChildren(k, out);
+        else out.push_back(k);
+    }
+}
+
+std::string prefabNodeName(GameObject* root, uint64_t local)
+{
+    std::string name;
+    root->traverse([&](GameObject* n) { if (name.empty() && n->prefabNode == local && n->name.size()) name = n->name; });
+    return name.empty() ? "node " + std::to_string(local) : name;
+}
+
+} // namespace
+
+void PropertiesPanel::resolvePrefabView(EditorContext& ctx)
+{
+    m_prefabView = {};
+    if (!ctx.selected) return;
+    GameObject* root = prefabInstanceRoot(ctx.selected);
+    if (!root) return;
+    m_prefabView.root = root;
+    m_prefabView.node = ctx.selected->prefabNode;
+    m_prefabView.name = std::filesystem::path(root->prefabLink->path).stem().string();
+    if (ctx.prefabs && m_prefabView.node != 0)
+        if (const PrefabTemplate* t = ctx.prefabs->find(root->prefabLink->path);
+            t && t->state == PrefabTemplate::State::Ready)
+            m_prefabView.tmplNode = findTemplateNodeJson(t->memoryRoot, m_prefabView.node);
+}
+
+bool PropertiesPanel::prefabBold(const std::string& path) const
+{
+    return m_prefabView.root && m_prefabView.node != 0 &&
+           isOverridden(*m_prefabView.root, m_prefabView.node, path, m_prefabView.tmplNode);
+}
+
+bool PropertiesPanel::prefabBold(std::initializer_list<const char*> paths) const
+{
+    for (const char* p : paths)
+        if (prefabBold(std::string(p))) return true;
+    return false;
+}
+
+void PropertiesPanel::prefabFieldMenu(EditorContext& ctx, const std::string& popupId,
+                                      const std::vector<std::string>& paths, const std::string& headerName)
+{
+    if (!ImGui::BeginPopupContextItem(popupId.c_str()))
+        return;
+    GameObject* root = m_prefabView.root;
+    const uint64_t node = m_prefabView.node;
+    const uint64_t rootId = root ? root->id : 0;
+    // What a right click can act on, decided once (prefabFieldTarget): the
+    // label's own paths (the commands narrow a wider entry, like the whole
+    // "/scripts" array, to them), or -- inside something the prefab does not
+    // have -- only that whole thing, and then the menu says so.
+    PrefabFieldTarget target;
+    if (root && node != 0)
+        for (const std::string& p : paths)
+        {
+            target = prefabFieldTarget(*root, node, p, m_prefabView.tmplNode);
+            if (target.kind != PrefabFieldTarget::Kind::None) break;
+        }
+    std::vector<PrefabOverride> which;
+    std::string applyLabel, revertLabel;
+    const std::string prefab = "Prefab '" + m_prefabView.name + "'";
+    switch (target.kind)
+    {
+        case PrefabFieldTarget::Kind::Field:
+            for (const std::string& p : paths) which.push_back({ node, p, nullptr });
+            applyLabel  = headerName.empty() ? "Apply to " + prefab : "Apply '" + headerName + "' changes to " + prefab;
+            revertLabel = headerName.empty() ? std::string("Revert") : "Revert '" + headerName + "' changes";
+            break;
+        case PrefabFieldTarget::Kind::AddedComponent:
+        {
+            const std::string name = headerName.empty() ? target.name : headerName;
+            which       = { target.wide };
+            applyLabel  = "Apply added component '" + name + "' to " + prefab;
+            revertLabel = "Remove added component '" + name + "'";
+            break;
+        }
+        case PrefabFieldTarget::Kind::AddedScript:
+            // The script the instance added, as a whole (its own entry).
+            which       = { target.wide };
+            applyLabel  = "Apply added script '" + target.name + "' to " + prefab;
+            revertLabel = "Remove added script '" + target.name + "'";
+            break;
+        case PrefabFieldTarget::Kind::None:
+            applyLabel  = "Apply to " + prefab;
+            revertLabel = "Revert";
+            break;
+    }
+    // An empty `which` would mean ALL of the instance's overrides: never sent.
+    const bool can = !which.empty() && rootId != 0 && ctx.runPrefabCommand;
+    // "##apply"/"##revert": the visible text changes with the target, the ids do not.
+    if (ImGui::MenuItem((applyLabel + "##prefabApply").c_str(), nullptr, false, can))
+        ctx.runPrefabCommand([rootId, which](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+            return std::make_unique<ApplyPrefabOverridesCommand>(pc, rootId, which, false);
+        });
+    if (ImGui::MenuItem((revertLabel + "##prefabRevert").c_str(), nullptr, false, can))
+        ctx.runPrefabCommand([rootId, which](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+            return std::make_unique<RevertPrefabOverridesCommand>(pc, rootId, which, false);
+        });
+    ImGui::EndPopup();
+}
+
+bool PropertiesPanel::prefabSectionHeader(EditorContext& ctx, const char* label, int flags,
+                                          std::initializer_list<const char*> paths)
+{
+    const bool bold = prefabBold(paths);
+    // Where TreeNodeBehavior puts the text of an unframed node: the arrow's
+    // width plus two paddings to the right of the cursor, on its text line.
+    const ImVec2 cursor = ImGui::GetCursorScreenPos();
+    const bool open = ImGui::TreeNodeEx(label, flags);   // same label: same id, bold or not
+    if (bold)
+    {
+        if (ImGui::IsItemVisible())
+            overlayBold(ImVec2(cursor.x + ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 2.0f, cursor.y),
+                        label);
+        std::vector<std::string> v(paths.begin(), paths.end());
+        prefabFieldMenu(ctx, std::string("##prefabHeaderMenu_") + label, v, visibleLabelText(label));
+    }
+    return open;
+}
+
+void PropertiesPanel::prefabTextLabel(EditorContext& ctx, const char* text, const std::string& popupId,
+                                      std::initializer_list<const char*> paths)
+{
+    if (!prefabBold(paths))
+    {
+        ImGui::TextUnformatted(text);
+        return;
+    }
+    boldLabel(text);
+    std::vector<std::string> v(paths.begin(), paths.end());
+    prefabFieldMenu(ctx, popupId, v);
+}
+
+void PropertiesPanel::drawPrefabInstanceBar(EditorContext& ctx)
+{
+    GameObject* root = m_prefabView.root;
+    if (!root || !root->prefabLink) return;
+    const bool missing = prefabNodeState(*root, ctx.prefabs) == PrefabNodeState::Missing;
+    const std::string file = std::filesystem::path(root->prefabLink->path).filename().string();
+    const uint64_t rootId = root->id;
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(missing ? ImVec4(1.0f, 0.42f, 0.42f, 1.0f) : ImVec4(0.48f, 0.72f, 1.0f, 1.0f),
+                       "Prefab: %s%s", file.c_str(), missing ? " (missing)" : "");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s%s%s", root->prefabLink->path.c_str(),
+                          root != ctx.selected ? "\nInstance root: " : "",
+                          root != ctx.selected ? root->name.c_str() : "");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Select##prefabBarSelect") && ctx.revealAsset)
+    {
+        const std::filesystem::path base = ctx.prefabs ? std::filesystem::path(ctx.prefabs->assetRoot())
+                                         : ctx.project  ? ctx.project->root() : std::filesystem::path();
+        ctx.revealAsset(base / std::filesystem::path(root->prefabLink->path));
+    }
+    ImGui::SameLine();
+
+    const std::vector<PrefabOverride>& overrides = root->prefabLink->overrides;
+    std::vector<GameObject*> added;
+    collectAddedChildren(root, added);
+    // The preview text carries the count; the id is "##prefabBarOverrides" whatever it says.
+    const std::string preview = "Overrides (" + std::to_string(overrides.size() + added.size()) + ")";
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize(preview.c_str()).x + ImGui::GetFrameHeight() +
+                            ImGui::GetStyle().FramePadding.x * 2.0f);
+    if (!ImGui::BeginCombo("##prefabBarOverrides", preview.c_str(), ImGuiComboFlags_HeightLarge))
+        return;
+
+    auto run = [&](EditorContext::PrefabCommandFactory make) {
+        if (ctx.runPrefabCommand) ctx.runPrefabCommand(std::move(make));
+        else ctx.pushLog("[Prefab] Prefabs need an open project");
+        ImGui::CloseCurrentPopup();
+    };
+    if (overrides.empty() && added.empty())
+        ImGui::TextDisabled("No overrides");
+
+    for (size_t i = 0; i < overrides.size(); ++i)
+    {
+        const PrefabOverride o = overrides[i];   // a copy: the list may change after a click
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%s > %s%s", prefabNodeName(root, o.node).c_str(), o.path.c_str(),
+                    o.value.is_null() ? " (removed)" : "");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Apply"))
+            run([rootId, o](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+                return std::make_unique<ApplyPrefabOverridesCommand>(pc, rootId, std::vector<PrefabOverride>{ o }, false);
+            });
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Revert"))
+            run([rootId, o](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+                return std::make_unique<RevertPrefabOverridesCommand>(pc, rootId, std::vector<PrefabOverride>{ o }, false);
+            });
+        ImGui::PopID();
+    }
+    for (GameObject* a : added)
+    {
+        const uint64_t childId = a->id;
+        ImGui::PushID("added");
+        ImGui::PushID(static_cast<int>(childId & 0x7fffffff));
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("+ %s (added)%s", a->name.c_str(), a->prefabLink ? " [prefab instance]" : "");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Apply"))
+            run([rootId, childId](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+                return std::make_unique<ApplyPrefabOverridesCommand>(pc, rootId, prefabNoOverrides(), true,
+                                                                     std::vector<uint64_t>{ childId });
+            });
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Revert"))
+            run([rootId, childId](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+                return std::make_unique<RevertPrefabOverridesCommand>(pc, rootId, prefabNoOverrides(), true,
+                                                                      std::vector<uint64_t>{ childId });
+            });
+        ImGui::PopID();
+        ImGui::PopID();
+    }
+    ImGui::Separator();
+    const bool any = !overrides.empty() || !added.empty();
+    ImGui::BeginDisabled(!any);
+    if (ImGui::Button("Apply All"))
+        run([rootId](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+            return std::make_unique<ApplyPrefabOverridesCommand>(pc, rootId, std::vector<PrefabOverride>{}, true);
+        });
+    ImGui::SameLine();
+    if (ImGui::Button("Revert All"))
+        run([rootId](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+            return std::make_unique<RevertPrefabOverridesCommand>(pc, rootId, std::vector<PrefabOverride>{}, true);
+        });
+    ImGui::EndDisabled();
+    ImGui::EndCombo();
+}
+
 void PropertiesPanel::draw(EditorContext& ctx)
 {
     if (m_open)
     {
         ImGui::Begin("Properties", &m_open);
+        // The selection in prefab terms, once per frame (every bold label and
+        // the instance bar read it).
+        resolvePrefabView(ctx);
         if (!ctx.selected)
         {
             m_caches.props = nullptr;
@@ -600,7 +901,9 @@ void PropertiesPanel::draw(EditorContext& ctx)
                 m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
             }
 
-            ImGui::Text("%s", ctx.selected->name.empty() ? "GameObject" : ctx.selected->name.c_str());
+            prefabTextLabel(ctx, ctx.selected->name.empty() ? "GameObject" : ctx.selected->name.c_str(),
+                            "##prefabNameMenu", {"/name"});
+            drawPrefabInstanceBar(ctx);
             ImGui::Separator();
 
             bool changed = false;
@@ -614,7 +917,9 @@ void PropertiesPanel::draw(EditorContext& ctx)
             ImGui::SetNextItemOpen(true, ImGuiCond_Once);
             if (ImGui::TreeNodeEx("Transform", ImGuiTreeNodeFlags_OpenOnArrow))
             {
-                ImGui::Text("Position");
+                // Bold per part (spec §5.4); a singular matrix is diffed whole
+                // ("/localTransform") and makes all three bold.
+                prefabTextLabel(ctx, "Position", "##prefabPositionMenu", {"/transform/position", "/localTransform"});
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
                 changed |= ImGui::DragFloat("X##1", &m_editPosition.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
@@ -634,7 +939,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
                 activated |= ImGui::IsItemActivated();
                 posCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
-                ImGui::Text("Rotation");
+                prefabTextLabel(ctx, "Rotation", "##prefabRotationMenu", {"/transform/rotation", "/localTransform"});
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
                 changed |= ImGui::DragFloat("X##2", &m_editRotationDeg.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
@@ -654,7 +959,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
                 activated |= ImGui::IsItemActivated();
                 rotCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
-                ImGui::Text("Scale   ");
+                prefabTextLabel(ctx, "Scale   ", "##prefabScaleMenu", {"/transform/scale", "/localTransform"});
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
                 changed |= ImGui::DragFloat("X##3", &m_editScale.x, 0.005f, 0.001f, +FLT_MAX, "% .3f");
@@ -796,7 +1101,8 @@ void PropertiesPanel::drawSsrSection(EditorContext& ctx)
     // Without a mesh there is no surface to reflect.
     if (!ctx.selected->hasMesh()) return;
 
-    if (!ImGui::TreeNodeEx("Screen Space Reflections", ImGuiTreeNodeFlags_OpenOnArrow))
+    if (!prefabSectionHeader(ctx, "Screen Space Reflections", ImGuiTreeNodeFlags_OpenOnArrow,
+                             {"/ssrEnabled", "/ssrIntensity"}))
         return;
 
     Scene*         scene = ctx.scene;
@@ -865,7 +1171,8 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
     // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasReflectionProbe()) return;
 
-    if (!ImGui::TreeNodeEx("Reflection Probe", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
+    if (!prefabSectionHeader(ctx, "Reflection Probe", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                             {"/reflectionProbe"}))
         return;
 
     Scene*                    scene = ctx.scene;
@@ -976,8 +1283,9 @@ void PropertiesPanel::drawReverbZoneSection(EditorContext& ctx)
     if (!ctx.selected->hasReverbZone()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Reverb Zone",
-                                          ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Reverb Zone",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/reverbZone"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##reverbZone");
 
@@ -1038,8 +1346,9 @@ void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
     if (!ctx.selected->hasAudioListener()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Audio Listener",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Audio Listener",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/audioListener"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##audioListener");
 
@@ -1083,8 +1392,9 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
     if (!ctx.selected->hasCanvas()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Canvas",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Canvas",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/canvas"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##canvas");
 
@@ -1406,8 +1716,9 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
     if (!ctx.selected->hasButton()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Button",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Button",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/button"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##button");
 
@@ -1859,8 +2170,9 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
     if (!ctx.selected->hasText()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Text",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Text",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/text"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##text");
 
@@ -2240,8 +2552,9 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
     if (!ctx.selected->hasProgressBar()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Progress Bar",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Progress Bar",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/progressBar"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##bar");
 
@@ -2552,8 +2865,9 @@ void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
     if (!ctx.selected->hasLayout()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Layout",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Layout",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/layout"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##layout");
 
@@ -2877,8 +3191,9 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
     if (!ctx.selected->hasPanel()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Panel",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Panel",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/panel"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##panel");
 
@@ -3194,8 +3509,9 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
     if (!ctx.selected->hasImage()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Image",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Image",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/image"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##image");
 
@@ -3649,8 +3965,9 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
     if (!ctx.selected->hasSlider()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Slider",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Slider",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/slider"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##slider");
 
@@ -4050,8 +4367,9 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
     if (!ctx.selected->hasCheckbox()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Checkbox",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Checkbox",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/checkbox"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##checkbox");
 
@@ -4434,8 +4752,9 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
     if (!ctx.selected->hasToggle()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Toggle",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Toggle",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/toggle"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##toggle");
 
@@ -4822,8 +5141,9 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
     if (!ctx.selected->hasScrollbar()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Scrollbar",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Scrollbar",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/scrollbar"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##scrollbar");
 
@@ -5300,8 +5620,9 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
     if (!ctx.selected->hasInputField()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Input Field",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Input Field",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/inputField"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##inputfield");
 
@@ -5813,8 +6134,9 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
     if (!ctx.selected->hasDropdown()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Dropdown",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Dropdown",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/dropdown"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##dropdown");
 
@@ -6354,8 +6676,9 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
     if (!ctx.selected->hasScrollView()) return;
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Scroll View",
-                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Scroll View",
+                                           ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/scrollView"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     const bool removeClicked = ImGui::SmallButton("x##scrollview");
 
@@ -6696,7 +7019,8 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
     // Add-gate: without the component there is no section, like colliders.
     if (!ctx.selected->hasLight()) return;
 
-    if (!ImGui::TreeNodeEx("Light", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
+    if (!prefabSectionHeader(ctx, "Light", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                             {"/light"}))
         return;
 
     Scene*            scene = ctx.scene;
@@ -6906,7 +7230,8 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
     };
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Box Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Box Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/boxCollider"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     bool removeClicked = ImGui::SmallButton("x");
 
@@ -7080,7 +7405,8 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
     };
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Sphere Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Sphere Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/sphereCollider"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     bool removeClicked = ImGui::SmallButton("x");
 
@@ -7243,7 +7569,8 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
     };
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Capsule Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Capsule Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/capsuleCollider"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     bool removeClicked = ImGui::SmallButton("x");
 
@@ -7408,7 +7735,8 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
     };
 
     ImGui::Separator();
-    bool sectionOpen = ImGui::TreeNodeEx("Plane Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    bool sectionOpen = prefabSectionHeader(ctx, "Plane Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                           {"/planeCollider"});
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
     bool removeClicked = ImGui::SmallButton("x");
 
@@ -7534,7 +7862,8 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
     }
 
     ImGui::Separator();
-    if (!ImGui::TreeNodeEx("Rigidbody", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
+    if (!prefabSectionHeader(ctx, "Rigidbody", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                             {"/rigidbody"}))
         return;
 
     Scene*   scene = ctx.scene;
@@ -7719,7 +8048,8 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
     }
 
     ImGui::Separator();
-    if (!ImGui::TreeNodeEx("Camera", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
+    if (!prefabSectionHeader(ctx, "Camera", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                             {"/camera"}))
         return;
 
     Scene*   scene = ctx.scene;
@@ -7852,7 +8182,8 @@ void PropertiesPanel::drawAnimatorSection(EditorContext& ctx)
     if (!ctx.selected || !ctx.selected->hasAnimator()) return;
     auto anim = ctx.selected->getAnimator();
 
-    if (!ImGui::TreeNodeEx("Animator", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
+    if (!prefabSectionHeader(ctx, "Animator", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                             {"/animator"}))
         return;
 
     ImGui::Text("States: %d", (int)anim->states().size());
@@ -7912,7 +8243,8 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
 
     if (ctx.selected->hasMesh())
     {
-        bool sectionOpen = ImGui::TreeNodeEx("Mesh", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+        bool sectionOpen = prefabSectionHeader(ctx, "Mesh", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                               {"/mesh"});
         ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
         bool removeClicked = ImGui::SmallButton("x");
 
@@ -8026,7 +8358,19 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
     //
     // "Material" and not "Textures": the section is no longer just textures since it adds the
     // Metallic/Roughness sliders below.
-    if (!ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    // Prefab: bold when a material override is stored (spec §5.4). A framed
+    // header puts its text one more padding to the right and one padding down.
+    const bool materialBold = prefabBold(std::string("/mesh/materials"));
+    const ImVec2 materialCursor = ImGui::GetCursorScreenPos();
+    const bool materialOpen = ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen);
+    if (materialBold)
+    {
+        if (ImGui::IsItemVisible())
+            overlayBold(ImVec2(materialCursor.x + ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 3.0f,
+                               materialCursor.y + ImGui::GetStyle().FramePadding.y), "Material");
+        prefabFieldMenu(ctx, "##prefabHeaderMenu_Material", { "/mesh/materials" }, "Material");
+    }
+    if (!materialOpen) return;
 
     // Captured ONCE, not read from ctx.selected in each callback: the drop and Clear are
     // synchronous (resolved this same frame, on the object being drawn right now), but Browse is
@@ -8436,7 +8780,8 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
     if (ctx.selected->hasAudioClip())
     {
         auto& clip = ctx.selected->getAudioClip();
-        bool sectionOpen = ImGui::TreeNodeEx("Audio Clip", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+        bool sectionOpen = prefabSectionHeader(ctx, "Audio Clip", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen,
+                                               {"/audioClip"});
         ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
         bool removeClicked = ImGui::SmallButton("x");
 
@@ -8801,16 +9146,23 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
 
     ScriptComponent* toRemove = nullptr;
 
+    // Prefab override paths of the scripts: keyed by name + occurrence
+    // ("/scripts/Mover#0/overrides/<prop>", spec §3.2), never by position.
+    std::vector<std::string> scriptNames;
+    for (const auto& s : ctx.selected->getScripts()) scriptNames.push_back(s->scriptName);
+    size_t scriptIndex = 0;
     for (auto& compPtr : ctx.selected->getScripts())
     {
         ScriptComponent* comp = compPtr.get();
         ImGui::PushID(comp);
+        const std::string scriptPath = prefabScriptPath(scriptNames, scriptIndex++);
 
         // TreeNodeEx (narrow label) not CollapsingHeader (full-width frame): the header would
         // overlap the "x" button and eat its click. Same pattern as collider sections.
         ImGui::Separator();
-        bool open = ImGui::TreeNodeEx((comp->scriptName + " (Script)").c_str(),
-            ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+        const std::string header = comp->scriptName + " (Script)";
+        bool open = prefabSectionHeader(ctx, header.c_str(),
+            ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen, { scriptPath.c_str() });
         ImGui::SameLine(ImGui::GetWindowWidth() - 65.0f);
         if (ImGui::SmallButton("Edit"))
             ctx.openScript(ctx.scriptManager->scriptsDirPath() / (comp->scriptName + ".lua"));
@@ -8848,10 +9200,18 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                         if (lv.get_type() == sol::type::number)       value = lv.as<double>();
                         else if (lv.get_type() == sol::type::boolean) value = lv.as<bool>();
                         else if (lv.get_type() == sol::type::string)  value = lv.as<std::string>();
+                        else if (lv.is<LuaPrefab>())                  value = PrefabRef{ lv.as<LuaPrefab>().path };
                     }
 
                     const std::string label = prettyPropLabel(prop.name);
                     bool edited = false;
+                    // Read BEFORE drawing: bold or not never changes a widget's
+                    // id (the label is the same; bold is drawn on top).
+                    const std::string propPath = scriptPath + "/overrides/" + prop.name;
+                    const bool propBold = prefabBold(propPath);
+                    const ImVec2 itemPos = ImGui::GetCursorScreenPos();
+                    const float  frameWidth = ImGui::CalcItemWidth();
+                    bool hasInlineLabel = true;   // the widget draws `label` right of its frame
 
                     if (std::holds_alternative<double>(value))
                     {
@@ -8866,11 +9226,61 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                             float f = static_cast<float>(d);
                             if (ImGui::DragFloat(label.c_str(), &f, 0.1f)) { value = double(f); edited = true; }
                         }
+                        if (propBold) overlayBoldWidgetLabel(itemPos, frameWidth, label.c_str());
                     }
                     else if (std::holds_alternative<bool>(value))
                     {
                         bool b = std::get<bool>(value);
                         if (ImGui::Checkbox(label.c_str(), &b)) { value = b; edited = true; }
+                        if (propBold) overlayBoldWidgetLabel(itemPos, ImGui::GetFrameHeight(), label.c_str());
+                    }
+                    else if (std::holds_alternative<PrefabRef>(value))
+                    {
+                        // Slot "[Enemy.prefab] (x)" (spec §5.4). The button's text
+                        // changes with the value, so its id is fixed with "###".
+                        hasInlineLabel = false;
+                        const std::string path = std::get<PrefabRef>(value).path;
+                        ImGui::PushID(prop.name.c_str());
+                        ImGui::AlignTextToFramePadding();
+                        if (propBold)
+                        {
+                            boldLabel(label.c_str());
+                            prefabFieldMenu(ctx, "##prefabPropMenu", { propPath });
+                        }
+                        else
+                            ImGui::TextUnformatted(label.c_str());
+                        ImGui::SameLine();
+                        const std::string shown = path.empty()
+                            ? std::string("None (Prefab)")
+                            : std::filesystem::path(path).filename().string();
+                        ImGui::Button(("[" + shown + "]###prefabSlot").c_str());
+                        if (!path.empty() && ImGui::IsItemHovered())
+                            ImGui::SetTooltip("%s", path.c_str());
+                        // A .prefab from the Content Browser, stored project-relative.
+                        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
+                        {
+                            const ImGuiPayload* peek = ImGui::GetDragDropPayload();
+                            const bool isPrefab = peek && peek->IsDataType("DT_ASSET_PATH") && peek->Data &&
+                                                  ctx.prefabs &&
+                                                  prefabKeyForAsset(static_cast<const char*>(peek->Data), *ctx.prefabs);
+                            if (isPrefab)
+                                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                                    if (const auto key = prefabKeyForAsset(static_cast<const char*>(payload->Data),
+                                                                           *ctx.prefabs))
+                                    {
+                                        value  = PrefabRef{ *key };
+                                        edited = true;
+                                        // Preloaded now: Instantiate in Play never reads disk.
+                                        ctx.prefabs->request(*key);
+                                    }
+                            ImGui::EndDragDropTarget();
+                        }
+                        if (!path.empty())
+                        {
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("x")) { value = PrefabRef{}; edited = true; }
+                        }
+                        ImGui::PopID();
                     }
                     else
                     {
@@ -8879,7 +9289,10 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                         copyToBuffer(buf, s);
                         if (ImGui::InputText(label.c_str(), buf, sizeof(buf)))
                         { value = std::string(buf); edited = true; }
+                        if (propBold) overlayBoldWidgetLabel(itemPos, frameWidth, label.c_str());
                     }
+                    if (hasInlineLabel && propBold)
+                        prefabFieldMenu(ctx, "##prefabPropMenu_" + prop.name, { propPath });
 
                     if (edited)
                     {
@@ -8892,6 +9305,12 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                                 {
                                     if (prop.isInteger) comp->instance[prop.name] = static_cast<int64_t>(v);
                                     else                comp->instance[prop.name] = v;
+                                }
+                                else if constexpr (std::is_same_v<T, PrefabRef>)
+                                {
+                                    // false, not nil: see ScriptManager::createInstance.
+                                    if (v.path.empty()) comp->instance[prop.name] = false;
+                                    else comp->instance[prop.name] = LuaPrefab{ v.path };
                                 }
                                 else comp->instance[prop.name] = v;
                             }, value);
@@ -8914,6 +9333,12 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                                 {
                                     if (prop.isInteger) comp->instance[prop.name] = static_cast<int64_t>(v);
                                     else                comp->instance[prop.name] = v;
+                                }
+                                else if constexpr (std::is_same_v<T, PrefabRef>)
+                                {
+                                    // false, not nil: see ScriptManager::createInstance.
+                                    if (v.path.empty()) comp->instance[prop.name] = false;
+                                    else comp->instance[prop.name] = LuaPrefab{ v.path };
                                 }
                                 else comp->instance[prop.name] = v;
                             }, prop.defaultValue);

@@ -1,6 +1,7 @@
 #pragma once
 #include "DonTopo/Audio/AudioBus.h"
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -11,6 +12,7 @@
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/GameObject.h" // MaterialOverride and Mesh, for MeshComponentCommand
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/PrefabOverrides.h" // PrefabOverride, PrefabLink, for the prefab commands
 #include "DonTopo/Renderer/ModelLoader.h" // ModelPiece, for insertModelPieces
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
@@ -47,16 +49,35 @@ public:
     virtual void execute() = 0;   // applies "after" (redo)
     virtual void undo() = 0;      // applies "before"
     virtual std::string label() const = 0;   // pa Log Console
+    // Whether the last execute()/undo() did its work. A command that can refuse
+    // (the prefab commands: a mesh still loading, a file changed on disk)
+    // overrides it; UndoManager then keeps it where it is instead of moving it
+    // to the other stack, and does not push one refused on its first execute.
+    // Every other command always succeeds: the default.
+    virtual bool lastStepSucceeded() const { return true; }
+    // Why the last step was refused (for the Log); empty if there is nothing to say.
+    virtual std::string lastStepMessage() const { return {}; }
+    // A refused undo() that can NEVER succeed (an Apply whose .prefab changed
+    // outside the editor): UndoManager drops the command and everything below
+    // it instead of keeping it on top forever. Only meaningful when
+    // lastStepSucceeded() is false; lastStepMessage() then says why.
+    virtual bool lastStepDiscardsHistory() const { return false; }
 };
 
 // Several commands as ONE undo step: execute in order, undo in reverse
 // order. It was born for "Add Mesh" of a multi-piece model (one
 // CreateGameObjectCommand per child created), but does not depend on that: it groups
 // any list of ICommand.
+//
+// It does not take a PrefabCommand (add() returns false and drops it): a
+// composite neither reports a child's refused step (lastStepSucceeded) nor
+// one that discards the history (lastStepDiscardsHistory), so a refused
+// prefab command inside one would be pushed as done, and an unrevertable
+// Apply would block nothing. Prefab commands are pushed one by one.
 class CompositeCommand : public ICommand {
 public:
     explicit CompositeCommand(std::string label) : m_label(std::move(label)) {}
-    void add(std::unique_ptr<ICommand> cmd) { m_cmds.push_back(std::move(cmd)); }
+    bool add(std::unique_ptr<ICommand> cmd);
     bool empty() const { return m_cmds.empty(); }
     void execute() override { for (auto& c : m_cmds) c->execute(); }
     void undo() override { for (auto it = m_cmds.rbegin(); it != m_cmds.rend(); ++it) (*it)->undo(); }
@@ -974,6 +995,262 @@ private:
     std::shared_ptr<const Mesh>   m_mesh;
     std::weak_ptr<const Mesh>     m_meshVista;
     std::vector<MaterialOverride> m_overrides;
+};
+
+// ── Prefab commands (spec 2026-09-30-prefabs-design.md §3.4, §5.5) ──────────
+
+class PrefabLibrary;
+class PrefabOverrideTracker;
+
+// What every prefab command works with. The tracker is NOT optional: each
+// command leaves every instance it touched synced with a fresh baseline (or,
+// while its template loads, with a baseline of its new state), so the tracker's
+// next revision pass and its fold of "unrecorded edits" never read the
+// command's own changes (a template changed by Apply, overrides dropped by
+// Revert, a link removed or restored by Unpack) as edits or reverts of the
+// user. Taking it here is what keeps that from being an obligation of every
+// caller.
+//
+// registerGpu receives every subtree a command builds or rebuilds (render
+// indices at -1), like the hooks of CreateGameObjectCommand. There is no
+// releaseGpu: every removal goes through Scene::removeGameObject, whose
+// onNodeRemoved listener already releases the slots.
+struct PrefabCommandContext
+{
+    Scene&                 scene;
+    PrefabLibrary&         library;
+    PrefabOverrideTracker& tracker;
+    PhysicsManager&        physics;
+    AudioManager&          audio;
+    std::function<void(GameObject*)> registerGpu;
+};
+
+// Common part of the five prefab commands. They resolve every target by id,
+// never by a stored pointer. execute() may refuse (succeeded() false, the reason
+// in lastMessage()); the undo of a refused execute does nothing.
+class PrefabCommand : public ICommand {
+public:
+    std::string label() const override { return m_label; }
+    // For the Log: why it was refused, or what happened to the file.
+    const std::string& lastMessage() const { return m_message; }
+    // Whether the command is applied now (its last execute() did its work and
+    // no undo() has taken it back since).
+    bool succeeded() const { return m_done; }
+
+    // The guards every prefab command shares, so no subclass can forget them:
+    // execute() on an applied command and undo() on an unapplied one do nothing
+    // and are refused (a desync can never apply twice); otherwise the step
+    // succeeded when it changed the applied state.
+    void execute() final;
+    void undo() final;
+    bool lastStepSucceeded() const override { return m_lastStepOk; }
+    std::string lastStepMessage() const override { return m_message; }
+    bool lastStepDiscardsHistory() const override { return !m_lastStepOk && m_refusedForGood; }
+
+protected:
+    PrefabCommand(PrefabCommandContext ctx, std::string label)
+        : m_ctx(std::move(ctx)), m_label(std::move(label)) {}
+
+    // The work of execute()/undo(). doExecute leaves m_done true when it applied
+    // the command; doUndo leaves it false when it took it back, and leaves it
+    // true when it refused (nothing touched).
+    virtual void doExecute() = 0;
+    virtual void doUndo() = 0;
+
+    // Instance roots linked to key (normalized like PrefabLibrary keys), by id.
+    std::vector<uint64_t> instancesOf(const std::string& key) const;
+    // Brings an instance to its Ready template if the tracker never synced it
+    // with the template's current generation (what the host's next revision
+    // pass would do). False if the template is not Ready or the instance still
+    // cannot be synced (a mesh in flight, a failed rebuild).
+    bool ensureSynced(uint64_t rootId);
+    // Records the edits the tracker has not seen yet (a synced instance is
+    // recomputed, another one folds its unrecorded edits), so a snapshot or a
+    // rebuild that follows does not lose them.
+    void recordPendingEdits(uint64_t rootId);
+    // After the command changed the link of rootId or its template: the
+    // tracker forgets what it knew, takes the current live subtree as the
+    // baseline (standing on standsOn, or on the Ready template), and, when the
+    // template is Ready, propagates it (match -> synced as is; else rebuilt).
+    void resyncInstance(uint64_t rootId, const nlohmann::json* standsOn = nullptr);
+
+    PrefabCommandContext m_ctx;
+    std::string          m_label;
+    std::string          m_message;
+    bool                 m_done = false;
+    bool                 m_lastStepOk = false;   // never executed: not pushable
+    // Set by a doUndo that refuses and can never succeed (cleared before each step).
+    bool                 m_refusedForGood = false;
+};
+
+// The `which` of Apply / Revert that selects NO override (an empty `which`
+// means all of them): for acting on added children only. Its single entry is
+// on prefab-local node 0, which no prefab node ever has (makePrefab numbers
+// from 1), so it matches nothing.
+inline std::vector<PrefabOverride> prefabNoOverrides() { return { PrefabOverride{ 0, std::string(), nullptr } }; }
+
+// Makes the subtree of nodeId a prefab: writes absPrefabPath, links the
+// subtree (link path = the project-relative key) and registers the template.
+// Undo unlinks and deletes the file ONLY while it holds exactly the bytes this
+// command wrote (Review Focus 5); otherwise it keeps it and says so. It never
+// overwrites an existing file, and refuses a node that is part of an instance.
+class CreatePrefabCommand : public PrefabCommand {
+public:
+    CreatePrefabCommand(PrefabCommandContext ctx, uint64_t nodeId, std::filesystem::path absPrefabPath);
+
+private:
+    void doExecute() override;
+    void doUndo() override;
+    uint64_t              m_nodeId;
+    std::filesystem::path m_path;
+    std::string           m_key;
+    std::string           m_written;      // the file's bytes right after the last write
+    bool                  m_hasWritten = false;
+};
+
+// Builds an instance of a Ready template under parentId (0 = scene root). The
+// first execute gives every node a fresh id and snapshots the subtree; a redo
+// rebuilds that snapshot, so the ids are the same and later commands resolve.
+class InstantiatePrefabCommand : public PrefabCommand {
+public:
+    InstantiatePrefabCommand(PrefabCommandContext ctx, std::string key, uint64_t parentId);
+    uint64_t instanceRootId() const { return m_rootId; }
+
+private:
+    void doExecute() override;
+    void doUndo() override;
+    std::string        m_key;
+    uint64_t           m_parentId;
+    uint64_t           m_rootId = 0;
+    size_t             m_index  = SIZE_MAX;
+    nlohmann::json     m_snapshot;
+    PreloadedMeshCache m_meshes;
+};
+
+// Writes overrides of one instance into its .prefab (which: empty = all of
+// them; otherwise paths, resolved by resolvePrefabSelection -- the stored
+// entries at or inside each, or a field narrowed out of a wider entry like
+// the whole "/scripts" array, which then stays on the instance) and, with
+// includeAddedChildren, its added children (onlyAddedChildIds:
+// empty = all of them) with new prefab-local ids. Removes them from the
+// instance and rebuilds every instance of the prefab from the new template
+// right away (so a node it adds to another instance has an id later commands
+// can hold; a redo gives it the same id again): the others keep their own
+// overrides, also on the same paths (Unity). Refused when the .prefab on disk
+// is no longer what the library loaded (building on it would erase that
+// change).
+//
+// Undo restores ONLY what execute changed, and only while the file still holds
+// the bytes Apply wrote: the previous bytes go back, the applying instance gets
+// its applied overrides back and its applied children unlinked, every instance
+// gets back the overrides the new template orphaned -- an override recorded
+// after the Apply (without a command) stays. If the file changed on disk in
+// between, nothing at all is undone (scene and file stay as Apply left them),
+// and since that can never change, the UndoManager discards the history under
+// it (lastStepDiscardsHistory).
+class ApplyPrefabOverridesCommand : public PrefabCommand {
+public:
+    ApplyPrefabOverridesCommand(PrefabCommandContext ctx, uint64_t instanceRootId,
+                                std::vector<PrefabOverride> which, bool includeAddedChildren,
+                                std::vector<uint64_t> onlyAddedChildIds = {});
+
+private:
+    void doExecute() override;
+    void doUndo() override;
+    // Rebuilds every instance of m_key that does not match tmpl (memory form)
+    // and re-baselines all of them on it. recordNewIds: remember the scene ids
+    // of the nodes the rebuilds created (first execute), used as id hints after.
+    // recordOrphans: remember the overrides each rebuild dropped (execute).
+    void rebuildInstances(const std::vector<uint64_t>& instances, const nlohmann::json& tmpl,
+                          bool recordNewIds, bool recordOrphans);
+    // True (with lastMessage) while a mesh of an instance of m_key is still on
+    // its way from the async loader: nothing may be rebuilt then.
+    bool refuseWhileMeshPending(const std::vector<uint64_t>& instances);
+    // Every execute after the first one: rebuilds from the bytes the first one
+    // wrote, which needs no Ready template (the library may still be reloading
+    // the previous version restored by the undo).
+    void redo();
+
+    uint64_t                    m_rootId;
+    std::vector<PrefabOverride> m_which;
+    bool                        m_includeAdded;
+    std::vector<uint64_t>       m_onlyAdded;
+    std::string                 m_key;
+    std::filesystem::path       m_path;
+    std::string                 m_previous;   // file bytes before execute
+    std::string                 m_written;    // file bytes right after it
+    std::vector<PrefabOverride> m_applied;    // removed from the applying instance
+    // Per instance root id: the overrides the new template orphaned (dropped by its rebuild).
+    std::unordered_map<uint64_t, std::vector<PrefabOverride>> m_orphaned;
+    std::vector<uint64_t>       m_linkedAdded;   // scene ids that got a prefabNode
+    // Per instance root id: prefab-local id -> scene id of the nodes the first
+    // execute's rebuilds created; a redo creates them with the same ids.
+    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint64_t>> m_createdIds;
+    bool                        m_idsRecorded = false;
+    // Redo: the scene ids the first execute linked, with their new local ids.
+    std::vector<std::pair<uint64_t, uint64_t>> m_toLink;
+    // Taken at the first execute, from the Ready template and the instances:
+    // every rebuild (execute, undo, redo) is seeded with them, so none reads a
+    // model file on the main thread -- not even while the library reloads.
+    nlohmann::json              m_seedRoot;         // the template the configured meshes belong to
+    PreloadedMeshCache          m_seedConfigured;   // PrefabTemplate::configuredMeshes
+    PreloadedMeshCache          m_seedMeshes;       // PrefabTemplate::meshes + the instances' live meshes
+    std::shared_ptr<MaterialAssetCache> m_seedMats;   // PrefabTemplate::mats (MaterialAsset is incomplete here)
+};
+
+// Drops overrides of one instance (which: empty = all; otherwise paths, by
+// revertPrefabSelection -- a field inside a wider entry rewrites that entry
+// at the field instead of dropping it whole) and, with
+// includeAddedChildren, deletes its added children (onlyAddedChildIds: empty =
+// all of them); then rebuilds it from the template. Undo puts back ONLY those:
+// the reverted overrides (unless the instance has a newer entry on the same
+// path) and each deleted child from its own snapshot (same ids); anything
+// recorded since stays.
+class RevertPrefabOverridesCommand : public PrefabCommand {
+public:
+    RevertPrefabOverridesCommand(PrefabCommandContext ctx, uint64_t instanceRootId,
+                                 std::vector<PrefabOverride> which, bool includeAddedChildren,
+                                 std::vector<uint64_t> onlyAddedChildIds = {});
+
+private:
+    void doExecute() override;
+    void doUndo() override;
+    struct DeletedChild
+    {
+        uint64_t           parentId = 0;
+        size_t             index    = SIZE_MAX;
+        nlohmann::json     snapshot;
+        PreloadedMeshCache meshes;
+    };
+    uint64_t                    m_rootId;
+    std::vector<PrefabOverride> m_which;
+    bool                        m_includeAdded;
+    std::vector<uint64_t>       m_onlyAdded;
+    std::vector<PrefabOverride> m_reverted;
+    // Wider entries rewritten at a wanted sub-path: (before, after).
+    std::vector<std::pair<PrefabOverride, PrefabOverride>> m_rewritten;
+    std::vector<DeletedChild>   m_deleted;
+};
+
+// Strips the link from an instance (the objects stay as they are). Undo puts
+// the link (with its overrides) and every prefabNode back by node id, merged
+// with the edits made to the objects while they were unpacked.
+class UnpackPrefabCommand : public PrefabCommand {
+public:
+    UnpackPrefabCommand(PrefabCommandContext ctx, uint64_t instanceRootId);
+
+private:
+    void doExecute() override;
+    void doUndo() override;
+    struct NodeLink
+    {
+        uint64_t                    id = 0;           // scene id
+        uint64_t                    prefabNode = 0;
+        std::shared_ptr<PrefabLink> link;             // a copy; only on instance roots
+    };
+    uint64_t              m_rootId;
+    std::vector<NodeLink> m_nodes;
+    nlohmann::json        m_atUnpack;   // memory form of the instance when it was unpacked
 };
 
 } // namespace DonTopo

@@ -3,6 +3,7 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Core/MaterialAsset.h"
+#include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
@@ -15,7 +16,12 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <deque>
 #include <fstream>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <set>
 #include <system_error>
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
@@ -188,6 +194,22 @@ std::vector<ExportAsset> collectSceneAssets(
     const fs::path& projectRoot,
     const std::map<std::string, fs::path>& scriptPaths)
 {
+    return collectSceneAssets(std::vector<Scene*>{ &scene }, projectRoot, scriptPaths, {});
+}
+
+std::vector<ExportAsset> collectSceneAssets(
+    const std::vector<Scene*>& scenes,
+    const fs::path& projectRoot,
+    const std::map<std::string, fs::path>& scriptPaths,
+    const std::vector<std::string>& extraFiles)
+{
+    // Every node of every scene, scene by scene, in each pass.
+    auto traverseAll = [&](const auto& fn)
+    {
+        for (Scene* s : scenes)
+            if (s) s->traverse(fn);
+    };
+
     std::vector<ExportAsset> out;
     std::map<std::string, size_t> seen;              // key -> index in out
     std::map<std::string, int> externalDirIndex;     // key of the source directory -> subfolder
@@ -311,7 +333,7 @@ std::vector<ExportAsset> collectSceneAssets(
     };
 
     // First pass: the models and what they read.
-    scene.traverse([&](GameObject* go)
+    traverseAll([&](GameObject* go)
     {
         if (!go->hasMesh()) return;
         addModel(go->getMesh()->sourcePath);
@@ -320,7 +342,7 @@ std::vector<ExportAsset> collectSceneAssets(
                 addModel(src.path);             // the builtin repeats sourcePath; addModel deduplicates
     });
 
-    scene.traverse([&](GameObject* go)
+    traverseAll([&](GameObject* go)
     {
         if (go->hasMesh())
         {
@@ -418,6 +440,9 @@ std::vector<ExportAsset> collectSceneAssets(
         }
     });
 
+    for (const std::string& f : extraFiles)
+        add(f);
+
     std::sort(out.begin(), out.end(),
               [](const ExportAsset& a, const ExportAsset& b) { return a.packagePath < b.packagePath; });
     return out;
@@ -512,6 +537,58 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
     return n;
 }
 
+// A stored prefab reference in the form PrefabLibrary::normalizeKey gives it:
+// '\' -> '/', lexically normalized, generic separators. Without the first step
+// a hand-edited "Prefabs\\Enemy.prefab" resolves on Windows but is ONE filename
+// on Linux, and the export reports it missing. (normalizeKey itself needs a
+// library instance; its asset-root stripping does not apply to stored values.)
+std::string normalizePrefabRef(std::string ref)
+{
+    std::replace(ref.begin(), ref.end(), '\\', '/');
+    return fs::path(ref).lexically_normal().generic_string();
+}
+
+// Every serialized PrefabRef: exactly {"prefab": "<path>"}, wherever it sits
+// (script overrides today). The same shape PrefabLibrary::collectReferences
+// matches, so whatever the runtime requests is what gets rewritten. Its paths
+// are stored relative to the project (the PrefabLibrary key form).
+int rewritePrefabRefs(nlohmann::json& j, const std::map<std::string, std::string>& sourceToPackage,
+                      const std::string& assetRoot)
+{
+    int n = 0;
+    if (j.is_object())
+    {
+        if (j.size() == 1)
+            if (const auto p = j.find("prefab"); p != j.end() && p->is_string())
+            {
+                // Looked up in normalized form (the one the BFS packaged it under);
+                // an unknown value is left exactly as stored.
+                nlohmann::json normalized = { {"prefab", normalizePrefabRef(p->get<std::string>())} };
+                if (!rewriteField(normalized, "prefab", sourceToPackage, assetRoot)) return 0;
+                j = std::move(normalized);
+                return 1;
+            }
+        for (auto& [key, value] : j.items())
+            n += rewritePrefabRefs(value, sourceToPackage, assetRoot);
+    }
+    else if (j.is_array())
+    {
+        for (nlohmann::json& v : j)
+            n += rewritePrefabRefs(v, sourceToPackage, assetRoot);
+    }
+    return n;
+}
+
+void stripLinksOfNode(nlohmann::json& node)
+{
+    if (!node.is_object()) return;
+    node.erase("prefab");
+    node.erase("prefabNode");
+    if (auto kids = node.find("children"); kids != node.end() && kids->is_array())
+        for (nlohmann::json& child : *kids)
+            stripLinksOfNode(child);
+}
+
 } // namespace
 
 int rewriteScenePaths(nlohmann::json& sceneJson,
@@ -520,9 +597,18 @@ int rewriteScenePaths(nlohmann::json& sceneJson,
 {
     // Accepts both the complete Scene::toJson() document ({version, root})
     // and a loose node, so that the tests can assemble the JSON by hand.
-    if (sceneJson.contains("root") && sceneJson["root"].is_object())
-        return rewriteNode(sceneJson["root"], sourceToPackage, assetRoot);
-    return rewriteNode(sceneJson, sourceToPackage, assetRoot);
+    nlohmann::json& root = (sceneJson.contains("root") && sceneJson["root"].is_object())
+                         ? sceneJson["root"] : sceneJson;
+    return rewriteNode(root, sourceToPackage, assetRoot) +
+           rewritePrefabRefs(root, sourceToPackage, assetRoot);
+}
+
+void stripPrefabLinks(nlohmann::json& sceneOrNode)
+{
+    if (sceneOrNode.contains("root") && sceneOrNode["root"].is_object())
+        stripLinksOfNode(sceneOrNode["root"]);
+    else
+        stripLinksOfNode(sceneOrNode);
 }
 
 ExportPlatform exportPlatformFor(platform::Os os)
@@ -558,7 +644,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const fs::path& runtimeExe,
                                 RenderBackend backend,
                                 const std::string& skyboxFolder,
-                                const ExportPlatform& plat)
+                                const ExportPlatform& plat,
+                                const std::map<std::string, nlohmann::json>& rewrittenPrefabs)
 {
     ExportResult r;
     std::error_code ec;
@@ -652,8 +739,42 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         }
     }
 
+    // Writes a JSON file into the package and counts it like copyOne does.
+    auto writeOne = [&](const fs::path& to, const nlohmann::json& content) -> bool
+    {
+        std::error_code cec;
+        fs::create_directories(to.parent_path(), cec);
+        if (!FileManager::writeJson(to.string(), content))
+        {
+            r.messages.push_back("Could not write " + to.string());
+            return false;
+        }
+        std::error_code sec;
+        std::uintmax_t size = fs::file_size(to, sec);
+        if (!sec) r.totalBytes += size;
+        ++r.fileCount;
+        return true;
+    };
+
     for (const ExportAsset& a : assets)
+    {
+        // A .prefab carries the editor's paths (raw model paths, project-relative
+        // .mat and PrefabRef values): it goes in rewritten, never verbatim.
+        if (fs::path(a.packagePath).extension() == ".prefab")
+        {
+            const auto it = rewrittenPrefabs.find(a.packagePath);
+            if (it == rewrittenPrefabs.end())
+            {
+                r.messages.push_back("Export failed: " + a.packagePath + " has no rewritten form; "
+                                     "copying it verbatim would leave this machine's paths in it.");
+                ok = false;
+                continue;
+            }
+            ok = writeOne(pkg / fs::path(a.packagePath), it->second) && ok;
+            continue;
+        }
         ok = copyOne(fs::path(a.sourcePath), pkg / fs::path(a.packagePath)) && ok;
+    }
 
     // A .mat names its textures relative to its own folder (or absolute when
     // that is impossible). Copied verbatim, one outside the project still
@@ -996,6 +1117,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
 }
 
 ExportResult exportGame(Scene& scene,
+                        PhysicsManager& physics,
+                        AudioManager& audio,
                         const std::map<std::string, fs::path>& scriptPaths,
                         const fs::path& destDir,
                         const std::string& gameName,
@@ -1034,7 +1157,110 @@ ExportResult exportGame(Scene& scene,
         return r;
     }
 
-    std::vector<ExportAsset> assets = collectSceneAssets(scene, projectRoot, scriptPaths);
+    const std::string& assetRoot = scene.assetRoot();
+
+    // Unlinked first: the prefab references are collected from what will be
+    // written, so a prefab named only by a link (its path, or a PrefabRef inside
+    // its override values) is neither packaged nor requested by the runtime.
+    nlohmann::json sceneJson = scene.toJson();
+    stripPrefabLinks(sceneJson);
+
+    // Referenced prefabs, breadth first. visited is keyed like every other
+    // asset (exportPathKey of the absolute path), so A -> B -> A ends and two
+    // spellings of one file are one prefab.
+    struct PackagedPrefab
+    {
+        std::string    sourcePath;   // absolute
+        nlohmann::json file;         // links stripped, paths still the editor's
+    };
+    std::vector<PackagedPrefab> prefabs;
+    {
+        std::vector<std::string> prefabErrors;
+        std::set<std::string>    visited;
+        // (reference as stored, who references it)
+        std::deque<std::pair<std::string, std::string>> queue;
+        for (const std::string& ref : PrefabLibrary::collectReferences(sceneJson))
+            queue.emplace_back(ref, "the scene");
+        while (!queue.empty())
+        {
+            const auto [ref, from] = queue.front();
+            queue.pop_front();
+            // Stored relative to the project (PrefabLibrary key form), the same
+            // resolution rewriteField applies when rewriting it.
+            const fs::path refPath(normalizePrefabRef(ref));
+            const std::string source = (refPath.is_absolute() || assetRoot.empty())
+                                     ? refPath.string() : (fs::path(assetRoot) / refPath).string();
+            if (!visited.insert(exportPathKey(source)).second) continue;
+
+            std::optional<nlohmann::json> f = FileManager::readJson(source);
+            if (!f)
+            {
+                prefabErrors.push_back("  " + source + " (referenced by " + from +
+                                       "): missing or not valid JSON");
+                continue;
+            }
+            const auto v = f->find("version");
+            const auto t = f->find("type");
+            const auto rootIt = f->find("root");
+            if (v == f->end() || !v->is_number_integer() || v->get<int>() != 1 ||
+                t == f->end() || !t->is_string() || t->get<std::string>() != "prefab" ||
+                rootIt == f->end() || !rootIt->is_object())
+            {
+                prefabErrors.push_back("  " + source + " (referenced by " + from + "): not a prefab file");
+                continue;
+            }
+            stripPrefabLinks(*f);
+            for (const std::string& next : PrefabLibrary::collectReferences(*f))
+                queue.emplace_back(next, refPath.filename().string());
+            prefabs.push_back({ fs::path(source).string(), std::move(*f) });
+        }
+        if (!prefabErrors.empty())
+        {
+            r.messages.push_back("Export cancelled: " + std::to_string(prefabErrors.size()) +
+                                 " referenced prefabs cannot be packaged:");
+            for (const std::string& e : prefabErrors) r.messages.push_back(e);
+            return r;
+        }
+    }
+
+    // Each prefab in a temporary Scene, so collectSceneAssets sees its models,
+    // materials, clips and scripts through the SAME code as the scene's. Under a
+    // plain root: the prefab root is an ordinary node there, as in an instance.
+    // Destroyed before returning (shutdown releases what they created in
+    // physics/audio while both are alive).
+    std::vector<std::unique_ptr<Scene>> prefabScenes;
+    struct SceneReleaser
+    {
+        std::vector<std::unique_ptr<Scene>>& scenes;
+        ~SceneReleaser() { for (auto& s : scenes) if (s) s->shutdown(); scenes.clear(); }
+    } releaser{ prefabScenes };
+    std::vector<Scene*> scenes{ &scene };
+    std::vector<std::string> prefabFiles;
+    for (const PackagedPrefab& p : prefabs)
+    {
+        auto s = std::make_unique<Scene>();
+        s->setAssetRoot(assetRoot);
+        const nlohmann::json doc = { {"version", 1},
+                                     {"root", { {"name", "prefab"},
+                                                {"children", nlohmann::json::array({ p.file["root"] })} }} };
+        if (!s->fromJson(doc, physics, audio))
+        {
+            r.messages.push_back("Export cancelled: the prefab " + p.sourcePath + " could not be loaded");
+            return r;
+        }
+        for (const std::string& w : s->lastWarnings())
+            r.messages.push_back("Warning (prefab " + fs::path(p.sourcePath).filename().string() + "): " + w);
+        scenes.push_back(s.get());
+        prefabScenes.push_back(std::move(s));
+        prefabFiles.push_back(p.sourcePath);
+    }
+
+    std::vector<ExportAsset> assets = collectSceneAssets(scenes, projectRoot, scriptPaths, prefabFiles);
+    r.packagedAssets = assets;
+    // Nothing else needs the temporary scenes: free their meshes before copying.
+    scenes.resize(1);
+    for (auto& s : prefabScenes) s->shutdown();
+    prefabScenes.clear();
 
     std::vector<std::string> missing;
     for (const ExportAsset& a : assets)
@@ -1052,11 +1278,59 @@ ExportResult exportGame(Scene& scene,
     for (const ExportAsset& a : assets)
         sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
 
-    nlohmann::json sceneJson = scene.toJson();
-    rewriteScenePaths(sceneJson, sourceToPackage, scene.assetRoot());
+    rewriteScenePaths(sceneJson, sourceToPackage, assetRoot);
 
-    return writeExportPackage(assets, sceneJson, destDir, gameName, projectRoot, scriptsDir,
-                              runtimeExe, backend, skyboxFolder);
+    // Same rewrite for each prefab. Then every model path left in it must be a
+    // package path: one that is not was never collected (its model failed to
+    // load in the temporary Scene, so the node had no mesh to walk), and the
+    // runtime resolves model paths as stored -- it would read this machine's
+    // file, or nothing, on any other one.
+    std::set<std::string> packagePaths;
+    for (const ExportAsset& a : assets) packagePaths.insert(a.packagePath);
+    std::map<std::string, nlohmann::json> rewrittenPrefabs;
+    std::vector<std::string> uncollected;
+    for (PackagedPrefab& p : prefabs)
+    {
+        rewriteScenePaths(p.file, sourceToPackage, assetRoot);
+        std::function<void(const nlohmann::json&)> check = [&](const nlohmann::json& node)
+        {
+            if (!node.is_object()) return;
+            if (const auto mesh = node.find("mesh"); mesh != node.end() && mesh->is_object())
+            {
+                auto checkPath = [&](const nlohmann::json& holder, const char* field)
+                {
+                    const auto it = holder.find(field);
+                    if (it == holder.end() || !it->is_string()) return;
+                    const std::string path = it->get<std::string>();
+                    if (!path.empty() && !packagePaths.count(path))
+                        uncollected.push_back("  " + p.sourcePath + ": " + path);
+                };
+                checkPath(*mesh, "sourcePath");
+                if (const auto srcs = mesh->find("animationSources"); srcs != mesh->end() && srcs->is_array())
+                    for (const nlohmann::json& src : *srcs)
+                        if (src.is_object()) checkPath(src, "path");
+            }
+            if (const auto kids = node.find("children"); kids != node.end() && kids->is_array())
+                for (const nlohmann::json& child : *kids) check(child);
+        };
+        check(p.file["root"]);
+        const auto it = sourceToPackage.find(exportPathKey(p.sourcePath));
+        if (it != sourceToPackage.end())
+            rewrittenPrefabs[it->second] = std::move(p.file);
+    }
+    if (!uncollected.empty())
+    {
+        r.messages.push_back("Export cancelled: " + std::to_string(uncollected.size()) +
+                             " model paths inside prefabs could not be loaded, so they cannot be packaged:");
+        for (const std::string& u : uncollected) r.messages.push_back(u);
+        return r;
+    }
+
+    ExportResult written = writeExportPackage(assets, sceneJson, destDir, gameName, projectRoot, scriptsDir,
+                                              runtimeExe, backend, skyboxFolder,
+                                              exportPlatformFor(platform::currentOs()), rewrittenPrefabs);
+    written.packagedAssets = std::move(assets);
+    return written;
 }
 
 } // namespace DonTopo

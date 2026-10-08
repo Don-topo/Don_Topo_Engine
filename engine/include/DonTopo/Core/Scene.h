@@ -22,6 +22,7 @@ namespace DonTopo
     class AudioManager;
     class AsyncAssetLoader;
     struct Mesh;
+    struct PrefabTemplate;   // PrefabLibrary.h (which includes this header)
 
     // Optional cache of meshes already loaded in RAM, indexed by sourcePath. It is
     // queried by scene loading (nodeFromJson) to skip the disk ReadFile of
@@ -38,6 +39,66 @@ namespace DonTopo
     // in the key, the undo of Delete of a multi-piece model would give the same
     // mesh to all its children.
     std::string meshCacheKey(const std::string& sourcePath, int piece);
+    // Key of the n-th (n >= 1) EXTRA skinned mesh of the same file+piece as
+    // baseKey (a meshCacheKey) with ANOTHER animation-source configuration:
+    // Scene::collectMeshes keeps one entry per configuration, and a skinned load
+    // looks at the base entry and then at variants 1, 2, ... until one is missing.
+    // Without them two nodes on the same FBX with different source lists shared
+    // ONE seed, and the undo of a Delete or a clone gave one node the other's clips.
+    std::string meshCacheVariantKey(const std::string& baseKey, int n);
+    // Adds src's meshes to dst WITHOUT losing configurations: variants are
+    // numbered per cache (collectMeshes of one root), so merging two caches by
+    // plain key dropped (emplace) or overwrote ([]) the other's skinned
+    // configurations, and that node then reconfigured from disk on the main
+    // thread. Each skinned mesh of src whose animation-source configuration dst
+    // does not serve yet is appended at the next free variant of its base key.
+    // srcWins: on a plain key holding another mesh, src's takes the base entry
+    // (the caller's are fresher) and dst's is kept as a variant if it serves
+    // another configuration. Non-skinned entries: one per key, as before.
+    void mergeMeshCaches(PreloadedMeshCache& dst, const PreloadedMeshCache& src, bool srcWins = false);
+
+    // Rewrite IN PLACE the stored-path fields of a node tree (mesh.materials[].albedo/
+    // normal/orm/matAsset): the disk-form fields nodeToJson writes with toStoredPath.
+    // The base* baselines are NOT handled on purpose: disk form (.scene/.prefab) never
+    // carries them, they exist only in the memory form (carryOverrideBaseline).
+    // resolveStoredPaths goes stored -> absolute (what nodeFromJson does on
+    // the disk path), storeRelativePaths the other way. They let a prefab file (disk
+    // form) be compared and instantiated through the memory form (empty root).
+    void resolveStoredPaths(nlohmann::json& nodeTree, const std::string& assetRoot);
+    void storeRelativePaths(nlohmann::json& nodeTree, const std::string& assetRoot);
+
+    // mesh.materials[] of a node json -> MaterialOverrides: THE parser nodeFromJson
+    // uses (malformed entries dropped with a warning naming nodeName). Base*
+    // baselines are read only with carryOverrideBaseline (memory form).
+    std::vector<MaterialOverride> materialOverridesFromJson(const nlohmann::json& materials,
+                                                            const std::string& nodeName,
+                                                            const std::string& assetRoot,
+                                                            bool carryOverrideBaseline,
+                                                            std::vector<std::string>* warnings);
+    // Writes the base* / base*Taken of ovs into the entries they were parsed from
+    // (same entry filter), as nodeToJson does with carryOverrideBaseline.
+    void writeMaterialOverrideBaselines(nlohmann::json& materials, const std::vector<MaterialOverride>& ovs);
+
+    // ── Node references ──────────────────────────────────────────────────────
+    // Fields of a node that hold the id of ANOTHER node. Today only the
+    // Animator's IK constraints ("animator": {"ik": [{"target", "pole"}]}); a new
+    // field of this kind must be listed HERE (both overloads), or prefabs, clones
+    // and reinsertions leave it pointing at the node it was copied from.
+    //
+    // Three id spaces meet in them:
+    //  - scene form (a .scene, the live objects): a scene id;
+    //  - prefab form (a .prefab, a template, a prefab override value): the
+    //    prefab-local id of a node of the same prefab, or {"scene": <id>} for a
+    //    node outside it (only in an instance's override values, never in a
+    //    .prefab: makePrefab and Apply turn those into 0 with a warning).
+    //  0 is "no node" in every space.
+    // Calls fn on each reference of this node only (not its children).
+    void forEachNodeReference(nlohmann::json& node, const std::function<void(nlohmann::json& ref)>& fn);
+    void forEachNodeReference(GameObject& node, const std::function<void(uint64_t& id)>& fn);
+    // The references inside an override value at `path` (the value of the
+    // whole "/animator", the "/animator/ik" array, one entry, or one field).
+    void forEachNodeReferenceInOverride(const std::string& path, nlohmann::json& value,
+                                        const std::function<void(nlohmann::json& ref)>& fn);
 
     struct SkinnedMesh;
     // true if the mesh's animation sources (path, builtin and clip
@@ -190,6 +251,25 @@ namespace DonTopo
             // whole scene.
             nlohmann::json subtreeToJson(const GameObject* node) const;
 
+            // Memory-form JSON of a subtree (empty root, NO override baseline): the
+            // form that prefab diff and propagation compare, so that the baseline of
+            // the material overrides never shows up as a difference.
+            nlohmann::json subtreeToMemoryJson(const GameObject* node) const;
+            // subtreeToMemoryJson of a prefab instance with its node references in
+            // PREFAB form (see forEachNodeReference): a reference to a linked node
+            // of this instance becomes that node's prefab-local id, any other one
+            // {"scene": id}. What every diff against the template reads (recompute,
+            // tracker baselines and folds, match, Unpack): with scene ids each
+            // instance would differ from its template on every reference.
+            nlohmann::json instanceToPrefabJson(const GameObject* instanceRoot) const;
+
+            // Builds the .prefab file JSON ({"version":1,"type":"prefab","root":...})
+            // from node's subtree: disk form (m_assetRoot), prefab-local ids 1..N in
+            // pre-order, no prefab/prefabNode keys. With link == true it also LINKS
+            // the scene subtree: node->prefabLink = {prefabPath, {}} and each node's
+            // prefabNode = its local id. The scene ids are not touched.
+            nlohmann::json makePrefab(GameObject* node, const std::string& prefabPath, bool link);
+
             // Rebuilds a subtree from j as a child of parent (or of the
             // root if parent is nullptr, same criterion as cloneGameObject),
             // inserted at position index of parent->children (if index
@@ -204,6 +284,62 @@ namespace DonTopo
                                         PhysicsManager& physics, AudioManager& audio,
                                         const PreloadedMeshCache* preloaded = nullptr);
 
+            // insertFromJson plus matCache: .mat files already loaded by absolute
+            // path, so building the subtree reads no material asset from disk
+            // (the zero-IO Instantiate of a preloaded prefab). insertFromJson is
+            // this with matCache == nullptr.
+            GameObject* insertFromJsonWithCaches(const nlohmann::json& j, GameObject* parent, size_t index,
+                                                  PhysicsManager& physics, AudioManager& audio,
+                                                  const PreloadedMeshCache* preloaded,
+                                                  const MaterialAssetCache* matCache);
+
+            // Propagation: rebuilds instanceRoot as prefab + its stored overrides + its
+            // added children. prefabMemoryRoot is the prefab root node in MEMORY form
+            // (resolveStoredPaths applied) with prefab-local ids.
+            //  - Every node matched by prefabNode keeps its scene id (selection and older
+            //    Undo commands keep resolving), nodes new to the prefab get a fresh one,
+            //    and the result still goes through the live-id guard of insertFromJson.
+            //  - The root keeps its id, its parent index, and its position/rotation
+            //    (where an instance stands is never an override); its scale follows the
+            //    prefab unless overridden.
+            //  - The old subtree leaves through removeGameObject, so onNodeRemoved
+            //    releases its GPU slots.
+            //  - Overrides whose node or component is gone are dropped from the link
+            //    and reported in lastWarnings() (with "dropped"). Two nodes claiming the
+            //    same prefabNode: the first is linked, the rest are kept as added children
+            //    (with a warning).
+            // Returns the LIVE root of the instance, same id and index either way: the
+            // rebuilt one (*rebuilt = true), or, if the build failed, the old subtree
+            // re-inserted as it was (*rebuilt = false). In BOTH cases the old slots are
+            // already released and the returned subtree has render indices at -1: the
+            // caller must register it on the GPU (Renderer::registerGameObject) every
+            // time, or the instance stays invisible.
+            // nullptr means there is nothing to register: either nothing was touched
+            // (null root, the scene root, no link, prefabMemoryRoot not an object; the
+            // instance is still live and registered), or even the restore failed and
+            // the instance was lost. lastWarnings() says which.
+            // idHints (prefab-local id -> scene id): the id a node NEW to this
+            // instance gets instead of a fresh one (the redo of an Apply rebuilds
+            // the nodes it created with their first ids, so later Undo commands
+            // still resolve). Still subject to the live-id guard.
+            GameObject* rebuildPrefabInstance(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot,
+                                              PhysicsManager& physics, AudioManager& audio,
+                                              const PreloadedMeshCache* meshes = nullptr,
+                                              const MaterialAssetCache* mats = nullptr,
+                                              bool* rebuilt = nullptr,
+                                              const std::unordered_map<uint64_t, uint64_t>* idHints = nullptr);
+
+            // Replaces instanceRoot->prefabLink->overrides with the diff of the live
+            // subtree against prefabMemoryRoot (matched by prefabNode). Returns true if
+            // the list changed. No-op (false) without a link or without a template
+            // (prefabMemoryRoot not an object): a missing prefab must never be read as
+            // "every override was reverted".
+            bool recomputePrefabOverrides(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot);
+
+            // Unpack: strips prefabLink and prefabNode from the whole subtree. The
+            // objects stay exactly as they are.
+            void unpackPrefab(GameObject* instanceRoot);
+
             // The meshes of the subtree that have a file, by sourcePath. It is
             // what seeds the preload cache of the clone and of the undo of Delete.
             static PreloadedMeshCache collectMeshes(GameObject* root);
@@ -215,6 +351,28 @@ namespace DonTopo
             // the root or the reconstruction fails.
             GameObject* cloneGameObject(GameObject* src, GameObject* parent,
                                         PhysicsManager& physics, AudioManager& audio);
+
+            // Builds a new instance of a Ready template as a child of parent (the
+            // scene root if nullptr), at the end of its children. Zero disk IO: the
+            // nodes come from t.memoryRoot, meshes from t.meshes (shared when their
+            // configuration matches, which the library guarantees), .mat files from
+            // t.mats, the hasBones probe seeded from t.meshes, and audio clips hit the
+            // AudioManager sound cache that t.warmAudio keeps alive.
+            //  - Every node gets a fresh scene id; prefabNode = its prefab-local id;
+            //    the root gets the link {t.key, no overrides}.
+            //  - pos / eulerDeg (Euler degrees, eulerAngleXYZ like Lua's Transform) are
+            //    WORLD space, as Unity's Instantiate(original, position, rotation,
+            //    parent); the root's scale stays the prefab's. nullptr keeps the
+            //    prefab root's own value, which is then LOCAL to parent (Unity's
+            //    Instantiate(original, parent)).
+            //  - A Camera or Audio Listener the scene already has wins: the instance's
+            //    one is dropped with a warning (one per scene, like insertFromJson).
+            // Render indices are left at -1: the caller registers the subtree on the
+            // GPU. nullptr (nothing built) if t is not Ready or the build failed;
+            // lastWarnings() says why.
+            GameObject* instantiatePrefab(const PrefabTemplate& t, GameObject* parent,
+                                          const glm::vec3* pos, const glm::vec3* eulerDeg,
+                                          PhysicsManager& physics, AudioManager& audio);
 
             // Collects the scene lights in the format the Renderer
             // consumes (setLights/setLightRadii). Pre-order from the root, and it
@@ -341,6 +499,18 @@ namespace DonTopo
             // object, which takes the whole matrix of the other one.
             void pruneDuplicateIds();
             void pruneExtraCameras();
+
+            // Body of insertFromJsonWithCaches with the baseline flag exposed. The
+            // public entry points pass true (their json comes from subtreeToJson, which
+            // carries the baseline); propagation passes false, because its json is a
+            // template plus memory-form nodes with no baseline in them, and reading
+            // "no baseline" as the baseline would wipe it instead of re-deriving it
+            // from the mesh.
+            GameObject* insertSubtree(const nlohmann::json& j, GameObject* parent, size_t index,
+                                      PhysicsManager& physics, AudioManager& audio,
+                                      const PreloadedMeshCache* preloaded,
+                                      const MaterialAssetCache* matCache,
+                                      bool carryOverrideBaseline);
 
             // The same for the Audio Listener: it keeps the first in pre-order
             // and removes the component from the rest, leaving a warning per discarded

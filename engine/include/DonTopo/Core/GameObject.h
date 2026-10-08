@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <unordered_map>
 
 // The 28 components are DECLARED, not included. Before, their concrete headers were
 // included here, and since the whole editor includes GameObject.h —directly or
@@ -27,6 +28,13 @@ namespace DonTopo
     struct Mesh;
     struct SkinnedMesh;
     struct Material;
+    struct PrefabLink;   // PrefabOverrides.h; only the .cpp files need it complete
+    struct MaterialAsset;   // MaterialAsset.h; declared so this header stays light
+
+    // Already-loaded .mat files, key: the absolute .mat path (MaterialOverride::
+    // matAsset). Consulted by applyMaterialOverrides / Scene::nodeFromJson so a
+    // preloaded prefab can be instantiated without reading the disk.
+    using MaterialAssetCache = std::unordered_map<std::string, MaterialAsset>;
     class Collider;
     class BoxCollider;
     class SphereCollider;
@@ -142,6 +150,16 @@ namespace DonTopo
             // destructor does NOT cancel anything — the pump already discards the results
             // whose targetId does not exist.
             uint64_t pendingMeshJob = 0;
+
+            // Prefab link (spec 2026-09-30-prefabs-design.md §2.2). prefabNode is the
+            // prefab-LOCAL id of the node this one comes from (0 = not part of a
+            // prefab instance). prefabLink exists only on the instance ROOT: the
+            // .prefab path plus the overrides. A shared_ptr to an incomplete type,
+            // like the components: the out-of-line destructor is where it must be
+            // complete. A clone gets its own PrefabLink (it travels through JSON),
+            // never the same pointer.
+            uint64_t prefabNode = 0;
+            std::shared_ptr<PrefabLink> prefabLink;
 
             explicit GameObject(std::string name = "");
             ~GameObject();
@@ -535,7 +553,12 @@ namespace DonTopo
     // Writes the overrides onto the materials, capturing the baseline the
     // first time it overwrites each slot. Idempotent: calling it twice in a row
     // leaves the same thing.
-    void applyMaterialOverrides(GameObject& go);
+    //
+    // matCache: optional, already-loaded .mat files by absolute path (the
+    // ov.matAsset string). A path found in it is NOT read from disk, which is
+    // what lets a preloaded prefab instantiate without IO; a path that is not
+    // in it falls back to loadMaterialAsset. nullptr = always read the disk.
+    void applyMaterialOverrides(GameObject& go, const MaterialAssetCache* matCache = nullptr);
 
     // The indices that applyMaterialOverrides is going to silently ignore (the FBX
     // was re-exported with fewer submeshes), as text and for whatever channel the
@@ -545,5 +568,8 @@ namespace DonTopo
     // the editor Log— have different channels, and this helper is what makes
     // both say exactly the same thing. It appends to `out`, it does not clear it.
     // Without a mesh it writes nothing: there are no materials to compare against.
-    void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out);
+    // matCache: a .mat found in it was already loaded (valid, no warning to
+    // give) and is not probed on disk again.
+    void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out,
+                                         const MaterialAssetCache* matCache = nullptr);
 }

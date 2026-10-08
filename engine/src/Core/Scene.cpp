@@ -4,9 +4,12 @@
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/MaterialAsset.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/AnimatorSerialization.h"
 #include "DonTopo/Core/PropertyTracks.h"
+#include "DonTopo/Core/PrefabOverrides.h"
+#include "DonTopo/Core/TransformDecompose.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
@@ -34,6 +37,9 @@
 #include <unordered_set>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/euler_angles.hpp>
+#include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/UiWidgets.h"
@@ -1752,6 +1758,8 @@ namespace
                             else
                                 ov[key] = v;
                         }
+                        else if constexpr (std::is_same_v<T, DonTopo::PrefabRef>)
+                            ov[key] = nlohmann::json{ {"prefab", v.path} };
                         else
                             ov[key] = v;
                     }, val);
@@ -1760,6 +1768,15 @@ namespace
             }
             j["scripts"] = std::move(arr);
         }
+
+        // Prefab link, written only when present: a scene with no prefabs serializes
+        // byte for byte as before. Right before "children" so the older keys keep
+        // their order.
+        if (node.prefabNode != 0)
+            j["prefabNode"] = node.prefabNode;
+        if (node.prefabLink)
+            j["prefab"] = { {"path", node.prefabLink->path},
+                            {"overrides", DonTopo::overridesToJson(node.prefabLink->overrides)} };
 
         j["children"] = nlohmann::json::array();
         for (const auto& child : node.children)
@@ -2095,6 +2112,9 @@ namespace
     // carryOverrideBaseline: read counterpart of the same nodeToJson flag —
     // see its big comment, next to "baseAlbedo". Default false (disk);
     // cloneGameObject and insertFromJson set it to true.
+    // matCache: already-loaded .mat files by absolute path; passed down to the
+    // children and to applyMaterialOverrides so a preloaded template is built
+    // without reading them from disk. nullptr (every older caller) = disk.
     void nodeFromJson(const nlohmann::json& j, GameObject* node, const glm::mat4& parentWorld,
                        DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio,
                        std::vector<std::string>* warnings,
@@ -2102,7 +2122,8 @@ namespace
                        const std::string& assetRoot,
                        DonTopo::AsyncAssetLoader* loader = nullptr,
                        const DonTopo::PreloadedMeshCache* preloaded = nullptr,
-                       bool carryOverrideBaseline = false)
+                       bool carryOverrideBaseline = false,
+                       const DonTopo::MaterialAssetCache* matCache = nullptr)
     {
         // "id" does not exist in .scene files saved before this field —
         // the id that the GameObject constructor already assigned (atomic
@@ -2162,8 +2183,20 @@ namespace
             // editor never created skinned — could never have an Animator without
             // reimporting the mesh by hand.
             const bool skinnedFlag = j["mesh"].value("skinned", false);
+            // A mesh handed over by reference (memRef) and found in preloaded is
+            // TRUSTED as is: it is already the final mesh of this node (a prefab
+            // template's per-node mesh, with its animation sources and material
+            // overrides applied once by the library; or a clone's procedural mesh).
+            // Nothing is probed, loaded or configured for it -- the zero-IO
+            // Instantiate depends on that. A memRef that is not found falls through
+            // to the normal paths (sourcePath, or the procedural warning below).
+            std::shared_ptr<const DonTopo::Mesh> provided;
+            if (preloaded)
+                if (const auto ref = j["mesh"].find("memRef"); ref != j["mesh"].end() && ref->is_string())
+                    if (const auto it = preloaded->find(ref->get<std::string>()); it != preloaded->end())
+                        provided = it->second;
             bool skinned = false;
-            if (!sourcePath.empty())
+            if (!sourcePath.empty() && !provided)
             {
                 // Per-load cache (see hasBonesCache below): without it each
                 // node that shares sourcePath with another would repeat the full
@@ -2187,7 +2220,7 @@ namespace
             // before warning, because saying "no longer declares bones" of a
             // file that simply does not exist is worse than not warning: it points
             // to the wrong place and hides that the mesh did not load at all.
-            if (skinnedFlag && !skinned && !sourcePath.empty() && warnings)
+            if (skinnedFlag && !skinned && !sourcePath.empty() && !provided && warnings)
             {
                 // FULL path, not filename(): in the missing file case
                 // this warning and the one in the catch below fire for the same
@@ -2207,7 +2240,11 @@ namespace
             }
             try
             {
-                if (skinned)
+                if (provided)
+                {
+                    node->setMesh(provided);
+                }
+                else if (skinned)
                 {
                     // The skinned load stays SYNCHRONOUS on purpose, even if there
                     // is a loader: it rebuilds the Animator clip config
@@ -2231,37 +2268,50 @@ namespace
                     // configuration the JSON asks for (the case of the clone and of the undo of
                     // Delete, which seed the cache with the live mesh), it is
                     // SHARED without touching it: neither a 12 MB copy nor re-applying
-                    // sources, which duplicated its clips. If it does not match (a freshly
-                    // preloaded FBX with another configuration), it is copied and
-                    // configured as always.
+                    // sources, which duplicated its clips. If none matches, an
+                    // unconfigured one (a freshly preloaded FBX) is copied and
+                    // configured as always; a configured one never is (see below).
                     std::shared_ptr<const DonTopo::Mesh> compartida;
                     std::shared_ptr<DonTopo::SkinnedMesh> mesh;
                     if (preloaded)
                     {
-                        auto it = preloaded->find(sourcePath);
-                        if (it != preloaded->end())
-                            if (const auto* sk = dynamic_cast<const DonTopo::SkinnedMesh*>(it->second.get()))
-                            {
-                                // Without the key (scene saved before it
-                                // existed) the scene asks only for the
-                                // animations of the FBX itself, which is exactly
-                                // what a preloaded one with a single builtin
-                                // source of that file brings. Without this equivalence
-                                // each node took its own copy (~80 MB with
-                                // modelAnimation.fbx). If it brings more sources, it is
-                                // copied and configured as before.
-                                const bool conClave = j["mesh"].contains("animationSources");
-                                const bool soloBuiltin = sk->animationSources.size() == 1 &&
-                                                         sk->animationSources[0].builtin &&
-                                                         sk->animationSources[0].path == sourcePath;
-                                const nlohmann::json fuentesPedidas = conClave
-                                    ? j["mesh"]["animationSources"] : nlohmann::json::array();
-                                if (conClave ? DonTopo::meshMatchesAnimationConfig(*sk, fuentesPedidas)
-                                             : soloBuiltin)
-                                    compartida = it->second;
-                                else
-                                    mesh = std::make_shared<DonTopo::SkinnedMesh>(*sk);
-                            }
+                        // Without the key (scene saved before it existed) the
+                        // scene asks only for the animations of the FBX itself,
+                        // which is exactly what a preloaded one with a single
+                        // builtin source of that file brings. Without this
+                        // equivalence each node took its own copy (~80 MB with
+                        // modelAnimation.fbx).
+                        const bool conClave = j["mesh"].contains("animationSources");
+                        const nlohmann::json fuentesPedidas = conClave
+                            ? j["mesh"]["animationSources"] : nlohmann::json::array();
+                        auto onlyBuiltin = [&](const DonTopo::SkinnedMesh& sk) {
+                            return sk.animationSources.size() == 1 && sk.animationSources[0].builtin &&
+                                   sk.animationSources[0].path == sourcePath;
+                        };
+                        // The base entry and then every configuration variant
+                        // collectMeshes added (meshCacheVariantKey). The one
+                        // configured exactly as the JSON asks is shared. Otherwise
+                        // only an UNCONFIGURED one (no source, or just the file's
+                        // own) may be copied and configured: applyAnimationSourceConfig
+                        // only appends, so configuring a copy of a mesh that
+                        // already carries another list would keep that list's
+                        // clips -- the wrong animations. Without such a candidate
+                        // it is read from disk, as on a miss.
+                        const DonTopo::SkinnedMesh* unconfigured = nullptr;
+                        for (int v = 0; !compartida; ++v)
+                        {
+                            const auto it = preloaded->find(v == 0 ? sourcePath
+                                                                   : DonTopo::meshCacheVariantKey(sourcePath, v));
+                            if (it == preloaded->end()) break;
+                            const auto* sk = dynamic_cast<const DonTopo::SkinnedMesh*>(it->second.get());
+                            if (!sk) continue;
+                            if (conClave ? DonTopo::meshMatchesAnimationConfig(*sk, fuentesPedidas) : onlyBuiltin(*sk))
+                                compartida = it->second;
+                            else if (!unconfigured && (sk->animationSources.empty() || onlyBuiltin(*sk)))
+                                unconfigured = sk;
+                        }
+                        if (!compartida && unconfigured)
+                            mesh = std::make_shared<DonTopo::SkinnedMesh>(*unconfigured);
                     }
                     if (!mesh && !compartida)
                         mesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(sourcePath));
@@ -2366,15 +2416,11 @@ namespace
                 }
                 else if (j["mesh"].contains("memRef"))
                 {
-                    // Written only by cloneGameObject, together with the cache
-                    // that holds the mesh: share it, no vertex round trip (H15).
-                    std::shared_ptr<const DonTopo::Mesh> shared;
-                    if (preloaded && j["mesh"]["memRef"].is_string())
-                        if (auto it = preloaded->find(j["mesh"]["memRef"].get<std::string>());
-                            it != preloaded->end())
-                            shared = it->second;
-                    if (shared) node->setMesh(shared);
-                    else if (warnings)
+                    // Written by cloneGameObject (procedural meshes) together with
+                    // the cache that holds the mesh; a reference that was found is
+                    // the `provided` branch above (no vertex round trip, H15). Here
+                    // it was not found, and there is no file to fall back on.
+                    if (warnings)
                         warnings->push_back("mesh of '" + node->name + "': in-memory reference "
                                              "without its source, the object loads without a mesh");
                 }
@@ -2444,79 +2490,12 @@ namespace
             // Texture overrides. A block that is not an array, or an entry
             // without a numeric "index", is discarded with a warning: half a configuration
             // is worse than none, same criterion as jsonToMat4 with the matrix.
+            // The parsing lives in materialOverridesFromJson, shared with the
+            // PrefabLibrary, which pre-applies a template's overrides once.
             if (j["mesh"].contains("materials"))
-            {
-                const nlohmann::json& mats = j["mesh"]["materials"];
-                if (!mats.is_array())
-                {
-                    if (warnings)
-                        warnings->push_back("mesh of '" + node->name + "'.materials: not a list, "
-                                            "the hand-assigned textures are discarded");
-                }
-                else
-                {
-                    for (const auto& entry : mats)
-                    {
-                        if (!entry.is_object() || !entry.contains("index")
-                            || !entry["index"].is_number_integer())
-                        {
-                            if (warnings)
-                                warnings->push_back("mesh of '" + node->name + "'.materials: entry without a "
-                                                    "valid index, discarded");
-                            continue;
-                        }
-                        MaterialOverride ov;
-                        ov.index  = entry["index"].get<int>();
-                        ov.albedo   = fromStoredPath(entry.value("albedo", ""), assetRoot);
-                        ov.normal   = fromStoredPath(entry.value("normal", ""), assetRoot);
-                        ov.orm      = fromStoredPath(entry.value("orm",    ""), assetRoot);
-                        ov.matAsset = fromStoredPath(entry.value("matAsset", ""), assetRoot);
-                        // Absent = -1.0f (the "no override" sentinel; see
-                        // MaterialOverride in GameObject.h), same criterion as
-                        // "absent = empty string" of the three paths above.
-                        // Through readFloat and not through a raw entry.value<float>():
-                        // this whole block is NOT inside any try, and a
-                        // "metallic": null or "metallic": "0.5" with .value<float>()
-                        // throws type_error.302 — the exception goes up to
-                        // fromJson(), which returns false, and THE WHOLE SCENE IS LOST
-                        // without saying why. readFloat is the same guard
-                        // the rest of the file already uses for this problem:
-                        // it warns naming the field and falls to the sentinel.
-                        // clamp(-1..1) also cuts a hand-mistyped "metallic": 5.0
-                        // before it reaches the Material and the dedup
-                        // key — the sentinel (negative) is not
-                        // affected, clamp(-1, -1, 1) leaves it the same.
-                        const std::string materialesCtx = "mesh of '" + node->name + "'.materials";
-                        ov.metallic  = std::clamp(readFloat(entry, "metallic",  -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
-                        ov.roughness = std::clamp(readFloat(entry, "roughness", -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
-                        // The baseline is ONLY read on the MEMORY path (see
-                        // the big comment of nodeToJson, next to the same
-                        // flag): on disk these fields, even if they were in the
-                        // JSON, are ignored on purpose — the correct baseline of
-                        // a disk load is the one that applyMaterialOverrides
-                        // captures over the material just derived from the FBX, not a saved one
-                        // that could be from ANOTHER export of the model.
-                        if (carryOverrideBaseline)
-                        {
-                            ov.baseAlbedo      = fromStoredPath(entry.value("baseAlbedo", ""), assetRoot);
-                            ov.baseAlbedoTaken = entry.value("baseAlbedoTaken", false);
-                            ov.baseNormal      = fromStoredPath(entry.value("baseNormal", ""), assetRoot);
-                            ov.baseNormalTaken = entry.value("baseNormalTaken", false);
-                            ov.baseOrm         = fromStoredPath(entry.value("baseOrm", ""), assetRoot);
-                            ov.baseOrmTaken    = entry.value("baseOrmTaken", false);
-                            // Same reason as metallic/roughness above:
-                            // readFloat/readBool instead of a raw entry.value<T>(),
-                            // so that a corrupt field warns and falls to the
-                            // default instead of taking down the whole fromJson().
-                            ov.baseMetallic       = readFloat(entry, "baseMetallic", 0.0f, warnings, materialesCtx);
-                            ov.baseMetallicTaken  = readBool(entry, "baseMetallicTaken", false, warnings, materialesCtx);
-                            ov.baseRoughness      = readFloat(entry, "baseRoughness", 0.0f, warnings, materialesCtx);
-                            ov.baseRoughnessTaken = readBool(entry, "baseRoughnessTaken", false, warnings, materialesCtx);
-                        }
-                        node->materialOverrides.push_back(std::move(ov));
-                    }
-                }
-            }
+                for (MaterialOverride& ov : DonTopo::materialOverridesFromJson(
+                         j["mesh"]["materials"], node->name, assetRoot, carryOverrideBaseline, warnings))
+                    node->materialOverrides.push_back(std::move(ov));
 
             // Overrides applied NOW that the mesh (if there was one: any
             // of the FIVE setMesh of the branches above — skinned; cached
@@ -2546,8 +2525,8 @@ namespace
                 // through its channel, and with two twin loops that lasts as long as it takes
                 // someone to touch only one.
                 if (warnings)
-                    collectMaterialOverrideWarnings(*node, *warnings);
-                applyMaterialOverrides(*node);
+                    collectMaterialOverrideWarnings(*node, *warnings, matCache);
+                applyMaterialOverrides(*node, matCache);
             }
         }
 
@@ -3272,12 +3251,42 @@ namespace
             // Without a path there is nothing to load: the node is left without audio and the
             // rest of the scene goes on. is3D/loop do have a reasonable default
             // (2D, no loop), which is also what the UI creates clips with.
+            //
+            // loadMode and rolloff are read FIRST and passed to the factory: both are
+            // part of the sound's cache key, and setting them afterwards (setLoadMode /
+            // setRolloff RELOAD) created and decoded a throwaway default sound first --
+            // a whole decompressed copy of a streamed track. Their warnings are kept
+            // apart and only reported when the clip exists, as before.
+            std::vector<std::string> modeWarnings;
+            DonTopo::AudioLoadMode loadMode = DonTopo::AudioLoadMode::Sample;
+            DonTopo::AudioRolloff rolloff = DonTopo::AudioRolloff::Inverse;
+            if (!path.empty())
+            {
+                // Same criterion as the bus below: absent = "sample" (how everything
+                // was loaded before), unknown name = warning.
+                const std::string loadModeName = readString(c, "loadMode", "sample", &modeWarnings, ctx);
+                if (!DonTopo::audioLoadModeFromStr(loadModeName, loadMode))
+                {
+                    loadMode = DonTopo::AudioLoadMode::Sample;
+                    modeWarnings.push_back(ctx + ".loadMode: unknown value '" + loadModeName +
+                                           "', using 'sample'");
+                }
+                // Attenuation curve: same criterion.
+                const std::string rolloffName = readString(c, "rolloff", "inverse", &modeWarnings, ctx);
+                if (!DonTopo::audioRolloffFromStr(rolloffName, rolloff))
+                {
+                    rolloff = DonTopo::AudioRolloff::Inverse;
+                    modeWarnings.push_back(ctx + ".rolloff: unknown value '" + rolloffName +
+                                           "', using 'inverse'");
+                }
+            }
             auto clip = path.empty()
                             ? nullptr
                             : audio.createAudioClipComponent(
                                   path,
                                   readBool(c, "is3D", false, warnings, ctx, /*required=*/true),
-                                  readBool(c, "loop", false, warnings, ctx, /*required=*/true));
+                                  readBool(c, "loop", false, warnings, ctx, /*required=*/true),
+                                  loadMode, rolloff);
             if (clip)
             {
                 // Without required: this field came later, and an earlier scene
@@ -3295,25 +3304,9 @@ namespace
                     warnings->push_back(ctx + ".bus: unknown value '" + busName +
                                          "', using 'sfx'");
                 clip->setBus(bus);
-                // Same criterion as the bus: absent = "sample" (how everything was loaded
-                // before), unknown name = warning. NOTE: setLoadMode
-                // RELOADS the sound, so setting it after creating the clip
-                // costs one extra load; it only happens in scenes whose clip streams,
-                // and it avoids the factory having to know all the
-                // component fields.
-                const std::string loadModeName = readString(c, "loadMode", "sample", warnings, ctx);
-                DonTopo::AudioLoadMode loadMode = DonTopo::AudioLoadMode::Sample;
-                if (!DonTopo::audioLoadModeFromStr(loadModeName, loadMode) && warnings)
-                    warnings->push_back(ctx + ".loadMode: unknown value '" + loadModeName +
-                                         "', using 'sample'");
-                clip->setLoadMode(loadMode);
-                // Attenuation curve: same criterion as bus and loadMode.
-                const std::string rolloffName = readString(c, "rolloff", "inverse", warnings, ctx);
-                DonTopo::AudioRolloff rolloff = DonTopo::AudioRolloff::Inverse;
-                if (!DonTopo::audioRolloffFromStr(rolloffName, rolloff) && warnings)
-                    warnings->push_back(ctx + ".rolloff: unknown value '" + rolloffName +
-                                         "', using 'inverse'");
-                clip->setRolloff(rolloff);
+                // loadMode/rolloff were already passed to the factory (see above).
+                if (warnings)
+                    warnings->insert(warnings->end(), modeWarnings.begin(), modeWarnings.end());
                 // The three voice ones. Neutral defaults: a scene prior to
                 // this feature sounds exactly the same as before.
                 clip->setSpread(readFloat(c, "spread", 0.0f, warnings, ctx));
@@ -3373,6 +3366,30 @@ namespace
             listener->setEnabled(j["audioListener"].value("enabled", true));
             node->setAudioListener(std::move(listener));
         }
+        // Prefab link, read tolerantly: a malformed field must not lose the object.
+        // The link loads unlinked (with a warning) instead of failing the scene.
+        if (auto it = j.find("prefabNode"); it != j.end() && it->is_number_unsigned())
+            node->prefabNode = it->get<uint64_t>();
+        if (auto it = j.find("prefab"); it != j.end())
+        {
+            if (it->is_object() && it->contains("path") && (*it)["path"].is_string())
+            {
+                auto link = std::make_shared<DonTopo::PrefabLink>();
+                link->path = (*it)["path"].get<std::string>();
+                std::vector<std::string> linkWarnings;
+                if (auto ov = it->find("overrides"); ov != it->end())
+                    link->overrides = DonTopo::overridesFromJson(*ov, &linkWarnings);
+                if (warnings)
+                    for (auto& w : linkWarnings)
+                        warnings->push_back("node '" + node->name + "'.prefab: " + w);
+                node->prefabLink = std::move(link);
+            }
+            else if (warnings)
+            {
+                warnings->push_back("node '" + node->name +
+                                    "'.prefab: malformed, the object loads unlinked");
+            }
+        }
         if (j.contains("scripts"))
         {
             for (const auto& sj : j["scripts"])
@@ -3390,7 +3407,9 @@ namespace
                 {
                     for (const auto& [key, val] : sj["overrides"].items())
                     {
-                        if (val.is_boolean())     comp->overrides[key] = val.get<bool>();
+                        if (val.is_object() && val.contains("prefab") && val["prefab"].is_string())
+                            comp->overrides[key] = DonTopo::PrefabRef{ val["prefab"].get<std::string>() };
+                        else if (val.is_boolean()) comp->overrides[key] = val.get<bool>();
                         else if (val.is_string()) comp->overrides[key] = val.get<std::string>();
                         else if (val.is_number()) comp->overrides[key] = val.get<double>();
                         // Other types: ignored (they are not serializable props)
@@ -3450,7 +3469,7 @@ namespace
             // would be the usual hand-written list.
             try
             {
-                nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, loadCache, assetRoot, loader, preloaded, carryOverrideBaseline);
+                nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, loadCache, assetRoot, loader, preloaded, carryOverrideBaseline, matCache);
             }
             catch (const nlohmann::json::exception& e)
             {
@@ -3561,13 +3580,70 @@ namespace DonTopo
         // nodes with the same id; findById returns the last of the traversal —the
         // clone—, and any undo command resolved by id ended up
         // writing into the wrong object.
-        std::function<void(nlohmann::json&)> stripIds = [&](nlohmann::json& node) {
-            node.erase("id");
+        //
+        // Fresh ids are handed out HERE rather than left to the GameObject
+        // constructor, so the clone's node references (IK targets) can follow
+        // them: one that pointed at a node of the cloned subtree points at the
+        // clone's copy; one pointing outside it is kept as is.
+        std::unordered_map<uint64_t, uint64_t> freshId;   // original id -> clone id
+        std::function<void(nlohmann::json&)> renewIds = [&](nlohmann::json& node) {
+            if (const auto id = node.find("id"); id != node.end() && id->is_number_integer())
+            {
+                const uint64_t fresh = GameObject::allocateId();
+                freshId.emplace(id->get<uint64_t>(), fresh);
+                *id = fresh;
+            }
+            else
+            {
+                node.erase("id");
+            }
             if (auto it = node.find("children"); it != node.end() && it->is_array())
                 for (nlohmann::json& child : *it)
-                    stripIds(child);
+                    renewIds(child);
         };
-        stripIds(j);
+        renewIds(j);
+        // Scene form (the node's own data): a scene id.
+        auto follow = [&](nlohmann::json& ref) {
+            if (ref.is_number_integer())
+                if (const auto it = freshId.find(ref.get<uint64_t>()); it != freshId.end()) ref = it->second;
+        };
+        // Prefab form (a link's override values): a number is a prefab-local id
+        // and stays; {"scene": id} is a scene id.
+        auto followScene = [&](nlohmann::json& ref) {
+            if (!ref.is_object()) return;
+            const auto s = ref.find("scene");
+            if (s != ref.end() && s->is_number_integer())
+                if (const auto it = freshId.find(s->get<uint64_t>()); it != freshId.end()) *s = it->second;
+        };
+        std::function<void(nlohmann::json&)> followRefs = [&](nlohmann::json& node) {
+            forEachNodeReference(node, follow);
+            if (auto link = node.find("prefab"); link != node.end() && link->is_object())
+                if (auto ovs = link->find("overrides"); ovs != link->end() && ovs->is_array())
+                    for (auto& o : *ovs)
+                        if (o.is_object() && o.contains("path") && o["path"].is_string() && o.contains("value"))
+                            forEachNodeReferenceInOverride(o["path"].get<std::string>(), o["value"], followScene);
+            if (auto it = node.find("children"); it != node.end() && it->is_array())
+                for (nlohmann::json& child : *it)
+                    followRefs(child);
+        };
+        followRefs(j);
+
+        // A clone of a NON-root node of a prefab instance (it has prefabNode but no
+        // link of its own) becomes an ADDED child, like Unity: without this the
+        // clone would carry the same prefabNode as its original, the instance would
+        // have two nodes claiming one prefab node, and propagation and override
+        // detection could only honor one of them. Cloning an instance ROOT (it has
+        // the link) keeps everything: the clone is a second instance.
+        if (src->prefabNode != 0 && !src->prefabLink)
+        {
+            std::function<void(nlohmann::json&)> unlink = [&](nlohmann::json& node) {
+                node.erase("prefabNode");
+                if (auto it = node.find("children"); it != node.end() && it->is_array())
+                    for (nlohmann::json& child : *it)
+                        unlink(child);
+            };
+            unlink(j);
+        }
 
         GameObject* clone = target->addChild(src->name + " (Clone)");
         // Before nodeFromJson: if it were cleared after (as it was), the
@@ -3921,6 +3997,182 @@ namespace DonTopo
         return nodeToJson(*node, std::string(), /*carryOverrideBaseline=*/true);
     }
 
+    nlohmann::json Scene::subtreeToMemoryJson(const GameObject* node) const
+    {
+        // Empty root like subtreeToJson, but WITHOUT the override baseline: the
+        // baseline is a snapshot of the editing session, not part of what an object
+        // "is", so prefab diff and propagation must never see it as a difference.
+        return nodeToJson(*node, std::string(), /*carryOverrideBaseline=*/false);
+    }
+
+    // ---- Node references (see Scene.h) ----
+
+    void forEachNodeReference(nlohmann::json& node, const std::function<void(nlohmann::json&)>& fn)
+    {
+        const auto anim = node.find("animator");
+        if (anim == node.end() || !anim->is_object()) return;
+        const auto ik = anim->find("ik");
+        if (ik == anim->end() || !ik->is_array()) return;
+        for (auto& c : *ik)
+            if (c.is_object())
+                for (const char* key : { "target", "pole" })
+                    if (auto it = c.find(key); it != c.end()) fn(*it);
+    }
+
+    void forEachNodeReference(GameObject& node, const std::function<void(uint64_t&)>& fn)
+    {
+        if (const auto& a = node.getAnimator())
+            for (auto& c : a->ikConstraintsMutable())
+            {
+                fn(c.targetId);
+                fn(c.poleId);
+            }
+    }
+
+    void forEachNodeReferenceInOverride(const std::string& path, nlohmann::json& value,
+                                        const std::function<void(nlohmann::json&)>& fn)
+    {
+        auto entry = [&](nlohmann::json& e) {
+            if (!e.is_object()) return;
+            for (const char* key : { "target", "pole" })
+                if (auto it = e.find(key); it != e.end()) fn(*it);
+        };
+        auto list = [&](nlohmann::json& a) {
+            if (a.is_array()) for (auto& e : a) entry(e);
+        };
+        if (path == "/animator")
+        {
+            if (value.is_object())
+                if (auto ik = value.find("ik"); ik != value.end()) list(*ik);
+            return;
+        }
+        const std::string prefix = "/animator/ik";
+        if (path.compare(0, prefix.size(), prefix) != 0) return;
+        const std::string rest = path.substr(prefix.size());   // "", "/<n>", "/<n>/<field>"
+        if (rest.empty()) { list(value); return; }
+        const size_t slash = rest.find('/', 1);
+        if (slash == std::string::npos) { entry(value); return; }
+        const std::string field = rest.substr(slash + 1);
+        if (field == "target" || field == "pole") fn(value);
+    }
+
+    nlohmann::json Scene::instanceToPrefabJson(const GameObject* instanceRoot) const
+    {
+        nlohmann::json j = subtreeToMemoryJson(instanceRoot);
+        // Scene id -> prefab-local id of the linked nodes of THIS instance (a
+        // nested instance's nodes belong to another prefab).
+        std::unordered_map<uint64_t, uint64_t> localOf;
+        std::function<void(const GameObject*, bool)> index = [&](const GameObject* n, bool isRoot) {
+            if (!isRoot && n->prefabLink) return;
+            if (n->prefabNode != 0) localOf.emplace(n->id, n->prefabNode);
+            for (const auto& c : n->children) index(c.get(), false);
+        };
+        index(instanceRoot, true);
+        std::function<void(nlohmann::json&)> walk = [&](nlohmann::json& n) {
+            forEachNodeReference(n, [&](nlohmann::json& ref) {
+                if (!ref.is_number_integer()) return;
+                const uint64_t id = ref.get<uint64_t>();
+                if (id == 0) return;
+                const auto it = localOf.find(id);
+                if (it != localOf.end()) ref = it->second;
+                else                     ref = nlohmann::json{ { "scene", id } };
+            });
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (auto& c : *kids) if (c.is_object()) walk(c);
+        };
+        walk(j);
+        return j;
+    }
+
+    namespace
+    {
+        // The keys of a mesh.materials[] entry that the DISK form stores through
+        // toStoredPath. The base* baselines are deliberately absent: they are only
+        // written and read with carryOverrideBaseline (memory form), never in a
+        // .scene/.prefab. Keep in sync with nodeToJson / nodeFromJson (a test compares
+        // both routes for the keys present in its fixture).
+        constexpr const char* kStoredPathKeys[] = { "albedo", "normal", "orm", "matAsset" };
+
+        template <typename Convert>
+        void rewriteStoredPaths(nlohmann::json& node, const Convert& convert)
+        {
+            if (!node.is_object()) return;
+            if (auto mesh = node.find("mesh"); mesh != node.end() && mesh->is_object())
+                if (auto mats = mesh->find("materials"); mats != mesh->end() && mats->is_array())
+                    for (auto& entry : *mats)
+                    {
+                        if (!entry.is_object()) continue;
+                        for (const char* key : kStoredPathKeys)
+                            if (auto it = entry.find(key); it != entry.end() && it->is_string())
+                                *it = convert(it->get<std::string>());
+                    }
+            if (auto kids = node.find("children"); kids != node.end() && kids->is_array())
+                for (auto& child : *kids) rewriteStoredPaths(child, convert);
+        }
+    }
+
+    void resolveStoredPaths(nlohmann::json& nodeTree, const std::string& assetRoot)
+    {
+        rewriteStoredPaths(nodeTree, [&](const std::string& p) { return fromStoredPath(p, assetRoot); });
+    }
+
+    void storeRelativePaths(nlohmann::json& nodeTree, const std::string& assetRoot)
+    {
+        rewriteStoredPaths(nodeTree, [&](const std::string& p) { return toStoredPath(p, assetRoot); });
+    }
+
+    nlohmann::json Scene::makePrefab(GameObject* node, const std::string& prefabPath, bool link)
+    {
+        // Disk form: paths relative to the project, like a .scene. The baseline is not
+        // written (default), a prefab is a definition, not an editing snapshot.
+        nlohmann::json root = nodeToJson(*node, m_assetRoot);
+
+        // Prefab-local ids 1..N in pre-order, and the link keys erased: the file
+        // describes the prefab itself, it is not an instance of anything.
+        uint64_t next = 0;
+        std::unordered_map<uint64_t, uint64_t> localOf;   // scene id -> prefab-local id
+        std::function<void(nlohmann::json&)> renumber = [&](nlohmann::json& j) {
+            if (const auto id = j.find("id"); id != j.end() && id->is_number_integer())
+                localOf.emplace(id->get<uint64_t>(), next + 1);
+            j["id"] = ++next;
+            j.erase("prefab");
+            j.erase("prefabNode");
+            if (auto kids = j.find("children"); kids != j.end() && kids->is_array())
+                for (auto& child : *kids) renumber(child);
+        };
+        renumber(root);
+
+        // Node references (IK targets) in prefab form: a node of the prefab by its
+        // local id; one outside it means nothing in another scene, so it is
+        // dropped (0) and reported rather than leaking a scene id into the file.
+        m_warnings.clear();
+        std::function<void(nlohmann::json&)> localize = [&](nlohmann::json& j) {
+            forEachNodeReference(j, [&](nlohmann::json& ref) {
+                const uint64_t id = ref.is_number_integer() ? ref.get<uint64_t>() : 0;
+                if (id == 0) { ref = 0; return; }
+                if (const auto it = localOf.find(id); it != localOf.end()) { ref = it->second; return; }
+                ref = 0;
+                m_warnings.push_back("prefab '" + prefabPath + "', node '" + j.value("name", std::string()) +
+                                     "': an IK target points outside the prefab; it is not saved in it");
+            });
+            if (auto kids = j.find("children"); kids != j.end() && kids->is_array())
+                for (auto& child : *kids) localize(child);
+        };
+        localize(root);
+
+        if (link)
+        {
+            // Same pre-order as renumber (traverse visits a node and then its
+            // children in order), so the counter lines up with the ids just written.
+            uint64_t local = 0;
+            node->traverse([&](GameObject* n) { n->prefabNode = ++local; });
+            node->prefabLink = std::make_shared<PrefabLink>();
+            node->prefabLink->path = prefabPath;
+        }
+
+        return { {"version", 1}, {"type", "prefab"}, {"root", std::move(root)} };
+    }
+
     bool meshMatchesAnimationConfig(const SkinnedMesh& mesh, const nlohmann::json& animationSources)
     {
         if (!animationSources.is_array()) return false;
@@ -3932,7 +4184,15 @@ namespace DonTopo
             if (!sj.is_object()) return false;
             if (sj.value("path", std::string()) != src.path) return false;
             if (sj.value("builtin", false) != src.builtin) return false;
-            if (!sj.contains("clips") || !sj["clips"].is_array()) return src.clipNames.empty();
+            // No clip list saved for this source: it matches only a source with no
+            // names either -- and the REST of the sources still has to be checked
+            // (this used to return here, so two lists that agreed on their first
+            // entry "matched" whatever came after it).
+            if (!sj.contains("clips") || !sj["clips"].is_array())
+            {
+                if (!src.clipNames.empty()) return false;
+                continue;
+            }
             const nlohmann::json& cj = sj["clips"];
             if (cj.size() != src.clipNames.size()) return false;
             for (size_t c = 0; c < cj.size(); c++)
@@ -3946,15 +4206,202 @@ namespace DonTopo
         return piece == 0 ? sourcePath : sourcePath + "#piece=" + std::to_string(piece);
     }
 
+    std::string meshCacheVariantKey(const std::string& baseKey, int n)
+    {
+        return baseKey + "#config=" + std::to_string(n);
+    }
+
+    namespace
+    {
+        // Same animation sources (path, builtin, clip names, in order): one cache
+        // entry serves both, a skinned load shares it.
+        bool sameAnimationSources(const SkinnedMesh& a, const SkinnedMesh& b)
+        {
+            if (a.animationSources.size() != b.animationSources.size()) return false;
+            for (size_t i = 0; i < a.animationSources.size(); ++i)
+            {
+                const AnimationSource& x = a.animationSources[i];
+                const AnimationSource& y = b.animationSources[i];
+                if (x.path != y.path || x.builtin != y.builtin || x.clipNames != y.clipNames) return false;
+            }
+            return true;
+        }
+
+        // Puts a skinned mesh at base or at the next free variant of base, unless
+        // an entry there already serves its configuration.
+        void addSkinnedVariant(PreloadedMeshCache& cache, const std::string& base,
+                               const std::shared_ptr<const Mesh>& mesh)
+        {
+            const auto* sk = dynamic_cast<const SkinnedMesh*>(mesh.get());
+            auto served = [&](const std::shared_ptr<const Mesh>& other) {
+                if (other == mesh) return true;
+                const auto* o = dynamic_cast<const SkinnedMesh*>(other.get());
+                return sk && o && sameAnimationSources(*o, *sk);
+            };
+            const auto b = cache.find(base);
+            if (b == cache.end()) { cache.emplace(base, mesh); return; }
+            if (served(b->second)) return;
+            for (int v = 1;; ++v)
+            {
+                const std::string key = meshCacheVariantKey(base, v);
+                const auto it = cache.find(key);
+                if (it == cache.end()) { cache.emplace(key, mesh); return; }
+                if (served(it->second)) return;
+            }
+        }
+    }
+
+    void mergeMeshCaches(PreloadedMeshCache& dst, const PreloadedMeshCache& src, bool srcWins)
+    {
+        for (const auto& [key, mesh] : src)
+        {
+            if (!mesh) continue;
+            const size_t at = key.find("#config=");
+            const std::string base = at == std::string::npos ? key : key.substr(0, at);
+            const auto it = dst.find(base);
+            const bool skinned = dynamic_cast<const SkinnedMesh*>(mesh.get()) != nullptr;
+            if (it == dst.end() || it->second == mesh)
+            {
+                if (it == dst.end()) dst.emplace(base, mesh);
+                continue;
+            }
+            const bool baseSkinned = dynamic_cast<const SkinnedMesh*>(it->second.get()) != nullptr;
+            if (!skinned || !baseSkinned)
+            {
+                if (srcWins && at == std::string::npos) it->second = mesh;   // one per key, as before
+                continue;
+            }
+            if (srcWins && at == std::string::npos)
+            {
+                // src's mesh takes the base entry; dst's goes on as a variant.
+                const std::shared_ptr<const Mesh> displaced = it->second;
+                it->second = mesh;
+                addSkinnedVariant(dst, base, displaced);
+                continue;
+            }
+            addSkinnedVariant(dst, base, mesh);
+        }
+    }
+
+    std::vector<MaterialOverride> materialOverridesFromJson(const nlohmann::json& mats, const std::string& nodeName,
+                                                            const std::string& assetRoot, bool carryOverrideBaseline,
+                                                            std::vector<std::string>* warnings)
+    {
+        // Texture overrides. A block that is not an array, or an entry
+        // without a numeric "index", is discarded with a warning: half a configuration
+        // is worse than none, same criterion as jsonToMat4 with the matrix.
+        std::vector<MaterialOverride> out;
+        if (!mats.is_array())
+        {
+            if (warnings)
+                warnings->push_back("mesh of '" + nodeName + "'.materials: not a list, "
+                                    "the hand-assigned textures are discarded");
+            return out;
+        }
+        for (const auto& entry : mats)
+        {
+            if (!entry.is_object() || !entry.contains("index")
+                || !entry["index"].is_number_integer())
+            {
+                if (warnings)
+                    warnings->push_back("mesh of '" + nodeName + "'.materials: entry without a "
+                                        "valid index, discarded");
+                continue;
+            }
+            MaterialOverride ov;
+            ov.index  = entry["index"].get<int>();
+            ov.albedo   = fromStoredPath(entry.value("albedo", ""), assetRoot);
+            ov.normal   = fromStoredPath(entry.value("normal", ""), assetRoot);
+            ov.orm      = fromStoredPath(entry.value("orm",    ""), assetRoot);
+            ov.matAsset = fromStoredPath(entry.value("matAsset", ""), assetRoot);
+            // Absent = -1.0f (the "no override" sentinel; see
+            // MaterialOverride in GameObject.h), same criterion as
+            // "absent = empty string" of the three paths above.
+            // Through readFloat and not through a raw entry.value<float>():
+            // this whole block is NOT inside any try, and a
+            // "metallic": null or "metallic": "0.5" with .value<float>()
+            // throws type_error.302 — the exception goes up to
+            // fromJson(), which returns false, and THE WHOLE SCENE IS LOST
+            // without saying why. readFloat is the same guard
+            // the rest of the file already uses for this problem:
+            // it warns naming the field and falls to the sentinel.
+            // clamp(-1..1) also cuts a hand-mistyped "metallic": 5.0
+            // before it reaches the Material and the dedup
+            // key — the sentinel (negative) is not
+            // affected, clamp(-1, -1, 1) leaves it the same.
+            const std::string materialesCtx = "mesh of '" + nodeName + "'.materials";
+            ov.metallic  = std::clamp(readFloat(entry, "metallic",  -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
+            ov.roughness = std::clamp(readFloat(entry, "roughness", -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
+            // The baseline is ONLY read on the MEMORY path (see
+            // the big comment of nodeToJson, next to the same
+            // flag): on disk these fields, even if they were in the
+            // JSON, are ignored on purpose — the correct baseline of
+            // a disk load is the one that applyMaterialOverrides
+            // captures over the material just derived from the FBX, not a saved one
+            // that could be from ANOTHER export of the model.
+            if (carryOverrideBaseline)
+            {
+                ov.baseAlbedo      = fromStoredPath(entry.value("baseAlbedo", ""), assetRoot);
+                ov.baseAlbedoTaken = entry.value("baseAlbedoTaken", false);
+                ov.baseNormal      = fromStoredPath(entry.value("baseNormal", ""), assetRoot);
+                ov.baseNormalTaken = entry.value("baseNormalTaken", false);
+                ov.baseOrm         = fromStoredPath(entry.value("baseOrm", ""), assetRoot);
+                ov.baseOrmTaken    = entry.value("baseOrmTaken", false);
+                // Same reason as metallic/roughness above:
+                // readFloat/readBool instead of a raw entry.value<T>(),
+                // so that a corrupt field warns and falls to the
+                // default instead of taking down the whole fromJson().
+                ov.baseMetallic       = readFloat(entry, "baseMetallic", 0.0f, warnings, materialesCtx);
+                ov.baseMetallicTaken  = readBool(entry, "baseMetallicTaken", false, warnings, materialesCtx);
+                ov.baseRoughness      = readFloat(entry, "baseRoughness", 0.0f, warnings, materialesCtx);
+                ov.baseRoughnessTaken = readBool(entry, "baseRoughnessTaken", false, warnings, materialesCtx);
+            }
+            out.push_back(std::move(ov));
+        }
+        return out;
+    }
+
+    void writeMaterialOverrideBaselines(nlohmann::json& mats, const std::vector<MaterialOverride>& ovs)
+    {
+        if (!mats.is_array()) return;
+        // Same entry filter as materialOverridesFromJson, so the k-th surviving
+        // entry is the k-th override. Same keys nodeToJson writes with
+        // carryOverrideBaseline (memory form: verbatim paths).
+        size_t k = 0;
+        for (auto& entry : mats)
+        {
+            if (!entry.is_object() || !entry.contains("index") || !entry["index"].is_number_integer()) continue;
+            if (k >= ovs.size()) return;
+            const MaterialOverride& ov = ovs[k++];
+            entry["baseAlbedo"]         = ov.baseAlbedo;
+            entry["baseAlbedoTaken"]    = ov.baseAlbedoTaken;
+            entry["baseNormal"]         = ov.baseNormal;
+            entry["baseNormalTaken"]    = ov.baseNormalTaken;
+            entry["baseOrm"]            = ov.baseOrm;
+            entry["baseOrmTaken"]       = ov.baseOrmTaken;
+            entry["baseMetallic"]       = ov.baseMetallic;
+            entry["baseMetallicTaken"]  = ov.baseMetallicTaken;
+            entry["baseRoughness"]      = ov.baseRoughness;
+            entry["baseRoughnessTaken"] = ov.baseRoughnessTaken;
+        }
+    }
+
     PreloadedMeshCache Scene::collectMeshes(GameObject* root)
     {
         PreloadedMeshCache out;
         if (!root) return out;
         root->traverse([&](GameObject* n) {
             if (!n->hasMesh()) return;
-            const std::string& ruta = n->getMesh()->sourcePath;
+            const std::shared_ptr<const Mesh>& mesh = n->getMesh();
+            const std::string& ruta = mesh->sourcePath;
             if (ruta.empty()) return;   // procedural: there is no file to avoid
-            out[meshCacheKey(ruta, n->getMesh()->piece)] = n->getMesh();
+            const std::string key = meshCacheKey(ruta, mesh->piece);
+            const auto it = out.find(key);
+            if (it == out.end()) { out.emplace(key, mesh); return; }
+            if (!dynamic_cast<const SkinnedMesh*>(mesh.get())) { it->second = mesh; return; }   // static: one per file+piece, as always
+            // Skinned: one entry per animation-source configuration. A node whose
+            // configuration is already listed is served by that entry.
+            addSkinnedVariant(out, key, mesh);
         });
         return out;
     }
@@ -3962,6 +4409,24 @@ namespace DonTopo
     GameObject* Scene::insertFromJson(const nlohmann::json& j, GameObject* parent, size_t index,
                                        PhysicsManager& physics, AudioManager& audio,
                                        const PreloadedMeshCache* preloaded)
+    {
+        return insertFromJsonWithCaches(j, parent, index, physics, audio, preloaded, nullptr);
+    }
+
+    GameObject* Scene::insertFromJsonWithCaches(const nlohmann::json& j, GameObject* parent, size_t index,
+                                                 PhysicsManager& physics, AudioManager& audio,
+                                                 const PreloadedMeshCache* preloaded,
+                                                 const MaterialAssetCache* matCache)
+    {
+        return insertSubtree(j, parent, index, physics, audio, preloaded, matCache,
+                             /*carryOverrideBaseline=*/true);
+    }
+
+    GameObject* Scene::insertSubtree(const nlohmann::json& j, GameObject* parent, size_t index,
+                                     PhysicsManager& physics, AudioManager& audio,
+                                     const PreloadedMeshCache* preloaded,
+                                     const MaterialAssetCache* matCache,
+                                     bool carryOverrideBaseline)
     {
         GameObject* target = parent ? parent : &m_root;
 
@@ -4018,9 +4483,10 @@ namespace DonTopo
         {
             // Empty root, counterpart of subtreeToJson: j came from there with an empty
             // root (verbatim paths), so it is read the same way. carryOverrideBaseline
-            // matching the same true of subtreeToJson.
+            // matching the same true of subtreeToJson (false only for propagation,
+            // see insertSubtree in Scene.h).
             nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
-                         /*loader=*/nullptr, preloaded, /*carryOverrideBaseline=*/true);
+                         /*loader=*/nullptr, preloaded, carryOverrideBaseline, matCache);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -4049,6 +4515,7 @@ namespace DonTopo
         // the command becomes useless. Fixing it fully requires invalidating the
         // Undo/Redo history on scene reload; it is a separate audit
         // of the id system, not this specific patch.
+        std::unordered_map<uint64_t, uint64_t> renamed;   // snapshot id -> new id
         node->traverse([&](GameObject* n) {
             n->staticRenderIndex  = -1;
             n->skinnedRenderIndex = -1;
@@ -4056,6 +4523,7 @@ namespace DonTopo
             {
                 const uint64_t idViejo = n->id;
                 n->id = GameObject::allocateId();
+                renamed.emplace(idViejo, n->id);
                 m_warnings.push_back("node '" + n->name + "': id " + std::to_string(idViejo) +
                                       " from the snapshot was already in use in the scene; reassigned to " +
                                       std::to_string(n->id) + " to avoid clashing with the live object");
@@ -4105,6 +4573,26 @@ namespace DonTopo
                 }
             }
         });
+        // A node reference inside the subtree to a node that was just renamed
+        // meant THAT node (the snapshot's own), not the live one keeping the id.
+        // The same in a reinserted instance's override values, where a node outside
+        // the linked ones (an added child) is {"scene": id}: without it the
+        // instance's next rebuild would re-aim at the live node keeping the id.
+        if (!renamed.empty())
+            node->traverse([&](GameObject* n) {
+                forEachNodeReference(*n, [&](uint64_t& id) {
+                    if (const auto it = renamed.find(id); it != renamed.end()) id = it->second;
+                });
+                if (n->prefabLink)
+                    for (PrefabOverride& o : n->prefabLink->overrides)
+                        forEachNodeReferenceInOverride(o.path, o.value, [&](nlohmann::json& ref) {
+                            if (!ref.is_object()) return;   // a prefab-local id: not a scene id
+                            const auto s = ref.find("scene");
+                            if (s == ref.end() || !s->is_number_integer()) return;
+                            if (const auto it = renamed.find(s->get<uint64_t>()); it != renamed.end())
+                                *s = it->second;
+                        });
+            });
 
         // addChild() inserted at the end; reposition to index if it is not already there.
         auto& siblings = target->children;
@@ -4116,6 +4604,497 @@ namespace DonTopo
         }
         collapseWarnings();
         return node;
+    }
+
+    namespace
+    {
+        // Prefab-local id of a node json ("id" in a template, "prefabNode" in an
+        // instance), 0 when absent or not an unsigned integer. 0 is never a valid
+        // local id (makePrefab numbers from 1), so it doubles as "not linked".
+        // A positive SIGNED integer is accepted too: a parsed file gives unsigned,
+        // but a template built in code ({"id", 99}) holds a signed int.
+        uint64_t localIdOf(const nlohmann::json& node, const char* key)
+        {
+            auto it = node.find(key);
+            if (it == node.end()) return 0;
+            if (it->is_number_unsigned()) return it->get<uint64_t>();
+            if (it->is_number_integer() && it->get<int64_t>() > 0) return (uint64_t)it->get<int64_t>();
+            return 0;
+        }
+
+        // Root transform of a rebuilt instance: position and rotation are the
+        // instance's (where an instance stands is never an override, see
+        // diffPrefabNode), the scale is the template's, which already carries a
+        // /transform/scale override if there was one. When the scale did not
+        // change the instance's matrix is kept verbatim: re-composing it from TRS
+        // would add float noise to a pose nobody touched.
+        glm::mat4 rebuiltRootTransform(const glm::mat4& instance, const glm::mat4& tmpl)
+        {
+            glm::vec3 pos, instScale, tmplScale;
+            glm::quat rot;
+            decomposeTransform(instance, &pos, &rot, &instScale);
+            decomposeTransform(tmpl, nullptr, nullptr, &tmplScale);
+            if (glm::all(glm::lessThanEqual(glm::abs(instScale - tmplScale), glm::vec3(1e-5f))))
+                return instance;
+            return glm::translate(glm::mat4(1.0f), pos) * glm::mat4_cast(rot) *
+                   glm::scale(glm::mat4(1.0f), tmplScale);
+        }
+    }
+
+    GameObject* Scene::rebuildPrefabInstance(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot,
+                                             PhysicsManager& physics, AudioManager& audio,
+                                             const PreloadedMeshCache* meshes, const MaterialAssetCache* mats,
+                                             bool* rebuiltOut,
+                                             const std::unordered_map<uint64_t, uint64_t>* idHints)
+    {
+        m_warnings.clear();
+        if (rebuiltOut) *rebuiltOut = false;
+        // Nothing is touched on these: the instance stays live and registered, and
+        // nullptr tells the caller there is nothing new to register.
+        if (!instanceRoot || !instanceRoot->parent || !instanceRoot->prefabLink || !prefabMemoryRoot.is_object())
+        {
+            if (instanceRoot)
+                m_warnings.push_back("prefab instance '" + instanceRoot->name + "': not rebuilt (" +
+                                     (!instanceRoot->parent        ? "it is the scene root"
+                                      : !instanceRoot->prefabLink ? "it has no prefab link"
+                                                                  : "its prefab is not loaded") +
+                                     "); nothing was changed");
+            return nullptr;
+        }
+
+        // 1. The instance as it is now. Memory form, no baseline: the same form the
+        //    template is in, and the one the failure path re-inserts verbatim.
+        const nlohmann::json inst = subtreeToMemoryJson(instanceRoot);
+        std::vector<std::string> warnings;
+
+        // A link on a root with no prefabNode cannot be matched to the template:
+        // every node would be rebuilt with a fresh id and every added child lost.
+        // It is not blocked (the rebuild is still the prefab), but not silent either.
+        if (instanceRoot->prefabNode == 0)
+            warnings.push_back("prefab instance '" + instanceRoot->name + "': its root has no prefabNode; "
+                               "its children could not be matched, so their ids and any added children "
+                               "were not kept");
+
+        // Scene id of every linked node by its prefab-local id, and the added
+        // children (nodes with no prefabNode) by the local id of the linked parent
+        // they hang from. An added child travels whole, its own subtree and scene
+        // ids included; it is re-attached below under the same prefab node.
+        //
+        // Two nodes claiming the SAME prefabNode (a hand-edited file, or a clone
+        // made before cloneGameObject unlinked them): the first in pre-order is the
+        // linked one, the rest become added children — kept whole with their ids,
+        // prefabNode erased from their subtree — instead of being dropped.
+        std::unordered_map<uint64_t, uint64_t> sceneIdByLocal;
+        std::unordered_set<uint64_t> seenLocal;
+        std::unordered_map<uint64_t, std::vector<nlohmann::json>> added;
+        std::function<void(nlohmann::json&)> unlinkAll = [&](nlohmann::json& n) {
+            n.erase("prefabNode");
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (auto& c : *kids) unlinkAll(c);
+        };
+        std::function<void(const nlohmann::json&)> scan = [&](const nlohmann::json& n) {
+            const uint64_t local = localIdOf(n, "prefabNode");
+            if (local == 0) return;   // an added child: carried whole by its parent below
+            seenLocal.insert(local);
+            if (const uint64_t id = localIdOf(n, "id"); id != 0) sceneIdByLocal.emplace(local, id);
+            auto kids = n.find("children");
+            if (kids == n.end() || !kids->is_array()) return;
+            for (const auto& c : *kids)
+            {
+                const uint64_t childLocal = localIdOf(c, "prefabNode");
+                if (childLocal == 0)
+                {
+                    added[local].push_back(c);
+                }
+                else if (seenLocal.count(childLocal))
+                {
+                    warnings.push_back("prefab instance '" + instanceRoot->name + "': node '" +
+                                       c.value("name", std::string()) + "' duplicates prefab node " +
+                                       std::to_string(childLocal) + "; it is kept as an added child");
+                    nlohmann::json dup = c;
+                    unlinkAll(dup);
+                    added[local].push_back(std::move(dup));
+                }
+                else
+                {
+                    scan(c);
+                }
+            }
+        };
+        scan(inst);
+
+        // 2. Template + stored overrides. Orphans (node or component no longer in
+        //    the prefab) come back as warnings and are left out of `applied`, which
+        //    is what the rebuilt link stores: they are dropped, not kept dormant.
+        nlohmann::json tree = prefabMemoryRoot;
+        const std::vector<PrefabOverride> applied =
+            applyPrefabOverrides(tree, instanceRoot->prefabLink->overrides, &warnings);
+
+        // 3. Template ids -> scene ids. A node the instance already had keeps its
+        //    scene id; a node new to the prefab loses "id" so the GameObject
+        //    constructor hands it a fresh one. Prefab-local ids never reach the
+        //    scene id space (spec §7): 99 in a template is not 99 in the scene.
+        //    A new node with an id hint gets that scene id instead (0 = none).
+        auto hintFor = [&](uint64_t local) -> uint64_t {
+            if (!idHints || local == 0) return 0;
+            const auto h = idHints->find(local);
+            return h != idHints->end() ? h->second : 0;
+        };
+        std::function<void(nlohmann::json&, bool)> relink = [&](nlohmann::json& n, bool isRoot) {
+            const uint64_t local = localIdOf(n, "id");
+            n.erase("prefab");   // a template carries no link; only the root gets one, below
+            if (local != 0) n["prefabNode"] = local;
+            else            n.erase("prefabNode");
+            // The root ALWAYS keeps the instance's id, even if the template renumbered
+            // its root: the caller's selection and Undo stack point at that id.
+            if (isRoot)                                   n["id"] = instanceRoot->id;
+            else if (auto it = sceneIdByLocal.find(local); local != 0 && it != sceneIdByLocal.end())
+                                                          n["id"] = it->second;
+            else if (const uint64_t hinted = hintFor(local); hinted != 0)
+                                                          n["id"] = hinted;   // the live-id guard still applies
+            // A fresh scene id NOW (what the GameObject constructor would hand
+            // out): node references of the template are resolved to it below.
+            else                                          n["id"] = GameObject::allocateId();
+
+            auto kids = n.find("children");
+            if (kids == n.end() || !kids->is_array()) n["children"] = nlohmann::json::array();
+            for (auto& c : n["children"]) if (c.is_object()) relink(c, false);
+            if (local != 0)
+                if (auto it = added.find(local); it != added.end())
+                {
+                    for (auto& c : it->second) n["children"].push_back(std::move(c));
+                    added.erase(it);
+                }
+        };
+        relink(tree, true);
+        // Node references of the template-derived nodes, prefab form -> scene form:
+        // a local id names that node of THIS instance (0 if the prefab no longer
+        // has it); {"scene": id} (an override aiming outside the linked nodes)
+        // is that scene id. The added children travel in scene form already and
+        // are left alone (they have no prefabNode).
+        {
+            std::unordered_map<uint64_t, uint64_t> sceneOf;   // prefab-local id -> scene id
+            std::function<void(const nlohmann::json&)> index = [&](const nlohmann::json& n) {
+                const uint64_t local = localIdOf(n, "prefabNode");
+                if (local == 0) return;
+                sceneOf.emplace(local, localIdOf(n, "id"));
+                if (const auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                    for (const auto& c : *kids) if (c.is_object()) index(c);
+            };
+            index(tree);
+            std::function<void(nlohmann::json&)> resolve = [&](nlohmann::json& n) {
+                if (localIdOf(n, "prefabNode") == 0) return;
+                forEachNodeReference(n, [&](nlohmann::json& ref) {
+                    if (ref.is_object())
+                    {
+                        const auto s = ref.find("scene");
+                        ref = s != ref.end() && s->is_number_integer() ? s->get<uint64_t>() : uint64_t(0);
+                        return;
+                    }
+                    const uint64_t local = ref.is_number_integer() ? ref.get<uint64_t>() : 0;
+                    const auto it = local != 0 ? sceneOf.find(local) : sceneOf.end();
+                    ref = it != sceneOf.end() ? it->second : uint64_t(0);
+                });
+                if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                    for (auto& c : *kids) if (c.is_object()) resolve(c);
+            };
+            resolve(tree);
+        }
+        // Whatever is left in `added` hung from a node the prefab no longer has.
+        // Losing user objects cannot be silent.
+        for (const auto& [local, kids] : added)
+            for (const auto& c : kids)
+                warnings.push_back("prefab instance '" + instanceRoot->name + "': added child '" +
+                                   c.value("name", std::string()) + "' dropped: its parent (prefab node " +
+                                   std::to_string(local) + ") is no longer in the prefab");
+
+        tree["prefab"] = { {"path", instanceRoot->prefabLink->path}, {"overrides", overridesToJson(applied)} };
+        tree["localTransform"] = mat4ToJson(rebuiltRootTransform(
+            instanceRoot->localTransform,
+            jsonToMat4(tree.value("localTransform", nlohmann::json::array()), &warnings,
+                       "prefab root of '" + instanceRoot->name + "'")));
+
+        // 4. Replace. The old subtree goes FIRST: its ids must not be live when the
+        //    new one is inserted, or the live-id guard of insertSubtree would rename
+        //    exactly the ids this function exists to keep. removeGameObject is also
+        //    what releases its GPU slots (onNodeRemoved) — no other release here.
+        //    Its meshes are kept alive in `cache`: the rebuild shares them instead of
+        //    re-reading the files, and a failed rebuild restores from them too.
+        GameObject* parent = instanceRoot->parent;
+        size_t index = 0;
+        while (index < parent->children.size() && parent->children[index].get() != instanceRoot) ++index;
+        PreloadedMeshCache cache = collectMeshes(instanceRoot);
+        if (meshes) mergeMeshCaches(cache, *meshes, /*srcWins=*/true);   // the caller's are fresher
+        removeGameObject(instanceRoot);
+        instanceRoot = nullptr;   // freed: from here on only ids are valid
+
+        // carryOverrideBaseline = false (unlike insertFromJson): neither the
+        // template nor `inst` carries a baseline, and it has to be re-derived from
+        // the mesh, as a disk load does.
+        GameObject* rebuilt = nullptr;
+        try
+        {
+            rebuilt = insertSubtree(tree, parent, index, physics, audio, &cache, mats, /*carryOverrideBaseline=*/false);
+        }
+        catch (const std::exception&)
+        {
+            // insertSubtree already cleans up after a throw inside nodeFromJson; this
+            // catches what happens before its try (a root "name" of the wrong type).
+            rebuilt = nullptr;
+        }
+        // insertSubtree clears m_warnings: the ones of this operation go in front.
+        m_warnings.insert(m_warnings.begin(), warnings.begin(), warnings.end());
+
+        if (!rebuilt)
+        {
+            // The old subtree comes back where it was, with its ids (they are not
+            // live, the failed build left nothing behind). It is returned, not
+            // hidden behind a nullptr: its GPU slots were already released by the
+            // removeGameObject above, so the caller has to register it just like a
+            // rebuilt one or the instance stays invisible. Warnings of the failed
+            // build are kept: they say WHY it failed.
+            std::vector<std::string> failWarnings = std::move(m_warnings);
+            const std::string name = inst.value("name", std::string());
+            GameObject* restored = nullptr;
+            try
+            {
+                restored = insertSubtree(inst, parent, index, physics, audio, &cache, mats,
+                                         /*carryOverrideBaseline=*/false);
+            }
+            catch (const std::exception&)
+            {
+                restored = nullptr;
+            }
+            failWarnings.push_back(restored
+                ? "prefab instance '" + name + "': could not be rebuilt from its prefab; left as it was"
+                : "prefab instance '" + name + "': could not be rebuilt from its prefab, and restoring it "
+                  "failed too; the instance was LOST");
+            failWarnings.insert(failWarnings.end(), m_warnings.begin(), m_warnings.end());
+            m_warnings = std::move(failWarnings);
+            collapseWarnings();
+            return restored;
+        }
+        if (rebuiltOut) *rebuiltOut = true;
+        collapseWarnings();
+        return rebuilt;
+    }
+
+    bool Scene::recomputePrefabOverrides(GameObject* instanceRoot, const nlohmann::json& prefabMemoryRoot)
+    {
+        // No template = nothing to compare against. Diffing against a null/failed
+        // template would turn every stored override into "reverted" and wipe the
+        // list the user built (spec §3.3: prefab missing -> overrides untouched).
+        if (!instanceRoot || !instanceRoot->prefabLink || !prefabMemoryRoot.is_object()) return false;
+
+        std::unordered_map<uint64_t, const nlohmann::json*> prefabNodes;
+        std::function<void(const nlohmann::json&)> index = [&](const nlohmann::json& n) {
+            if (const uint64_t id = localIdOf(n, "id"); id != 0) prefabNodes.emplace(id, &n);
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (const auto& c : *kids) if (c.is_object()) index(c);
+        };
+        index(prefabMemoryRoot);
+
+        // Pre-order, so the list comes out in a stable order. Added children are
+        // not overrides (they are recognized by their missing prefabNode) and
+        // nothing below them is walked; a prefab node with no instance counterpart
+        // yields nothing (removing prefab children is blocked in the UI).
+        std::vector<PrefabOverride> fresh;
+        // Prefab form: node references compared as prefab-local ids.
+        const nlohmann::json inst = instanceToPrefabJson(instanceRoot);
+        std::function<void(const nlohmann::json&, bool)> walk = [&](const nlohmann::json& n, bool isRoot) {
+            const uint64_t local = localIdOf(n, "prefabNode");
+            if (local == 0) return;
+            if (auto it = prefabNodes.find(local); it != prefabNodes.end())
+            {
+                auto d = diffPrefabNode(local, *it->second, n, isRoot);
+                fresh.insert(fresh.end(), std::make_move_iterator(d.begin()), std::make_move_iterator(d.end()));
+            }
+            if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                for (const auto& c : *kids) walk(c, false);
+        };
+        walk(inst, true);
+
+        // The same entries in another order are the same list: kept as stored.
+        // A rebuild stores them in apply order (plain entries, then each keyed
+        // array), the diff in JSON key order; replacing one with the other on
+        // an edit-free revision pass would change the saved bytes for nothing.
+        auto& current = instanceRoot->prefabLink->overrides;
+        bool same = current.size() == fresh.size();
+        std::vector<bool> used(current.size(), false);
+        for (size_t f = 0; same && f < fresh.size(); ++f)
+        {
+            bool found = false;
+            for (size_t c = 0; c < current.size() && !found; ++c)
+                if (!used[c] && current[c].node == fresh[f].node && current[c].path == fresh[f].path &&
+                    current[c].value == fresh[f].value)
+                    used[c] = found = true;
+            same = found;
+        }
+        if (same) return false;
+        current = std::move(fresh);
+        return true;
+    }
+
+    void Scene::unpackPrefab(GameObject* instanceRoot)
+    {
+        if (!instanceRoot) return;
+        instanceRoot->traverse([](GameObject* n) {
+            n->prefabNode = 0;
+            n->prefabLink.reset();
+        });
+    }
+
+    GameObject* Scene::instantiatePrefab(const PrefabTemplate& t, GameObject* parent,
+                                         const glm::vec3* pos, const glm::vec3* eulerDeg,
+                                         PhysicsManager& physics, AudioManager& audio)
+    {
+        m_warnings.clear();
+        if (t.state != PrefabTemplate::State::Ready || !t.memoryRoot.is_object())
+        {
+            m_warnings.push_back("prefab '" + t.key + "': not instantiated (" +
+                                 (t.state == PrefabTemplate::State::Ready ? "its template is empty"
+                                                                          : "it is not loaded") + ")");
+            return nullptr;
+        }
+        GameObject* target = parent ? parent : &m_root;
+
+        // Template -> instance json: prefab-local ids already turned into
+        // prefabNode with no "id" (the GameObject constructor hands every node a
+        // fresh scene id; spec §7), the root link, and each node's final mesh by
+        // memRef with its override baselines -- all prepared ONCE by the library
+        // (PrefabTemplate::instanceRoot). A template assembled by hand without it
+        // is relinked here from memoryRoot (meshes then from t.meshes).
+        const bool prepared = t.instanceRoot.is_object();
+        nlohmann::json j = prepared ? t.instanceRoot : t.memoryRoot;
+        if (!prepared)
+        {
+            std::function<void(nlohmann::json&)> relink = [&](nlohmann::json& n) {
+                const uint64_t local = localIdOf(n, "id");
+                n.erase("id");
+                n.erase("prefab");
+                if (local != 0) n["prefabNode"] = local;
+                else            n.erase("prefabNode");
+                if (auto kids = n.find("children"); kids != n.end() && kids->is_array())
+                    for (auto& c : *kids) if (c.is_object()) relink(c);
+            };
+            relink(j);
+            j["prefab"] = { {"path", t.key}, {"overrides", nlohmann::json::array()} };
+        }
+        const PreloadedMeshCache& meshes = prepared ? t.instanceMeshes : t.meshes;
+
+        // Pose, written into the json BEFORE building: the collider factories take
+        // the initial PhysX pose from the world transform at build time.
+        // position/rotation are world space, the scale is the prefab root's local
+        // one (Unity). Position is exact; the rotation is exact unless the parent
+        // has non-uniform scale (then no local TRS can reproduce it anyway).
+        if (pos || eulerDeg)
+        {
+            const glm::mat4 tmplLocal = jsonToMat4(j.value("localTransform", nlohmann::json::array()),
+                                                   &m_warnings, "prefab root of '" + t.key + "'");
+            glm::vec3 localScale(1.0f), worldPos(0.0f);
+            glm::quat worldRot(1.0f, 0.0f, 0.0f, 0.0f);
+            decomposeTransform(tmplLocal, nullptr, nullptr, &localScale);
+            decomposeTransform(target->worldTransform * tmplLocal, &worldPos, &worldRot, nullptr);
+            if (pos) worldPos = *pos;
+            if (eulerDeg)
+                worldRot = glm::quat_cast(glm::eulerAngleXYZ(glm::radians(eulerDeg->x),
+                                                             glm::radians(eulerDeg->y),
+                                                             glm::radians(eulerDeg->z)));
+            // A singular parent (an axis at scale 0, or two collapsed onto each
+            // other) has no inverse and no answer: the pose is then taken as local
+            // rather than filling the matrix with inf/NaN. Judged RELATIVE to the
+            // axis lengths, not by |det| alone: a parent uniformly scaled by 1e-4
+            // has det 1e-12 and is perfectly invertible.
+            const glm::mat4& parentWorld = target->worldTransform;
+            const float l0 = glm::length(glm::vec3(parentWorld[0]));
+            const float l1 = glm::length(glm::vec3(parentWorld[1]));
+            const float l2 = glm::length(glm::vec3(parentWorld[2]));
+            const float axes = l0 * l1 * l2;
+            const bool invertible = axes > 0.0f && std::isfinite(axes) &&
+                                    std::fabs(glm::determinant(glm::mat3(parentWorld))) > 1e-6f * axes;
+            const glm::mat4 invParent = invertible ? glm::inverse(parentWorld) : glm::mat4(1.0f);
+            glm::vec3 localPos(0.0f);
+            glm::quat localRot(1.0f, 0.0f, 0.0f, 0.0f);
+            decomposeTransform(invParent * glm::translate(glm::mat4(1.0f), worldPos) * glm::mat4_cast(worldRot),
+                               &localPos, &localRot, nullptr);
+            j["localTransform"] = mat4ToJson(glm::translate(glm::mat4(1.0f), localPos) *
+                                             glm::mat4_cast(localRot) *
+                                             glm::scale(glm::mat4(1.0f), localScale));
+        }
+
+        // One camera and one Audio Listener per scene, looked at BEFORE inserting
+        // (afterwards the live one cannot be told apart from the new one).
+        bool hasCamera   = findCamera() != nullptr;
+        bool hasListener = findAudioListener() != nullptr;
+
+        const auto nameIt = j.find("name");
+        GameObject* root = target->addChild(nameIt != j.end() && nameIt->is_string()
+                                            ? nameIt->get<std::string>() : std::string());
+        // hasBones answered by the template's meshes, never by an Assimp probe; OR
+        // so a static piece of the same file cannot mask a skinned one. (A node
+        // with its own prepared mesh is not even probed: memRef.)
+        NodeLoadCache cache;
+        for (const auto& [key, m] : meshes)
+            if (m) cache.hasBones[m->sourcePath] = cache.hasBones[m->sourcePath] ||
+                                                   (dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr);
+        try
+        {
+            // Empty asset root: memory form, paths are already absolute.
+            // carryOverrideBaseline = true, like cloneGameObject: the prepared json
+            // carries the baselines of the overrides the library already baked into
+            // each node's mesh, so applyMaterialOverrides finds nothing to change and
+            // the mesh stays SHARED (an edit later copies only that instance's).
+            // Without baselines in the json (no overrides, or an unprepared
+            // template) nothing is "taken" and they are derived from the mesh, as on
+            // a disk load.
+            nodeFromJson(j, root, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
+                         /*loader=*/nullptr, &meshes, /*carryOverrideBaseline=*/true, &t.mats);
+        }
+        catch (const std::exception& e)
+        {
+            m_warnings.push_back("prefab '" + t.key + "': could not be instantiated (" + e.what() + ")");
+            removeGameObject(root);
+            collapseWarnings();
+            return nullptr;
+        }
+
+        root->traverse([&](GameObject* n) {
+            n->staticRenderIndex  = -1;
+            n->skinnedRenderIndex = -1;
+            if (n->hasCameraComponent())
+            {
+                if (hasCamera)
+                {
+                    n->setCameraComponent(nullptr);
+                    m_warnings.push_back("Instance of '" + t.key + "', node '" + n->name +
+                                         "': the CameraComponent is discarded (there is already a camera in the scene)");
+                }
+                hasCamera = true;
+            }
+            if (n->hasAudioListener())
+            {
+                if (hasListener)
+                {
+                    n->setAudioListener(nullptr);
+                    m_warnings.push_back("Instance of '" + t.key + "', node '" + n->name +
+                                         "': its Audio Listener is discarded (there is already one in the scene)");
+                }
+                hasListener = true;
+            }
+        });
+        // Node references came in prefab form (local ids; a template never holds
+        // {"scene": ...}): each one now names THIS instance's node.
+        std::unordered_map<uint64_t, uint64_t> sceneOf;   // prefab-local id -> scene id
+        root->traverse([&](GameObject* n) { if (n->prefabNode != 0) sceneOf.emplace(n->prefabNode, n->id); });
+        root->traverse([&](GameObject* n) {
+            forEachNodeReference(*n, [&](uint64_t& id) {
+                if (id == 0) return;
+                const auto it = sceneOf.find(id);
+                id = it != sceneOf.end() ? it->second : 0;
+            });
+        });
+        collapseWarnings();
+        return root;
     }
 
     void Scene::update(float dt)

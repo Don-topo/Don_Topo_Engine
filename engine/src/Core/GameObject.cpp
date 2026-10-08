@@ -135,7 +135,8 @@ namespace DonTopo
         return static_cast<SkinnedMesh*>(editMesh());
     }
 
-    void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out)
+    void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out,
+                                         const MaterialAssetCache* matCache)
     {
         if (!go.hasMesh()) return;
 
@@ -159,6 +160,8 @@ namespace DonTopo
         for (const MaterialOverride& ov : go.materialOverrides)
         {
             if (ov.matAsset.empty()) continue;
+            // Preloaded: no IO, and a cached entry has nothing to warn about.
+            if (matCache && matCache->find(ov.matAsset) != matCache->end()) continue;
             // Single warning per path (spec): this function is called once PER
             // OBJECT on the same shared `out` of the whole scene (see
             // Scene::fromJson), so several objects sharing a broken .mat
@@ -175,7 +178,7 @@ namespace DonTopo
         }
     }
 
-    void applyMaterialOverrides(GameObject& go)
+    void applyMaterialOverrides(GameObject& go, const MaterialAssetCache* matCache)
     {
         // It is applied on a COPY of the materials and only written to the
         // mesh if something changes: the mesh may be shared (clone, undo of
@@ -183,13 +186,23 @@ namespace DonTopo
         // the same overrides as its original changes nothing and keeps
         // sharing it. The baselines are captured in `ov` in this pass, just
         // as before, because the copy has the same values as the mesh.
+        // Only the five fields an override can touch are copied, NOT the whole
+        // Material: its embedded textures (FBX with packed images) are megabytes,
+        // and copying them on every call cost ~1.5 ms per skinned Instantiate even
+        // when nothing changed.
+        struct Fields
+        {
+            std::string texturePath, normalMapPath, metallicRoughnessPath;
+            float       metallic = 0.0f, roughness = 0.5f;
+        };
         const std::vector<const Material*> actuales = materialsOfMesh(go);
-        std::vector<Material> copia;
+        std::vector<Fields> copia;
         copia.reserve(actuales.size());
-        for (const Material* m : actuales) copia.push_back(*m);
-        std::vector<Material*> mats;
+        for (const Material* m : actuales)
+            copia.push_back({ m->texturePath, m->normalMapPath, m->metallicRoughnessPath, m->metallic, m->roughness });
+        std::vector<Fields*> mats;
         mats.reserve(copia.size());
-        for (Material& m : copia) mats.push_back(&m);
+        for (Fields& m : copia) mats.push_back(&m);
 
         for (MaterialOverride& ov : go.materialOverrides)
         {
@@ -197,7 +210,7 @@ namespace DonTopo
             // It is silently ignored here; the warning is given by the scene reader,
             // which is the one with a channel to report it.
             if (ov.index < 0 || ov.index >= (int)mats.size()) continue;
-            Material& mat = *mats[(size_t)ov.index];
+            Fields& mat = *mats[(size_t)ov.index];
 
             // The .mat (if any) resolves whatever the object does NOT override: an
             // "effective" value is computed per field and fed to the SAME
@@ -207,7 +220,16 @@ namespace DonTopo
             // identical to what it was before this field existed.
             MaterialAsset matAsset;
             if (!ov.matAsset.empty())
-                matAsset = loadMaterialAsset(ov.matAsset);   // tolerant: invalid = inherit everything
+            {
+                // A preloaded .mat is taken from the cache (no IO); a miss falls
+                // back to the disk like the no-cache path.
+                const auto cached = matCache ? matCache->find(ov.matAsset)
+                                             : MaterialAssetCache::const_iterator{};
+                if (matCache && cached != matCache->end())
+                    matAsset = cached->second;
+                else
+                    matAsset = loadMaterialAsset(ov.matAsset);   // tolerant: invalid = inherit everything
+            }
 
             auto effective = [](const std::string& objOverride, const std::string& matValue)
             {
@@ -275,7 +297,7 @@ namespace DonTopo
             aplicaFactor(effectiveFactor(ov.roughness, matAsset.roughness), ov.baseRoughness, ov.baseRoughnessTaken, mat.roughness);
         }
 
-        auto distinto = [](const Material& a, const Material& b)
+        auto distinto = [](const Fields& a, const Material& b)
         {
             return a.texturePath != b.texturePath || a.normalMapPath != b.normalMapPath ||
                    a.metallicRoughnessPath != b.metallicRoughnessPath ||

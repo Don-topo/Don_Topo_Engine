@@ -4,7 +4,10 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Editor/Command.h"
+#include "DonTopo/Editor/PrefabOverrideTracker.h"
+#include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/UndoManager.h"
+#include "DonTopo/Core/PrefabLibrary.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Renderer/Cube.h"
@@ -18,6 +21,8 @@
 #include <cassert>
 #include <cctype>
 #include <cstring>
+#include <filesystem>
+#include <optional>
 #include "DonTopo/Renderer/EditorRenderer.h"
 
 namespace {
@@ -92,6 +97,29 @@ void moveGameObject(DonTopo::GameObject* dragged, DonTopo::GameObject* target)
     destParent->children.insert(destParent->children.begin() + destIndex, std::move(moved));
 }
 
+// The parent moveGameObject would give `dragged` when dropped on target.
+DonTopo::GameObject* moveDestinationParent(DonTopo::GameObject* target)
+{
+    return target && target->parent ? target->parent : target;
+}
+
+// Inside an open BeginDragDropTarget: accepts a Content Browser asset only
+// when it is a .prefab (the peek keeps other assets from being highlighted
+// or eaten here). The dropped absolute path in `path`.
+bool acceptPrefabAssetDrop(std::string& path)
+{
+    const ImGuiPayload* peek = ImGui::GetDragDropPayload();
+    if (!peek || !peek->IsDataType("DT_ASSET_PATH") || !peek->Data) return false;
+    std::string ext = std::filesystem::path(static_cast<const char*>(peek->Data)).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (ext != ".prefab") return false;
+    const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH");
+    if (!payload) return false;
+    path = static_cast<const char*>(payload->Data);
+    return true;
+}
+
 } // namespace
 
 namespace DonTopo {
@@ -123,6 +151,11 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             m_pendingMoveSource = *(GameObject**)payload->Data;
             m_pendingMoveTarget = sceneRoot;
         }
+        // A .prefab from the Content Browser on the empty space: a new
+        // instance at the scene root (spec §5.2).
+        std::string prefabPath;
+        if (acceptPrefabAssetDrop(prefabPath))
+            dropPrefab(ctx, prefabPath, nullptr);
         ImGui::EndDragDropTarget();
     }
 
@@ -130,7 +163,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     bool canRename = ctx.selected && ctx.selected->parent != nullptr;
 
     if (ImGui::IsWindowFocused() && canDelete && ImGui::IsKeyPressed(ImGuiKey_Delete))
-        m_pendingDelete = ctx.selected;
+        requestDelete(ctx, ctx.selected);
     if (ImGui::IsWindowFocused() && canRename && ImGui::IsKeyPressed(ImGuiKey_F2))
         beginRename(ctx.selected);
 
@@ -174,7 +207,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         if (ImGui::MenuItem("Rename", nullptr, false, canRename))
             beginRename(ctx.selected);
         if (ImGui::MenuItem("Delete GameObject", nullptr, false, canDelete))
-            m_pendingDelete = ctx.selected;
+            requestDelete(ctx, ctx.selected);
         ImGui::EndPopup();
     }
 
@@ -271,7 +304,19 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             oldIndex = static_cast<size_t>(it - oldSiblings.begin());
         }
 
-        moveGameObject(dragged, target);
+        // Prefab structure (Edit Mode; Play restores the scene on Stop): a
+        // linked node keeps its place, and no instance goes inside another.
+        std::string refusal;
+        if (!ctx.isPlaying && dragged->parent)
+            if (GameObject* destParent = moveDestinationParent(target))
+                refusal = prefabMoveRefusal(*dragged, *destParent);
+        if (!refusal.empty())
+        {
+            ctx.pushLog(refusal);
+            canUndoMove = false;
+        }
+        else
+            moveGameObject(dragged, target);
 
         if (canUndoMove && dragged->parent)
         {
@@ -409,7 +454,22 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
         flags |= ImGuiTreeNodeFlags_Selected;
 
     const std::string label = node->name.empty() ? "GameObject" : node->name;
+    // Prefab nodes (spec §5.3): blue, red when the template is missing or
+    // failed; added children keep the normal color. The id is the pointer,
+    // so the color never changes the widget's identity.
+    const PrefabNodeState prefabState = prefabNodeState(*node, ctx.prefabs);
+    const bool colored = prefabState != PrefabNodeState::None;
+    if (colored)
+        ImGui::PushStyleColor(ImGuiCol_Text, prefabState == PrefabNodeState::Missing
+                                                 ? ImVec4(1.0f, 0.42f, 0.42f, 1.0f)
+                                                 : ImVec4(0.48f, 0.72f, 1.0f, 1.0f));
     bool open = ImGui::TreeNodeEx((const void*)node, flags, "%s", label.c_str());
+    if (colored)
+        ImGui::PopStyleColor();
+    if (colored && prefabState == PrefabNodeState::Missing && node->prefabLink &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("Prefab '%s' is missing or failed to load; the instance keeps its stored state",
+                          node->prefabLink->path.c_str());
     if (ImGui::IsItemClicked())
         ctx.selected = node;
 
@@ -430,11 +490,21 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
             m_pendingMoveSource = *(GameObject**)payload->Data;
             m_pendingMoveTarget = node;
         }
+        // A .prefab dropped on a node: a new instance as its child.
+        std::string prefabPath;
+        if (acceptPrefabAssetDrop(prefabPath))
+            dropPrefab(ctx, prefabPath, node);
         ImGui::EndDragDropTarget();
     }
 
     if (ImGui::BeginPopupContextItem())
     {
+        // Only on an instance root (spec §5.3), first so they are easy to find.
+        if (node->prefabLink && node->parent)
+        {
+            drawPrefabMenuItems(ctx, node);
+            ImGui::Separator();
+        }
         if (ImGui::MenuItem("Create GameObject"))
         {
             GameObject* created = node->addChild("GameObject");
@@ -473,7 +543,7 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
         if (ImGui::MenuItem("Rename", nullptr, false, canModify))
             beginRename(node);
         if (ImGui::MenuItem("Delete GameObject", nullptr, false, canModify))
-            m_pendingDelete = node;
+            requestDelete(ctx, node);
         ImGui::EndPopup();
     }
 
@@ -482,6 +552,73 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
         for (const auto& child : node->children)
             drawNode(ctx, child.get());
         ImGui::TreePop();
+    }
+}
+
+void ScenePanel::requestDelete(EditorContext& ctx, GameObject* node)
+{
+    if (!node) return;
+    // Edit Mode only: what is deleted in Play comes back on Stop, and the
+    // override model (what this protects) is not tracked there.
+    if (!ctx.isPlaying && !canDeleteNode(*node))
+    {
+        ctx.pushLog("Unpack the prefab to delete this object ('" + node->name + "')");
+        return;
+    }
+    m_pendingDelete = node;
+}
+
+void ScenePanel::dropPrefab(EditorContext& ctx, const std::string& assetPath, GameObject* parent)
+{
+    if (ctx.editingLocked)
+    {
+        ctx.pushLog("Scene load in progress: the prefab was not instantiated");
+        return;
+    }
+    if (!ctx.prefabs || !ctx.instantiatePrefab)
+    {
+        ctx.pushLog("Instantiate: prefabs need an open project");
+        return;
+    }
+    const std::optional<std::string> key = prefabKeyForAsset(assetPath, *ctx.prefabs);
+    if (!key)
+    {
+        ctx.pushLog("Instantiate: '" + assetPath + "' is not a prefab inside the project");
+        return;
+    }
+    // Said here, before any wait for the template; InstantiatePrefabCommand
+    // refuses it too, for any other caller.
+    if (parent && prefabInstanceRoot(parent))
+    {
+        ctx.pushLog("Instantiate: '" + parent->name + "' is part of a prefab instance "
+                    "(nested prefabs are not supported)");
+        return;
+    }
+    // Resolved by id at the end of the frame (the scene root is 0).
+    ctx.instantiatePrefab(*key, parent && parent->parent ? parent->id : 0);
+}
+
+void ScenePanel::drawPrefabMenuItems(EditorContext& ctx, GameObject* node)
+{
+    if (ImGui::MenuItem("Unpack Prefab"))
+    {
+        if (!ctx.runPrefabCommand)
+            ctx.pushLog("Unpack Prefab: prefabs need an open project");
+        else
+        {
+            const uint64_t id = node->id;
+            ctx.runPrefabCommand([id](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+                return std::make_unique<UnpackPrefabCommand>(pc, id);
+            });
+        }
+    }
+    if (ImGui::MenuItem("Select Prefab Asset") && ctx.revealAsset)
+    {
+        // Link paths are project-relative.
+        const std::filesystem::path root = ctx.prefabs ? std::filesystem::path(ctx.prefabs->assetRoot())
+                                         : ctx.project  ? ctx.project->root()
+                                                        : std::filesystem::path();
+        ctx.revealAsset(root / std::filesystem::path(node->prefabLink->path));
     }
 }
 

@@ -8,6 +8,8 @@
 #include "DonTopo/Editor/GpuTimeFormat.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/PrefabLibrary.h"
+#include "DonTopo/Core/PrefabOverrides.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
@@ -223,6 +225,8 @@ void EditorUI::setRenderer(std::unique_ptr<EditorRenderer> renderer)
 void EditorUI::setProject(const ProjectContext* project)
 {
     m_project = project;
+    // Work queued against the previous project's scene.
+    dropPendingPrefabWork();
 
     // Root against which Scene relativizes/resolves the hand-assigned texture
     // paths (Task 6). It has to be set HERE, before
@@ -248,6 +252,174 @@ void EditorUI::setProject(const ProjectContext* project)
     // setter covers the order in which IT arrives second.
     if (m_scene && project && project->valid())
         m_scene->setAssetRoot(project->root().string());
+
+    // The prefab library is rooted at the project: created on the first one,
+    // re-rooted (which clears every template) on a change of project. Before
+    // openProjectScene, whose load requests the scene's prefabs.
+    if (m_prefabs && project && project->valid() &&
+        m_prefabs->assetRoot() != project->root().string())
+    {
+        if (m_prefabSync) m_prefabSync->resetForNewRoot();
+        m_prefabs->setAssetRoot(project->root().string());
+    }
+    ensurePrefabLibrary();
+}
+
+void EditorUI::setJobSystem(JobSystem* jobs)
+{
+    m_jobSystem = jobs;
+    ensurePrefabLibrary();
+}
+
+void EditorUI::setScriptManager(ScriptManager* sm)
+{
+    // The previous one (if any) must not keep a pointer to our library.
+    if (m_scriptManager && m_scriptManager != sm)
+        m_scriptManager->setPrefabLibrary(nullptr);
+    m_scriptManager = sm;
+    if (m_scriptManager)
+        m_scriptManager->setPrefabLibrary(m_prefabs.get());
+}
+
+void EditorUI::ensurePrefabLibrary()
+{
+    if (m_prefabs || m_prefabsReleased || !m_jobSystem || !m_project || !m_project->valid())
+        return;
+    m_prefabs = std::make_unique<PrefabLibrary>(*m_jobSystem, m_project->root().string());
+    // The editor applies prefabs (Apply/Create -> updateFromMemory): keeping the
+    // raw loader meshes lets a changed animation-source list be rebuilt from RAM
+    // instead of re-read. Before any request(). The runtime does NOT do this.
+    m_prefabs->setKeepRawMeshes(true);
+    // The sync installs itself as the library's onReady.
+    m_prefabSync = std::make_unique<PrefabSceneSync>(*m_prefabs);
+    configurePrefabSync();
+    if (m_scriptManager)
+        m_scriptManager->setPrefabLibrary(m_prefabs.get());
+}
+
+void EditorUI::configurePrefabSync()
+{
+    if (!m_prefabSync) return;
+    PrefabSceneSync::Host host;
+    host.scene     = m_scene;
+    host.physics   = m_physics;
+    host.audio     = m_audio;
+    host.isPlaying = [this] { return m_isPlaying; };
+    host.registerGpu = [this](GameObject* root) { if (m_renderer) m_renderer->registerGameObject(root); };
+    host.pin = [this](const std::string& key, const std::vector<std::shared_ptr<const Mesh>>& meshes) {
+        if (m_renderer) m_renderer->pinTemplateMeshes(key, meshes);
+    };
+    host.unpin = [this](const std::string& key) { if (m_renderer) m_renderer->unpinTemplateMeshes(key); };
+    host.log   = [this](const std::string& msg) { m_logPanel.push(msg); };
+    host.meshRequestLive = [this](uint64_t job) { return m_assetLoader && m_assetLoader->isRequestLive(job); };
+    host.loaderPending   = [this] { return m_assetLoader ? m_assetLoader->pending() : 0; };
+    m_prefabSync->setHost(std::move(host));
+}
+
+void EditorUI::withPrefabRebuilds(const std::function<void()>& fn)
+{
+    // A rebuild frees the old subtree (onNodeRemoved clears m_selected if it was
+    // inside); the matched nodes keep their ids, so the selection comes back.
+    // Always by id, not only when something was rebuilt: a rebuild that FAILED
+    // re-inserts the old subtree (new objects, same ids) after onNodeRemoved
+    // already cleared the selection.
+    const uint64_t selectedId = m_selected ? m_selected->id : 0;
+    GameObject* const before  = m_selected;
+    fn();
+    const bool rebuilt = m_prefabSync && m_prefabSync->takeRebuiltCount() > 0;
+    if (m_scene && selectedId != 0)
+        m_selected = m_scene->findById(selectedId);
+    if (rebuilt || m_selected != before)
+        m_propertiesPanel.invalidateCaches();
+}
+
+void EditorUI::releasePrefabLibrary()
+{
+    // Final: nothing re-creates the library afterwards (ensurePrefabLibrary).
+    m_prefabsReleased = true;
+    // Order: nobody may reach the library once it starts dying (an OnDestroy
+    // calling Instantiate/IsLoaded), then the renderer's references to its
+    // meshes, then the library itself (cancels its jobs, drops its warm audio
+    // clips while the AudioManager is still alive).
+    if (m_scriptManager)
+        m_scriptManager->setPrefabLibrary(nullptr);
+    if (m_prefabSync)
+        m_prefabSync->unpinAll();
+    m_prefabSync.reset();
+    m_prefabs.reset();
+}
+
+void EditorUI::updatePrefabTracking()
+{
+    const uint64_t revision = m_undoHistory.revision();
+    const bool     active   = ImGui::IsAnyItemActive();
+    const bool     revisionChanged = revision != m_lastPrefabRevision;
+    const bool     itemDeactivated = m_prefabItemWasActive && !active;
+    m_lastPrefabRevision  = revision;
+    m_prefabItemWasActive = active;
+    if (!m_prefabSync)
+        return;
+    // Edit Mode only: PrefabSceneSync::frame checks isPlaying itself.
+    withPrefabRebuilds([&] {
+        m_prefabSync->frame(revisionChanged, itemDeactivated ? m_selected : nullptr);
+    });
+}
+
+void EditorUI::execPrefabCommand(const EditorContext::PrefabCommandFactory& make)
+{
+    auto log = [this](const std::string& msg) { m_logPanel.push("[Prefab] " + msg); };
+    // Play Mode: Stop restores the scene from its snapshot and clears the
+    // history, but a .prefab written meanwhile would stay -- out of step with
+    // the scene the user returns to.
+    if (m_isPlaying)
+    {
+        log("Prefab commands are not available in Play Mode; stop it first");
+        return;
+    }
+    if (!m_prefabs || !m_prefabSync || !m_scene || !m_physics || !m_audio)
+    {
+        log("Prefabs need an open project");
+        return;
+    }
+    PrefabCommandContext pc{ *m_scene, *m_prefabs, m_prefabSync->tracker(), *m_physics, *m_audio,
+                             [this](GameObject* root) { if (m_renderer) m_renderer->registerGameObject(root); } };
+    // Rebuilds re-resolve the selection by id and drop the Properties caches.
+    withPrefabRebuilds([&] {
+        pushPrefabCommand(m_undoHistory, make(pc), log);
+    });
+    m_propertiesPanel.invalidateCaches();
+}
+
+void EditorUI::runPendingPrefabJobs()
+{
+    // A job may queue another one (it does not today): run until empty, in order.
+    while (!m_pendingPrefabJobs.empty())
+    {
+        std::vector<std::function<void()>> jobs;
+        jobs.swap(m_pendingPrefabJobs);
+        for (auto& job : jobs) job();
+    }
+    // Dropped prefabs whose template became Ready (Edit Mode only: Play
+    // clears the queue). Each one is an InstantiatePrefabCommand, which
+    // refuses a parent that is gone or now inside an instance.
+    if (!m_prefabSync || m_isPlaying) return;
+    for (const PrefabSceneSync::QueuedInstantiate& q :
+         m_prefabSync->takeReadyInstantiates(std::chrono::steady_clock::now()))
+    {
+        const std::string key = q.key;
+        const uint64_t parentId = q.parentId;
+        execPrefabCommand([key, parentId](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+            return std::make_unique<InstantiatePrefabCommand>(pc, key, parentId);
+        });
+    }
+}
+
+void EditorUI::dropPendingPrefabWork()
+{
+    // Ids in these belong to the scene (or project) being replaced: in the new
+    // one they may name other objects.
+    m_pendingPrefabJobs.clear();
+    if (m_prefabSync) m_prefabSync->clearQueuedInstantiates();
 }
 
 void EditorUI::setScene(Scene* scene)
@@ -262,6 +434,7 @@ void EditorUI::setScene(Scene* scene)
     // when its turn comes.
     if (m_scene && m_project && m_project->valid())
         m_scene->setAssetRoot(m_project->root().string());
+    configurePrefabSync();
 }
 
 EditorRenderer& EditorUI::renderer() { return *m_renderer; }
@@ -950,6 +1123,18 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
     // rest of the frames and without a project.
     applyProjectSettings();
 
+    // Prefab templates, Edit and Play alike: finished loads become Ready here
+    // (onPrefabReady pins them and, in Edit Mode, propagates them). Before the
+    // panels, so none of them draws a subtree a propagation is about to replace.
+    if (m_prefabSync)
+    {
+        // The world pointers may have been set after the library was created.
+        const PrefabSceneSync::Host& h = m_prefabSync->host();
+        if (h.scene != m_scene || h.physics != m_physics || h.audio != m_audio)
+            configurePrefabSync();
+        withPrefabRebuilds([&] { m_prefabSync->pump(2.0f); });
+    }
+
     // Drain of the DonTopo.loadScene mailbox: here, at the start of the UI
     // frame, the script tick has already been left (ScriptManager::update runs earlier in
     // main's loop), so loading does not destroy the GameObject that requested the
@@ -1052,6 +1237,27 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
         m_droppedFilesProvider,
         m_jobSystem,
     };
+    ctx.prefabs = m_prefabs.get();
+    // Prefab commands from the panels: queued, run after every panel drew
+    // (runPendingPrefabJobs, below).
+    ctx.runPrefabCommand = [this](EditorContext::PrefabCommandFactory make) {
+        m_pendingPrefabJobs.push_back([this, make = std::move(make)] { execPrefabCommand(make); });
+    };
+    ctx.instantiatePrefab = [this](const std::string& key, uint64_t parentId) {
+        m_pendingPrefabJobs.push_back([this, key, parentId] {
+            if (m_isPlaying)
+            {
+                m_logPanel.push("[Prefab] Prefab commands are not available in Play Mode; stop it first");
+                return;
+            }
+            if (!m_prefabSync) { m_logPanel.push("[Prefab] Prefabs need an open project"); return; }
+            // Never waited for here (spec §5.2 allows it, but a slow load froze
+            // the window): queued, and instantiated by runPendingPrefabJobs on
+            // the frame its template is Ready -- this same one if it already is.
+            m_prefabSync->queueInstantiate(key, parentId, std::chrono::seconds(60));
+        });
+    };
+    ctx.revealAsset = [this](const std::filesystem::path& asset) { m_contentBrowserPanel.revealAsset(asset); };
 
     m_scenePanel.draw(ctx, sceneRoot);
     // ScenePanel deleted the selected GameObject: invalidates the Properties edit
@@ -1097,7 +1303,26 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
     // scene stays with what was already applied (valid, saveable state).
     m_loadingModal.update(m_assetLoader ? m_assetLoader->pending() : 0);
     if (m_loadingModal.draw() && m_assetLoader)
+    {
         m_assetLoader->cancelAllPending();
+        // The loader cannot reach the scene: the objects it will never serve
+        // stop waiting here (they stay without a mesh, as before). Whatever
+        // still reads a stale pendingMeshJob is covered anyway by
+        // AsyncAssetLoader::isRequestLive (the prefab tracker asks it).
+        if (m_scene)
+            m_scene->traverse([&](GameObject* n) {
+                if (n->pendingMeshJob != 0 && !m_assetLoader->isRequestLive(n->pendingMeshJob))
+                    n->pendingMeshJob = 0;
+            });
+    }
+
+    // Prefab commands the panels queued this frame, now that none of them is
+    // drawing; before the tracker pass, which sees their revision change.
+    runPendingPrefabJobs();
+
+    // The single override detection point (spec §3.2), after every panel had its
+    // chance to push a command or finish an edit this frame.
+    updatePrefabTracking();
 }
 
 void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, EditorRenderer& renderer)
@@ -1241,7 +1466,14 @@ void EditorUI::handleUndoRedoShortcut()
         m_undoHistory.undo();
         m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
         m_propertiesPanel.invalidateCaches();
-        m_logPanel.push("Undo: " + m_undoHistory.lastLabel());
+        // A refused undo stays where it was (UndoManager): say so, with why.
+        // One that can never be undone took the history below it away: the
+        // manager's message is the whole Log line.
+        if (m_undoHistory.lastDiscardedHistory())
+            m_logPanel.push(m_undoHistory.lastMessage());
+        else
+            m_logPanel.push((m_undoHistory.lastRefused() ? "Undo refused: " : "Undo: ") + m_undoHistory.lastLabel() +
+                            (m_undoHistory.lastMessage().empty() ? std::string() : " (" + m_undoHistory.lastMessage() + ")"));
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Y) && m_undoHistory.canRedo())
     {
@@ -1249,7 +1481,8 @@ void EditorUI::handleUndoRedoShortcut()
         m_undoHistory.redo();
         m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
         m_propertiesPanel.invalidateCaches();
-        m_logPanel.push("Redo: " + m_undoHistory.lastLabel());
+        m_logPanel.push((m_undoHistory.lastRefused() ? "Redo refused: " : "Redo: ") + m_undoHistory.lastLabel() +
+                        (m_undoHistory.lastMessage().empty() ? std::string() : " (" + m_undoHistory.lastMessage() + ")"));
     }
     if (ImGui::IsKeyPressed(ImGuiKey_D))
         duplicateSelection();
@@ -1433,10 +1666,13 @@ void EditorUI::drawToolbar()
         if (ImGui::Button("Stop"))
         {
             if (m_scriptManager) m_scriptManager->onPlayStop();
+            // Back in Edit Mode BEFORE the restore: the reload checks the restored
+            // prefab instances against templates that became Ready (or changed)
+            // during Play, and propagation only runs in Edit Mode.
+            m_isPlaying = false;
             // Synchronous restore (async=false): no modal, deterministic. Introducing
             // half-finished states in the Play->Stop transition is not worth it.
             m_sceneIOError = reloadSceneFromJson(m_playSnapshot, /*async=*/false) ? "" : "Could not restore the scene";
-            m_isPlaying = false;
             m_logPanel.push("Play Mode stopped");
         }
         ImGui::PopStyleColor();
@@ -1447,6 +1683,9 @@ void EditorUI::drawToolbar()
         {
             m_playSnapshot = m_scene->toJson();
             m_undoHistory.clear();
+            // A prefab drop still waiting for its template is not instantiated
+            // in Play (Stop clears it again through reloadSceneFromJson).
+            dropPendingPrefabWork();
             // Warning only once when Play starts (not every frame: the Renderer
             // queries findCamera() in all of them, and logging there would flood the
             // console). Without a camera, Play starts anyway with the editor's, since
@@ -1650,6 +1889,10 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
 {
     if (!m_scene || !m_renderer || !m_physics || !m_audio)
         return false;
+    // Prefab commands queued this frame (a panel drew before the Content
+    // Browser asked for this load) and drops waiting for a template name
+    // objects of the scene being replaced.
+    dropPendingPrefabWork();
 
     // Releases GPU resources of the current scene, and with them its indices: if
     // fromJson fails further down due to nested malformation, m_root is still
@@ -1715,8 +1958,21 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
         // already present; onAssetsLoaded repeats it when the rest lands.
         if (m_renderer)
             m_renderer->refitCameraRange();
+
+        // Prefabs of the new scene: request/evict, baselines, and propagation of
+        // the templates already Ready (Edit Mode; a Lua load in Play evicts
+        // nothing). See PrefabSceneSync::sceneLoaded.
+        ensurePrefabLibrary();
+        if (m_prefabSync)
+        {
+            configurePrefabSync();
+            withPrefabRebuilds([&] { m_prefabSync->sceneLoaded(j); });
+        }
     }
     m_undoHistory.clear();
+    // The clear above moves the revision: the tracker must not take it for an
+    // edit (nothing was synced yet anyway; this only saves a pointless pass).
+    m_lastPrefabRevision = m_undoHistory.revision();
 
     return loaded;
 }
@@ -2024,15 +2280,31 @@ void EditorUI::runExport()
         for (const auto& [name, cls] : m_scriptManager->getRegistry())
             scriptPaths[name] = cls.path;
 
+    const RenderBackend exportBackend = (m_exportBackend == (int)RenderBackend::D3D12)
+                                            ? RenderBackend::D3D12
+                                            : RenderBackend::Vulkan;
+    // The referenced prefabs are loaded into temporary scenes to collect their
+    // assets, which needs both managers.
+    if (!m_physics || !m_audio)
+    {
+        m_logPanel.push("Export cancelled: the physics or audio manager is not available");
+        return;
+    }
+    ExportResult result = exportGame(*m_scene, *m_physics, *m_audio, scriptPaths, m_exportDestDir,
+                                     m_exportNameBuffer, projectRoot, scriptsDir, runtimeExe,
+                                     exportBackend, m_skyboxFolder);
+
     // Warning, NOT a block: the package is assembled from what the scene references, and
     // that may fall outside the project. The repo's shared assets are
     // legitimate and travel as always; what is worth flagging is an asset of
     // ANOTHER project, which is a leak. It warns and exports anyway: leaving it
     // out of the package would give a game without that asset, which is worse.
+    // It reads the list exportGame actually packaged, not a re-scan of the scene:
+    // an asset reached only through a referenced prefab is invisible to the scene.
     if (m_project && m_project->valid())
     {
         const ProjectContext workspace(ProjectContext::workspaceDir());
-        for (const ExportAsset& a : collectSceneAssets(*m_scene, projectRoot, scriptPaths))
+        for (const ExportAsset& a : result.packagedAssets)
         {
             const fs::path src(a.sourcePath);
             if (m_project->contains(src))
@@ -2043,12 +2315,6 @@ void EditorUI::runExport()
         }
     }
 
-    const RenderBackend exportBackend = (m_exportBackend == (int)RenderBackend::D3D12)
-                                            ? RenderBackend::D3D12
-                                            : RenderBackend::Vulkan;
-    ExportResult result = exportGame(*m_scene, scriptPaths, m_exportDestDir,
-                                     m_exportNameBuffer, projectRoot, scriptsDir, runtimeExe,
-                                     exportBackend, m_skyboxFolder);
     for (const std::string& msg : result.messages)
         m_logPanel.push(msg);
     if (!result.ok)

@@ -8,6 +8,7 @@
 #include "DonTopo/Core/ImportSettings.h"
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/UndoManager.h"
+#include "DonTopo/Editor/PrefabOverrideTracker.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Audio/AudioManager.h"
@@ -243,13 +244,17 @@ AssetKind classifyAsset(const std::string& ext, bool isDir)
     if (e == ".lua")                                                          return AssetKind::Script;
     if (e == ".spv")                                                          return AssetKind::Shader;
     if (e == ".mat")                                                          return AssetKind::Material;
+    if (e == ".prefab")                                                       return AssetKind::Prefab;
     return AssetKind::Other;
 }
 
 bool isAssetDraggable(const std::string& ext, bool isDir, bool inMultiSelection)
 {
     if (isDir || inMultiSelection || isImportableExtension(ext)) return true;
-    return classifyAsset(ext, false) == AssetKind::Material;
+    // Project assets that are never imported from outside: a .mat (onto a
+    // material slot) and a .prefab (onto the hierarchy or a script's Prefab slot).
+    const AssetKind kind = classifyAsset(ext, false);
+    return kind == AssetKind::Material || kind == AssetKind::Prefab;
 }
 
 std::optional<std::filesystem::path> acceptOrImportMatTexture(const ProjectContext* project,
@@ -974,7 +979,61 @@ void ContentBrowserPanel::acceptAssetDropOnFolder(const std::filesystem::path& d
         if (!srcs.empty())
             m_pendingMove = PendingMove{ std::move(srcs), destDir };
     }
+    // A hierarchy node dropped onto a folder: a new prefab inside it.
+    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
+        if (GameObject* node = *static_cast<GameObject* const*>(payload->Data))
+            m_pendingPrefab = PendingPrefab{ node->id, node->name, destDir };
     ImGui::EndDragDropTarget();
+}
+
+void ContentBrowserPanel::acceptPrefabDropOnFolder(const std::filesystem::path& destDir)
+{
+    if (!ImGui::BeginDragDropTarget())
+        return;
+    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
+        if (GameObject* node = *static_cast<GameObject* const*>(payload->Data))
+            m_pendingPrefab = PendingPrefab{ node->id, node->name, destDir };
+    ImGui::EndDragDropTarget();
+}
+
+void ContentBrowserPanel::applyPendingPrefab(EditorContext& ctx)
+{
+    if (!m_pendingPrefab)
+        return;
+    const PendingPrefab p = *m_pendingPrefab;
+    m_pendingPrefab.reset();
+    if (ctx.editingLocked)
+    {
+        ctx.pushLog("Scene load in progress: the prefab was not created");
+        return;
+    }
+    if (!ctx.runPrefabCommand)
+    {
+        ctx.pushLog("Create Prefab: prefabs need an open project");
+        return;
+    }
+    // The free name is chosen now; the command itself never overwrites a file.
+    const std::filesystem::path file = uniquePrefabPath(p.destDir, p.name);
+    const uint64_t id = p.nodeId;
+    ctx.runPrefabCommand([id, file](const PrefabCommandContext& pc) -> std::unique_ptr<PrefabCommand> {
+        return std::make_unique<CreatePrefabCommand>(pc, id, file);
+    });
+}
+
+void ContentBrowserPanel::revealAsset(const std::filesystem::path& asset)
+{
+    const std::filesystem::path dir = asset.parent_path();
+    if (!m_projectRoot.empty() && !samePath(dir, m_projectRoot) && !pathUnderDir(dir, m_projectRoot))
+        return;
+    m_currentDir       = dir.string();
+    m_scanned          = false;
+    m_revealCurrentDir = true;
+    m_revealSelect     = asset;
+    // Filters that would hide it are cleared: the user asked to SEE it.
+    m_filterText[0]    = '\0';
+    m_filterKindIndex  = 0;
+    m_open             = true;
+    m_focusOnReveal    = true;
 }
 
 void ContentBrowserPanel::applyPendingMove(EditorContext& ctx, GameObject* sceneRoot)
@@ -1135,6 +1194,12 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     // m_open is still true, and dropping onto what IS seen (another tab of the same
     // dock, e.g.) must not import here; visible gates the drop block.
     const bool visible = ImGui::Begin("Content Browser", &m_open);
+    if (m_focusOnReveal)
+    {
+        // A docked tab behind another one comes to the front (revealAsset).
+        ImGui::SetWindowFocus();
+        m_focusOnReveal = false;
+    }
     float totalWidth  = ImGui::GetContentRegionAvail().x;
     float totalHeight = ImGui::GetContentRegionAvail().y;
     float leftWidth   = totalWidth * 0.38f;
@@ -1334,7 +1399,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 {"Image", AssetKind::Image},      {"Font", AssetKind::Font},
                 {"Scene", AssetKind::Scene},      {"Script", AssetKind::Script},
                 {"Shader", AssetKind::Shader},     {"Material", AssetKind::Material},
-                {"Other", AssetKind::Other},
+                {"Prefab", AssetKind::Prefab},     {"Other", AssetKind::Other},
             };
             ImGui::SetNextItemWidth(std::max(80.0f, paneW - 140.0f));
             ImGui::InputTextWithHint("##AssetFilterText", "Search by name...",
@@ -1371,6 +1436,18 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         }
         // Changing folder, filtering or rescanning leaves no ghost selection.
         pruneSelection(m_selection, visible);
+        // revealAsset: once its folder is listed, the asset becomes the selection.
+        if (!m_revealSelect.empty() && m_scanned)
+        {
+            m_selection.clear();
+            for (const auto& p : visible)
+                if (samePath(p, m_revealSelect))
+                {
+                    m_selection.items.push_back(p);
+                    m_selection.anchor = p;
+                }
+            m_revealSelect.clear();
+        }
 
         ImGui::Columns(cols, "##AssetGrid", false);
 
@@ -1392,6 +1469,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             case AssetKind::Script:  btnColor = ImVec4(0.30f, 0.40f, 0.85f, 1.0f); label = "LUA"; break;
             case AssetKind::Shader:  btnColor = ImVec4(0.80f, 0.35f, 0.10f, 1.0f); label = "SPV"; break;
             case AssetKind::Material: btnColor = ImVec4(0.75f, 0.55f, 0.20f, 1.0f); label = "MAT"; break;
+            // The hierarchy's prefab blue (#7BB8FF), darker so the white label reads.
+            case AssetKind::Prefab:  btnColor = ImVec4(0.30f, 0.52f, 0.80f, 1.0f); label = "PFB"; break;
             default:                 btnColor = ImVec4(0.40f, 0.40f, 0.40f, 1.0f); label = "..."; break;
             }
 
@@ -1601,6 +1680,15 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
             !ImGui::IsAnyItemHovered())
             m_selection.clear();
+
+        // The empty space under the grid: dropping a hierarchy node here makes
+        // it a prefab in the current folder (spec §5.1). A Dummy has no id, so
+        // it neither counts as a hovered item above nor blocks the context menu below.
+        {
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            ImGui::Dummy(ImVec2(std::max(avail.x, 1.0f), std::max(avail.y, 40.0f)));
+            acceptPrefabDropOnFolder(std::filesystem::path(m_currentDir));
+        }
 
         // Right click on empty grid space (on an asset its own Rename/Delete menu
         // comes up): same pattern as the ScenePanel's Create menu. The
@@ -2067,6 +2155,9 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         }
     }
     ImGui::EndChild();
+    // A node dropped this frame on the tree, a grid folder or the grid's
+    // background: queued as a CreatePrefabCommand (it runs at the end of the frame).
+    applyPendingPrefab(ctx);
     ImGui::End();
 }
 

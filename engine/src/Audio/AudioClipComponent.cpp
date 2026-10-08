@@ -7,13 +7,14 @@
 namespace DonTopo {
 
 AudioClipComponent::AudioClipComponent(AudioManager* audio, std::string path, int soundId, bool is3D, bool loop,
-                                        AudioLoadMode loadMode)
+                                        AudioLoadMode loadMode, AudioRolloff rolloff)
     : m_audio(audio)
     , m_path(std::move(path))
     , m_soundId(soundId)
     , m_is3D(is3D)
     , m_loop(loop)
     , m_loadMode(loadMode)
+    , m_rolloff(rolloff)
 {
     applyDistances();
 }

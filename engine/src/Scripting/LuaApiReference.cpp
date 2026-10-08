@@ -35,6 +35,12 @@ const std::vector<std::string>& baseSymbols()
         // DestroyGameObject(entity) — destroys the GameObject and its subtree in
         // Play (deferred to end of frame). See Scene / README.
         "DestroyGameObject",
+        // Prefab() — class-table default that declares a prefab slot; the instance
+        // receives a Prefab with .path and :IsLoaded().
+        "Prefab", "Prefab.path", "Prefab:IsLoaded",
+        // Instantiate(prefab, position?, rotation?, parent?) — builds a preloaded
+        // prefab; a Lua error if it is not loaded yet. Scene.Instantiate clones.
+        "Instantiate",
 
         // self — script instance (implicit parameter of the
         // Script:Method functions). 'self.entity' is the only field injected by
@@ -583,6 +589,13 @@ const std::unordered_map<std::string, DocEntry>& docTable()
             {"Log.Error", {"(message)", "Writes to the Log Console with an [ERROR] prefix."}},
             {"print", {"(...)", "Lua's print, redirected to the Log Console."}},
             {"DestroyGameObject", {"(entity: Entity)", "Destroys the object and its subtree at the end of the frame."}},
+            {"Prefab", {"() -> Prefab", "Declares a prefab slot in the class table (enemy = Prefab()); assign the .prefab in the Properties panel."}},
+            {"Prefab.path", {"", "Project-relative path of the assigned prefab; read-only."}},
+            {"Prefab:IsLoaded", {"() -> boolean", "true if the prefab is loaded and Instantiate would succeed now."}},
+            {"Instantiate", {"(prefab: Prefab, position: Vec3?, rotation: Vec3?, parent: Entity?) -> Entity",
+                             "Instantiates a preloaded prefab: (prefab), (prefab, parent), (prefab, position, rotation) "
+                             "or (prefab, position, rotation, parent); position/rotation are world space, rotation in "
+                             "Euler degrees. Errors if the prefab is not loaded yet."}},
 
             // --- Input ---
             {"Input.IsKeyDown", {"(key) -> boolean", "Key held. Use the Key table."}},

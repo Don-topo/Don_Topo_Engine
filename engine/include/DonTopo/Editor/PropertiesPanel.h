@@ -1,10 +1,13 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <glm/glm.hpp>
+#include <nlohmann/json.hpp>
 #include "DonTopo/Editor/UndoManager.h" // BoxColliderState, SphereColliderState, CapsuleColliderState, PlaneColliderState
 #include "DonTopo/Editor/DeferredSlider.h"
 #include "DonTopo/Core/CameraComponent.h"
@@ -285,6 +288,41 @@ private:
     void setScrollbarAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
 
     void drawAudioClipDialog(EditorContext& ctx);
+
+    // ── Prefab instance UI (spec §5.4) ──────────────────────────────────────
+    // What this frame's selection is in prefab terms, resolved once at the top
+    // of draw(): the instance it is inside (nullptr = none), its prefab-local
+    // node (0 = an added child), the template's json for that node (nullptr
+    // while the template is not Ready) and the prefab's name for the menus.
+    struct PrefabView
+    {
+        GameObject*           root = nullptr;
+        uint64_t              node = 0;
+        const nlohmann::json* tmplNode = nullptr;
+        std::string           name;
+    };
+    PrefabView m_prefabView;
+    void resolvePrefabView(EditorContext& ctx);
+    // "Prefab: Enemy.prefab  [Select] [Overrides v]" with per-row Apply/Revert.
+    void drawPrefabInstanceBar(EditorContext& ctx);
+    // Whether the selection overrides any of paths (bold).
+    bool prefabBold(std::initializer_list<const char*> paths) const;
+    bool prefabBold(const std::string& path) const;
+    // Right click on the last item, when bold. A field (headerName empty):
+    // "Apply to Prefab '<name>'" / "Revert" of exactly its paths; a header:
+    // "Apply '<headerName>' changes..." / "Revert '<headerName>' changes".
+    // Inside an added component or script the items name the wider action
+    // (prefabFieldTarget). popupId unique per label.
+    void prefabFieldMenu(EditorContext& ctx, const std::string& popupId,
+                         const std::vector<std::string>& paths, const std::string& headerName = {});
+    // A component header: TreeNodeEx with the same label (same id), drawn bold
+    // when the component has an override, with the right-click menu.
+    bool prefabSectionHeader(EditorContext& ctx, const char* label, int flags,
+                             std::initializer_list<const char*> paths);
+    // A plain text label (Name, Position...) drawn bold when overridden, with the menu.
+    void prefabTextLabel(EditorContext& ctx, const char* text, const std::string& popupId,
+                         std::initializer_list<const char*> paths);
+
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
     void drawNewScriptPopup(EditorContext& ctx);

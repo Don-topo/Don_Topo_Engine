@@ -171,6 +171,18 @@ namespace DonTopo
                 case sol::type::string:
                     p.defaultValue = value.as<std::string>();
                     break;
+                case sol::type::table:
+                {
+                    // Only the Prefab() sentinel is a prop; other tables are not.
+                    sol::table t = value.as<sol::table>();
+                    sol::object marker = t["__dt_prefab"];
+                    if (marker.is<bool>() && marker.as<bool>())
+                    {
+                        p.defaultValue = PrefabRef{};
+                        break;
+                    }
+                    continue;
+                }
                 default:
                     continue; // nested functions/tables: they are not props
             }
@@ -204,6 +216,15 @@ namespace DonTopo
                 {
                     if (p.isInteger) inst[p.name] = static_cast<int64_t>(val);
                     else             inst[p.name] = val;
+                }
+                else if constexpr (std::is_same_v<T, PrefabRef>)
+                {
+                    // An empty slot is stored as false, not nil: nil would delete the
+                    // key and the class default (the Prefab() sentinel table) would
+                    // show through the metatable. false is falsy, so `if self.x then`
+                    // behaves exactly as with nil.
+                    if (val.path.empty()) inst[p.name] = false;
+                    else inst[p.name] = sol::make_object(m_lua, LuaPrefab{ val.path });
                 }
                 else inst[p.name] = val;
             }, *v);

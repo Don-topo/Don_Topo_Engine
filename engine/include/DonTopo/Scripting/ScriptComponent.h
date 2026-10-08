@@ -8,9 +8,16 @@ namespace DonTopo {
 
 class GameObject;
 
-// Value of a serializable script prop (the 3 types ScriptManager detects
+// Reference to a prefab asset assigned to a script prop. The path is
+// project-relative, stored exactly as the editor assigned it.
+struct PrefabRef {
+    std::string path;
+    bool operator==(const PrefabRef&) const = default;
+};
+
+// Value of a serializable script prop (the 4 types ScriptManager detects
 // in the class table).
-using ScriptValue = std::variant<double, bool, std::string>;
+using ScriptValue = std::variant<double, bool, std::string, PrefabRef>;
 
 // A Lua script attached to a GameObject. The instance (Lua table) only
 // exists in Play Mode; in Edit Mode the component is just name + overrides.

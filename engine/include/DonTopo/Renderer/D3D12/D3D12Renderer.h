@@ -218,6 +218,14 @@ public:
     void removeGameObject(GameObject* node) override;
     void removeMeshComponent(GameObject* node) override;
 
+    // Prefab templates (contract in EditorRenderer). Here only SKINNED meshes are
+    // pinned (shared B6 geometry + material textures): a static mesh's buffers
+    // and textures belong to the draw slot that uploaded them, so they cannot be
+    // held without one.
+    void pinTemplateMeshes(const std::string& key,
+                           const std::vector<std::shared_ptr<const Mesh>>& meshes) override;
+    void unpinTemplateMeshes(const std::string& key) override;
+
     void replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot) override;
 
     // Contract in EditorRenderer::rebuildStaticMesh. Here the object that changes
